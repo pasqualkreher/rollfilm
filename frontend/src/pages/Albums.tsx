@@ -1,0 +1,55 @@
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "../api/client";
+
+export function Albums() {
+  const [name, setName] = useState("");
+  const queryClient = useQueryClient();
+
+  const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
+
+  const createAlbum = useMutation({
+    mutationFn: () => api.albums.create(name),
+    onSuccess: () => {
+      setName("");
+      queryClient.invalidateQueries({ queryKey: ["albums"] });
+    },
+  });
+
+  return (
+    <div className="page">
+      <h2 className="section-title">Albums</h2>
+      <form
+        className="import-toolbar"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim()) createAlbum.mutate();
+        }}
+      >
+        <input type="text" placeholder="New album name" value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="btn primary" type="submit">
+          Create album
+        </button>
+      </form>
+
+      {albums && albums.length === 0 && <div className="empty-state">No albums yet - create one above.</div>}
+
+      <div className="thumbnail-grid">
+        {albums?.map((album) => (
+          <Link
+            key={album.id}
+            to={`/albums/${album.id}`}
+            className="thumb-card"
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}
+          >
+            <div style={{ textAlign: "center", color: "var(--text)" }}>
+              <div style={{ fontWeight: 600 }}>{album.name}</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{album.image_count} photos</div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}

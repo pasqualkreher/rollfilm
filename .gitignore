@@ -1,0 +1,54 @@
+# ---- OS ----
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+
+# ---- Editors / IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- Python (backend) ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# virtualenvs
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Node / frontend ----
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Environment / secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Logs ----
+*.log
+
+# ---- App runtime data (photo library, SQLite DB, thumbnails, staging, model cache) ----
+/data/

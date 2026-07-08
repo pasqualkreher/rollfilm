@@ -1,0 +1,971 @@
+:root {
+  --bg: #ffffff;
+  --bg-elevated: #f6f6f7;
+  --border: #e2e2e4;
+  --text: #1a1a1a;
+  --text-muted: #6b6b70;
+  --accent: #3a6df0;
+  --accent-contrast: #ffffff;
+  --danger: #d0392b;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17181a;
+    --bg-elevated: #212226;
+    --border: #34353a;
+    --text: #f1f1f2;
+    --text-muted: #9a9aa0;
+    --accent: #6d93ff;
+    --accent-contrast: #0c0c0d;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 10;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.nav-links {
+  display: flex;
+  gap: 4px;
+}
+
+.nav-links a {
+  padding: 6px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.nav-links a.active,
+.nav-links a:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.search-bar {
+  flex: 1;
+  max-width: 420px;
+}
+
+.search-bar input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.page {
+  flex: 1;
+  padding: 20px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+/* A labelled filter control: small muted caption sitting left of its input. */
+.filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.filter-field-inline {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.count-pill {
+  margin-left: 10px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.segmented button {
+  padding: 6px 14px;
+  border: none;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.segmented button.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+select, .filter-bar input[type="number"] {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.thumbnail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+/* Immich-style date timeline: month/year sections with headers that stick to
+   the top of the scroll area as you pass through each month. */
+.timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline-section {
+  margin-bottom: 8px;
+}
+
+.timeline-header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  margin: 0 0 12px;
+  padding: 8px 2px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--bg);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.timeline-header-count {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* Reserve a right gutter on the whole page so every row - the filter bar
+   included, not just the photo grid - ends before the fixed scrubber and can't
+   sit underneath it. */
+.page-timeline {
+  padding-right: 58px;
+}
+
+/* Right-edge date scrubber, pinned to the viewport so it stays put while the
+   timeline scrolls underneath it. A faint translucent strip reads as a control
+   and mutes whatever scrolls behind it. */
+.timeline-scrubber {
+  position: fixed;
+  /* top is set inline - it tracks the timeline's position so the rail begins at
+     the first date header and rises as the filter bar scrolls away. */
+  right: 4px;
+  bottom: 10px;
+  width: 48px;
+  z-index: 20;
+  cursor: ns-resize;
+  touch-action: none;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(6px);
+  opacity: 0.5;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.timeline-scrubber:hover,
+.timeline-scrubber.dragging {
+  opacity: 1;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+}
+
+.scrubber-tick {
+  position: absolute;
+  right: 8px;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.05;
+  text-align: right;
+  pointer-events: none;
+}
+
+.scrubber-year {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.scrubber-month {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.scrubber-tick.active .scrubber-month,
+.scrubber-tick.active .scrubber-year {
+  color: var(--accent);
+}
+
+.scrubber-handle {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.timeline-scrubber:hover .scrubber-handle,
+.timeline-scrubber.dragging .scrubber-handle {
+  opacity: 1;
+}
+
+.scrubber-bubble {
+  position: absolute;
+  right: 56px;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  padding: 5px 11px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.timeline-scrubber:hover .scrubber-bubble,
+.scrubber-bubble.visible {
+  opacity: 1;
+}
+
+.thumb-card {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  aspect-ratio: 1 / 1;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.thumb-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+.thumb-card.selected {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.thumb-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.thumb-card .badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+
+.thumb-card .duplicate-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.thumb-card .select-checkbox {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 18px;
+  height: 18px;
+  z-index: 1;
+}
+
+/* Quick add-to-selects button, revealed on hover so it doesn't clutter the
+   grid; stays visible once the photo is actually in the selects set. */
+.selects-toggle {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease;
+  z-index: 1;
+}
+
+.thumb-card:hover .selects-toggle {
+  opacity: 1;
+}
+
+.selects-toggle.in-selects {
+  opacity: 1;
+  background: var(--accent);
+}
+
+.selects-remove,
+.card-remove {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  z-index: 1;
+}
+
+.selects-remove:hover,
+.card-remove:hover {
+  background: var(--danger);
+}
+
+/* Card-remove (× ) sits top-right so it doesn't collide with the top-left
+   add-to-selects button. */
+.card-remove {
+  left: auto;
+  right: 6px;
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease;
+}
+
+.thumb-card:hover .card-remove {
+  opacity: 1;
+}
+
+/* When a remove button occupies the top-right, drop the RAW+JPG badge below it
+   so the two don't overlap. */
+.thumb-card.has-remove .badge {
+  top: 40px;
+}
+
+.thumb-card .overlay-info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 10px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+  color: #fff;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.overlay-stars {
+  color: #f2b134;
+  letter-spacing: 1px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.overlay-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  flex-shrink: 0;
+}
+
+.import-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
+.import-card .thumb-card {
+  border-radius: 0;
+  border: none;
+}
+
+.import-card-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 1000;
+  display: flex;
+  /* stretch (not center) so .lightbox-content can own the full height between
+     the top/bottom padding and hand its leftover space to the image via flex -
+     this is what keeps the photo from ever being clipped. */
+  align-items: stretch;
+  justify-content: center;
+  padding: 48px 72px;
+}
+
+.lightbox-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 0;
+  max-width: 100%;
+}
+
+.lightbox-image {
+  /* flex:1 + min-height:0 makes the image box take exactly the space the
+     control bar leaves; object-fit:contain scales the photo inside it, so it's
+     always fully visible and never overflows the viewport. */
+  flex: 1 1 0;
+  min-height: 0;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.lightbox-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px 24px;
+  color: #fff;
+  font-size: 13px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  justify-content: space-between;
+  width: min(90vw, 900px);
+  padding: 12px 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+}
+
+.lightbox-controls-meta,
+.lightbox-controls-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.lightbox-filename {
+  font-weight: 600;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightbox-counter {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.lightbox-import-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lightbox-import-toggle.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.badge-inline {
+  background: rgba(255, 255, 255, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 3px 6px 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.tag-chip button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.lightbox-nav-btn {
+  /* Pinned to the viewport edges (not laid out inline next to the image) so
+     they're never pushed off-screen on narrower windows, regardless of how
+     wide the image itself renders. */
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #fff;
+  font-size: 32px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.lightbox-nav-prev {
+  left: 20px;
+}
+
+.lightbox-nav-next {
+  right: 20px;
+}
+
+.lightbox-nav-btn:disabled {
+  opacity: 0.2;
+  cursor: not-allowed;
+}
+
+.rating-stars {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.rating-stars button {
+  background: none;
+  border: none;
+  font-size: 16px;
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.rating-stars button.filled {
+  color: #f2b134;
+}
+
+.color-label-picker {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: transform 0.08s ease;
+}
+
+.color-swatch:hover {
+  transform: scale(1.15);
+}
+
+/* The "no color / any" option: a slashed circle so it's an obvious clear
+   affordance instead of an invisible transparent dot. */
+.color-swatch-none {
+  background:
+    linear-gradient(
+      to top left,
+      transparent calc(50% - 1px),
+      var(--danger) calc(50% - 1px),
+      var(--danger) calc(50% + 1px),
+      transparent calc(50% + 1px)
+    ),
+    var(--bg);
+}
+
+.color-swatch.selected {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 14px;
+  transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* A quieter button for secondary actions like "Clear filters". */
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+
+.btn.ghost:hover:not(:disabled) {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.empty-state {
+  color: var(--text-muted);
+  padding: 40px;
+  text-align: center;
+}
+
+/* Deliberately no fixed/computed height on this container - depending on a
+   stretched parent height (previously `calc(100vh - 100px)`) is fragile in
+   narrow or embedded viewports (e.g. an IDE preview pane), where it could
+   compute to near-zero and squeeze .detail-image away to nothing. Each
+   child below sizes itself directly instead, and flex-wrap alone handles
+   switching from side-by-side to stacked. */
+.detail-layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 40px;
+  flex: 1;
+  min-height: 0;
+  align-content: flex-start;
+}
+
+.detail-image {
+  flex: 999 1 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border-radius: 12px;
+  overflow: hidden;
+  max-height: 74vh;
+  padding: 20px;
+}
+
+.detail-image-dark {
+  background: #000;
+}
+
+.detail-image img.framed {
+  border: 10px solid #fff;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+}
+
+.detail-image img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(74vh - 40px);
+  object-fit: contain;
+}
+
+/* The detail view fills the viewport and doesn't scroll itself - the side panel
+   scrolls internally instead (see .detail-panel max-height). */
+.detail-page {
+  overflow: hidden;
+}
+
+.detail-panel {
+  flex: 1 1 280px;
+  max-width: 320px;
+  min-width: 0;
+  /* Cap to the layout height so long metadata/similar lists scroll *inside* the
+     panel rather than growing the row and scrolling the whole page. */
+  max-height: 100%;
+  overflow-y: auto;
+  /* Small horizontal padding so selection outlines on flush-left controls (the
+     color swatches) aren't clipped by overflow-x: hidden at the content edge. */
+  overflow-x: hidden;
+  padding: 0 4px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Keep the similar-photos strip inside its own scroll area so a long list of
+   matches can't stretch the panel (and with it the whole page) past the
+   viewport - it scrolls in place instead. */
+.similar-grid {
+  /* Miniature matches - small enough that several fit without dominating the
+     panel; the strip scrolls if there are many. */
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+  max-height: 44vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+@media (max-width: 700px) {
+  /* Stacked layout: let the page scroll as a whole again so the image and panel
+     don't get clipped when they can't sit side by side. */
+  .detail-page {
+    overflow-y: auto;
+  }
+
+  .detail-image {
+    flex-basis: 100%;
+    max-height: 40vh;
+  }
+
+  .detail-image img {
+    max-height: 40vh;
+  }
+
+  .detail-panel {
+    flex-basis: 100%;
+    max-width: none;
+    max-height: 50vh;
+  }
+}
+
+.exif-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.exif-table td {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.exif-table td:first-child {
+  color: var(--text-muted);
+}
+
+.import-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.import-toolbar input[type="text"] {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.section-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+/* Map view: let the map fill the remaining page height. */
+.map-page {
+  overflow: hidden;
+}
+
+/* Explicit height (rather than flex:1) so Leaflet always gets a non-zero
+   container size - a flex-derived height can resolve to 0 at init time and
+   leave the map blank. */
+.map-wrap {
+  position: relative;
+  height: calc(100vh - 150px);
+  min-height: 320px;
+}
+
+.map-container {
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.map-empty {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Photo "pins": the thumbnail itself, framed - closer to Apple Photos than a
+   generic teardrop marker. */
+.map-pin img {
+  width: 46px;
+  height: 46px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  transition: transform 0.08s ease;
+}
+
+.map-pin img:hover {
+  transform: scale(1.12);
+}
+
+/* Leaflet's default UI chrome uses light colors; keep the attribution legible
+   on either theme. */
+.leaflet-container {
+  background: var(--bg-elevated);
+  font-family: inherit;
+}

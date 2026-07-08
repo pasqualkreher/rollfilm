@@ -1,0 +1,41 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      - LIBRARY_ROOT=${LIBRARY_ROOT:-/data/library}
+      - DB_PATH=${DB_PATH:-/data/db/library.db}
+      - IMPORT_STAGING_ROOT=${IMPORT_STAGING_ROOT:-/data/staging}
+      - THUMBNAIL_CACHE_ROOT=${THUMBNAIL_CACHE_ROOT:-/data/thumbnails}
+      - MODEL_CACHE_ROOT=${MODEL_CACHE_ROOT:-/data/models}
+      - AUTH_MODE=${AUTH_MODE:-none}
+      - CLIP_MODEL_NAME=${CLIP_MODEL_NAME:-ViT-B-32}
+      - CLIP_MODEL_PRETRAINED=${CLIP_MODEL_PRETRAINED:-laion2b_s34b_b79k}
+      - HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}
+    volumes:
+      - ${HOST_LIBRARY_PATH:-./data/library}:/data/library
+      - ${HOST_DB_PATH:-./data/db}:/data/db
+      - ${HOST_STAGING_PATH:-./data/staging}:/data/staging
+      - ${HOST_THUMBNAIL_PATH:-./data/thumbnails}:/data/thumbnails
+      - ${HOST_MODEL_CACHE_PATH:-./data/models}:/data/models
+      - ./backend/app:/app/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+    depends_on:
+      - backend

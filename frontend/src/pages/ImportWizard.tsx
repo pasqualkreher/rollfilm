@@ -1,0 +1,290 @@
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "../api/client";
+import type { ColorLabel, StagedFileOut, ViewMode } from "../api/types";
+import { RatingStars } from "../components/RatingStars";
+import { ColorLabelPicker } from "../components/ColorLabelPicker";
+import { PhotoFilters } from "../components/PhotoFilters";
+import { ImportLightbox } from "../components/ImportLightbox";
+import { groupPairsAdjacent } from "../utils/pairing";
+import { useImportSession } from "../state/importSession";
+
+const RECOGNIZED_EXT = /\.(jpe?g|png|cr2|cr3|nef|arw|dng|raf|orf|rw2|pef|srw)$/i;
+
+function pickImportableFiles(fileList: FileList): File[] {
+  return Array.from(fileList).filter((f) => !f.name.startsWith(".") && RECOGNIZED_EXT.test(f.name));
+}
+
+function sourceLabelFor(fileList: FileList): string {
+  const first = fileList[0] as (File & { webkitRelativePath?: string }) | undefined;
+  const rel = first?.webkitRelativePath;
+  return rel && rel.includes("/") ? rel.split("/")[0] : "Uploaded folder";
+}
+
+// Byte-identical to a photo already in the library or elsewhere in this same
+// batch - the backend refuses to import these, so the UI shouldn't let you
+// select them in the first place.
+function isExactDuplicate(f: StagedFileOut): boolean {
+  return Boolean(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && !f.is_near_duplicate;
+}
+
+// Shots where exactly one half of a RAW+JPEG pair is selected - used to ask
+// "did you mean to leave the other one out?" before committing.
+function findIncompletePairs(files: StagedFileOut[]): StagedFileOut[] {
+  const byId = new Map(files.map((f) => [f.id, f]));
+  const seen = new Set<string>();
+  const missingHalf: StagedFileOut[] = [];
+  for (const f of files) {
+    if (!f.paired_staged_file_id || seen.has(f.id)) continue;
+    const partner = byId.get(f.paired_staged_file_id);
+    seen.add(f.id);
+    if (partner) seen.add(partner.id);
+    if (partner && f.selected !== partner.selected) {
+      missingHalf.push(f.selected ? partner : f);
+    }
+  }
+  return missingHalf;
+}
+
+export function ImportWizard() {
+  const { sessionId, sourceLabel, uploadProgress, uploadError, isUploading, startUpload, reset } =
+    useImportSession();
+  const [hideDuplicates, setHideDuplicates] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>("combined");
+  const [ratingMin, setRatingMin] = useState(0);
+  const [colorFilter, setColorFilter] = useState<ColorLabel>("none");
+  const [pickError, setPickError] = useState<string | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const { data: files, isLoading } = useQuery({
+    queryKey: ["import-files", sessionId],
+    queryFn: () => api.import.files(sessionId!),
+    enabled: !!sessionId,
+  });
+
+  const updateStaged = useMutation({
+    mutationFn: ({
+      fileId,
+      patch,
+    }: {
+      fileId: string;
+      patch: { selected?: boolean; rating?: number; color_label?: ColorLabel };
+    }) => api.import.updateStagedFile(sessionId!, fileId, patch),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] }),
+  });
+
+  const commit = useMutation({
+    mutationFn: () => api.import.commit(sessionId!),
+    onSuccess: () => {
+      // Without this, the session tracked in context (see state/importSession)
+      // stays set after a successful commit, so revisiting /import re-opens
+      // this same now-committed session - and Discard then 400s because it's
+      // no longer in "staging" status, leaving no way back to a fresh import.
+      reset();
+      navigate("/");
+    },
+  });
+
+  const discard = useMutation({
+    mutationFn: () => api.import.discard(sessionId!),
+    // Always reset locally, even if the delete itself failed (e.g. the
+    // session was already committed/discarded) - the point of Discard is to
+    // get back to a clean import screen, and a stale server-side session is
+    // exactly the case where that recovery matters most.
+    onSettled: () => reset(),
+  });
+
+  const filteredFiles: StagedFileOut[] = (files ?? []).filter((f) => {
+    if (hideDuplicates && (f.duplicate_of_image_id || f.duplicate_of_staged_file_id)) return false;
+    if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
+    if (viewMode === "raw_only" && f.file_type !== "raw") return false;
+    if (ratingMin > 0 && f.rating < ratingMin) return false;
+    if (colorFilter !== "none" && f.color_label !== colorFilter) return false;
+    return true;
+  });
+  const visibleFiles =
+    viewMode === "combined" ? groupPairsAdjacent(filteredFiles, (f) => f.paired_staged_file_id) : filteredFiles;
+  const selectedCount = (files ?? []).filter((f) => f.selected).length;
+
+  async function selectAll(selected: boolean) {
+    await Promise.all(
+      visibleFiles
+        .filter((f) => !selected || !isExactDuplicate(f))
+        .map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected }))
+    );
+    queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+  }
+
+  async function applyFilterToSelection() {
+    const visibleIds = new Set(visibleFiles.map((f) => f.id));
+    await Promise.all(
+      (files ?? [])
+        .filter((f) => !(visibleIds.has(f.id) && isExactDuplicate(f)))
+        .map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected: visibleIds.has(f.id) }))
+    );
+    queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+  }
+
+  async function handleCommitClick() {
+    const missingHalf = findIncompletePairs(files ?? []);
+    if (missingHalf.length > 0) {
+      const includeBoth = window.confirm(
+        `${missingHalf.length} shot(s) have only the RAW or only the JPEG selected. ` +
+          `Include the missing file for these shots too?\n\n` +
+          `OK = include both, Cancel = keep your current selection as-is.`
+      );
+      if (includeBoth) {
+        await Promise.all(
+          missingHalf.map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected: true }))
+        );
+        queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+      }
+    }
+    commit.mutate();
+  }
+
+  // Attached as a plain native listener (not React's onChange) and the
+  // webkitdirectory/directory attributes are set imperatively here too -
+  // React's synthetic event system has known quirks around file inputs
+  // (its internal value-tracking can silently swallow the change event
+  // depending on how the file list was assigned), so this bypasses that
+  // layer entirely and talks to the DOM directly.
+  useEffect(() => {
+    const el = fileInputRef.current;
+    if (!el) return;
+    el.setAttribute("webkitdirectory", "");
+    el.setAttribute("directory", "");
+
+    function onChange(e: Event) {
+      const target = e.target as HTMLInputElement;
+      const fileList = target.files;
+      if (!fileList || fileList.length === 0) {
+        target.value = "";
+        return;
+      }
+
+      // input.files is a *live* FileList - it must be fully read (both of
+      // these calls snapshot it into plain arrays/values) before resetting
+      // target.value, since clearing the value empties that same live list.
+      const picked = pickImportableFiles(fileList);
+      const label = sourceLabelFor(fileList);
+      target.value = ""; // allow re-picking the same folder later
+
+      if (picked.length === 0) {
+        setPickError("No JPEG/RAW photos found in that folder.");
+        return;
+      }
+      setPickError(null);
+      startUpload(picked, label);
+    }
+
+    el.addEventListener("change", onChange);
+    return () => el.removeEventListener("change", onChange);
+  }, [startUpload]);
+
+  if (!sessionId) {
+    return (
+      <div className="page">
+        <h2 className="section-title">Import photos</h2>
+        <p style={{ color: "var(--text-muted)", marginTop: -8 }}>
+          Pick the SD card, camera, or folder you want to import from.
+        </p>
+        <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} />
+        <button className="btn primary" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+          {isUploading ? `Uploading... ${uploadProgress ?? 0}%` : "Choose folder to import"}
+        </button>
+        {pickError && <div className="empty-state">{pickError}</div>}
+        {uploadError && <div className="empty-state">Upload failed: {uploadError}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="page">
+      <h2 className="section-title">Review import ({sourceLabel})</h2>
+      <PhotoFilters
+        viewMode={viewMode}
+        onViewMode={setViewMode}
+        ratingMin={ratingMin}
+        onRatingMin={setRatingMin}
+        colorLabel={colorFilter}
+        onColorLabel={setColorFilter}
+      >
+        <label className="filter-field filter-field-inline">
+          <input type="checkbox" checked={hideDuplicates} onChange={(e) => setHideDuplicates(e.target.checked)} />{" "}
+          Hide duplicates
+        </label>
+        <button className="btn" onClick={applyFilterToSelection}>
+          Select only filtered
+        </button>
+        <button className="btn" onClick={() => selectAll(true)}>
+          Select all
+        </button>
+        <button className="btn" onClick={() => selectAll(false)}>
+          Select none
+        </button>
+      </PhotoFilters>
+      <div className="filter-bar">
+        <span>{selectedCount} of {files?.length ?? 0} selected for import</span>
+        <button className="btn primary" onClick={handleCommitClick} disabled={selectedCount === 0 || commit.isPending}>
+          {commit.isPending ? "Importing..." : `Import ${selectedCount} photo(s)`}
+        </button>
+        <button className="btn" onClick={() => discard.mutate()} disabled={discard.isPending}>
+          Discard
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="empty-state">Processing uploaded files...</div>
+      ) : (
+        <div className="thumbnail-grid">
+          {visibleFiles.map((f, i) => (
+            <div key={f.id} className="import-card">
+              <div className="thumb-card" onClick={() => setLightboxIndex(i)}>
+                <img src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
+                {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
+                  <span className="duplicate-badge">
+                    {f.is_near_duplicate ? "Possible duplicate" : "Already in library"}
+                  </span>
+                )}
+                <span className="badge">{f.paired_staged_file_id ? "RAW+JPG" : f.file_type.toUpperCase()}</span>
+              </div>
+              <div className="import-card-footer">
+                <input
+                  type="checkbox"
+                  checked={f.selected}
+                  disabled={isExactDuplicate(f)}
+                  title={isExactDuplicate(f) ? "Already in your library - can't be imported again" : undefined}
+                  onChange={(e) => updateStaged.mutate({ fileId: f.id, patch: { selected: e.target.checked } })}
+                />
+                <RatingStars
+                  rating={f.rating}
+                  onChange={(rating) => updateStaged.mutate({ fileId: f.id, patch: { rating } })}
+                />
+                <ColorLabelPicker
+                  value={f.color_label}
+                  onChange={(color_label) => updateStaged.mutate({ fileId: f.id, patch: { color_label } })}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {lightboxIndex !== null && (
+        <ImportLightbox
+          sessionId={sessionId}
+          files={visibleFiles}
+          index={lightboxIndex}
+          onIndexChange={setLightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onUpdate={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
+        />
+      )}
+    </div>
+  );
+}
