@@ -27,6 +27,9 @@ class ImageOut(BaseModel):
     rating: int
     color_label: ColorLabel
     paired_image_id: str | None
+    # Set when this photo was indexed in place from an external source root
+    # (e.g. a NAS) rather than imported into the managed library.
+    source_root_id: str | None
     edit_rotation: int
     edit_crop_x: float | None
     edit_crop_y: float | None
@@ -160,6 +163,42 @@ class ImmichSettingsUpdate(BaseModel):
 class ImmichTestResult(BaseModel):
     ok: bool
     message: str
+
+
+class SourceRootCreate(BaseModel):
+    name: str
+    path: str
+
+
+class SourceRootOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    path: str
+    created_at: datetime
+    last_scanned_at: datetime | None
+    image_count: int = 0
+    scanning: bool = False
+
+
+class ScanStatusOut(BaseModel):
+    running: bool
+    scanned: int
+    added: int
+    error: str | None = None
+
+
+class DirEntry(BaseModel):
+    name: str
+    path: str
+
+
+class DirListing(BaseModel):
+    path: str
+    parent: str | None
+    exists: bool
+    entries: list[DirEntry]
 
 
 class SearchResultOut(BaseModel):

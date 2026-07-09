@@ -60,14 +60,40 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class SourceRoot(Base):
+    """A folder outside the managed library (e.g. a mounted NAS) that is scanned
+    and indexed *in place* - the photos under it are added to the library but
+    their files are never copied or moved. Multiple source roots can be
+    registered. See app/services/sources.py."""
+
+    __tablename__ = "source_roots"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
+    name: Mapped[str] = mapped_column(String)
+    # Absolute path as seen *inside the backend* (i.e. the container mount point).
+    path: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_scanned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class Image(Base):
     __tablename__ = "images"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
 
-    # Relative to settings.library_root, e.g. "2026/2026-07-08/IMG_0001.CR2".
+    # For managed (imported) photos this is relative to settings.library_root,
+    # e.g. "2026/2026-07-08/IMG_0001.CR2". For photos indexed from an external
+    # source root it is the absolute on-disk path (source_root_id is set); the
+    # file stays where it is. Resolve either via services.filesystem.resolve_image_path.
     file_path: Mapped[str] = mapped_column(String, unique=True)
+    # Null = managed library file; set = indexed in place from this source root.
+    source_root_id: Mapped[str | None] = mapped_column(
+        ForeignKey("source_roots.id"), nullable=True, index=True
+    )
     original_filename: Mapped[str] = mapped_column(String)
 
     file_hash: Mapped[str] = mapped_column(String, index=True)

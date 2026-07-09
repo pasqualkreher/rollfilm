@@ -8,19 +8,8 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
 import { groupPairsAdjacent } from "../utils/pairing";
+import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
-
-const RECOGNIZED_EXT = /\.(jpe?g|png|cr2|cr3|nef|arw|dng|raf|orf|rw2|pef|srw)$/i;
-
-function pickImportableFiles(fileList: FileList): File[] {
-  return Array.from(fileList).filter((f) => !f.name.startsWith(".") && RECOGNIZED_EXT.test(f.name));
-}
-
-function sourceLabelFor(fileList: FileList): string {
-  const first = fileList[0] as (File & { webkitRelativePath?: string }) | undefined;
-  const rel = first?.webkitRelativePath;
-  return rel && rel.includes("/") ? rel.split("/")[0] : "Uploaded folder";
-}
 
 // Byte-identical to a photo already in the library or elsewhere in this same
 // batch - the backend refuses to import these, so the UI shouldn't let you

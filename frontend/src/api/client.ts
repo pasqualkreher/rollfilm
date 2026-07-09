@@ -2,11 +2,14 @@ import type {
   AlbumOut,
   CropBox,
   ImageOut,
+  DirListing,
   ImmichSettings,
   ImmichTestResult,
   ImportSessionOut,
   LibraryFilters,
+  ScanStatus,
   SearchResultOut,
+  SourceRoot,
   StagedFileOut,
   StagedFileUpdatePatch,
 } from "./types";
@@ -262,6 +265,27 @@ export const api = {
     },
     testImmich(): Promise<ImmichTestResult> {
       return request(`/settings/immich/test`, { method: "POST" });
+    },
+  },
+  sources: {
+    list(): Promise<SourceRoot[]> {
+      return request(`/sources`);
+    },
+    add(name: string, path: string): Promise<SourceRoot> {
+      return request(`/sources`, { method: "POST", body: JSON.stringify({ name, path }) });
+    },
+    browse(path?: string): Promise<DirListing> {
+      const qs = path ? `?${new URLSearchParams({ path })}` : "";
+      return request(`/sources/browse${qs}`);
+    },
+    scan(id: string): Promise<ScanStatus> {
+      return request(`/sources/${id}/scan`, { method: "POST" });
+    },
+    scanStatus(id: string): Promise<ScanStatus> {
+      return request(`/sources/${id}/scan-status`);
+    },
+    remove(id: string): Promise<void> {
+      return request(`/sources/${id}`, { method: "DELETE" });
     },
   },
 };

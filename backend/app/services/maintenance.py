@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.models import Album, AlbumImage, ColorLabel, FileType, Image, ImportSession, ImportStagedFile
 from app.services.exif import read_exif
+from app.services.filesystem import resolve_image_path
 from app.services.raw import classify_file_type
 from app.services.thumbnails import derivative_dir, regenerate_for_image
 from app.workers.queue import enqueue_post_import
@@ -31,6 +32,12 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
     removed = 0
     for image in images:
+        # Only the managed library folder is treated as source-of-truth here.
+        # External (source-root) photos are governed by their own scan lifecycle
+        # and must NOT be pruned just because e.g. the NAS is momentarily
+        # unmounted - that would wipe the whole index.
+        if image.source_root_id is not None:
+            continue
         if not (settings.library_root / image.file_path).exists():
             shutil.rmtree(derivative_dir(image.id), ignore_errors=True)
             db.delete(image)
@@ -39,7 +46,9 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
 
     tracked = {
         str((settings.library_root / img.file_path).resolve())
-        for img in db.query(Image).filter(Image.owner_id == owner_id).all()
+        for img in db.query(Image)
+        .filter(Image.owner_id == owner_id, Image.source_root_id.is_(None))
+        .all()
     }
     untracked = sum(
         1
@@ -56,7 +65,7 @@ def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
     rebuilt = 0
     for image in images:
-        full_path = settings.library_root / image.file_path
+        full_path = resolve_image_path(image)
         if full_path.exists():
             regenerate_for_image(image)
             # Backfill orientation-correct dimensions for photos imported before
@@ -130,9 +139,24 @@ def build_backup_zip(db: Session, owner_id: int) -> Path:
     all metadata (ratings, albums, edits, ...). Deliberately not a raw copy
     of the sqlite file - swapping that out from under a live connection pool
     on restore would be fragile; restoring by re-inserting rows is safer."""
-    images = db.query(Image).filter(Image.owner_id == owner_id).all()
+    # Backups cover the managed library only. External source-root photos live
+    # on their own storage (a NAS etc.) and can be re-indexed by re-adding the
+    # source, so their originals aren't bundled into the backup zip.
+    images = (
+        db.query(Image)
+        .filter(Image.owner_id == owner_id, Image.source_root_id.is_(None))
+        .all()
+    )
     albums = db.query(Album).filter(Album.owner_id == owner_id).all()
-    album_images = db.query(AlbumImage).join(Album).filter(Album.owner_id == owner_id).all()
+    # Exclude album memberships that point at external photos (which aren't in
+    # the backup) so a restore never tries to re-link a missing image.
+    album_images = (
+        db.query(AlbumImage)
+        .join(Album)
+        .join(Image, Image.id == AlbumImage.image_id)
+        .filter(Album.owner_id == owner_id, Image.source_root_id.is_(None))
+        .all()
+    )
 
     manifest = {
         "created_at": datetime.now(timezone.utc).isoformat(),

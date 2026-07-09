@@ -32,6 +32,7 @@ export interface ImageOut {
   rating: number;
   color_label: ColorLabel;
   paired_image_id: string | null;
+  source_root_id: string | null;
   edit_rotation: number;
   edit_crop_x: number | null;
   edit_crop_y: number | null;
@@ -102,6 +103,35 @@ export interface ImmichSettings {
 export interface ImmichTestResult {
   ok: boolean;
   message: string;
+}
+
+export interface SourceRoot {
+  id: string;
+  name: string;
+  path: string;
+  created_at: string;
+  last_scanned_at: string | null;
+  image_count: number;
+  scanning: boolean;
+}
+
+export interface ScanStatus {
+  running: boolean;
+  scanned: number;
+  added: number;
+  error: string | null;
+}
+
+export interface DirEntry {
+  name: string;
+  path: string;
+}
+
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  exists: boolean;
+  entries: DirEntry[];
 }
 
 export interface LibraryFilters {

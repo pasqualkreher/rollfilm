@@ -20,6 +20,13 @@ services:
       - ${HOST_STAGING_PATH:-./data/staging}:/data/staging
       - ${HOST_THUMBNAIL_PATH:-./data/thumbnails}:/data/thumbnails
       - ${HOST_MODEL_CACHE_PATH:-./data/models}:/data/models
+      # External photo sources scanned in place (e.g. a NAS or an existing photo
+      # folder). Mount host folders under /sources, then register them in
+      # Settings -> External photo sources (path e.g. /sources/nas-photos).
+      # Mounted read-only so the app can never modify or delete your originals.
+      # Point HOST_SOURCES_PATH at your collection, or add more read-only lines
+      # like `- /mnt/nas/photos:/sources/nas:ro`.
+      - ${HOST_SOURCES_PATH:-./data/sources}:/sources:ro
       - ./backend/app:/app/app
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

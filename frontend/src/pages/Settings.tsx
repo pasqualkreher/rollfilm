@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ImmichTestResult } from "../api/types";
+import { ExternalSources } from "../components/ExternalSources";
 
 export function Settings() {
   const queryClient = useQueryClient();
@@ -163,6 +164,8 @@ export function Settings() {
           </p>
         )}
       </section>
+
+      <ExternalSources />
 
       <section style={{ marginBottom: 32 }}>
         <h3 className="section-title" style={{ fontSize: 15 }}>

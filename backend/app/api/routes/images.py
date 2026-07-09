@@ -17,6 +17,7 @@ from app.config import settings
 from app.db.models import AlbumImage, ColorLabel, FileType, Image, ImageTag, ImportStagedFile, Tag, User
 from app.db.session import engine, get_db
 from app.services import embeddings, thumbnails
+from app.services.filesystem import resolve_image_path
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,12 @@ def bulk_delete_images(
     db.flush()
 
     for image in images:
-        (settings.library_root / image.file_path).unlink(missing_ok=True)
+        # Never touch the original of a file indexed from an external source -
+        # it lives on the user's NAS/folder and isn't ours to delete. Only the
+        # DB row and our cached thumbnails go. Managed (imported) originals are
+        # removed as before.
+        if image.source_root_id is None:
+            (settings.library_root / image.file_path).unlink(missing_ok=True)
         shutil.rmtree(thumbnails.derivative_dir(image.id), ignore_errors=True)
         db.delete(image)
     db.commit()
@@ -167,7 +173,7 @@ def download_zip(
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
         used_names: dict[str, int] = {}
         for image in images:
-            path = settings.library_root / image.file_path
+            path = resolve_image_path(image)
             if not path.exists():
                 continue
             # Two different images can share an original filename; suffix later
@@ -349,7 +355,7 @@ def get_preview(image_id: str, db: Session = Depends(get_db), current_user: User
 @router.get("/{image_id}/original")
 def get_original(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     image = get_owned_image(db, current_user.id, image_id)
-    path: Path = settings.library_root / image.file_path
+    path: Path = resolve_image_path(image)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Original file missing from library")
     return FileResponse(path, filename=image.original_filename)

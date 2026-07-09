@@ -71,9 +71,11 @@ def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
 
 
 def regenerate_for_image(image: "Image") -> None:
+    from app.services.filesystem import resolve_image_path
+
     crop = None
     if image.edit_crop_x is not None:
         crop = (image.edit_crop_x, image.edit_crop_y, image.edit_crop_width, image.edit_crop_height)
     generate_derivatives(
-        image.id, settings.library_root / image.file_path, rotation=image.edit_rotation, crop=crop
+        image.id, resolve_image_path(image), rotation=image.edit_rotation, crop=crop
     )

@@ -1,5 +1,24 @@
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from app.config import settings
+
+if TYPE_CHECKING:
+    from app.db.models import Image
+
+
+def resolve_image_path(image: "Image") -> Path:
+    """The on-disk location of an image's original file.
+
+    Managed (imported) photos live under LIBRARY_ROOT with a relative
+    file_path; photos indexed from an external source root store their absolute
+    path and stay wherever they are (e.g. on a NAS). This is the single place
+    that difference is resolved - callers should never join library_root by hand.
+    """
+    if image.source_root_id:
+        return Path(image.file_path)
+    return settings.library_root / image.file_path
 
 
 def library_relative_path(taken_at: datetime, original_filename: str, library_root: Path) -> str:
