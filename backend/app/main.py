@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import albums, images, import_, maintenance, search, tags
+from app.api.routes import albums, images, import_, maintenance, search, settings, tags
 from app.db.session import engine
 from app.services.embeddings import ensure_embeddings_table
 
@@ -19,6 +19,7 @@ app.include_router(albums.router)
 app.include_router(import_.router)
 app.include_router(search.router)
 app.include_router(maintenance.router)
+app.include_router(settings.router)
 app.include_router(tags.router)
 
 

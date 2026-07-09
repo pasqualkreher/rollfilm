@@ -315,22 +315,35 @@ def crop_image(
     return image
 
 
+def _serve_derivative(image: Image, name: str, not_ready_detail: str) -> FileResponse:
+    """Serve a cached derivative (thumbnail.jpg / preview.jpg), generating it
+    on the spot if it isn't there yet. Derivatives are normally produced by the
+    background worker after import, but that's asynchronous - without this
+    fallback the grid shows broken images right after an import until the files
+    exist *and* the page is manually refreshed. Generating on-miss closes that
+    race and also self-heals any derivative that failed or was deleted."""
+    path = thumbnails.derivative_dir(image.id) / name
+    if not path.exists():
+        try:
+            thumbnails.regenerate_for_image(image)
+        except Exception:
+            logger.exception("On-demand %s generation failed for image %s", name, image.id)
+            raise HTTPException(status_code=404, detail=not_ready_detail)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=not_ready_detail)
+    return FileResponse(path)
+
+
 @router.get("/{image_id}/thumbnail")
 def get_thumbnail(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     image = get_owned_image(db, current_user.id, image_id)
-    path = thumbnails.derivative_dir(image.id) / "thumbnail.jpg"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Thumbnail not ready yet")
-    return FileResponse(path)
+    return _serve_derivative(image, "thumbnail.jpg", "Thumbnail not ready yet")
 
 
 @router.get("/{image_id}/preview")
 def get_preview(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     image = get_owned_image(db, current_user.id, image_id)
-    path = thumbnails.derivative_dir(image.id) / "preview.jpg"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Preview not ready yet")
-    return FileResponse(path)
+    return _serve_derivative(image, "preview.jpg", "Preview not ready yet")
 
 
 @router.get("/{image_id}/original")

@@ -40,6 +40,8 @@ def _to_staged_file_out(f: ImportStagedFile, paired_id: str | None = None) -> sc
         taken_at=exif.get("taken_at"),
         camera_make=exif.get("camera_make"),
         camera_model=exif.get("camera_model"),
+        width=exif.get("width"),
+        height=exif.get("height"),
     )
 
 
@@ -149,12 +151,15 @@ def update_staged_file(
 
 @router.post("/sessions/{session_id}/commit", response_model=list[schemas.ImageOut])
 def commit_session(
-    session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    session_id: str,
+    payload: schemas.CommitImportRequest = schemas.CommitImportRequest(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     session = get_owned_import_session(db, current_user.id, session_id)
     if session.status != ImportSessionStatus.staging:
         raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
-    return commit_import_session(db, session, current_user.id)
+    return commit_import_session(db, session, current_user.id, payload.upload_to_immich)
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

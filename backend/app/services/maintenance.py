@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models import Album, AlbumImage, ColorLabel, FileType, Image, ImportSession, ImportStagedFile
+from app.services.exif import read_exif
 from app.services.raw import classify_file_type
 from app.services.thumbnails import derivative_dir, regenerate_for_image
 from app.workers.queue import enqueue_post_import
@@ -55,9 +56,18 @@ def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
     rebuilt = 0
     for image in images:
-        if (settings.library_root / image.file_path).exists():
+        full_path = settings.library_root / image.file_path
+        if full_path.exists():
             regenerate_for_image(image)
+            # Backfill orientation-correct dimensions for photos imported before
+            # width/height accounted for the EXIF orientation tag, so the grid
+            # can show each one at its true portrait/landscape shape.
+            exif = read_exif(full_path)
+            if exif.width and exif.height:
+                image.width = exif.width
+                image.height = exif.height
             rebuilt += 1
+    db.commit()
     return {"rebuilt": rebuilt}
 
 

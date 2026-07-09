@@ -192,6 +192,17 @@ class ImportSession(Base):
     )
 
 
+class AppSetting(Base):
+    """Simple key-value store for app-wide configuration the user sets from the
+    Settings screen (e.g. Immich server URL + API key). Single-user today, so
+    these are global rather than owner-scoped."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(String)
+
+
 class ImportStagedFile(Base):
     __tablename__ = "import_staged_files"
 

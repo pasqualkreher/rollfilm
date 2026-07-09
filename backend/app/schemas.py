@@ -130,12 +130,36 @@ class StagedFileOut(BaseModel):
     taken_at: datetime | None
     camera_make: str | None
     camera_model: str | None
+    width: int | None
+    height: int | None
 
 
 class StagedFileUpdate(BaseModel):
     selected: bool | None = None
     rating: int | None = None
     color_label: ColorLabel | None = None
+
+
+class CommitImportRequest(BaseModel):
+    # Also push the selected JPEGs (never RAWs) to Immich after import.
+    upload_to_immich: bool = False
+
+
+class ImmichSettingsOut(BaseModel):
+    base_url: str | None
+    # The stored API key itself is never returned - only whether one is set.
+    api_key_set: bool
+
+
+class ImmichSettingsUpdate(BaseModel):
+    base_url: str
+    # Omit / send null to keep the existing key when only changing the URL.
+    api_key: str | None = None
+
+
+class ImmichTestResult(BaseModel):
+    ok: bool
+    message: str
 
 
 class SearchResultOut(BaseModel):

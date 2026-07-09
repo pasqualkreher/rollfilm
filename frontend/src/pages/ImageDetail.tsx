@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
@@ -18,7 +18,21 @@ export function ImageDetail() {
   const [activeId, setActiveId] = useState(id!);
   const [editorOpen, setEditorOpen] = useState(false);
   const [bgMode, setBgMode] = useState<"light" | "dark">("light");
+  // Click-to-zoom loupe: click toggles a 2.5x zoom centred on the click point,
+  // then moving the mouse pans (transform-origin follows the cursor).
+  const [zoomed, setZoomed] = useState(false);
+  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
   const selects = useSelects();
+
+  const ZOOM_SCALE = 2.5;
+
+  function cursorOrigin(e: ReactMouseEvent<HTMLImageElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * 100,
+      y: ((e.clientY - rect.top) / rect.height) * 100,
+    };
+  }
 
   // Passed from the Library grid so arrow keys can zap through the same
   // filtered/ordered set of photos you were browsing, not the whole library.
@@ -30,6 +44,12 @@ export function ImageDetail() {
   useEffect(() => {
     setActiveId(id!);
   }, [id]);
+
+  // Drop back to fit-view whenever the shown photo changes (arrow-key nav or
+  // the RAW/JPEG toggle), so a new image never opens already zoomed-in.
+  useEffect(() => {
+    setZoomed(false);
+  }, [activeId]);
 
   const { data: image } = useQuery({
     queryKey: ["image", activeId],
@@ -117,19 +137,35 @@ export function ImageDetail() {
         <div style={{ flex: "999 1 400px", display: "flex", flexDirection: "column", gap: 10 }}>
           <div className={`detail-image${bgMode === "dark" ? " detail-image-dark" : ""}`}>
             <img
-              className={bgMode === "dark" ? "framed" : undefined}
+              className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}`}
+              style={{
+                transform: zoomed ? `scale(${ZOOM_SCALE})` : undefined,
+                transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+              }}
               src={api.images.previewUrl(image.id, editVersion(image))}
               alt={image.original_filename}
+              onClick={(e) => {
+                setZoomOrigin(cursorOrigin(e));
+                setZoomed((z) => !z);
+              }}
+              onMouseMove={(e) => {
+                if (zoomed) setZoomOrigin(cursorOrigin(e));
+              }}
             />
           </div>
-          <span className="segmented" style={{ alignSelf: "center" }}>
-            <button className={bgMode === "light" ? "active" : ""} onClick={() => setBgMode("light")}>
-              Light background
-            </button>
-            <button className={bgMode === "dark" ? "active" : ""} onClick={() => setBgMode("dark")}>
-              Black background
-            </button>
-          </span>
+          <div className="detail-image-toolbar">
+            <span className="segmented">
+              <button className={bgMode === "light" ? "active" : ""} onClick={() => setBgMode("light")}>
+                Light background
+              </button>
+              <button className={bgMode === "dark" ? "active" : ""} onClick={() => setBgMode("dark")}>
+                Black background
+              </button>
+            </span>
+            <span className="detail-zoom-hint">
+              {zoomed ? "Click to zoom out · move to pan" : "Click photo to zoom"}
+            </span>
+          </div>
         </div>
         <div className="detail-panel">
           <h3 className="section-title">{image.original_filename}</h3>

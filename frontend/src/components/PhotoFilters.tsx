@@ -15,6 +15,13 @@ interface Props {
   albums?: AlbumOut[];
   albumId?: string;
   onAlbumId?: (id: string) => void;
+  // When provided, a "From date – To date" range is shown that filters by
+  // capture date (taken_at) with month/day precision via native date pickers.
+  // Both handlers must be given to enable it. Values are ISO dates ("YYYY-MM-DD").
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  onDateFrom?: (d: string | null) => void;
+  onDateTo?: (d: string | null) => void;
   // Extra controls (e.g. import's "Hide duplicates" / select buttons) render
   // after the shared filters so every screen keeps an identical filter core.
   children?: ReactNode;
@@ -32,14 +39,26 @@ export function PhotoFilters({
   albums,
   albumId,
   onAlbumId,
+  dateFrom,
+  dateTo,
+  onDateFrom,
+  onDateTo,
   children,
 }: Props) {
-  const isFiltering = ratingMin > 0 || colorLabel !== "none" || (albumId ?? "") !== "";
+  const showDates = Boolean(onDateFrom && onDateTo);
+  const isFiltering =
+    ratingMin > 0 ||
+    colorLabel !== "none" ||
+    (albumId ?? "") !== "" ||
+    Boolean(dateFrom) ||
+    Boolean(dateTo);
 
   function clearAll() {
     onRatingMin(0);
     onColorLabel("none");
     onAlbumId?.("");
+    onDateFrom?.(null);
+    onDateTo?.(null);
   }
 
   return (
@@ -75,6 +94,29 @@ export function PhotoFilters({
         Color
         <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
       </label>
+
+      {showDates && (
+        <label className="filter-field">
+          Date taken
+          <span className="date-range">
+            <input
+              type="date"
+              value={dateFrom ?? ""}
+              max={dateTo ?? undefined}
+              onChange={(e) => onDateFrom?.(e.target.value || null)}
+              aria-label="From date"
+            />
+            <span className="date-range-sep">–</span>
+            <input
+              type="date"
+              value={dateTo ?? ""}
+              min={dateFrom ?? undefined}
+              onChange={(e) => onDateTo?.(e.target.value || null)}
+              aria-label="To date"
+            />
+          </span>
+        </label>
+      )}
 
       <button className="btn ghost" onClick={clearAll} disabled={!isFiltering}>
         Clear filters

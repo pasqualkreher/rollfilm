@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
-import { useSelects } from "../state/selects";
 import { TimelineScrubber } from "./TimelineScrubber";
 
 interface Props {
@@ -50,7 +49,6 @@ export function ThumbnailGrid({
   removeTitle = "Remove",
 }: Props) {
   const navigate = useNavigate();
-  const selects = useSelects();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -61,9 +59,21 @@ export function ThumbnailGrid({
   const allIds = images.map((im) => im.id);
 
   function renderCard(image: ImageOut, index: number) {
+    // Size each card to the photo's real aspect ratio so the grid shows the
+    // whole frame uncropped (portrait stays portrait, panoramas stay wide),
+    // instead of the previous square crop. Falls back to the CSS 1/1 when a
+    // photo's dimensions aren't known. A manual 90°/270° edit rotation swaps
+    // the displayed width/height, so mirror that here.
+    let aspectRatio: string | undefined;
+    if (image.width && image.height) {
+      const quarterTurned = Math.abs(Math.round(image.edit_rotation / 90)) % 2 === 1;
+      const [w, h] = quarterTurned ? [image.height, image.width] : [image.width, image.height];
+      aspectRatio = `${w} / ${h}`;
+    }
     return (
       <div
         key={image.id}
+        style={aspectRatio ? { aspectRatio } : undefined}
         className={`thumb-card${selectMode && selectedIds?.has(image.id) ? " selected" : ""}${
           !selectMode && onRemove ? " has-remove" : ""
         }`}
@@ -77,18 +87,6 @@ export function ThumbnailGrid({
       >
         <img src={api.images.thumbnailUrl(image.id, editVersion(image))} loading="lazy" alt={image.original_filename} />
         {image.paired_image_id && <span className="badge">RAW+JPG</span>}
-        {!selectMode && (
-          <button
-            className={`selects-toggle${selects.has(image.id) ? " in-selects" : ""}`}
-            title={selects.has(image.id) ? "In selects - click to remove" : "Add to selects"}
-            onClick={(e) => {
-              e.stopPropagation();
-              selects.toggle(image.id);
-            }}
-          >
-            {selects.has(image.id) ? "✓" : "+"}
-          </button>
-        )}
         {!selectMode && onRemove && (
           <button
             className="card-remove"

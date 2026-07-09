@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ColorLabel, LibraryFilters, ViewMode } from "../api/types";
@@ -16,11 +17,15 @@ export function Library() {
   const [ratingMin, setRatingMin] = useState<number>(0);
   const [colorLabel, setColorLabel] = useState<ColorLabel>("none");
   const [albumId, setAlbumId] = useState<string>("");
+  const [dateFrom, setDateFrom] = useState<string | null>(null);
+  const [dateTo, setDateTo] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const selects = useSelects();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const q = (searchParams.get("q") ?? "").trim();
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
 
@@ -29,11 +34,20 @@ export function Library() {
     rating_min: ratingMin || undefined,
     color_label: colorLabel !== "none" ? colorLabel : undefined,
     album_id: albumId || undefined,
+    // Capture-date range from the date pickers: include the whole "from" day
+    // through the end of the "to" day.
+    date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
+    date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
   };
 
   const { data: images, isLoading } = useQuery({
-    queryKey: ["images", filters],
-    queryFn: () => api.images.list(filters),
+    queryKey: ["images", { ...filters, q }],
+    queryFn: async () => {
+      // With a search query the grid switches to scoped search (same filters,
+      // just ranked by relevance); otherwise it's the plain filtered list.
+      if (q) return (await api.search.query(q, filters)).map((r) => r.image);
+      return api.images.list(filters);
+    },
   });
 
   const orderedImages =
@@ -115,6 +129,10 @@ export function Library() {
         albums={albums}
         albumId={albumId}
         onAlbumId={setAlbumId}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onDateFrom={setDateFrom}
+        onDateTo={setDateTo}
       >
         <button
           className={`btn${selectMode ? " primary" : ""}`}
@@ -136,6 +154,24 @@ export function Library() {
           </>
         )}
       </PhotoFilters>
+      {q && (
+        <div className="search-scope-banner">
+          <span>
+            Results for <strong>"{q}"</strong> in this view
+            {!isLoading && images ? ` (${images.length})` : ""}
+          </span>
+          <button
+            className="btn ghost"
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete("q");
+              setSearchParams(next);
+            }}
+          >
+            Clear search
+          </button>
+        </div>
+      )}
       {selected.size > 0 && (
         <div className="filter-bar">
           <span>{selected.size} selected</span>
@@ -168,7 +204,7 @@ export function Library() {
           selectedIds={selected}
           onToggleSelect={toggleSelect}
           selectMode={selectMode}
-          groupByDate
+          groupByDate={!q}
         />
       )}
     </div>

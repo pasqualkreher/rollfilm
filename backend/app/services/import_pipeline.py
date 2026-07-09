@@ -20,7 +20,8 @@ from app.services.filesystem import library_relative_path
 from app.services.hashing import hamming_distance, perceptual_hash, sha256_file
 from app.services.pairing import pair_siblings
 from app.services.raw import classify_file_type, extract_preview
-from app.workers.queue import enqueue_post_import
+from app.services.settings_store import get_immich_config
+from app.workers.queue import enqueue_immich_upload, enqueue_post_import
 
 
 class UploadedFile(Protocol):
@@ -193,7 +194,9 @@ def stage_uploaded_files(
     return session
 
 
-def commit_import_session(db: Session, session: ImportSession, owner_id: int) -> list[Image]:
+def commit_import_session(
+    db: Session, session: ImportSession, owner_id: int, upload_to_immich: bool = False
+) -> list[Image]:
     selected_files = [
         f
         for f in session.staged_files
@@ -250,9 +253,23 @@ def commit_import_session(db: Session, session: ImportSession, owner_id: int) ->
     session.status = ImportSessionStatus.committed
     db.commit()
 
+    # Only attempt Immich uploads when the user asked for it *and* the
+    # integration is configured; a missing/half-set config silently skips.
+    immich = get_immich_config(db) if upload_to_immich else None
+
     for image in new_images:
         db.refresh(image)
-        enqueue_post_import(image.id, settings.library_root / image.file_path)
+        image_path = settings.library_root / image.file_path
+        enqueue_post_import(image.id, image_path)
+
+        # Per the import option: push only the JPEGs to Immich, never the RAWs.
+        if immich and image.file_type == FileType.jpeg:
+            enqueue_immich_upload(
+                immich.base_url,
+                immich.api_key,
+                image_path,
+                image.taken_at,
+            )
 
     shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
     return new_images

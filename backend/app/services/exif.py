@@ -46,12 +46,34 @@ def _parse_datetime(value: str | None) -> datetime | None:
     return None
 
 
+def _is_quarter_rotated(orientation) -> bool:
+    """True when the EXIF orientation is a 90°/270° turn, meaning the stored
+    pixel width/height are swapped relative to how the photo is displayed.
+    Handles both numeric orientation (5-8) and exiftool's descriptive strings
+    ("Rotate 90 CW", "Rotate 270 CW")."""
+    if orientation is None:
+        return False
+    if isinstance(orientation, (int, float)):
+        return int(orientation) in (5, 6, 7, 8)
+    text = str(orientation)
+    return "90" in text or "270" in text
+
+
 def read_exif(path: Path) -> ExifData:
     metadata = _get_helper().get_metadata([str(path)])[0]
 
+    width = metadata.get("EXIF:ExifImageWidth") or metadata.get("File:ImageWidth")
+    height = metadata.get("EXIF:ExifImageHeight") or metadata.get("File:ImageHeight")
+    # Report the *displayed* dimensions: cameras store portrait shots as
+    # landscape pixels plus an orientation tag, so swap when that tag is a
+    # quarter turn. Keeps width/height consistent with the auto-oriented
+    # thumbnails (see services/raw.py) the grid renders.
+    if width and height and _is_quarter_rotated(metadata.get("EXIF:Orientation")):
+        width, height = height, width
+
     return ExifData(
-        width=metadata.get("EXIF:ExifImageWidth") or metadata.get("File:ImageWidth"),
-        height=metadata.get("EXIF:ExifImageHeight") or metadata.get("File:ImageHeight"),
+        width=width,
+        height=height,
         taken_at=_parse_datetime(metadata.get("EXIF:DateTimeOriginal")),
         camera_make=metadata.get("EXIF:Make"),
         camera_model=metadata.get("EXIF:Model"),

@@ -79,6 +79,8 @@ export interface StagedFileOut {
   taken_at: string | null;
   camera_make: string | null;
   camera_model: string | null;
+  width: number | null;
+  height: number | null;
 }
 
 export interface StagedFileUpdatePatch {
@@ -90,6 +92,16 @@ export interface StagedFileUpdatePatch {
 export interface SearchResultOut {
   image: ImageOut;
   distance: number;
+}
+
+export interface ImmichSettings {
+  base_url: string | null;
+  api_key_set: boolean;
+}
+
+export interface ImmichTestResult {
+  ok: boolean;
+  message: string;
 }
 
 export interface LibraryFilters {

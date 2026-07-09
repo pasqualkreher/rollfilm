@@ -2,6 +2,8 @@ import type {
   AlbumOut,
   CropBox,
   ImageOut,
+  ImmichSettings,
+  ImmichTestResult,
   ImportSessionOut,
   LibraryFilters,
   SearchResultOut,
@@ -187,16 +189,30 @@ export const api = {
         body: JSON.stringify(patch),
       });
     },
-    commit(id: string): Promise<ImageOut[]> {
-      return request(`/import/sessions/${id}/commit`, { method: "POST" });
+    commit(id: string, uploadToImmich = false): Promise<ImageOut[]> {
+      return request(`/import/sessions/${id}/commit`, {
+        method: "POST",
+        body: JSON.stringify({ upload_to_immich: uploadToImmich }),
+      });
     },
     discard(id: string): Promise<void> {
       return request(`/import/sessions/${id}`, { method: "DELETE" });
     },
   },
   search: {
-    query(q: string): Promise<SearchResultOut[]> {
-      return request(`/search?${new URLSearchParams({ q })}`);
+    // Scoped to the grid the user is on: pass the same filters (album, rating,
+    // color, date range, view mode) so results only include photos the current
+    // view would show.
+    query(q: string, filters?: Partial<LibraryFilters>): Promise<SearchResultOut[]> {
+      const params = new URLSearchParams({ q });
+      if (filters) {
+        Object.entries(filters).forEach(([key, value]) => {
+          if (value !== undefined && value !== null && value !== "") {
+            params.set(key, String(value));
+          }
+        });
+      }
+      return request(`/search?${params.toString()}`);
     },
   },
   maintenance: {
@@ -235,6 +251,17 @@ export const api = {
   tags: {
     list(): Promise<string[]> {
       return request(`/tags`);
+    },
+  },
+  settings: {
+    getImmich(): Promise<ImmichSettings> {
+      return request(`/settings/immich`);
+    },
+    updateImmich(patch: { base_url: string; api_key?: string | null }): Promise<ImmichSettings> {
+      return request(`/settings/immich`, { method: "PUT", body: JSON.stringify(patch) });
+    },
+    testImmich(): Promise<ImmichTestResult> {
+      return request(`/settings/immich/test`, { method: "POST" });
     },
   },
 };

@@ -90,11 +90,12 @@ button {
 .search-bar {
   flex: 1;
   max-width: 420px;
+  position: relative;
 }
 
 .search-bar input {
   width: 100%;
-  padding: 8px 12px;
+  padding: 8px 30px 8px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
@@ -174,7 +175,9 @@ button {
   color: var(--accent-contrast);
 }
 
-select, .filter-bar input[type="number"] {
+select,
+.filter-bar input[type="number"],
+.filter-bar input[type="date"] {
   padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -183,10 +186,89 @@ select, .filter-bar input[type="number"] {
   font-size: 13px;
 }
 
+/* Capture-date range: two date pickers with a dash between them. */
+.date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.date-range-sep {
+  color: var(--text-muted);
+}
+
+/* Native date inputs blend into the filter bar and render a faint,
+   disabled-looking calendar icon by default - give them a contrasting field
+   background, full-strength text, and a picker icon that's visible in both
+   light and dark themes. */
+.filter-bar input[type="date"] {
+  background: var(--bg);
+  color: var(--text);
+  min-height: 32px;
+  font-family: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  color-scheme: light;
+}
+
+.filter-bar input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.filter-bar input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .filter-bar input[type="date"] {
+    color-scheme: dark;
+  }
+}
+
+/* Banner shown above a grid when a scoped search is active. */
+.search-scope-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 10px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* Clear (✕) button inside the top-bar search box. */
+.search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px;
+}
+
+.search-clear:hover {
+  color: var(--text);
+}
+
 .thumbnail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
+  /* Cards size to each photo's real aspect ratio (set inline per image), so
+     don't stretch them to the tallest item in the row - keep their natural
+     height and top-align instead. */
+  align-items: start;
 }
 
 /* Immich-style date timeline: month/year sections with headers that stick to
@@ -330,6 +412,8 @@ select, .filter-bar input[type="number"] {
   overflow: hidden;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
+  /* Fallback ratio when a photo's dimensions are unknown; the grid overrides
+     this per-card with the image's real aspect ratio (inline style). */
   aspect-ratio: 1 / 1;
   cursor: pointer;
   transition: transform 0.1s ease, box-shadow 0.1s ease;
@@ -519,7 +603,9 @@ select, .filter-bar input[type="number"] {
      this is what keeps the photo from ever being clipped. */
   align-items: stretch;
   justify-content: center;
-  padding: 48px 72px;
+  /* Generous top/bottom framing so the photo never sits flush against the
+     screen edges in the lightbox. */
+  padding: 64px 72px;
 }
 
 .lightbox-content {
@@ -793,9 +879,15 @@ select, .filter-bar input[type="number"] {
   justify-content: center;
   background: var(--bg-elevated);
   border-radius: 12px;
+  /* Clips the zoomed-in photo to the frame (the loupe effect). */
   overflow: hidden;
-  max-height: 74vh;
-  padding: 20px;
+  /* Fill most of the viewport height so the photo uses the available app space
+     rather than sitting small in the middle. Bigger top/bottom inset than the
+     sides so the light-table background shows as a clear band above and below
+     the photo instead of the image sitting flush to the frame edges. */
+  max-height: 86vh;
+  min-height: 0;
+  padding: 40px 16px;
 }
 
 .detail-image-dark {
@@ -810,8 +902,37 @@ select, .filter-bar input[type="number"] {
 .detail-image img {
   display: block;
   max-width: 100%;
-  max-height: calc(74vh - 40px);
+  /* Size to the container's content box (100%), not a fixed vh value: the
+     available height is less than 86vh once the top bar / Back button / toolbar
+     take their share, so a vh-based cap made the image overflow the padding and
+     get clipped - hiding the top/bottom band. 100% always fits inside the
+     40px inset. */
+  max-height: 100%;
   object-fit: contain;
+}
+
+/* Click-to-zoom loupe on the detail photo. */
+.detail-photo {
+  transition: transform 0.15s ease;
+  cursor: zoom-in;
+}
+
+.detail-photo.zoomed {
+  cursor: zoom-out;
+  transition: transform 0.05s ease-out;
+}
+
+.detail-image-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.detail-zoom-hint {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 /* The detail view fills the viewport and doesn't scroll itself - the side panel

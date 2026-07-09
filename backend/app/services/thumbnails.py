@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -51,11 +52,22 @@ def generate_derivatives(
 
     preview = source.copy()
     preview.thumbnail((PREVIEW_MAX_PX, PREVIEW_MAX_PX))
-    preview.save(out_dir / "preview.jpg", "JPEG", quality=90)
+    _save_atomic(preview, out_dir / "preview.jpg", quality=90)
 
     thumb = source.copy()
     thumb.thumbnail((THUMBNAIL_MAX_PX, THUMBNAIL_MAX_PX))
-    thumb.save(out_dir / "thumbnail.jpg", "JPEG", quality=85)
+    _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=85)
+
+
+def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
+    """Write to a temp file in the same dir, then rename into place. The
+    thumbnail endpoint can generate a derivative on-demand at the same time the
+    background worker is writing it after import; an atomic rename means a
+    reader always sees either the old file or a fully-written new one, never a
+    half-written JPEG."""
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    image.save(tmp, "JPEG", quality=quality)
+    os.replace(tmp, dest)
 
 
 def regenerate_for_image(image: "Image") -> None:

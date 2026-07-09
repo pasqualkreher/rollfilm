@@ -4,7 +4,6 @@ import { ImportWizard } from "./pages/ImportWizard";
 import { Albums } from "./pages/Albums";
 import { AlbumDetail } from "./pages/AlbumDetail";
 import { ImageDetail } from "./pages/ImageDetail";
-import { SearchResults } from "./pages/SearchResults";
 import { Settings } from "./pages/Settings";
 import { Selects } from "./pages/Selects";
 import { MapView } from "./pages/MapView";
@@ -56,7 +55,6 @@ export default function App() {
             <Route path="/albums" element={<Albums />} />
             <Route path="/albums/:id" element={<AlbumDetail />} />
             <Route path="/image/:id" element={<ImageDetail />} />
-            <Route path="/search" element={<SearchResults />} />
             <Route path="/map" element={<MapView />} />
             <Route path="/selects" element={<Selects />} />
             <Route path="/settings" element={<Settings />} />

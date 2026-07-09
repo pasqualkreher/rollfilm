@@ -56,9 +56,16 @@ export function ImportWizard() {
   const [colorFilter, setColorFilter] = useState<ColorLabel>("none");
   const [pickError, setPickError] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [uploadToImmich, setUploadToImmich] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  const { data: immich } = useQuery({
+    queryKey: ["immich-settings"],
+    queryFn: () => api.settings.getImmich(),
+  });
+  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
 
   const { data: files, isLoading } = useQuery({
     queryKey: ["import-files", sessionId],
@@ -78,8 +85,12 @@ export function ImportWizard() {
   });
 
   const commit = useMutation({
-    mutationFn: () => api.import.commit(sessionId!),
+    mutationFn: () => api.import.commit(sessionId!, uploadToImmich && immichConfigured),
     onSuccess: () => {
+      // The freshly-imported photos won't appear on the Library until its
+      // ["images"] query refetches - invalidate so they show up immediately
+      // instead of only after a manual page refresh.
+      queryClient.invalidateQueries({ queryKey: ["images"] });
       // Without this, the session tracked in context (see state/importSession)
       // stays set after a successful commit, so revisiting /import re-opens
       // this same now-committed session - and Discard then 400s because it's
@@ -230,6 +241,23 @@ export function ImportWizard() {
       </PhotoFilters>
       <div className="filter-bar">
         <span>{selectedCount} of {files?.length ?? 0} selected for import</span>
+        <label
+          className="filter-field filter-field-inline"
+          title={
+            immichConfigured
+              ? "Upload the selected JPEGs to Immich after import (RAW files are never uploaded)"
+              : "Add your Immich host and API key in Settings to enable this"
+          }
+          style={immichConfigured ? undefined : { opacity: 0.5 }}
+        >
+          <input
+            type="checkbox"
+            checked={uploadToImmich && immichConfigured}
+            disabled={!immichConfigured}
+            onChange={(e) => setUploadToImmich(e.target.checked)}
+          />{" "}
+          Also upload to Immich (JPG only)
+        </label>
         <button className="btn primary" onClick={handleCommitClick} disabled={selectedCount === 0 || commit.isPending}>
           {commit.isPending ? "Importing..." : `Import ${selectedCount} photo(s)`}
         </button>
@@ -244,7 +272,11 @@ export function ImportWizard() {
         <div className="thumbnail-grid">
           {visibleFiles.map((f, i) => (
             <div key={f.id} className="import-card">
-              <div className="thumb-card" onClick={() => setLightboxIndex(i)}>
+              <div
+                className="thumb-card"
+                style={f.width && f.height ? { aspectRatio: `${f.width} / ${f.height}` } : undefined}
+                onClick={() => setLightboxIndex(i)}
+              >
                 <img src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
                 {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
                   <span className="duplicate-badge">

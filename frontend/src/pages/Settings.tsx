@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import type { ImmichTestResult } from "../api/types";
 
 export function Settings() {
   const queryClient = useQueryClient();
@@ -11,6 +12,43 @@ export function Settings() {
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreResult, setRestoreResult] = useState<string | null>(null);
   const restoreFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [immichUrl, setImmichUrl] = useState("");
+  const [immichKey, setImmichKey] = useState("");
+  const [immichSaved, setImmichSaved] = useState(false);
+  const [immichTest, setImmichTest] = useState<ImmichTestResult | null>(null);
+
+  const { data: immich } = useQuery({
+    queryKey: ["immich-settings"],
+    queryFn: () => api.settings.getImmich(),
+  });
+
+  // Seed the host field from the server once, without clobbering edits in
+  // progress. The API key is never sent back down (only whether one is set),
+  // so its field stays blank and acts as "leave unchanged unless you type one".
+  useEffect(() => {
+    if (immich) setImmichUrl(immich.base_url ?? "");
+  }, [immich]);
+
+  const saveImmich = useMutation({
+    mutationFn: () =>
+      api.settings.updateImmich({
+        base_url: immichUrl.trim(),
+        // Blank = keep the existing key rather than wiping it.
+        api_key: immichKey.trim() ? immichKey.trim() : undefined,
+      }),
+    onSuccess: () => {
+      setImmichSaved(true);
+      setImmichKey("");
+      setImmichTest(null);
+      queryClient.invalidateQueries({ queryKey: ["immich-settings"] });
+    },
+  });
+
+  const testImmich = useMutation({
+    mutationFn: () => api.settings.testImmich(),
+    onSuccess: (result) => setImmichTest(result),
+  });
 
   const sync = useMutation({
     mutationFn: () => api.maintenance.sync(),
@@ -55,6 +93,76 @@ export function Settings() {
   return (
     <div className="page" style={{ maxWidth: 640 }}>
       <h2 className="section-title">Settings</h2>
+
+      <section style={{ marginBottom: 32 }}>
+        <h3 className="section-title" style={{ fontSize: 15 }}>
+          Immich integration
+        </h3>
+        <p style={{ color: "var(--text-muted)" }}>
+          Add your Immich host and an API key here to enable the{" "}
+          <em>"Also upload to Immich"</em> option during import. Only JPEGs are uploaded - RAW files
+          stay in this library only. Create an API key in Immich under{" "}
+          <strong>Account Settings → API Keys</strong>.
+        </p>
+        <label className="filter-field" style={{ display: "block", marginBottom: 10 }}>
+          <span style={{ display: "block", marginBottom: 4, color: "var(--text-muted)" }}>
+            Immich host
+          </span>
+          <input
+            type="text"
+            placeholder="http://your-immich:2283"
+            value={immichUrl}
+            onChange={(e) => {
+              setImmichUrl(e.target.value);
+              setImmichSaved(false);
+            }}
+            style={{ width: "100%", boxSizing: "border-box" }}
+          />
+        </label>
+        <label className="filter-field" style={{ display: "block", marginBottom: 10 }}>
+          <span style={{ display: "block", marginBottom: 4, color: "var(--text-muted)" }}>
+            API key {immich?.api_key_set && <em>(a key is saved - leave blank to keep it)</em>}
+          </span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            placeholder={immich?.api_key_set ? "••••••••  (unchanged)" : "Paste your Immich API key"}
+            value={immichKey}
+            onChange={(e) => {
+              setImmichKey(e.target.value);
+              setImmichSaved(false);
+            }}
+            style={{ width: "100%", boxSizing: "border-box" }}
+          />
+        </label>
+        <div className="import-toolbar">
+          <button
+            className="btn primary"
+            onClick={() => saveImmich.mutate()}
+            disabled={!immichUrl.trim() || saveImmich.isPending}
+          >
+            {saveImmich.isPending ? "Saving..." : "Save Immich settings"}
+          </button>
+          <button
+            className="btn"
+            onClick={() => testImmich.mutate()}
+            disabled={!immich?.api_key_set || testImmich.isPending}
+            title={!immich?.api_key_set ? "Save a host and API key first" : undefined}
+          >
+            {testImmich.isPending ? "Testing..." : "Test connection"}
+          </button>
+        </div>
+        {immichSaved && <p style={{ color: "var(--text-muted)" }}>Immich settings saved.</p>}
+        {saveImmich.isError && (
+          <p style={{ color: "var(--danger)" }}>{(saveImmich.error as Error).message}</p>
+        )}
+        {immichTest && (
+          <p style={{ color: immichTest.ok ? "var(--text-muted)" : "var(--danger)" }}>
+            {immichTest.ok ? "✓ " : "✗ "}
+            {immichTest.message}
+          </p>
+        )}
+      </section>
 
       <section style={{ marginBottom: 32 }}>
         <h3 className="section-title" style={{ fontSize: 15 }}>
