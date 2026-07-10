@@ -42,11 +42,17 @@ export interface ImageOut {
   edit_contrast: number;
   edit_highlights: number;
   edit_shadows: number;
+  edit_whites: number;
+  edit_blacks: number;
   edit_saturation: number;
   edit_temperature: number;
   edit_tint: number;
   edit_color_mix: string | null; // JSON: { band: [hue, sat, lum] }
   edit_vignette: number;
+  edit_distortion: number;
+  edit_dehaze: number;
+  edit_grain: number;
+  edit_denoise: number;
   tags: string[];
   album_ids: string[];
 }

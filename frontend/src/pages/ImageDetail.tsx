@@ -24,6 +24,11 @@ export function ImageDetail() {
   // fit; pan is a pixel translation applied before the scale.
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  // Swap the preview for the full-resolution render once the user zooms in, so
+  // 100% shows true original pixels instead of an upscaled preview. If the
+  // full render can't be fetched we fall back to the preview (never a broken img).
+  const [hiRes, setHiRes] = useState(false);
+  const [fullFailed, setFullFailed] = useState(false);
   const imageBoxRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const selects = useSelects();
@@ -51,7 +56,15 @@ export function ImageDetail() {
   // the RAW/JPEG toggle), so a new image never opens already zoomed-in.
   useEffect(() => {
     resetZoom();
+    setHiRes(false);
+    setFullFailed(false);
   }, [activeId]);
+
+  // Once zoomed in, upgrade to the full-resolution render (loaded lazily) unless
+  // it already failed for this photo.
+  useEffect(() => {
+    if (zoomed && !fullFailed) setHiRes(true);
+  }, [zoomed, fullFailed]);
 
   const { data: image } = useQuery({
     queryKey: ["image", activeId],
@@ -240,8 +253,20 @@ export function ImageDetail() {
                 cursor: zoomed ? (dragRef.current ? "grabbing" : "grab") : "default",
               }}
               draggable={false}
-              src={api.images.previewUrl(image.id, editVersion(image))}
+              src={
+                hiRes
+                  ? api.images.fullUrl(image.id, editVersion(image))
+                  : api.images.previewUrl(image.id, editVersion(image))
+              }
               alt={image.original_filename}
+              onError={() => {
+                // Full render unavailable - fall back to the preview so the
+                // photo never shows as a broken image.
+                if (hiRes) {
+                  setFullFailed(true);
+                  setHiRes(false);
+                }
+              }}
               onMouseDown={(e: ReactMouseEvent<HTMLImageElement>) => {
                 if (!zoomed) return;
                 e.preventDefault();
@@ -257,6 +282,20 @@ export function ImageDetail() {
               onMouseLeave={() => {
                 dragRef.current = null;
               }}
+              onDoubleClick={(e: ReactMouseEvent<HTMLImageElement>) => {
+                // Lightroom-style: double-click toggles fit <-> 100% at the cursor.
+                const box = imageBoxRef.current!.getBoundingClientRect();
+                const dx = e.clientX - (box.left + box.width / 2);
+                const dy = e.clientY - (box.top + box.height / 2);
+                if (zoomed) {
+                  resetZoom();
+                } else {
+                  const img = e.currentTarget;
+                  const target = Math.min(MAX_ZOOM, Math.max(1.5, img.naturalWidth / img.getBoundingClientRect().width));
+                  setScale(target);
+                  setPan({ x: dx * (1 - target), y: dy * (1 - target) });
+                }
+              }}
             />
           </div>
           <div className="detail-image-toolbar">
@@ -269,7 +308,7 @@ export function ImageDetail() {
               </button>
             </span>
             <span className="detail-zoom-hint">
-              {zoomed ? "Drag to pan · Esc to fit" : "Scroll or pinch to zoom"}
+              {zoomed ? "Drag to pan · double-click or Esc to fit" : "Scroll, pinch, or double-click to zoom"}
             </span>
           </div>
         </div>

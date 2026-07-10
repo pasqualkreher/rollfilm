@@ -39,11 +39,17 @@ class ImageOut(BaseModel):
     edit_contrast: int
     edit_highlights: int
     edit_shadows: int
+    edit_whites: int
+    edit_blacks: int
     edit_saturation: int
     edit_temperature: int
     edit_tint: int
     edit_color_mix: str | None
     edit_vignette: int
+    edit_distortion: int
+    edit_dehaze: int
+    edit_grain: int
+    edit_denoise: int
     tags: list[str]
     album_ids: list[str]
 
@@ -55,6 +61,9 @@ class ImageAdjustments(BaseModel):
     contrast: int = 0
     highlights: int = 0
     shadows: int = 0
+    whites: int = 0
+    blacks: int = 0
+    dehaze: int = 0
     saturation: int = 0
     temperature: int = 0
     tint: int = 0
@@ -108,6 +117,9 @@ class ImageEdits(ImageAdjustments):
     # {band: [hue, sat, lum]} each -100..100; band in red/orange/.../magenta.
     color_mix: dict[str, list[int]] | None = None
     vignette: int = 0
+    distortion: int = 0  # lens distortion correction, geometric
+    grain: int = 0  # film grain amount, 0..100
+    denoise: int = 0  # noise reduction, 0..100
 
 
 class BulkImageUpdate(BaseModel):

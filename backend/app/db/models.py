@@ -150,6 +150,8 @@ class Image(Base):
     edit_contrast: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     edit_highlights: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     edit_shadows: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_whites: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_blacks: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     edit_saturation: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     edit_temperature: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     edit_tint: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -157,6 +159,12 @@ class Image(Base):
     # vignette amount (-100 darken .. +100 lighten corners).
     edit_color_mix: Mapped[str | None] = mapped_column(String, nullable=True)
     edit_vignette: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Lens distortion correction (-100 barrel .. +100 pincushion), geometric.
+    edit_distortion: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Effects: dehaze (-100..100), film grain (0..100), denoise (0..100).
+    edit_dehaze: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_grain: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_denoise: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     albums: Mapped[list["AlbumImage"]] = relationship(back_populates="image", cascade="all, delete-orphan")
     tag_links: Mapped[list["ImageTag"]] = relationship(cascade="all, delete-orphan")

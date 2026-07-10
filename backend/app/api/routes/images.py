@@ -122,6 +122,13 @@ def _add_tag_to_image(db: Session, owner_id: int, image: Image, name: str) -> No
         db.add(ImageTag(image_id=image.id, tag_id=tag.id))
 
 
+def _remove_tag_from_image(db: Session, owner_id: int, image: Image, name: str) -> None:
+    tag = db.query(Tag).filter(Tag.owner_id == owner_id, Tag.name == name).first()
+    if tag is None:
+        return
+    db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
+
+
 @router.get("", response_model=list[schemas.ImageOut])
 def list_images(
     view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
@@ -545,11 +552,32 @@ def save_edits(
     image.edit_contrast = _clamp100(payload.contrast)
     image.edit_highlights = _clamp100(payload.highlights)
     image.edit_shadows = _clamp100(payload.shadows)
+    image.edit_whites = _clamp100(payload.whites)
+    image.edit_blacks = _clamp100(payload.blacks)
+    image.edit_dehaze = _clamp100(payload.dehaze)
     image.edit_saturation = _clamp100(payload.saturation)
     image.edit_temperature = _clamp100(payload.temperature)
     image.edit_tint = _clamp100(payload.tint)
     image.edit_vignette = _clamp100(payload.vignette)
+    image.edit_distortion = _clamp100(payload.distortion)
+    image.edit_grain = max(0, min(100, int(payload.grain)))
+    image.edit_denoise = max(0, min(100, int(payload.denoise)))
     image.edit_color_mix = _clean_color_mix(payload.color_mix)
+    # Tag edited photos "edit" so they're easy to find; drop the tag if the edit
+    # was reset back to the original look.
+    has_edit = bool(
+        payload.rotation % 360
+        or payload.crop is not None
+        or image.edit_color_mix
+        or any(
+            int(getattr(payload, name))
+            for name in (*thumbnails.ADJUSTMENT_FIELDS, "vignette", "distortion", "grain", "denoise")
+        )
+    )
+    if has_edit:
+        _add_tag_to_image(db, current_user.id, image, "edit")
+    else:
+        _remove_tag_from_image(db, current_user.id, image, "edit")
     db.commit()
     db.refresh(image)
     _try_regenerate_derivatives(image)
@@ -576,11 +604,15 @@ def save_copy(
         crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
     adjustments = {name: _clamp100(getattr(payload, name)) for name in thumbnails.ADJUSTMENT_FIELDS}
     adjustments["vignette"] = _clamp100(payload.vignette)
+    adjustments["grain"] = max(0, min(100, int(payload.grain)))
+    adjustments["denoise"] = max(0, min(100, int(payload.denoise)))
     cleaned_mix = _clean_color_mix(payload.color_mix)
     adjustments["color_mix"] = json.loads(cleaned_mix) if cleaned_mix else None
 
     try:
-        edited = thumbnails.render_edited_image(src, payload.rotation % 360, crop, adjustments)
+        edited = thumbnails.render_edited_image(
+            src, payload.rotation % 360, crop, adjustments, distortion=_clamp100(payload.distortion)
+        )
     except Exception:
         logger.exception("Failed to render edited copy of %s", src.id)
         raise HTTPException(status_code=500, detail="Could not render the edited copy")
@@ -618,7 +650,7 @@ def save_copy(
     )
     db.add(new_image)
     db.flush()
-    _add_tag_to_image(db, current_user.id, new_image, "edited")
+    _add_tag_to_image(db, current_user.id, new_image, "edit copy")
     db.commit()
     db.refresh(new_image)
     # Thumbnails + search embedding for the new copy, off the request path.
@@ -655,6 +687,21 @@ def get_thumbnail(image_id: str, db: Session = Depends(get_db), current_user: Us
 def get_preview(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     image = get_owned_image(db, current_user.id, image_id)
     return _serve_derivative(image, "preview.jpg", "Preview not ready yet")
+
+
+@router.get("/{image_id}/full")
+def get_full(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Full-resolution edited JPEG for true 100% zoom in the lightbox. Generated
+    on first request and cached (cleared automatically when edits change)."""
+    image = get_owned_image(db, current_user.id, image_id)
+    path = thumbnails.derivative_dir(image.id) / "full.jpg"
+    if not path.exists():
+        try:
+            thumbnails.generate_full(image)
+        except Exception:
+            logger.exception("Full render failed for image %s", image.id)
+            raise HTTPException(status_code=404, detail="Full-resolution image not available")
+    return FileResponse(path)
 
 
 @router.get("/{image_id}/original")

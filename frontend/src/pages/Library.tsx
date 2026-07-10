@@ -248,8 +248,9 @@ export function Library() {
           <button className="btn" onClick={resetSelectedMetadata}>
             Reset stars/tags/colors
           </button>
-          <button className="btn danger" onClick={deleteSelected}>
-            Delete selected
+          <span style={{ flex: 1 }} />
+          <button className="btn quiet-danger btn-sm" onClick={deleteSelected} title="Delete the selected photos">
+            Delete
           </button>
           {immichMsg && <span style={{ color: "var(--text-muted)" }}>{immichMsg}</span>}
         </div>

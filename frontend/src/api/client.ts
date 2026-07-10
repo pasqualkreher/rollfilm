@@ -30,11 +30,17 @@ export function editVersion(image: ImageOut): string {
     image.edit_contrast,
     image.edit_highlights,
     image.edit_shadows,
+    image.edit_whites,
+    image.edit_blacks,
     image.edit_saturation,
     image.edit_temperature,
     image.edit_tint,
     image.edit_color_mix ?? "",
     image.edit_vignette,
+    image.edit_distortion,
+    image.edit_dehaze,
+    image.edit_grain,
+    image.edit_denoise,
   ].join("-");
 }
 
@@ -155,6 +161,10 @@ export const api = {
     },
     previewUrl(id: string, version?: string): string {
       return assetUrl(`/images/${id}/preview${version ? `?v=${version}` : ""}`);
+    },
+    // Full-resolution edited render for true 100% zoom.
+    fullUrl(id: string, version?: string): string {
+      return assetUrl(`/images/${id}/full${version ? `?v=${version}` : ""}`);
     },
     // Geometry-only render (no tonal edits) the editor draws its live preview on.
     basePreviewUrl(id: string, version?: string): string {

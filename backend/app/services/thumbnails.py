@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageFilter
 
 from app.config import settings
 from app.services.raw import extract_full_preview
@@ -27,6 +27,9 @@ ADJUSTMENT_FIELDS = (
     "contrast",
     "highlights",
     "shadows",
+    "whites",
+    "blacks",
+    "dehaze",
     "saturation",
     "temperature",
     "tint",
@@ -40,6 +43,23 @@ def derivative_dir(image_id: str) -> Path:
     path = settings.thumbnail_cache_root / image_id
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def apply_distortion(image: PILImage.Image, amount: int) -> PILImage.Image:
+    """Radial lens-distortion correction (geometric). amount<0 pulls the corners
+    in (corrects barrel), amount>0 pushes them out (corrects pincushion). Nearest
+    sampling - fast, and the JS live preview mirrors it. No-op when amount is 0."""
+    if not amount:
+        return image
+    rgb = np.asarray(image.convert("RGB"))
+    h, w = rgb.shape[:2]
+    k = amount / 100.0 * 0.4
+    ys = np.linspace(-1.0, 1.0, h, dtype=np.float32)[:, None]
+    xs = np.linspace(-1.0, 1.0, w, dtype=np.float32)[None, :]
+    factor = 1.0 + k * (xs * xs + ys * ys)
+    sx = np.clip(np.rint((xs * factor + 1.0) / 2.0 * (w - 1)), 0, w - 1).astype(np.int32)
+    sy = np.clip(np.rint((ys * factor + 1.0) / 2.0 * (h - 1)), 0, h - 1).astype(np.int32)
+    return PILImage.fromarray(rgb[sy, sx], "RGB")
 
 
 def apply_edits(image: PILImage.Image, rotation: int, crop: CropBox | None) -> PILImage.Image:
@@ -143,6 +163,8 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     c = adj.get("contrast", 0) / 100.0
     hi = adj.get("highlights", 0) / 100.0
     sh = adj.get("shadows", 0) / 100.0
+    wh = adj.get("whites", 0) / 100.0
+    bl = adj.get("blacks", 0) / 100.0
     s = adj.get("saturation", 0) / 100.0
     t = adj.get("temperature", 0) / 100.0
     n = adj.get("tint", 0) / 100.0
@@ -164,9 +186,31 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
             arr += (hi * 0.5 * luma**2)[..., None]
         np.clip(arr, 0.0, 1.0, out=arr)
 
+    # Whites/blacks act on the very ends of the tone range (cubic mask, so more
+    # concentrated at the extremes than highlights/shadows).
+    if wh or bl:
+        luma = arr @ _LUMA
+        if wh:
+            arr += (wh * 0.5 * luma**3)[..., None]
+        if bl:
+            arr += (bl * 0.5 * (1.0 - luma) ** 3)[..., None]
+        np.clip(arr, 0.0, 1.0, out=arr)
+
     if c:
         arr = (arr - 0.5) * (1.0 + c) + 0.5
         np.clip(arr, 0.0, 1.0, out=arr)
+
+    # Dehaze: lift a low-contrast/desaturated veil - darken slightly, expand
+    # contrast, and boost saturation (negative adds a soft hazy look).
+    dh = adj.get("dehaze", 0) / 100.0
+    if dh:
+        arr = arr - dh * 0.05
+        arr = (arr - 0.5) * (1.0 + dh * 0.4) + 0.5
+        np.clip(arr, 0.0, 1.0, out=arr)
+        luma = (arr @ _LUMA)[..., None]
+        arr = luma + (arr - luma) * (1.0 + dh * 0.4)
+        np.clip(arr, 0.0, 1.0, out=arr)
+
     mix = adj.get("color_mix")
     if mix:
         arr = _apply_color_mix(np.clip(arr, 0.0, 1.0), mix)
@@ -177,10 +221,17 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0)
 
 
+def _apply_grain(arr: np.ndarray, amount: int) -> np.ndarray:
+    """Add monochrome film grain (luminance noise). Stochastic - the live preview
+    uses a different random pattern but the same intensity, which is fine."""
+    noise = (np.random.rand(*arr.shape[:2]).astype(np.float32) - 0.5) * (amount / 100.0) * 0.2
+    return np.clip(arr + noise[..., None], 0.0, 1.0)
+
+
 def _has_edits(adj: dict) -> bool:
     if any(adj.get(k, 0) for k in ADJUSTMENT_FIELDS):
         return True
-    if adj.get("vignette", 0):
+    if adj.get("vignette", 0) or adj.get("grain", 0) or adj.get("denoise", 0):
         return True
     mix = adj.get("color_mix") or {}
     return any(any(v) for v in mix.values())
@@ -191,11 +242,20 @@ def apply_adjustments(image: PILImage.Image, adj: dict) -> PILImage.Image:
     when everything is neutral (the common case - avoids a needless numpy pass)."""
     if not _has_edits(adj):
         return image
+    # Denoise first (spatial): a light Gaussian blur scaled to the image size so
+    # preview and full render soften by a comparable amount.
+    dn = adj.get("denoise", 0)
+    if dn > 0:
+        radius = dn / 100.0 * (max(image.size) / 600.0)
+        if radius > 0.1:
+            image = image.filter(ImageFilter.GaussianBlur(radius))
     rgb = image.convert("RGB")
     arr = np.asarray(rgb, dtype=np.float32) / 255.0
     arr = _adjust_array(arr, adj)
     if adj.get("vignette", 0):
         arr = _apply_vignette(arr, adj["vignette"])
+    if adj.get("grain", 0) > 0:
+        arr = _apply_grain(arr, adj["grain"])
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     return PILImage.fromarray(out, "RGB")
 
@@ -206,6 +266,7 @@ def generate_derivatives(
     rotation: int = 0,
     crop: CropBox | None = None,
     adjustments: dict | None = None,
+    distortion: int = 0,
 ) -> None:
     """Writes thumbnail.jpg (grid) and preview.jpg (lightbox) for an image.
 
@@ -217,6 +278,8 @@ def generate_derivatives(
     """
     out_dir = derivative_dir(image_id)
     source = extract_full_preview(source_path)
+    if distortion:
+        source = apply_distortion(source, distortion)
     source = apply_edits(source, rotation, crop)
     if adjustments:
         source = apply_adjustments(source, adjustments)
@@ -228,6 +291,10 @@ def generate_derivatives(
     thumb = source.copy()
     thumb.thumbnail((THUMBNAIL_MAX_PX, THUMBNAIL_MAX_PX))
     _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=85)
+
+    # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
+    # is regenerated on next request with the new edits.
+    (out_dir / "full.jpg").unlink(missing_ok=True)
 
 
 def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
@@ -256,16 +323,37 @@ def render_base_preview_bytes(image: "Image", max_px: int = PREVIEW_MAX_PX) -> b
 
 
 def render_edited_image(
-    image: "Image", rotation: int, crop: CropBox | None, adjustments: dict
+    image: "Image", rotation: int, crop: CropBox | None, adjustments: dict, distortion: int = 0
 ) -> PILImage.Image:
-    """Full-resolution RGB render with the given rotation, crop and tonal edits
+    """Full-resolution RGB render with the given lens/geometry and tonal edits
     baked in. Used to write a flattened edited *copy* into the library."""
     from app.services.filesystem import resolve_image_path
 
     source = extract_full_preview(resolve_image_path(image))
+    if distortion:
+        source = apply_distortion(source, distortion)
     source = apply_edits(source, rotation, crop)
     source = apply_adjustments(source, adjustments)
     return source.convert("RGB")
+
+
+def generate_full(image: "Image") -> Path:
+    """Render + cache the full-resolution edited JPEG (for true 100% zoom in the
+    lightbox), returning its path. Cheap to serve once cached; cleared whenever
+    the edit changes (see generate_derivatives)."""
+    out = derivative_dir(image.id) / "full.jpg"
+    crop = None
+    if image.edit_crop_x is not None:
+        crop = (image.edit_crop_x, image.edit_crop_y, image.edit_crop_width, image.edit_crop_height)
+    rendered = render_edited_image(
+        image,
+        image.edit_rotation,
+        crop,
+        adjustments_from_image(image),
+        distortion=getattr(image, "edit_distortion", 0) or 0,
+    )
+    _save_atomic(rendered, out, quality=90)
+    return out
 
 
 def adjustments_from_image(image: "Image") -> dict:
@@ -273,6 +361,8 @@ def adjustments_from_image(image: "Image") -> dict:
     an Image row, ready for apply_adjustments / generate_derivatives."""
     adj = {name: getattr(image, f"edit_{name}", 0) or 0 for name in ADJUSTMENT_FIELDS}
     adj["vignette"] = getattr(image, "edit_vignette", 0) or 0
+    adj["grain"] = getattr(image, "edit_grain", 0) or 0
+    adj["denoise"] = getattr(image, "edit_denoise", 0) or 0
     raw = getattr(image, "edit_color_mix", None)
     if raw:
         try:
@@ -295,4 +385,5 @@ def regenerate_for_image(image: "Image") -> None:
         rotation=image.edit_rotation,
         crop=crop,
         adjustments=adjustments,
+        distortion=getattr(image, "edit_distortion", 0) or 0,
     )

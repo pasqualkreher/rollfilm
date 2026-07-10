@@ -8,6 +8,9 @@ export interface Adjustments {
   contrast: number;
   highlights: number;
   shadows: number;
+  whites: number;
+  blacks: number;
+  dehaze: number;
   saturation: number;
   temperature: number;
   tint: number;
@@ -18,6 +21,9 @@ export const NEUTRAL: Adjustments = {
   contrast: 0,
   highlights: 0,
   shadows: 0,
+  whites: 0,
+  blacks: 0,
+  dehaze: 0,
   saturation: 0,
   temperature: 0,
   tint: 0,
@@ -29,6 +35,9 @@ export const ADJUSTMENT_DEFS: { key: keyof Adjustments; label: string }[] = [
   { key: "contrast", label: "Contrast" },
   { key: "highlights", label: "Highlights" },
   { key: "shadows", label: "Shadows" },
+  { key: "whites", label: "Whites" },
+  { key: "blacks", label: "Blacks" },
+  { key: "dehaze", label: "Dehaze" },
   { key: "saturation", label: "Saturation" },
   { key: "temperature", label: "Temperature" },
   { key: "tint", label: "Tint" },
@@ -40,6 +49,9 @@ export function adjustmentsFromImage(image: ImageOut): Adjustments {
     contrast: image.edit_contrast,
     highlights: image.edit_highlights,
     shadows: image.edit_shadows,
+    whites: image.edit_whites,
+    blacks: image.edit_blacks,
+    dehaze: image.edit_dehaze,
     saturation: image.edit_saturation,
     temperature: image.edit_temperature,
     tint: image.edit_tint,
@@ -84,6 +96,9 @@ export interface ImageEdits extends Adjustments {
   crop: CropBox | null;
   colorMix: ColorMix;
   vignette: number;
+  distortion: number;
+  grain: number; // 0..100
+  denoise: number; // 0..100
 }
 
 export function editsFromImage(image: ImageOut): ImageEdits {
@@ -113,6 +128,9 @@ export function editsFromImage(image: ImageOut): ImageEdits {
         : null,
     colorMix: mix,
     vignette: image.edit_vignette,
+    distortion: image.edit_distortion,
+    grain: image.edit_grain,
+    denoise: image.edit_denoise,
   };
 }
 
@@ -157,6 +175,7 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 export interface PixelEdits extends Adjustments {
   colorMix?: ColorMix;
   vignette?: number;
+  grain?: number;
 }
 
 // Apply the edits to `src` (RGBA bytes) into `dst`, both length width*height*4.
@@ -173,10 +192,14 @@ export function applyAdjustments(
   const c = adj.contrast / 100;
   const hi = adj.highlights / 100;
   const sh = adj.shadows / 100;
+  const wh = adj.whites / 100;
+  const bl = adj.blacks / 100;
+  const dh = adj.dehaze / 100;
   const s = adj.saturation / 100;
   const t = adj.temperature / 100;
   const n = adj.tint / 100;
   const vig = (adj.vignette ?? 0) / 100;
+  const grain = (adj.grain ?? 0) / 100;
   const mix = adj.colorMix;
   const useMix = !!mix && !mixIsNeutral(mix);
 
@@ -225,10 +248,40 @@ export function applyAdjustments(
       b = clamp01(b);
     }
 
+    if (wh || bl) {
+      const luma = r * LR + g * LG + b * LB;
+      if (wh) {
+        const m = wh * 0.5 * luma * luma * luma;
+        r += m;
+        g += m;
+        b += m;
+      }
+      if (bl) {
+        const d = 1 - luma;
+        const m = bl * 0.5 * d * d * d;
+        r += m;
+        g += m;
+        b += m;
+      }
+      r = clamp01(r);
+      g = clamp01(g);
+      b = clamp01(b);
+    }
+
     if (c) {
       r = clamp01((r - 0.5) * contrast + 0.5);
       g = clamp01((g - 0.5) * contrast + 0.5);
       b = clamp01((b - 0.5) * contrast + 0.5);
+    }
+
+    if (dh) {
+      r = clamp01((r - dh * 0.05 - 0.5) * (1 + dh * 0.4) + 0.5);
+      g = clamp01((g - dh * 0.05 - 0.5) * (1 + dh * 0.4) + 0.5);
+      b = clamp01((b - dh * 0.05 - 0.5) * (1 + dh * 0.4) + 0.5);
+      const luma = r * LR + g * LG + b * LB;
+      r = clamp01(luma + (r - luma) * (1 + dh * 0.4));
+      g = clamp01(luma + (g - luma) * (1 + dh * 0.4));
+      b = clamp01(luma + (b - luma) * (1 + dh * 0.4));
     }
 
     if (useMix) {
@@ -276,9 +329,49 @@ export function applyAdjustments(
       b = clamp01(b * vf);
     }
 
+    if (grain) {
+      // Monochrome film grain (stochastic - pattern differs from the saved
+      // render but the intensity matches).
+      const nz = (Math.random() - 0.5) * grain * 0.2;
+      r = clamp01(r + nz);
+      g = clamp01(g + nz);
+      b = clamp01(b + nz);
+    }
+
     dst[i] = r * 255 + 0.5;
     dst[i + 1] = g * 255 + 0.5;
     dst[i + 2] = b * 255 + 0.5;
     dst[i + 3] = src[i + 3];
   }
+}
+
+// Radial lens-distortion correction (geometric), mirroring the backend's numpy
+// version exactly (nearest sampling). Returns a new ImageData; input untouched.
+export function applyDistortion(src: ImageData, amount: number): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const out = new ImageData(w, h);
+  const k = (amount / 100) * 0.4;
+  const s = src.data;
+  const d = out.data;
+  for (let y = 0; y < h; y++) {
+    const ny = h > 1 ? (y / (h - 1)) * 2 - 1 : 0;
+    for (let x = 0; x < w; x++) {
+      const nx = w > 1 ? (x / (w - 1)) * 2 - 1 : 0;
+      const factor = 1 + k * (nx * nx + ny * ny);
+      let sx = Math.round(((nx * factor + 1) / 2) * (w - 1));
+      let sy = Math.round(((ny * factor + 1) / 2) * (h - 1));
+      if (sx < 0) sx = 0;
+      else if (sx > w - 1) sx = w - 1;
+      if (sy < 0) sy = 0;
+      else if (sy > h - 1) sy = h - 1;
+      const di = (y * w + x) * 4;
+      const si = (sy * w + sx) * 4;
+      d[di] = s[si];
+      d[di + 1] = s[si + 1];
+      d[di + 2] = s[si + 2];
+      d[di + 3] = s[si + 3];
+    }
+  }
+  return out;
 }
