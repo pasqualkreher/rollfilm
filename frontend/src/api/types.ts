@@ -38,6 +38,15 @@ export interface ImageOut {
   edit_crop_y: number | null;
   edit_crop_width: number | null;
   edit_crop_height: number | null;
+  edit_exposure: number;
+  edit_contrast: number;
+  edit_highlights: number;
+  edit_shadows: number;
+  edit_saturation: number;
+  edit_temperature: number;
+  edit_tint: number;
+  edit_color_mix: string | null; // JSON: { band: [hue, sat, lum] }
+  edit_vignette: number;
   tags: string[];
   album_ids: string[];
 }

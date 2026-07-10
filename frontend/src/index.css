@@ -831,6 +831,225 @@ input:focus-visible {
   padding: 6px 8px;
 }
 
+/* ---- Adjustments editor (Exposure/Contrast/… with live canvas preview) ---- */
+.editor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  background: #0d0d0f;
+  color: #f1f1f2;
+}
+
+.editor-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow: hidden;
+}
+
+.editor-canvas-wrap {
+  position: relative;
+  line-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.editor-canvas {
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* Crop selection drawn over the canvas while in crop mode. */
+.crop-rect {
+  position: absolute;
+  border: 1px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.editor-geometry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+/* Section divider in the edit panel (Light / Color / Color mixer / Lens). */
+.editor-section-title {
+  margin-top: 18px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Colour-mixer band swatches. */
+.mixer-bands {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.mixer-band {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.1s ease;
+}
+
+.mixer-band:hover {
+  transform: scale(1.12);
+}
+
+.mixer-band.active {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+/* A dot marks bands that have a non-neutral edit. */
+.mixer-band.edited::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 1.5px solid var(--bg);
+}
+
+.editor-hint {
+  color: #9a9aa0;
+  font-size: 14px;
+}
+
+.editor-panel {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px;
+  background: var(--bg);
+  color: var(--text);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.editor-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 12px 0 20px;
+}
+
+.editor-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.editor-slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.editor-slider-val {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.editor-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Footer pinned to the bottom of the (scrolling) panel: a secondary row
+   (Reset / Cancel) above the two prominent save actions. */
+.editor-footer {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  padding-bottom: 2px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+.editor-footer-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.editor-footer-primary {
+  display: flex;
+  gap: 8px;
+}
+
+/* Save / Save copy fill the width evenly so they read as the main actions. */
+.editor-footer-primary .btn {
+  flex: 1;
+  padding: 9px 12px;
+  font-weight: 600;
+}
+
+.editor-footer-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* Round close (✕) pinned to the top-left of the editor overlay. */
+.editor-close {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.1s ease;
+}
+
+.editor-close:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.editor-close:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
 .lightbox-overlay {
   position: fixed;
   inset: 0;

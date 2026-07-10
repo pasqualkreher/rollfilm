@@ -35,8 +35,31 @@ class ImageOut(BaseModel):
     edit_crop_y: float | None
     edit_crop_width: float | None
     edit_crop_height: float | None
+    edit_exposure: int
+    edit_contrast: int
+    edit_highlights: int
+    edit_shadows: int
+    edit_saturation: int
+    edit_temperature: int
+    edit_tint: int
+    edit_color_mix: str | None
+    edit_vignette: int
     tags: list[str]
     album_ids: list[str]
+
+
+class ImageAdjustments(BaseModel):
+    """Non-destructive tonal/color slider edits, each -100..100 (0 = neutral)."""
+
+    exposure: int = 0
+    contrast: int = 0
+    highlights: int = 0
+    shadows: int = 0
+    saturation: int = 0
+    temperature: int = 0
+    tint: int = 0
+
+
 
 
 class ImageUpdate(BaseModel):
@@ -73,6 +96,18 @@ class CropBox(BaseModel):
 
 class CropRequest(BaseModel):
     crop: CropBox | None  # null clears the crop
+
+
+class ImageEdits(ImageAdjustments):
+    """The full non-destructive edit: geometry (rotation + crop), the tonal
+    sliders, a per-hue colour mixer and a vignette. Used both to save edits in
+    place and to bake an edited copy."""
+
+    rotation: int = 0  # absolute, multiple of 90
+    crop: CropBox | None = None
+    # {band: [hue, sat, lum]} each -100..100; band in red/orange/.../magenta.
+    color_mix: dict[str, list[int]] | None = None
+    vignette: int = 0
 
 
 class BulkImageUpdate(BaseModel):

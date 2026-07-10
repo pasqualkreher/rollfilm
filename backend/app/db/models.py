@@ -143,6 +143,21 @@ class Image(Base):
     edit_crop_width: Mapped[float | None] = mapped_column(Float, nullable=True)
     edit_crop_height: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Non-destructive tonal/color slider edits, each -100..100 (0 = neutral).
+    # Applied together with rotation/crop when derivatives are regenerated; the
+    # original file on disk is never modified. See thumbnails.apply_adjustments.
+    edit_exposure: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_contrast: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_highlights: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_shadows: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_saturation: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_temperature: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_tint: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Per-hue HSL mixer as JSON ({band: [hue, sat, lum]}), null = neutral; and a
+    # vignette amount (-100 darken .. +100 lighten corners).
+    edit_color_mix: Mapped[str | None] = mapped_column(String, nullable=True)
+    edit_vignette: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
     albums: Mapped[list["AlbumImage"]] = relationship(back_populates="image", cascade="all, delete-orphan")
     tag_links: Mapped[list["ImageTag"]] = relationship(cascade="all, delete-orphan")
 

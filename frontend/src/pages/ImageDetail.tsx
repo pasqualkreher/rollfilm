@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
-import { ImageEditor } from "../components/ImageEditor";
+import { PhotoEditor } from "../components/PhotoEditor";
 import { TagEditor } from "../components/TagEditor";
 import { AlbumPicker } from "../components/AlbumPicker";
 import { useSelects } from "../state/selects";
@@ -17,7 +17,7 @@ export function ImageDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState(id!);
-  const [editorOpen, setEditorOpen] = useState(false);
+  const [adjustOpen, setAdjustOpen] = useState(false);
   const [bgMode, setBgMode] = useState<"light" | "dark">("light");
   const mergePairs = useMergePairs();
   // Click-to-zoom loupe: click toggles a 2.5x zoom centred on the click point,
@@ -73,7 +73,7 @@ export function ImageDetail() {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (editorOpen) return;
+      if (adjustOpen) return;
 
       // Esc closes the lightbox - but first step out of a zoomed-in loupe if the
       // photo is currently zoomed, so one press doesn't do both.
@@ -99,7 +99,7 @@ export function ImageDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [imageIds, id, navigate, editorOpen, image, paired, activeId, zoomed]);
+  }, [imageIds, id, navigate, adjustOpen, image, paired, activeId, zoomed]);
 
   const { data: similar } = useQuery({
     queryKey: ["similar", activeId],
@@ -240,8 +240,8 @@ export function ImageDetail() {
           <h3 className="section-title">{image.original_filename}</h3>
 
           <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-            <button className="btn" onClick={() => setEditorOpen(true)}>
-              Rotate / crop
+            <button className="btn primary" onClick={() => setAdjustOpen(true)}>
+              Edit
             </button>
             <button
               className={`btn${selects.has(image.id) ? " primary" : ""}`}
@@ -361,7 +361,12 @@ export function ImageDetail() {
                   <div
                     key={r.image.id}
                     className="thumb-card"
-                    onClick={() => navigate(`/image/${r.image.id}`)}
+                    // Replace (don't push) so exploring similars doesn't stack
+                    // history - one Back returns straight to the grid you came
+                    // from instead of walking back through each similar you viewed.
+                    onClick={() =>
+                      navigate(`/image/${r.image.id}`, { replace: true, state: { imageIds } })
+                    }
                   >
                     <img
                       src={api.images.thumbnailUrl(r.image.id, editVersion(r.image))}
@@ -375,7 +380,7 @@ export function ImageDetail() {
         </div>
       </div>
 
-      {editorOpen && <ImageEditor image={image} onClose={() => setEditorOpen(false)} />}
+      {adjustOpen && <PhotoEditor image={image} onClose={() => setAdjustOpen(false)} />}
     </div>
   );
 }

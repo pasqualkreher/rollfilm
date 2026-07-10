@@ -14,6 +14,7 @@ import type {
   StagedFileOut,
   StagedFileUpdatePatch,
 } from "./types";
+import type { ImageEdits } from "../utils/adjustments";
 
 // Thumbnail/preview files are regenerated in place after an edit, so the URL
 // needs to change to bust the browser cache - this derives a stable version
@@ -25,6 +26,15 @@ export function editVersion(image: ImageOut): string {
     image.edit_crop_y ?? "",
     image.edit_crop_width ?? "",
     image.edit_crop_height ?? "",
+    image.edit_exposure,
+    image.edit_contrast,
+    image.edit_highlights,
+    image.edit_shadows,
+    image.edit_saturation,
+    image.edit_temperature,
+    image.edit_tint,
+    image.edit_color_mix ?? "",
+    image.edit_vignette,
   ].join("-");
 }
 
@@ -132,11 +142,23 @@ export const api = {
     crop(id: string, crop: CropBox | null): Promise<ImageOut> {
       return request(`/images/${id}/crop`, { method: "PATCH", body: JSON.stringify({ crop }) });
     },
+    // Save the full non-destructive edit (rotation + crop + tonal) in place.
+    saveEdits(id: string, edits: ImageEdits): Promise<ImageOut> {
+      return request(`/images/${id}/edits`, { method: "PATCH", body: JSON.stringify(edits) });
+    },
+    // Bake the edit into a new managed library photo (tagged "edited").
+    saveCopy(id: string, edits: ImageEdits): Promise<ImageOut> {
+      return request(`/images/${id}/save-copy`, { method: "POST", body: JSON.stringify(edits) });
+    },
     thumbnailUrl(id: string, version?: string): string {
       return assetUrl(`/images/${id}/thumbnail${version ? `?v=${version}` : ""}`);
     },
     previewUrl(id: string, version?: string): string {
       return assetUrl(`/images/${id}/preview${version ? `?v=${version}` : ""}`);
+    },
+    // Geometry-only render (no tonal edits) the editor draws its live preview on.
+    basePreviewUrl(id: string, version?: string): string {
+      return assetUrl(`/images/${id}/base-preview${version ? `?v=${version}` : ""}`);
     },
     originalUrl(id: string): string {
       return assetUrl(`/images/${id}/original`);

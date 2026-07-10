@@ -1,12 +1,14 @@
+import hashlib
 import io
+import json
 import logging
 import shutil
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -27,8 +29,10 @@ from app.db.models import (
 )
 from app.db.session import engine, get_db
 from app.services import embeddings, immich as immich_service, sources as sources_service, thumbnails
-from app.services.filesystem import resolve_image_path
+from app.services.filesystem import library_relative_path, resolve_image_path
+from app.services.hashing import perceptual_hash
 from app.services.settings_store import get_immich_config
+from app.workers.queue import enqueue_post_import
 
 logger = logging.getLogger(__name__)
 
@@ -472,6 +476,154 @@ def crop_image(
     db.refresh(image)
     _try_regenerate_derivatives(image)
     return image
+
+
+@router.get("/{image_id}/base-preview")
+def base_preview(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Geometry-only JPEG (rotation/crop, no tonal edits) that the editor draws
+    its live preview on. Rendered on the fly - it's only fetched while editing."""
+    image = get_owned_image(db, current_user.id, image_id)
+    try:
+        data = thumbnails.render_base_preview_bytes(image)
+    except Exception:
+        logger.exception("Base preview render failed for image %s", image.id)
+        raise HTTPException(status_code=404, detail="Could not render preview")
+    return Response(content=data, media_type="image/jpeg")
+
+
+_clamp100 = lambda v: max(-100, min(100, int(v)))  # noqa: E731
+
+
+def _clean_color_mix(mix: dict | None) -> str | None:
+    """Clamp the per-band HSL mixer and drop it entirely when fully neutral, so a
+    neutral edit stores NULL rather than a no-op JSON blob."""
+    if not mix:
+        return None
+    cleaned = {
+        band: [_clamp100(v) for v in (vals or [0, 0, 0])[:3]]
+        for band, vals in mix.items()
+        if band in thumbnails.COLOR_BANDS
+    }
+    if not any(any(v) for v in cleaned.values()):
+        return None
+    return json.dumps(cleaned)
+
+
+def _validate_crop(crop: schemas.CropBox | None) -> None:
+    if crop is None:
+        return
+    if not (0 <= crop.x < 1 and 0 <= crop.y < 1 and 0 < crop.width <= 1 - crop.x and 0 < crop.height <= 1 - crop.y):
+        raise HTTPException(status_code=400, detail="Crop box must be within the image bounds")
+
+
+@router.patch("/{image_id}/edits", response_model=schemas.ImageOut)
+def save_edits(
+    image_id: str,
+    payload: schemas.ImageEdits,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Save the full non-destructive edit (rotation + crop + tonal sliders) in
+    place and re-render this photo's derivatives. The original file on disk is
+    never modified - resetting everything restores the original look."""
+    if payload.rotation % 90 != 0:
+        raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
+    _validate_crop(payload.crop)
+    image = get_owned_image(db, current_user.id, image_id)
+    image.edit_rotation = payload.rotation % 360
+    if payload.crop is None:
+        image.edit_crop_x = image.edit_crop_y = image.edit_crop_width = image.edit_crop_height = None
+    else:
+        c = payload.crop
+        image.edit_crop_x, image.edit_crop_y = c.x, c.y
+        image.edit_crop_width, image.edit_crop_height = c.width, c.height
+    image.edit_exposure = _clamp100(payload.exposure)
+    image.edit_contrast = _clamp100(payload.contrast)
+    image.edit_highlights = _clamp100(payload.highlights)
+    image.edit_shadows = _clamp100(payload.shadows)
+    image.edit_saturation = _clamp100(payload.saturation)
+    image.edit_temperature = _clamp100(payload.temperature)
+    image.edit_tint = _clamp100(payload.tint)
+    image.edit_vignette = _clamp100(payload.vignette)
+    image.edit_color_mix = _clean_color_mix(payload.color_mix)
+    db.commit()
+    db.refresh(image)
+    _try_regenerate_derivatives(image)
+    return image
+
+
+@router.post("/{image_id}/save-copy", response_model=schemas.ImageOut)
+def save_copy(
+    image_id: str,
+    payload: schemas.ImageEdits,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Bake the given edit into a brand-new managed library photo (a flattened
+    JPEG), tagged "edited" so edited shots are easy to find. The source photo -
+    and every original file on disk - is left completely untouched."""
+    if payload.rotation % 90 != 0:
+        raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
+    _validate_crop(payload.crop)
+    src = get_owned_image(db, current_user.id, image_id)
+
+    crop = None
+    if payload.crop is not None:
+        crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
+    adjustments = {name: _clamp100(getattr(payload, name)) for name in thumbnails.ADJUSTMENT_FIELDS}
+    adjustments["vignette"] = _clamp100(payload.vignette)
+    cleaned_mix = _clean_color_mix(payload.color_mix)
+    adjustments["color_mix"] = json.loads(cleaned_mix) if cleaned_mix else None
+
+    try:
+        edited = thumbnails.render_edited_image(src, payload.rotation % 360, crop, adjustments)
+    except Exception:
+        logger.exception("Failed to render edited copy of %s", src.id)
+        raise HTTPException(status_code=500, detail="Could not render the edited copy")
+
+    buf = io.BytesIO()
+    edited.save(buf, "JPEG", quality=95)
+    data = buf.getvalue()
+
+    filename = f"{Path(src.original_filename).stem}_edited.jpg"
+    taken_at = src.taken_at or datetime.now(timezone.utc)
+    rel_path = library_relative_path(taken_at, filename, settings.library_root)
+    (settings.library_root / rel_path).write_bytes(data)
+
+    new_image = Image(
+        owner_id=current_user.id,
+        file_path=rel_path,
+        source_root_id=None,  # a managed library file, regardless of the source's origin
+        original_filename=filename,
+        file_hash=hashlib.sha256(data).hexdigest(),
+        perceptual_hash=perceptual_hash(edited),
+        file_type=FileType.jpeg,
+        raw_format=None,
+        width=edited.width,
+        height=edited.height,
+        file_size=len(data),
+        taken_at=src.taken_at,
+        camera_make=src.camera_make,
+        camera_model=src.camera_model,
+        iso=src.iso,
+        aperture=src.aperture,
+        shutter_speed=src.shutter_speed,
+        focal_length=src.focal_length,
+        gps_lat=src.gps_lat,
+        gps_lon=src.gps_lon,
+    )
+    db.add(new_image)
+    db.flush()
+    _add_tag_to_image(db, current_user.id, new_image, "edited")
+    db.commit()
+    db.refresh(new_image)
+    # Thumbnails + search embedding for the new copy, off the request path.
+    enqueue_post_import(new_image.id, settings.library_root / rel_path)
+    return new_image
 
 
 def _serve_derivative(image: Image, name: str, not_ready_detail: str) -> FileResponse:
