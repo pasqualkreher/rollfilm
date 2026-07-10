@@ -260,8 +260,7 @@ export function ImageDetail() {
               </button>
             )}
             <button
-              className="btn"
-              style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
+              className="btn danger"
               onClick={deletePhoto}
               title="Delete this photo (and its RAW/JPEG partner) - removes the original file too"
             >
@@ -297,19 +296,25 @@ export function ImageDetail() {
             </div>
           )}
 
-          <div style={{ marginBottom: 16 }}>
+          <div className="detail-section">
+            <div className="detail-section-label">Rating</div>
             <RatingStars rating={image.rating} onChange={setRating} />
           </div>
-          <div style={{ marginBottom: 16 }}>
+          <div className="detail-section">
+            <div className="detail-section-label">Color label</div>
             <ColorLabelPicker value={image.color_label} onChange={setColor} />
           </div>
-          <div style={{ marginBottom: 16 }}>
+          <div className="detail-section">
+            <div className="detail-section-label">Tags</div>
             <TagEditor tags={image.tags} onAdd={addTag} onRemove={removeTag} />
           </div>
-          <div style={{ marginBottom: 16 }}>
+          <div className="detail-section">
+            <div className="detail-section-label">Albums</div>
             <AlbumPicker onAdd={addToAlbum} currentAlbumIds={image.album_ids} onRemove={removeFromAlbum} />
           </div>
 
+          <div className="detail-section">
+            <div className="detail-section-label">Info</div>
           <table className="exif-table">
             <tbody>
               <tr>
@@ -347,15 +352,18 @@ export function ImageDetail() {
             </tbody>
           </table>
 
-          <a className="btn" href={api.images.originalUrl(image.id)} style={{ display: "block", marginTop: 16, textAlign: "center" }}>
-            Download original
-          </a>
+            <a
+              className="btn"
+              href={api.images.originalUrl(image.id)}
+              style={{ display: "block", marginTop: 14, textAlign: "center" }}
+            >
+              Download original
+            </a>
+          </div>
 
           {similar && similar.length > 0 && (
-            <>
-              <h4 className="section-title" style={{ marginTop: 24 }}>
-                Similar photos
-              </h4>
+            <div className="detail-section">
+              <div className="detail-section-label">Similar photos</div>
               <div className="thumbnail-grid similar-grid">
                 {similar.map((r) => (
                   <div
@@ -375,7 +383,7 @@ export function ImageDetail() {
                   </div>
                 ))}
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>

@@ -92,7 +92,7 @@ export function Settings() {
   });
 
   return (
-    <div className="page" style={{ maxWidth: 640 }}>
+    <div className="page settings-page">
       <h2 className="section-title">Settings</h2>
 
       <section style={{ marginBottom: 32 }}>
@@ -220,8 +220,7 @@ export function Settings() {
             onChange={(e) => setRestoreConfirmation(e.target.value)}
           />
           <button
-            className="btn"
-            style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
+            className="btn danger"
             disabled={!restoreFile || restoreConfirmation.trim().toLowerCase() !== "delete" || restore.isPending}
             onClick={() => restore.mutate()}
           >
@@ -250,8 +249,7 @@ export function Settings() {
             onChange={(e) => setWipeConfirmation(e.target.value)}
           />
           <button
-            className="btn"
-            style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
+            className="btn danger"
             disabled={wipeConfirmation.trim().toLowerCase() !== "delete" || wipe.isPending}
             onClick={() => {
               if (window.confirm("This will permanently delete your entire library. Are you sure?")) {

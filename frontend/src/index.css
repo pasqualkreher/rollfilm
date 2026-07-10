@@ -1363,9 +1363,21 @@ input:focus-visible {
 }
 
 .btn.ghost:hover:not(:disabled) {
-  background: var(--bg);
-  border-color: var(--border);
+  background: var(--hover);
+  border-color: transparent;
   color: var(--text);
+}
+
+/* Destructive actions (Delete, Remove, Discard) - one shared look instead of
+   ad-hoc inline colours. */
+.btn.danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger);
+}
+
+.btn.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 .btn:disabled {
@@ -1480,17 +1492,44 @@ input:focus-visible {
   min-height: 0;
 }
 
+/* Labelled, separated sections inside the detail panel so rating / color /
+   tags / info / similar each read as a distinct block. */
+.detail-section {
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.detail-section:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.detail-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
 /* Keep the similar-photos strip inside its own scroll area so a long list of
    matches can't stretch the panel (and with it the whole page) past the
    viewport - it scrolls in place instead. */
 .similar-grid {
-  /* Miniature matches - small enough that several fit without dominating the
-     panel; the strip scrolls if there are many. */
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  /* Miniature matches - small square tiles so they read as a uniform grid of
+     recommendations; the strip scrolls if there are many. */
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
   gap: 8px;
   max-height: 44vh;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+/* Recommendations are shown 1:1 (square), independent of each photo's shape. */
+.similar-grid .thumb-card {
+  height: auto;
+  aspect-ratio: 1 / 1;
 }
 
 @media (max-width: 700px) {
@@ -1514,6 +1553,24 @@ input:focus-visible {
     max-width: none;
     max-height: 50vh;
   }
+}
+
+/* Settings: full-width page, each section separated by a divider for a clear,
+   consistent rhythm. */
+.settings-page section {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+}
+
+.settings-page section:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+/* Section dividers span the full width, but keep the content (text, inputs,
+   toolbars) in a comfortable reading column so nothing stretches edge to edge. */
+.settings-page section > * {
+  max-width: 640px;
 }
 
 .exif-table {

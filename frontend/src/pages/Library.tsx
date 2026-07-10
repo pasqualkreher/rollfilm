@@ -248,7 +248,7 @@ export function Library() {
           <button className="btn" onClick={resetSelectedMetadata}>
             Reset stars/tags/colors
           </button>
-          <button className="btn" style={{ borderColor: "var(--danger)", color: "var(--danger)" }} onClick={deleteSelected}>
+          <button className="btn danger" onClick={deleteSelected}>
             Delete selected
           </button>
           {immichMsg && <span style={{ color: "var(--text-muted)" }}>{immichMsg}</span>}

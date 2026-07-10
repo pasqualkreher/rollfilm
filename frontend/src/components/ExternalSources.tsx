@@ -168,8 +168,7 @@ export function ExternalSources() {
                   {s.scanning ? "Scanning…" : "Scan now"}
                 </button>
                 <button
-                  className="btn"
-                  style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
+                  className="btn danger"
                   onClick={() => {
                     if (
                       window.confirm(
