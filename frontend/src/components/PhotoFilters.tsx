@@ -35,8 +35,13 @@ interface Props {
   // Whether to show the "Merge RAW+JPG" toggle. Off for the import review grid,
   // which works on staged files rather than library pairs.
   showMerge?: boolean;
-  // Extra controls (e.g. import's "Hide duplicates" / select buttons) render
-  // after the shared filters so every screen keeps an identical filter core.
+  // Extra view controls (e.g. import's "Hide duplicates") rendered inside the
+  // view group, left of the divider - so they read as a display option rather
+  // than a page action.
+  viewExtras?: ReactNode;
+  // Extra actions (e.g. import's Select / Select all buttons) render after the
+  // shared filters, right of the divider, so every screen keeps an identical
+  // filter core.
   children?: ReactNode;
 }
 
@@ -60,6 +65,7 @@ export function PhotoFilters({
   onDateFrom,
   onDateTo,
   showMerge = true,
+  viewExtras,
   children,
 }: Props) {
   const showDates = Boolean(onDateFrom && onDateTo);
@@ -157,6 +163,7 @@ export function PhotoFilters({
       <div className="control-group control-group--view">
         <ViewModeToggle value={viewMode} onChange={onViewMode} />
         <ViewPrefsControls showMerge={showMerge} />
+        {viewExtras}
       </div>
 
       {/* Page-specific actions (Select, Select all, ...). */}

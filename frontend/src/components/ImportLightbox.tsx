@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import type { ColorLabel, StagedFileOut } from "../api/types";
 import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
+import { fileTypeBadge } from "./ThumbnailGrid";
 
 interface Props {
   sessionId: string;
@@ -57,7 +58,7 @@ export function ImportLightbox({ sessionId, files, index, onIndexChange, onClose
           <div className="lightbox-controls-meta">
             <span className="lightbox-filename">{file.original_filename}</span>
             <span className="badge-inline">
-              {file.paired_staged_file_id ? "RAW+JPG" : file.file_type.toUpperCase()}
+              {fileTypeBadge(file.file_type, Boolean(file.paired_staged_file_id))}
             </span>
             <span className="lightbox-counter">
               {index + 1} / {files.length}

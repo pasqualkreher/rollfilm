@@ -7,6 +7,7 @@ import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
+import { fileTypeBadge } from "../components/ThumbnailGrid";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
@@ -361,11 +362,13 @@ export function ImportWizard() {
         onRatingMin={setRatingMin}
         colorLabel={colorFilter}
         onColorLabel={setColorFilter}
+        viewExtras={
+          <label className="filter-field filter-field-inline">
+            <input type="checkbox" checked={hideDuplicates} onChange={(e) => setHideDuplicates(e.target.checked)} />{" "}
+            Hide duplicates
+          </label>
+        }
       >
-        <label className="filter-field filter-field-inline">
-          <input type="checkbox" checked={hideDuplicates} onChange={(e) => setHideDuplicates(e.target.checked)} />{" "}
-          Hide duplicates
-        </label>
         <button
           className={`btn${selectMode ? " primary" : ""}`}
           onClick={() => setSelectMode((v) => !v)}
@@ -429,7 +432,6 @@ export function ImportWizard() {
             <div key={f.id} className={`import-card${f.selected ? " selected" : ""}`}>
               <div
                 className={`thumb-card${f.selected ? " selected" : ""}`}
-                style={f.width && f.height ? { aspectRatio: `${f.width} / ${f.height}` } : undefined}
                 onClick={(e) => (selectMode ? toggleStagedSelect(i, e.shiftKey) : setLightboxIndex(i))}
                 title={
                   selectMode
@@ -458,7 +460,7 @@ export function ImportWizard() {
                     {f.is_near_duplicate ? "Possible duplicate" : "Already in library"}
                   </span>
                 )}
-                <span className="badge">{f.paired_staged_file_id ? "RAW+JPG" : f.file_type.toUpperCase()}</span>
+                <span className="badge">{fileTypeBadge(f.file_type, Boolean(f.paired_staged_file_id))}</span>
                 <button
                   className="card-expand"
                   title="Preview"

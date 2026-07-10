@@ -6,6 +6,7 @@ import type { ImageOut } from "../api/types";
 import { useSelects } from "../state/selects";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 import { ViewPrefsControls } from "../components/ViewPrefsControls";
+import { fileTypeBadge } from "../components/ThumbnailGrid";
 
 export function Selects() {
   const { ids, count, remove, clear } = useSelects();
@@ -112,7 +113,7 @@ export function Selects() {
                   alt={image.original_filename}
                   onClick={() => navigate(`/image/${image.id}`)}
                 />
-                {image.paired_image_id && <span className="badge">RAW+JPG</span>}
+                <span className="badge">{fileTypeBadge(image.file_type, Boolean(image.paired_image_id))}</span>
                 <button
                   className="selects-remove"
                   title="Remove from selects"

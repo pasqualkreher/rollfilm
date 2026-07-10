@@ -19,6 +19,13 @@ interface Props {
   removeTitle?: string;
 }
 
+// Short badge shown on every thumbnail so the file kind is obvious at a glance:
+// a RAW+JPEG pair, or the lone type (RAW / JPG / PNG).
+export function fileTypeBadge(fileType: string, paired: boolean): string {
+  if (paired) return "RAW+JPG";
+  return fileType === "jpeg" ? "JPG" : fileType.toUpperCase();
+}
+
 function monthLabel(iso: string | null): string {
   if (!iso) return "Unknown date";
   const d = new Date(iso);
@@ -74,7 +81,7 @@ export function ThumbnailGrid({
         }}
       >
         <img src={api.images.thumbnailUrl(image.id, editVersion(image))} loading="lazy" alt={image.original_filename} />
-        {image.paired_image_id && <span className="badge">RAW+JPG</span>}
+        <span className="badge">{fileTypeBadge(image.file_type, Boolean(image.paired_image_id))}</span>
         {!selectMode && onRemove && (
           <button
             className="card-remove"
