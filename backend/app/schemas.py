@@ -49,7 +49,11 @@ class ImageOut(BaseModel):
     edit_distortion: int
     edit_dehaze: int
     edit_grain: int
+    edit_grain_size: int
     edit_denoise: int
+    edit_clarity: int
+    edit_sharpness: int
+    edit_color_tint: int
     tags: list[str]
     album_ids: list[str]
 
@@ -119,7 +123,11 @@ class ImageEdits(ImageAdjustments):
     vignette: int = 0
     distortion: int = 0  # lens distortion correction, geometric
     grain: int = 0  # film grain amount, 0..100
+    grain_size: int = 0  # film grain coarseness, 0..100
     denoise: int = 0  # noise reduction, 0..100
+    clarity: int = 0  # midtone local contrast, -100..100
+    sharpness: int = 0  # edge sharpening / softening, -100..100
+    color_tint: int = 0  # global hue rotation, -100..100 -> +/-180 deg
 
 
 class BulkImageUpdate(BaseModel):

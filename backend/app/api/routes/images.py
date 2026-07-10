@@ -561,7 +561,11 @@ def save_edits(
     image.edit_vignette = _clamp100(payload.vignette)
     image.edit_distortion = _clamp100(payload.distortion)
     image.edit_grain = max(0, min(100, int(payload.grain)))
+    image.edit_grain_size = max(0, min(100, int(payload.grain_size)))
     image.edit_denoise = max(0, min(100, int(payload.denoise)))
+    image.edit_clarity = _clamp100(payload.clarity)
+    image.edit_sharpness = _clamp100(payload.sharpness)
+    image.edit_color_tint = _clamp100(payload.color_tint)
     image.edit_color_mix = _clean_color_mix(payload.color_mix)
     # Tag edited photos "edit" so they're easy to find; drop the tag if the edit
     # was reset back to the original look.
@@ -571,7 +575,16 @@ def save_edits(
         or image.edit_color_mix
         or any(
             int(getattr(payload, name))
-            for name in (*thumbnails.ADJUSTMENT_FIELDS, "vignette", "distortion", "grain", "denoise")
+            for name in (
+                *thumbnails.ADJUSTMENT_FIELDS,
+                "vignette",
+                "distortion",
+                "grain",
+                "denoise",
+                "clarity",
+                "sharpness",
+                "color_tint",
+            )
         )
     )
     if has_edit:
@@ -605,7 +618,10 @@ def save_copy(
     adjustments = {name: _clamp100(getattr(payload, name)) for name in thumbnails.ADJUSTMENT_FIELDS}
     adjustments["vignette"] = _clamp100(payload.vignette)
     adjustments["grain"] = max(0, min(100, int(payload.grain)))
+    adjustments["grain_size"] = max(0, min(100, int(payload.grain_size)))
     adjustments["denoise"] = max(0, min(100, int(payload.denoise)))
+    adjustments["clarity"] = _clamp100(payload.clarity)
+    adjustments["sharpness"] = _clamp100(payload.sharpness)
     cleaned_mix = _clean_color_mix(payload.color_mix)
     adjustments["color_mix"] = json.loads(cleaned_mix) if cleaned_mix else None
 

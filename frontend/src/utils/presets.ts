@@ -9,7 +9,11 @@ export interface EditPreset {
   vignette: number;
   distortion: number;
   grain: number;
+  grainSize: number;
   denoise: number;
+  clarity: number;
+  sharpness: number;
+  colorTint: number;
 }
 
 const KEY = "pm.editorPresets";

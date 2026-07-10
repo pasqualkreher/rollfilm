@@ -164,7 +164,14 @@ class Image(Base):
     # Effects: dehaze (-100..100), film grain (0..100), denoise (0..100).
     edit_dehaze: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     edit_grain: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_grain_size: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     edit_denoise: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Detail: clarity (-100..100 midtone local contrast) and sharpness (-100..100,
+    # negative softens).
+    edit_clarity: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_sharpness: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Global colour-mixer tint: rotates all hues (-100..100 -> +/-180 deg).
+    edit_color_tint: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     albums: Mapped[list["AlbumImage"]] = relationship(back_populates="image", cascade="all, delete-orphan")
     tag_links: Mapped[list["ImageTag"]] = relationship(cascade="all, delete-orphan")

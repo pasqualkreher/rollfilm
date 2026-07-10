@@ -7,6 +7,9 @@ import {
   adjustmentsFromImage,
   applyAdjustments,
   applyDistortion,
+  applyGrain,
+  clarity as clarityPass,
+  unsharp,
   BAND_SWATCH,
   COLOR_BANDS,
   editsFromImage,
@@ -138,7 +141,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [vignette, setVignette] = useState(saved.vignette);
   const [distortion, setDistortion] = useState(saved.distortion);
   const [grain, setGrain] = useState(saved.grain);
+  const [grainSize, setGrainSize] = useState(saved.grainSize);
   const [denoise, setDenoise] = useState(saved.denoise);
+  const [clarity, setClarity] = useState(saved.clarity);
+  const [sharpness, setSharpness] = useState(saved.sharpness);
+  const [colorTint, setColorTint] = useState(saved.colorTint);
   const [band, setBand] = useState<ColorBand>("red");
   const [gridOverlay, setGridOverlay] = useState<GridOverlay>("none");
   const [presets, setPresets] = useState<Record<string, EditPreset>>(() => loadPresets());
@@ -167,12 +174,16 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Compose: rotate + crop the raw base, then run tonal/colour/vignette on the
   // resulting (final) frame - same order as the backend, so preview == save.
   function drawPreview(
-    px: Adjustments & { colorMix: ColorMix; vignette: number; grain: number },
+    px: Adjustments & { colorMix: ColorMix; vignette: number; colorTint: number },
     rot: number,
     cr: CropBox | null,
     cropping: boolean,
     dist: number,
-    dn: number
+    dn: number,
+    cl: number,
+    sp: number,
+    gr: number,
+    gsz: number
   ) {
     const base = baseRef.current;
     const baseCanvas = baseCanvasRef.current;
@@ -234,9 +245,13 @@ export function PhotoEditor({ image, onClose }: Props) {
     fctx.drawImage(rotc, sx, sy, sw, sh, 0, 0, fw, fh);
     fctx.filter = "none";
 
-    const srcData = fctx.getImageData(0, 0, fw, fh);
+    // Detail (spatial) before the tonal pass, matching the backend order.
+    let work = fctx.getImageData(0, 0, fw, fh);
+    if (cl) work = clarityPass(work, Math.max(3, Math.max(fw, fh) / 60), (cl / 100) * 0.9);
+    if (sp) work = unsharp(work, Math.max(0.6, Math.max(fw, fh) / 1500), (sp / 100) * 1.2);
     const out = fctx.createImageData(fw, fh);
-    applyAdjustments(srcData.data, out.data, px, fw, fh);
+    applyAdjustments(work.data, out.data, px, fw, fh);
+    if (gr > 0) applyGrain(out, gr, gsz);
     canvas.width = fw;
     canvas.height = fh;
     canvas.getContext("2d")!.putImageData(out, 0, 0);
@@ -295,11 +310,37 @@ export function PhotoEditor({ image, onClose }: Props) {
   useEffect(() => {
     if (!ready) return;
     const raf = requestAnimationFrame(() =>
-      drawPreview({ ...adj, colorMix, vignette, grain }, rotation, crop, cropMode, distortion, denoise)
+      drawPreview(
+        { ...adj, colorMix, vignette, colorTint },
+        rotation,
+        crop,
+        cropMode,
+        distortion,
+        denoise,
+        clarity,
+        sharpness,
+        grain,
+        grainSize
+      )
     );
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, adj, colorMix, vignette, distortion, grain, denoise, rotation, crop, cropMode]);
+  }, [
+    ready,
+    adj,
+    colorMix,
+    vignette,
+    colorTint,
+    distortion,
+    grain,
+    grainSize,
+    denoise,
+    clarity,
+    sharpness,
+    rotation,
+    crop,
+    cropMode,
+  ]);
 
   // The framed image changes size on geometry changes / crop mode, so drop back
   // to fit then to keep zoom/pan sane.
@@ -335,7 +376,20 @@ export function PhotoEditor({ image, onClose }: Props) {
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const edits: ImageEdits = { ...adj, rotation, crop, colorMix, vignette, distortion, grain, denoise };
+  const edits: ImageEdits = {
+    ...adj,
+    rotation,
+    crop,
+    colorMix,
+    vignette,
+    distortion,
+    grain,
+    grainSize,
+    denoise,
+    clarity,
+    sharpness,
+    colorTint,
+  };
 
   function applyPreset(p: EditPreset) {
     setAdj({ ...NEUTRAL, ...p.adj });
@@ -343,13 +397,28 @@ export function PhotoEditor({ image, onClose }: Props) {
     setVignette(p.vignette ?? 0);
     setDistortion(p.distortion ?? 0);
     setGrain(p.grain ?? 0);
+    setGrainSize(p.grainSize ?? 0);
     setDenoise(p.denoise ?? 0);
+    setClarity(p.clarity ?? 0);
+    setSharpness(p.sharpness ?? 0);
+    setColorTint(p.colorTint ?? 0);
   }
 
   function confirmSavePreset() {
     const name = presetName.trim();
     if (!name) return;
-    savePreset(name, { adj, colorMix, vignette, distortion, grain, denoise });
+    savePreset(name, {
+      adj,
+      colorMix,
+      vignette,
+      distortion,
+      grain,
+      grainSize,
+      denoise,
+      clarity,
+      sharpness,
+      colorTint,
+    });
     setPresets(loadPresets());
     setSelectedPreset(name);
     setNamingPreset(false);
@@ -421,20 +490,27 @@ export function PhotoEditor({ image, onClose }: Props) {
     vignette === 0 &&
     distortion === 0 &&
     grain === 0 &&
-    denoise === 0;
+    grainSize === 0 &&
+    denoise === 0 &&
+    clarity === 0 &&
+    sharpness === 0 &&
+    colorTint === 0;
 
   return (
     <div className="editor-overlay">
-      <button
-        className="icon-btn back-btn editor-back"
-        onClick={onClose}
-        disabled={busy}
-        title="Back (Esc)"
-        aria-label="Back"
-      >
-        ←
-      </button>
-      <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
+      <div className="editor-header">
+        <button
+          className="icon-btn back-btn"
+          onClick={onClose}
+          disabled={busy}
+          title="Back (Esc)"
+          aria-label="Back"
+        >
+          ←
+        </button>
+      </div>
+      <div className="editor-body">
+        <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
         <div className="editor-stage-main">
         {loading && <div className="editor-hint">Loading…</div>}
         {error && <div className="editor-hint">{error}</div>}
@@ -612,13 +688,21 @@ export function PhotoEditor({ image, onClose }: Props) {
           ))}
         </div>
 
+        {/* Detail */}
+        <div className="editor-section-title">Detail</div>
+        <div className="editor-sliders">
+          <Slider label="Clarity" value={clarity} onChange={setClarity} />
+          <Slider label="Sharpness" value={sharpness} onChange={setSharpness} />
+          <Slider label="Denoise" value={denoise} onChange={setDenoise} min={0} />
+        </div>
+
         {/* Lens / effects */}
         <div className="editor-section-title">Lens &amp; effects</div>
         <div className="editor-sliders">
           <Slider label="Distortion" value={distortion} onChange={setDistortion} />
           <Slider label="Vignette" value={vignette} onChange={setVignette} />
-          <Slider label="Denoise" value={denoise} onChange={setDenoise} min={0} />
           <Slider label="Grain" value={grain} onChange={setGrain} min={0} />
+          <Slider label="Grain size" value={grainSize} onChange={setGrainSize} min={0} />
         </div>
 
         {/* Presets */}
@@ -713,7 +797,11 @@ export function PhotoEditor({ image, onClose }: Props) {
                 setVignette(0);
                 setDistortion(0);
                 setGrain(0);
+                setGrainSize(0);
                 setDenoise(0);
+                setClarity(0);
+                setSharpness(0);
+                setColorTint(0);
               }}
             >
               Reset all
@@ -733,6 +821,7 @@ export function PhotoEditor({ image, onClose }: Props) {
             </button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

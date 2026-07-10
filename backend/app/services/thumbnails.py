@@ -46,19 +46,23 @@ def derivative_dir(image_id: str) -> Path:
 
 
 def apply_distortion(image: PILImage.Image, amount: int) -> PILImage.Image:
-    """Radial lens-distortion correction (geometric). amount<0 pulls the corners
-    in (corrects barrel), amount>0 pushes them out (corrects pincushion). Nearest
-    sampling - fast, and the JS live preview mirrors it. No-op when amount is 0."""
+    """Radial lens-distortion correction (geometric), circular in pixel space
+    (aspect-correct). +amount corrects barrel (pulls content in), -amount corrects
+    pincushion. Nearest sampling; the JS live preview mirrors this exactly."""
     if not amount:
         return image
     rgb = np.asarray(image.convert("RGB"))
     h, w = rgb.shape[:2]
-    k = amount / 100.0 * 0.4
-    ys = np.linspace(-1.0, 1.0, h, dtype=np.float32)[:, None]
-    xs = np.linspace(-1.0, 1.0, w, dtype=np.float32)[None, :]
-    factor = 1.0 + k * (xs * xs + ys * ys)
-    sx = np.clip(np.rint((xs * factor + 1.0) / 2.0 * (w - 1)), 0, w - 1).astype(np.int32)
-    sy = np.clip(np.rint((ys * factor + 1.0) / 2.0 * (h - 1)), 0, h - 1).astype(np.int32)
+    k = amount / 100.0 * 0.25
+    cx = (w - 1) / 2.0
+    cy = (h - 1) / 2.0
+    half = max(w, h) / 2.0  # common scale for both axes -> circular, not elliptical
+    ys, xs = np.meshgrid(np.arange(h, dtype=np.float32), np.arange(w, dtype=np.float32), indexing="ij")
+    dx = (xs - cx) / half
+    dy = (ys - cy) / half
+    factor = 1.0 + k * (dx * dx + dy * dy)
+    sx = np.clip(np.rint(cx + (xs - cx) * factor), 0, w - 1).astype(np.int32)
+    sy = np.clip(np.rint(cy + (ys - cy) * factor), 0, h - 1).astype(np.int32)
     return PILImage.fromarray(rgb[sy, sx], "RGB")
 
 
@@ -116,11 +120,12 @@ def _hsl_to_rgb(hue: np.ndarray, sat: np.ndarray, lum: np.ndarray) -> np.ndarray
     return np.clip(np.stack([r + m, g + m, b + m], axis=-1), 0.0, 1.0)
 
 
-def _apply_color_mix(arr: np.ndarray, mix: dict) -> np.ndarray:
+def _apply_color_mix(arr: np.ndarray, mix: dict, tint: int = 0) -> np.ndarray:
     """Shift hue / saturation / luminance of each colour band. `mix` maps a band
-    name to [hue, sat, lum], each -100..100."""
+    name to [hue, sat, lum], each -100..100. `tint` rotates *all* hues
+    (-100..100 -> +/-180 deg) to shift the whole palette."""
     bands = {b: mix.get(b, [0, 0, 0]) for b in COLOR_BANDS}
-    if not any(any(v) for v in bands.values()):
+    if not tint and not any(any(v) for v in bands.values()):
         return arr
     hue, sat, lum = _rgb_to_hsl(arr)
     hue_shift = np.zeros_like(hue)
@@ -135,10 +140,16 @@ def _apply_color_mix(arr: np.ndarray, mix: dict) -> np.ndarray:
         hue_shift[m] = (1 - t) * b0[0] + t * b1[0]
         sat_adj[m] = (1 - t) * b0[1] + t * b1[1]
         lum_adj[m] = (1 - t) * b0[2] + t * b1[2]
-    hue = (hue + hue_shift * 0.3) % 360.0  # +/-30 degrees at the extremes
+    # +/-180 degrees at the extremes, so a band can be pushed all the way to a
+    # different colour (with wrap, any target hue is reachable). The global tint
+    # rotates every hue on top of the per-band shifts.
+    hue = (hue + hue_shift * 1.8 + tint / 100.0 * 180.0) % 360.0
     sat = np.clip(sat * (1.0 + sat_adj / 100.0), 0.0, 1.0)
-    lum = np.clip(lum + lum_adj / 100.0 * 0.25, 0.0, 1.0)
-    return _hsl_to_rgb(hue, sat, lum)
+    rgb = _hsl_to_rgb(hue, sat, lum)
+    # Luminance as a brightness scale (preserves the band's colour). Moving HSL
+    # lightness instead washes each band toward white/black - which looked broken.
+    factor = (1.0 + lum_adj / 100.0 * 0.5)[..., None]
+    return np.clip(rgb * factor, 0.0, 1.0)
 
 
 def _apply_vignette(arr: np.ndarray, amount: int) -> np.ndarray:
@@ -200,20 +211,23 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
         arr = (arr - 0.5) * (1.0 + c) + 0.5
         np.clip(arr, 0.0, 1.0, out=arr)
 
-    # Dehaze: lift a low-contrast/desaturated veil - darken slightly, expand
-    # contrast, and boost saturation (negative adds a soft hazy look).
+    # Dehaze: haze is a bright, desaturated veil sitting mostly in the shadows/
+    # mids. Unlike Contrast (a symmetric S-curve), +dehaze *only* pulls that veil
+    # down (asymmetric, weighted to darker tones) and restores saturation;
+    # -dehaze lifts the shadows + desaturates for a soft, hazy look.
     dh = adj.get("dehaze", 0) / 100.0
     if dh:
-        arr = arr - dh * 0.05
-        arr = (arr - 0.5) * (1.0 + dh * 0.4) + 0.5
+        luma = arr @ _LUMA
+        arr = arr - (dh * 0.22) * ((1.0 - luma) ** 2)[..., None]
         np.clip(arr, 0.0, 1.0, out=arr)
-        luma = (arr @ _LUMA)[..., None]
-        arr = luma + (arr - luma) * (1.0 + dh * 0.4)
+        luma2 = (arr @ _LUMA)[..., None]
+        arr = luma2 + (arr - luma2) * (1.0 + dh * 0.6)
         np.clip(arr, 0.0, 1.0, out=arr)
 
     mix = adj.get("color_mix")
-    if mix:
-        arr = _apply_color_mix(np.clip(arr, 0.0, 1.0), mix)
+    tint = adj.get("color_tint", 0)
+    if mix or tint:
+        arr = _apply_color_mix(np.clip(arr, 0.0, 1.0), mix or {}, tint)
     if s:
         luma = (arr @ _LUMA)[..., None]
         arr = luma + (arr - luma) * (1.0 + s)
@@ -221,18 +235,49 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0)
 
 
-def _apply_grain(arr: np.ndarray, amount: int) -> np.ndarray:
-    """Add monochrome film grain (luminance noise). Stochastic - the live preview
-    uses a different random pattern but the same intensity, which is fine."""
-    noise = (np.random.rand(*arr.shape[:2]).astype(np.float32) - 0.5) * (amount / 100.0) * 0.2
+def _apply_grain(arr: np.ndarray, amount: int, size: int = 0) -> np.ndarray:
+    """Add monochrome film grain (luminance noise). `size` (0..100) controls the
+    grain's coarseness: noise is generated at a lower resolution and scaled up so
+    higher size = chunkier grain. Stochastic - preview uses a different pattern."""
+    h, w = arr.shape[:2]
+    scale = 1.0 + (size / 100.0) * 4.0  # 1x .. 5x coarser
+    nh = max(1, int(round(h / scale)))
+    nw = max(1, int(round(w / scale)))
+    small = np.random.rand(nh, nw).astype(np.float32)
+    if (nh, nw) != (h, w):
+        small_pil = PILImage.fromarray((small * 255.0 + 0.5).astype(np.uint8), "L")
+        noise = np.asarray(small_pil.resize((w, h), PILImage.BILINEAR), dtype=np.float32) / 255.0
+    else:
+        noise = small
+    noise = (noise - 0.5) * (amount / 100.0) * 0.2
     return np.clip(arr + noise[..., None], 0.0, 1.0)
+
+
+def _unsharp(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
+    """Unsharp mask: out = in + amount*(in - blur(in)). Positive amount sharpens,
+    negative softens. Small radius = sharpness."""
+    pil = PILImage.fromarray((np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
+    blur = np.asarray(pil.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
+    return np.clip(arr + amount * (arr - blur), 0.0, 1.0)
+
+
+def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
+    """Fujifilm-style clarity: large-radius local contrast weighted toward the
+    midtones (so highlights/shadows aren't crushed). Positive = punchier mids,
+    negative = softer."""
+    pil = PILImage.fromarray((np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
+    blur = np.asarray(pil.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
+    luma = arr @ _LUMA
+    mask = (1.0 - np.abs(2.0 * luma - 1.0))[..., None]  # peaks at midtones
+    return np.clip(arr + amount * (arr - blur) * mask, 0.0, 1.0)
 
 
 def _has_edits(adj: dict) -> bool:
     if any(adj.get(k, 0) for k in ADJUSTMENT_FIELDS):
         return True
-    if adj.get("vignette", 0) or adj.get("grain", 0) or adj.get("denoise", 0):
-        return True
+    for k in ("vignette", "grain", "denoise", "clarity", "sharpness", "color_tint"):
+        if adj.get(k, 0):
+            return True
     mix = adj.get("color_mix") or {}
     return any(any(v) for v in mix.values())
 
@@ -242,20 +287,31 @@ def apply_adjustments(image: PILImage.Image, adj: dict) -> PILImage.Image:
     when everything is neutral (the common case - avoids a needless numpy pass)."""
     if not _has_edits(adj):
         return image
+    long_edge = max(image.size)
     # Denoise first (spatial): a light Gaussian blur scaled to the image size so
     # preview and full render soften by a comparable amount.
     dn = adj.get("denoise", 0)
     if dn > 0:
-        radius = dn / 100.0 * (max(image.size) / 600.0)
+        radius = dn / 100.0 * (long_edge / 600.0)
         if radius > 0.1:
             image = image.filter(ImageFilter.GaussianBlur(radius))
     rgb = image.convert("RGB")
     arr = np.asarray(rgb, dtype=np.float32) / 255.0
+    # Detail (spatial), before the tonal pass: clarity = large-radius local
+    # contrast, sharpness = small-radius edge enhancement.
+    cl = adj.get("clarity", 0)
+    if cl:
+        arr = _clarity(arr, max(3.0, long_edge / 60.0), cl / 100.0 * 0.9)
+    sp = adj.get("sharpness", 0)
+    if sp:
+        # +sharpen / -soften share the unsharp formula (negative amount blends
+        # toward the blur).
+        arr = _unsharp(arr, max(0.6, long_edge / 1500.0), sp / 100.0 * 1.2)
     arr = _adjust_array(arr, adj)
     if adj.get("vignette", 0):
         arr = _apply_vignette(arr, adj["vignette"])
     if adj.get("grain", 0) > 0:
-        arr = _apply_grain(arr, adj["grain"])
+        arr = _apply_grain(arr, adj["grain"], adj.get("grain_size", 0))
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     return PILImage.fromarray(out, "RGB")
 
@@ -362,7 +418,11 @@ def adjustments_from_image(image: "Image") -> dict:
     adj = {name: getattr(image, f"edit_{name}", 0) or 0 for name in ADJUSTMENT_FIELDS}
     adj["vignette"] = getattr(image, "edit_vignette", 0) or 0
     adj["grain"] = getattr(image, "edit_grain", 0) or 0
+    adj["grain_size"] = getattr(image, "edit_grain_size", 0) or 0
     adj["denoise"] = getattr(image, "edit_denoise", 0) or 0
+    adj["clarity"] = getattr(image, "edit_clarity", 0) or 0
+    adj["sharpness"] = getattr(image, "edit_sharpness", 0) or 0
+    adj["color_tint"] = getattr(image, "edit_color_tint", 0) or 0
     raw = getattr(image, "edit_color_mix", None)
     if raw:
         try:

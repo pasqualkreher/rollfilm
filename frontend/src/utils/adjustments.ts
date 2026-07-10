@@ -98,7 +98,11 @@ export interface ImageEdits extends Adjustments {
   vignette: number;
   distortion: number;
   grain: number; // 0..100
+  grainSize: number; // 0..100 (coarseness)
   denoise: number; // 0..100
+  clarity: number; // -100..100
+  sharpness: number; // -100..100 (negative softens)
+  colorTint: number; // global hue rotation, -100..100
 }
 
 export function editsFromImage(image: ImageOut): ImageEdits {
@@ -130,7 +134,11 @@ export function editsFromImage(image: ImageOut): ImageEdits {
     vignette: image.edit_vignette,
     distortion: image.edit_distortion,
     grain: image.edit_grain,
+    grainSize: image.edit_grain_size,
     denoise: image.edit_denoise,
+    clarity: image.edit_clarity,
+    sharpness: image.edit_sharpness,
+    colorTint: image.edit_color_tint,
   };
 }
 
@@ -175,7 +183,7 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 export interface PixelEdits extends Adjustments {
   colorMix?: ColorMix;
   vignette?: number;
-  grain?: number;
+  colorTint?: number;
 }
 
 // Apply the edits to `src` (RGBA bytes) into `dst`, both length width*height*4.
@@ -199,9 +207,9 @@ export function applyAdjustments(
   const t = adj.temperature / 100;
   const n = adj.tint / 100;
   const vig = (adj.vignette ?? 0) / 100;
-  const grain = (adj.grain ?? 0) / 100;
+  const tintRot = (adj.colorTint ?? 0) / 100;
   const mix = adj.colorMix;
-  const useMix = !!mix && !mixIsNeutral(mix);
+  const useMix = (!!mix && !mixIsNeutral(mix)) || tintRot !== 0;
 
   const gain = e ? Math.pow(2, e) : 1;
   const rWb = 1 + 0.2 * t;
@@ -275,13 +283,15 @@ export function applyAdjustments(
     }
 
     if (dh) {
-      r = clamp01((r - dh * 0.05 - 0.5) * (1 + dh * 0.4) + 0.5);
-      g = clamp01((g - dh * 0.05 - 0.5) * (1 + dh * 0.4) + 0.5);
-      b = clamp01((b - dh * 0.05 - 0.5) * (1 + dh * 0.4) + 0.5);
-      const luma = r * LR + g * LG + b * LB;
-      r = clamp01(luma + (r - luma) * (1 + dh * 0.4));
-      g = clamp01(luma + (g - luma) * (1 + dh * 0.4));
-      b = clamp01(luma + (b - luma) * (1 + dh * 0.4));
+      let luma = r * LR + g * LG + b * LB;
+      const veil = dh * 0.22 * (1 - luma) * (1 - luma);
+      r = clamp01(r - veil);
+      g = clamp01(g - veil);
+      b = clamp01(b - veil);
+      luma = r * LR + g * LG + b * LB;
+      r = clamp01(luma + (r - luma) * (1 + dh * 0.6));
+      g = clamp01(luma + (g - luma) * (1 + dh * 0.6));
+      b = clamp01(luma + (b - luma) * (1 + dh * 0.6));
     }
 
     if (useMix) {
@@ -289,23 +299,31 @@ export function applyAdjustments(
       let hueShift = 0;
       let satAdj = 0;
       let lumAdj = 0;
-      for (let j = 0; j < 8; j++) {
-        const lo = BAND_EDGES[j];
-        const hiEdge = BAND_EDGES[j + 1];
-        if (h0 >= lo && h0 < hiEdge) {
-          const tt = (h0 - lo) / (hiEdge - lo);
-          const b0 = mix![COLOR_BANDS[j]];
-          const b1 = mix![COLOR_BANDS[(j + 1) % 8]];
-          hueShift = (1 - tt) * b0[0] + tt * b1[0];
-          satAdj = (1 - tt) * b0[1] + tt * b1[1];
-          lumAdj = (1 - tt) * b0[2] + tt * b1[2];
-          break;
+      if (mix) {
+        for (let j = 0; j < 8; j++) {
+          const lo = BAND_EDGES[j];
+          const hiEdge = BAND_EDGES[j + 1];
+          if (h0 >= lo && h0 < hiEdge) {
+            const tt = (h0 - lo) / (hiEdge - lo);
+            const b0 = mix[COLOR_BANDS[j]];
+            const b1 = mix[COLOR_BANDS[(j + 1) % 8]];
+            hueShift = (1 - tt) * b0[0] + tt * b1[0];
+            satAdj = (1 - tt) * b0[1] + tt * b1[1];
+            lumAdj = (1 - tt) * b0[2] + tt * b1[2];
+            break;
+          }
         }
       }
-      const nh = (((h0 + hueShift * 0.3) % 360) + 360) % 360;
+      const nh = (((h0 + hueShift * 1.8 + tintRot * 180) % 360) + 360) % 360;
       const ns = clamp01(s0 * (1 + satAdj / 100));
-      const nl = clamp01(l0 + (lumAdj / 100) * 0.25);
-      [r, g, b] = hslToRgb(nh, ns, nl);
+      [r, g, b] = hslToRgb(nh, ns, l0);
+      if (lumAdj) {
+        // Brightness scale (preserves colour) rather than moving HSL lightness.
+        const f = 1 + (lumAdj / 100) * 0.5;
+        r = clamp01(r * f);
+        g = clamp01(g * f);
+        b = clamp01(b * f);
+      }
     }
 
     if (s) {
@@ -329,15 +347,6 @@ export function applyAdjustments(
       b = clamp01(b * vf);
     }
 
-    if (grain) {
-      // Monochrome film grain (stochastic - pattern differs from the saved
-      // render but the intensity matches).
-      const nz = (Math.random() - 0.5) * grain * 0.2;
-      r = clamp01(r + nz);
-      g = clamp01(g + nz);
-      b = clamp01(b + nz);
-    }
-
     dst[i] = r * 255 + 0.5;
     dst[i + 1] = g * 255 + 0.5;
     dst[i + 2] = b * 255 + 0.5;
@@ -351,16 +360,19 @@ export function applyDistortion(src: ImageData, amount: number): ImageData {
   const w = src.width;
   const h = src.height;
   const out = new ImageData(w, h);
-  const k = (amount / 100) * 0.4;
+  const k = (amount / 100) * 0.25;
+  const cx = (w - 1) / 2;
+  const cy = (h - 1) / 2;
+  const half = Math.max(w, h) / 2; // common scale -> circular, aspect-correct
   const s = src.data;
   const d = out.data;
   for (let y = 0; y < h; y++) {
-    const ny = h > 1 ? (y / (h - 1)) * 2 - 1 : 0;
+    const dy = (y - cy) / half;
     for (let x = 0; x < w; x++) {
-      const nx = w > 1 ? (x / (w - 1)) * 2 - 1 : 0;
-      const factor = 1 + k * (nx * nx + ny * ny);
-      let sx = Math.round(((nx * factor + 1) / 2) * (w - 1));
-      let sy = Math.round(((ny * factor + 1) / 2) * (h - 1));
+      const dx = (x - cx) / half;
+      const factor = 1 + k * (dx * dx + dy * dy);
+      let sx = Math.round(cx + (x - cx) * factor);
+      let sy = Math.round(cy + (y - cy) * factor);
       if (sx < 0) sx = 0;
       else if (sx > w - 1) sx = w - 1;
       if (sy < 0) sy = 0;
@@ -374,4 +386,104 @@ export function applyDistortion(src: ImageData, amount: number): ImageData {
     }
   }
   return out;
+}
+
+// Unsharp mask (clarity / sharpness): out = in + amount*(in - blur(in)). Uses a
+// canvas Gaussian blur; mirrors the backend but is approximate at preview scale.
+export function unsharp(input: ImageData, radius: number, amount: number): ImageData {
+  const w = input.width;
+  const h = input.height;
+  const src = document.createElement("canvas");
+  src.width = w;
+  src.height = h;
+  src.getContext("2d")!.putImageData(input, 0, 0);
+  const bc = document.createElement("canvas");
+  bc.width = w;
+  bc.height = h;
+  const bctx = bc.getContext("2d")!;
+  bctx.filter = `blur(${radius}px)`;
+  bctx.drawImage(src, 0, 0);
+  bctx.filter = "none";
+  const blur = bctx.getImageData(0, 0, w, h).data;
+  const out = new ImageData(w, h);
+  const s = input.data;
+  const d = out.data;
+  for (let i = 0; i < s.length; i += 4) {
+    d[i] = clamp01((s[i] + amount * (s[i] - blur[i])) / 255) * 255 + 0.5;
+    d[i + 1] = clamp01((s[i + 1] + amount * (s[i + 1] - blur[i + 1])) / 255) * 255 + 0.5;
+    d[i + 2] = clamp01((s[i + 2] + amount * (s[i + 2] - blur[i + 2])) / 255) * 255 + 0.5;
+    d[i + 3] = s[i + 3];
+  }
+  return out;
+}
+
+// Fujifilm-style clarity: large-radius local contrast weighted to the midtones.
+export function clarity(input: ImageData, radius: number, amount: number): ImageData {
+  const w = input.width;
+  const h = input.height;
+  const src = document.createElement("canvas");
+  src.width = w;
+  src.height = h;
+  src.getContext("2d")!.putImageData(input, 0, 0);
+  const bc = document.createElement("canvas");
+  bc.width = w;
+  bc.height = h;
+  const bctx = bc.getContext("2d")!;
+  bctx.filter = `blur(${radius}px)`;
+  bctx.drawImage(src, 0, 0);
+  bctx.filter = "none";
+  const blur = bctx.getImageData(0, 0, w, h).data;
+  const out = new ImageData(w, h);
+  const s = input.data;
+  const d = out.data;
+  for (let i = 0; i < s.length; i += 4) {
+    const rr = s[i] / 255;
+    const gg = s[i + 1] / 255;
+    const bb = s[i + 2] / 255;
+    const luma = rr * LR + gg * LG + bb * LB;
+    const mask = 1 - Math.abs(2 * luma - 1);
+    d[i] = clamp01(rr + amount * ((s[i] - blur[i]) / 255) * mask) * 255 + 0.5;
+    d[i + 1] = clamp01(gg + amount * ((s[i + 1] - blur[i + 1]) / 255) * mask) * 255 + 0.5;
+    d[i + 2] = clamp01(bb + amount * ((s[i + 2] - blur[i + 2]) / 255) * mask) * 255 + 0.5;
+    d[i + 3] = s[i + 3];
+  }
+  return out;
+}
+
+// Monochrome film grain with size (coarseness): noise generated at a reduced
+// resolution and scaled up. Mutates `img`. Stochastic (pattern differs from save).
+export function applyGrain(img: ImageData, amount: number, size: number): void {
+  const w = img.width;
+  const h = img.height;
+  const scale = 1 + (size / 100) * 4;
+  const nw = Math.max(1, Math.round(w / scale));
+  const nh = Math.max(1, Math.round(h / scale));
+  const small = document.createElement("canvas");
+  small.width = nw;
+  small.height = nh;
+  const sctx = small.getContext("2d")!;
+  const nd = sctx.createImageData(nw, nh);
+  for (let i = 0; i < nd.data.length; i += 4) {
+    const v = Math.random() * 255;
+    nd.data[i] = v;
+    nd.data[i + 1] = v;
+    nd.data[i + 2] = v;
+    nd.data[i + 3] = 255;
+  }
+  sctx.putImageData(nd, 0, 0);
+  const big = document.createElement("canvas");
+  big.width = w;
+  big.height = h;
+  const bctx = big.getContext("2d")!;
+  bctx.imageSmoothingEnabled = size > 0;
+  bctx.drawImage(small, 0, 0, w, h);
+  const noise = bctx.getImageData(0, 0, w, h).data;
+  const amt = (amount / 100) * 0.2 * 255;
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const nz = (noise[i] / 255 - 0.5) * amt;
+    d[i] = d[i] + nz;
+    d[i + 1] = d[i + 1] + nz;
+    d[i + 2] = d[i + 2] + nz;
+  }
 }

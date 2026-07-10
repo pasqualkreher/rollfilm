@@ -52,7 +52,11 @@ export interface ImageOut {
   edit_distortion: number;
   edit_dehaze: number;
   edit_grain: number;
+  edit_grain_size: number;
   edit_denoise: number;
+  edit_clarity: number;
+  edit_sharpness: number;
+  edit_color_tint: number;
   tags: string[];
   album_ids: string[];
 }

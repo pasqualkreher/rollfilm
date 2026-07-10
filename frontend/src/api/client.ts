@@ -40,7 +40,11 @@ export function editVersion(image: ImageOut): string {
     image.edit_distortion,
     image.edit_dehaze,
     image.edit_grain,
+    image.edit_grain_size,
     image.edit_denoise,
+    image.edit_clarity,
+    image.edit_sharpness,
+    image.edit_color_tint,
   ].join("-");
 }
 

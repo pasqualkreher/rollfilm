@@ -230,6 +230,23 @@ button {
   font-weight: 600;
 }
 
+/* Shared text-input styling so every input (album name, Immich, etc.) matches. */
+input[type="text"],
+input[type="password"],
+input[type="search"],
+input[type="email"],
+input[type="url"],
+textarea {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
 select,
 .filter-bar input[type="number"],
 .filter-bar input[type="date"] {
@@ -239,19 +256,22 @@ select,
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
-  transition: border-color 0.12s ease;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 select:hover,
+input:hover:not(:disabled),
 .filter-bar input[type="date"]:hover {
   border-color: var(--text-muted);
 }
 
+/* One clean accent ring on focus (no double browser + custom outline). */
 select:focus-visible,
-input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 /* Capture-date range: two date pickers with a dash between them. */
@@ -837,8 +857,25 @@ input:focus-visible {
   inset: 0;
   z-index: 1000;
   display: flex;
-  background: #0d0d0f;
-  color: #f1f1f2;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Slim top bar holding the back arrow, so it never overlaps the photo. */
+.editor-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Stage + panel sit below the header. */
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
 .editor-stage {
@@ -851,14 +888,6 @@ input:focus-visible {
   padding: 40px 16px;
   overflow: hidden;
   transition: background 0.15s ease;
-}
-
-/* Back arrow pinned to the top-left corner of the editor, like the lightbox. */
-.editor-back {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  z-index: 5;
 }
 
 /* The image area; the background toggle sits in its own row below it. */
