@@ -59,21 +59,9 @@ export function ThumbnailGrid({
   const allIds = images.map((im) => im.id);
 
   function renderCard(image: ImageOut, index: number) {
-    // Size each card to the photo's real aspect ratio so the grid shows the
-    // whole frame uncropped (portrait stays portrait, panoramas stay wide),
-    // instead of the previous square crop. Falls back to the CSS 1/1 when a
-    // photo's dimensions aren't known. A manual 90°/270° edit rotation swaps
-    // the displayed width/height, so mirror that here.
-    let aspectRatio: string | undefined;
-    if (image.width && image.height) {
-      const quarterTurned = Math.abs(Math.round(image.edit_rotation / 90)) % 2 === 1;
-      const [w, h] = quarterTurned ? [image.height, image.width] : [image.width, image.height];
-      aspectRatio = `${w} / ${h}`;
-    }
     return (
       <div
         key={image.id}
-        style={aspectRatio ? { aspectRatio } : undefined}
         className={`thumb-card${selectMode && selectedIds?.has(image.id) ? " selected" : ""}${
           !selectMode && onRemove ? " has-remove" : ""
         }`}

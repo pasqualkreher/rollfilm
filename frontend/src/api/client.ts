@@ -5,6 +5,7 @@ import type {
   DirListing,
   ImmichSettings,
   ImmichTestResult,
+  ImmichPushResult,
   ImportSessionOut,
   LibraryFilters,
   ScanStatus,
@@ -27,7 +28,12 @@ export function editVersion(image: ImageOut): string {
   ].join("-");
 }
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+// In the Electron app the backend runs on a random localhost port, injected by
+// the preload script. Fall back to the build-time env (web/Docker) or the dev default.
+const BASE_URL =
+  (typeof window !== "undefined" && window.photoManager?.apiBaseUrl) ||
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://localhost:8000";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -60,10 +66,16 @@ export const api = {
     get(id: string): Promise<ImageOut> {
       return request(`/images/${id}`);
     },
-    update(id: string, patch: { rating?: number; color_label?: string }): Promise<ImageOut> {
+    update(
+      id: string,
+      patch: { rating?: number; color_label?: string; apply_to_pair?: boolean }
+    ): Promise<ImageOut> {
       return request(`/images/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
     },
-    bulkUpdate(image_ids: string[], patch: { rating?: number; color_label?: string }): Promise<ImageOut[]> {
+    bulkUpdate(
+      image_ids: string[],
+      patch: { rating?: number; color_label?: string; apply_to_pair?: boolean }
+    ): Promise<ImageOut[]> {
       return request(`/images/bulk`, {
         method: "PATCH",
         body: JSON.stringify({ image_ids, ...patch }),
@@ -96,6 +108,11 @@ export const api = {
     },
     bulkAddTags(image_ids: string[], tag_names: string[]): Promise<ImageOut[]> {
       return request(`/images/bulk-tags`, { method: "POST", body: JSON.stringify({ image_ids, tag_names }) });
+    },
+    // Push already-imported library photos to Immich (only works when Immich is
+    // configured in Settings). JPEGs upload; RAW/other files are skipped.
+    pushToImmich(image_ids: string[]): Promise<ImmichPushResult> {
+      return request(`/images/immich`, { method: "POST", body: JSON.stringify({ image_ids }) });
     },
     bulkReset(image_ids: string[]): Promise<ImageOut[]> {
       return request(`/images/bulk-reset`, { method: "POST", body: JSON.stringify({ image_ids }) });

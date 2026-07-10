@@ -105,6 +105,14 @@ export interface ImmichTestResult {
   message: string;
 }
 
+export interface ImmichPushResult {
+  uploaded: number;
+  duplicate: number;
+  skipped: number;
+  failed: number;
+  message: string;
+}
+
 export interface SourceRoot {
   id: string;
   name: string;
@@ -113,6 +121,9 @@ export interface SourceRoot {
   last_scanned_at: string | null;
   image_count: number;
   scanning: boolean;
+  // False when the source folder isn't currently reachable (external drive
+  // unplugged / NAS unmounted); its photos are hidden from the library.
+  available: boolean;
 }
 
 export interface ScanStatus {

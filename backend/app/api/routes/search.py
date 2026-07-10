@@ -8,7 +8,7 @@ from app import schemas
 from app.auth import get_current_user
 from app.db.models import AlbumImage, ColorLabel, FileType, Image, ImageTag, Tag, User
 from app.db.session import engine, get_db
-from app.services import embeddings
+from app.services import embeddings, sources as sources_service
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -87,6 +87,10 @@ def search_images(
     results: list[schemas.SearchResultOut] = []
     seen_ids: set[str] = set()
 
+    # Same rule as the library grid: photos from a disconnected external source
+    # aren't searchable while their drive/NAS is offline.
+    unavailable = sources_service.unavailable_source_ids(db, current_user.id)
+
     tag_query = (
         db.query(Image)
         .join(ImageTag, ImageTag.image_id == Image.id)
@@ -94,7 +98,10 @@ def search_images(
         .filter(Tag.name.ilike(f"%{q}%"))
     )
     tag_matches = (
-        _apply_scope(tag_query, **scope_kwargs).order_by(Image.taken_at.desc()).limit(limit).all()
+        sources_service.exclude_unavailable(_apply_scope(tag_query, **scope_kwargs), unavailable)
+        .order_by(Image.taken_at.desc())
+        .limit(limit)
+        .all()
     )
     for image in tag_matches:
         seen_ids.add(image.id)
@@ -106,7 +113,10 @@ def search_images(
         # for a generous pool and keep the first that survive, in similarity
         # order. The set of ids allowed by the current scope is looked up once.
         allowed_ids = {
-            row.id for row in _apply_scope(db.query(Image.id), **scope_kwargs).all()
+            row.id
+            for row in sources_service.exclude_unavailable(
+                _apply_scope(db.query(Image.id), **scope_kwargs), unavailable
+            ).all()
         }
         candidate_pool = max(limit * 5, 200)
         matches = embeddings.query_similar(engine, vector, k=candidate_pool)

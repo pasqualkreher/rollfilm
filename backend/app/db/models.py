@@ -49,9 +49,9 @@ class ImportSessionStatus(str, enum.Enum):
 
 
 class User(Base):
-    """Single seeded row for now (id=1). See app/auth.py: get_current_user()
-    always returns this row until real multi-user auth is added, at which
-    point every owner_id-scoped query below already works unchanged."""
+    """The single local user (id=1), seeded on first access. This is a
+    single-user desktop app; the owner_id columns below all point at this row.
+    See app/auth.py: get_current_user()."""
 
     __tablename__ = "users"
 
@@ -220,7 +220,7 @@ class ImportSession(Base):
 
 class AppSetting(Base):
     """Simple key-value store for app-wide configuration the user sets from the
-    Settings screen (e.g. Immich server URL + API key). Single-user today, so
+    Settings screen (e.g. Immich server URL + API key). Single-user app, so
     these are global rather than owner-scoped."""
 
     __tablename__ = "app_settings"

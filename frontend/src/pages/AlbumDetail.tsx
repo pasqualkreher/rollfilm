@@ -11,6 +11,7 @@ import { BulkTagInput } from "../components/BulkTagInput";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { useSelects } from "../state/selects";
 import { groupPairsAdjacent } from "../utils/pairing";
+import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
@@ -24,6 +25,7 @@ export function AlbumDetail() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const selects = useSelects();
+  const mergePairs = useMergePairs();
   const [searchParams, setSearchParams] = useSearchParams();
   const q = (searchParams.get("q") ?? "").trim();
 
@@ -32,6 +34,12 @@ export function AlbumDetail() {
     queryFn: () => api.albums.get(id!),
     enabled: !!id,
   });
+
+  // "Add to Immich" only appears when the integration is configured in Settings.
+  const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
+  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
+  const [immichBusy, setImmichBusy] = useState(false);
+  const [immichMsg, setImmichMsg] = useState<string | null>(null);
 
   const filters: LibraryFilters = {
     view_mode: viewMode,
@@ -53,10 +61,28 @@ export function AlbumDetail() {
     enabled: !!id,
   });
 
+  // In combined view, either merge each RAW+JPEG pair into one JPEG card, or
+  // just keep the two partners adjacent. Other view modes show a flat list.
   const orderedImages =
     viewMode === "combined"
-      ? groupPairsAdjacent(images ?? [], (img) => img.paired_image_id)
+      ? mergePairs
+        ? collapsePairs(images ?? [])
+        : groupPairsAdjacent(images ?? [], (img) => img.paired_image_id)
       : images ?? [];
+
+  // Expand a set of ids with each one's RAW/JPEG partner, but only in merged
+  // view where the partner is hidden behind the shown card (the split view lets
+  // the user pick each half, so we keep their selection exact there).
+  function withPairedIds(ids: string[]): string[] {
+    if (!mergePairs) return ids;
+    const byId = new Map((images ?? []).map((im) => [im.id, im]));
+    const out = new Set(ids);
+    for (const imgId of ids) {
+      const partner = byId.get(imgId)?.paired_image_id;
+      if (partner) out.add(partner);
+    }
+    return Array.from(out);
+  }
 
   async function removeFromAlbum(imageId: string) {
     if (!id) return;
@@ -96,16 +122,26 @@ export function AlbumDetail() {
 
   async function applyBulk(patch: { rating?: number; color_label?: string }) {
     if (selected.size === 0) return;
-    await api.images.bulkUpdate(Array.from(selected), patch);
+    // With merged pairs only the JPEG is visible, so mirror the change to each
+    // hidden RAW partner too.
+    await api.images.bulkUpdate(Array.from(selected), { ...patch, apply_to_pair: mergePairs });
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
   async function deleteSelected() {
     if (selected.size === 0) return;
-    if (!window.confirm(`Delete ${selected.size} photo(s)? This removes the original files too - it cannot be undone.`)) {
+    // Merged view hides the RAW behind its JPEG - delete both halves of the shot.
+    const ids = withPairedIds(Array.from(selected));
+    const extra = ids.length - selected.size;
+    const suffix = extra > 0 ? ` (plus ${extra} paired RAW/JPEG file${extra === 1 ? "" : "s"})` : "";
+    if (
+      !window.confirm(
+        `Delete ${selected.size} photo(s)${suffix}? This removes the original files too - it cannot be undone.`
+      )
+    ) {
       return;
     }
-    await api.images.bulkDelete(Array.from(selected));
+    await api.images.bulkDelete(ids);
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["album", id] });
@@ -140,6 +176,20 @@ export function AlbumDetail() {
     if (!window.confirm(`Reset stars, colors, and tags for ${selected.size} photo(s)?`)) return;
     await api.images.bulkReset(Array.from(selected));
     queryClient.invalidateQueries({ queryKey: ["images"] });
+  }
+
+  async function addSelectedToImmich() {
+    if (selected.size === 0) return;
+    setImmichBusy(true);
+    setImmichMsg(null);
+    try {
+      const result = await api.images.pushToImmich(Array.from(selected));
+      setImmichMsg(result.message);
+    } catch (e) {
+      setImmichMsg((e as Error).message);
+    } finally {
+      setImmichBusy(false);
+    }
   }
 
   return (
@@ -208,6 +258,16 @@ export function AlbumDetail() {
           <button className="btn" onClick={() => selects.add(Array.from(selected))}>
             Add to selects
           </button>
+          {immichConfigured && (
+            <button
+              className="btn"
+              onClick={addSelectedToImmich}
+              disabled={immichBusy}
+              title="Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
+            >
+              {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+            </button>
+          )}
           <button className="btn" onClick={resetSelectedMetadata}>
             Reset stars/tags/colors
           </button>
@@ -217,6 +277,7 @@ export function AlbumDetail() {
           <button className="btn" style={{ borderColor: "var(--danger)", color: "var(--danger)" }} onClick={deleteSelected}>
             Delete selected
           </button>
+          {immichMsg && <span style={{ color: "var(--text-muted)" }}>{immichMsg}</span>}
         </div>
       )}
       {selectMode && (

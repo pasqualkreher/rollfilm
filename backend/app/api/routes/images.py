@@ -14,10 +14,21 @@ from app import schemas
 from app.api.deps import get_owned_image
 from app.auth import get_current_user
 from app.config import settings
-from app.db.models import AlbumImage, ColorLabel, FileType, Image, ImageTag, ImportStagedFile, Tag, User
+from app.db.models import (
+    AlbumImage,
+    ColorLabel,
+    FileType,
+    Image,
+    ImageTag,
+    ImportStagedFile,
+    SourceRoot,
+    Tag,
+    User,
+)
 from app.db.session import engine, get_db
-from app.services import embeddings, thumbnails
+from app.services import embeddings, immich as immich_service, sources as sources_service, thumbnails
 from app.services.filesystem import resolve_image_path
+from app.services.settings_store import get_immich_config
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +44,59 @@ def _try_regenerate_derivatives(image: Image) -> None:
         thumbnails.regenerate_for_image(image)
     except Exception:
         logger.exception("Failed to regenerate thumbnails for image %s after edit", image.id)
+
+
+def _prune_empty_dirs(start: Path, stop_at: Path) -> None:
+    """After deleting a managed original, remove any now-empty parent folders the
+    app created for it (the per-year / per-day import folders), walking upward.
+    Never touches stop_at (the library root) itself, and bails the moment it
+    would step outside it - so a bad path can't delete unrelated directories."""
+    try:
+        stop_at = stop_at.resolve()
+    except OSError:
+        return
+    current = start.parent
+    while True:
+        try:
+            resolved = current.resolve()
+        except OSError:
+            return
+        # Stop at the library root, or if we've somehow escaped above it.
+        if resolved == stop_at or stop_at not in resolved.parents:
+            return
+        try:
+            next(resolved.iterdir())
+            return  # still has contents - leave it (and everything above) alone
+        except StopIteration:
+            pass  # empty - safe to remove
+        except OSError:
+            return
+        try:
+            resolved.rmdir()
+        except OSError:
+            return
+        current = resolved.parent
+
+
+def _apply_to_pair(
+    db: Session,
+    owner_id: int,
+    image: Image,
+    rating: int | None,
+    color_label: ColorLabel | None,
+) -> None:
+    """Mirror a rating/color change onto this image's RAW+JPEG partner, so users
+    can cull the merged pair by only touching the JPEG. No-op when the image has
+    no partner (or it isn't owned by the caller)."""
+    if not image.paired_image_id:
+        return
+    partner = db.get(Image, image.paired_image_id)
+    if partner is None or partner.owner_id != owner_id:
+        return
+    if rating is not None:
+        partner.rating = rating
+    if color_label is not None:
+        partner.color_label = color_label
 
 
 def _get_or_create_tag(db: Session, owner_id: int, name: str) -> Tag:
@@ -94,6 +158,13 @@ def list_images(
     # without hiding either one (hiding one would make it impossible to
     # select/deselect independently, e.g. during import review).
 
+    # Hide photos indexed from an external source that isn't currently connected
+    # (unplugged drive / unmounted NAS) - the index stays, they reappear when it
+    # reconnects.
+    query = sources_service.exclude_unavailable(
+        query, sources_service.unavailable_source_ids(db, current_user.id)
+    )
+
     query = query.order_by(Image.taken_at.desc())
     return query.offset(offset).limit(limit).all()
 
@@ -115,6 +186,8 @@ def bulk_update_images(
             image.rating = update.rating
         if update.color_label is not None:
             image.color_label = update.color_label
+        if update.apply_to_pair:
+            _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
     db.commit()
     for image in images:
         db.refresh(image)
@@ -130,26 +203,51 @@ def bulk_delete_images(
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     image_ids = {image.id for image in images}
 
-    # paired_image_id and (old) ImportStagedFile.duplicate_of_image_id both
-    # have FK constraints (enforced - see db/session.py) back to images.id;
-    # null those out first or deleting one half of a pair would fail.
+    # paired_image_id and ImportStagedFile.duplicate_of_image_id both have FK
+    # constraints (enforced - see db/session.py) back to images.id; null those
+    # out first or deleting a row still referenced by another would fail. Clear
+    # the deleted rows' own pairing link *and* any external sibling pointing
+    # back in - when both halves of a pair are selected, only nulling the
+    # sibling leaves the first half still pointing at the second.
     for image in images:
-        if image.paired_image_id:
-            sibling = db.get(Image, image.paired_image_id)
-            if sibling:
-                sibling.paired_image_id = None
-    db.query(ImportStagedFile).filter(ImportStagedFile.duplicate_of_image_id.in_(image_ids)).update(
-        {ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False
-    )
+        image.paired_image_id = None
+    if image_ids:
+        db.query(Image).filter(Image.paired_image_id.in_(image_ids)).update(
+            {Image.paired_image_id: None}, synchronize_session=False
+        )
+        db.query(ImportStagedFile).filter(
+            ImportStagedFile.duplicate_of_image_id.in_(image_ids)
+        ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
     db.flush()
 
+    # Cache source roots so an all-from-one-folder delete hits the DB once, not
+    # once per image.
+    source_cache: dict[str, SourceRoot | None] = {}
+
+    def _source_for(img: Image) -> SourceRoot | None:
+        if img.source_root_id is None:
+            return None
+        if img.source_root_id not in source_cache:
+            source_cache[img.source_root_id] = db.get(SourceRoot, img.source_root_id)
+        return source_cache[img.source_root_id]
+
     for image in images:
-        # Never touch the original of a file indexed from an external source -
-        # it lives on the user's NAS/folder and isn't ours to delete. Only the
-        # DB row and our cached thumbnails go. Managed (imported) originals are
-        # removed as before.
-        if image.source_root_id is None:
-            (settings.library_root / image.file_path).unlink(missing_ok=True)
+        source = _source_for(image)
+        if source is None:
+            # Managed (imported) library file - ours to delete. Also tidy the
+            # date folders the app created once they're empty, so deleting the
+            # last shot of a day/year doesn't leave hollow dirs.
+            original = settings.library_root / image.file_path
+            original.unlink(missing_ok=True)
+            _prune_empty_dirs(original, settings.library_root)
+        elif sources_service.is_path_available(source.path):
+            # File indexed in place from a *connected* external folder: delete
+            # the original there too. Only when the drive/folder is currently
+            # reachable - an offline source is left untouched. We remove just the
+            # file, never the user's own folder structure.
+            resolve_image_path(image).unlink(missing_ok=True)
+        # else: external source is offline - can't reach the file; leave it on
+        # disk (the row still goes, matching "removed from the library").
         shutil.rmtree(thumbnails.derivative_dir(image.id), ignore_errors=True)
         db.delete(image)
     db.commit()
@@ -192,6 +290,59 @@ def download_zip(
         buffer,
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="photos.zip"'},
+    )
+
+
+@router.post("/immich", response_model=schemas.ImmichPushResult)
+def push_images_to_immich(
+    payload: schemas.ImmichPushRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Push already-imported library photos to Immich. Only works when the
+    Immich integration is configured in Settings. Mirrors the import option:
+    JPEGs are uploaded, RAW/other files are skipped. Immich does its own
+    checksum-based dedup, so re-pushing the same photo is safe."""
+    immich = get_immich_config(db)
+    if immich is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Immich isn't configured. Add the host and API key under Settings first.",
+        )
+
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    uploaded = duplicate = skipped = failed = 0
+    for image in images:
+        # Same policy as import: only JPEGs go to Immich, never RAW originals.
+        if image.file_type != FileType.jpeg:
+            skipped += 1
+            continue
+        path = resolve_image_path(image)
+        if not path.exists():
+            failed += 1
+            continue
+        try:
+            status = immich_service.upload_asset(
+                immich.base_url, immich.api_key, path, image.taken_at
+            )
+            if status == "duplicate":
+                duplicate += 1
+            else:
+                uploaded += 1
+        except Exception:
+            logger.exception("Immich upload failed for image %s", image.id)
+            failed += 1
+
+    parts = [f"{uploaded} uploaded"]
+    if duplicate:
+        parts.append(f"{duplicate} already on Immich")
+    if skipped:
+        parts.append(f"{skipped} skipped (RAW/non-JPEG)")
+    if failed:
+        parts.append(f"{failed} failed")
+    return schemas.ImmichPushResult(
+        uploaded=uploaded, duplicate=duplicate, skipped=skipped, failed=failed,
+        message=", ".join(parts) + ".",
     )
 
 
@@ -243,6 +394,8 @@ def update_image(
         image.rating = update.rating
     if update.color_label is not None:
         image.color_label = update.color_label
+    if update.apply_to_pair:
+        _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
     db.commit()
     db.refresh(image)
     return image

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -7,9 +7,10 @@ import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
-import { groupPairsAdjacent } from "../utils/pairing";
+import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
+import { useMergePairs } from "../state/viewPrefs";
 
 // Byte-identical to a photo already in the library or elsewhere in this same
 // batch - the backend refuses to import these, so the UI shouldn't let you
@@ -46,7 +47,10 @@ export function ImportWizard() {
   const [pickError, setPickError] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [uploadToImmich, setUploadToImmich] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const filesInputRef = useRef<HTMLInputElement | null>(null);
+  const importMenuRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -56,20 +60,32 @@ export function ImportWizard() {
   });
   const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
 
+  const mergePairs = useMergePairs();
+
   const { data: files, isLoading } = useQuery({
     queryKey: ["import-files", sessionId],
     queryFn: () => api.import.files(sessionId!),
     enabled: !!sessionId,
   });
 
+  const filesById = useMemo(() => new Map((files ?? []).map((f) => [f.id, f])), [files]);
+
   const updateStaged = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       fileId,
       patch,
     }: {
       fileId: string;
       patch: { selected?: boolean; rating?: number; color_label?: ColorLabel };
-    }) => api.import.updateStagedFile(sessionId!, fileId, patch),
+    }) => {
+      await api.import.updateStagedFile(sessionId!, fileId, patch);
+      // Merged view shows only the JPEG of a pair, so mirror the change onto the
+      // hidden RAW partner - selecting/rating the one card affects both files.
+      if (mergePairs) {
+        const partnerId = filesById.get(fileId)?.paired_staged_file_id;
+        if (partnerId) await api.import.updateStagedFile(sessionId!, partnerId, patch);
+      }
+    },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] }),
   });
 
@@ -106,13 +122,40 @@ export function ImportWizard() {
     if (colorFilter !== "none" && f.color_label !== colorFilter) return false;
     return true;
   });
+  // In combined view, either merge each pair into one JPEG card (mergePairs) or
+  // keep the two halves adjacent. Other view modes show a flat list.
   const visibleFiles =
-    viewMode === "combined" ? groupPairsAdjacent(filteredFiles, (f) => f.paired_staged_file_id) : filteredFiles;
+    viewMode === "combined"
+      ? mergePairs
+        ? collapsePairsBy(filteredFiles, (f) => f.file_type, (f) => f.paired_staged_file_id)
+        : groupPairsAdjacent(filteredFiles, (f) => f.paired_staged_file_id)
+      : filteredFiles;
   const selectedCount = (files ?? []).filter((f) => f.selected).length;
+
+  // When merged, a visible card stands in for both halves - expand a set of
+  // visible files to also include each one's hidden RAW/JPEG partner so bulk
+  // select/deselect acts on the whole pair, not just the shown JPEG.
+  function withPartners(list: StagedFileOut[]): StagedFileOut[] {
+    if (!mergePairs) return list;
+    const out: StagedFileOut[] = [];
+    const seen = new Set<string>();
+    for (const f of list) {
+      if (!seen.has(f.id)) {
+        out.push(f);
+        seen.add(f.id);
+      }
+      const partner = f.paired_staged_file_id ? filesById.get(f.paired_staged_file_id) : undefined;
+      if (partner && !seen.has(partner.id)) {
+        out.push(partner);
+        seen.add(partner.id);
+      }
+    }
+    return out;
+  }
 
   async function selectAll(selected: boolean) {
     await Promise.all(
-      visibleFiles
+      withPartners(visibleFiles)
         .filter((f) => !selected || !isExactDuplicate(f))
         .map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected }))
     );
@@ -120,7 +163,7 @@ export function ImportWizard() {
   }
 
   async function applyFilterToSelection() {
-    const visibleIds = new Set(visibleFiles.map((f) => f.id));
+    const visibleIds = new Set(withPartners(visibleFiles).map((f) => f.id));
     await Promise.all(
       (files ?? [])
         .filter((f) => !(visibleIds.has(f.id) && isExactDuplicate(f)))
@@ -147,18 +190,32 @@ export function ImportWizard() {
     commit.mutate();
   }
 
-  // Attached as a plain native listener (not React's onChange) and the
-  // webkitdirectory/directory attributes are set imperatively here too -
-  // React's synthetic event system has known quirks around file inputs
-  // (its internal value-tracking can silently swallow the change event
-  // depending on how the file list was assigned), so this bypasses that
-  // layer entirely and talks to the DOM directly.
+  // Shared: filter a picked FileList down to importable photos and kick off the
+  // upload. Used by both the folder picker and the individual-files picker.
+  const stageFileList = useCallback(
+    (fileList: FileList, label: string, emptyMessage: string) => {
+      // input.files is a *live* FileList - snapshot what we need (pickImportableFiles
+      // reads it) before the caller clears target.value, which empties that list.
+      const picked = pickImportableFiles(fileList);
+      if (picked.length === 0) {
+        setPickError(emptyMessage);
+        return;
+      }
+      setPickError(null);
+      startUpload(picked, label);
+    },
+    [startUpload]
+  );
+
+  // File inputs use plain native listeners, not React's onChange: React's
+  // synthetic event system has known quirks around file inputs where its
+  // internal value-tracking can silently swallow the change event, so we talk
+  // to the DOM directly. The folder input additionally gets webkitdirectory.
   useEffect(() => {
-    const el = fileInputRef.current;
+    const el = folderInputRef.current;
     if (!el) return;
     el.setAttribute("webkitdirectory", "");
     el.setAttribute("directory", "");
-
     function onChange(e: Event) {
       const target = e.target as HTMLInputElement;
       const fileList = target.files;
@@ -166,37 +223,98 @@ export function ImportWizard() {
         target.value = "";
         return;
       }
-
-      // input.files is a *live* FileList - it must be fully read (both of
-      // these calls snapshot it into plain arrays/values) before resetting
-      // target.value, since clearing the value empties that same live list.
-      const picked = pickImportableFiles(fileList);
       const label = sourceLabelFor(fileList);
+      stageFileList(fileList, label, "No JPEG/RAW photos found in that folder.");
       target.value = ""; // allow re-picking the same folder later
-
-      if (picked.length === 0) {
-        setPickError("No JPEG/RAW photos found in that folder.");
-        return;
-      }
-      setPickError(null);
-      startUpload(picked, label);
     }
-
     el.addEventListener("change", onChange);
     return () => el.removeEventListener("change", onChange);
-  }, [startUpload]);
+  }, [stageFileList]);
+
+  useEffect(() => {
+    const el = filesInputRef.current;
+    if (!el) return;
+    function onChange(e: Event) {
+      const target = e.target as HTMLInputElement;
+      const fileList = target.files;
+      if (!fileList || fileList.length === 0) {
+        target.value = "";
+        return;
+      }
+      const label =
+        fileList.length === 1 ? fileList[0].name : `${fileList.length} selected files`;
+      stageFileList(fileList, label, "None of the selected files are JPEG/RAW photos.");
+      target.value = ""; // allow re-picking the same files later
+    }
+    el.addEventListener("change", onChange);
+    return () => el.removeEventListener("change", onChange);
+  }, [stageFileList]);
+
+  // Close the import dropdown on an outside click or Escape.
+  useEffect(() => {
+    if (!importMenuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (importMenuRef.current && !importMenuRef.current.contains(e.target as Node)) {
+        setImportMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setImportMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [importMenuOpen]);
 
   if (!sessionId) {
     return (
       <div className="page">
         <h2 className="section-title">Import photos</h2>
         <p style={{ color: "var(--text-muted)", marginTop: -8 }}>
-          Pick the SD card, camera, or folder you want to import from.
+          Import from an SD card, camera, or folder - or pick individual photos.
         </p>
-        <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} />
-        <button className="btn primary" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-          {isUploading ? `Uploading... ${uploadProgress ?? 0}%` : "Choose folder to import"}
-        </button>
+        <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} />
+        <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
+        <div className="import-toolbar">
+          <div className="import-menu" ref={importMenuRef}>
+            <button
+              className="btn primary"
+              onClick={() => setImportMenuOpen((v) => !v)}
+              disabled={isUploading}
+              aria-haspopup="menu"
+              aria-expanded={importMenuOpen}
+            >
+              {isUploading ? `Uploading... ${uploadProgress ?? 0}%` : "Import photos ▾"}
+            </button>
+            {importMenuOpen && !isUploading && (
+              <div className="import-menu-dropdown" role="menu">
+                <button
+                  className="import-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setImportMenuOpen(false);
+                    folderInputRef.current?.click();
+                  }}
+                >
+                  Choose folder to import
+                </button>
+                <button
+                  className="import-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setImportMenuOpen(false);
+                    filesInputRef.current?.click();
+                  }}
+                >
+                  Choose files…
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
         {pickError && <div className="empty-state">{pickError}</div>}
         {uploadError && <div className="empty-state">Upload failed: {uploadError}</div>}
       </div>

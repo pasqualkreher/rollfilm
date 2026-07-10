@@ -1,0 +1,17 @@
+// Bridges a tiny, explicit API into the renderer. Nothing else from Node/Electron
+// is exposed (contextIsolation on). client.ts reads `apiBaseUrl` at load time;
+// ExternalSources calls `pickFolder()` to add an existing photo folder.
+
+const { contextBridge, ipcRenderer } = require("electron");
+
+function readApiBase() {
+  const prefix = "--pm-api-base=";
+  const arg = process.argv.find((a) => a.startsWith(prefix));
+  return arg ? arg.slice(prefix.length) : null;
+}
+
+contextBridge.exposeInMainWorld("photoManager", {
+  apiBaseUrl: readApiBase(),
+  // Opens the native OS folder dialog; resolves to an absolute host path or null.
+  pickFolder: () => ipcRenderer.invoke("pm:pick-folder"),
+});

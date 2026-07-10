@@ -1,4 +1,5 @@
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,10 @@ _helper: exiftool.ExifToolHelper | None = None
 def _get_helper() -> exiftool.ExifToolHelper:
     global _helper
     if _helper is None:
-        _helper = exiftool.ExifToolHelper()
+        # EXIFTOOL_PATH lets the packaged desktop app point at the exiftool binary
+        # shipped inside the bundle; otherwise fall back to `exiftool` on PATH.
+        executable = os.environ.get("EXIFTOOL_PATH") or "exiftool"
+        _helper = exiftool.ExifToolHelper(executable=executable)
     return _helper
 
 

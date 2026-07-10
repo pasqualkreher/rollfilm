@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { AlbumOut, ColorLabel, ViewMode } from "../api/types";
 import { ViewModeToggle } from "./ViewModeToggle";
 import { ColorLabelPicker } from "./ColorLabelPicker";
+import { ViewPrefsControls } from "./ViewPrefsControls";
 
 interface Props {
   viewMode: ViewMode;
@@ -22,6 +23,9 @@ interface Props {
   dateTo?: string | null;
   onDateFrom?: (d: string | null) => void;
   onDateTo?: (d: string | null) => void;
+  // Whether to show the "Merge RAW+JPG" toggle. Off for the import review grid,
+  // which works on staged files rather than library pairs.
+  showMerge?: boolean;
   // Extra controls (e.g. import's "Hide duplicates" / select buttons) render
   // after the shared filters so every screen keeps an identical filter core.
   children?: ReactNode;
@@ -43,6 +47,7 @@ export function PhotoFilters({
   dateTo,
   onDateFrom,
   onDateTo,
+  showMerge = true,
   children,
 }: Props) {
   const showDates = Boolean(onDateFrom && onDateTo);
@@ -63,66 +68,78 @@ export function PhotoFilters({
 
   return (
     <div className="filter-bar">
-      <ViewModeToggle value={viewMode} onChange={onViewMode} />
+      {/* Filters: narrow down *which* photos are shown. */}
+      <div className="control-group">
+        {albums && onAlbumId && (
+          <label className="filter-field">
+            Album
+            <select value={albumId ?? ""} onChange={(e) => onAlbumId(e.target.value)}>
+              <option value="">All photos</option>
+              {albums.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
-      {albums && onAlbumId && (
         <label className="filter-field">
-          Album
-          <select value={albumId ?? ""} onChange={(e) => onAlbumId(e.target.value)}>
-            <option value="">All photos</option>
-            {albums.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
+          Rating
+          <select value={ratingMin} onChange={(e) => onRatingMin(Number(e.target.value))}>
+            {[0, 1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>
+                {n === 0 ? "Any" : `${"★".repeat(n)}+`}
               </option>
             ))}
           </select>
         </label>
-      )}
 
-      <label className="filter-field">
-        Rating
-        <select value={ratingMin} onChange={(e) => onRatingMin(Number(e.target.value))}>
-          {[0, 1, 2, 3, 4, 5].map((n) => (
-            <option key={n} value={n}>
-              {n === 0 ? "Any" : `${"★".repeat(n)}+`}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="filter-field">
-        Color
-        <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
-      </label>
-
-      {showDates && (
         <label className="filter-field">
-          Date taken
-          <span className="date-range">
-            <input
-              type="date"
-              value={dateFrom ?? ""}
-              max={dateTo ?? undefined}
-              onChange={(e) => onDateFrom?.(e.target.value || null)}
-              aria-label="From date"
-            />
-            <span className="date-range-sep">–</span>
-            <input
-              type="date"
-              value={dateTo ?? ""}
-              min={dateFrom ?? undefined}
-              onChange={(e) => onDateTo?.(e.target.value || null)}
-              aria-label="To date"
-            />
-          </span>
+          Color
+          <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
         </label>
-      )}
 
-      <button className="btn ghost" onClick={clearAll} disabled={!isFiltering}>
-        Clear filters
-      </button>
+        {showDates && (
+          <label className="filter-field">
+            Date
+            <span className="date-range">
+              <input
+                type="date"
+                value={dateFrom ?? ""}
+                max={dateTo ?? undefined}
+                onChange={(e) => onDateFrom?.(e.target.value || null)}
+                aria-label="From date"
+              />
+              <span className="date-range-sep">–</span>
+              <input
+                type="date"
+                value={dateTo ?? ""}
+                min={dateFrom ?? undefined}
+                onChange={(e) => onDateTo?.(e.target.value || null)}
+                aria-label="To date"
+              />
+            </span>
+          </label>
+        )}
 
-      {children}
+        {isFiltering && (
+          <button className="btn ghost btn-sm" onClick={clearAll}>
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* View: how the same photos are displayed (type, size, pairing). Pushed
+          to the right and divided off so it reads as a distinct concern from the
+          filters above. */}
+      <div className="control-group control-group--view">
+        <ViewModeToggle value={viewMode} onChange={onViewMode} />
+        <ViewPrefsControls showMerge={showMerge} />
+      </div>
+
+      {/* Page-specific actions (Select, Select all, ...). */}
+      {children && <div className="control-group control-group--actions">{children}</div>}
     </div>
   );
 }

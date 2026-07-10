@@ -15,12 +15,37 @@ export function ExternalSources() {
   const [path, setPath] = useState("");
   const [picking, setPicking] = useState(false);
 
+  // In the desktop app we get a real OS folder dialog; on the web we fall back
+  // to the server-side directory browser (DirectoryPicker).
+  const electron = typeof window !== "undefined" ? window.photoManager : undefined;
+
+  // Set the chosen folder as the path, defaulting the name to the folder's own
+  // name if the user hasn't typed one.
+  const applyChosenFolder = (chosen: string) => {
+    setPath(chosen);
+    if (!name.trim()) {
+      const base = chosen.replace(/\/+$/, "").split("/").pop();
+      if (base) setName(base);
+    }
+  };
+
+  const handleBrowse = async () => {
+    if (electron?.pickFolder) {
+      const chosen = await electron.pickFolder();
+      if (chosen) applyChosenFolder(chosen);
+    } else {
+      setPicking(true);
+    }
+  };
+
   const { data: sources } = useQuery({
     queryKey: ["sources"],
     queryFn: () => api.sources.list(),
-    // Keep polling while any source is mid-scan so counts/progress update live.
+    // Poll while any source is mid-scan (live counts/progress) and also on a
+    // slow tick so plugging in / removing a drive flips its status without a
+    // manual refresh.
     refetchInterval: (query) =>
-      (query.state.data ?? []).some((s) => s.scanning) ? 1500 : false,
+      (query.state.data ?? []).some((s) => s.scanning) ? 1500 : 5000,
   });
 
   const addSource = useMutation({
@@ -58,11 +83,20 @@ export function ExternalSources() {
         time the app starts, and whenever you press <em>Scan now</em>. (Photos you bring in via the{" "}
         <em>Import</em> tab are the ones copied into the app's managed library.)
       </p>
-      <p style={{ color: "var(--text-muted)" }}>
-        The folder must be visible <strong>inside the backend container</strong> (mount it via the{" "}
-        <code>sources</code> volume in <code>docker-compose.yml</code>), then use <em>Browse</em> to
-        pick it - e.g. <code>/sources/nas-photos</code>.
-      </p>
+      {electron ? (
+        <p style={{ color: "var(--text-muted)" }}>
+          Click <em>Browse</em> and pick any folder on your computer - the app reads it directly, no
+          setup needed.
+        </p>
+      ) : (
+        <p style={{ color: "var(--text-muted)" }}>
+          Click <em>Browse</em> and pick the folder. Your computer's drives and NAS shares show up under{" "}
+          <code>/hostfs</code> (on macOS that's everything under <code>/Volumes</code>). If nothing
+          appears there, the broad mount isn't active yet - set <code>HOST_BROWSE_PATH</code> in{" "}
+          <code>.env</code> and run <code>docker compose up -d</code> once; after that it all works from
+          here.
+        </p>
+      )}
 
       <div className="import-toolbar" style={{ flexWrap: "wrap" }}>
         <input
@@ -79,7 +113,7 @@ export function ExternalSources() {
           onChange={(e) => setPath(e.target.value)}
           style={{ minWidth: 220, flex: 1 }}
         />
-        <button className="btn" onClick={() => setPicking(true)}>
+        <button className="btn" onClick={handleBrowse}>
           Browse…
         </button>
         <button
@@ -98,12 +132,7 @@ export function ExternalSources() {
         <DirectoryPicker
           onClose={() => setPicking(false)}
           onSelect={(chosen) => {
-            setPath(chosen);
-            // Default the name to the folder's own name if the user hasn't typed one.
-            if (!name.trim()) {
-              const base = chosen.replace(/\/+$/, "").split("/").pop();
-              if (base) setName(base);
-            }
+            applyChosenFolder(chosen);
             setPicking(false);
           }}
         />
@@ -112,17 +141,30 @@ export function ExternalSources() {
       {sources && sources.length > 0 && (
         <div className="source-list">
           {sources.map((s) => (
-            <div key={s.id} className="source-row">
+            <div key={s.id} className={`source-row${s.available ? "" : " disconnected"}`}>
               <div className="source-row-main">
-                <span className="source-name">{s.name}</span>
+                <span className="source-name">
+                  {s.name}
+                  {!s.available && <span className="source-disconnected-badge">Disconnected</span>}
+                </span>
                 <span className="source-path">{s.path}</span>
                 <span className="source-meta">
                   {s.image_count} photo{s.image_count === 1 ? "" : "s"} · {formatScanned(s.last_scanned_at)}
                   {s.scanning && <span className="source-scanning"> · scanning…</span>}
+                  {!s.available && (
+                    <span className="source-disconnected-note">
+                      {" "}· not connected — its photos are hidden until you reconnect it
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="source-row-actions">
-                <button className="btn" onClick={() => scan.mutate(s.id)} disabled={s.scanning}>
+                <button
+                  className="btn"
+                  onClick={() => scan.mutate(s.id)}
+                  disabled={s.scanning || !s.available}
+                  title={!s.available ? "Reconnect the drive/folder to scan it" : undefined}
+                >
                   {s.scanning ? "Scanning…" : "Scan now"}
                 </button>
                 <button

@@ -1,0 +1,51 @@
+{
+  "name": "photo-manager-desktop",
+  "version": "0.1.0",
+  "description": "Photo Manager — native desktop app",
+  "main": "main.js",
+  "author": "Pasqual Kreher",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "npm run copy:renderer && electron .",
+    "dev": "concurrently -k -n renderer,electron \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "cd ../frontend && npm run dev",
+    "dev:electron": "wait-on tcp:127.0.0.1:5173 && cross-env PM_DEV=1 electron .",
+    "copy:renderer": "rm -rf renderer && cp -r ../frontend/dist renderer",
+    "build:renderer": "cd ../frontend && npm run build && cd ../electron && npm run copy:renderer",
+    "build:backend": "cd ../backend && sh build_backend.sh",
+    "pack": "npm run build:renderer && npm run build:backend && electron-builder --dir",
+    "dist": "npm run build:renderer && npm run build:backend && electron-builder"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.pasqualkreher.photomanager",
+    "productName": "Photo Manager",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "."
+      }
+    ],
+    "directories": {
+      "output": "dist-app"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.photography",
+      "identity": null,
+      "gatekeeperAssess": false
+    }
+  }
+}

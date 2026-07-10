@@ -7,19 +7,26 @@ from sqlalchemy.orm import Session
 
 from app import schemas
 from app.auth import get_current_user
-from app.db.models import Image, SourceRoot, User
+from app.db.models import Image, ImportStagedFile, SourceRoot, User
 from app.db.session import get_db
 from app.services import sources as sources_service
 from app.services.thumbnails import derivative_dir
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
-# Where the folder picker starts. /sources is the conventional mount point for
-# external photos (see docker-compose.yml); if it isn't mounted we fall back to
-# the filesystem root. From there the user can navigate anywhere the backend
-# container can see (a NAS has to be mounted in to be reachable at all).
-BROWSE_START = Path("/sources")
+# Where the folder picker starts. /hostfs is the broad host mount (your drives /
+# NAS - see docker-compose.yml), /sources the conventional smaller mount; fall
+# back to the filesystem root. From the start point the user can navigate to any
+# folder the backend can see (anything must be mounted in to be reachable).
 FS_ROOT = Path("/")
+BROWSE_START_CANDIDATES = [Path("/hostfs"), Path("/sources")]
+
+
+def _default_browse_start() -> Path:
+    for candidate in BROWSE_START_CANDIDATES:
+        if candidate.is_dir():
+            return candidate
+    return FS_ROOT
 
 
 def _to_source_out(db: Session, source: SourceRoot) -> schemas.SourceRootOut:
@@ -35,6 +42,7 @@ def _to_source_out(db: Session, source: SourceRoot) -> schemas.SourceRootOut:
         last_scanned_at=source.last_scanned_at,
         image_count=count,
         scanning=bool(status.get("running")),
+        available=sources_service.is_path_available(source.path),
     )
 
 
@@ -60,8 +68,7 @@ def browse_directories(
     if path:
         target = Path(path).resolve()
     else:
-        start = BROWSE_START.resolve()
-        target = start if start.is_dir() else FS_ROOT
+        target = _default_browse_start()
 
     if not target.is_dir():
         return schemas.DirListing(path=str(target), parent=None, exists=False, entries=[])
@@ -151,12 +158,24 @@ def remove_source(
         raise HTTPException(status_code=404, detail="Source not found")
 
     images = db.query(Image).filter(Image.source_root_id == source.id).all()
+    image_ids = [image.id for image in images]
+
+    # Clear every foreign key that points at the rows we're about to delete, or
+    # SQLite's FK check aborts the DELETE. These are all nullable pointers, so
+    # nulling them just detaches the reference without removing other data:
+    #   1. RAW/JPEG pairing links - both the deleted rows' own paired_image_id
+    #      (a pair where *both* halves live in this source references itself)
+    #      and any external sibling still pointing back in.
+    #   2. Import staged files that recorded one of these images as a duplicate.
     for image in images:
-        # Break RAW/JPEG pairing links pointing at rows we're about to delete.
-        if image.paired_image_id:
-            sibling = db.get(Image, image.paired_image_id)
-            if sibling:
-                sibling.paired_image_id = None
+        image.paired_image_id = None
+    if image_ids:
+        db.query(Image).filter(Image.paired_image_id.in_(image_ids)).update(
+            {Image.paired_image_id: None}, synchronize_session=False
+        )
+        db.query(ImportStagedFile).filter(
+            ImportStagedFile.duplicate_of_image_id.in_(image_ids)
+        ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
     db.flush()
     for image in images:
         shutil.rmtree(derivative_dir(image.id), ignore_errors=True)

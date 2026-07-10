@@ -42,6 +42,9 @@ class ImageOut(BaseModel):
 class ImageUpdate(BaseModel):
     rating: int | None = None
     color_label: ColorLabel | None = None
+    # When set, the same rating/color is also written to this image's RAW+JPEG
+    # partner - so rating the JPEG rates the RAW too.
+    apply_to_pair: bool = False
 
 
 class AddTagRequest(BaseModel):
@@ -76,6 +79,8 @@ class BulkImageUpdate(BaseModel):
     image_ids: list[str]
     rating: int | None = None
     color_label: ColorLabel | None = None
+    # See ImageUpdate.apply_to_pair - fans each change out to RAW+JPEG partners.
+    apply_to_pair: bool = False
 
 
 class BulkDeleteRequest(BaseModel):
@@ -84,6 +89,18 @@ class BulkDeleteRequest(BaseModel):
 
 class BulkDownloadRequest(BaseModel):
     image_ids: list[str]
+
+
+class ImmichPushRequest(BaseModel):
+    image_ids: list[str]
+
+
+class ImmichPushResult(BaseModel):
+    uploaded: int
+    duplicate: int
+    skipped: int
+    failed: int
+    message: str
 
 
 class AlbumCreate(BaseModel):
@@ -180,6 +197,10 @@ class SourceRootOut(BaseModel):
     last_scanned_at: datetime | None
     image_count: int = 0
     scanning: bool = False
+    # False when the source folder isn't currently reachable (external drive
+    # unplugged / NAS unmounted). Its photos are hidden from the library while
+    # unavailable, but the index is kept so they return when it reconnects.
+    available: bool = True
 
 
 class ScanStatusOut(BaseModel):

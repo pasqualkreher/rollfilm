@@ -1,15 +1,28 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
 import type { ImageOut } from "../api/types";
 import { useSelects } from "../state/selects";
+import { collapsePairs, useMergePairs } from "../state/viewPrefs";
+import { ViewPrefsControls } from "../components/ViewPrefsControls";
 
 export function Selects() {
   const { ids, count, remove, clear } = useSelects();
+  const mergePairs = useMergePairs();
   const navigate = useNavigate();
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [immichBusy, setImmichBusy] = useState(false);
+  const [immichMsg, setImmichMsg] = useState<string | null>(null);
+
+  // The "Add to Immich" action only appears when the integration is configured
+  // in Settings (both host and API key present).
+  const { data: immich } = useQuery({
+    queryKey: ["immich-settings"],
+    queryFn: () => api.settings.getImmich(),
+  });
+  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
 
   // One query per selected id; deleted photos simply resolve to nothing and are
   // filtered out below so the list never shows a broken tile.
@@ -20,9 +33,11 @@ export function Selects() {
     })),
   });
 
-  const images = results
+  const loadedImages = results
     .map((r) => r.data)
     .filter((img): img is ImageOut => Boolean(img));
+  // When merging, a selected RAW+JPEG pair shows as its single JPEG card.
+  const images = mergePairs ? collapsePairs(loadedImages) : loadedImages;
 
   async function downloadAll() {
     if (count === 0) return;
@@ -34,6 +49,21 @@ export function Selects() {
       setError((e as Error).message);
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function addToImmich() {
+    if (count === 0) return;
+    setImmichBusy(true);
+    setImmichMsg(null);
+    setError(null);
+    try {
+      const result = await api.images.pushToImmich(ids);
+      setImmichMsg(result.message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setImmichBusy(false);
     }
   }
 
@@ -55,9 +85,21 @@ export function Selects() {
             <button className="btn primary" onClick={downloadAll} disabled={downloading}>
               {downloading ? "Preparing zip..." : `Download all (${count})`}
             </button>
+            {immichConfigured && (
+              <button
+                className="btn"
+                onClick={addToImmich}
+                disabled={immichBusy}
+                title="Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
+              >
+                {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+              </button>
+            )}
             <button className="btn ghost" onClick={clear}>
               Clear selects
             </button>
+            <ViewPrefsControls />
+            {immichMsg && <span style={{ color: "var(--text-muted)" }}>{immichMsg}</span>}
             {error && <span style={{ color: "var(--danger)" }}>{error}</span>}
           </div>
 

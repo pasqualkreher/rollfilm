@@ -15,6 +15,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlalchemy import or_
+from sqlalchemy.orm import Query, Session
+
 from app.db.models import FileType, Image, SourceRoot
 from app.db.session import SessionLocal
 from app.services.exif import read_exif
@@ -24,6 +27,34 @@ from app.services.raw import classify_file_type, extract_preview
 from app.workers.queue import enqueue_post_import
 
 logger = logging.getLogger(__name__)
+
+
+def is_path_available(path: str) -> bool:
+    """True when a source root's folder is currently reachable. For an external
+    drive or NAS this is False while it's unplugged/unmounted - the signal we
+    use to hide its photos from the library instead of showing dead thumbnails."""
+    try:
+        return Path(path).is_dir()
+    except OSError:
+        # A hung or broken network mount can raise rather than return False.
+        return False
+
+
+def unavailable_source_ids(db: Session, owner_id: int) -> list[str]:
+    """Ids of the owner's source roots whose folder isn't currently reachable."""
+    rows = db.query(SourceRoot.id, SourceRoot.path).filter(SourceRoot.owner_id == owner_id).all()
+    return [sid for sid, path in rows if not is_path_available(path)]
+
+
+def exclude_unavailable(query: Query, unavailable_ids: list[str]) -> Query:
+    """Drop images that belong to a currently-unreachable source root, while
+    keeping managed-library images (no source root) and reachable-source ones."""
+    if not unavailable_ids:
+        return query
+    return query.filter(
+        or_(Image.source_root_id.is_(None), Image.source_root_id.notin_(unavailable_ids))
+    )
+
 
 _scan_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="source-scan")
 
@@ -93,9 +124,9 @@ def _pair_scanned(images: list[Image]) -> None:
             jpegs[0].paired_image_id = raws[0].id
 
 
-def _index_file(db, source_root: SourceRoot, path: Path) -> Image:
+def _index_file(db, source_root: SourceRoot, path: Path, sha256: str | None = None) -> Image:
     stat = path.stat()
-    sha256 = sha256_file(path)
+    sha256 = sha256 or sha256_file(path)
     phash = perceptual_hash(extract_preview(path))
     exif = json.loads(read_exif(path).to_json())
     file_type = FileType(classify_file_type(path))
@@ -150,18 +181,25 @@ def _run_scan(source_root_id: str) -> None:
             )
             return
 
-        # Files from this source already indexed - skip them so re-scans only
-        # pick up what's new (dedup by absolute path).
-        already: set[str] = {
-            row[0]
-            for row in db.query(Image.file_path)
-            .filter(Image.source_root_id == source_root.id)
-            .all()
-        }
+        # Files already indexed anywhere in the library - skip them so re-scans
+        # only pick up what's new. Dedup is global (not just this source):
+        # Image.file_path is globally unique, so a folder that overlaps another
+        # source root (or the same folder added twice) would otherwise hit a
+        # UNIQUE violation on insert.
+        already: set[str] = {row[0] for row in db.query(Image.file_path).all()}
+
+        # Content-hash index of this source's rows, so a file we've never seen at
+        # this path but whose bytes match an existing row can be recognised as a
+        # rename/move rather than indexed as a brand-new duplicate. This is the
+        # "mapping by hash": a file's identity is its content, not its name.
+        by_hash: dict[str, Image] = {}
+        for img in db.query(Image).filter(Image.source_root_id == source_root.id).all():
+            by_hash.setdefault(img.file_hash, img)
 
         new_images: list[Image] = []
         scanned = 0
         added = 0
+        renamed = 0
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.name.startswith("."):
                 continue
@@ -174,12 +212,42 @@ def _run_scan(source_root_id: str) -> None:
             key = str(path)
             if key in already:
                 continue
+
             try:
-                new_images.append(_index_file(db, source_root, path))
+                sha256 = sha256_file(path)
+            except OSError:
+                logger.exception("Could not read %s", path)
+                continue
+
+            moved = by_hash.get(sha256)
+            if moved is not None and not Path(moved.file_path).exists():
+                # Same bytes as an indexed file whose old path is now gone: this
+                # is that file, renamed or moved. Relocate the existing row in
+                # place so its RAW/JPEG pairing, rating, tags and id all survive
+                # - instead of leaving a stale row and inserting a duplicate.
+                already.discard(moved.file_path)
+                moved.file_path = key
+                moved.original_filename = path.name
+                already.add(key)
+                renamed += 1
+                continue
+
+            try:
+                # Nested transaction (SAVEPOINT) so one unreadable or otherwise
+                # failing file rolls back only itself - the session stays usable
+                # and the files already indexed in this batch are kept, instead
+                # of one bad file poisoning the whole scan.
+                with db.begin_nested():
+                    image = _index_file(db, source_root, path, sha256=sha256)
+                new_images.append(image)
+                by_hash.setdefault(sha256, image)
                 already.add(key)
                 added += 1
             except Exception:
                 logger.exception("Failed to index %s", path)
+
+        if renamed:
+            logger.info("Source %s: relocated %d renamed/moved file(s)", source_root_id, renamed)
 
         _pair_scanned(new_images)
         source_root.last_scanned_at = datetime.now(timezone.utc)

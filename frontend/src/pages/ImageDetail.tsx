@@ -8,6 +8,7 @@ import { ImageEditor } from "../components/ImageEditor";
 import { TagEditor } from "../components/TagEditor";
 import { AlbumPicker } from "../components/AlbumPicker";
 import { useSelects } from "../state/selects";
+import { useMergePairs } from "../state/viewPrefs";
 import type { ColorLabel } from "../api/types";
 
 export function ImageDetail() {
@@ -18,6 +19,7 @@ export function ImageDetail() {
   const [activeId, setActiveId] = useState(id!);
   const [editorOpen, setEditorOpen] = useState(false);
   const [bgMode, setBgMode] = useState<"light" | "dark">("light");
+  const mergePairs = useMergePairs();
   // Click-to-zoom loupe: click toggles a 2.5x zoom centred on the click point,
   // then moving the mouse pans (transform-origin follows the cursor).
   const [zoomed, setZoomed] = useState(false);
@@ -63,9 +65,23 @@ export function ImageDetail() {
     enabled: !!image?.paired_image_id,
   });
 
+  // "Add to Immich" only shows when the integration is configured in Settings.
+  const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
+  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
+  const [immichBusy, setImmichBusy] = useState(false);
+  const [immichMsg, setImmichMsg] = useState<string | null>(null);
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (editorOpen) return;
+
+      // Esc closes the lightbox - but first step out of a zoomed-in loupe if the
+      // photo is currently zoomed, so one press doesn't do both.
+      if (e.key === "Escape") {
+        if (zoomed) setZoomed(false);
+        else navigate(-1);
+        return;
+      }
 
       if ((e.key === "ArrowUp" || e.key === "ArrowDown") && image && paired) {
         setActiveId(activeId === image.id ? paired.id : image.id);
@@ -83,7 +99,7 @@ export function ImageDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [imageIds, id, navigate, editorOpen, image, paired, activeId]);
+  }, [imageIds, id, navigate, editorOpen, image, paired, activeId, zoomed]);
 
   const { data: similar } = useQuery({
     queryKey: ["similar", activeId],
@@ -93,16 +109,24 @@ export function ImageDetail() {
 
   if (!image) return <div className="page empty-state">Loading...</div>;
 
-  async function setRating(rating: number) {
-    await api.images.update(image!.id, { rating });
+  // With "Merge RAW+JPG" on, rating/coloring the shown file also writes the
+  // partner - and we refresh its cached copy so the other tab reflects it.
+  function invalidateActiveAndPair() {
     queryClient.invalidateQueries({ queryKey: ["image", activeId] });
+    if (mergePairs && image!.paired_image_id) {
+      queryClient.invalidateQueries({ queryKey: ["image", image!.paired_image_id] });
+    }
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
+  async function setRating(rating: number) {
+    await api.images.update(image!.id, { rating, apply_to_pair: mergePairs });
+    invalidateActiveAndPair();
+  }
+
   async function setColor(color_label: ColorLabel) {
-    await api.images.update(image!.id, { color_label });
-    queryClient.invalidateQueries({ queryKey: ["image", activeId] });
-    queryClient.invalidateQueries({ queryKey: ["images"] });
+    await api.images.update(image!.id, { color_label, apply_to_pair: mergePairs });
+    invalidateActiveAndPair();
   }
 
   async function addTag(name: string) {
@@ -128,10 +152,55 @@ export function ImageDetail() {
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
+  async function addToImmich() {
+    if (!image) return;
+    setImmichBusy(true);
+    setImmichMsg(null);
+    // Push both halves of a pair so the JPEG is uploaded regardless of which is
+    // shown (the backend skips RAW files itself).
+    const ids = paired ? [image.id, paired.id] : [image.id];
+    try {
+      const result = await api.images.pushToImmich(ids);
+      setImmichMsg(result.message);
+    } catch (e) {
+      setImmichMsg((e as Error).message);
+    } finally {
+      setImmichBusy(false);
+    }
+  }
+
+  async function deletePhoto() {
+    if (!image) return;
+    // A RAW+JPEG pair is one shot - delete both halves so we never leave an
+    // orphaned RAW (or JPEG) behind.
+    const ids = paired ? [image.id, paired.id] : [image.id];
+    const what = ids.length > 1 ? "this RAW+JPEG shot (2 files)" : "this photo";
+    if (!window.confirm(`Delete ${what}? This removes the original file(s) too - it can't be undone.`)) {
+      return;
+    }
+    await api.images.bulkDelete(ids);
+    ids.forEach((delId) => selects.has(delId) && selects.remove(delId));
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+
+    // Move to the next remaining photo in the set you were browsing; if none is
+    // left (or we arrived here without a set), fall back to where we came from.
+    if (imageIds && imageIds.length > 0) {
+      const remaining = imageIds.filter((x) => !ids.includes(x));
+      if (remaining.length > 0) {
+        const currentIndex = imageIds.indexOf(id!);
+        const next =
+          remaining.find((x) => imageIds.indexOf(x) > currentIndex) ?? remaining[remaining.length - 1];
+        navigate(`/image/${next}`, { replace: true, state: { imageIds: remaining } });
+        return;
+      }
+    }
+    navigate(-1);
+  }
+
   return (
     <div className="page detail-page">
-      <button className="btn" onClick={() => navigate(-1)}>
-        ← Back
+      <button className="icon-btn back-btn" onClick={() => navigate(-1)} title="Back (Esc)" aria-label="Back">
+        ←
       </button>
       <div className="detail-layout" style={{ marginTop: 16 }}>
         <div style={{ flex: "999 1 400px", display: "flex", flexDirection: "column", gap: 10 }}>
@@ -170,7 +239,7 @@ export function ImageDetail() {
         <div className="detail-panel">
           <h3 className="section-title">{image.original_filename}</h3>
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
             <button className="btn" onClick={() => setEditorOpen(true)}>
               Rotate / crop
             </button>
@@ -180,7 +249,28 @@ export function ImageDetail() {
             >
               {selects.has(image.id) ? "✓ In selects" : "+ Add to selects"}
             </button>
+            {immichConfigured && (
+              <button
+                className="btn"
+                onClick={addToImmich}
+                disabled={immichBusy}
+                title="Upload this photo's JPEG to your configured Immich server (RAW is skipped)"
+              >
+                {immichBusy ? "Uploading..." : "Add to Immich"}
+              </button>
+            )}
+            <button
+              className="btn"
+              style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
+              onClick={deletePhoto}
+              title="Delete this photo (and its RAW/JPEG partner) - removes the original file too"
+            >
+              Delete
+            </button>
           </div>
+          {immichMsg && (
+            <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>{immichMsg}</p>
+          )}
 
           {paired && (
             <div style={{ marginBottom: 16 }}>

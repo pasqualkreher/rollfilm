@@ -10,7 +10,6 @@ services:
       - IMPORT_STAGING_ROOT=${IMPORT_STAGING_ROOT:-/data/staging}
       - THUMBNAIL_CACHE_ROOT=${THUMBNAIL_CACHE_ROOT:-/data/thumbnails}
       - MODEL_CACHE_ROOT=${MODEL_CACHE_ROOT:-/data/models}
-      - AUTH_MODE=${AUTH_MODE:-none}
       - CLIP_MODEL_NAME=${CLIP_MODEL_NAME:-ViT-B-32}
       - CLIP_MODEL_PRETRAINED=${CLIP_MODEL_PRETRAINED:-laion2b_s34b_b79k}
       - HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}
@@ -27,6 +26,13 @@ services:
       # Point HOST_SOURCES_PATH at your collection, or add more read-only lines
       # like `- /mnt/nas/photos:/sources/nas:ro`.
       - ${HOST_SOURCES_PATH:-./data/sources}:/sources:ro
+      # Broad read-only mount so you can browse & pick ANY mounted drive/NAS
+      # straight from the app (Settings -> External photo sources -> Browse),
+      # without editing this file per source. On macOS external drives and NAS
+      # shares live under /Volumes (already shared by Docker Desktop); on Linux
+      # set HOST_BROWSE_PATH to /mnt, /media, or / as appropriate. Read-only, so
+      # originals can never be modified. It appears inside the app as /hostfs.
+      - ${HOST_BROWSE_PATH:-/Volumes}:/hostfs:ro
       - ./backend/app:/app/app
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
