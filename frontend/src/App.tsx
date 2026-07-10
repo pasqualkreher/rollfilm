@@ -10,6 +10,7 @@ import { MapView } from "./pages/MapView";
 import { SearchBar } from "./components/SearchBar";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
+import { TasksProvider, useTasks } from "./state/tasks";
 
 function ImportNavLink() {
   const { isUploading, uploadProgress } = useImportSession();
@@ -29,27 +30,48 @@ function SelectsNavLink() {
   );
 }
 
+// Top bar: while a blocking Settings task runs, the nav is locked (you can't
+// switch tabs) and a spinner + label shows what's happening.
+function TopBar() {
+  const { busyLabel } = useTasks();
+  const locked = busyLabel !== null;
+  return (
+    <div className="top-bar">
+      <span className="brand">Photo Manager</span>
+      <nav
+        className={`nav-links${locked ? " nav-links--locked" : ""}`}
+        aria-disabled={locked}
+        title={locked ? "Please wait until the current task finishes" : undefined}
+      >
+        <NavLink to="/" end>
+          Library
+        </NavLink>
+        <NavLink to="/albums">Albums</NavLink>
+        <NavLink to="/map">Map</NavLink>
+        <ImportNavLink />
+        <SelectsNavLink />
+        <NavLink to="/settings">Settings</NavLink>
+      </nav>
+      {locked && (
+        <span className="nav-task" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+          {busyLabel}
+        </span>
+      )}
+      <SearchBar />
+    </div>
+  );
+}
+
 export default function App() {
   return (
-    <SelectsProvider>
-      <ImportSessionProvider>
-        <div className="app-shell">
-          <div className="top-bar">
-            <span className="brand">Photo Manager</span>
-            <nav className="nav-links">
-              <NavLink to="/" end>
-                Library
-              </NavLink>
-              <NavLink to="/albums">Albums</NavLink>
-              <NavLink to="/map">Map</NavLink>
-              <ImportNavLink />
-              <SelectsNavLink />
-              <NavLink to="/settings">Settings</NavLink>
-            </nav>
-            <SearchBar />
-          </div>
+    <TasksProvider>
+      <SelectsProvider>
+        <ImportSessionProvider>
+          <div className="app-shell">
+            <TopBar />
 
-          <Routes>
+            <Routes>
             <Route path="/" element={<Library />} />
             <Route path="/import" element={<ImportWizard />} />
             <Route path="/albums" element={<Albums />} />
@@ -58,9 +80,10 @@ export default function App() {
             <Route path="/map" element={<MapView />} />
             <Route path="/selects" element={<Selects />} />
             <Route path="/settings" element={<Settings />} />
-          </Routes>
-        </div>
-      </ImportSessionProvider>
-    </SelectsProvider>
+            </Routes>
+          </div>
+        </ImportSessionProvider>
+      </SelectsProvider>
+    </TasksProvider>
   );
 }

@@ -1,14 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { ImmichTestResult } from "../api/types";
 import { ExternalSources } from "../components/ExternalSources";
+import { useTheme, type Theme } from "../state/theme";
+import { useTasks } from "../state/tasks";
+
+const THEME_OPTIONS: { value: Theme; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "System" },
+];
 
 export function Settings() {
   const queryClient = useQueryClient();
+  const [theme, setTheme] = useTheme();
+  const { setBusyLabel } = useTasks();
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
-  const [wipeConfirmation, setWipeConfirmation] = useState("");
   const [restoreConfirmation, setRestoreConfirmation] = useState("");
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreResult, setRestoreResult] = useState<string | null>(null);
@@ -66,16 +75,10 @@ export function Settings() {
     mutationFn: () => api.maintenance.rebuildThumbnails(),
     onSuccess: (result) => {
       setRebuildResult(`Rebuilt thumbnails/previews for ${result.rebuilt} photo(s).`);
+      // Bump the cache-bust so the freshly rebuilt (e.g. higher-res) images
+      // actually reload instead of being served from the browser cache.
+      bumpThumbnailCacheBust();
       queryClient.invalidateQueries({ queryKey: ["images"] });
-    },
-  });
-
-  const wipe = useMutation({
-    mutationFn: () => api.maintenance.wipe(wipeConfirmation),
-    onSuccess: () => {
-      setWipeConfirmation("");
-      queryClient.invalidateQueries({ queryKey: ["images"] });
-      queryClient.invalidateQueries({ queryKey: ["albums"] });
     },
   });
 
@@ -91,9 +94,62 @@ export function Settings() {
     },
   });
 
+  const { data: tagUsage } = useQuery({ queryKey: ["tag-usage"], queryFn: () => api.tags.usage() });
+  const unusedTags = (tagUsage ?? []).filter((t) => t.count === 0);
+
+  function invalidateTags() {
+    queryClient.invalidateQueries({ queryKey: ["tag-usage"] });
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
+  }
+
+  const removeTag = useMutation({
+    mutationFn: (name: string) => api.tags.remove(name),
+    onSuccess: invalidateTags,
+  });
+
+  const pruneTags = useMutation({
+    mutationFn: () => api.tags.pruneUnused(),
+    onSuccess: invalidateTags,
+  });
+
+  // Surface the running maintenance task to the app shell, which locks the nav
+  // (so the page can't be switched away and unmounted mid-task) and shows a
+  // spinner. Cleared when idle and on unmount.
+  const runningLabel = sync.isPending
+    ? "Syncing library…"
+    : rebuildThumbnails.isPending
+      ? "Rebuilding thumbnails…"
+      : restore.isPending
+        ? "Restoring backup…"
+        : null;
+  useEffect(() => {
+    setBusyLabel(runningLabel);
+  }, [runningLabel, setBusyLabel]);
+  useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
+
   return (
     <div className="page settings-page">
       <h2 className="section-title">Settings</h2>
+
+      <section style={{ marginBottom: 32 }}>
+        <h3 className="section-title" style={{ fontSize: 15 }}>
+          Appearance
+        </h3>
+        <p style={{ color: "var(--text-muted)" }}>
+          Choose a light or dark look, or follow your system setting.
+        </p>
+        <span className="segmented">
+          {THEME_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              className={theme === o.value ? "active" : ""}
+              onClick={() => setTheme(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </span>
+      </section>
 
       <section style={{ marginBottom: 32 }}>
         <h3 className="section-title" style={{ fontSize: 15 }}>
@@ -165,6 +221,48 @@ export function Settings() {
         )}
       </section>
 
+      <section style={{ marginBottom: 32 }}>
+        <h3 className="section-title" style={{ fontSize: 15 }}>
+          Tags
+        </h3>
+        <p style={{ color: "var(--text-muted)" }}>
+          Unused tags are ones no photo carries anymore (left behind after retagging or deleting
+          photos). Remove them to keep the tag filter tidy.
+        </p>
+        {unusedTags.length === 0 ? (
+          <p style={{ color: "var(--text-muted)" }}>No unused tags — nothing to clean up.</p>
+        ) : (
+          <>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+              {unusedTags.map((t) => (
+                <span key={t.name} className="tag-chip">
+                  {t.name}
+                  <button
+                    type="button"
+                    onClick={() => removeTag.mutate(t.name)}
+                    disabled={removeTag.isPending}
+                    aria-label={`Remove tag ${t.name}`}
+                    title={`Remove “${t.name}”`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <button className="btn" onClick={() => pruneTags.mutate()} disabled={pruneTags.isPending}>
+              {pruneTags.isPending
+                ? "Removing…"
+                : `Remove all ${unusedTags.length} unused tag${unusedTags.length === 1 ? "" : "s"}`}
+            </button>
+          </>
+        )}
+        {(removeTag.isError || pruneTags.isError) && (
+          <p style={{ color: "var(--danger)" }}>
+            {((removeTag.error || pruneTags.error) as Error).message}
+          </p>
+        )}
+      </section>
+
       <ExternalSources />
 
       <section style={{ marginBottom: 32 }}>
@@ -231,36 +329,6 @@ export function Settings() {
         {restore.isError && (
           <p style={{ color: "var(--danger)" }}>{(restore.error as Error).message}</p>
         )}
-      </section>
-
-      <section>
-        <h3 className="section-title" style={{ fontSize: 15, color: "var(--danger)" }}>
-          Danger zone
-        </h3>
-        <p style={{ color: "var(--text-muted)" }}>
-          Permanently deletes every photo, album, and rating. This cannot be undone - download a backup
-          first if you're not sure.
-        </p>
-        <div className="import-toolbar">
-          <input
-            type="text"
-            placeholder="Type delete to confirm"
-            value={wipeConfirmation}
-            onChange={(e) => setWipeConfirmation(e.target.value)}
-          />
-          <button
-            className="btn danger"
-            disabled={wipeConfirmation.trim().toLowerCase() !== "delete" || wipe.isPending}
-            onClick={() => {
-              if (window.confirm("This will permanently delete your entire library. Are you sure?")) {
-                wipe.mutate();
-              }
-            }}
-          >
-            {wipe.isPending ? "Deleting..." : "Delete entire library"}
-          </button>
-        </div>
-        {wipe.isSuccess && <p style={{ color: "var(--text-muted)" }}>Library deleted.</p>}
       </section>
     </div>
   );

@@ -164,6 +164,11 @@ export interface DirListing {
   entries: DirEntry[];
 }
 
+export interface TagUsage {
+  name: string;
+  count: number;
+}
+
 export interface LibraryFilters {
   view_mode: ViewMode;
   album_id?: string;
@@ -172,5 +177,6 @@ export interface LibraryFilters {
   camera_model?: string;
   date_from?: string;
   date_to?: string;
+  tags?: string[];
   limit?: number;
 }

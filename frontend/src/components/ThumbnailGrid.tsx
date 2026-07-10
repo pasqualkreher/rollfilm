@@ -141,7 +141,9 @@ export function ThumbnailGrid({
       ))}
 
       <TimelineScrubber
-        getScroller={() => rootRef.current?.closest(".page") as HTMLElement | null}
+        getScroller={() =>
+          (rootRef.current?.closest(".page-scroll") ?? rootRef.current?.closest(".page")) as HTMLElement | null
+        }
         getSectionEl={(label) => sectionEls.current.get(label) ?? null}
         getAnchor={() => rootRef.current}
         sections={sections.map((s) => ({ label: s.label }))}

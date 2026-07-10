@@ -298,3 +298,12 @@ class DangerZoneRequest(BaseModel):
 class RestoreResult(BaseModel):
     images_restored: int
     albums_restored: int
+
+
+class TagUsage(BaseModel):
+    name: str
+    count: int
+
+
+class PruneTagsResult(BaseModel):
+    removed: list[str]

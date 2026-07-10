@@ -13,6 +13,7 @@ import type {
   SourceRoot,
   StagedFileOut,
   StagedFileUpdatePatch,
+  TagUsage,
 } from "./types";
 import type { ImageEdits } from "../utils/adjustments";
 
@@ -72,16 +73,54 @@ export function assetUrl(path: string): string {
   return `${BASE_URL}${path}`;
 }
 
+// A global cache-bust token bumped when derivatives are regenerated app-wide
+// (e.g. "Rebuild thumbnails" in Settings). The per-image `?v=` only changes when
+// an edit changes, so without this a rebuild at a new resolution would keep
+// serving the browser-cached images. Stored in localStorage so it survives
+// reloads and is shared across tabs.
+const CACHE_BUST_KEY = "pm.thumbCacheBust";
+
+export function bumpThumbnailCacheBust(): void {
+  try {
+    localStorage.setItem(CACHE_BUST_KEY, String(Date.now()));
+  } catch {
+    /* ignore */
+  }
+}
+
+function derivativeUrl(path: string, version?: string): string {
+  let cb = "";
+  try {
+    cb = localStorage.getItem(CACHE_BUST_KEY) ?? "";
+  } catch {
+    /* ignore */
+  }
+  const query = [version ? `v=${version}` : "", cb ? `cb=${cb}` : ""].filter(Boolean).join("&");
+  return assetUrl(`${path}${query ? `?${query}` : ""}`);
+}
+
+// Serialise library/search filters to query params. Array values (e.g. `tags`)
+// become repeated params (?tags=a&tags=b) so the backend reads them as a list;
+// empty / null / "" entries are dropped.
+function filtersToParams(filters: Partial<LibraryFilters>): URLSearchParams {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    if (Array.isArray(value)) {
+      value.forEach((v) => {
+        if (v !== undefined && v !== null && v !== "") params.append(key, String(v));
+      });
+    } else {
+      params.set(key, String(value));
+    }
+  });
+  return params;
+}
+
 export const api = {
   images: {
     list(filters: LibraryFilters): Promise<ImageOut[]> {
-      const params = new URLSearchParams();
-      Object.entries(filters).forEach(([key, value]) => {
-        if (value !== undefined && value !== null && value !== "") {
-          params.set(key, String(value));
-        }
-      });
-      return request(`/images?${params.toString()}`);
+      return request(`/images?${filtersToParams(filters).toString()}`);
     },
     get(id: string): Promise<ImageOut> {
       return request(`/images/${id}`);
@@ -161,18 +200,18 @@ export const api = {
       return request(`/images/${id}/save-copy`, { method: "POST", body: JSON.stringify(edits) });
     },
     thumbnailUrl(id: string, version?: string): string {
-      return assetUrl(`/images/${id}/thumbnail${version ? `?v=${version}` : ""}`);
+      return derivativeUrl(`/images/${id}/thumbnail`, version);
     },
     previewUrl(id: string, version?: string): string {
-      return assetUrl(`/images/${id}/preview${version ? `?v=${version}` : ""}`);
+      return derivativeUrl(`/images/${id}/preview`, version);
     },
     // Full-resolution edited render for true 100% zoom.
     fullUrl(id: string, version?: string): string {
-      return assetUrl(`/images/${id}/full${version ? `?v=${version}` : ""}`);
+      return derivativeUrl(`/images/${id}/full`, version);
     },
     // Geometry-only render (no tonal edits) the editor draws its live preview on.
     basePreviewUrl(id: string, version?: string): string {
-      return assetUrl(`/images/${id}/base-preview${version ? `?v=${version}` : ""}`);
+      return derivativeUrl(`/images/${id}/base-preview`, version);
     },
     originalUrl(id: string): string {
       return assetUrl(`/images/${id}/original`);
@@ -260,14 +299,8 @@ export const api = {
     // color, date range, view mode) so results only include photos the current
     // view would show.
     query(q: string, filters?: Partial<LibraryFilters>): Promise<SearchResultOut[]> {
-      const params = new URLSearchParams({ q });
-      if (filters) {
-        Object.entries(filters).forEach(([key, value]) => {
-          if (value !== undefined && value !== null && value !== "") {
-            params.set(key, String(value));
-          }
-        });
-      }
+      const params = filtersToParams(filters ?? {});
+      params.set("q", q);
       return request(`/search?${params.toString()}`);
     },
   },
@@ -307,6 +340,15 @@ export const api = {
   tags: {
     list(): Promise<string[]> {
       return request(`/tags`);
+    },
+    usage(): Promise<TagUsage[]> {
+      return request(`/tags/usage`);
+    },
+    remove(name: string): Promise<void> {
+      return request(`/tags/${encodeURIComponent(name)}`, { method: "DELETE" });
+    },
+    pruneUnused(): Promise<{ removed: string[] }> {
+      return request(`/tags/prune-unused`, { method: "POST" });
     },
   },
   settings: {

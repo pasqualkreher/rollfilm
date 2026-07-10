@@ -13,7 +13,12 @@ from app.services.raw import extract_full_preview
 if TYPE_CHECKING:
     from app.db.models import Image
 
-THUMBNAIL_MAX_PX = 512
+# Grid thumbnails are generated at a quarter of the original's dimensions, which
+# is far cheaper than a large fixed size (keeping a full-library rebuild fast)
+# while staying crisp enough for the square grid tiles. THUMBNAIL_MAX_PX is just
+# an upper cap so very large originals don't still yield oversized thumbnails.
+THUMBNAIL_SCALE = 0.25
+THUMBNAIL_MAX_PX = 1600
 PREVIEW_MAX_PX = 2048
 
 CropBox = tuple[float, float, float, float]
@@ -144,11 +149,15 @@ def _apply_color_mix(arr: np.ndarray, mix: dict, tint: int = 0) -> np.ndarray:
     # different colour (with wrap, any target hue is reachable). The global tint
     # rotates every hue on top of the per-band shifts.
     hue = (hue + hue_shift * 1.8 + tint / 100.0 * 180.0) % 360.0
+    sat0 = sat  # original saturation, before the mixer's own sat shift below
     sat = np.clip(sat * (1.0 + sat_adj / 100.0), 0.0, 1.0)
     rgb = _hsl_to_rgb(hue, sat, lum)
     # Luminance as a brightness scale (preserves the band's colour). Moving HSL
     # lightness instead washes each band toward white/black - which looked broken.
-    factor = (1.0 + lum_adj / 100.0 * 0.5)[..., None]
+    # Weighted by the pixel's original saturation so near-neutral tones (sky,
+    # shadows) aren't brightened/darkened just because their (nearly arbitrary)
+    # hue happens to fall in this band - only actually-coloured pixels shift.
+    factor = (1.0 + lum_adj / 100.0 * 0.5 * sat0)[..., None]
     return np.clip(rgb * factor, 0.0, 1.0)
 
 
@@ -235,21 +244,45 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0)
 
 
+def _grain_noise(*shape: int) -> np.ndarray:
+    """Sum of 3 uniforms, centred and scaled to roughly [-1, 1] with a
+    bell-shaped (Irwin-Hall) distribution - much closer to how photographic
+    grain amplitude is actually distributed than flat np.random.rand noise."""
+    u = np.random.rand(*shape) + np.random.rand(*shape) + np.random.rand(*shape)
+    return ((u - 1.5) / 1.5).astype(np.float32)
+
+
 def _apply_grain(arr: np.ndarray, amount: int, size: int = 0) -> np.ndarray:
-    """Add monochrome film grain (luminance noise). `size` (0..100) controls the
-    grain's coarseness: noise is generated at a lower resolution and scaled up so
-    higher size = chunkier grain. Stochastic - preview uses a different pattern."""
+    """Add analog-style film grain: a full-resolution fine layer (the sharp
+    photographic texture) blended with a coarser "clump" layer approximating
+    silver-halide clusters - built from a hard-edged blocky field that's then
+    Gaussian-blurred to round its edges into soft irregular blobs (a plain
+    bilinear stretch instead gives smooth linear gradients, which reads as a
+    digital blur rather than grain). `size` (0..100) shifts the blend toward
+    the clump layer for chunkier grain. Intensity tapers toward the highlights,
+    matching how grain shows up on scanned film. Stochastic - preview uses a
+    different pattern."""
     h, w = arr.shape[:2]
-    scale = 1.0 + (size / 100.0) * 4.0  # 1x .. 5x coarser
-    nh = max(1, int(round(h / scale)))
-    nw = max(1, int(round(w / scale)))
-    small = np.random.rand(nh, nw).astype(np.float32)
-    if (nh, nw) != (h, w):
-        small_pil = PILImage.fromarray((small * 255.0 + 0.5).astype(np.uint8), "L")
-        noise = np.asarray(small_pil.resize((w, h), PILImage.BILINEAR), dtype=np.float32) / 255.0
-    else:
-        noise = small
-    noise = (noise - 0.5) * (amount / 100.0) * 0.2
+    size_f = size / 100.0
+
+    fine = _grain_noise(h, w)
+
+    block_px = 1.0 + size_f * 5.0
+    nh = max(1, int(round(h / block_px)))
+    nw = max(1, int(round(w / block_px)))
+    small = _grain_noise(nh, nw)
+    small_pil = PILImage.fromarray(np.clip(small * 90.0 + 128.0, 0, 255).astype(np.uint8), "L")
+    blocky = small_pil.resize((w, h), PILImage.NEAREST)
+    if size_f > 0:
+        blocky = blocky.filter(ImageFilter.GaussianBlur(max(0.6, block_px * 0.4)))
+    clump = (np.asarray(blocky, dtype=np.float32) - 128.0) / 128.0
+
+    fine_weight = 1.0 - 0.55 * size_f
+    clump_weight = 0.55 * size_f
+    luma = arr @ _LUMA
+    highlight_falloff = 1.0 - np.power(np.clip(luma, 0.0, 1.0), 1.6) * 0.85
+    combined = (fine * fine_weight + clump * clump_weight) * highlight_falloff
+    noise = combined * (amount / 100.0) * 0.16
     return np.clip(arr + noise[..., None], 0.0, 1.0)
 
 
@@ -341,12 +374,18 @@ def generate_derivatives(
         source = apply_adjustments(source, adjustments)
 
     preview = source.copy()
-    preview.thumbnail((PREVIEW_MAX_PX, PREVIEW_MAX_PX))
+    # LANCZOS gives noticeably crisper downscales than the thumbnail() default.
+    preview.thumbnail((PREVIEW_MAX_PX, PREVIEW_MAX_PX), PILImage.LANCZOS)
     _save_atomic(preview, out_dir / "preview.jpg", quality=90)
 
     thumb = source.copy()
-    thumb.thumbnail((THUMBNAIL_MAX_PX, THUMBNAIL_MAX_PX))
-    _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=85)
+    # Grid thumbnail at a quarter of the original's dimensions (a lot cheaper to
+    # generate than a large fixed size, so a full-library rebuild stays quick),
+    # capped so huge originals don't still produce oversized thumbnails.
+    tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
+    th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
+    thumb.thumbnail((tw, th), PILImage.LANCZOS)
+    _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=88)
 
     # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
     # is regenerated on next request with the new edits.

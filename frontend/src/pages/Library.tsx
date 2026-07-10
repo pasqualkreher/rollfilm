@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -10,6 +10,7 @@ import { AlbumPicker } from "../components/AlbumPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { useSelects } from "../state/selects";
+import { useTasks } from "../state/tasks";
 import { groupPairsAdjacent } from "../utils/pairing";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 
@@ -18,6 +19,7 @@ export function Library() {
   const [ratingMin, setRatingMin] = useState<number>(0);
   const [colorLabel, setColorLabel] = useState<ColorLabel>("none");
   const [albumId, setAlbumId] = useState<string>("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState<string | null>(null);
   const [dateTo, setDateTo] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -30,6 +32,7 @@ export function Library() {
   const q = (searchParams.get("q") ?? "").trim();
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
+  const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
 
   // "Add to Immich" only appears when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
@@ -37,11 +40,20 @@ export function Library() {
   const [immichBusy, setImmichBusy] = useState(false);
   const [immichMsg, setImmichMsg] = useState<string | null>(null);
 
+  // Lock the nav + show the top-bar spinner while uploading to Immich, same as
+  // the Settings maintenance tasks.
+  const { setBusyLabel } = useTasks();
+  useEffect(() => {
+    setBusyLabel(immichBusy ? "Uploading to Immich…" : null);
+  }, [immichBusy, setBusyLabel]);
+  useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
+
   const filters: LibraryFilters = {
     view_mode: viewMode,
     rating_min: ratingMin || undefined,
     color_label: colorLabel !== "none" ? colorLabel : undefined,
     album_id: albumId || undefined,
+    tags: selectedTags.length ? selectedTags : undefined,
     // Capture-date range from the date pickers: include the whole "from" day
     // through the end of the "to" day.
     date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
@@ -182,6 +194,9 @@ export function Library() {
         albums={albums}
         albumId={albumId}
         onAlbumId={setAlbumId}
+        allTags={allTags}
+        selectedTags={selectedTags}
+        onTags={setSelectedTags}
         dateFrom={dateFrom}
         dateTo={dateTo}
         onDateFrom={setDateFrom}
@@ -207,6 +222,7 @@ export function Library() {
           </>
         )}
       </PhotoFilters>
+      <div className="page-scroll">
       {q && (
         <div className="search-scope-banner">
           <span>
@@ -226,7 +242,7 @@ export function Library() {
         </div>
       )}
       {selected.size > 0 && (
-        <div className="filter-bar">
+        <div className="filter-bar action-bar--bottom">
           <span>{selected.size} selected</span>
           <RatingStars rating={0} onChange={(r) => applyBulk({ rating: r })} />
           <ColorLabelPicker value="none" onChange={(c) => applyBulk({ color_label: c })} />
@@ -272,6 +288,7 @@ export function Library() {
           groupByDate={!q}
         />
       )}
+      </div>
     </div>
   );
 }

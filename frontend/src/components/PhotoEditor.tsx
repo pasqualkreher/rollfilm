@@ -23,6 +23,7 @@ import {
   type ImageEdits,
 } from "../utils/adjustments";
 import { loadPresets, savePreset, deletePreset, type EditPreset } from "../utils/presets";
+import { FILM_SIMULATIONS, NONE_SIM, resolveFilmSim, type FilmSimDef } from "../utils/filmSimulations";
 
 interface Props {
   image: ImageOut;
@@ -148,6 +149,8 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [colorTint, setColorTint] = useState(saved.colorTint);
   const [band, setBand] = useState<ColorBand>("red");
   const [gridOverlay, setGridOverlay] = useState<GridOverlay>("none");
+  const [filmSim, setFilmSim] = useState("");
+  const [filmSimStrength, setFilmSimStrength] = useState(100);
   const [presets, setPresets] = useState<Record<string, EditPreset>>(() => loadPresets());
   const [selectedPreset, setSelectedPreset] = useState("");
   // Inline preset naming (Electron has no window.prompt).
@@ -391,7 +394,23 @@ export function PhotoEditor({ image, onClose }: Props) {
     colorTint,
   };
 
+  // Apply a Fujifilm-style film simulation, blended toward neutral by `strength`
+  // (0..100). Exposure is preserved - a simulation defines the look (contrast,
+  // colour rendering, grain), not the exposure compensation.
+  function applyFilmSim(id: string, strength: number) {
+    setFilmSim(id);
+    setFilmSimStrength(strength);
+    const sim: FilmSimDef | null = id === "none" ? null : FILM_SIMULATIONS.find((s) => s.id === id) ?? null;
+    const resolved = sim ? resolveFilmSim(sim, strength) : null;
+    setAdj((prev) => ({ ...NEUTRAL, ...(resolved?.adj ?? {}), exposure: prev.exposure }));
+    setColorMix(resolved?.colorMix ?? neutralMix());
+    setGrain(resolved?.grain ?? 0);
+    setGrainSize(resolved?.grainSize ?? 0);
+    setClarity(resolved?.clarity ?? 0);
+  }
+
   function applyPreset(p: EditPreset) {
+    setFilmSim("");
     setAdj({ ...NEUTRAL, ...p.adj });
     setColorMix(p.colorMix ? { ...neutralMix(), ...p.colorMix } : neutralMix());
     setVignette(p.vignette ?? 0);
@@ -653,6 +672,36 @@ export function PhotoEditor({ image, onClose }: Props) {
           )}
         </div>
 
+        {/* Film simulation - Fujifilm-style one-tap looks, built from the same
+            adjustment/colour-mixer/grain pipeline above so preview == save. */}
+        <div className="editor-section-title">Film simulation</div>
+        <div className="filmsim-grid">
+          <button
+            className={`filmsim-chip${filmSim === "" || filmSim === "none" ? " active" : ""}`}
+            title={NONE_SIM.description}
+            onClick={() => applyFilmSim("none", 0)}
+          >
+            <span className="filmsim-swatch" style={{ background: NONE_SIM.swatch }} />
+            <span className="filmsim-label">{NONE_SIM.label}</span>
+          </button>
+          {FILM_SIMULATIONS.map((sim) => (
+            <button
+              key={sim.id}
+              className={`filmsim-chip${filmSim === sim.id ? " active" : ""}`}
+              title={sim.description}
+              onClick={() => applyFilmSim(sim.id, 100)}
+            >
+              <span className="filmsim-swatch" style={{ background: sim.swatch }} />
+              <span className="filmsim-label">{sim.label}</span>
+            </button>
+          ))}
+        </div>
+        {filmSim !== "" && filmSim !== "none" && (
+          <div className="editor-sliders" style={{ margin: "10px 0 4px" }}>
+            <Slider label="Intensity" value={filmSimStrength} onChange={(v) => applyFilmSim(filmSim, v)} min={0} />
+          </div>
+        )}
+
         {/* Light */}
         <div className="editor-section-title">Light</div>
         <div className="editor-sliders">
@@ -790,6 +839,7 @@ export function PhotoEditor({ image, onClose }: Props) {
               className="btn ghost btn-sm"
               disabled={allNeutral}
               onClick={() => {
+                setFilmSim("");
                 setAdj(NEUTRAL);
                 setRotation(0);
                 setCrop(null);

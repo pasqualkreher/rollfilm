@@ -3,6 +3,7 @@ import type { AlbumOut, ColorLabel, ViewMode } from "../api/types";
 import { ViewModeToggle } from "./ViewModeToggle";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { ViewPrefsControls } from "./ViewPrefsControls";
+import { TagFilter } from "./TagFilter";
 
 interface Props {
   viewMode: ViewMode;
@@ -16,6 +17,14 @@ interface Props {
   albums?: AlbumOut[];
   albumId?: string;
   onAlbumId?: (id: string) => void;
+  // When provided, a multi-select "Tag" filter is shown. `allTags` is every
+  // tag name the user has ever created; `selectedTags` are the ones the grid is
+  // currently filtered to (AND - a photo must have all of them). Album detail
+  // and Library both show it; Import review omits it (staged files aren't
+  // tagged yet).
+  allTags?: string[];
+  selectedTags?: string[];
+  onTags?: (tags: string[]) => void;
   // When provided, a "From date – To date" range is shown that filters by
   // capture date (taken_at) with month/day precision via native date pickers.
   // Both handlers must be given to enable it. Values are ISO dates ("YYYY-MM-DD").
@@ -43,6 +52,9 @@ export function PhotoFilters({
   albums,
   albumId,
   onAlbumId,
+  allTags,
+  selectedTags,
+  onTags,
   dateFrom,
   dateTo,
   onDateFrom,
@@ -55,6 +67,7 @@ export function PhotoFilters({
     ratingMin > 0 ||
     colorLabel !== "none" ||
     (albumId ?? "") !== "" ||
+    (selectedTags?.length ?? 0) > 0 ||
     Boolean(dateFrom) ||
     Boolean(dateTo);
 
@@ -62,12 +75,13 @@ export function PhotoFilters({
     onRatingMin(0);
     onColorLabel("none");
     onAlbumId?.("");
+    onTags?.([]);
     onDateFrom?.(null);
     onDateTo?.(null);
   }
 
   return (
-    <div className="filter-bar">
+    <div className="filter-bar filter-bar--sticky">
       {/* Filters: narrow down *which* photos are shown. */}
       <div className="control-group">
         {albums && onAlbumId && (
@@ -99,6 +113,13 @@ export function PhotoFilters({
           Color
           <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
         </label>
+
+        {allTags && onTags && (
+          <label className="filter-field">
+            Tags
+            <TagFilter options={allTags} value={selectedTags ?? []} onChange={onTags} />
+          </label>
+        )}
 
         {showDates && (
           <label className="filter-field">

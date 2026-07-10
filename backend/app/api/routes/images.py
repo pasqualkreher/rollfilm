@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import schemas
@@ -138,6 +139,7 @@ def list_images(
     camera_model: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    tags: list[str] | None = Query(None),
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -159,6 +161,19 @@ def list_images(
         query = query.filter(Image.taken_at >= date_from)
     if date_to:
         query = query.filter(Image.taken_at <= date_to)
+    if tags:
+        # AND semantics: keep only photos carrying *every* selected tag, so each
+        # extra tag narrows the results further (like the other filters).
+        wanted = [t for t in tags if t]
+        if wanted:
+            matching_ids = (
+                db.query(ImageTag.image_id)
+                .join(Tag, Tag.id == ImageTag.tag_id)
+                .filter(Tag.owner_id == current_user.id, Tag.name.in_(wanted))
+                .group_by(ImageTag.image_id)
+                .having(func.count(func.distinct(Tag.name)) == len(wanted))
+            )
+            query = query.filter(Image.id.in_(matching_ids))
 
     if view_mode == "jpeg_only":
         query = query.filter(Image.file_type == FileType.jpeg)

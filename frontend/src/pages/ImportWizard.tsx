@@ -10,6 +10,7 @@ import { ImportLightbox } from "../components/ImportLightbox";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
+import { useTasks } from "../state/tasks";
 import { useMergePairs } from "../state/viewPrefs";
 
 // Byte-identical to a photo already in the library or elsewhere in this same
@@ -46,6 +47,8 @@ export function ImportWizard() {
   const [colorFilter, setColorFilter] = useState<ColorLabel>("none");
   const [pickError, setPickError] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [lastIndex, setLastIndex] = useState<number | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
   const [uploadToImmich, setUploadToImmich] = useState(false);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -114,6 +117,14 @@ export function ImportWizard() {
     onSettled: () => reset(),
   });
 
+  // Lock the nav + show the top-bar spinner while an import commit runs, same as
+  // the Settings maintenance tasks and the Immich upload.
+  const { setBusyLabel } = useTasks();
+  useEffect(() => {
+    setBusyLabel(commit.isPending ? "Importing photos…" : null);
+  }, [commit.isPending, setBusyLabel]);
+  useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
+
   const filteredFiles: StagedFileOut[] = (files ?? []).filter((f) => {
     if (hideDuplicates && (f.duplicate_of_image_id || f.duplicate_of_staged_file_id)) return false;
     if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
@@ -151,6 +162,25 @@ export function ImportWizard() {
       }
     }
     return out;
+  }
+
+  // Library-style selection: in select mode, click a card to toggle whether
+  // it's imported, shift-click to select the whole range since the last click.
+  // (Exact duplicates can't be imported, so they're skipped.) Outside select
+  // mode a plain click opens the lightbox preview instead - the per-card
+  // checkbox still toggles import selection in either mode.
+  async function toggleStagedSelect(index: number, shiftKey: boolean) {
+    const target = visibleFiles[index];
+    if (!target || isExactDuplicate(target)) return;
+    if (shiftKey && lastIndex !== null) {
+      const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
+      const range = withPartners(visibleFiles.slice(start, end + 1)).filter((f) => !isExactDuplicate(f));
+      await Promise.all(range.map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected: true })));
+      queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+    } else {
+      updateStaged.mutate({ fileId: target.id, patch: { selected: !target.selected } });
+    }
+    setLastIndex(index);
   }
 
   async function selectAll(selected: boolean) {
@@ -336,17 +366,28 @@ export function ImportWizard() {
           <input type="checkbox" checked={hideDuplicates} onChange={(e) => setHideDuplicates(e.target.checked)} />{" "}
           Hide duplicates
         </label>
-        <button className="btn" onClick={applyFilterToSelection}>
-          Select only filtered
+        <button
+          className={`btn${selectMode ? " primary" : ""}`}
+          onClick={() => setSelectMode((v) => !v)}
+        >
+          {selectMode ? "Done selecting" : "Select"}
         </button>
-        <button className="btn" onClick={() => selectAll(true)}>
-          Select all
-        </button>
-        <button className="btn" onClick={() => selectAll(false)}>
-          Select none
-        </button>
+        {selectMode && (
+          <>
+            <button className="btn" onClick={applyFilterToSelection}>
+              Select only filtered
+            </button>
+            <button className="btn" onClick={() => selectAll(true)}>
+              Select all
+            </button>
+            <button className="btn" onClick={() => selectAll(false)}>
+              Clear selection
+            </button>
+          </>
+        )}
       </PhotoFilters>
-      <div className="filter-bar">
+      <div className="page-scroll">
+      <div className="filter-bar action-bar--bottom">
         <span>{selectedCount} of {files?.length ?? 0} selected for import</span>
         <label
           className="filter-field filter-field-inline"
@@ -373,24 +414,61 @@ export function ImportWizard() {
         </button>
       </div>
 
+      {selectMode && (
+        <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
+          Click photos to select them for import - shift-click to select a range. The checkbox on
+          each card works anytime.
+        </p>
+      )}
+
       {isLoading ? (
         <div className="empty-state">Processing uploaded files...</div>
       ) : (
         <div className="thumbnail-grid">
           {visibleFiles.map((f, i) => (
-            <div key={f.id} className="import-card">
+            <div key={f.id} className={`import-card${f.selected ? " selected" : ""}`}>
               <div
-                className="thumb-card"
+                className={`thumb-card${f.selected ? " selected" : ""}`}
                 style={f.width && f.height ? { aspectRatio: `${f.width} / ${f.height}` } : undefined}
-                onClick={() => setLightboxIndex(i)}
+                onClick={(e) => (selectMode ? toggleStagedSelect(i, e.shiftKey) : setLightboxIndex(i))}
+                title={
+                  selectMode
+                    ? isExactDuplicate(f)
+                      ? "Already in your library - can't be imported"
+                      : "Click to select, shift-click for a range"
+                    : "Click to preview"
+                }
               >
                 <img src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
+                {selectMode && (
+                  <input
+                    className="select-checkbox"
+                    type="checkbox"
+                    checked={f.selected}
+                    disabled={isExactDuplicate(f)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleStagedSelect(i, e.shiftKey);
+                    }}
+                    onChange={() => {}}
+                  />
+                )}
                 {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
                   <span className="duplicate-badge">
                     {f.is_near_duplicate ? "Possible duplicate" : "Already in library"}
                   </span>
                 )}
                 <span className="badge">{f.paired_staged_file_id ? "RAW+JPG" : f.file_type.toUpperCase()}</span>
+                <button
+                  className="card-expand"
+                  title="Preview"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setLightboxIndex(i);
+                  }}
+                >
+                  ⤢
+                </button>
               </div>
               <div className="import-card-footer">
                 <input
@@ -413,6 +491,7 @@ export function ImportWizard() {
           ))}
         </div>
       )}
+      </div>
 
       {lightboxIndex !== null && (
         <ImportLightbox

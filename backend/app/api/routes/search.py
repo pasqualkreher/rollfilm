@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends
+from fastapi import Query as QueryParam
+from sqlalchemy import func
 from sqlalchemy.orm import Query, Session
 
 from app import schemas
@@ -23,11 +25,13 @@ def _apply_scope(
     camera_model: str | None,
     date_from: datetime | None,
     date_to: datetime | None,
+    tags: list[str] | None,
     view_mode: str,
+    db: Session,
 ) -> Query:
     """Apply the same scope/filters the grid is currently showing, so a search
     only ever returns photos from the active view (the whole library, or one
-    album) that also match the active rating/color/date filters."""
+    album) that also match the active rating/color/date/tag filters."""
     query = query.filter(Image.owner_id == owner_id)
     if album_id:
         query = query.join(AlbumImage, AlbumImage.image_id == Image.id).filter(
@@ -43,6 +47,19 @@ def _apply_scope(
         query = query.filter(Image.taken_at >= date_from)
     if date_to:
         query = query.filter(Image.taken_at <= date_to)
+    wanted = [t for t in (tags or []) if t]
+    if wanted:
+        # A subquery (rather than a join) so this composes safely with the
+        # tag-text-match query below, which already joins ImageTag/Tag itself.
+        # AND semantics: the photo must carry every selected tag.
+        matching_ids = (
+            db.query(ImageTag.image_id)
+            .join(Tag, Tag.id == ImageTag.tag_id)
+            .filter(Tag.owner_id == owner_id, Tag.name.in_(wanted))
+            .group_by(ImageTag.image_id)
+            .having(func.count(func.distinct(Tag.name)) == len(wanted))
+        )
+        query = query.filter(Image.id.in_(matching_ids))
     if view_mode == "jpeg_only":
         query = query.filter(Image.file_type == FileType.jpeg)
     elif view_mode == "raw_only":
@@ -60,6 +77,7 @@ def search_images(
     camera_model: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    tags: list[str] | None = QueryParam(None),
     view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -71,8 +89,8 @@ def search_images(
     fill any remaining slots.
 
     Everything is constrained to the caller-supplied scope (album + rating /
-    color / date filters), so search acts on the grid the user is looking at
-    rather than the whole library."""
+    color / date / tag filters), so search acts on the grid the user is
+    looking at rather than the whole library."""
     scope_kwargs = dict(
         owner_id=current_user.id,
         album_id=album_id,
@@ -81,7 +99,9 @@ def search_images(
         camera_model=camera_model,
         date_from=date_from,
         date_to=date_to,
+        tags=tags,
         view_mode=view_mode,
+        db=db,
     )
 
     results: list[schemas.SearchResultOut] = []

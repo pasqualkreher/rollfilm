@@ -319,7 +319,10 @@ export function applyAdjustments(
       [r, g, b] = hslToRgb(nh, ns, l0);
       if (lumAdj) {
         // Brightness scale (preserves colour) rather than moving HSL lightness.
-        const f = 1 + (lumAdj / 100) * 0.5;
+        // Weighted by the pixel's original saturation (s0) so near-neutral
+        // tones aren't shifted just because their near-arbitrary hue falls in
+        // this band - matches the backend.
+        const f = 1 + (lumAdj / 100) * 0.5 * s0;
         r = clamp01(r * f);
         g = clamp01(g * f);
         b = clamp01(b * f);
@@ -450,40 +453,70 @@ export function clarity(input: ImageData, radius: number, amount: number): Image
   return out;
 }
 
-// Monochrome film grain with size (coarseness): noise generated at a reduced
-// resolution and scaled up. Mutates `img`. Stochastic (pattern differs from save).
+// Sum of 3 uniforms, centred and scaled to roughly [-1,1] with a bell-shaped
+// (Irwin-Hall) distribution - much closer to how photographic grain amplitude
+// is actually distributed than flat Math.random() noise, without the cost of
+// a true Gaussian (Box-Muller) transform.
+function grainNoise(): number {
+  return (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
+}
+
+// Analog-style film grain: a full-resolution fine layer (the sharp
+// photographic texture) blended with a coarser "clump" layer approximating
+// silver-halide clusters - built from a hard-edged blocky field that's then
+// Gaussian-blurred to round its edges into soft irregular blobs. A plain
+// bilinear stretch of the blocky field (the old approach) instead produces
+// smooth linear gradients between random points, which reads as a digital
+// blur rather than grain. Intensity tapers toward the highlights, matching
+// how grain shows up on scanned film. Mutates `img`. Stochastic (pattern
+// differs from the saved render).
 export function applyGrain(img: ImageData, amount: number, size: number): void {
   const w = img.width;
   const h = img.height;
-  const scale = 1 + (size / 100) * 4;
-  const nw = Math.max(1, Math.round(w / scale));
-  const nh = Math.max(1, Math.round(h / scale));
+  const sizeF = size / 100;
+
+  const blockPx = 1 + sizeF * 5;
+  const nw = Math.max(1, Math.round(w / blockPx));
+  const nh = Math.max(1, Math.round(h / blockPx));
   const small = document.createElement("canvas");
   small.width = nw;
   small.height = nh;
   const sctx = small.getContext("2d")!;
   const nd = sctx.createImageData(nw, nh);
   for (let i = 0; i < nd.data.length; i += 4) {
-    const v = Math.random() * 255;
+    const v = Math.min(255, Math.max(0, 128 + grainNoise() * 90));
     nd.data[i] = v;
     nd.data[i + 1] = v;
     nd.data[i + 2] = v;
     nd.data[i + 3] = 255;
   }
   sctx.putImageData(nd, 0, 0);
-  const big = document.createElement("canvas");
-  big.width = w;
-  big.height = h;
-  const bctx = big.getContext("2d")!;
-  bctx.imageSmoothingEnabled = size > 0;
-  bctx.drawImage(small, 0, 0, w, h);
-  const noise = bctx.getImageData(0, 0, w, h).data;
-  const amt = (amount / 100) * 0.2 * 255;
+  const blocky = document.createElement("canvas");
+  blocky.width = w;
+  blocky.height = h;
+  const blctx = blocky.getContext("2d")!;
+  blctx.imageSmoothingEnabled = false;
+  blctx.drawImage(small, 0, 0, w, h);
+  const clumped = document.createElement("canvas");
+  clumped.width = w;
+  clumped.height = h;
+  const cctx = clumped.getContext("2d")!;
+  if (sizeF > 0) cctx.filter = `blur(${Math.max(0.6, blockPx * 0.4)}px)`;
+  cctx.drawImage(blocky, 0, 0);
+  cctx.filter = "none";
+  const clumpData = cctx.getImageData(0, 0, w, h).data;
+
+  const fineWeight = 1 - 0.55 * sizeF;
+  const clumpWeight = 0.55 * sizeF;
+  const amt = (amount / 100) * 0.16 * 255;
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
-    const nz = (noise[i] / 255 - 0.5) * amt;
-    d[i] = d[i] + nz;
-    d[i + 1] = d[i + 1] + nz;
-    d[i + 2] = d[i + 2] + nz;
+    const luma = (d[i] * LR + d[i + 1] * LG + d[i + 2] * LB) / 255;
+    const highlightFalloff = 1 - Math.pow(luma, 1.6) * 0.85;
+    const clump = (clumpData[i] / 255 - 0.5) * 2;
+    const n = (grainNoise() * fineWeight + clump * clumpWeight) * amt * highlightFalloff;
+    d[i] += n;
+    d[i + 1] += n;
+    d[i + 2] += n;
   }
 }

@@ -21,7 +21,10 @@ from app.services.hashing import hamming_distance, perceptual_hash, sha256_file
 from app.services.pairing import pair_siblings
 from app.services.raw import classify_file_type, extract_preview
 from app.services.settings_store import get_immich_config
+from app.services.thumbnails import THUMBNAIL_MAX_PX, THUMBNAIL_SCALE
 from app.workers.queue import enqueue_immich_upload, enqueue_post_import
+
+from PIL import Image as PILImage
 
 
 class UploadedFile(Protocol):
@@ -30,8 +33,6 @@ class UploadedFile(Protocol):
 
     filename: str | None
     file: BinaryIO
-
-STAGING_THUMBNAIL_PX = 512
 
 
 def _same_shot_stem(name_a: str, name_b: str) -> bool:
@@ -103,8 +104,12 @@ def _stage_one_file(
     phash = perceptual_hash(preview)
     exif = read_exif(staged_path)
 
+    # Match the library's grid thumbnail exactly (0.25 of the original, capped,
+    # LANCZOS) so the import review shows the same quality as everywhere else.
     thumb = preview.copy()
-    thumb.thumbnail((STAGING_THUMBNAIL_PX, STAGING_THUMBNAIL_PX))
+    tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
+    th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
+    thumb.thumbnail((tw, th), PILImage.LANCZOS)
 
     staged_file = ImportStagedFile(
         import_session_id=session.id,
@@ -118,7 +123,7 @@ def _stage_one_file(
     db.add(staged_file)
     db.flush()
 
-    thumb.save(thumb_dir / f"{staged_file.id}.jpg", "JPEG", quality=80)
+    thumb.save(thumb_dir / f"{staged_file.id}.jpg", "JPEG", quality=88)
 
     # Check the already-committed library first, then files already staged
     # earlier in this same batch (e.g. an SD card with two copies of a shot) -

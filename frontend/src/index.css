@@ -18,8 +18,11 @@
   color-scheme: light;
 }
 
+/* Dark palette, shared by the OS-auto rule and the manual "force dark" rule
+   below. Only applied automatically when the user hasn't picked a theme
+   (:root has no data-theme); a manual choice sets data-theme and wins. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #17181a;
     --bg-elevated: #212226;
     --hover: #2b2c31;
@@ -34,6 +37,25 @@
     color-scheme: dark;
   }
 }
+
+/* User forced dark (Settings → Appearance), regardless of the OS setting. */
+:root[data-theme="dark"] {
+  --bg: #17181a;
+  --bg-elevated: #212226;
+  --hover: #2b2c31;
+  --border: #34353a;
+  --text: #f1f1f2;
+  --text-muted: #9a9aa0;
+  --accent: #6d93ff;
+  --accent-contrast: #0c0c0d;
+  --accent-soft: rgba(109, 147, 255, 0.18);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+/* User forced light: the :root defaults already are light, so nothing more is
+   needed - setting data-theme="light" simply disables the OS-dark rule above. */
 
 * {
   box-sizing: border-box;
@@ -83,6 +105,40 @@ button {
 .nav-links {
   display: flex;
   gap: 4px;
+}
+
+/* While a Settings task runs, the nav is locked so the user can't switch tabs
+   (which would unmount the page) until it finishes. */
+.nav-links--locked {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* Running-task indicator in the top bar. */
+.nav-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: pm-spin 0.7s linear infinite;
+}
+
+@keyframes pm-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .nav-links a {
@@ -145,6 +201,77 @@ button {
   border-radius: var(--radius);
 }
 
+/* Keep the filter bar pinned just under the nav while the photo grid scrolls,
+   so filters (and Select) stay reachable without scrolling back to the top.
+   Full-bleed (negative margins cancel the page padding, inner padding restores
+   the content inset) so, once pinned, it forms a solid opaque band flush under
+   the nav with no gap above or at the sides for photos to show through. */
+/* The filter bar is a docked, opaque header that lives ABOVE the scroll region
+   (see .page-scroll) rather than inside it. So it never moves, nothing shows
+   through it, and the scrollbar + all content (messages, grid) begin below it. */
+.filter-bar--sticky {
+  position: static;
+  margin: 0;
+  padding: 12px 20px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+/* A page with a docked filter bar becomes a fixed-header column: the page itself
+   doesn't scroll (headers stay put); only the inner .page-scroll does. */
+.page:has(.filter-bar--sticky) {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Any heading above the bar (e.g. the album title) keeps page-like insets since
+   the page padding is now zero. */
+.page:has(.filter-bar--sticky) > .section-title {
+  margin: 0;
+  padding: 16px 20px 10px;
+}
+
+/* The scroll region below the header: this is what actually scrolls, so its
+   scrollbar starts right under the filter bar. */
+.page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+}
+
+/* Timeline pages reserve a right gutter so the grid clears the fixed scrubber. */
+.page-timeline .page-scroll {
+  padding-right: 58px;
+}
+
+/* Bulk-action bar (shown when photos are selected): pinned to the bottom of the
+   window like Photos/Finder, so its actions stay put while the grid scrolls.
+   A fully opaque fill + top border/shadow so the photos never show through. */
+.action-bar--bottom {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.18);
+}
+
+/* Reserve room at the foot of the scroll area so the last grid row can scroll
+   clear of the fixed action bar instead of hiding behind it. The scroll region
+   is `.page-scroll`, so the padding goes there. */
+.page:has(.action-bar--bottom) .page-scroll {
+  padding-bottom: 96px;
+}
+
 /* Related controls grouped tightly (filters | view | actions), so each reads as
    part of a purpose rather than one long undifferentiated row. */
 .control-group {
@@ -152,6 +279,14 @@ button {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+/* Consistent two-row layout across every filter bar (Library / Album / Import):
+   the filter controls (Album/Rating/Color/Tags/Date) always fill the first row,
+   and the view controls + page actions (type/Size/Merge · Select) drop to the
+   second row - regardless of window width or which filters a page shows. */
+.filter-bar--sticky > .control-group:first-child {
+  flex: 1 1 100%;
 }
 
 /* Divider before the selection/actions group, so "what you can do" reads as
@@ -526,10 +661,15 @@ textarea:focus-visible {
      back to the previous fixed width when the variable isn't set yet. */
   grid-template-columns: repeat(auto-fill, minmax(var(--thumb-min, 180px), 1fr));
   gap: 12px;
-  /* Cards size to each photo's real aspect ratio (set inline per image), so
-     don't stretch them to the tallest item in the row - keep their natural
-     height and top-align instead. */
   align-items: start;
+}
+
+/* Uniform square (1:1) tiles at every Size (S/M/L/XL), in both the Library and
+   album grids. The photo fills the square via object-fit: cover. Overrides the
+   base .thumb-card fixed height. */
+.thumbnail-grid .thumb-card {
+  aspect-ratio: 1 / 1;
+  height: auto;
 }
 
 /* Immich-style date timeline: month/year sections with headers that stick to
@@ -751,6 +891,36 @@ textarea:focus-visible {
 
 .thumb-card:hover .selects-toggle {
   opacity: 1;
+}
+
+/* Import: preview (lightbox) button, revealed on hover, since a plain click now
+   selects the card (Library-style). Bottom-right to clear the top badges. */
+.card-expand {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease;
+  z-index: 1;
+}
+
+.thumb-card:hover .card-expand {
+  opacity: 1;
+}
+
+.card-expand:hover {
+  background: rgba(0, 0, 0, 0.8);
 }
 
 .selects-toggle.in-selects {
@@ -1006,6 +1176,50 @@ input.editor-preset-select {
   color: var(--text-muted);
 }
 
+/* Film simulation picker - a grid of small look chips (swatch + name), like a
+   camera's film simulation menu. */
+.filmsim-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.filmsim-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 2px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+
+.filmsim-chip:hover {
+  border-color: var(--border);
+}
+
+.filmsim-chip.active {
+  border-color: var(--text);
+  background: var(--bg-elevated);
+}
+
+.filmsim-swatch {
+  width: 100%;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.filmsim-label {
+  font-size: 10.5px;
+  line-height: 1.15;
+  text-align: center;
+  color: var(--text);
+}
+
 /* Colour-mixer band swatches. */
 .mixer-bands {
   display: flex;
@@ -1255,6 +1469,118 @@ input.editor-preset-select {
   padding: 3px 6px 3px 10px;
   border-radius: 999px;
   font-size: 12px;
+}
+
+/* Multi-select tag filter (button + checkbox popover) used in the filter bar. */
+.tag-filter {
+  position: relative;
+  display: inline-flex;
+}
+
+.tag-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  max-width: 160px;
+}
+
+.tag-filter-btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.tag-filter-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Selected state reads with the same accent tint as other active controls. */
+.tag-filter-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tag-filter-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-filter-caret {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.tag-filter-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 200px;
+  max-width: 260px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+.tag-filter-search {
+  width: 100%;
+  margin-bottom: 6px;
+  box-sizing: border-box;
+}
+
+.tag-filter-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.tag-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tag-filter-item:hover {
+  background: var(--hover);
+}
+
+.tag-filter-item input {
+  cursor: pointer;
+}
+
+.tag-filter-empty {
+  padding: 8px 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.tag-filter-clear {
+  margin-top: 6px;
+  width: 100%;
+  padding: 6px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .tag-chip button {

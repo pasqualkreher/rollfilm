@@ -6,6 +6,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HashRouter } from "react-router-dom";
 import App from "./App";
 import "./index.css";
+import { initTheme } from "./state/theme";
+
+// Apply the saved light/dark preference before the first paint.
+initTheme();
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
