@@ -842,13 +842,43 @@ input:focus-visible {
 }
 
 .editor-stage {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-direction: column;
+  /* Same generous band around the photo as the lightbox (.detail-image). */
+  padding: 40px 16px;
+  overflow: hidden;
+  transition: background 0.15s ease;
+}
+
+/* The image area; the background toggle sits in its own row below it. */
+.editor-stage-main {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
   overflow: hidden;
+}
+
+/* Match the lightbox backgrounds exactly (see .detail-image / .detail-image-dark). */
+.editor-stage-dark {
+  background: #000;
+}
+
+.editor-stage-light {
+  background: var(--bg-elevated);
+}
+
+/* Light/Black background switch in its own row under the image (like the
+   lightbox toolbar), not floating over the photo. */
+.editor-bg-toggle {
+  display: flex;
+  justify-content: center;
+  padding-top: 14px;
 }
 
 .editor-canvas-wrap {
@@ -861,8 +891,19 @@ input:focus-visible {
 .editor-canvas {
   max-width: 100%;
   max-height: calc(100vh - 48px);
-  border-radius: 6px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  /* Framing matches the lightbox: flush on a light background, and on black it
+     floats with a soft shadow + slight rounding (see .editor-stage-dark below,
+     mirroring .detail-image img.framed). */
+  display: block;
+  /* Zoom/pan transform applied inline; scale from the centre with no transition
+     so it tracks the scroll/drag directly. */
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.editor-stage-dark .editor-canvas {
+  border-radius: 3px;
+  box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
 }
 
 /* Crop selection drawn over the canvas while in crop mode. */
@@ -1428,9 +1469,11 @@ input:focus-visible {
   background: #000;
 }
 
+/* On a black background, lift the photo with a soft shadow and a hairline edge
+   instead of a heavy white mat - cleaner and more modern. */
 .detail-image img.framed {
-  border: 10px solid #fff;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+  border-radius: 3px;
+  box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
 }
 
 .detail-image img {
@@ -1445,15 +1488,12 @@ input:focus-visible {
   object-fit: contain;
 }
 
-/* Click-to-zoom loupe on the detail photo. */
+/* Scroll/pinch-to-zoom + drag-to-pan on the detail photo. No transform
+   transition so zooming and panning track the input directly (cursor set
+   inline: grab / grabbing when zoomed). */
 .detail-photo {
-  transition: transform 0.15s ease;
-  cursor: zoom-in;
-}
-
-.detail-photo.zoomed {
-  cursor: zoom-out;
-  transition: transform 0.05s ease-out;
+  transform-origin: center center;
+  will-change: transform;
 }
 
 .detail-image-toolbar {

@@ -78,6 +78,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const baseRef = useRef<ImageData | null>(null); // raw pixels (no edits)
   const baseCanvasRef = useRef<HTMLCanvasElement | null>(null); // base drawn, for rotation
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const panDragRef = useRef<{ x: number; y: number } | null>(null);
 
   const saved = editsFromImage(image);
   const [adj, setAdj] = useState<Adjustments>(() => adjustmentsFromImage(image));
@@ -92,6 +95,17 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [bgMode, setBgMode] = useState<"light" | "dark">("light");
+  // Scroll/pinch to zoom (toward cursor), drag to pan - same as the lightbox.
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const MAX_ZOOM = 6;
+  const zoomed = scale > 1.001;
+
+  function resetZoom() {
+    setScale(1);
+    setPan({ x: 0, y: 0 });
+  }
 
   // Compose: rotate + crop the raw base, then run tonal/colour/vignette on the
   // resulting (final) frame - same order as the backend, so preview == save.
@@ -199,6 +213,40 @@ export function PhotoEditor({ image, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, adj, colorMix, vignette, rotation, crop, cropMode]);
 
+  // The framed image changes size on geometry changes / crop mode, so drop back
+  // to fit then to keep zoom/pan sane.
+  useEffect(() => {
+    resetZoom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, rotation, crop, cropMode]);
+
+  // Scroll / pinch to zoom toward the cursor (native non-passive listener so we
+  // can preventDefault - mirrors the lightbox).
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      const wrap = wrapRef.current;
+      if (!wrap) return;
+      const rect = wrap.getBoundingClientRect();
+      const dx = e.clientX - (rect.left + rect.width / 2);
+      const dy = e.clientY - (rect.top + rect.height / 2);
+      setScale((prev) => {
+        const factor = Math.exp(-e.deltaY * 0.0015);
+        const next = Math.min(MAX_ZOOM, Math.max(1, prev * factor));
+        setPan((pp) =>
+          next <= 1.001
+            ? { x: 0, y: 0 }
+            : { x: dx - (dx - pp.x) * (next / prev), y: dy - (dy - pp.y) * (next / prev) }
+        );
+        return next;
+      });
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   const edits: ImageEdits = { ...adj, rotation, crop, colorMix, vignette };
 
   const saveEdits = useMutation({
@@ -257,26 +305,45 @@ export function PhotoEditor({ image, onClose }: Props) {
       <button className="editor-close" onClick={onClose} disabled={busy} title="Close (Esc)" aria-label="Close editor">
         ✕
       </button>
-      <div className="editor-stage">
+      <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
+        <div className="editor-stage-main">
         {loading && <div className="editor-hint">Loading…</div>}
         {error && <div className="editor-hint">{error}</div>}
-        <div className="editor-canvas-wrap" style={{ display: loading || error ? "none" : "inline-block" }}>
+        <div className="editor-canvas-wrap" ref={wrapRef} style={{ display: loading || error ? "none" : "inline-block" }}>
           <canvas
             ref={canvasRef}
             className="editor-canvas"
-            style={{ cursor: cropMode ? "crosshair" : "default" }}
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+              cursor: cropMode ? "crosshair" : zoomed ? (panDragRef.current ? "grabbing" : "grab") : "default",
+            }}
             onMouseDown={(e) => {
-              if (!cropMode) return;
-              const p = fractionAt(e.clientX, e.clientY);
-              setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
-              setDragging(true);
+              if (cropMode) {
+                const p = fractionAt(e.clientX, e.clientY);
+                setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+                setDragging(true);
+              } else if (zoomed) {
+                e.preventDefault();
+                panDragRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+              }
             }}
             onMouseMove={(e) => {
-              if (!cropMode || !dragging || !drag) return;
-              const p = fractionAt(e.clientX, e.clientY);
-              setDrag({ ...drag, x1: p.x, y1: p.y });
+              if (cropMode) {
+                if (dragging && drag) {
+                  const p = fractionAt(e.clientX, e.clientY);
+                  setDrag({ ...drag, x1: p.x, y1: p.y });
+                }
+              } else if (panDragRef.current) {
+                setPan({ x: e.clientX - panDragRef.current.x, y: e.clientY - panDragRef.current.y });
+              }
             }}
-            onMouseUp={() => setDragging(false)}
+            onMouseUp={() => {
+              setDragging(false);
+              panDragRef.current = null;
+            }}
+            onMouseLeave={() => {
+              panDragRef.current = null;
+            }}
           />
           {cropMode && hasDrawnCrop && (
             <div
@@ -290,6 +357,19 @@ export function PhotoEditor({ image, onClose }: Props) {
             />
           )}
         </div>
+        </div>
+        {!loading && !error && (
+          <div className="editor-bg-toggle">
+            <span className="segmented">
+              <button className={bgMode === "light" ? "active" : ""} onClick={() => setBgMode("light")}>
+                Light background
+              </button>
+              <button className={bgMode === "dark" ? "active" : ""} onClick={() => setBgMode("dark")}>
+                Black background
+              </button>
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="editor-panel">

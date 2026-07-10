@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
@@ -20,20 +20,20 @@ export function ImageDetail() {
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [bgMode, setBgMode] = useState<"light" | "dark">("light");
   const mergePairs = useMergePairs();
-  // Click-to-zoom loupe: click toggles a 2.5x zoom centred on the click point,
-  // then moving the mouse pans (transform-origin follows the cursor).
-  const [zoomed, setZoomed] = useState(false);
-  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
+  // Scroll / trackpad-pinch to zoom (toward the cursor), drag to pan. scale 1 =
+  // fit; pan is a pixel translation applied before the scale.
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const imageBoxRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ x: number; y: number } | null>(null);
   const selects = useSelects();
 
-  const ZOOM_SCALE = 2.5;
+  const MAX_ZOOM = 6;
+  const zoomed = scale > 1.001;
 
-  function cursorOrigin(e: ReactMouseEvent<HTMLImageElement>) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return {
-      x: ((e.clientX - rect.left) / rect.width) * 100,
-      y: ((e.clientY - rect.top) / rect.height) * 100,
-    };
+  function resetZoom() {
+    setScale(1);
+    setPan({ x: 0, y: 0 });
   }
 
   // Passed from the Library grid so arrow keys can zap through the same
@@ -50,8 +50,36 @@ export function ImageDetail() {
   // Drop back to fit-view whenever the shown photo changes (arrow-key nav or
   // the RAW/JPEG toggle), so a new image never opens already zoomed-in.
   useEffect(() => {
-    setZoomed(false);
+    resetZoom();
   }, [activeId]);
+
+  // Scroll / pinch to zoom toward the cursor. A native, non-passive listener so
+  // we can preventDefault - otherwise ctrl+wheel (trackpad pinch) would zoom the
+  // whole app and a plain wheel would scroll the page.
+  useEffect(() => {
+    const el = imageBoxRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      const rect = el!.getBoundingClientRect();
+      // Cursor position relative to the box centre (the transform origin).
+      const dx = e.clientX - (rect.left + rect.width / 2);
+      const dy = e.clientY - (rect.top + rect.height / 2);
+      setScale((prevScale) => {
+        const factor = Math.exp(-e.deltaY * 0.0015);
+        const next = Math.min(MAX_ZOOM, Math.max(1, prevScale * factor));
+        // Keep the image point under the cursor fixed while zooming.
+        setPan((prevPan) => {
+          if (next <= 1.001) return { x: 0, y: 0 };
+          const ratio = next / prevScale;
+          return { x: dx - (dx - prevPan.x) * ratio, y: dy - (dy - prevPan.y) * ratio };
+        });
+        return next;
+      });
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const { data: image } = useQuery({
     queryKey: ["image", activeId],
@@ -75,10 +103,10 @@ export function ImageDetail() {
     function onKeyDown(e: KeyboardEvent) {
       if (adjustOpen) return;
 
-      // Esc closes the lightbox - but first step out of a zoomed-in loupe if the
-      // photo is currently zoomed, so one press doesn't do both.
+      // Esc closes the lightbox - but first drop back to fit if zoomed in, so
+      // one press doesn't do both.
       if (e.key === "Escape") {
-        if (zoomed) setZoomed(false);
+        if (zoomed) resetZoom();
         else navigate(-1);
         return;
       }
@@ -204,21 +232,30 @@ export function ImageDetail() {
       </button>
       <div className="detail-layout" style={{ marginTop: 16 }}>
         <div style={{ flex: "999 1 400px", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div className={`detail-image${bgMode === "dark" ? " detail-image-dark" : ""}`}>
+          <div className={`detail-image${bgMode === "dark" ? " detail-image-dark" : ""}`} ref={imageBoxRef}>
             <img
               className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}`}
               style={{
-                transform: zoomed ? `scale(${ZOOM_SCALE})` : undefined,
-                transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                cursor: zoomed ? (dragRef.current ? "grabbing" : "grab") : "default",
               }}
+              draggable={false}
               src={api.images.previewUrl(image.id, editVersion(image))}
               alt={image.original_filename}
-              onClick={(e) => {
-                setZoomOrigin(cursorOrigin(e));
-                setZoomed((z) => !z);
+              onMouseDown={(e: ReactMouseEvent<HTMLImageElement>) => {
+                if (!zoomed) return;
+                e.preventDefault();
+                dragRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
               }}
-              onMouseMove={(e) => {
-                if (zoomed) setZoomOrigin(cursorOrigin(e));
+              onMouseMove={(e: ReactMouseEvent<HTMLImageElement>) => {
+                if (!dragRef.current) return;
+                setPan({ x: e.clientX - dragRef.current.x, y: e.clientY - dragRef.current.y });
+              }}
+              onMouseUp={() => {
+                dragRef.current = null;
+              }}
+              onMouseLeave={() => {
+                dragRef.current = null;
               }}
             />
           </div>
@@ -232,7 +269,7 @@ export function ImageDetail() {
               </button>
             </span>
             <span className="detail-zoom-hint">
-              {zoomed ? "Click to zoom out · move to pan" : "Click photo to zoom"}
+              {zoomed ? "Drag to pan · Esc to fit" : "Scroll or pinch to zoom"}
             </span>
           </div>
         </div>
