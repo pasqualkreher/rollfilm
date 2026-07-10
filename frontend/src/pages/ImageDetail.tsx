@@ -53,34 +53,6 @@ export function ImageDetail() {
     resetZoom();
   }, [activeId]);
 
-  // Scroll / pinch to zoom toward the cursor. A native, non-passive listener so
-  // we can preventDefault - otherwise ctrl+wheel (trackpad pinch) would zoom the
-  // whole app and a plain wheel would scroll the page.
-  useEffect(() => {
-    const el = imageBoxRef.current;
-    if (!el) return;
-    function onWheel(e: WheelEvent) {
-      e.preventDefault();
-      const rect = el!.getBoundingClientRect();
-      // Cursor position relative to the box centre (the transform origin).
-      const dx = e.clientX - (rect.left + rect.width / 2);
-      const dy = e.clientY - (rect.top + rect.height / 2);
-      setScale((prevScale) => {
-        const factor = Math.exp(-e.deltaY * 0.0015);
-        const next = Math.min(MAX_ZOOM, Math.max(1, prevScale * factor));
-        // Keep the image point under the cursor fixed while zooming.
-        setPan((prevPan) => {
-          if (next <= 1.001) return { x: 0, y: 0 };
-          const ratio = next / prevScale;
-          return { x: dx - (dx - prevPan.x) * ratio, y: dy - (dy - prevPan.y) * ratio };
-        });
-        return next;
-      });
-    }
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
-
   const { data: image } = useQuery({
     queryKey: ["image", activeId],
     queryFn: () => api.images.get(activeId),
@@ -92,6 +64,34 @@ export function ImageDetail() {
     queryFn: () => api.images.get(image!.paired_image_id!),
     enabled: !!image?.paired_image_id,
   });
+
+  // Scroll / pinch to zoom toward the cursor. A native, non-passive listener so
+  // we can preventDefault - otherwise ctrl+wheel (trackpad pinch) would zoom the
+  // whole app and a plain wheel would scroll the page. Keyed to image?.id so it
+  // (re)attaches once the .detail-image element actually mounts - the component
+  // early-returns a loading state before the photo is ready.
+  useEffect(() => {
+    const el = imageBoxRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      const rect = el!.getBoundingClientRect();
+      const dx = e.clientX - (rect.left + rect.width / 2);
+      const dy = e.clientY - (rect.top + rect.height / 2);
+      setScale((prevScale) => {
+        const factor = Math.exp(-e.deltaY * 0.0015);
+        const next = Math.min(MAX_ZOOM, Math.max(1, prevScale * factor));
+        setPan((prevPan) => {
+          if (next <= 1.001) return { x: 0, y: 0 };
+          const ratio = next / prevScale;
+          return { x: dx - (dx - prevPan.x) * ratio, y: dy - (dy - prevPan.y) * ratio };
+        });
+        return next;
+      });
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [image?.id]);
 
   // "Add to Immich" only shows when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
