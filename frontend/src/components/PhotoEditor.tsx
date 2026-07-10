@@ -143,6 +143,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [gridOverlay, setGridOverlay] = useState<GridOverlay>("none");
   const [presets, setPresets] = useState<Record<string, EditPreset>>(() => loadPresets());
   const [selectedPreset, setSelectedPreset] = useState("");
+  // Inline preset naming (Electron has no window.prompt).
+  const [namingPreset, setNamingPreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
   const [cropMode, setCropMode] = useState(false);
   const [drag, setDrag] = useState<DragRect | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -343,12 +346,14 @@ export function PhotoEditor({ image, onClose }: Props) {
     setDenoise(p.denoise ?? 0);
   }
 
-  function handleSavePreset() {
-    const name = window.prompt("Save these settings as a preset. Name:", selectedPreset || "")?.trim();
+  function confirmSavePreset() {
+    const name = presetName.trim();
     if (!name) return;
     savePreset(name, { adj, colorMix, vignette, distortion, grain, denoise });
     setPresets(loadPresets());
     setSelectedPreset(name);
+    setNamingPreset(false);
+    setPresetName("");
   }
 
   function handleDeletePreset() {
@@ -420,6 +425,15 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   return (
     <div className="editor-overlay">
+      <button
+        className="icon-btn back-btn editor-back"
+        onClick={onClose}
+        disabled={busy}
+        title="Back (Esc)"
+        aria-label="Back"
+      >
+        ←
+      </button>
       <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
         <div className="editor-stage-main">
         {loading && <div className="editor-hint">Loading…</div>}
@@ -505,6 +519,7 @@ export function PhotoEditor({ image, onClose }: Props) {
       </div>
 
       <div className="editor-panel">
+        <div className="editor-panel-body">
         <h3 className="section-title" style={{ marginBottom: 2 }}>
           Edit
         </h3>
@@ -608,39 +623,78 @@ export function PhotoEditor({ image, onClose }: Props) {
 
         {/* Presets */}
         <div className="editor-section-title">Presets</div>
-        <div className="editor-preset-row">
-          <select
-            className="editor-preset-select"
-            value={selectedPreset}
-            onChange={(e) => {
-              const name = e.target.value;
-              setSelectedPreset(name);
-              const p = presets[name];
-              if (p) applyPreset(p);
-            }}
-          >
-            <option value="">
-              {Object.keys(presets).length ? "Apply a preset…" : "No presets yet"}
-            </option>
-            {Object.keys(presets)
-              .sort()
-              .map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-          </select>
-          <button className="btn btn-sm" onClick={handleSavePreset} title="Save the current look as a preset">
-            Save…
-          </button>
-          <button
-            className="btn btn-sm ghost"
-            onClick={handleDeletePreset}
-            disabled={!selectedPreset}
-            title="Delete the selected preset"
-          >
-            Delete
-          </button>
+        {namingPreset ? (
+          <div className="editor-preset-row">
+            <input
+              className="editor-preset-select"
+              type="text"
+              autoFocus
+              placeholder="Preset name"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirmSavePreset();
+                else if (e.key === "Escape") {
+                  setNamingPreset(false);
+                  setPresetName("");
+                }
+              }}
+            />
+            <button className="btn btn-sm primary" onClick={confirmSavePreset} disabled={!presetName.trim()}>
+              Save
+            </button>
+            <button
+              className="btn btn-sm ghost"
+              onClick={() => {
+                setNamingPreset(false);
+                setPresetName("");
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="editor-preset-row">
+            <select
+              className="editor-preset-select"
+              value={selectedPreset}
+              onChange={(e) => {
+                const name = e.target.value;
+                setSelectedPreset(name);
+                const p = presets[name];
+                if (p) applyPreset(p);
+              }}
+            >
+              <option value="">{Object.keys(presets).length ? "Apply a preset…" : "No presets yet"}</option>
+              {Object.keys(presets)
+                .sort()
+                .map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+            </select>
+            <button
+              className="btn btn-sm"
+              onClick={() => {
+                setPresetName(selectedPreset || "");
+                setNamingPreset(true);
+              }}
+              title="Save the current look as a preset"
+            >
+              Save…
+            </button>
+            <button
+              className="btn btn-sm ghost"
+              onClick={handleDeletePreset}
+              disabled={!selectedPreset}
+              title="Delete the selected preset"
+            >
+              Delete
+            </button>
+          </div>
+        )}
+
         </div>
 
         <div className="editor-footer">
@@ -663,9 +717,6 @@ export function PhotoEditor({ image, onClose }: Props) {
               }}
             >
               Reset all
-            </button>
-            <button className="btn ghost btn-sm" onClick={onClose} disabled={busy}>
-              Cancel
             </button>
           </div>
           <div className="editor-footer-primary">

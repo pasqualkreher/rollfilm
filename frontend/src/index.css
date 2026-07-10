@@ -853,6 +853,14 @@ input:focus-visible {
   transition: background 0.15s ease;
 }
 
+/* Back arrow pinned to the top-left corner of the editor, like the lightbox. */
+.editor-back {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+}
+
 /* The image area; the background toggle sits in its own row below it. */
 .editor-stage-main {
   flex: 1;
@@ -934,6 +942,15 @@ input:focus-visible {
   font-size: 13px;
 }
 
+/* The inline preset-name field reuses the select's sizing but needs input chrome. */
+input.editor-preset-select {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
 /* Crop selection drawn over the canvas while in crop mode. */
 .crop-rect {
   position: absolute;
@@ -1010,12 +1027,23 @@ input:focus-visible {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 20px;
+  min-height: 0;
   background: var(--bg);
   color: var(--text);
   border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* Only the controls scroll; the footer stays put, so the scrollbar ends at the
+   save block rather than running behind it. */
+.editor-panel-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px 20px 18px;
 }
 
 .editor-sliders {
@@ -1053,15 +1081,14 @@ input:focus-visible {
 
 /* Footer pinned to the bottom of the (scrolling) panel: a secondary row
    (Reset / Cancel) above the two prominent save actions. */
+/* Static save block below the scroll area (not sticky), so the scrollbar stops
+   at its top edge. */
 .editor-footer {
-  position: sticky;
-  bottom: 0;
-  margin-top: auto;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-top: 14px;
-  padding-bottom: 2px;
+  padding: 14px 20px 20px;
   background: var(--bg);
   border-top: 1px solid var(--border);
 }
