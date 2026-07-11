@@ -6,19 +6,12 @@ import type { CropBox, ImageOut } from "../api/types";
 import {
   ADJUSTMENT_DEFS,
   adjustmentsFromImage,
-  applyAdjustments,
-  applyDistortion,
-  applyGrain,
-  clarity as clarityPass,
-  dehaze as dehazePass,
-  denoise as denoisePass,
-  mist as mistPass,
-  unsharp,
   BAND_SWATCH,
   COLOR_BANDS,
   editsFromImage,
   isNeutral,
   mixIsNeutral,
+  neutralEdits,
   neutralMix,
   NEUTRAL,
   type Adjustments,
@@ -41,10 +34,9 @@ interface DragRect {
   y1: number;
 }
 
-// Working resolution for the live preview. Full original res isn't feasible for
-// a per-pixel JS pass on every slider move; 2048 keeps zoom sharp while staying
-// interactive. The saved/exported render is always full original resolution.
-const MAX_PX = 2048;
+// The live preview is rendered *server-side* by the exact save pipeline
+// (POST /images/:id/editor-preview), debounced per edit change - one
+// implementation of every effect, preview always identical to the save.
 const LIGHT_KEYS: (keyof Adjustments)[] = ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "dehaze"];
 const COLOR_KEYS: (keyof Adjustments)[] = ["temperature", "tint", "saturation"];
 type GridOverlay = "none" | "thirds" | "grid" | "diagonal";
@@ -135,15 +127,14 @@ export function PhotoEditor({ image, onClose }: Props) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const baseRef = useRef<ImageData | null>(null); // raw pixels (no edits)
-  const baseCanvasRef = useRef<HTMLCanvasElement | null>(null); // base drawn, for rotation
   const stageRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const panDragRef = useRef<{ x: number; y: number } | null>(null);
-  // Cache the distortion-corrected base so it's only recomputed when the
-  // distortion slider changes, not on every tonal tweak.
-  const distortRef = useRef<{ amount: number; canvas: HTMLCanvasElement } | null>(null);
   const histRef = useRef<HTMLCanvasElement | null>(null);
+  // Server preview plumbing: abort a stale in-flight render when a newer edit
+  // state supersedes it, and ignore late responses by sequence number.
+  const abortRef = useRef<AbortController | null>(null);
+  const renderSeq = useRef(0);
 
   // Live RGB histogram of the rendered preview (Lightroom/RapidRAW-style),
   // redrawn on every preview render. Screen-blended channel fills; sqrt scaling
@@ -236,193 +227,73 @@ export function PhotoEditor({ image, onClose }: Props) {
     setPan({ x: 0, y: 0 });
   }
 
-  // Compose: rotate + crop the raw base, then run tonal/colour/vignette on the
-  // resulting (final) frame - same order as the backend, so preview == save.
-  function drawPreview(
-    px: Adjustments & {
-      colorMix: ColorMix;
-      vignette: number;
-      colorTint: number;
-      chromeEffect: number;
-      chromeBlue: number;
-    },
-    rot: number,
-    cr: CropBox | null,
-    cropping: boolean,
-    dist: number,
-    dn: number,
-    cl: number,
-    sp: number,
-    gr: number,
-    gsz: number,
-    mst: number
-  ) {
-    const base = baseRef.current;
-    const baseCanvas = baseCanvasRef.current;
-    const canvas = canvasRef.current;
-    if (!base || !baseCanvas || !canvas) return;
-
-    // Lens distortion (geometric) is applied to the base first, cached so tonal
-    // tweaks don't re-run the per-pixel remap.
-    let srcCanvas = baseCanvas;
-    if (dist) {
-      if (!distortRef.current || distortRef.current.amount !== dist) {
-        const dImg = applyDistortion(base, dist);
-        const dc = document.createElement("canvas");
-        dc.width = base.width;
-        dc.height = base.height;
-        dc.getContext("2d")!.putImageData(dImg, 0, 0);
-        distortRef.current = { amount: dist, canvas: dc };
-      }
-      srcCanvas = distortRef.current.canvas;
-    }
-
-    const w0 = base.width;
-    const h0 = base.height;
-    const swap = rot % 180 !== 0;
-    const rw = swap ? h0 : w0;
-    const rh = swap ? w0 : h0;
-    const rotc = document.createElement("canvas");
-    rotc.width = rw;
-    rotc.height = rh;
-    const rctx = rotc.getContext("2d")!;
-    rctx.translate(rw / 2, rh / 2);
-    rctx.rotate((rot * Math.PI) / 180);
-    rctx.drawImage(srcCanvas, -w0 / 2, -h0 / 2);
-
-    let sx = 0;
-    let sy = 0;
-    let sw = rw;
-    let sh = rh;
-    let fw = rw;
-    let fh = rh;
-    if (cr && !cropping) {
-      sx = cr.x * rw;
-      sy = cr.y * rh;
-      sw = Math.max(1, cr.width * rw);
-      sh = Math.max(1, cr.height * rh);
-      fw = Math.round(sw);
-      fh = Math.round(sh);
-    }
-    const frame = document.createElement("canvas");
-    frame.width = fw;
-    frame.height = fh;
-    const fctx = frame.getContext("2d")!;
-    fctx.drawImage(rotc, sx, sy, sw, sh, 0, 0, fw, fh);
-
-    // Spatial passes before the tonal pass, matching the backend order:
-    // denoise -> clarity -> sharpness -> dehaze.
-    let work = fctx.getImageData(0, 0, fw, fh);
-    if (dn > 0) work = denoisePass(work, dn);
-    if (cl) work = clarityPass(work, Math.max(3, Math.max(fw, fh) / 60), (cl / 100) * 0.9);
-    // Radius capped like the backend - fine, tight sharpening without halos.
-    if (sp) work = unsharp(work, Math.min(2, Math.max(0.6, Math.max(fw, fh) / 2000)), (sp / 100) * 1.2);
-    if (px.dehaze) work = dehazePass(work, px.dehaze);
-    let out = fctx.createImageData(fw, fh);
-    applyAdjustments(work.data, out.data, px, fw, fh);
-    // Mist blooms the toned image (backend order match), then grain on top.
-    if (mst > 0) out = mistPass(out, mst);
-    if (gr > 0) applyGrain(out, gr, gsz);
-    canvas.width = fw;
-    canvas.height = fh;
-    canvas.getContext("2d")!.putImageData(out, 0, 0);
-    drawHistogram(out);
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    let objUrl: string | null = null;
-    setLoading(true);
-    setError(null);
-    fetch(api.images.basePreviewUrl(image.id))
-      .then((r) => {
-        if (!r.ok) throw new Error(`preview ${r.status}`);
-        return r.blob();
-      })
-      .then(
-        (blob) =>
-          new Promise<HTMLImageElement>((resolve, reject) => {
-            objUrl = URL.createObjectURL(blob);
-            const im = new Image();
-            im.onload = () => resolve(im);
-            im.onerror = () => reject(new Error("decode failed"));
-            im.src = objUrl;
-          })
-      )
-      .then((im) => {
-        if (cancelled) return;
-        const scale = Math.min(1, MAX_PX / Math.max(im.naturalWidth, im.naturalHeight));
-        const w = Math.max(1, Math.round(im.naturalWidth * scale));
-        const h = Math.max(1, Math.round(im.naturalHeight * scale));
-        const bc = document.createElement("canvas");
-        bc.width = w;
-        bc.height = h;
-        const bctx = bc.getContext("2d")!;
-        bctx.drawImage(im, 0, 0, w, h);
-        baseRef.current = bctx.getImageData(0, 0, w, h);
-        baseCanvasRef.current = bc;
-        setLoading(false);
-        setReady(true);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setError(`Couldn't load the photo for editing: ${(e as Error).message}`);
-          setLoading(false);
-        }
-      })
-      .finally(() => {
-        if (objUrl) URL.revokeObjectURL(objUrl);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image.id]);
-
-  useEffect(() => {
-    if (!ready) return;
-    // In compare mode neutralise the tonal/colour/detail passes (keeping only
-    // geometry, so the frame size is unchanged) to show the untouched original.
-    const px = compare
-      ? { ...NEUTRAL, colorMix: neutralMix(), vignette: 0, colorTint: 0, chromeEffect: 0, chromeBlue: 0 }
-      : { ...adj, colorMix, vignette, colorTint, chromeEffect, chromeBlue };
-    const raf = requestAnimationFrame(() =>
-      drawPreview(
-        px,
-        rotation,
-        crop,
-        cropMode,
-        distortion,
-        compare ? 0 : denoise,
-        compare ? 0 : clarity,
-        compare ? 0 : sharpness,
-        compare ? 0 : grain,
-        grainSize,
-        compare ? 0 : mistAmount
-      )
-    );
-    return () => cancelAnimationFrame(raf);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    ready,
-    compare,
-    adj,
+  const edits: ImageEdits = {
+    ...adj,
+    rotation,
+    crop,
     colorMix,
     vignette,
-    colorTint,
-    chromeEffect,
-    chromeBlue,
     distortion,
     grain,
     grainSize,
     denoise,
     clarity,
     sharpness,
-    mistAmount,
-    rotation,
-    crop,
-    cropMode,
-  ]);
+    colorTint,
+    chromeEffect,
+    chromeBlue,
+    mist: mistAmount,
+  };
+
+  // What the preview should actually show right now: in crop mode the full
+  // (uncropped) frame, in compare mode the untouched original with only the
+  // geometry kept so the frame doesn't jump.
+  const previewEdits: ImageEdits = compare
+    ? neutralEdits(rotation, cropMode ? null : crop)
+    : { ...edits, crop: cropMode ? null : crop };
+  const previewKey = JSON.stringify(previewEdits);
+
+  // Server-rendered live preview: debounce edit changes, cancel the stale
+  // in-flight render, draw the returned JPEG onto the canvas. The very first
+  // render (and image switches) skip the debounce.
+  useEffect(() => {
+    let cancelled = false;
+    const seq = ++renderSeq.current;
+    const timer = setTimeout(
+      async () => {
+        abortRef.current?.abort();
+        const ctrl = new AbortController();
+        abortRef.current = ctrl;
+        try {
+          const blob = await api.images.editorPreview(image.id, previewEdits, ctrl.signal);
+          if (cancelled || seq !== renderSeq.current) return;
+          const bmp = await createImageBitmap(blob);
+          const canvas = canvasRef.current;
+          if (!canvas) return;
+          canvas.width = bmp.width;
+          canvas.height = bmp.height;
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(bmp, 0, 0);
+          drawHistogram(ctx.getImageData(0, 0, bmp.width, bmp.height));
+          setError(null);
+          setLoading(false);
+          setReady(true);
+        } catch (e) {
+          if ((e as Error).name === "AbortError") return;
+          if (!cancelled) {
+            setError(`Couldn't render the preview: ${(e as Error).message}`);
+            setLoading(false);
+          }
+        }
+      },
+      ready ? 140 : 0
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [image.id, previewKey]);
 
   // The framed image changes size on geometry changes / crop mode, so drop back
   // to fit then to keep zoom/pan sane.
@@ -457,24 +328,6 @@ export function PhotoEditor({ image, onClose }: Props) {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
-
-  const edits: ImageEdits = {
-    ...adj,
-    rotation,
-    crop,
-    colorMix,
-    vignette,
-    distortion,
-    grain,
-    grainSize,
-    denoise,
-    clarity,
-    sharpness,
-    colorTint,
-    chromeEffect,
-    chromeBlue,
-    mist: mistAmount,
-  };
 
   // Apply a Fujifilm-style film simulation, blended toward neutral by `strength`
   // (0..100). Exposure is preserved - a simulation defines the look (contrast,

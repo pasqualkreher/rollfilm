@@ -1,9 +1,11 @@
 import io
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 from PIL import Image as PILImage, ImageFilter
 
@@ -220,10 +222,14 @@ def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
     radius = max(2, round(max(dsmall.shape) / 50))
     dsmall = _box_min(np.clip(dsmall, 0.0, 1.0), radius)
 
-    # Smooth the transmission so block edges don't show, then upsample.
-    tsm = PILImage.fromarray((dsmall * 255.0 + 0.5).astype(np.uint8), "L")
-    tsm = tsm.filter(ImageFilter.GaussianBlur(radius)).resize((w, h), PILImage.BILINEAR)
-    dark = np.asarray(tsm, dtype=np.float32) / 255.0
+    # Refine the transmission with a guided filter (guide = the image itself):
+    # edge-aware, so the haze estimate follows real object boundaries instead
+    # of the blocky quarter-scale grid - the classic He et al. refinement that
+    # kills both block artifacts and edge halos.
+    coarse = cv2.resize(dsmall.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+    gray = (arr @ _LUMA).astype(np.float32)
+    dark = cv2.ximgproc.guidedFilter(gray, coarse, int(max(8, max(h, w) / 40)), 1e-3)
+    dark = np.clip(dark, 0.0, 1.0)
 
     # Floor t at 0.4 (max ~2.5x amplification): lower floors turn fine detail
     # near the atmospheric colour into blown white blobs.
@@ -239,21 +245,18 @@ def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
 
 
 def _denoise_image(image: PILImage.Image, amount: int) -> PILImage.Image:
-    """Real(istic) denoise (replaces the old plain Gaussian blur, which just
-    softened everything). Colour noise - the ugly confetti - is smoothed hard
-    on the chroma planes in YCbCr, where the eye barely resolves detail, while
-    luminance is cleaned gently with an edge-keeping 3x3 median blend so real
-    texture and edges survive."""
+    """Real denoise: OpenCV's non-local means (the reference classic-space NR
+    algorithm - it averages *similar patches* rather than neighbouring pixels,
+    so noise vanishes while texture and edges survive). Luma is cleaned more
+    gently than chroma, like camera NR - colour confetti is what looks ugly."""
     f = min(100, max(0, amount)) / 100.0
     if f <= 0:
         return image
-    long_edge = max(image.size)
-    y, cb, cr = image.convert("YCbCr").split()
-    rad = 0.5 + f * (long_edge / 400.0)
-    cb = cb.filter(ImageFilter.GaussianBlur(rad))
-    cr = cr.filter(ImageFilter.GaussianBlur(rad))
-    y = PILImage.blend(y, y.filter(ImageFilter.MedianFilter(3)), min(1.0, f * 1.2))
-    return PILImage.merge("YCbCr", (y, cb, cr)).convert("RGB")
+    bgr = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
+    h_luma = 2.0 + f * 9.0
+    h_chroma = 3.0 + f * 14.0
+    out = cv2.fastNlMeansDenoisingColored(bgr, None, h_luma, h_chroma, 7, 21)
+    return PILImage.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB), "RGB")
 
 
 def _apply_chrome(arr: np.ndarray, chrome: int, chrome_blue: int) -> np.ndarray:
@@ -456,15 +459,18 @@ def _unsharp(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
 
 def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
     """Fujifilm-style clarity: large-radius local contrast weighted toward the
-    midtones (so highlights/shadows aren't crushed). The mask is a raised tent
-    (^1.5) so the effect eases out gradually toward the tonal extremes instead
-    of cutting off linearly - closer to the camera's gentle Clarity rendering.
-    Positive = punchier mids, negative = softer."""
-    pil = PILImage.fromarray((np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
-    blur = np.asarray(pil.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
+    midtones (so highlights/shadows aren't crushed). The structural base comes
+    from an edge-preserving *guided filter* rather than a Gaussian blur - a
+    Gaussian bleeds across strong edges, which turned into bright/dark halos
+    around subjects at higher amounts; the guided filter stops at edges, so
+    only genuine local texture gets amplified. The midtone mask is a raised
+    tent (^1.5) easing out toward the tonal extremes. Positive = punchier
+    mids, negative = softer."""
+    src = np.clip(arr, 0.0, 1.0).astype(np.float32)
+    base = cv2.ximgproc.guidedFilter(src, src, int(max(4, radius)), 0.01)
     luma = arr @ _LUMA
     mask = np.power(1.0 - np.abs(2.0 * luma - 1.0), 1.5)[..., None]  # peaks at midtones
-    return np.clip(arr + amount * (arr - blur) * mask, 0.0, 1.0)
+    return np.clip(arr + amount * (src - base) * mask, 0.0, 1.0)
 
 
 def _has_edits(adj: dict) -> bool:
@@ -591,6 +597,47 @@ def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
     tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
     image.save(tmp, "JPEG", quality=quality)
     os.replace(tmp, dest)
+
+
+# Working resolution for the interactive editor preview: enough for a sharp
+# on-screen image, small enough that a full pipeline pass stays interactive.
+EDITOR_PREVIEW_PX = 1600
+
+
+@lru_cache(maxsize=4)
+def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int) -> PILImage.Image:
+    """The decoded, downscaled base image the editor preview renders on top of.
+    Cached so slider moves only re-run the edit pipeline, not the (expensive)
+    RAW decode. Keyed by file mtime so an on-disk change invalidates. Treat the
+    returned image as immutable - every pipeline step copies."""
+    src = extract_full_preview(Path(path_str))
+    src.thumbnail((max_px, max_px), PILImage.LANCZOS)
+    return src.convert("RGB")
+
+
+def render_editor_preview_bytes(
+    image: "Image",
+    rotation: int,
+    crop: CropBox | None,
+    adjustments: dict,
+    distortion: int = 0,
+    max_px: int = EDITOR_PREVIEW_PX,
+) -> bytes:
+    """Render the editor's live preview server-side: the exact save pipeline
+    (same code path as generate_derivatives/render_edited_image) on a cached,
+    preview-sized base. One pipeline = the preview IS the saved look - no
+    JS mirror to drift out of sync."""
+    from app.services.filesystem import resolve_image_path
+
+    path = resolve_image_path(image)
+    img = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, max_px)
+    if distortion:
+        img = apply_distortion(img, distortion)
+    img = apply_edits(img, rotation, crop)
+    img = apply_adjustments(img, adjustments)
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=88)
+    return buf.getvalue()
 
 
 def render_base_preview_bytes(image: "Image", max_px: int = PREVIEW_MAX_PX) -> bytes:

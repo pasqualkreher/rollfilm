@@ -619,6 +619,56 @@ def save_edits(
     return image
 
 
+def _payload_adjustments(payload: schemas.ImageEdits) -> dict:
+    """The clamped tonal/effect adjustments dict off an edits payload, ready
+    for the thumbnails pipeline. Shared by save-copy and the editor preview."""
+    adjustments = {name: _clamp100(getattr(payload, name)) for name in thumbnails.ADJUSTMENT_FIELDS}
+    adjustments["vignette"] = _clamp100(payload.vignette)
+    adjustments["grain"] = max(0, min(100, int(payload.grain)))
+    adjustments["grain_size"] = max(0, min(100, int(payload.grain_size)))
+    adjustments["denoise"] = max(0, min(100, int(payload.denoise)))
+    adjustments["clarity"] = _clamp100(payload.clarity)
+    adjustments["sharpness"] = _clamp100(payload.sharpness)
+    adjustments["color_tint"] = _clamp100(payload.color_tint)
+    adjustments["chrome_effect"] = max(0, min(100, int(payload.chrome_effect)))
+    adjustments["chrome_blue"] = max(0, min(100, int(payload.chrome_blue)))
+    adjustments["mist"] = max(0, min(100, int(payload.mist)))
+    cleaned_mix = _clean_color_mix(payload.color_mix)
+    adjustments["color_mix"] = json.loads(cleaned_mix) if cleaned_mix else None
+    return adjustments
+
+
+@router.post("/{image_id}/editor-preview")
+def editor_preview(
+    image_id: str,
+    payload: schemas.ImageEdits,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Live editor preview, rendered server-side with the *same* pipeline that
+    saves - so what you see while editing is exactly what you get. The decoded
+    base image is cached, so only the edit pipeline re-runs per request."""
+    if payload.rotation % 90 != 0:
+        raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
+    _validate_crop(payload.crop)
+    image = get_owned_image(db, current_user.id, image_id)
+    crop = None
+    if payload.crop is not None:
+        crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
+    try:
+        data = thumbnails.render_editor_preview_bytes(
+            image,
+            payload.rotation % 360,
+            crop,
+            _payload_adjustments(payload),
+            distortion=_clamp100(payload.distortion),
+        )
+    except Exception:
+        logger.exception("Failed to render editor preview for %s", image.id)
+        raise HTTPException(status_code=500, detail="Could not render the preview")
+    return Response(content=data, media_type="image/jpeg")
+
+
 @router.post("/{image_id}/save-copy", response_model=schemas.ImageOut)
 def save_copy(
     image_id: str,
@@ -637,20 +687,7 @@ def save_copy(
     crop = None
     if payload.crop is not None:
         crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
-    adjustments = {name: _clamp100(getattr(payload, name)) for name in thumbnails.ADJUSTMENT_FIELDS}
-    adjustments["vignette"] = _clamp100(payload.vignette)
-    adjustments["grain"] = max(0, min(100, int(payload.grain)))
-    adjustments["grain_size"] = max(0, min(100, int(payload.grain_size)))
-    adjustments["denoise"] = max(0, min(100, int(payload.denoise)))
-    adjustments["clarity"] = _clamp100(payload.clarity)
-    adjustments["sharpness"] = _clamp100(payload.sharpness)
-    # color_tint was missing here before - saved copies silently dropped it.
-    adjustments["color_tint"] = _clamp100(payload.color_tint)
-    adjustments["chrome_effect"] = max(0, min(100, int(payload.chrome_effect)))
-    adjustments["chrome_blue"] = max(0, min(100, int(payload.chrome_blue)))
-    adjustments["mist"] = max(0, min(100, int(payload.mist)))
-    cleaned_mix = _clean_color_mix(payload.color_mix)
-    adjustments["color_mix"] = json.loads(cleaned_mix) if cleaned_mix else None
+    adjustments = _payload_adjustments(payload)
 
     try:
         edited = thumbnails.render_edited_image(

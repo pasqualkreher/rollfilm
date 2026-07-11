@@ -210,6 +210,18 @@ export const api = {
     crop(id: string, crop: CropBox | null): Promise<ImageOut> {
       return request(`/images/${id}/crop`, { method: "PATCH", body: JSON.stringify({ crop }) });
     },
+    // Live editor preview, rendered server-side with the exact save pipeline -
+    // returns a JPEG blob. Abortable so a newer slider state cancels stale renders.
+    async editorPreview(id: string, edits: ImageEdits, signal?: AbortSignal): Promise<Blob> {
+      const res = await fetch(`${BASE_URL}/images/${id}/editor-preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(apiEdits(edits)),
+        signal,
+      });
+      if (!res.ok) throw new Error(`preview render failed: ${res.status}`);
+      return res.blob();
+    },
     // Save the full non-destructive edit (rotation + crop + tonal) in place.
     saveEdits(id: string, edits: ImageEdits): Promise<ImageOut> {
       return request(`/images/${id}/edits`, { method: "PATCH", body: JSON.stringify(apiEdits(edits)) });
