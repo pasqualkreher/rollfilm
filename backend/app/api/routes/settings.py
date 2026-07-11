@@ -12,6 +12,7 @@ from app.services.settings_store import (
     get_setting,
     set_setting,
 )
+from app.workers.queue import immich_upload_history
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -40,6 +41,14 @@ def update_immich_settings(
 
     api_key = get_setting(db, IMMICH_API_KEY)
     return schemas.ImmichSettingsOut(base_url=payload.base_url.strip(), api_key_set=bool(api_key))
+
+
+@router.get("/immich/uploads", response_model=list[schemas.ImmichUploadResult])
+def recent_immich_uploads(current_user: User = Depends(get_current_user)):
+    """Outcome of recent background Immich uploads (kept in memory since the
+    last backend start) — the uploads themselves are fire-and-forget, so this
+    is how the UI can show whether they actually arrived."""
+    return immich_upload_history()
 
 
 @router.post("/immich/test", response_model=schemas.ImmichTestResult)

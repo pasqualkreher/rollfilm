@@ -1,7 +1,10 @@
 import logging
+import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 
 from app.db.session import engine
 from app.services.embeddings import encode_image, ensure_embeddings_table, upsert_embedding
@@ -33,17 +36,59 @@ def enqueue_immich_upload(
     _executor.submit(_upload_to_immich, base_url, api_key, source_path, file_created_at)
 
 
+# Because uploads are fire-and-forget, their outcome would otherwise be
+# invisible to the user (only the log would know). Keep the most recent
+# results in memory so the Settings page can show what happened.
+_upload_history: deque[dict] = deque(maxlen=50)
+_history_lock = Lock()
+
+# A single network blip (e.g. "no route to host" while the connection drops
+# for a second) must not silently lose an upload — retry a couple of times.
+_UPLOAD_ATTEMPTS = 3
+_RETRY_DELAYS_S = (2, 6)
+
+
+def immich_upload_history() -> list[dict]:
+    with _history_lock:
+        return list(_upload_history)
+
+
+def _record_upload(filename: str, ok: bool, detail: str) -> None:
+    with _history_lock:
+        _upload_history.appendleft(
+            {
+                "filename": filename,
+                "ok": ok,
+                "detail": detail,
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+
 def _upload_to_immich(
     base_url: str,
     api_key: str,
     source_path: Path,
     file_created_at: datetime | None,
 ) -> None:
-    try:
-        status = upload_asset(base_url, api_key, source_path, file_created_at)
-        logger.info("Uploaded %s to Immich (%s)", source_path.name, status)
-    except Exception:
-        logger.exception("Immich upload failed for %s", source_path.name)
+    last_error: Exception | None = None
+    for attempt in range(1, _UPLOAD_ATTEMPTS + 1):
+        try:
+            status = upload_asset(base_url, api_key, source_path, file_created_at)
+            logger.info("Uploaded %s to Immich (%s)", source_path.name, status)
+            _record_upload(source_path.name, True, status)
+            return
+        except Exception as exc:
+            last_error = exc
+            logger.exception(
+                "Immich upload failed for %s (attempt %d/%d)",
+                source_path.name,
+                attempt,
+                _UPLOAD_ATTEMPTS,
+            )
+            if attempt < _UPLOAD_ATTEMPTS:
+                time.sleep(_RETRY_DELAYS_S[attempt - 1])
+    _record_upload(source_path.name, False, str(last_error)[:300])
 
 
 def _process(image_id: str, source_path: Path) -> None:

@@ -6,6 +6,7 @@ import type {
   ImmichSettings,
   ImmichTestResult,
   ImmichPushResult,
+  ImmichUploadResult,
   ImportSessionOut,
   LibraryFilters,
   ScanStatus,
@@ -391,6 +392,9 @@ export const api = {
     },
     testImmich(): Promise<ImmichTestResult> {
       return request(`/settings/immich/test`, { method: "POST" });
+    },
+    immichUploads(): Promise<ImmichUploadResult[]> {
+      return request(`/settings/immich/uploads`);
     },
   },
   sources: {

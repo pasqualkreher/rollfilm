@@ -243,6 +243,13 @@ class ImmichTestResult(BaseModel):
     message: str
 
 
+class ImmichUploadResult(BaseModel):
+    filename: str
+    ok: bool
+    detail: str
+    at: str
+
+
 class SourceRootCreate(BaseModel):
     name: str
     path: str

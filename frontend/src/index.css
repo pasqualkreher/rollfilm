@@ -2216,12 +2216,41 @@ input.editor-preset-select {
   margin-top: 12px;
 }
 
-.help-page {
+/* .help-page is the scroll container (.page), so it must stay full-width —
+   otherwise the vertical scrollbar sits at the content edge instead of the
+   window's right edge. Only the inner column is width-limited. */
+.help-inner {
   max-width: 820px;
+}
+
+.help-toc {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 2px 18px;
+  padding: 14px 16px;
+  margin: 8px 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.help-toc-link {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 14px;
+  text-align: left;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.help-toc-link:hover {
+  text-decoration: underline;
 }
 
 .help-page h3 {
   margin-top: 32px;
+  scroll-margin-top: 12px;
 }
 
 .help-page h4 {

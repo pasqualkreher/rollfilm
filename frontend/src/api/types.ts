@@ -127,6 +127,13 @@ export interface ImmichTestResult {
   message: string;
 }
 
+export interface ImmichUploadResult {
+  filename: string;
+  ok: boolean;
+  detail: string;
+  at: string;
+}
+
 export interface ImmichPushResult {
   uploaded: number;
   duplicate: number;

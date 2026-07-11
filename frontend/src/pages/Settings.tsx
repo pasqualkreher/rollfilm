@@ -40,6 +40,15 @@ export function Settings() {
     queryFn: () => api.settings.getImmich(),
   });
 
+  // Background uploads are fire-and-forget on the server; this is the only
+  // place their outcome is visible. Poll while the page is open so results
+  // appear shortly after an import finishes.
+  const { data: immichUploads } = useQuery({
+    queryKey: ["immich-uploads"],
+    queryFn: () => api.settings.immichUploads(),
+    refetchInterval: 10_000,
+  });
+
   // Seed the host field from the server once, without clobbering edits in
   // progress. The API key is never sent back down (only whether one is set),
   // so its field stays blank and acts as "leave unchanged unless you type one".
@@ -244,6 +253,24 @@ export function Settings() {
             {immichTest.ok ? "✓ " : "✗ "}
             {immichTest.message}
           </p>
+        )}
+        {immichUploads && immichUploads.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <h4 style={{ margin: "0 0 6px", fontSize: 13 }}>Recent uploads</h4>
+            <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none", fontSize: 13 }}>
+              {immichUploads.slice(0, 8).map((u) => (
+                <li key={`${u.filename}-${u.at}`} style={{ padding: "3px 0" }}>
+                  <span style={{ color: u.ok ? "var(--text-muted)" : "var(--danger)" }}>
+                    {u.ok ? "✓" : "✗"}
+                  </span>{" "}
+                  {u.filename}{" "}
+                  <span style={{ color: u.ok ? "var(--text-muted)" : "var(--danger)" }}>
+                    — {u.ok ? u.detail : `failed after 3 attempts: ${u.detail}`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </section>
 
