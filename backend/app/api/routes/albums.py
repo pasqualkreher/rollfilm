@@ -5,14 +5,21 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.api.deps import get_owned_album, get_owned_image
 from app.auth import get_current_user
-from app.db.models import Album, AlbumImage, User
+from app.db.models import Album, AlbumImage, Image, User
 from app.db.session import get_db
 
 router = APIRouter(prefix="/albums", tags=["albums"])
 
 
 def _to_album_out(db: Session, album: Album) -> schemas.AlbumOut:
-    count = db.query(func.count(AlbumImage.id)).filter(AlbumImage.album_id == album.id).scalar()
+    # Photos sitting in the Trash keep their album membership (so restoring
+    # puts them back), but they shouldn't inflate the visible count.
+    count = (
+        db.query(func.count(AlbumImage.id))
+        .join(Image, Image.id == AlbumImage.image_id)
+        .filter(AlbumImage.album_id == album.id, Image.deleted_at.is_(None))
+        .scalar()
+    )
     return schemas.AlbumOut(
         id=album.id,
         name=album.name,

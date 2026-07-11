@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ColorLabel, LibraryFilters, ViewMode } from "../api/types";
+import type { ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
@@ -12,6 +12,7 @@ import { PhotoFilters } from "../components/PhotoFilters";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
 import { groupPairsAdjacent } from "../utils/pairing";
+import { deleteConfirmMessage } from "../utils/deleteMessage";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 
 export function AlbumDetail() {
@@ -146,13 +147,9 @@ export function AlbumDetail() {
     if (selected.size === 0) return;
     // Merged view hides the RAW behind its JPEG - delete both halves of the shot.
     const ids = withPairedIds(Array.from(selected));
-    const extra = ids.length - selected.size;
-    const suffix = extra > 0 ? ` (plus ${extra} paired RAW/JPEG file${extra === 1 ? "" : "s"})` : "";
-    if (
-      !window.confirm(
-        `Delete ${selected.size} photo(s)${suffix}? This removes the original files too - it cannot be undone.`
-      )
-    ) {
+    const byId = new Map((images ?? []).map((im) => [im.id, im]));
+    const items = ids.map((x) => byId.get(x)).filter((im): im is ImageOut => Boolean(im));
+    if (!window.confirm(deleteConfirmMessage(items, ids.length - selected.size))) {
       return;
     }
     await api.images.bulkDelete(ids);
@@ -160,6 +157,7 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["album", id] });
     queryClient.invalidateQueries({ queryKey: ["albums"] });
+    queryClient.invalidateQueries({ queryKey: ["trash"] });
   }
 
   async function removeSelectedFromAlbum() {

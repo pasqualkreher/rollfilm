@@ -108,6 +108,14 @@ class Image(Base):
 
     taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Set = the photo sits in the in-app Trash (soft-deleted): hidden from the
+    # library but its file stays on disk until it's restored or permanently
+    # deleted. Only managed photos are ever trashed - deleting a photo indexed
+    # from a source root removes just the row (the external file is never ours
+    # to delete).
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     camera_make: Mapped[str | None] = mapped_column(String, nullable=True)
     camera_model: Mapped[str | None] = mapped_column(String, nullable=True)

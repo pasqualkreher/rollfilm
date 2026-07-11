@@ -9,13 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models import (
+    ColorLabel,
     FileType,
     Image,
     ImportSession,
     ImportSessionStatus,
     ImportStagedFile,
 )
-from app.services.exif import read_exif
+from app.services.exif import read_exif, to_float, to_int
 from app.services.filesystem import library_relative_path
 from app.services.hashing import hamming_distance, perceptual_hash, sha256_file
 from app.services.pairing import pair_siblings
@@ -134,10 +135,15 @@ def _stage_one_file(
     )
     if exact_image_match:
         staged_file.duplicate_of_image_id = exact_image_match.id
-        # Byte-identical to a photo already in the library - don't import it
-        # again by default (the API also rejects re-selecting it - see
-        # update_staged_file in api/routes/import_.py).
-        staged_file.selected = False
+        if exact_image_match.source_root_id is None:
+            # Byte-identical to a photo already in the managed library - don't
+            # import it again by default (the API also rejects re-selecting it -
+            # see update_staged_file in api/routes/import_.py).
+            staged_file.selected = False
+        # else: the only copy is indexed in place from an external source root.
+        # A copy imported *into* the library is the source of truth, so this
+        # stays selected - committing promotes the external row to a managed
+        # one instead of creating a duplicate (see commit_import_session).
     else:
         exact_staged_match = next((s for s in already_staged if s.sha256 == sha256), None)
         if exact_staged_match:
@@ -202,14 +208,39 @@ def stage_uploaded_files(
 def commit_import_session(
     db: Session, session: ImportSession, owner_id: int, upload_to_immich: bool = False
 ) -> list[Image]:
+    def _exact_referenced_duplicate(f: ImportStagedFile) -> Image | None:
+        """The scan-in-place (source root) image this staged file is a
+        byte-identical copy of, if any. That's the one exact-duplicate case
+        where importing is still allowed: a copy imported *into* the library
+        is the source of truth, so committing promotes the referenced row to
+        a managed one instead of creating a duplicate."""
+        if not f.duplicate_of_image_id or f.is_near_duplicate:
+            return None
+        existing = db.get(Image, f.duplicate_of_image_id)
+        if existing is not None and existing.source_root_id is not None:
+            return existing
+        return None
+
+    def _is_exact_duplicate(f: ImportStagedFile) -> bool:
+        return bool(
+            (f.duplicate_of_image_id or f.duplicate_of_staged_file_id) and not f.is_near_duplicate
+        )
+
     selected_files = [
         f
         for f in session.staged_files
-        if f.selected and not ((f.duplicate_of_image_id or f.duplicate_of_staged_file_id) and not f.is_near_duplicate)
+        if f.selected and (not _is_exact_duplicate(f) or _exact_referenced_duplicate(f) is not None)
     ]
     new_images: list[Image] = []
 
     for staged in selected_files:
+        # Re-checked per file (not just in the filter above) because an earlier
+        # file in this same commit may have already promoted the shared
+        # duplicate target - importing this one too would duplicate it.
+        promoted = _exact_referenced_duplicate(staged)
+        if _is_exact_duplicate(staged) and promoted is None:
+            continue
+
         exif_dict = json.loads(staged.exif_json) if staged.exif_json else {}
         staged_full_path = settings.import_staging_root / staged.staged_path
 
@@ -223,34 +254,53 @@ def commit_import_session(
         dest_path = settings.library_root / relative_dest
         shutil.move(str(staged_full_path), str(dest_path))
 
-        image = Image(
-            owner_id=owner_id,
-            file_path=relative_dest,
-            original_filename=staged.original_filename,
-            file_hash=staged.sha256,
-            perceptual_hash=staged.perceptual_hash,
-            file_type=staged.file_type,
-            raw_format=(
-                Path(staged.original_filename).suffix.lstrip(".").upper()
-                if staged.file_type == FileType.raw
-                else None
-            ),
-            width=exif_dict.get("width"),
-            height=exif_dict.get("height"),
-            file_size=dest_path.stat().st_size,
-            taken_at=taken_at,
-            camera_make=exif_dict.get("camera_make"),
-            camera_model=exif_dict.get("camera_model"),
-            iso=exif_dict.get("iso"),
-            aperture=exif_dict.get("aperture"),
-            shutter_speed=exif_dict.get("shutter_speed"),
-            focal_length=exif_dict.get("focal_length"),
-            gps_lat=exif_dict.get("gps_lat"),
-            gps_lon=exif_dict.get("gps_lon"),
-            rating=staged.rating,
-            color_label=staged.color_label,
-        )
-        db.add(image)
+        if promoted is not None:
+            # Same bytes, previously only indexed in place from an external
+            # folder. Point the existing row at the fresh library copy and drop
+            # its source link - it keeps its id, so rating, tags, albums, edits
+            # and RAW/JPEG pairing all survive. The external file stays where
+            # it is, untouched.
+            promoted.file_path = relative_dest
+            promoted.source_root_id = None
+            promoted.original_filename = staged.original_filename
+            promoted.file_size = dest_path.stat().st_size
+            if staged.rating:
+                promoted.rating = staged.rating
+            if staged.color_label != ColorLabel.none:
+                promoted.color_label = staged.color_label
+            image = promoted
+        else:
+            image = Image(
+                owner_id=owner_id,
+                file_path=relative_dest,
+                original_filename=staged.original_filename,
+                file_hash=staged.sha256,
+                perceptual_hash=staged.perceptual_hash,
+                file_type=staged.file_type,
+                raw_format=(
+                    Path(staged.original_filename).suffix.lstrip(".").upper()
+                    if staged.file_type == FileType.raw
+                    else None
+                ),
+                # Coerced defensively: sessions staged before exif.py sanitised
+                # numeric tags can still carry exiftool's 'undef' strings in
+                # their stored exif_json.
+                width=to_int(exif_dict.get("width")),
+                height=to_int(exif_dict.get("height")),
+                file_size=dest_path.stat().st_size,
+                taken_at=taken_at,
+                camera_make=exif_dict.get("camera_make"),
+                camera_model=exif_dict.get("camera_model"),
+                iso=to_int(exif_dict.get("iso")),
+                aperture=to_float(exif_dict.get("aperture")),
+                shutter_speed=exif_dict.get("shutter_speed"),
+                focal_length=to_float(exif_dict.get("focal_length")),
+                gps_lat=to_float(exif_dict.get("gps_lat")),
+                gps_lon=to_float(exif_dict.get("gps_lon")),
+                rating=staged.rating,
+                color_label=staged.color_label,
+            )
+            db.add(image)
         db.flush()
         new_images.append(image)
 

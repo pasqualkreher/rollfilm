@@ -160,8 +160,25 @@ export const api = {
         body: JSON.stringify({ image_ids, ...patch }),
       });
     },
+    // Managed photos go to the in-app Trash (restorable); photos indexed from
+    // an external source root are removed from the library only - their files
+    // on disk are never touched.
     bulkDelete(image_ids: string[]): Promise<void> {
       return request(`/images/bulk-delete`, { method: "POST", body: JSON.stringify({ image_ids }) });
+    },
+    listTrash(): Promise<ImageOut[]> {
+      return request(`/images/trash`);
+    },
+    restoreFromTrash(image_ids: string[]): Promise<ImageOut[]> {
+      return request(`/images/trash/restore`, { method: "POST", body: JSON.stringify({ image_ids }) });
+    },
+    // Permanently deletes photos already in the Trash - this removes the
+    // original files from the library folder.
+    deleteFromTrash(image_ids: string[]): Promise<void> {
+      return request(`/images/trash/delete`, { method: "POST", body: JSON.stringify({ image_ids }) });
+    },
+    emptyTrash(): Promise<void> {
+      return request(`/images/trash/empty`, { method: "POST" });
     },
     // Fetches a server-built zip of the originals and saves it via a temporary
     // object URL - keeps the potentially large binary out of React state.

@@ -196,10 +196,22 @@ def _run_scan(source_root_id: str) -> None:
         for img in db.query(Image).filter(Image.source_root_id == source_root.id).all():
             by_hash.setdefault(img.file_hash, img)
 
+        # Cross-mode duplicate rule: a photo imported *into* the managed library
+        # is the source of truth. A scanned file whose bytes match a managed
+        # image (including one sitting in the Trash - it's still restorable) is
+        # skipped rather than indexed as an external duplicate.
+        managed_hashes: set[str] = {
+            file_hash
+            for (file_hash,) in db.query(Image.file_hash)
+            .filter(Image.owner_id == source_root.owner_id, Image.source_root_id.is_(None))
+            .all()
+        }
+
         new_images: list[Image] = []
         scanned = 0
         added = 0
         renamed = 0
+        skipped_managed = 0
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.name.startswith("."):
                 continue
@@ -217,6 +229,10 @@ def _run_scan(source_root_id: str) -> None:
                 sha256 = sha256_file(path)
             except OSError:
                 logger.exception("Could not read %s", path)
+                continue
+
+            if sha256 in managed_hashes:
+                skipped_managed += 1
                 continue
 
             moved = by_hash.get(sha256)
@@ -248,6 +264,12 @@ def _run_scan(source_root_id: str) -> None:
 
         if renamed:
             logger.info("Source %s: relocated %d renamed/moved file(s)", source_root_id, renamed)
+        if skipped_managed:
+            logger.info(
+                "Source %s: skipped %d file(s) already imported into the managed library",
+                source_root_id,
+                skipped_managed,
+            )
 
         _pair_scanned(new_images)
         source_root.last_scanned_at = datetime.now(timezone.utc)

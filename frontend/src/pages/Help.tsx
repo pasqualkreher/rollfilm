@@ -10,6 +10,7 @@ const SECTIONS: { id: string; title: string }[] = [
   { id: "browsing", title: "Browsing the library" },
   { id: "search", title: "Search" },
   { id: "culling", title: "Culling: stars, colors, tags and Selects" },
+  { id: "trash", title: "Deleting & the Trash" },
   { id: "photo-view", title: "The photo view" },
   { id: "editing", title: "Editing photos" },
   { id: "albums", title: "Albums" },
@@ -88,7 +89,10 @@ export function Help() {
             Photo Manager checks every staged file against your library.{" "}
             <strong>"Already in library"</strong> means byte-identical — these can't be imported
             again. <strong>"Possible duplicate"</strong> means visually near-identical — you decide.
-            "Hide duplicates" (on by default) keeps them out of view.
+            "Hide duplicates" (on by default) keeps them out of view. Exception: a photo that so far
+            only exists in an <em>external source</em> can still be imported — the imported copy
+            becomes the library's own, and the photo keeps its stars, tags, albums and edits (the
+            file in the external folder stays untouched).
           </li>
           <li>
             You can already <strong>rate and color-label</strong> staged photos, so culling can start
@@ -134,9 +138,10 @@ export function Help() {
           </li>
         </ul>
         <p>
-          <strong>Deleting is permanent.</strong> There is no trash can: deleting removes the
-          original file(s) from disk, and a RAW+JPEG pair is always deleted together. The backup
-          feature (below) is your safety net.
+          <strong>Deleting is safe by default.</strong> Library photos go to the in-app{" "}
+          <strong>Trash</strong> first and can be restored; photos from an external source are only
+          removed from the catalog — their files on disk are never touched. A RAW+JPEG pair is
+          always deleted together. See "Deleting &amp; the Trash" below.
         </p>
 
         <H id="search">Search</H>
@@ -167,6 +172,29 @@ export function Help() {
             shows a live count.
           </li>
         </ul>
+
+        <H id="trash">Deleting &amp; the Trash</H>
+        <p>What "Delete" does depends on where the photo lives:</p>
+        <ul>
+          <li>
+            <strong>Photos imported into your library</strong> move to the <strong>Trash</strong>{" "}
+            (in the nav). The original file stays in your library folder, and the photo keeps its
+            stars, tags, albums and edits — <strong>Restore</strong> brings it back exactly as it
+            was.
+          </li>
+          <li>
+            <strong>Photos from an external source</strong> (indexed in place) are removed from the
+            catalog immediately — they don't go to the Trash, because{" "}
+            <strong>their files are never deleted</strong>. The original stays untouched in your
+            folder/NAS; a future re-scan of that source would index it again.
+          </li>
+        </ul>
+        <p>
+          On the Trash page, <strong>"Delete forever"</strong> (or <strong>"Empty trash"</strong>)
+          permanently deletes the selected photos — only this step actually removes the original
+          files from your library folder, and it cannot be undone. The delete confirmation always
+          tells you exactly what will happen to your selection.
+        </p>
 
         <H id="photo-view">The photo view</H>
         <p>
@@ -245,6 +273,18 @@ export function Help() {
           <strong>Disconnected</strong> and its photos are hidden until it returns. "Remove" only
           forgets the index — the files stay untouched.
         </p>
+        <ul>
+          <li>
+            <strong>Deleting a photo</strong> from an external source also only removes the catalog
+            entry — the file on disk is never touched (see "Deleting &amp; the Trash").
+          </li>
+          <li>
+            <strong>Duplicates between library and sources:</strong> the imported library copy is
+            always the source of truth. A scan skips files that are byte-identical to a photo
+            already in your library, and importing a photo that a source already indexed turns that
+            entry into a regular library photo instead of creating a duplicate.
+          </li>
+        </ul>
 
         <H id="immich">Immich</H>
         <p>

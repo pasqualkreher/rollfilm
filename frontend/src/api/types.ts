@@ -21,6 +21,8 @@ export interface ImageOut {
   height: number | null;
   taken_at: string | null;
   imported_at: string;
+  // Set while the photo sits in the in-app Trash (managed photos only).
+  deleted_at: string | null;
   camera_make: string | null;
   camera_model: string | null;
   iso: number | null;

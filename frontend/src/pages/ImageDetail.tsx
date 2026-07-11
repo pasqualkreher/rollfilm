@@ -9,6 +9,7 @@ import { TagEditor } from "../components/TagEditor";
 import { AlbumPicker } from "../components/AlbumPicker";
 import { useSelects } from "../state/selects";
 import { useMergePairs } from "../state/viewPrefs";
+import { deleteConfirmMessage } from "../utils/deleteMessage";
 import type { ColorLabel } from "../api/types";
 
 // exiftool delivers the exposure time as a plain decimal ("0.003571428571");
@@ -233,13 +234,14 @@ export function ImageDetail() {
     // A RAW+JPEG pair is one shot - delete both halves so we never leave an
     // orphaned RAW (or JPEG) behind.
     const ids = paired ? [image.id, paired.id] : [image.id];
-    const what = ids.length > 1 ? "this RAW+JPEG shot (2 files)" : "this photo";
-    if (!window.confirm(`Delete ${what}? This removes the original file(s) too - it can't be undone.`)) {
+    const items = paired ? [image, paired] : [image];
+    if (!window.confirm(deleteConfirmMessage(items))) {
       return;
     }
     await api.images.bulkDelete(ids);
     ids.forEach((delId) => selects.has(delId) && selects.remove(delId));
     queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["trash"] });
 
     // Move to the next remaining photo in the set you were browsing; if none is
     // left (or we arrived here without a set), fall back to where we came from.
@@ -356,7 +358,7 @@ export function ImageDetail() {
             <button
               className="btn danger"
               onClick={deletePhoto}
-              title="Delete this photo (and its RAW/JPEG partner) - removes the original file too"
+              title="Delete this photo (and its RAW/JPEG partner) - library photos move to the Trash, external photos are only removed from the catalog"
             >
               Delete
             </button>

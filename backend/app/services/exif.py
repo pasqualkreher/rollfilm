@@ -39,6 +39,23 @@ class ExifData:
         return json.dumps(data)
 
 
+def to_int(value) -> int | None:
+    """Coerce an exiftool value to int, or None. exiftool reports missing/
+    unknown numeric tags as the literal string 'undef' (seen on Fujifilm RAWs
+    with adapted lenses), which must never reach a numeric DB column."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def to_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -66,8 +83,8 @@ def _is_quarter_rotated(orientation) -> bool:
 def read_exif(path: Path) -> ExifData:
     metadata = _get_helper().get_metadata([str(path)])[0]
 
-    width = metadata.get("EXIF:ExifImageWidth") or metadata.get("File:ImageWidth")
-    height = metadata.get("EXIF:ExifImageHeight") or metadata.get("File:ImageHeight")
+    width = to_int(metadata.get("EXIF:ExifImageWidth") or metadata.get("File:ImageWidth"))
+    height = to_int(metadata.get("EXIF:ExifImageHeight") or metadata.get("File:ImageHeight"))
     # Report the *displayed* dimensions: cameras store portrait shots as
     # landscape pixels plus an orientation tag, so swap when that tag is a
     # quarter turn. Keeps width/height consistent with the auto-oriented
@@ -75,16 +92,17 @@ def read_exif(path: Path) -> ExifData:
     if width and height and _is_quarter_rotated(metadata.get("EXIF:Orientation")):
         width, height = height, width
 
+    shutter = metadata.get("EXIF:ExposureTime")
     return ExifData(
         width=width,
         height=height,
         taken_at=_parse_datetime(metadata.get("EXIF:DateTimeOriginal")),
         camera_make=metadata.get("EXIF:Make"),
         camera_model=metadata.get("EXIF:Model"),
-        iso=metadata.get("EXIF:ISO"),
-        aperture=metadata.get("EXIF:FNumber"),
-        shutter_speed=str(metadata.get("EXIF:ExposureTime")) if metadata.get("EXIF:ExposureTime") else None,
-        focal_length=metadata.get("EXIF:FocalLength"),
-        gps_lat=metadata.get("Composite:GPSLatitude"),
-        gps_lon=metadata.get("Composite:GPSLongitude"),
+        iso=to_int(metadata.get("EXIF:ISO")),
+        aperture=to_float(metadata.get("EXIF:FNumber")),
+        shutter_speed=str(shutter) if shutter not in (None, "", "undef") else None,
+        focal_length=to_float(metadata.get("EXIF:FocalLength")),
+        gps_lat=to_float(metadata.get("Composite:GPSLatitude")),
+        gps_lon=to_float(metadata.get("Composite:GPSLongitude")),
     )

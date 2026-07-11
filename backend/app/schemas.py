@@ -16,6 +16,8 @@ class ImageOut(BaseModel):
     height: int | None
     taken_at: datetime | None
     imported_at: datetime
+    # Set while the photo sits in the in-app Trash (managed photos only).
+    deleted_at: datetime | None
     camera_make: str | None
     camera_model: str | None
     iso: int | None

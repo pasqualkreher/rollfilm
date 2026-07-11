@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ColorLabel, LibraryFilters, ViewMode } from "../api/types";
+import type { ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
@@ -12,6 +12,7 @@ import { PhotoFilters } from "../components/PhotoFilters";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
 import { groupPairsAdjacent } from "../utils/pairing";
+import { deleteConfirmMessage } from "../utils/deleteMessage";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 
 export function Library() {
@@ -134,18 +135,15 @@ export function Library() {
     // In merged view only the JPEG is shown, so a delete must take the hidden
     // RAW partner with it - a RAW+JPEG pair is one shot.
     const ids = withPairedIds(Array.from(selected));
-    const extra = ids.length - selected.size;
-    const suffix = extra > 0 ? ` (plus ${extra} paired RAW/JPEG file${extra === 1 ? "" : "s"})` : "";
-    if (
-      !window.confirm(
-        `Delete ${selected.size} photo(s)${suffix}? This removes the original files too - it cannot be undone.`
-      )
-    ) {
+    const byId = new Map((images ?? []).map((im) => [im.id, im]));
+    const items = ids.map((x) => byId.get(x)).filter((im): im is ImageOut => Boolean(im));
+    if (!window.confirm(deleteConfirmMessage(items, ids.length - selected.size))) {
       return;
     }
     await api.images.bulkDelete(ids);
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["trash"] });
   }
 
   async function addTagToSelected(name: string) {

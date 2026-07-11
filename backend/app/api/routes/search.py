@@ -32,7 +32,7 @@ def _apply_scope(
     """Apply the same scope/filters the grid is currently showing, so a search
     only ever returns photos from the active view (the whole library, or one
     album) that also match the active rating/color/date/tag filters."""
-    query = query.filter(Image.owner_id == owner_id)
+    query = query.filter(Image.owner_id == owner_id, Image.deleted_at.is_(None))
     if album_id:
         query = query.join(AlbumImage, AlbumImage.image_id == Image.id).filter(
             AlbumImage.album_id == album_id

@@ -25,7 +25,6 @@ from app.db.models import (
     Image,
     ImageTag,
     ImportStagedFile,
-    SourceRoot,
     Tag,
     User,
 )
@@ -146,7 +145,9 @@ def list_images(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Image).filter(Image.owner_id == current_user.id)
+    query = db.query(Image).filter(
+        Image.owner_id == current_user.id, Image.deleted_at.is_(None)
+    )
 
     if album_id:
         query = query.join(AlbumImage, AlbumImage.image_id == Image.id).filter(
@@ -196,6 +197,96 @@ def list_images(
     return query.offset(offset).limit(limit).all()
 
 
+def _hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) -> None:
+    """Remove image rows for good. paired_image_id and
+    ImportStagedFile.duplicate_of_image_id both have FK constraints (enforced -
+    see db/session.py) back to images.id; null those out first or deleting a row
+    still referenced by another would fail. Clear the deleted rows' own pairing
+    link *and* any external sibling pointing back in - when both halves of a
+    pair are selected, only nulling the sibling leaves the first half still
+    pointing at the second.
+
+    Original files are only ever touched for managed photos (delete_files=True
+    from the Trash); photos indexed from a source root always keep their file -
+    it lives in the user's own folder and was never ours to delete."""
+    image_ids = {image.id for image in images}
+    for image in images:
+        image.paired_image_id = None
+    if image_ids:
+        db.query(Image).filter(Image.paired_image_id.in_(image_ids)).update(
+            {Image.paired_image_id: None}, synchronize_session=False
+        )
+        db.query(ImportStagedFile).filter(
+            ImportStagedFile.duplicate_of_image_id.in_(image_ids)
+        ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
+    db.flush()
+
+    for image in images:
+        if delete_files and image.source_root_id is None:
+            # Managed (imported) library file - ours to delete. Also tidy the
+            # date folders the app created once they're empty, so deleting the
+            # last shot of a day/year doesn't leave hollow dirs.
+            original = settings.library_root / image.file_path
+            original.unlink(missing_ok=True)
+            _prune_empty_dirs(original, settings.library_root)
+        shutil.rmtree(thumbnails.derivative_dir(image.id), ignore_errors=True)
+        db.delete(image)
+
+
+@router.get("/trash", response_model=list[schemas.ImageOut])
+def list_trash(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return (
+        db.query(Image)
+        .filter(Image.owner_id == current_user.id, Image.deleted_at.isnot(None))
+        .order_by(Image.deleted_at.desc())
+        .all()
+    )
+
+
+@router.post("/trash/restore", response_model=list[schemas.ImageOut])
+def restore_from_trash(
+    payload: schemas.BulkDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    for image in images:
+        image.deleted_at = None
+    db.commit()
+    for image in images:
+        db.refresh(image)
+    return images
+
+
+@router.post("/trash/delete", status_code=204)
+def delete_from_trash(
+    payload: schemas.BulkDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Permanently delete photos that are already in the Trash - this is the
+    step that actually removes the original files from the library folder."""
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    if any(image.deleted_at is None for image in images):
+        raise HTTPException(
+            status_code=400,
+            detail="Only photos in the Trash can be permanently deleted. Move them to the Trash first.",
+        )
+    _hard_delete_images(db, images, delete_files=True)
+    db.commit()
+
+
+@router.post("/trash/empty", status_code=204)
+def empty_trash(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    images = (
+        db.query(Image)
+        .filter(Image.owner_id == current_user.id, Image.deleted_at.isnot(None))
+        .all()
+    )
+    _hard_delete_images(db, images, delete_files=True)
+    db.commit()
+
+
 @router.get("/{image_id}", response_model=schemas.ImageOut)
 def get_image(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return get_owned_image(db, current_user.id, image_id)
@@ -227,56 +318,24 @@ def bulk_delete_images(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Deleting means different things for the two kinds of photos:
+
+    - Managed (imported into the library): soft-delete into the in-app Trash.
+      The file stays in the library folder; it's only removed for good when the
+      photo is permanently deleted from the Trash (see /trash/delete).
+    - Indexed in place from a source root: remove the library row (and cached
+      derivatives) only. The original file lives in the user's own folder and
+      is never touched.
+    """
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
-    image_ids = {image.id for image in images}
+    managed = [image for image in images if image.source_root_id is None]
+    referenced = [image for image in images if image.source_root_id is not None]
 
-    # paired_image_id and ImportStagedFile.duplicate_of_image_id both have FK
-    # constraints (enforced - see db/session.py) back to images.id; null those
-    # out first or deleting a row still referenced by another would fail. Clear
-    # the deleted rows' own pairing link *and* any external sibling pointing
-    # back in - when both halves of a pair are selected, only nulling the
-    # sibling leaves the first half still pointing at the second.
-    for image in images:
-        image.paired_image_id = None
-    if image_ids:
-        db.query(Image).filter(Image.paired_image_id.in_(image_ids)).update(
-            {Image.paired_image_id: None}, synchronize_session=False
-        )
-        db.query(ImportStagedFile).filter(
-            ImportStagedFile.duplicate_of_image_id.in_(image_ids)
-        ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
-    db.flush()
+    now = datetime.now(timezone.utc)
+    for image in managed:
+        image.deleted_at = now
 
-    # Cache source roots so an all-from-one-folder delete hits the DB once, not
-    # once per image.
-    source_cache: dict[str, SourceRoot | None] = {}
-
-    def _source_for(img: Image) -> SourceRoot | None:
-        if img.source_root_id is None:
-            return None
-        if img.source_root_id not in source_cache:
-            source_cache[img.source_root_id] = db.get(SourceRoot, img.source_root_id)
-        return source_cache[img.source_root_id]
-
-    for image in images:
-        source = _source_for(image)
-        if source is None:
-            # Managed (imported) library file - ours to delete. Also tidy the
-            # date folders the app created once they're empty, so deleting the
-            # last shot of a day/year doesn't leave hollow dirs.
-            original = settings.library_root / image.file_path
-            original.unlink(missing_ok=True)
-            _prune_empty_dirs(original, settings.library_root)
-        elif sources_service.is_path_available(source.path):
-            # File indexed in place from a *connected* external folder: delete
-            # the original there too. Only when the drive/folder is currently
-            # reachable - an offline source is left untouched. We remove just the
-            # file, never the user's own folder structure.
-            resolve_image_path(image).unlink(missing_ok=True)
-        # else: external source is offline - can't reach the file; leave it on
-        # disk (the row still goes, matching "removed from the library").
-        shutil.rmtree(thumbnails.derivative_dir(image.id), ignore_errors=True)
-        db.delete(image)
+    _hard_delete_images(db, referenced, delete_files=False)
     db.commit()
 
 
@@ -819,6 +878,6 @@ def get_similar_images(
     results = []
     for match_id, distance in matches:
         match_image = db.get(Image, match_id)
-        if match_image and match_image.owner_id == current_user.id:
+        if match_image and match_image.owner_id == current_user.id and match_image.deleted_at is None:
             results.append(schemas.SearchResultOut(image=match_image, distance=distance))
     return results

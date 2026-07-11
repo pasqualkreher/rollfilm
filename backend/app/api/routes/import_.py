@@ -9,7 +9,7 @@ from app import schemas
 from app.api.deps import get_owned_import_session
 from app.auth import get_current_user
 from app.config import settings
-from app.db.models import ImportSessionStatus, ImportStagedFile, User
+from app.db.models import Image, ImportSessionStatus, ImportStagedFile, User
 from app.db.session import get_db
 from app.services.import_pipeline import (
     commit_import_session,
@@ -130,11 +130,20 @@ def update_staged_file(
         staged.duplicate_of_image_id or staged.duplicate_of_staged_file_id
     ) and not staged.is_near_duplicate
     if payload.selected and is_exact_duplicate:
-        raise HTTPException(
-            status_code=400,
-            detail="This file is byte-identical to another photo (already in your library, or elsewhere in "
-            "this batch) and can't be imported again.",
+        # One exception: a byte-identical copy of a photo that's only *indexed
+        # in place* from an external source root may be imported - the managed
+        # library copy becomes the source of truth (the existing row is
+        # promoted at commit, see import_pipeline.commit_import_session).
+        dup_image = (
+            db.get(Image, staged.duplicate_of_image_id) if staged.duplicate_of_image_id else None
         )
+        duplicates_referenced_only = dup_image is not None and dup_image.source_root_id is not None
+        if not duplicates_referenced_only:
+            raise HTTPException(
+                status_code=400,
+                detail="This file is byte-identical to another photo (already in your library, or elsewhere in "
+                "this batch) and can't be imported again.",
+            )
 
     if payload.selected is not None:
         staged.selected = payload.selected

@@ -6,6 +6,7 @@ import { AlbumDetail } from "./pages/AlbumDetail";
 import { ImageDetail } from "./pages/ImageDetail";
 import { Settings } from "./pages/Settings";
 import { Selects } from "./pages/Selects";
+import { Trash } from "./pages/Trash";
 import { MapView } from "./pages/MapView";
 import { Help } from "./pages/Help";
 import { SearchBar } from "./components/SearchBar";
@@ -52,6 +53,7 @@ function TopBar() {
         <NavLink to="/map">Map</NavLink>
         <ImportNavLink />
         <SelectsNavLink />
+        <NavLink to="/trash">Trash</NavLink>
         <NavLink to="/settings">Settings</NavLink>
         <NavLink to="/help">Help</NavLink>
       </nav>
@@ -82,6 +84,7 @@ export default function App() {
             <Route path="/image/:id" element={<ImageDetail />} />
             <Route path="/map" element={<MapView />} />
             <Route path="/selects" element={<Selects />} />
+            <Route path="/trash" element={<Trash />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/help" element={<Help />} />
             </Routes>
