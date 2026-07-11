@@ -25,6 +25,7 @@ let backendProc = null;
 let apiPort = 0;
 let apiBaseUrl = "";
 let mainWindow = null;
+let splashWindow = null;
 // Absolute path to the user's photo library, chosen on first run (see
 // ensureLibraryRoot). The DB, thumbnails and caches stay in userData; only the
 // library of actual photo files lives here.
@@ -88,6 +89,54 @@ async function ensureLibraryRoot() {
     writeConfig({ ...cfg, libraryRoot: chosen });
     return chosen;
   }
+}
+
+// Tiny frameless window shown from the moment the app launches until the main
+// window is ready, so the user sees that something is happening while the
+// backend boots (which can take a while on first start).
+function createSplash() {
+  splashWindow = new BrowserWindow({
+    width: 380,
+    height: 200,
+    frame: false,
+    resizable: false,
+    fullscreenable: false,
+    center: true,
+    icon: windowIconPath(),
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  splashWindow.loadFile(path.join(__dirname, "splash.html"));
+  splashWindow.on("closed", () => {
+    splashWindow = null;
+  });
+}
+
+function setSplashStatus(text) {
+  if (!splashWindow) return;
+  const js = `document.getElementById("status").textContent = ${JSON.stringify(text)};`;
+  splashWindow.webContents.executeJavaScript(js).catch(() => {});
+}
+
+function closeSplash() {
+  if (splashWindow) {
+    splashWindow.destroy();
+    splashWindow = null;
+  }
+}
+
+// Icon handling: packaged builds get their icon from electron-builder
+// (build/icon.png → .icns/.ico), but in dev Electron shows its default logo
+// unless we set one explicitly (dock icon on macOS, window icon elsewhere).
+function windowIconPath() {
+  if (process.platform === "darwin") return undefined; // dock icon is set separately
+  const p = path.join(__dirname, "build", "icon.png");
+  return fs.existsSync(p) ? p : undefined;
+}
+
+function setDevDockIcon() {
+  if (process.platform !== "darwin" || app.isPackaged || !app.dock) return;
+  const p = path.join(__dirname, "build", "icon.png");
+  if (fs.existsSync(p)) app.dock.setIcon(p);
 }
 
 function getFreePort() {
@@ -190,6 +239,8 @@ function createWindow() {
     width: 1400,
     height: 900,
     title: "Photo Manager",
+    show: false, // shown once ready-to-show, replacing the splash without a blank flash
+    icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -207,6 +258,11 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
   }
 
+  mainWindow.once("ready-to-show", () => {
+    closeSplash();
+    if (mainWindow) mainWindow.show();
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -223,11 +279,56 @@ ipcMain.handle("pm:pick-folder", async () => {
   return result.filePaths[0];
 });
 
+// Settings page: current library location, read-only.
+ipcMain.handle("pm:get-library-root", () => libraryRoot);
+
+// Settings page: pick a new library folder. The backend only reads
+// LIBRARY_ROOT at launch, so after saving the new path the app relaunches
+// itself (the user confirms this first).
+ipcMain.handle("pm:change-library-root", async () => {
+  const picked = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose a new photo library folder",
+    defaultPath: libraryRoot || undefined,
+    properties: ["openDirectory", "createDirectory"],
+    buttonLabel: "Use this folder",
+  });
+  if (picked.canceled || picked.filePaths.length === 0) return { changed: false };
+
+  const chosen = picked.filePaths[0];
+  if (chosen === libraryRoot) return { changed: false };
+
+  const confirm = await dialog.showMessageBox(mainWindow, {
+    type: "question",
+    title: "Change library folder",
+    message: "Restart Photo Manager with the new library folder?",
+    detail:
+      `New location:\n${chosen}\n\n` +
+      "Your photos are not moved automatically. If the new folder doesn't already " +
+      "contain your library files, move them there first (or start a fresh library). " +
+      "App data (database, thumbnails, caches) stays where it is.",
+    buttons: ["Restart now", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (confirm.response !== 0) return { changed: false };
+
+  writeConfig({ ...readConfig(), libraryRoot: chosen });
+  app.relaunch();
+  app.quit();
+  return { changed: true, path: chosen };
+});
+
 app.whenReady().then(async () => {
+  setDevDockIcon();
+  createSplash();
+
   // Block on the first-run library-location prompt before anything else - the
   // backend needs LIBRARY_ROOT set when it starts.
+  setSplashStatus("Checking library folder…");
   libraryRoot = await ensureLibraryRoot();
   if (!libraryRoot) {
+    closeSplash();
     app.quit();
     return;
   }
@@ -236,11 +337,14 @@ app.whenReady().then(async () => {
   apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 
   console.log(`[main] starting backend, expecting ${apiBaseUrl}`);
+  setSplashStatus("Starting backend…");
   startBackend();
   const healthy = await waitForHealth();
   if (healthy) {
     console.log("[main] backend healthy — opening window");
+    setSplashStatus("Loading your library…");
   } else {
+    closeSplash();
     dialog.showErrorBox(
       "Backend did not start",
       "The Photo Manager backend did not become ready in time. See the logs for details."

@@ -14,4 +14,8 @@ contextBridge.exposeInMainWorld("photoManager", {
   apiBaseUrl: readApiBase(),
   // Opens the native OS folder dialog; resolves to an absolute host path or null.
   pickFolder: () => ipcRenderer.invoke("pm:pick-folder"),
+  // Current photo-library folder (chosen on first start).
+  getLibraryRoot: () => ipcRenderer.invoke("pm:get-library-root"),
+  // Pick a new library folder; on confirmation the app restarts itself.
+  changeLibraryRoot: () => ipcRenderer.invoke("pm:change-library-root"),
 });

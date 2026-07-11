@@ -30,6 +30,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "splash.html",
       "renderer/**/*"
     ],
     "extraResources": [
@@ -45,10 +46,12 @@
       "target": "dmg",
       "category": "public.app-category.photography",
       "identity": null,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "icon": "build/icon.png"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,
@@ -56,7 +59,8 @@
     },
     "linux": {
       "target": "AppImage",
-      "category": "Graphics"
+      "category": "Graphics",
+      "icon": "build/icon.png"
     }
   }
 }

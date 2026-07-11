@@ -23,6 +23,13 @@ export function Settings() {
   const [restoreResult, setRestoreResult] = useState<string | null>(null);
   const restoreFileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Library folder: only available in the desktop app (Electron bridge).
+  const desktop = window.photoManager;
+  const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
+  useEffect(() => {
+    desktop?.getLibraryRoot?.().then(setLibraryRoot).catch(() => {});
+  }, [desktop]);
+
   const [immichUrl, setImmichUrl] = useState("");
   const [immichKey, setImmichKey] = useState("");
   const [immichSaved, setImmichSaved] = useState(false);
@@ -150,6 +157,25 @@ export function Settings() {
           ))}
         </span>
       </section>
+
+      {desktop?.changeLibraryRoot && (
+        <section style={{ marginBottom: 32 }}>
+          <h3 className="section-title" style={{ fontSize: 15 }}>
+            Library folder
+          </h3>
+          <p style={{ color: "var(--text-muted)" }}>
+            Where your photo files are stored (chosen on first start). App data — database,
+            thumbnails, caches — stays in the standard app-data location. Changing the folder
+            restarts the app; your photos are not moved automatically.
+          </p>
+          <p style={{ fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
+            {libraryRoot ?? "…"}
+          </p>
+          <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
+            Change library folder…
+          </button>
+        </section>
+      )}
 
       <section style={{ marginBottom: 32 }}>
         <h3 className="section-title" style={{ fontSize: 15 }}>
