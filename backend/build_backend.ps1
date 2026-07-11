@@ -48,9 +48,12 @@ $TmpZip = Join-Path $env:TEMP $Zip
 # Expand-Archive as a FileFormatException.
 & curl.exe -fsSL "https://downloads.sourceforge.net/project/exiftool/$Zip" -o $TmpZip
 if ($LASTEXITCODE -ne 0) { Write-Error "exiftool download failed" }
-# Sanity check: a real zip starts with "PK".
-$sig = [System.Text.Encoding]::ASCII.GetString((Get-Content $TmpZip -AsByteStream -TotalCount 2))
-if ($sig -ne "PK") { Write-Error "Downloaded exiftool file is not a zip (got HTML?)" }
+# Sanity check: a real zip starts with "PK". ([IO.File] works in both Windows
+# PowerShell 5.1 and pwsh 7 - Get-Content's byte flags differ between them.)
+$bytes = [System.IO.File]::ReadAllBytes($TmpZip)
+if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x50 -or $bytes[1] -ne 0x4B) {
+    Write-Error "Downloaded exiftool file is not a zip (got HTML?)"
+}
 $TmpDir = Join-Path $env:TEMP "exiftool-extract"
 if (Test-Path $TmpDir) { Remove-Item -Recurse -Force $TmpDir }
 Expand-Archive -Path $TmpZip -DestinationPath $TmpDir
