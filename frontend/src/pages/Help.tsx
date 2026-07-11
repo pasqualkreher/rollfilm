@@ -224,9 +224,9 @@ export function Help() {
 
         <H id="albums">Albums</H>
         <p>
-          Create an album on the Albums page, then fill it via the bulk bar ("Add to album" — you can
-          create a new album right there too) or from a photo's detail page. Removing a photo from an
-          album, or deleting the whole album, never deletes the photos themselves.
+          Albums are created on the Albums page. Fill them via the bulk bar ("Add to album") or from
+          a photo's detail page. Removing a photo from an album, or deleting the whole album, never
+          deletes the photos themselves.
         </p>
 
         <H id="map">Map</H>
@@ -344,13 +344,13 @@ export function Help() {
         </p>
         <ul>
           <li>
-            macOS: <code>~/Library/Application Support/Photo Manager/logs/backend.log</code>
+            macOS: <code>~/Library/Application Support/photo-manager-desktop/logs/backend.log</code>
           </li>
           <li>
-            Windows: <code>%APPDATA%\Photo Manager\logs\backend.log</code>
+            Windows: <code>%APPDATA%\photo-manager-desktop\logs\backend.log</code>
           </li>
           <li>
-            Linux: <code>~/.config/Photo Manager/logs/backend.log</code>
+            Linux: <code>~/.config/photo-manager-desktop/logs/backend.log</code>
           </li>
         </ul>
         <h4>An Immich upload didn't arrive</h4>

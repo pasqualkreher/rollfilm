@@ -11,6 +11,16 @@ import { useSelects } from "../state/selects";
 import { useMergePairs } from "../state/viewPrefs";
 import type { ColorLabel } from "../api/types";
 
+// exiftool delivers the exposure time as a plain decimal ("0.003571428571");
+// photographers read shutter speeds as fractions ("1/280") or whole seconds.
+function formatShutterSpeed(value: string | null): string {
+  if (!value) return "—";
+  const secs = Number(value);
+  if (!isFinite(secs) || secs <= 0) return value; // already "1/280"-style or unparseable
+  if (secs >= 1) return `${Number(secs.toFixed(1))}s`;
+  return `1/${Math.round(1 / secs)}`;
+}
+
 export function ImageDetail() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
@@ -427,7 +437,7 @@ export function ImageDetail() {
               </tr>
               <tr>
                 <td>Shutter</td>
-                <td>{image.shutter_speed ?? "—"}</td>
+                <td>{formatShutterSpeed(image.shutter_speed)}</td>
               </tr>
               <tr>
                 <td>Focal length</td>
