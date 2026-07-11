@@ -357,7 +357,8 @@ app.whenReady().then(async () => {
 
   // Block on the first-run library-location prompt before anything else - the
   // backend needs LIBRARY_ROOT set when it starts.
-  setSplashStatus("Checking library folder…");
+  const isFirstStart = !readConfig().libraryRoot;
+  setSplashStatus(isFirstStart ? "Checking library folder…" : "Loading…");
   libraryRoot = await ensureLibraryRoot();
   if (!libraryRoot) {
     closeSplash();
@@ -369,7 +370,13 @@ app.whenReady().then(async () => {
   apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 
   console.log(`[main] starting backend, expecting ${apiBaseUrl}`);
-  setSplashStatus("Starting backend… the first launch can take a few minutes");
+  // The slow-first-launch hint only makes sense when no library was configured
+  // yet (true first run); on later launches a plain "Loading…" is enough.
+  setSplashStatus(
+    isFirstStart
+      ? "Starting backend… the first launch can take a few minutes"
+      : "Loading…",
+  );
   startBackend();
 
   // First launch of a packaged build is genuinely slow (Gatekeeper scans the
