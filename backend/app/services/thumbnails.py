@@ -154,11 +154,153 @@ def _apply_color_mix(arr: np.ndarray, mix: dict, tint: int = 0) -> np.ndarray:
     rgb = _hsl_to_rgb(hue, sat, lum)
     # Luminance as a brightness scale (preserves the band's colour). Moving HSL
     # lightness instead washes each band toward white/black - which looked broken.
-    # Weighted by the pixel's original saturation so near-neutral tones (sky,
-    # shadows) aren't brightened/darkened just because their (nearly arbitrary)
-    # hue happens to fall in this band - only actually-coloured pixels shift.
-    factor = (1.0 + lum_adj / 100.0 * 0.5 * sat0)[..., None]
+    # Gated by a *ramp* on the pixel's original saturation: true neutrals (grey,
+    # shadows) stay put so they aren't brightened just because their near-arbitrary
+    # hue lands in a band, but anything meaningfully coloured (sat >= ~0.5) gets the
+    # full, clearly-visible response. The old `0.5 * sat0` weighting scaled the
+    # effect straight down by saturation, so on ordinary (partly-saturated) photos
+    # the Luminance slider did almost nothing - it read as broken.
+    sat_weight = np.clip((sat0 - 0.08) * 2.2, 0.0, 1.0)
+    factor = (1.0 + lum_adj / 100.0 * 0.9 * sat_weight)[..., None]
     return np.clip(rgb * factor, 0.0, 1.0)
+
+
+def _box_min(dark: np.ndarray, radius: int) -> np.ndarray:
+    """Separable (square-patch) minimum filter - the erosion step of the dark
+    channel prior. Runs on the small (quarter-scale) dark channel, so a simple
+    shift-and-minimum loop is plenty fast."""
+    out = dark
+    for axis in (0, 1):
+        m = out.copy()
+        for k in range(1, radius + 1):
+            if axis == 0:
+                up = np.pad(out, ((k, 0), (0, 0)), mode="edge")[: out.shape[0], :]
+                down = np.pad(out, ((0, k), (0, 0)), mode="edge")[k:, :]
+            else:
+                up = np.pad(out, ((0, 0), (k, 0)), mode="edge")[:, : out.shape[1]]
+                down = np.pad(out, ((0, 0), (0, k)), mode="edge")[:, k:]
+            np.minimum(m, up, out=m)
+            np.minimum(m, down, out=m)
+        out = m
+    return out
+
+
+def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
+    """Real dehaze (replaces the old per-pixel veil-subtract hack).
+
+    Positive: dark-channel-prior haze removal - estimate the atmospheric light
+    A from a high per-channel percentile, build a transmission map from the
+    patch-eroded dark channel of I/A (computed at quarter scale, then smoothed
+    and upsampled), and recover the scene radiance J = (I - A)/t + A. Haze-free
+    regions have a near-zero dark channel, so they pass through untouched;
+    genuinely hazy areas get their contrast and colour back instead of just
+    being darkened.
+
+    Negative: physically *add* a neutral veil (mix toward a bright atmospheric
+    colour) for a soft, hazy look.
+
+    The JS live preview mirrors this (canvas blur standing in for the Gaussian),
+    approximate at preview scale like clarity/sharpness."""
+    dh = amount / 100.0
+    if dh < 0:
+        t = 1.0 + 0.45 * dh  # dh in [-1,0) -> t in [0.55,1)
+        return np.clip(arr * t + 0.93 * (1.0 - t), 0.0, 1.0)
+
+    h, w = arr.shape[:2]
+    # Atmospheric light per channel: robust high percentile, floored so the
+    # normalisation below can't blow up on dark images.
+    A = np.clip(np.percentile(arr.reshape(-1, 3), 99.5, axis=0), 0.5, 1.0).astype(np.float32)
+
+    # Dark channel of I/A at quarter scale (block-min), then patch erosion.
+    dark_full = (arr / A).min(axis=2)
+    ph = (-dark_full.shape[0]) % 4
+    pw = (-dark_full.shape[1]) % 4
+    dpad = np.pad(dark_full, ((0, ph), (0, pw)), mode="edge")
+    dsmall = dpad.reshape(dpad.shape[0] // 4, 4, dpad.shape[1] // 4, 4).min(axis=(1, 3))
+    radius = max(2, round(max(dsmall.shape) / 50))
+    dsmall = _box_min(np.clip(dsmall, 0.0, 1.0), radius)
+
+    # Smooth the transmission so block edges don't show, then upsample.
+    tsm = PILImage.fromarray((dsmall * 255.0 + 0.5).astype(np.uint8), "L")
+    tsm = tsm.filter(ImageFilter.GaussianBlur(radius)).resize((w, h), PILImage.BILINEAR)
+    dark = np.asarray(tsm, dtype=np.float32) / 255.0
+
+    # Floor t at 0.4 (max ~2.5x amplification): lower floors turn fine detail
+    # near the atmospheric colour into blown white blobs.
+    t = np.clip(1.0 - (0.85 * dh) * dark, 0.4, 1.0)[..., None]
+    j = (arr - A) / t + A
+    # Highlight protection: bright clouds/sky sit at (or above) the atmospheric
+    # light itself, where the 1/t recovery amplifies tiny variations into hard
+    # clipped-white artifacts - fade the effect out toward the highlights. Haze
+    # lives in the mids/shadows, so this barely costs any actual dehazing.
+    luma = np.clip(arr @ _LUMA, 0.0, 1.0)
+    keep = 1.0 - np.clip((luma - 0.75) / 0.2, 0.0, 1.0) * 0.85
+    return np.clip(arr + (j - arr) * keep[..., None], 0.0, 1.0)
+
+
+def _denoise_image(image: PILImage.Image, amount: int) -> PILImage.Image:
+    """Real(istic) denoise (replaces the old plain Gaussian blur, which just
+    softened everything). Colour noise - the ugly confetti - is smoothed hard
+    on the chroma planes in YCbCr, where the eye barely resolves detail, while
+    luminance is cleaned gently with an edge-keeping 3x3 median blend so real
+    texture and edges survive."""
+    f = min(100, max(0, amount)) / 100.0
+    if f <= 0:
+        return image
+    long_edge = max(image.size)
+    y, cb, cr = image.convert("YCbCr").split()
+    rad = 0.5 + f * (long_edge / 400.0)
+    cb = cb.filter(ImageFilter.GaussianBlur(rad))
+    cr = cr.filter(ImageFilter.GaussianBlur(rad))
+    y = PILImage.blend(y, y.filter(ImageFilter.MedianFilter(3)), min(1.0, f * 1.2))
+    return PILImage.merge("YCbCr", (y, cb, cr)).convert("RGB")
+
+
+def _apply_chrome(arr: np.ndarray, chrome: int, chrome_blue: int) -> np.ndarray:
+    """Fujifilm-style Color Chrome Effect: deepen (darken) highly saturated
+    colours so they gain gradation instead of blocking up - the in-camera
+    effect that gives Velvia reds and Classic Chrome tones their depth.
+    `chrome` applies to all hues weighted by saturation^1.5; `chrome_blue`
+    (Color Chrome FX Blue) does the same for a soft window around blue,
+    deepening skies. Darkening in RGB keeps channel ratios, so perceived
+    saturation rises as the tone deepens - like the real effect."""
+    if not chrome and not chrome_blue:
+        return arr
+    hue, sat, lum = _rgb_to_hsl(arr)
+    # Weight by *chroma* (max-min), not HSL saturation: HSL sat blows up to ~1
+    # for near-white/near-black pixels with tiny channel differences (the
+    # cylinder normalisation divides by the vanishing lightness span), which
+    # darkened random bright cloud pixels into blotchy artifacts. Chroma fades
+    # to zero at both tonal extremes by construction, so only genuinely
+    # colourful pixels deepen - like the in-camera effect.
+    chroma_w = np.minimum(1.0, sat * (1.0 - np.abs(2.0 * lum - 1.0)) * 1.4)
+    factor = np.ones_like(sat)
+    if chrome:
+        factor *= 1.0 - 0.32 * (chrome / 100.0) * np.power(chroma_w, 1.5)
+    if chrome_blue:
+        ang = np.abs(hue - 250.0)
+        ang = np.minimum(ang, 360.0 - ang)
+        window = np.where(ang < 90.0, 0.5 + 0.5 * np.cos(np.pi * ang / 90.0), 0.0)
+        factor *= 1.0 - 0.35 * (chrome_blue / 100.0) * chroma_w * window
+    return np.clip(arr * factor[..., None], 0.0, 1.0)
+
+
+def _mist(arr: np.ndarray, amount: int) -> np.ndarray:
+    """Pro-Mist-style diffusion filter: screen-blend a large-radius blur of the
+    image, weighted toward its highlights, over the sharp original - bright
+    areas bloom and halate softly into their surroundings while shadows and
+    midtone detail stay intact. Runs on the *toned* image (after the tonal
+    pass), like a filter in front of the lens capturing the final look."""
+    f = min(100, max(0, amount)) / 100.0
+    if f <= 0:
+        return arr
+    long_edge = max(arr.shape[:2])
+    radius = max(8.0, long_edge / 25.0)
+    pil = PILImage.fromarray((np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
+    blur = np.asarray(pil.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
+    luma_b = np.clip(blur @ _LUMA, 0.0, 1.0)
+    glow = np.clip(blur * (np.power(luma_b, 1.2) * 0.85 * f)[..., None], 0.0, 1.0)
+    return 1.0 - (1.0 - arr) * (1.0 - glow)
 
 
 def _apply_vignette(arr: np.ndarray, amount: int) -> np.ndarray:
@@ -190,20 +332,25 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     n = adj.get("tint", 0) / 100.0
 
     if e:
-        arr = arr * (2.0 ** e)  # +/- one stop at the extremes
+        arr = arr * (2.0 ** (2.0 * e))  # +/- two stops at the extremes (a useful range)
     if t:
-        arr[..., 0] *= 1.0 + 0.2 * t  # warm: more red
-        arr[..., 2] *= 1.0 - 0.2 * t  # ...less blue
+        arr[..., 0] *= 1.0 + 0.3 * t  # warm: more red
+        arr[..., 2] *= 1.0 - 0.3 * t  # ...less blue
     if n:
-        arr[..., 1] *= 1.0 - 0.2 * n  # +tint = magenta (less green)
+        arr[..., 1] *= 1.0 - 0.3 * n  # +tint = magenta (less green)
     np.clip(arr, 0.0, 1.0, out=arr)
 
+    # Fuji-style tone masks: shadows lift fades to zero at pure black (keeps the
+    # film "toe" dense instead of washing blacks grey) and highlights fade to
+    # zero at pure white (whites stay anchored; the Whites slider owns the very
+    # top end). Both peak in the lower/upper mids like Fuji's Shadow/Highlight
+    # Tone rather than piling up at the extremes.
     if hi or sh:
         luma = arr @ _LUMA
         if sh:
-            arr += (sh * 0.5 * (1.0 - luma) ** 2)[..., None]
+            arr += (sh * 0.7 * (1.0 - luma) ** 2 * np.power(luma, 0.4))[..., None]
         if hi:
-            arr += (hi * 0.5 * luma**2)[..., None]
+            arr += (hi * 0.6 * luma**2 * np.power(1.0 - luma, 0.4))[..., None]
         np.clip(arr, 0.0, 1.0, out=arr)
 
     # Whites/blacks act on the very ends of the tone range (cubic mask, so more
@@ -216,27 +363,21 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
             arr += (bl * 0.5 * (1.0 - luma) ** 3)[..., None]
         np.clip(arr, 0.0, 1.0, out=arr)
 
+    # Contrast as a filmic S-curve (blend toward/away from smoothstep) instead of
+    # the old linear stretch around 0.5: the linear version clipped highlights
+    # and blacks harshly, while the sigmoid rolls both ends off softly - the
+    # "shoulder" that gives in-camera film renderings their character. The 1.6
+    # gain keeps the midtone slope comparable to the old response.
     if c:
-        arr = (arr - 0.5) * (1.0 + c) + 0.5
-        np.clip(arr, 0.0, 1.0, out=arr)
-
-    # Dehaze: haze is a bright, desaturated veil sitting mostly in the shadows/
-    # mids. Unlike Contrast (a symmetric S-curve), +dehaze *only* pulls that veil
-    # down (asymmetric, weighted to darker tones) and restores saturation;
-    # -dehaze lifts the shadows + desaturates for a soft, hazy look.
-    dh = adj.get("dehaze", 0) / 100.0
-    if dh:
-        luma = arr @ _LUMA
-        arr = arr - (dh * 0.22) * ((1.0 - luma) ** 2)[..., None]
-        np.clip(arr, 0.0, 1.0, out=arr)
-        luma2 = (arr @ _LUMA)[..., None]
-        arr = luma2 + (arr - luma2) * (1.0 + dh * 0.6)
+        cs = min(1.0, max(-1.0, 1.6 * c))
+        arr = arr + cs * (arr * arr * (3.0 - 2.0 * arr) - arr)
         np.clip(arr, 0.0, 1.0, out=arr)
 
     mix = adj.get("color_mix")
     tint = adj.get("color_tint", 0)
     if mix or tint:
         arr = _apply_color_mix(np.clip(arr, 0.0, 1.0), mix or {}, tint)
+    arr = _apply_chrome(arr, adj.get("chrome_effect", 0), adj.get("chrome_blue", 0))
     if s:
         luma = (arr @ _LUMA)[..., None]
         arr = luma + (arr - luma) * (1.0 + s)
@@ -252,37 +393,56 @@ def _grain_noise(*shape: int) -> np.ndarray:
     return ((u - 1.5) / 1.5).astype(np.float32)
 
 
+def _grain_field(h: int, w: int, particle_px: float) -> np.ndarray:
+    """A film-grain noise field with a given particle size in pixels: noise is
+    generated at particle resolution, nearest-upscaled (hard speckle edges),
+    then lightly blurred so particles read as soft irregular blobs rather than
+    square pixels. Roughly [-1, 1]."""
+    nh = min(h, max(1, int(round(h / particle_px))))
+    nw = min(w, max(1, int(round(w / particle_px))))
+    small = _grain_noise(nh, nw)
+    pil = PILImage.fromarray(np.clip(small * 90.0 + 128.0, 0, 255).astype(np.uint8), "L")
+    field = pil.resize((w, h), PILImage.NEAREST)
+    field = field.filter(ImageFilter.GaussianBlur(max(0.35, particle_px * 0.4)))
+    return (np.asarray(field, dtype=np.float32) - 128.0) / 90.0
+
+
 def _apply_grain(arr: np.ndarray, amount: int, size: int = 0) -> np.ndarray:
-    """Add analog-style film grain: a full-resolution fine layer (the sharp
-    photographic texture) blended with a coarser "clump" layer approximating
-    silver-halide clusters - built from a hard-edged blocky field that's then
-    Gaussian-blurred to round its edges into soft irregular blobs (a plain
-    bilinear stretch instead gives smooth linear gradients, which reads as a
-    digital blur rather than grain). `size` (0..100) shifts the blend toward
-    the clump layer for chunkier grain. Intensity tapers toward the highlights,
-    matching how grain shows up on scanned film. Stochastic - preview uses a
-    different pattern."""
+    """Fuji-style analog film grain.
+
+    Two layers: a fine base texture plus a coarser "clump" layer approximating
+    silver-halide clusters, blended toward the clumps as `size` grows. Both
+    particle sizes scale with the image's resolution (long edge), so grain
+    looks the *same* on the 2048px preview and the full-resolution save - the
+    old version generated 1px noise regardless of resolution, so full-size
+    renders came out with much finer (near-invisible) grain than the preview,
+    and per-pixel white noise reads as digital sensor noise, not film.
+
+    Intensity follows a midtone bell like real film: strongest in the mids,
+    fading into deep shadows (film's thin toe) and highlights (dense areas of
+    the negative). Monochromatic (same offset on R/G/B), like silver grain.
+    Stochastic - the preview shows a different pattern than the saved render."""
     h, w = arr.shape[:2]
     size_f = size / 100.0
+    long_edge = max(h, w)
 
-    fine = _grain_noise(h, w)
+    # Particle sizes relative to resolution. The size slider's low end is
+    # near-pixel salt (crisp fine-ISO texture), growing to chunky pushed-film
+    # clumps at the top.
+    p_fine = max(0.7, (long_edge / 1500.0) * (0.35 + 1.25 * size_f))
+    p_clump = p_fine * (2.2 + size_f * 2.8)
 
-    block_px = 1.0 + size_f * 5.0
-    nh = max(1, int(round(h / block_px)))
-    nw = max(1, int(round(w / block_px)))
-    small = _grain_noise(nh, nw)
-    small_pil = PILImage.fromarray(np.clip(small * 90.0 + 128.0, 0, 255).astype(np.uint8), "L")
-    blocky = small_pil.resize((w, h), PILImage.NEAREST)
-    if size_f > 0:
-        blocky = blocky.filter(ImageFilter.GaussianBlur(max(0.6, block_px * 0.4)))
-    clump = (np.asarray(blocky, dtype=np.float32) - 128.0) / 128.0
+    fine = _grain_field(h, w, p_fine)
+    clump = _grain_field(h, w, p_clump)
 
-    fine_weight = 1.0 - 0.55 * size_f
-    clump_weight = 0.55 * size_f
-    luma = arr @ _LUMA
-    highlight_falloff = 1.0 - np.power(np.clip(luma, 0.0, 1.0), 1.6) * 0.85
-    combined = (fine * fine_weight + clump * clump_weight) * highlight_falloff
-    noise = combined * (amount / 100.0) * 0.16
+    # Barely any clump layer at the fine end - its blobs read as "big grain"
+    # even when the fine layer is tiny.
+    fine_weight = 1.0 - 0.45 * size_f
+    clump_weight = 0.15 + 0.6 * size_f
+    luma = np.clip(arr @ _LUMA, 0.0, 1.0)
+    midtone = np.power(4.0 * luma * (1.0 - luma), 0.75)
+    combined = (fine * fine_weight + clump * clump_weight) * midtone
+    noise = combined * (amount / 100.0) * 0.14
     return np.clip(arr + noise[..., None], 0.0, 1.0)
 
 
@@ -296,38 +456,52 @@ def _unsharp(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
 
 def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
     """Fujifilm-style clarity: large-radius local contrast weighted toward the
-    midtones (so highlights/shadows aren't crushed). Positive = punchier mids,
-    negative = softer."""
+    midtones (so highlights/shadows aren't crushed). The mask is a raised tent
+    (^1.5) so the effect eases out gradually toward the tonal extremes instead
+    of cutting off linearly - closer to the camera's gentle Clarity rendering.
+    Positive = punchier mids, negative = softer."""
     pil = PILImage.fromarray((np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
     blur = np.asarray(pil.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
     luma = arr @ _LUMA
-    mask = (1.0 - np.abs(2.0 * luma - 1.0))[..., None]  # peaks at midtones
+    mask = np.power(1.0 - np.abs(2.0 * luma - 1.0), 1.5)[..., None]  # peaks at midtones
     return np.clip(arr + amount * (arr - blur) * mask, 0.0, 1.0)
 
 
 def _has_edits(adj: dict) -> bool:
     if any(adj.get(k, 0) for k in ADJUSTMENT_FIELDS):
         return True
-    for k in ("vignette", "grain", "denoise", "clarity", "sharpness", "color_tint"):
+    for k in ("vignette", "grain", "denoise", "clarity", "sharpness", "color_tint", "chrome_effect", "chrome_blue", "mist"):
         if adj.get(k, 0):
             return True
     mix = adj.get("color_mix") or {}
     return any(any(v) for v in mix.values())
 
 
-def apply_adjustments(image: PILImage.Image, adj: dict) -> PILImage.Image:
+def _grain_pil(image: PILImage.Image, adj: dict) -> PILImage.Image:
+    """Apply the film-grain pass to a PIL image at its *current* resolution."""
+    g = adj.get("grain", 0)
+    if g <= 0:
+        return image
+    arr = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+    arr = _apply_grain(arr, g, adj.get("grain_size", 0))
+    return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
+
+
+def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = True) -> PILImage.Image:
     """Return a new image with the slider edits baked in, or the input untouched
-    when everything is neutral (the common case - avoids a needless numpy pass)."""
+    when everything is neutral (the common case - avoids a needless numpy pass).
+
+    `include_grain=False` skips the grain pass so the caller can add grain
+    *after* downscaling to the output size (see generate_derivatives): grain
+    baked at full resolution gets averaged away by the LANCZOS downscale to the
+    preview/thumbnail, so what you saw in the editor vanished after saving."""
     if not _has_edits(adj):
         return image
     long_edge = max(image.size)
-    # Denoise first (spatial): a light Gaussian blur scaled to the image size so
-    # preview and full render soften by a comparable amount.
+    # Denoise first (spatial): chroma smoothing + gentle luma median in YCbCr.
     dn = adj.get("denoise", 0)
     if dn > 0:
-        radius = dn / 100.0 * (long_edge / 600.0)
-        if radius > 0.1:
-            image = image.filter(ImageFilter.GaussianBlur(radius))
+        image = _denoise_image(image.convert("RGB"), dn)
     rgb = image.convert("RGB")
     arr = np.asarray(rgb, dtype=np.float32) / 255.0
     # Detail (spatial), before the tonal pass: clarity = large-radius local
@@ -338,12 +512,22 @@ def apply_adjustments(image: PILImage.Image, adj: dict) -> PILImage.Image:
     sp = adj.get("sharpness", 0)
     if sp:
         # +sharpen / -soften share the unsharp formula (negative amount blends
-        # toward the blur).
-        arr = _unsharp(arr, max(0.6, long_edge / 1500.0), sp / 100.0 * 1.2)
+        # toward the blur). Radius is capped: Fuji-style sharpening is a fine,
+        # tight edge enhancement - an uncapped radius grew to ~4px on full-res
+        # renders, which produced visible halos.
+        arr = _unsharp(arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2)
+    # Dehaze is spatial too (transmission map from the dark channel), so it runs
+    # here rather than in the per-pixel tonal pass.
+    dh = adj.get("dehaze", 0)
+    if dh:
+        arr = _dehaze(arr, dh)
     arr = _adjust_array(arr, adj)
+    # Mist blooms the *toned* image, so it runs after the tonal pass.
+    if adj.get("mist", 0) > 0:
+        arr = _mist(arr, adj["mist"])
     if adj.get("vignette", 0):
         arr = _apply_vignette(arr, adj["vignette"])
-    if adj.get("grain", 0) > 0:
+    if include_grain and adj.get("grain", 0) > 0:
         arr = _apply_grain(arr, adj["grain"], adj.get("grain_size", 0))
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     return PILImage.fromarray(out, "RGB")
@@ -371,11 +555,15 @@ def generate_derivatives(
         source = apply_distortion(source, distortion)
     source = apply_edits(source, rotation, crop)
     if adjustments:
-        source = apply_adjustments(source, adjustments)
+        # Grain is added per-derivative below, *after* the downscale - baked at
+        # full res it would just be averaged away by the resize.
+        source = apply_adjustments(source, adjustments, include_grain=False)
 
     preview = source.copy()
     # LANCZOS gives noticeably crisper downscales than the thumbnail() default.
     preview.thumbnail((PREVIEW_MAX_PX, PREVIEW_MAX_PX), PILImage.LANCZOS)
+    if adjustments:
+        preview = _grain_pil(preview, adjustments)
     _save_atomic(preview, out_dir / "preview.jpg", quality=90)
 
     thumb = source.copy()
@@ -385,6 +573,8 @@ def generate_derivatives(
     tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
     th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
     thumb.thumbnail((tw, th), PILImage.LANCZOS)
+    if adjustments:
+        thumb = _grain_pil(thumb, adjustments)
     _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=88)
 
     # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
@@ -462,6 +652,9 @@ def adjustments_from_image(image: "Image") -> dict:
     adj["clarity"] = getattr(image, "edit_clarity", 0) or 0
     adj["sharpness"] = getattr(image, "edit_sharpness", 0) or 0
     adj["color_tint"] = getattr(image, "edit_color_tint", 0) or 0
+    adj["chrome_effect"] = getattr(image, "edit_chrome_effect", 0) or 0
+    adj["chrome_blue"] = getattr(image, "edit_chrome_blue", 0) or 0
+    adj["mist"] = getattr(image, "edit_mist", 0) or 0
     raw = getattr(image, "edit_color_mix", None)
     if raw:
         try:

@@ -103,6 +103,9 @@ export interface ImageEdits extends Adjustments {
   clarity: number; // -100..100
   sharpness: number; // -100..100 (negative softens)
   colorTint: number; // global hue rotation, -100..100
+  chromeEffect: number; // Fuji Color Chrome Effect, 0..100
+  chromeBlue: number; // Fuji Color Chrome FX Blue, 0..100
+  mist: number; // Pro-Mist diffusion (highlight bloom), 0..100
 }
 
 export function editsFromImage(image: ImageOut): ImageEdits {
@@ -139,6 +142,9 @@ export function editsFromImage(image: ImageOut): ImageEdits {
     clarity: image.edit_clarity,
     sharpness: image.edit_sharpness,
     colorTint: image.edit_color_tint,
+    chromeEffect: image.edit_chrome_effect,
+    chromeBlue: image.edit_chrome_blue,
+    mist: image.edit_mist,
   };
 }
 
@@ -184,11 +190,15 @@ export interface PixelEdits extends Adjustments {
   colorMix?: ColorMix;
   vignette?: number;
   colorTint?: number;
+  chromeEffect?: number;
+  chromeBlue?: number;
 }
 
 // Apply the edits to `src` (RGBA bytes) into `dst`, both length width*height*4.
 // A single tight per-pixel pass so it runs live on each slider move. The maths
 // and order mirror the backend (services/thumbnails) so preview == saved render.
+// Note: dehaze and denoise are *spatial* passes (see dehaze()/denoise() below),
+// run before this per-pixel pass - `adj.dehaze` is ignored here.
 export function applyAdjustments(
   src: Uint8ClampedArray,
   dst: Uint8ClampedArray,
@@ -202,20 +212,23 @@ export function applyAdjustments(
   const sh = adj.shadows / 100;
   const wh = adj.whites / 100;
   const bl = adj.blacks / 100;
-  const dh = adj.dehaze / 100;
   const s = adj.saturation / 100;
   const t = adj.temperature / 100;
   const n = adj.tint / 100;
   const vig = (adj.vignette ?? 0) / 100;
   const tintRot = (adj.colorTint ?? 0) / 100;
+  const chrome = (adj.chromeEffect ?? 0) / 100;
+  const chromeB = (adj.chromeBlue ?? 0) / 100;
   const mix = adj.colorMix;
   const useMix = (!!mix && !mixIsNeutral(mix)) || tintRot !== 0;
 
-  const gain = e ? Math.pow(2, e) : 1;
-  const rWb = 1 + 0.2 * t;
-  const bWb = 1 - 0.2 * t;
-  const gWb = 1 - 0.2 * n;
-  const contrast = 1 + c;
+  const gain = e ? Math.pow(2, 2 * e) : 1; // +/- two stops at the extremes
+  const rWb = 1 + 0.3 * t;
+  const bWb = 1 - 0.3 * t;
+  const gWb = 1 - 0.3 * n;
+  // Contrast as a filmic S-curve blend (see the backend comment) - soft
+  // highlight shoulder/black toe instead of the old clipping linear stretch.
+  const cs = Math.min(1, Math.max(-1, 1.6 * c));
   const sat = 1 + s;
 
   for (let i = 0; i < src.length; i += 4) {
@@ -238,15 +251,18 @@ export function applyAdjustments(
     b = clamp01(b);
 
     if (hi || sh) {
+      // Fuji-style tone masks (see the backend comment): the shadows lift fades
+      // to zero at pure black (film toe stays dense) and highlights fade to
+      // zero at pure white (Whites owns the top end).
       const luma = r * LR + g * LG + b * LB;
       if (sh) {
-        const m = sh * 0.5 * (1 - luma) * (1 - luma);
+        const m = sh * 0.7 * (1 - luma) * (1 - luma) * Math.pow(luma, 0.4);
         r += m;
         g += m;
         b += m;
       }
       if (hi) {
-        const m = hi * 0.5 * luma * luma;
+        const m = hi * 0.6 * luma * luma * Math.pow(1 - luma, 0.4);
         r += m;
         g += m;
         b += m;
@@ -277,21 +293,9 @@ export function applyAdjustments(
     }
 
     if (c) {
-      r = clamp01((r - 0.5) * contrast + 0.5);
-      g = clamp01((g - 0.5) * contrast + 0.5);
-      b = clamp01((b - 0.5) * contrast + 0.5);
-    }
-
-    if (dh) {
-      let luma = r * LR + g * LG + b * LB;
-      const veil = dh * 0.22 * (1 - luma) * (1 - luma);
-      r = clamp01(r - veil);
-      g = clamp01(g - veil);
-      b = clamp01(b - veil);
-      luma = r * LR + g * LG + b * LB;
-      r = clamp01(luma + (r - luma) * (1 + dh * 0.6));
-      g = clamp01(luma + (g - luma) * (1 + dh * 0.6));
-      b = clamp01(luma + (b - luma) * (1 + dh * 0.6));
+      r = clamp01(r + cs * (r * r * (3 - 2 * r) - r));
+      g = clamp01(g + cs * (g * g * (3 - 2 * g) - g));
+      b = clamp01(b + cs * (b * b * (3 - 2 * b) - b));
     }
 
     if (useMix) {
@@ -319,13 +323,38 @@ export function applyAdjustments(
       [r, g, b] = hslToRgb(nh, ns, l0);
       if (lumAdj) {
         // Brightness scale (preserves colour) rather than moving HSL lightness.
-        // Weighted by the pixel's original saturation (s0) so near-neutral
-        // tones aren't shifted just because their near-arbitrary hue falls in
-        // this band - matches the backend.
-        const f = 1 + (lumAdj / 100) * 0.5 * s0;
+        // Gated by a ramp on the pixel's original saturation (s0) so near-neutral
+        // tones stay put while genuinely-coloured pixels get the full, visible
+        // response - matches the backend (was a flat `0.5 * s0`, which made the
+        // slider nearly a no-op on ordinary photos).
+        const satWeight = Math.min(1, Math.max(0, (s0 - 0.08) * 2.2));
+        const f = 1 + (lumAdj / 100) * 0.9 * satWeight;
         r = clamp01(r * f);
         g = clamp01(g * f);
         b = clamp01(b * f);
+      }
+    }
+
+    // Fuji Color Chrome Effect / FX Blue (see backend _apply_chrome): darken
+    // colourful pixels (all hues / a window around blue) so they deepen and
+    // gain gradation. Weighted by *chroma*, not HSL saturation - HSL sat blows
+    // up to ~1 near white/black, which turned bright cloud pixels into blotchy
+    // dark artifacts; chroma fades to zero at the tonal extremes.
+    if (chrome || chromeB) {
+      const [hc, sc, lc] = rgbToHsl(r, g, b);
+      const chromaW = Math.min(1, sc * (1 - Math.abs(2 * lc - 1)) * 1.4);
+      let factor = 1;
+      if (chrome) factor *= 1 - 0.32 * chrome * Math.pow(chromaW, 1.5);
+      if (chromeB) {
+        let angDist = Math.abs(hc - 250);
+        angDist = Math.min(angDist, 360 - angDist);
+        const window = angDist < 90 ? 0.5 + 0.5 * Math.cos((Math.PI * angDist) / 90) : 0;
+        factor *= 1 - 0.35 * chromeB * chromaW * window;
+      }
+      if (factor !== 1) {
+        r = clamp01(r * factor);
+        g = clamp01(g * factor);
+        b = clamp01(b * factor);
       }
     }
 
@@ -391,6 +420,258 @@ export function applyDistortion(src: ImageData, amount: number): ImageData {
   return out;
 }
 
+// Real dehaze, mirroring the backend's dark-channel prior (approximate at
+// preview scale - canvas blur stands in for the Gaussian, like clarity).
+// Positive: estimate atmospheric light A (per-channel 99.5th percentile),
+// build a transmission map from the patch-eroded dark channel of I/A at
+// quarter scale, smooth + upsample it, then recover J = (I - A)/t + A.
+// Negative: physically add a neutral veil. Returns a new ImageData.
+export function dehaze(img: ImageData, amount: number): ImageData {
+  const w = img.width;
+  const h = img.height;
+  const s = img.data;
+  const out = new ImageData(w, h);
+  const d = out.data;
+  const dh = amount / 100;
+
+  if (dh < 0) {
+    const t = 1 + 0.45 * dh;
+    const veil = 0.93 * (1 - t) * 255;
+    for (let i = 0; i < s.length; i += 4) {
+      d[i] = s[i] * t + veil;
+      d[i + 1] = s[i + 1] * t + veil;
+      d[i + 2] = s[i + 2] * t + veil;
+      d[i + 3] = s[i + 3];
+    }
+    return out;
+  }
+
+  // Atmospheric light per channel via histogram percentiles.
+  const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+  const total = w * h;
+  for (let i = 0; i < s.length; i += 4) {
+    hist[0][s[i]]++;
+    hist[1][s[i + 1]]++;
+    hist[2][s[i + 2]]++;
+  }
+  const A = [0.5, 0.5, 0.5];
+  for (let ch = 0; ch < 3; ch++) {
+    let cum = 0;
+    const target = total * 0.995;
+    for (let v = 0; v < 256; v++) {
+      cum += hist[ch][v];
+      if (cum >= target) {
+        A[ch] = Math.min(1, Math.max(0.5, v / 255));
+        break;
+      }
+    }
+  }
+
+  // Dark channel of I/A at quarter scale (block-min over each 4x4 tile).
+  const sw = Math.ceil(w / 4);
+  const sh = Math.ceil(h / 4);
+  let dark = new Float32Array(sw * sh).fill(1);
+  for (let y = 0; y < h; y++) {
+    const row = (y >> 2) * sw;
+    const off = y * w * 4;
+    for (let x = 0; x < w; x++) {
+      const i = off + x * 4;
+      const v = Math.min(s[i] / 255 / A[0], s[i + 1] / 255 / A[1], s[i + 2] / 255 / A[2], 1);
+      const di = row + (x >> 2);
+      if (v < dark[di]) dark[di] = v;
+    }
+  }
+
+  // Separable min-filter (patch erosion) on the small dark channel.
+  const radius = Math.max(2, Math.round(Math.max(sw, sh) / 50));
+  for (let pass = 0; pass < 2; pass++) {
+    const eroded = new Float32Array(sw * sh);
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        let m = 1;
+        if (pass === 0) {
+          const lo = Math.max(0, x - radius);
+          const hiX = Math.min(sw - 1, x + radius);
+          for (let k = lo; k <= hiX; k++) m = Math.min(m, dark[y * sw + k]);
+        } else {
+          const lo = Math.max(0, y - radius);
+          const hiY = Math.min(sh - 1, y + radius);
+          for (let k = lo; k <= hiY; k++) m = Math.min(m, dark[k * sw + x]);
+        }
+        eroded[y * sw + x] = m;
+      }
+    }
+    dark = eroded;
+  }
+
+  // Smooth (canvas blur) + upsample the transmission back to full size.
+  const smallC = document.createElement("canvas");
+  smallC.width = sw;
+  smallC.height = sh;
+  const sctx = smallC.getContext("2d")!;
+  const smallImg = sctx.createImageData(sw, sh);
+  for (let i = 0; i < dark.length; i++) {
+    const v = dark[i] * 255;
+    smallImg.data[i * 4] = v;
+    smallImg.data[i * 4 + 1] = v;
+    smallImg.data[i * 4 + 2] = v;
+    smallImg.data[i * 4 + 3] = 255;
+  }
+  sctx.putImageData(smallImg, 0, 0);
+  // Blur at the *small* scale first, then upscale (backend match). Blurring
+  // during the scaled drawImage would apply the radius in destination space -
+  // ~4x less smoothing - leaving hard blocky transmission edges that showed up
+  // as white blocky artifacts in bright skies.
+  const blurC = document.createElement("canvas");
+  blurC.width = sw;
+  blurC.height = sh;
+  const blurCtx = blurC.getContext("2d")!;
+  blurCtx.filter = `blur(${radius}px)`;
+  blurCtx.drawImage(smallC, 0, 0);
+  blurCtx.filter = "none";
+  const fullC = document.createElement("canvas");
+  fullC.width = w;
+  fullC.height = h;
+  const fctx = fullC.getContext("2d")!;
+  fctx.imageSmoothingEnabled = true;
+  fctx.drawImage(blurC, 0, 0, sw, sh, 0, 0, w, h);
+  const darkFull = fctx.getImageData(0, 0, w, h).data;
+
+  // Floor t at 0.4 (max ~2.5x amplification) and fade the effect out in the
+  // highlights: bright clouds/sky sit at the atmospheric colour itself, where
+  // the 1/t recovery blows tiny variations into clipped-white blobs (backend
+  // match - see _dehaze).
+  const strength = 0.85 * dh;
+  for (let i = 0; i < s.length; i += 4) {
+    const t = Math.max(0.4, 1 - strength * (darkFull[i] / 255));
+    const r0 = s[i] / 255;
+    const g0 = s[i + 1] / 255;
+    const b0 = s[i + 2] / 255;
+    const luma = Math.min(1, Math.max(0, r0 * LR + g0 * LG + b0 * LB));
+    const keep = 1 - Math.min(1, Math.max(0, (luma - 0.75) / 0.2)) * 0.85;
+    d[i] = Math.min(255, Math.max(0, r0 + ((r0 - A[0]) / t + A[0] - r0) * keep) * 255);
+    d[i + 1] = Math.min(255, Math.max(0, g0 + ((g0 - A[1]) / t + A[1] - g0) * keep) * 255);
+    d[i + 2] = Math.min(255, Math.max(0, b0 + ((b0 - A[2]) / t + A[2] - b0) * keep) * 255);
+    d[i + 3] = s[i + 3];
+  }
+  return out;
+}
+
+// Real(istic) denoise, mirroring the backend: chroma noise is smoothed hard in
+// YCbCr space (a canvas Gaussian on the whole image supplies the blurred
+// chroma - blurring RGB then converting is the same as blurring the chroma
+// planes, since the transform is linear), while luminance gets a gentle
+// edge-keeping 3x3 median blend so texture survives. Returns a new ImageData.
+export function denoise(img: ImageData, amount: number): ImageData {
+  const w = img.width;
+  const h = img.height;
+  const f = Math.min(100, Math.max(0, amount)) / 100;
+  if (f <= 0) return img;
+  const s = img.data;
+
+  // Blurred copy (for chroma), radius matching the backend.
+  const rad = 0.5 + f * (Math.max(w, h) / 400);
+  const src = document.createElement("canvas");
+  src.width = w;
+  src.height = h;
+  src.getContext("2d")!.putImageData(img, 0, 0);
+  const bc = document.createElement("canvas");
+  bc.width = w;
+  bc.height = h;
+  const bctx = bc.getContext("2d")!;
+  bctx.filter = `blur(${rad}px)`;
+  bctx.drawImage(src, 0, 0);
+  bctx.filter = "none";
+  const blur = bctx.getImageData(0, 0, w, h).data;
+
+  // Luma plane (BT.601, matching PIL's YCbCr) + 3x3 median.
+  const y0 = new Float32Array(w * h);
+  for (let i = 0, p = 0; i < s.length; i += 4, p++) {
+    y0[p] = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
+  }
+  const lumaBlend = Math.min(1, f * 1.2);
+  const med = new Float32Array(w * h);
+  const win = new Float32Array(9);
+  for (let y = 0; y < h; y++) {
+    const ym = Math.max(0, y - 1);
+    const yp = Math.min(h - 1, y + 1);
+    for (let x = 0; x < w; x++) {
+      const xm = Math.max(0, x - 1);
+      const xp = Math.min(w - 1, x + 1);
+      win[0] = y0[ym * w + xm];
+      win[1] = y0[ym * w + x];
+      win[2] = y0[ym * w + xp];
+      win[3] = y0[y * w + xm];
+      win[4] = y0[y * w + x];
+      win[5] = y0[y * w + xp];
+      win[6] = y0[yp * w + xm];
+      win[7] = y0[yp * w + x];
+      win[8] = y0[yp * w + xp];
+      // Median of 9 via partial selection sort (5 passes).
+      for (let a = 0; a < 5; a++) {
+        let mi = a;
+        for (let b = a + 1; b < 9; b++) if (win[b] < win[mi]) mi = b;
+        const tmp = win[a];
+        win[a] = win[mi];
+        win[mi] = tmp;
+      }
+      med[y * w + x] = win[4];
+    }
+  }
+
+  // Recompose: cleaned luma + blurred chroma.
+  const out = new ImageData(w, h);
+  const d = out.data;
+  for (let i = 0, p = 0; i < s.length; i += 4, p++) {
+    const cb = -0.168736 * blur[i] - 0.331264 * blur[i + 1] + 0.5 * blur[i + 2];
+    const cr = 0.5 * blur[i] - 0.418688 * blur[i + 1] - 0.081312 * blur[i + 2];
+    const yy = y0[p] + lumaBlend * (med[p] - y0[p]);
+    d[i] = yy + 1.402 * cr;
+    d[i + 1] = yy - 0.344136 * cb - 0.714136 * cr;
+    d[i + 2] = yy + 1.772 * cb;
+    d[i + 3] = s[i + 3];
+  }
+  return out;
+}
+
+// Pro-Mist-style diffusion (mirrors the backend _mist): screen-blend a
+// large-radius blur of the image, weighted toward its highlights, over the
+// sharp original - bright areas bloom and halate softly while shadows and
+// midtone detail stay intact. Runs on the toned image. Returns a new ImageData.
+export function mist(img: ImageData, amount: number): ImageData {
+  const w = img.width;
+  const h = img.height;
+  const f = Math.min(100, Math.max(0, amount)) / 100;
+  if (f <= 0) return img;
+  const radius = Math.max(8, Math.max(w, h) / 25);
+  const src = document.createElement("canvas");
+  src.width = w;
+  src.height = h;
+  src.getContext("2d")!.putImageData(img, 0, 0);
+  const bc = document.createElement("canvas");
+  bc.width = w;
+  bc.height = h;
+  const bctx = bc.getContext("2d")!;
+  bctx.filter = `blur(${radius}px)`;
+  bctx.drawImage(src, 0, 0);
+  bctx.filter = "none";
+  const blur = bctx.getImageData(0, 0, w, h).data;
+  const out = new ImageData(w, h);
+  const s = img.data;
+  const d = out.data;
+  for (let i = 0; i < s.length; i += 4) {
+    const lb = Math.min(1, Math.max(0, (blur[i] * LR + blur[i + 1] * LG + blur[i + 2] * LB) / 255));
+    const gw = Math.pow(lb, 1.2) * 0.85 * f;
+    for (let c = 0; c < 3; c++) {
+      const v = s[i + c] / 255;
+      const glow = Math.min(1, (blur[i + c] / 255) * gw);
+      d[i + c] = (1 - (1 - v) * (1 - glow)) * 255 + 0.5;
+    }
+    d[i + 3] = s[i + 3];
+  }
+  return out;
+}
+
 // Unsharp mask (clarity / sharpness): out = in + amount*(in - blur(in)). Uses a
 // canvas Gaussian blur; mirrors the backend but is approximate at preview scale.
 export function unsharp(input: ImageData, radius: number, amount: number): ImageData {
@@ -444,7 +725,8 @@ export function clarity(input: ImageData, radius: number, amount: number): Image
     const gg = s[i + 1] / 255;
     const bb = s[i + 2] / 255;
     const luma = rr * LR + gg * LG + bb * LB;
-    const mask = 1 - Math.abs(2 * luma - 1);
+    // Raised tent (^1.5) mask - eases out toward the tonal extremes (backend match).
+    const mask = Math.pow(1 - Math.abs(2 * luma - 1), 1.5);
     d[i] = clamp01(rr + amount * ((s[i] - blur[i]) / 255) * mask) * 255 + 0.5;
     d[i + 1] = clamp01(gg + amount * ((s[i + 1] - blur[i + 1]) / 255) * mask) * 255 + 0.5;
     d[i + 2] = clamp01(bb + amount * ((s[i + 2] - blur[i + 2]) / 255) * mask) * 255 + 0.5;
@@ -461,23 +743,13 @@ function grainNoise(): number {
   return (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
 }
 
-// Analog-style film grain: a full-resolution fine layer (the sharp
-// photographic texture) blended with a coarser "clump" layer approximating
-// silver-halide clusters - built from a hard-edged blocky field that's then
-// Gaussian-blurred to round its edges into soft irregular blobs. A plain
-// bilinear stretch of the blocky field (the old approach) instead produces
-// smooth linear gradients between random points, which reads as a digital
-// blur rather than grain. Intensity tapers toward the highlights, matching
-// how grain shows up on scanned film. Mutates `img`. Stochastic (pattern
-// differs from the saved render).
-export function applyGrain(img: ImageData, amount: number, size: number): void {
-  const w = img.width;
-  const h = img.height;
-  const sizeF = size / 100;
-
-  const blockPx = 1 + sizeF * 5;
-  const nw = Math.max(1, Math.round(w / blockPx));
-  const nh = Math.max(1, Math.round(h / blockPx));
+// A film-grain noise field with a given particle size in pixels: noise at
+// particle resolution, nearest-upscaled (hard speckle edges), then lightly
+// blurred so particles read as soft irregular blobs rather than square
+// pixels. Returns the field's red-channel bytes (grey field).
+function grainField(w: number, h: number, particlePx: number): Uint8ClampedArray {
+  const nw = Math.min(w, Math.max(1, Math.round(w / particlePx)));
+  const nh = Math.min(h, Math.max(1, Math.round(h / particlePx)));
   const small = document.createElement("canvas");
   small.width = nw;
   small.height = nh;
@@ -491,30 +763,51 @@ export function applyGrain(img: ImageData, amount: number, size: number): void {
     nd.data[i + 3] = 255;
   }
   sctx.putImageData(nd, 0, 0);
-  const blocky = document.createElement("canvas");
-  blocky.width = w;
-  blocky.height = h;
-  const blctx = blocky.getContext("2d")!;
-  blctx.imageSmoothingEnabled = false;
-  blctx.drawImage(small, 0, 0, w, h);
-  const clumped = document.createElement("canvas");
-  clumped.width = w;
-  clumped.height = h;
-  const cctx = clumped.getContext("2d")!;
-  if (sizeF > 0) cctx.filter = `blur(${Math.max(0.6, blockPx * 0.4)}px)`;
-  cctx.drawImage(blocky, 0, 0);
-  cctx.filter = "none";
-  const clumpData = cctx.getImageData(0, 0, w, h).data;
+  const full = document.createElement("canvas");
+  full.width = w;
+  full.height = h;
+  const fctx = full.getContext("2d")!;
+  fctx.imageSmoothingEnabled = false;
+  fctx.drawImage(small, 0, 0, w, h);
+  const soft = document.createElement("canvas");
+  soft.width = w;
+  soft.height = h;
+  const softCtx = soft.getContext("2d")!;
+  softCtx.filter = `blur(${Math.max(0.35, particlePx * 0.4)}px)`;
+  softCtx.drawImage(full, 0, 0);
+  softCtx.filter = "none";
+  return softCtx.getImageData(0, 0, w, h).data;
+}
 
-  const fineWeight = 1 - 0.55 * sizeF;
-  const clumpWeight = 0.55 * sizeF;
-  const amt = (amount / 100) * 0.16 * 255;
+// Fuji-style analog film grain (mirrors the backend _apply_grain): a fine base
+// texture plus a coarser silver-halide "clump" layer, both with particle sizes
+// scaled to the image resolution so preview grain == saved grain. Intensity
+// follows a midtone bell like real film - strongest in the mids, fading into
+// deep shadows and highlights. Monochromatic, like silver grain. Mutates
+// `img`. Stochastic (pattern differs from the saved render).
+export function applyGrain(img: ImageData, amount: number, size: number): void {
+  const w = img.width;
+  const h = img.height;
+  const sizeF = size / 100;
+  const longEdge = Math.max(w, h);
+
+  // Low end is near-pixel salt (crisp fine-ISO texture); top end is chunky.
+  const pFine = Math.max(0.7, (longEdge / 1500) * (0.35 + 1.25 * sizeF));
+  const pClump = pFine * (2.2 + sizeF * 2.8);
+  const fine = grainField(w, h, pFine);
+  const clump = grainField(w, h, pClump);
+
+  const fineWeight = 1 - 0.45 * sizeF;
+  // Barely any clump layer at the fine end - its blobs read as "big grain".
+  const clumpWeight = 0.15 + 0.6 * sizeF;
+  const amt = (amount / 100) * 0.14 * 255;
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
-    const luma = (d[i] * LR + d[i + 1] * LG + d[i + 2] * LB) / 255;
-    const highlightFalloff = 1 - Math.pow(luma, 1.6) * 0.85;
-    const clump = (clumpData[i] / 255 - 0.5) * 2;
-    const n = (grainNoise() * fineWeight + clump * clumpWeight) * amt * highlightFalloff;
+    const luma = Math.min(1, Math.max(0, (d[i] * LR + d[i + 1] * LG + d[i + 2] * LB) / 255));
+    const midtone = Math.pow(4 * luma * (1 - luma), 0.75);
+    const fineN = ((fine[i] - 128) / 90) * fineWeight;
+    const clumpN = ((clump[i] - 128) / 90) * clumpWeight;
+    const n = (fineN + clumpN) * amt * midtone;
     d[i] += n;
     d[i + 1] += n;
     d[i + 2] += n;

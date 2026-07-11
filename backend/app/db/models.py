@@ -172,6 +172,12 @@ class Image(Base):
     edit_sharpness: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # Global colour-mixer tint: rotates all hues (-100..100 -> +/-180 deg).
     edit_color_tint: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Fujifilm-style Color Chrome Effect (0..100, deepens saturated colours) and
+    # Color Chrome FX Blue (0..100, deepens blues specifically).
+    edit_chrome_effect: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_chrome_blue: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Pro-Mist-style diffusion (0..100): highlights bloom/halate softly.
+    edit_mist: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     albums: Mapped[list["AlbumImage"]] = relationship(back_populates="image", cascade="all, delete-orphan")
     tag_links: Mapped[list["ImageTag"]] = relationship(cascade="all, delete-orphan")

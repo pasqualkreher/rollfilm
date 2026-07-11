@@ -14,6 +14,10 @@ export interface EditPreset {
   clarity: number;
   sharpness: number;
   colorTint: number;
+  // Optional so presets saved before these existed still load.
+  chromeEffect?: number;
+  chromeBlue?: number;
+  mist?: number;
 }
 
 const KEY = "pm.editorPresets";

@@ -44,6 +44,14 @@ export function ImageDetail() {
   // Passed from the Library grid so arrow keys can zap through the same
   // filtered/ordered set of photos you were browsing, not the whole library.
   const imageIds = (location.state as { imageIds?: string[] } | null)?.imageIds;
+  // Where the back arrow should lead. Set e.g. after "Save copy" (which jumps
+  // here directly) so back goes to the Library instead of replaying history.
+  const backTo = (location.state as { backTo?: string } | null)?.backTo;
+
+  function goBack() {
+    if (backTo) navigate(backTo);
+    else navigate(-1);
+  }
 
   // The route param changes on arrow-key navigation (same component instance,
   // React Router just re-renders it) - activeId must follow it, or the RAW/JPEG
@@ -120,7 +128,7 @@ export function ImageDetail() {
       // one press doesn't do both.
       if (e.key === "Escape") {
         if (zoomed) resetZoom();
-        else navigate(-1);
+        else goBack();
         return;
       }
 
@@ -235,12 +243,12 @@ export function ImageDetail() {
         return;
       }
     }
-    navigate(-1);
+    goBack();
   }
 
   return (
     <div className="page detail-page">
-      <button className="icon-btn back-btn" onClick={() => navigate(-1)} title="Back (Esc)" aria-label="Back">
+      <button className="icon-btn back-btn" onClick={goBack} title="Back (Esc)" aria-label="Back">
         ←
       </button>
       <div className="detail-layout" style={{ marginTop: 16 }}>

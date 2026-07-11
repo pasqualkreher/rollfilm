@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
@@ -9,6 +10,9 @@ import {
   applyDistortion,
   applyGrain,
   clarity as clarityPass,
+  dehaze as dehazePass,
+  denoise as denoisePass,
+  mist as mistPass,
   unsharp,
   BAND_SWATCH,
   COLOR_BANDS,
@@ -71,9 +75,11 @@ function normalizeRect(r: DragRect): CropBox {
 
 function GridLines({ type }: { type: GridOverlay }) {
   if (type === "none") return null;
-  const stroke = "rgba(255,255,255,0.55)";
+  // Dark grey lines (with a faint light edge from CSS drop-shadow) so the
+  // composition guides stay subtle and readable over most photos.
+  const stroke = "rgba(40,40,46,0.7)";
   const line = (x1: number, y1: number, x2: number, y2: number, i: number) => (
-    <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={stroke} strokeWidth={0.4} vectorEffect="non-scaling-stroke" />
+    <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={stroke} strokeWidth={0.5} vectorEffect="non-scaling-stroke" />
   );
   const els: JSX.Element[] = [];
   if (type === "thirds") {
@@ -97,17 +103,20 @@ function Slider({
   value,
   onChange,
   min = -100,
+  format,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   min?: number;
+  // Optional value formatter (e.g. exposure rendered in EV stops).
+  format?: (v: number) => string;
 }) {
   return (
     <label className="editor-slider">
       <span className="editor-slider-head">
         <span>{label}</span>
-        <span className="editor-slider-val">{value > 0 ? `+${value}` : value}</span>
+        <span className="editor-slider-val">{format ? format(value) : value > 0 ? `+${value}` : value}</span>
       </span>
       <input
         type="range"
@@ -124,6 +133,7 @@ function Slider({
 
 export function PhotoEditor({ image, onClose }: Props) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const baseRef = useRef<ImageData | null>(null); // raw pixels (no edits)
   const baseCanvasRef = useRef<HTMLCanvasElement | null>(null); // base drawn, for rotation
@@ -133,6 +143,51 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Cache the distortion-corrected base so it's only recomputed when the
   // distortion slider changes, not on every tonal tweak.
   const distortRef = useRef<{ amount: number; canvas: HTMLCanvasElement } | null>(null);
+  const histRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Live RGB histogram of the rendered preview (Lightroom/RapidRAW-style),
+  // redrawn on every preview render. Screen-blended channel fills; sqrt scaling
+  // so shadows/highlights detail stays readable next to big midtone peaks.
+  function drawHistogram(img: ImageData) {
+    const hc = histRef.current;
+    if (!hc) return;
+    const ctx = hc.getContext("2d")!;
+    const W = hc.width;
+    const H = hc.height;
+    const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+    const d = img.data;
+    // Sample ~120k pixels regardless of preview size.
+    const step = Math.max(1, Math.floor(d.length / 4 / 120000)) * 4;
+    for (let i = 0; i < d.length; i += step) {
+      bins[0][d[i]]++;
+      bins[1][d[i + 1]]++;
+      bins[2][d[i + 2]]++;
+    }
+    // Scale by the max over the interior bins so clipped-end spikes don't
+    // flatten the rest of the curve (the ends still draw, just capped).
+    let max = 1;
+    for (let ch = 0; ch < 3; ch++) {
+      for (let v = 1; v < 255; v++) if (bins[ch][v] > max) max = bins[ch][v];
+    }
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#141416";
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "screen";
+    const colors = ["#c33f3f", "#3f9c4a", "#3f63c3"];
+    for (let ch = 0; ch < 3; ch++) {
+      ctx.fillStyle = colors[ch];
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      for (let v = 0; v < 256; v++) {
+        const y = H - Math.min(1, Math.sqrt(bins[ch][v] / max)) * (H - 2);
+        ctx.lineTo((v / 255) * W, y);
+      }
+      ctx.lineTo(W, H);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
 
   const saved = editsFromImage(image);
   const [adj, setAdj] = useState<Adjustments>(() => adjustmentsFromImage(image));
@@ -147,6 +202,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [clarity, setClarity] = useState(saved.clarity);
   const [sharpness, setSharpness] = useState(saved.sharpness);
   const [colorTint, setColorTint] = useState(saved.colorTint);
+  const [chromeEffect, setChromeEffect] = useState(saved.chromeEffect);
+  const [chromeBlue, setChromeBlue] = useState(saved.chromeBlue);
+  const [mistAmount, setMistAmount] = useState(saved.mist);
   const [band, setBand] = useState<ColorBand>("red");
   const [gridOverlay, setGridOverlay] = useState<GridOverlay>("none");
   const [filmSim, setFilmSim] = useState("");
@@ -163,6 +221,10 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [bgMode, setBgMode] = useState<"light" | "dark">("light");
+  // Hold-to-compare: while true, the canvas re-renders with every tonal/colour/
+  // effect neutralised (geometry kept, so the frame doesn't jump) - a quick
+  // before/after against the original.
+  const [compare, setCompare] = useState(false);
   // Scroll/pinch to zoom (toward cursor), drag to pan - same as the lightbox.
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -177,7 +239,13 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Compose: rotate + crop the raw base, then run tonal/colour/vignette on the
   // resulting (final) frame - same order as the backend, so preview == save.
   function drawPreview(
-    px: Adjustments & { colorMix: ColorMix; vignette: number; colorTint: number },
+    px: Adjustments & {
+      colorMix: ColorMix;
+      vignette: number;
+      colorTint: number;
+      chromeEffect: number;
+      chromeBlue: number;
+    },
     rot: number,
     cr: CropBox | null,
     cropping: boolean,
@@ -186,7 +254,8 @@ export function PhotoEditor({ image, onClose }: Props) {
     cl: number,
     sp: number,
     gr: number,
-    gsz: number
+    gsz: number,
+    mst: number
   ) {
     const base = baseRef.current;
     const baseCanvas = baseCanvasRef.current;
@@ -239,25 +308,25 @@ export function PhotoEditor({ image, onClose }: Props) {
     frame.width = fw;
     frame.height = fh;
     const fctx = frame.getContext("2d")!;
-    // Denoise: a light Gaussian blur, scaled to frame size to roughly match the
-    // backend render.
-    if (dn > 0) {
-      const radius = (dn / 100) * (Math.max(fw, fh) / 600);
-      if (radius > 0.1) fctx.filter = `blur(${radius}px)`;
-    }
     fctx.drawImage(rotc, sx, sy, sw, sh, 0, 0, fw, fh);
-    fctx.filter = "none";
 
-    // Detail (spatial) before the tonal pass, matching the backend order.
+    // Spatial passes before the tonal pass, matching the backend order:
+    // denoise -> clarity -> sharpness -> dehaze.
     let work = fctx.getImageData(0, 0, fw, fh);
+    if (dn > 0) work = denoisePass(work, dn);
     if (cl) work = clarityPass(work, Math.max(3, Math.max(fw, fh) / 60), (cl / 100) * 0.9);
-    if (sp) work = unsharp(work, Math.max(0.6, Math.max(fw, fh) / 1500), (sp / 100) * 1.2);
-    const out = fctx.createImageData(fw, fh);
+    // Radius capped like the backend - fine, tight sharpening without halos.
+    if (sp) work = unsharp(work, Math.min(2, Math.max(0.6, Math.max(fw, fh) / 2000)), (sp / 100) * 1.2);
+    if (px.dehaze) work = dehazePass(work, px.dehaze);
+    let out = fctx.createImageData(fw, fh);
     applyAdjustments(work.data, out.data, px, fw, fh);
+    // Mist blooms the toned image (backend order match), then grain on top.
+    if (mst > 0) out = mistPass(out, mst);
     if (gr > 0) applyGrain(out, gr, gsz);
     canvas.width = fw;
     canvas.height = fh;
     canvas.getContext("2d")!.putImageData(out, 0, 0);
+    drawHistogram(out);
   }
 
   useEffect(() => {
@@ -312,34 +381,44 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   useEffect(() => {
     if (!ready) return;
+    // In compare mode neutralise the tonal/colour/detail passes (keeping only
+    // geometry, so the frame size is unchanged) to show the untouched original.
+    const px = compare
+      ? { ...NEUTRAL, colorMix: neutralMix(), vignette: 0, colorTint: 0, chromeEffect: 0, chromeBlue: 0 }
+      : { ...adj, colorMix, vignette, colorTint, chromeEffect, chromeBlue };
     const raf = requestAnimationFrame(() =>
       drawPreview(
-        { ...adj, colorMix, vignette, colorTint },
+        px,
         rotation,
         crop,
         cropMode,
         distortion,
-        denoise,
-        clarity,
-        sharpness,
-        grain,
-        grainSize
+        compare ? 0 : denoise,
+        compare ? 0 : clarity,
+        compare ? 0 : sharpness,
+        compare ? 0 : grain,
+        grainSize,
+        compare ? 0 : mistAmount
       )
     );
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     ready,
+    compare,
     adj,
     colorMix,
     vignette,
     colorTint,
+    chromeEffect,
+    chromeBlue,
     distortion,
     grain,
     grainSize,
     denoise,
     clarity,
     sharpness,
+    mistAmount,
     rotation,
     crop,
     cropMode,
@@ -392,6 +471,9 @@ export function PhotoEditor({ image, onClose }: Props) {
     clarity,
     sharpness,
     colorTint,
+    chromeEffect,
+    chromeBlue,
+    mist: mistAmount,
   };
 
   // Apply a Fujifilm-style film simulation, blended toward neutral by `strength`
@@ -407,6 +489,8 @@ export function PhotoEditor({ image, onClose }: Props) {
     setGrain(resolved?.grain ?? 0);
     setGrainSize(resolved?.grainSize ?? 0);
     setClarity(resolved?.clarity ?? 0);
+    setChromeEffect(resolved?.chromeEffect ?? 0);
+    setChromeBlue(resolved?.chromeBlue ?? 0);
   }
 
   function applyPreset(p: EditPreset) {
@@ -421,6 +505,9 @@ export function PhotoEditor({ image, onClose }: Props) {
     setClarity(p.clarity ?? 0);
     setSharpness(p.sharpness ?? 0);
     setColorTint(p.colorTint ?? 0);
+    setChromeEffect(p.chromeEffect ?? 0);
+    setChromeBlue(p.chromeBlue ?? 0);
+    setMistAmount(p.mist ?? 0);
   }
 
   function confirmSavePreset() {
@@ -437,6 +524,9 @@ export function PhotoEditor({ image, onClose }: Props) {
       clarity,
       sharpness,
       colorTint,
+      chromeEffect,
+      chromeBlue,
+      mist: mistAmount,
     });
     setPresets(loadPresets());
     setSelectedPreset(name);
@@ -463,10 +553,14 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   const saveCopy = useMutation({
     mutationFn: () => api.images.saveCopy(image.id, edits),
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       onClose();
+      // Jump to the freshly created edited photo rather than staying on the
+      // original - and make its back arrow lead to the Library, not back
+      // through the editing history.
+      navigate(`/image/${created.id}`, { state: { backTo: "/" } });
     },
   });
 
@@ -513,7 +607,10 @@ export function PhotoEditor({ image, onClose }: Props) {
     denoise === 0 &&
     clarity === 0 &&
     sharpness === 0 &&
-    colorTint === 0;
+    colorTint === 0 &&
+    chromeEffect === 0 &&
+    chromeBlue === 0 &&
+    mistAmount === 0;
 
   return (
     <div className="editor-overlay">
@@ -609,6 +706,16 @@ export function PhotoEditor({ image, onClose }: Props) {
                 Black background
               </button>
             </span>
+            <button
+              className={`btn btn-sm editor-compare-btn${compare ? " active" : ""}`}
+              onMouseDown={() => setCompare(true)}
+              onMouseUp={() => setCompare(false)}
+              onMouseLeave={() => setCompare(false)}
+              disabled={allNeutral}
+              title="Hold to compare with the original"
+            >
+              {compare ? "Showing original" : "Compare"}
+            </button>
           </div>
         )}
       </div>
@@ -704,9 +811,20 @@ export function PhotoEditor({ image, onClose }: Props) {
 
         {/* Light */}
         <div className="editor-section-title">Light</div>
+        {/* Live RGB histogram of the current preview, right with the tonal
+            controls it responds to. */}
+        <canvas ref={histRef} className="editor-histogram" width={256} height={64} />
         <div className="editor-sliders">
           {LIGHT_KEYS.map((k) => (
-            <Slider key={k} label={labelFor(k)} value={adj[k]} onChange={(v) => setAdj((a) => ({ ...a, [k]: v }))} />
+            <Slider
+              key={k}
+              label={labelFor(k)}
+              value={adj[k]}
+              onChange={(v) => setAdj((a) => ({ ...a, [k]: v }))}
+              // Exposure maps to +/-2 stops; show the actual EV so the number
+              // means something photographic.
+              format={k === "exposure" ? (v) => `${v > 0 ? "+" : ""}${((v / 100) * 2).toFixed(2)} EV` : undefined}
+            />
           ))}
         </div>
 
@@ -716,6 +834,9 @@ export function PhotoEditor({ image, onClose }: Props) {
           {COLOR_KEYS.map((k) => (
             <Slider key={k} label={labelFor(k)} value={adj[k]} onChange={(v) => setAdj((a) => ({ ...a, [k]: v }))} />
           ))}
+          {/* Fuji in-camera colour depth options. */}
+          <Slider label="Color chrome" value={chromeEffect} onChange={setChromeEffect} min={0} />
+          <Slider label="Chrome blue" value={chromeBlue} onChange={setChromeBlue} min={0} />
         </div>
 
         {/* Color mixer */}
@@ -750,6 +871,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         <div className="editor-sliders">
           <Slider label="Distortion" value={distortion} onChange={setDistortion} />
           <Slider label="Vignette" value={vignette} onChange={setVignette} />
+          <Slider label="Mist" value={mistAmount} onChange={setMistAmount} min={0} />
           <Slider label="Grain" value={grain} onChange={setGrain} min={0} />
           <Slider label="Grain size" value={grainSize} onChange={setGrainSize} min={0} />
         </div>
@@ -852,6 +974,9 @@ export function PhotoEditor({ image, onClose }: Props) {
                 setClarity(0);
                 setSharpness(0);
                 setColorTint(0);
+                setChromeEffect(0);
+                setChromeBlue(0);
+                setMistAmount(0);
               }}
             >
               Reset all

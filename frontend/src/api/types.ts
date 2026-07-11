@@ -57,6 +57,9 @@ export interface ImageOut {
   edit_clarity: number;
   edit_sharpness: number;
   edit_color_tint: number;
+  edit_chrome_effect: number;
+  edit_chrome_blue: number;
+  edit_mist: number;
   tags: string[];
   album_ids: string[];
 }

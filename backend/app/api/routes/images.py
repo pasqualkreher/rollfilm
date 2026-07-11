@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import logging
+import re
 import shutil
 import zipfile
 from datetime import datetime, timezone
@@ -581,6 +582,9 @@ def save_edits(
     image.edit_clarity = _clamp100(payload.clarity)
     image.edit_sharpness = _clamp100(payload.sharpness)
     image.edit_color_tint = _clamp100(payload.color_tint)
+    image.edit_chrome_effect = max(0, min(100, int(payload.chrome_effect)))
+    image.edit_chrome_blue = max(0, min(100, int(payload.chrome_blue)))
+    image.edit_mist = max(0, min(100, int(payload.mist)))
     image.edit_color_mix = _clean_color_mix(payload.color_mix)
     # Tag edited photos "edit" so they're easy to find; drop the tag if the edit
     # was reset back to the original look.
@@ -599,6 +603,9 @@ def save_edits(
                 "clarity",
                 "sharpness",
                 "color_tint",
+                "chrome_effect",
+                "chrome_blue",
+                "mist",
             )
         )
     )
@@ -637,6 +644,11 @@ def save_copy(
     adjustments["denoise"] = max(0, min(100, int(payload.denoise)))
     adjustments["clarity"] = _clamp100(payload.clarity)
     adjustments["sharpness"] = _clamp100(payload.sharpness)
+    # color_tint was missing here before - saved copies silently dropped it.
+    adjustments["color_tint"] = _clamp100(payload.color_tint)
+    adjustments["chrome_effect"] = max(0, min(100, int(payload.chrome_effect)))
+    adjustments["chrome_blue"] = max(0, min(100, int(payload.chrome_blue)))
+    adjustments["mist"] = max(0, min(100, int(payload.mist)))
     cleaned_mix = _clean_color_mix(payload.color_mix)
     adjustments["color_mix"] = json.loads(cleaned_mix) if cleaned_mix else None
 
@@ -652,9 +664,19 @@ def save_copy(
     edited.save(buf, "JPEG", quality=95)
     data = buf.getvalue()
 
-    filename = f"{Path(src.original_filename).stem}_edited.jpg"
+    # Name edited copies "<stem>_edit-1.jpg", "_edit-2", ... - the first free
+    # number, so repeated copies of the same photo don't overwrite each other.
+    # Strip an existing "_edit-<n>" suffix first, so a copy of a copy counts up
+    # (DSCF0048_edit-2.jpg) instead of stacking (DSCF0048_edit-1_edit-1.jpg).
+    stem = re.sub(r"_edit-\d+$", "", Path(src.original_filename).stem)
     taken_at = src.taken_at or datetime.now(timezone.utc)
-    rel_path = library_relative_path(taken_at, filename, settings.library_root)
+    n = 1
+    while True:
+        filename = f"{stem}_edit-{n}.jpg"
+        rel_path = library_relative_path(taken_at, filename, settings.library_root)
+        if not (settings.library_root / rel_path).exists():
+            break
+        n += 1
     (settings.library_root / rel_path).write_bytes(data)
 
     new_image = Image(

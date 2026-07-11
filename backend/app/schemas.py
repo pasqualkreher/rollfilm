@@ -54,6 +54,9 @@ class ImageOut(BaseModel):
     edit_clarity: int
     edit_sharpness: int
     edit_color_tint: int
+    edit_chrome_effect: int
+    edit_chrome_blue: int
+    edit_mist: int
     tags: list[str]
     album_ids: list[str]
 
@@ -128,6 +131,9 @@ class ImageEdits(ImageAdjustments):
     clarity: int = 0  # midtone local contrast, -100..100
     sharpness: int = 0  # edge sharpening / softening, -100..100
     color_tint: int = 0  # global hue rotation, -100..100 -> +/-180 deg
+    chrome_effect: int = 0  # Fuji Color Chrome Effect: deepen saturated colours, 0..100
+    chrome_blue: int = 0  # Fuji Color Chrome FX Blue: deepen blues, 0..100
+    mist: int = 0  # Pro-Mist diffusion: highlight bloom/halation, 0..100
 
 
 class BulkImageUpdate(BaseModel):

@@ -46,7 +46,26 @@ export function editVersion(image: ImageOut): string {
     image.edit_clarity,
     image.edit_sharpness,
     image.edit_color_tint,
+    image.edit_chrome_effect,
+    image.edit_chrome_blue,
+    image.edit_mist,
   ].join("-");
+}
+
+// The editor state uses camelCase; the API's pydantic model is snake_case.
+// Multi-word fields MUST be renamed here - pydantic silently ignores unknown
+// keys, so a camelCase key wouldn't error, it would just drop the edit (this
+// bit us: colorMix/grainSize/colorTint were lost on every save).
+function apiEdits(edits: ImageEdits) {
+  const { colorMix, grainSize, colorTint, chromeEffect, chromeBlue, ...rest } = edits;
+  return {
+    ...rest,
+    color_mix: colorMix,
+    grain_size: grainSize,
+    color_tint: colorTint,
+    chrome_effect: chromeEffect,
+    chrome_blue: chromeBlue,
+  };
 }
 
 // In the Electron app the backend runs on a random localhost port, injected by
@@ -193,11 +212,11 @@ export const api = {
     },
     // Save the full non-destructive edit (rotation + crop + tonal) in place.
     saveEdits(id: string, edits: ImageEdits): Promise<ImageOut> {
-      return request(`/images/${id}/edits`, { method: "PATCH", body: JSON.stringify(edits) });
+      return request(`/images/${id}/edits`, { method: "PATCH", body: JSON.stringify(apiEdits(edits)) });
     },
     // Bake the edit into a new managed library photo (tagged "edited").
     saveCopy(id: string, edits: ImageEdits): Promise<ImageOut> {
-      return request(`/images/${id}/save-copy`, { method: "POST", body: JSON.stringify(edits) });
+      return request(`/images/${id}/save-copy`, { method: "POST", body: JSON.stringify(apiEdits(edits)) });
     },
     thumbnailUrl(id: string, version?: string): string {
       return derivativeUrl(`/images/${id}/thumbnail`, version);
