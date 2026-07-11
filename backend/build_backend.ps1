@@ -42,9 +42,15 @@ $EtDir = Join-Path $Here "..\electron\resources\exiftool"
 if (Test-Path $EtDir) { Remove-Item -Recurse -Force $EtDir }
 New-Item -ItemType Directory -Force -Path $EtDir | Out-Null
 $TmpZip = Join-Path $env:TEMP $Zip
-# exiftool.org no longer serves the versioned zips (404) - use the SourceForge
-# mirror, same as build_backend.sh does for the unix tarball.
-Invoke-WebRequest -UseBasicParsing "https://sourceforge.net/projects/exiftool/files/$Zip/download" -OutFile $TmpZip
+# exiftool.org no longer serves the versioned zips (404). Fetch from the
+# SourceForge *direct-download* host via curl.exe: the "/files/.../download"
+# web URL can answer with an HTML interstitial page, which then explodes in
+# Expand-Archive as a FileFormatException.
+& curl.exe -fsSL "https://downloads.sourceforge.net/project/exiftool/$Zip" -o $TmpZip
+if ($LASTEXITCODE -ne 0) { Write-Error "exiftool download failed" }
+# Sanity check: a real zip starts with "PK".
+$sig = [System.Text.Encoding]::ASCII.GetString((Get-Content $TmpZip -AsByteStream -TotalCount 2))
+if ($sig -ne "PK") { Write-Error "Downloaded exiftool file is not a zip (got HTML?)" }
 $TmpDir = Join-Path $env:TEMP "exiftool-extract"
 if (Test-Path $TmpDir) { Remove-Item -Recurse -Force $TmpDir }
 Expand-Archive -Path $TmpZip -DestinationPath $TmpDir
