@@ -53,9 +53,20 @@ jobs:
         with:
           node-version: 22
 
+      # NOT setup-python on macOS: its Python builds ship a sqlite3 without
+      # loadable-extension support, and the backend needs enable_load_extension
+      # for sqlite-vec — the packaged app would crash on startup. Homebrew's
+      # Python is built with extension loading enabled.
       - uses: actions/setup-python@v5
+        if: runner.os != 'macOS'
         with:
           python-version: "3.11"
+
+      - name: Install Python 3.11 (Homebrew, macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install python@3.11
+          echo "$(brew --prefix python@3.11)/libexec/bin" >> "$GITHUB_PATH"
 
       - name: Create backend venv (with CPU torch + PyInstaller)
         shell: bash
@@ -65,6 +76,10 @@ jobs:
           # Always go through `python -m pip`: on Windows the pip.exe shim
           # can't replace itself during `pip install --upgrade pip`.
           if [ "$RUNNER_OS" = "Windows" ]; then PY=".venv/Scripts/python"; else PY=".venv/bin/python"; fi
+          # Fail the build right here if this Python can't load sqlite
+          # extensions — shipping it would produce an app whose backend
+          # crashes on launch (sqlite-vec is loaded on every DB connection).
+          "$PY" -c "import sqlite3; sqlite3.connect(':memory:').enable_load_extension(True); print('sqlite3 extension loading: OK')"
           "$PY" -m pip install --upgrade pip
           # CPU-only torch: much smaller than the CUDA default on Linux/Windows.
           # On macOS the regular PyPI wheels are already CPU/MPS.

@@ -7,7 +7,9 @@ import { ImageDetail } from "./pages/ImageDetail";
 import { Settings } from "./pages/Settings";
 import { Selects } from "./pages/Selects";
 import { MapView } from "./pages/MapView";
+import { Help } from "./pages/Help";
 import { SearchBar } from "./components/SearchBar";
+import { WelcomeGuide } from "./components/WelcomeGuide";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
@@ -51,6 +53,7 @@ function TopBar() {
         <ImportNavLink />
         <SelectsNavLink />
         <NavLink to="/settings">Settings</NavLink>
+        <NavLink to="/help">Help</NavLink>
       </nav>
       {locked && (
         <span className="nav-task" role="status" aria-live="polite">
@@ -80,7 +83,10 @@ export default function App() {
             <Route path="/map" element={<MapView />} />
             <Route path="/selects" element={<Selects />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/help" element={<Help />} />
             </Routes>
+
+            <WelcomeGuide />
           </div>
         </ImportSessionProvider>
       </SelectsProvider>

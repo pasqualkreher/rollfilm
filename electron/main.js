@@ -9,7 +9,7 @@
 //   4. Expose a native folder picker over IPC (the whole reason for going
 //      desktop: any host path is directly readable by the native backend).
 
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("child_process");
 const net = require("net");
 const http = require("http");
@@ -165,14 +165,15 @@ function pingOnce(url) {
   });
 }
 
-async function waitForHealth(timeoutMs = 120000) {
+// Resolves with "ok" (healthy), "died" (backend process exited) or "timeout".
+async function waitForHealth(timeoutMs = 180000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (backendProc && backendProc.exitCode !== null) return false; // died early
-    if (await pingOnce(`${apiBaseUrl}/health`)) return true;
+    if (!backendProc || backendProc.exitCode !== null) return "died";
+    if (await pingOnce(`${apiBaseUrl}/health`)) return "ok";
     await new Promise((r) => setTimeout(r, 500));
   }
-  return false;
+  return "timeout";
 }
 
 function resolveBackendCommand() {
@@ -209,20 +210,51 @@ function resolveBackendCommand() {
   return { cmd: py, args: ["run_server.py"], cwd: backendDir, env };
 }
 
+// Backend output goes to a log file in userData (a packaged app has no
+// terminal, so without this a backend crash leaves nothing to diagnose).
+// The previous launch's log is kept as backend.previous.log.
+function backendLogPath() {
+  return path.join(app.getPath("userData"), "logs", "backend.log");
+}
+
+function openBackendLogStream() {
+  const logFile = backendLogPath();
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  try {
+    if (fs.existsSync(logFile)) {
+      fs.renameSync(logFile, path.join(path.dirname(logFile), "backend.previous.log"));
+    }
+  } catch {
+    /* rotating is best-effort */
+  }
+  return fs.createWriteStream(logFile, { flags: "a" });
+}
+
 function startBackend() {
   const { cmd, args, cwd, env } = resolveBackendCommand();
+  const log = openBackendLogStream();
+  log.write(`[main] ${new Date().toISOString()} launching: ${cmd} ${args.join(" ")}\n`);
   backendProc = spawn(cmd, args, { cwd, env });
 
-  backendProc.stdout.on("data", (d) => process.stdout.write(`[backend] ${d}`));
-  backendProc.stderr.on("data", (d) => process.stderr.write(`[backend] ${d}`));
+  backendProc.stdout.on("data", (d) => {
+    process.stdout.write(`[backend] ${d}`);
+    log.write(d);
+  });
+  backendProc.stderr.on("data", (d) => {
+    process.stderr.write(`[backend] ${d}`);
+    log.write(d);
+  });
   backendProc.on("error", (err) => {
+    log.write(`[main] failed to launch backend: ${err.message}\n`);
     dialog.showErrorBox(
       "Backend failed to start",
-      `Could not launch the backend process:\n\n${cmd}\n\n${err.message}`
+      `Could not launch the backend process:\n\n${cmd}\n\n${err.message}\n\nLog file:\n${backendLogPath()}`
     );
   });
   backendProc.on("exit", (code, signal) => {
     process.stderr.write(`[backend] exited (code=${code}, signal=${signal})\n`);
+    log.write(`[main] backend exited (code=${code}, signal=${signal})\n`);
+    log.end();
     backendProc = null;
   });
 }
@@ -337,21 +369,52 @@ app.whenReady().then(async () => {
   apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 
   console.log(`[main] starting backend, expecting ${apiBaseUrl}`);
-  setSplashStatus("Starting backend…");
+  setSplashStatus("Starting backend… the first launch can take a few minutes");
   startBackend();
-  const healthy = await waitForHealth();
-  if (healthy) {
-    console.log("[main] backend healthy — opening window");
-    setSplashStatus("Loading your library…");
-  } else {
-    closeSplash();
-    dialog.showErrorBox(
-      "Backend did not start",
-      "The Photo Manager backend did not become ready in time. See the logs for details."
-    );
-    app.quit();
-    return;
+
+  // First launch of a packaged build is genuinely slow (Gatekeeper scans the
+  // bundle, torch imports, DB migrations run), so on timeout offer to keep
+  // waiting instead of giving up — and point at the log file either way.
+  let result = await waitForHealth();
+  while (result !== "ok") {
+    if (result === "died") {
+      closeSplash();
+      const choice = await dialog.showMessageBox({
+        type: "error",
+        title: "Backend did not start",
+        message: "The Photo Manager backend stopped unexpectedly.",
+        detail: `The log usually shows why:\n${backendLogPath()}`,
+        buttons: ["Open log folder", "Quit"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (choice.response === 0) shell.showItemInFolder(backendLogPath());
+      app.quit();
+      return;
+    }
+    // timeout — backend is still running, just not ready yet
+    const choice = await dialog.showMessageBox({
+      type: "warning",
+      title: "Backend is taking a while",
+      message: "The Photo Manager backend is still starting.",
+      detail:
+        "The first launch can take several minutes (macOS verifies the app and the " +
+        `image engine loads). You can keep waiting or quit.\n\nLog file:\n${backendLogPath()}`,
+      buttons: ["Keep waiting", "Quit"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (choice.response !== 0) {
+      closeSplash();
+      app.quit();
+      return;
+    }
+    result = await waitForHealth(120000);
   }
+  console.log("[main] backend healthy — opening window");
+  setSplashStatus("Loading your library…");
 
   createWindow();
 
