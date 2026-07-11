@@ -11,15 +11,39 @@ name: Build desktop installers
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Which installers to build"
+        type: choice
+        default: all
+        options: [all, macos, windows, linux]
   push:
     tags: ["v*"]
 
 jobs:
+  # Cheap ubuntu job that turns the platform choice into the build matrix -
+  # lets a single failed platform be rebuilt without re-running the others
+  # (the macOS runner burns private-repo minutes at a 10x multiplier).
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        run: |
+          case "${{ github.event.inputs.platform || 'all' }}" in
+            macos)   echo 'matrix=["macos-latest"]' >> "$GITHUB_OUTPUT";;
+            windows) echo 'matrix=["windows-latest"]' >> "$GITHUB_OUTPUT";;
+            linux)   echo 'matrix=["ubuntu-latest"]' >> "$GITHUB_OUTPUT";;
+            *)       echo 'matrix=["macos-latest","windows-latest","ubuntu-latest"]' >> "$GITHUB_OUTPUT";;
+          esac
+
   build:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        os: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -38,16 +62,18 @@ jobs:
         run: |
           cd backend
           python -m venv .venv
-          if [ "$RUNNER_OS" = "Windows" ]; then PIP=".venv/Scripts/pip"; else PIP=".venv/bin/pip"; fi
-          "$PIP" install --upgrade pip
+          # Always go through `python -m pip`: on Windows the pip.exe shim
+          # can't replace itself during `pip install --upgrade pip`.
+          if [ "$RUNNER_OS" = "Windows" ]; then PY=".venv/Scripts/python"; else PY=".venv/bin/python"; fi
+          "$PY" -m pip install --upgrade pip
           # CPU-only torch: much smaller than the CUDA default on Linux/Windows.
           # On macOS the regular PyPI wheels are already CPU/MPS.
           if [ "$RUNNER_OS" = "macOS" ]; then
-            "$PIP" install torch torchvision
+            "$PY" -m pip install torch torchvision
           else
-            "$PIP" install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+            "$PY" -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           fi
-          "$PIP" install -e . pyinstaller
+          "$PY" -m pip install -e . pyinstaller
 
       - name: Build installer
         run: node build-desktop.js
