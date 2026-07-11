@@ -18,7 +18,8 @@ __pycache__/
 *$py.class
 *.egg-info/
 .eggs/
-build/
+# Python build output only - electron/build/ holds the (tracked) app icon.
+/backend/build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
