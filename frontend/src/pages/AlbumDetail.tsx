@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ColorLabel, LibraryFilters, ViewMode } from "../api/types";
@@ -26,6 +26,7 @@ export function AlbumDetail() {
   const [selectMode, setSelectMode] = useState(false);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const selects = useSelects();
   const mergePairs = useMergePairs();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -207,9 +208,30 @@ export function AlbumDetail() {
 
   return (
     <div className="page page-timeline">
-      <h2 className="section-title">
+      <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {album?.name ?? "Album"}
         {album && <span className="count-pill">{album.image_count} photos</span>}
+        <span style={{ flex: 1 }} />
+        {album && (
+          <button
+            className="btn quiet-danger btn-sm"
+            title="Delete this album - its photos stay in the library"
+            onClick={async () => {
+              if (
+                !window.confirm(
+                  `Delete album “${album.name}”? Its ${album.image_count} photo(s) stay in your library.`
+                )
+              ) {
+                return;
+              }
+              await api.albums.remove(album.id);
+              queryClient.invalidateQueries({ queryKey: ["albums"] });
+              navigate("/albums");
+            }}
+          >
+            Delete album
+          </button>
+        )}
       </h2>
       <PhotoFilters
         viewMode={viewMode}

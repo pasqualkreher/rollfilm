@@ -17,6 +17,14 @@ export function Albums() {
     },
   });
 
+  // Deleting an album only removes the album itself (and its photo links) -
+  // the photos stay in the library untouched.
+  async function deleteAlbum(id: string, albumName: string, count: number) {
+    if (!window.confirm(`Delete album “${albumName}”? Its ${count} photo(s) stay in your library.`)) return;
+    await api.albums.remove(id);
+    queryClient.invalidateQueries({ queryKey: ["albums"] });
+  }
+
   return (
     <div className="page">
       <h2 className="section-title">Albums</h2>
@@ -40,13 +48,24 @@ export function Albums() {
           <Link
             key={album.id}
             to={`/albums/${album.id}`}
-            className="thumb-card"
+            className="thumb-card has-remove"
             style={{ display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}
           >
             <div style={{ textAlign: "center", color: "var(--text)" }}>
               <div style={{ fontWeight: 600 }}>{album.name}</div>
               <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{album.image_count} photos</div>
             </div>
+            <button
+              className="card-remove"
+              title="Delete album (photos stay in the library)"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                deleteAlbum(album.id, album.name, album.image_count);
+              }}
+            >
+              ×
+            </button>
           </Link>
         ))}
       </div>
