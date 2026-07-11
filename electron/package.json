@@ -11,7 +11,7 @@
     "dev": "concurrently -k -n renderer,electron \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "cd ../frontend && npm run dev",
     "dev:electron": "wait-on tcp:127.0.0.1:5173 && cross-env PM_DEV=1 electron .",
-    "copy:renderer": "rm -rf renderer && cp -r ../frontend/dist renderer",
+    "copy:renderer": "node -e \"const fs=require('fs');fs.rmSync('renderer',{recursive:true,force:true});fs.cpSync('../frontend/dist','renderer',{recursive:true})\"",
     "build:renderer": "cd ../frontend && npm run build && cd ../electron && npm run copy:renderer",
     "build:backend": "cd ../backend && sh build_backend.sh",
     "pack": "npm run build:renderer && npm run build:backend && electron-builder --dir",
@@ -46,6 +46,17 @@
       "category": "public.app-category.photography",
       "identity": null,
       "gatekeeperAssess": false
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Graphics"
     }
   }
 }

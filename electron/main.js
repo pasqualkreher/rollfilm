@@ -138,17 +138,25 @@ function resolveBackendCommand() {
     LIBRARY_ROOT: libraryRoot,
   };
 
+  const isWin = process.platform === "win32";
   if (app.isPackaged) {
     // PyInstaller onedir bundle shipped via electron-builder extraResources.
-    const exe = path.join(process.resourcesPath, "backend", "photo-manager-backend");
-    // Point the backend at the portable exiftool staged next to it.
-    env.EXIFTOOL_PATH = path.join(process.resourcesPath, "exiftool", "exiftool");
+    const exe = path.join(
+      process.resourcesPath,
+      "backend",
+      isWin ? "photo-manager-backend.exe" : "photo-manager-backend"
+    );
+    // Point the backend at the portable exiftool staged next to it (the
+    // standalone .exe on Windows, the Perl distribution elsewhere).
+    env.EXIFTOOL_PATH = path.join(process.resourcesPath, "exiftool", isWin ? "exiftool.exe" : "exiftool");
     return { cmd: exe, args: [], cwd: path.dirname(exe), env };
   }
 
   // Dev: run from the backend source tree using its local virtualenv.
   const backendDir = path.join(__dirname, "..", "backend");
-  const py = path.join(backendDir, ".venv", "bin", "python");
+  const py = isWin
+    ? path.join(backendDir, ".venv", "Scripts", "python.exe")
+    : path.join(backendDir, ".venv", "bin", "python");
   return { cmd: py, args: ["run_server.py"], cwd: backendDir, env };
 }
 

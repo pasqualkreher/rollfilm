@@ -25,8 +25,8 @@ hiddenimports = [
 hiddenimports += collect_submodules("uvicorn")
 
 # Grab data files + native libs (torch dylibs, libraw vendored by rawpy, the
-# open_clip BPE vocab, sqlite-vec's extension, etc.).
-for pkg in ("torch", "torchvision", "open_clip", "rawpy", "sqlite_vec", "PIL", "imagehash"):
+# open_clip BPE vocab, sqlite-vec's extension, OpenCV's native module, etc.).
+for pkg in ("torch", "torchvision", "open_clip", "rawpy", "sqlite_vec", "PIL", "imagehash", "cv2"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
