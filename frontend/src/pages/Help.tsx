@@ -312,12 +312,15 @@ export function Help() {
             with the backup's contents — you must type "delete" to confirm.
           </li>
           <li>
-            <strong>Sync database to library:</strong> removes database entries whose files vanished
-            from disk and reports files in the library folder that aren't imported.
+            <strong>Sync database to library:</strong> the one-stop repair. Removes database entries
+            whose files vanished from disk, deletes thumbnails that belong to no photo anymore,
+            regenerates missing thumbnails in the background, and reports files in the library
+            folder that aren't imported.
           </li>
           <li>
-            <strong>Rebuild all thumbnails:</strong> regenerates every thumbnail/preview from the
-            originals.
+            <strong>Rebuild all thumbnails:</strong> emergency reset — regenerates every
+            thumbnail/preview from the originals (slow). Only needed if thumbnails still look wrong
+            after a sync.
           </li>
         </ul>
 

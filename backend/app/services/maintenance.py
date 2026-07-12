@@ -15,6 +15,7 @@ from app.services.exif import read_exif
 from app.services.filesystem import resolve_image_path
 from app.services.raw import classify_file_type
 from app.services.thumbnails import derivative_dir, regenerate_for_image
+from app.services.trash import hard_delete_images
 from app.workers.queue import enqueue_post_import
 
 
@@ -24,38 +25,81 @@ class UploadedFile(Protocol):
 
 
 def sync_db_with_library(db: Session, owner_id: int) -> dict:
-    """The filesystem is the source of truth: any DB row whose file no
-    longer exists under LIBRARY_ROOT (e.g. deleted/moved outside the app)
-    gets removed, along with its cached thumbnails. Files found in the
-    library that aren't tracked in the DB are only reported, not
-    auto-imported - re-adding them is what the Import flow is for."""
+    """The filesystem is the source of truth: reconcile the database *and* the
+    thumbnail cache with what is actually in the library.
+
+    - DB rows whose managed file no longer exists under LIBRARY_ROOT (deleted/
+      moved outside the app) are removed. Done FK-safe via hard_delete_images:
+      RAW+JPEG pairs point at each other (and staged import files can point at
+      images), so plain row deletes could violate those constraints and abort
+      the whole sync half-way, leaving ghost entries behind.
+    - Cached thumbnail folders that belong to no image anymore are deleted.
+    - Photos whose thumbnail/preview is missing get it regenerated in the
+      background (only when their original is currently reachable).
+    - Files found in the library folder that aren't tracked in the DB are only
+      reported, not auto-imported - re-adding them is what the Import flow is
+      for.
+
+    Only the managed library folder is treated as source-of-truth for row
+    removal. External (source-root) photos are governed by their own scan
+    lifecycle and must NOT be pruned just because e.g. the NAS is momentarily
+    unmounted - that would wipe the whole index."""
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
-    removed = 0
-    for image in images:
-        # Only the managed library folder is treated as source-of-truth here.
-        # External (source-root) photos are governed by their own scan lifecycle
-        # and must NOT be pruned just because e.g. the NAS is momentarily
-        # unmounted - that would wipe the whole index.
-        if image.source_root_id is not None:
-            continue
-        if not (settings.library_root / image.file_path).exists():
-            shutil.rmtree(derivative_dir(image.id), ignore_errors=True)
-            db.delete(image)
-            removed += 1
+    missing = [
+        image
+        for image in images
+        if image.source_root_id is None
+        and not (settings.library_root / image.file_path).exists()
+    ]
+    hard_delete_images(db, missing, delete_files=False)
     db.commit()
+
+    kept = db.query(Image).filter(Image.owner_id == owner_id).all()
 
     tracked = {
         str((settings.library_root / img.file_path).resolve())
-        for img in db.query(Image)
-        .filter(Image.owner_id == owner_id, Image.source_root_id.is_(None))
-        .all()
+        for img in kept
+        if img.source_root_id is None
     }
     untracked = sum(
         1
         for path in settings.library_root.rglob("*")
         if path.is_file() and classify_file_type(path) is not None and str(path.resolve()) not in tracked
     )
-    return {"removed_missing_files": removed, "untracked_files_found": untracked}
+
+    # Thumbnail cache holds one folder per image id - drop any that no image
+    # row (of any owner; ids are globally unique) points at anymore, e.g. left
+    # behind by older deletes that never cleaned up.
+    valid_ids = {row[0] for row in db.query(Image.id).all()}
+    orphan_thumbnails_removed = 0
+    if settings.thumbnail_cache_root.is_dir():
+        for entry in settings.thumbnail_cache_root.iterdir():
+            if entry.is_dir() and entry.name not in valid_ids:
+                shutil.rmtree(entry, ignore_errors=True)
+                orphan_thumbnails_removed += 1
+
+    # ...and the reverse direction: queue regeneration for photos whose
+    # derivatives are missing, off the request path on the post-import pool.
+    thumbnails_queued = 0
+    for image in kept:
+        cache = derivative_dir(image.id)
+        if (cache / "thumbnail.jpg").exists() and (cache / "preview.jpg").exists():
+            continue
+        original = resolve_image_path(image)
+        try:
+            reachable = original.exists()
+        except OSError:
+            reachable = False  # hung/broken network mount
+        if reachable:
+            enqueue_post_import(image.id, original)
+            thumbnails_queued += 1
+
+    return {
+        "removed_missing_files": len(missing),
+        "untracked_files_found": untracked,
+        "orphan_thumbnails_removed": orphan_thumbnails_removed,
+        "thumbnails_queued": thumbnails_queued,
+    }
 
 
 def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:

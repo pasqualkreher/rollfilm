@@ -310,6 +310,8 @@ class SearchResultOut(BaseModel):
 class SyncResult(BaseModel):
     removed_missing_files: int
     untracked_files_found: int
+    orphan_thumbnails_removed: int
+    thumbnails_queued: int
 
 
 class RebuildThumbnailsResult(BaseModel):

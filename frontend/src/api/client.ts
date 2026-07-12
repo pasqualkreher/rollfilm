@@ -352,7 +352,12 @@ export const api = {
     },
   },
   maintenance: {
-    sync(): Promise<{ removed_missing_files: number; untracked_files_found: number }> {
+    sync(): Promise<{
+      removed_missing_files: number;
+      untracked_files_found: number;
+      orphan_thumbnails_removed: number;
+      thumbnails_queued: number;
+    }> {
       return request(`/maintenance/sync`, { method: "POST" });
     },
     rebuildThumbnails(): Promise<{ rebuilt: number }> {

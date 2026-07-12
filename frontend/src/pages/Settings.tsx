@@ -99,11 +99,23 @@ export function Settings() {
   const sync = useMutation({
     mutationFn: () => api.maintenance.sync(),
     onSuccess: (result) => {
+      const parts = [
+        `Removed ${result.removed_missing_files} entr${result.removed_missing_files === 1 ? "y" : "ies"} for files no longer on disk`,
+        `cleaned up ${result.orphan_thumbnails_removed} orphaned thumbnail folder(s)`,
+      ];
+      if (result.thumbnails_queued > 0) {
+        parts.push(
+          `queued ${result.thumbnails_queued} missing thumbnail(s) for rebuild (finishes in the background)`
+        );
+      }
       setSyncResult(
-        `Removed ${result.removed_missing_files} entr${result.removed_missing_files === 1 ? "y" : "ies"} for files no longer on disk. ` +
-          `Found ${result.untracked_files_found} file(s) in the library folder that aren't imported yet.`
+        `${parts.join(", ")}. Found ${result.untracked_files_found} file(s) in the library folder that aren't imported yet.`
       );
+      // Stale browser-cached thumbnails (e.g. for re-created derivatives) must
+      // reload, not be served from cache.
+      bumpThumbnailCacheBust();
       queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["trash"] });
     },
   });
 
@@ -386,8 +398,9 @@ export function Settings() {
           Library maintenance
         </h3>
         <p style={{ color: "var(--text-muted)" }}>
-          The library folder on disk is the source of truth. This removes any database entries whose
-          files are no longer there (e.g. deleted outside the app).
+          The library folder on disk is the source of truth. This removes database entries whose
+          files are no longer there (e.g. deleted outside the app), cleans up thumbnails that belong
+          to no photo anymore, and regenerates missing thumbnails in the background.
         </p>
         <button className="btn" onClick={() => sync.mutate()} disabled={sync.isPending}>
           {sync.isPending ? "Syncing..." : "Sync database to library"}
@@ -395,8 +408,10 @@ export function Settings() {
         {syncResult && <p style={{ color: "var(--text-muted)" }}>{syncResult}</p>}
 
         <p style={{ color: "var(--text-muted)", marginTop: 16 }}>
-          Rebuilds every cached thumbnail/preview from the original files - use this after an image
-          rendering fix that only applies to newly-generated thumbnails.
+          Emergency reset: rebuilds <em>every</em> cached thumbnail/preview from the original files,
+          which can take a long time. Normally "Sync database to library" above is all you need -
+          use this only if thumbnails still look wrong afterwards (e.g. after an image rendering
+          fix).
         </p>
         <button className="btn" onClick={() => rebuildThumbnails.mutate()} disabled={rebuildThumbnails.isPending}>
           {rebuildThumbnails.isPending ? "Rebuilding..." : "Rebuild all thumbnails"}
