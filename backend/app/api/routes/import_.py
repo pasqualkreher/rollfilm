@@ -12,6 +12,7 @@ from app.config import settings
 from app.db.models import Image, ImportSessionStatus, ImportStagedFile, User
 from app.db.session import get_db
 from app.services.import_pipeline import (
+    append_uploaded_files,
     commit_import_session,
     compute_staged_pairs,
     discard_import_session,
@@ -49,11 +50,21 @@ def _to_staged_file_out(f: ImportStagedFile, paired_id: str | None = None) -> sc
 def upload_import_session(
     files: list[UploadFile] = File(...),
     source_label: str = Form("Uploaded folder"),
+    session_id: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Stage uploaded photos. The multipart parser rejects requests with more
+    than 1000 files, so large imports are uploaded in several batches: the
+    first call creates the session, follow-ups pass its `session_id` to append
+    to it."""
     if not files:
         raise HTTPException(status_code=400, detail="No files were uploaded")
+    if session_id:
+        session = get_owned_import_session(db, current_user.id, session_id)
+        if session.status != ImportSessionStatus.staging:
+            raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
+        return append_uploaded_files(db, session, current_user.id, files)
     return stage_uploaded_files(db, current_user.id, files, source_label)
 
 

@@ -127,6 +127,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageMainRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const panDragRef = useRef<{ x: number; y: number } | null>(null);
   const histRef = useRef<HTMLCanvasElement | null>(null);
@@ -179,6 +180,29 @@ export function PhotoEditor({ image, onClose }: Props) {
     }
     ctx.globalCompositeOperation = "source-over";
   }
+
+  // The canvas's on-screen size must not follow its bitmap size (the default
+  // for a canvas): the fast preview and the full-resolution refinement that
+  // replaces it moments later have different pixel sizes, so the photo
+  // visibly jumped between the two renders (and on every slider change).
+  // Instead, fit the canvas into the stage from its aspect ratio - both
+  // renders of the same edit state then display at exactly the same size.
+  function fitCanvasToStage() {
+    const canvas = canvasRef.current;
+    const box = stageMainRef.current;
+    if (!canvas || !box || !canvas.width || !canvas.height) return;
+    const rect = box.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return;
+    const s = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+    canvas.style.width = `${Math.round(canvas.width * s)}px`;
+    canvas.style.height = `${Math.round(canvas.height * s)}px`;
+  }
+
+  useEffect(() => {
+    window.addEventListener("resize", fitCanvasToStage);
+    return () => window.removeEventListener("resize", fitCanvasToStage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const saved = editsFromImage(image);
   const [adj, setAdj] = useState<Adjustments>(() => adjustmentsFromImage(image));
@@ -268,6 +292,7 @@ export function PhotoEditor({ image, onClose }: Props) {
       if (!canvas) return;
       canvas.width = bmp.width;
       canvas.height = bmp.height;
+      fitCanvasToStage();
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
       if (withHistogram) drawHistogram(ctx.getImageData(0, 0, bmp.width, bmp.height));
@@ -485,7 +510,7 @@ export function PhotoEditor({ image, onClose }: Props) {
       </div>
       <div className="editor-body">
         <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
-        <div className="editor-stage-main">
+        <div className="editor-stage-main" ref={stageMainRef}>
         {loading && <div className="editor-hint">Loading…</div>}
         {error && <div className="editor-hint">{error}</div>}
         <div className="editor-canvas-wrap" ref={wrapRef} style={{ display: loading || error ? "none" : "inline-block" }}>

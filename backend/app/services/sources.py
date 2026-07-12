@@ -146,6 +146,35 @@ def _pair_scanned(db: Session, source_root: SourceRoot) -> None:
             raws[0].paired_image_id = jpegs[0].id
             jpegs[0].paired_image_id = raws[0].id
 
+    # Second pass: pair the shots whose halves don't sit side by side in this
+    # source - a RAW and JPEG kept in sibling subfolders (RAW/ + JPG/), or one
+    # half that lives in the managed library / another source because it was
+    # imported before this folder was added ("skipped_managed" in the scan).
+    # Directory can't disambiguate here, so the stricter key is same stem AND
+    # identical capture time: two files of one shot always share both, while a
+    # reused basename (DSCF0001 from a different day) practically never does.
+    db.flush()  # autoflush is off - the query below must see pass-one's pairs
+    unpaired_all = (
+        db.query(Image)
+        .filter(
+            Image.owner_id == source_root.owner_id,
+            Image.paired_image_id.is_(None),
+            Image.deleted_at.is_(None),
+            Image.taken_at.isnot(None),
+        )
+        .all()
+    )
+    by_shot: dict[tuple[str, datetime], list[Image]] = defaultdict(list)
+    for image in unpaired_all:
+        stem = Path(image.original_filename).stem.lower()
+        by_shot[(stem, image.taken_at)].append(image)
+    for group in by_shot.values():
+        raws = [i for i in group if i.file_type == FileType.raw]
+        jpegs = [i for i in group if i.file_type == FileType.jpeg]
+        if len(raws) == 1 and len(jpegs) == 1:
+            raws[0].paired_image_id = jpegs[0].id
+            jpegs[0].paired_image_id = raws[0].id
+
 
 def _index_file(db, source_root: SourceRoot, path: Path, sha256: str | None = None) -> Image:
     stat = path.stat()

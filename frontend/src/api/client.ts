@@ -138,6 +138,39 @@ function filtersToParams(filters: Partial<LibraryFilters>): URLSearchParams {
   return params;
 }
 
+// One batch of an import upload. Uses XMLHttpRequest (not fetch) so we get
+// real upload progress - an SD card of RAW files can be several GB, and a
+// silent multi-minute hang would look broken without it. `sessionId` appends
+// to an existing staging session (null creates a new one).
+function uploadBatch(
+  files: File[],
+  sourceLabel: string,
+  sessionId: string | null,
+  onLoaded?: (bytes: number) => void
+): Promise<ImportSessionOut> {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    files.forEach((f) => formData.append("files", f, f.name));
+    formData.append("source_label", sourceLabel);
+    if (sessionId) formData.append("session_id", sessionId);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE_URL}/import/sessions/upload`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onLoaded) onLoaded(e.loaded);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status} ${xhr.responseText}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Upload failed: network error"));
+    xhr.send(formData);
+  });
+}
+
 export const api = {
   images: {
     list(filters: LibraryFilters): Promise<ImageOut[]> {
@@ -289,30 +322,23 @@ export const api = {
     },
   },
   import: {
-    // Uses XMLHttpRequest (not fetch) so we get real upload progress - an SD
-    // card of RAW files can be several GB, and a silent multi-minute hang
-    // would look broken without it.
-    upload(files: File[], sourceLabel: string, onProgress?: (pct: number) => void): Promise<ImportSessionOut> {
-      return new Promise((resolve, reject) => {
-        const formData = new FormData();
-        files.forEach((f) => formData.append("files", f, f.name));
-        formData.append("source_label", sourceLabel);
-
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", `${BASE_URL}/import/sessions/upload`);
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve(JSON.parse(xhr.responseText));
-          } else {
-            reject(new Error(`Upload failed: ${xhr.status} ${xhr.responseText}`));
-          }
-        };
-        xhr.onerror = () => reject(new Error("Upload failed: network error"));
-        xhr.send(formData);
-      });
+    // The server's multipart parser rejects a request with more than 1000
+    // files, so big imports (a whole archive folder) are sent as several
+    // batches: the first creates the staging session, the rest append to it.
+    // Batches well under the cap keep each request's memory bounded too.
+    async upload(files: File[], sourceLabel: string, onProgress?: (pct: number) => void): Promise<ImportSessionOut> {
+      const BATCH_FILES = 250;
+      const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1;
+      let doneBytes = 0;
+      let session: ImportSessionOut | null = null;
+      for (let i = 0; i < files.length; i += BATCH_FILES) {
+        const batch = files.slice(i, i + BATCH_FILES);
+        session = await uploadBatch(batch, sourceLabel, session?.id ?? null, (loaded) => {
+          onProgress?.(Math.min(100, Math.round(((doneBytes + loaded) / totalBytes) * 100)));
+        });
+        doneBytes += batch.reduce((sum, f) => sum + f.size, 0);
+      }
+      return session!;
     },
     get(id: string): Promise<ImportSessionOut> {
       return request(`/import/sessions/${id}`);

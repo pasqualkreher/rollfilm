@@ -1813,23 +1813,34 @@ input.editor-preset-select {
   text-align: center;
 }
 
-/* Deliberately no fixed/computed height on this container - depending on a
-   stretched parent height (previously `calc(100vh - 100px)`) is fragile in
-   narrow or embedded viewports (e.g. an IDE preview pane), where it could
-   compute to near-zero and squeeze .detail-image away to nothing. Each
-   child below sizes itself directly instead, and flex-wrap alone handles
-   switching from side-by-side to stacked. */
+/* No fixed/computed height here (previously `calc(100vh - 100px)`, which is
+   fragile in embedded viewports) - the height comes from the flex chain:
+   .detail-page is the flex-column page, this layout takes its remaining
+   height (flex: 1) and its single line stretches (default align-content), so
+   the photo column and side panel both get the full available height. */
 .detail-layout {
   display: flex;
   flex-wrap: wrap;
   gap: 40px;
   flex: 1;
   min-height: 0;
-  align-content: flex-start;
+}
+
+/* The photo column: image area on top, background/zoom toolbar below. Takes
+   all width the side panel doesn't need (flex-grow 999 vs 1). */
+.detail-main {
+  flex: 999 1 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .detail-image {
-  flex: 999 1 400px;
+  /* Fill the column's height (minus the toolbar) so the photo gets all the
+     available app space on any screen size. */
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1837,12 +1848,10 @@ input.editor-preset-select {
   border-radius: 12px;
   /* Clips the zoomed-in photo to the frame (the loupe effect). */
   overflow: hidden;
-  /* Fill most of the viewport height so the photo uses the available app space
-     rather than sitting small in the middle. Bigger top/bottom inset than the
-     sides so the light-table background shows as a clear band above and below
-     the photo instead of the image sitting flush to the frame edges. */
-  max-height: 86vh;
   min-height: 0;
+  /* Bigger top/bottom inset than the sides so the light-table background shows
+     as a clear band above and below the photo instead of the image sitting
+     flush to the frame edges. */
   padding: 40px 16px;
 }
 
@@ -1859,12 +1868,11 @@ input.editor-preset-select {
 
 .detail-image img {
   display: block;
+  /* Fallback fit until the JS fit-to-frame kicks in (see ImageDetail): the
+     component sets an explicit width/height that scales the photo up OR down
+     to fill the frame - max-* alone never scales up, which left previews
+     sitting tiny in the middle of large screens. */
   max-width: 100%;
-  /* Size to the container's content box (100%), not a fixed vh value: the
-     available height is less than 86vh once the top bar / Back button / toolbar
-     take their share, so a vh-based cap made the image overflow the padding and
-     get clipped - hiding the top/bottom band. 100% always fits inside the
-     40px inset. */
   max-height: 100%;
   object-fit: contain;
 }

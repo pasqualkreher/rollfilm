@@ -1,4 +1,7 @@
+import { useEffect, useRef } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "./api/client";
 import { Library } from "./pages/Library";
 import { ImportWizard } from "./pages/ImportWizard";
 import { Albums } from "./pages/Albums";
@@ -14,6 +17,39 @@ import { WelcomeGuide } from "./components/WelcomeGuide";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
+
+// Source-root scans run in the background (started from Settings or the
+// automatic startup scan) and commit their new photos when they finish. This
+// watches them from anywhere in the app and refreshes the photo queries when a
+// scan completes or a source's photo count changes - without it, the Library
+// only updated on react-query's refetch-on-window-focus, i.e. after switching
+// windows and back.
+function SourceScanWatcher() {
+  const queryClient = useQueryClient();
+  const { data: sources } = useQuery({
+    queryKey: ["sources"],
+    queryFn: () => api.sources.list(),
+    // Poll fast while a scan is running, slowly otherwise (also picks up the
+    // startup auto-scan and drives being plugged in/out).
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((s) => s.scanning) ? 1500 : 10_000,
+  });
+
+  const prev = useRef<{ scanning: boolean; count: number } | null>(null);
+  useEffect(() => {
+    if (!sources) return;
+    const scanning = sources.some((s) => s.scanning);
+    const count = sources.reduce((sum, s) => sum + s.image_count, 0);
+    const p = prev.current;
+    prev.current = { scanning, count };
+    if (p && ((p.scanning && !scanning) || p.count !== count)) {
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["image"] });
+    }
+  }, [sources, queryClient]);
+
+  return null;
+}
 
 function ImportNavLink() {
   const { isUploading, uploadProgress } = useImportSession();
@@ -74,6 +110,7 @@ export default function App() {
       <SelectsProvider>
         <ImportSessionProvider>
           <div className="app-shell">
+            <SourceScanWatcher />
             <TopBar />
 
             <Routes>

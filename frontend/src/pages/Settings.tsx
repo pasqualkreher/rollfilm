@@ -26,8 +26,10 @@ export function Settings() {
   // Library folder: only available in the desktop app (Electron bridge).
   const desktop = window.photoManager;
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
+  const [dataRoot, setDataRoot] = useState<string | null>(null);
   useEffect(() => {
     desktop?.getLibraryRoot?.().then(setLibraryRoot).catch(() => {});
+    desktop?.getDataRoot?.().then(setDataRoot).catch(() => {});
   }, [desktop]);
 
   const [immichUrl, setImmichUrl] = useState("");
@@ -205,8 +207,7 @@ export function Settings() {
             Library folder
           </h3>
           <p style={{ color: "var(--text-muted)" }}>
-            Where your photo files are stored (chosen on first start). App data — database,
-            thumbnails, caches — stays in the standard app-data location. Changing the folder
+            Where your photo files are stored (chosen on first start). Changing the folder
             restarts the app; your photos are not moved automatically.
           </p>
           <p style={{ fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
@@ -214,6 +215,25 @@ export function Settings() {
           </p>
           <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
             Change library folder…
+          </button>
+        </section>
+      )}
+
+      {desktop?.changeDataRoot && (
+        <section style={{ marginBottom: 32 }}>
+          <h3 className="section-title" style={{ fontSize: 15 }}>
+            App-data folder
+          </h3>
+          <p style={{ color: "var(--text-muted)" }}>
+            Where the library database and thumbnail cache are stored. Other system files
+            (caches, logs, models) stay in the standard app-data location. Changing the folder
+            copies the database and thumbnails over and restarts the app.
+          </p>
+          <p style={{ fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
+            {dataRoot ?? "…"}
+          </p>
+          <button className="btn" onClick={() => desktop.changeDataRoot()}>
+            Change app-data folder…
           </button>
         </section>
       )}

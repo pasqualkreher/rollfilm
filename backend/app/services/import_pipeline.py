@@ -172,12 +172,35 @@ def stage_uploaded_files(
     session = ImportSession(owner_id=owner_id, source_path=source_label or "Uploaded folder")
     db.add(session)
     db.flush()
+    _stage_uploads_into(db, session, owner_id, uploads)
+    db.commit()
+    db.refresh(session)
+    return session
 
+
+def append_uploaded_files(
+    db: Session, session: ImportSession, owner_id: int, uploads: list[UploadedFile]
+) -> ImportSession:
+    """Stage another batch of uploads into an existing staging session. The
+    multipart parser caps a single request at 1000 files, so big imports are
+    sent as several requests all appending to one session - duplicate checks
+    and RAW+JPEG pairing still see the whole session, not just one batch."""
+    _stage_uploads_into(db, session, owner_id, uploads)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def _stage_uploads_into(
+    db: Session, session: ImportSession, owner_id: int, uploads: list[UploadedFile]
+) -> None:
     session_dir = settings.import_staging_root / session.id
     thumb_dir = session_dir / ".thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
-    already_staged: list[ImportStagedFile] = []
+    # Seed with what's already staged (empty for a fresh session) so files in a
+    # later batch are checked for duplicates against earlier batches too.
+    already_staged: list[ImportStagedFile] = list(session.staged_files)
 
     for upload in uploads:
         original_filename = Path(upload.filename or "").name
@@ -199,10 +222,6 @@ def stage_uploaded_files(
         _stage_one_file(
             db, session, thumb_dir, owner_id, already_staged, staged_path, original_filename, file_type
         )
-
-    db.commit()
-    db.refresh(session)
-    return session
 
 
 def commit_import_session(

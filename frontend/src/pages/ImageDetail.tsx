@@ -41,8 +41,27 @@ export function ImageDetail() {
   const [hiRes, setHiRes] = useState(false);
   const [fullFailed, setFullFailed] = useState(false);
   const imageBoxRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const selects = useSelects();
+  // Explicit on-screen size for the photo, fit to the frame. CSS max-* only
+  // ever scales down, so a preview smaller than the frame sat tiny in the
+  // middle of large screens; this scales up too. Done in JS (not object-fit)
+  // so the <img> element stays exactly the size of the visible photo - the
+  // framed shadow and the double-click zoom math depend on that.
+  const [fit, setFit] = useState<{ w: number; h: number } | null>(null);
+
+  function refitImage() {
+    const box = imageBoxRef.current;
+    const img = imgRef.current;
+    if (!box || !img || !img.naturalWidth || !img.naturalHeight) return;
+    const cs = getComputedStyle(box);
+    const availW = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const availH = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    if (availW <= 0 || availH <= 0) return;
+    const s = Math.min(availW / img.naturalWidth, availH / img.naturalHeight);
+    setFit({ w: img.naturalWidth * s, h: img.naturalHeight * s });
+  }
 
   const MAX_ZOOM = 6;
   const zoomed = scale > 1.001;
@@ -77,6 +96,7 @@ export function ImageDetail() {
     resetZoom();
     setHiRes(false);
     setFullFailed(false);
+    setFit(null);
   }, [activeId]);
 
   // Once zoomed in, upgrade to the full-resolution render (loaded lazily) unless
@@ -96,6 +116,22 @@ export function ImageDetail() {
     queryFn: () => api.images.get(image!.paired_image_id!),
     enabled: !!image?.paired_image_id,
   });
+
+  // Keep the photo fit to its frame when the window or the frame itself
+  // resizes (e.g. the side panel wrapping). Keyed to image?.id because the
+  // component early-returns a loading state before the frame element mounts.
+  useEffect(() => {
+    const box = imageBoxRef.current;
+    if (!box) return;
+    const observer = new ResizeObserver(() => refitImage());
+    observer.observe(box);
+    window.addEventListener("resize", refitImage);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", refitImage);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [image?.id]);
 
   // Scroll / pinch to zoom toward the cursor. A native, non-passive listener so
   // we can preventDefault - otherwise ctrl+wheel (trackpad pinch) would zoom the
@@ -270,14 +306,17 @@ export function ImageDetail() {
         ←
       </button>
       <div className="detail-layout" style={{ marginTop: 16 }}>
-        <div style={{ flex: "999 1 400px", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="detail-main">
           <div className={`detail-image${bgMode === "dark" ? " detail-image-dark" : ""}`} ref={imageBoxRef}>
             <img
+              ref={imgRef}
               className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}`}
               style={{
+                ...(fit ? { width: fit.w, height: fit.h } : null),
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
                 cursor: zoomed ? (dragRef.current ? "grabbing" : "grab") : "default",
               }}
+              onLoad={refitImage}
               draggable={false}
               src={
                 hiRes
