@@ -54,18 +54,25 @@ export function Help() {
         </nav>
 
         <H id="basics">The basics: where your photos live</H>
-        <p>Photo Manager keeps two kinds of data in two places:</p>
+        <p>Photo Manager keeps everything for a library together in one place:</p>
         <ul>
           <li>
             <strong>Your library folder</strong> — the folder you picked on first start. Imported
-            photo files are copied here; it's yours to back up or put on an external drive. You can
+            photo files are copied here, and the database, thumbnails and import staging live
+            alongside them in a hidden <code>.photomanager</code> subfolder. That makes the whole
+            library self-contained: back it up or move it to another drive as one folder. You can
             see and change it under <em>Settings → Library folder</em> (changing it restarts the app
-            and does not move existing files).
+            and does not move existing photo files).
           </li>
           <li>
-            <strong>App data</strong> — the database, thumbnails and caches. These live in the
-            standard app-data location and are rebuilt or managed automatically; you never need to
-            touch them.
+            <strong>Separate libraries</strong> — because a library is self-contained, you can keep
+            several independent ones and switch between them by pointing the app at a different
+            library folder under <em>Settings → Library folder</em>.
+          </li>
+          <li>
+            <strong>Shared app data</strong> — only the AI model cache and logs stay in the standard
+            app-data location. They're rebuilt or managed automatically; you never need to touch
+            them.
           </li>
         </ul>
         <p>

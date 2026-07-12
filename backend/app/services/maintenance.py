@@ -61,10 +61,16 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
         for img in kept
         if img.source_root_id is None
     }
+    # The database, thumbnails and staging live in a ".photomanager" subfolder
+    # of the library; skip it so its JPG thumbnails aren't counted as untracked
+    # photos.
     untracked = sum(
         1
         for path in settings.library_root.rglob("*")
-        if path.is_file() and classify_file_type(path) is not None and str(path.resolve()) not in tracked
+        if path.is_file()
+        and ".photomanager" not in path.relative_to(settings.library_root).parts
+        and classify_file_type(path) is not None
+        and str(path.resolve()) not in tracked
     )
 
     # Thumbnail cache holds one folder per image id - drop any that no image

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { DirectoryPicker } from "./DirectoryPicker";
@@ -47,6 +47,19 @@ export function ExternalSources() {
     refetchInterval: (query) =>
       (query.state.data ?? []).some((s) => s.scanning) ? 1500 : 5000,
   });
+
+  // A source is scanned in the background after it's added/re-scanned, so the
+  // add mutation's one-time invalidate fires before any photo is indexed. Watch
+  // the polled source list and refresh the Library whenever a source's photo
+  // count or scanning status changes, so new photos show up live without having
+  // to switch windows to trigger a refetch-on-focus.
+  const sourcesSig = (sources ?? [])
+    .map((s) => `${s.id}:${s.image_count}:${s.scanning}`)
+    .join("|");
+  useEffect(() => {
+    if (sources) queryClient.invalidateQueries({ queryKey: ["images"] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcesSig]);
 
   const addSource = useMutation({
     mutationFn: () => api.sources.add(name.trim(), path.trim()),

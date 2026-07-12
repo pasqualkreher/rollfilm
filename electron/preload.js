@@ -18,8 +18,6 @@ contextBridge.exposeInMainWorld("photoManager", {
   getLibraryRoot: () => ipcRenderer.invoke("pm:get-library-root"),
   // Pick a new library folder; on confirmation the app restarts itself.
   changeLibraryRoot: () => ipcRenderer.invoke("pm:change-library-root"),
-  // Current folder holding the database + thumbnails.
+  // Folder holding the database, thumbnails and staging (inside the library).
   getDataRoot: () => ipcRenderer.invoke("pm:get-data-root"),
-  // Pick a new database/thumbnails folder; data is copied and the app restarts.
-  changeDataRoot: () => ipcRenderer.invoke("pm:change-data-root"),
 });

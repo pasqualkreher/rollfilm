@@ -6,6 +6,7 @@ owner_id-scoped query keeps working unchanged.
 """
 
 from fastapi import Depends
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import User
@@ -18,8 +19,17 @@ LOCAL_USERNAME = "local"
 def get_current_user(db: Session = Depends(get_db)) -> User:
     user = db.get(User, LOCAL_USER_ID)
     if user is None:
+        # On a fresh database the first page load fires several requests at once,
+        # so more than one can race to seed the local user. Whoever loses the
+        # race hits a UNIQUE-constraint error on commit — roll back and reuse the
+        # row the winner just created rather than surfacing a 500.
         user = User(id=LOCAL_USER_ID, username=LOCAL_USERNAME)
         db.add(user)
-        db.commit()
-        db.refresh(user)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            user = db.get(User, LOCAL_USER_ID)
+        else:
+            db.refresh(user)
     return user

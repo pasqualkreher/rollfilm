@@ -3,9 +3,10 @@
 // Responsibilities:
 //   1. Start the FastAPI backend natively as a child process, bound to
 //      127.0.0.1 on a free port (dev: local .venv; packaged: bundled exe).
-//   2. Point the backend at the user-chosen library folder and data folder
-//      (DB + thumbnails); staging, model cache and logs stay in Electron's
-//      userData (the standard app-data location).
+//   2. Point the backend at the user-chosen library folder; its database,
+//      thumbnails and staging live inside that folder (see libraryDataDir) so
+//      each library is self-contained. Only the model cache and logs stay in
+//      Electron's userData (the standard app-data location).
 //   3. Wait for /health, then open the window with the built React renderer.
 //   4. Expose a native folder picker over IPC (the whole reason for going
 //      desktop: any host path is directly readable by the native backend).
@@ -28,12 +29,10 @@ let apiBaseUrl = "";
 let mainWindow = null;
 let splashWindow = null;
 // Absolute path to the user's photo library, chosen on first run (see
-// ensureLibraryRoot).
+// ensureLibraryRoot). The database, thumbnails and import staging live inside
+// this folder (see libraryDataDir); only the model cache and logs stay in
+// userData.
 let libraryRoot = "";
-// Base folder for the database and thumbnails, also user-choosable (first run
-// or Settings). Defaults to userData. Staging, model cache and logs always
-// stay in userData — those are disposable system files.
-let dataRoot = "";
 
 // Small JSON config in userData that remembers the user's chosen library
 // location across launches. Kept separate from the backend DB on purpose: it's
@@ -73,8 +72,8 @@ async function ensureLibraryRoot() {
         ? "Your photo library folder can't be found."
         : "Welcome to Photo Manager",
       detail: missing
-        ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive/folder, or choose a new location. App data (database, thumbnails, caches) stays in the standard app-data folder.`
-        : "Pick a folder where your photo library will be stored — for example a folder on an external drive or one you back up. App data (database, thumbnails, caches) is kept automatically in the standard app-data location.",
+        ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive/folder, or choose a new location. Each library keeps its own database, thumbnails and staging inside the folder, so pointing at a different folder switches to that library.`
+        : "Pick a folder where your photo library will be stored — for example a folder on an external drive or one you back up. The library's database, thumbnails and staging are kept inside this folder too, so the whole library is self-contained. (Only the AI model cache and logs stay in the standard app-data location.)",
       buttons: ["Choose folder…", "Quit"],
       defaultId: 0,
       cancelId: 1,
@@ -95,104 +94,23 @@ async function ensureLibraryRoot() {
   }
 }
 
-// Where the DB + thumbnails live inside the chosen data folder. Kept in
-// subfolders so a user-picked folder stays tidy and the DB never sits directly
-// next to unrelated files.
-function dbPathFor(root) {
-  return path.join(root, "db", "library.db");
+// The DB, thumbnails and import staging live inside the library folder itself,
+// under a hidden ".photomanager" subfolder, so each library folder is fully
+// self-contained: point the app at a different library folder and you get that
+// library's database, thumbnails and staging with it. This makes it possible to
+// keep several independent libraries and switch between them. (The CLIP model
+// cache and logs are shared/disposable and stay in userData instead.)
+function libraryDataDir(lib) {
+  return path.join(lib, ".photomanager");
 }
-function thumbnailRootFor(root) {
-  return path.join(root, "thumbnails");
+function dbPathFor(lib) {
+  return path.join(libraryDataDir(lib), "db", "library.db");
 }
-
-// First-run companion to ensureLibraryRoot: where should the database and
-// thumbnails live? Defaults to userData (the standard app-data folder); the
-// user can pick e.g. an external drive instead. On later launches the saved
-// choice is reused; if the saved folder disappeared we ask again. Returns the
-// absolute path, or null if the user chose to quit.
-async function ensureDataRoot(isFirstStart) {
-  const cfg = readConfig();
-  const fallback = app.getPath("userData");
-  if (cfg.dataRoot && fs.existsSync(cfg.dataRoot)) return cfg.dataRoot;
-  const missing = Boolean(cfg.dataRoot); // saved but no longer present
-
-  // Existing installs (library already configured, no dataRoot saved) keep
-  // their data where it is — in userData — without being prompted.
-  if (!missing && !isFirstStart) return fallback;
-
-  while (true) {
-    const intro = await dialog.showMessageBox({
-      type: "info",
-      title: "Choose where app data is stored",
-      message: missing
-        ? "Your app-data folder can't be found."
-        : "Where should the database and thumbnails be stored?",
-      detail: missing
-        ? `The database and thumbnails were at:\n${cfg.dataRoot}\n\nReconnect that drive/folder, choose a new location, or fall back to the standard app-data folder (starts with an empty library database).`
-        : `The library database and thumbnail cache can live in the standard app-data folder, or in a folder you choose (e.g. next to your photo library or on a drive you back up).\n\nStandard location:\n${fallback}`,
-      buttons: missing
-        ? ["Choose folder…", "Use standard location", "Quit"]
-        : ["Use standard location", "Choose folder…", "Quit"],
-      defaultId: 0,
-      cancelId: 2,
-      noLink: true,
-    });
-    const labels = missing
-      ? ["choose", "standard", "quit"]
-      : ["standard", "choose", "quit"];
-    const action = labels[intro.response];
-    if (action === "quit") return null;
-    if (action === "standard") {
-      const cur = readConfig();
-      delete cur.dataRoot;
-      writeConfig(cur);
-      return fallback;
-    }
-
-    const picked = await dialog.showOpenDialog({
-      title: "Choose a folder for the database and thumbnails",
-      properties: ["openDirectory", "createDirectory"],
-      buttonLabel: "Use this folder",
-    });
-    if (picked.canceled || picked.filePaths.length === 0) continue;
-
-    const chosen = picked.filePaths[0];
-    writeConfig({ ...readConfig(), dataRoot: chosen });
-    return chosen;
-  }
+function thumbnailRootFor(lib) {
+  return path.join(libraryDataDir(lib), "thumbnails");
 }
-
-// Best-effort move of the existing DB (and thumbnails) into a newly chosen
-// data folder, so changing the location in Settings doesn't silently start an
-// empty library. Called with the backend already stopped. Never overwrites a
-// DB that already exists at the target (that folder was used before — reuse it).
-function migrateDataRoot(oldRoot, newRoot) {
-  const notes = [];
-  const oldDb = dbPathFor(oldRoot);
-  const newDb = dbPathFor(newRoot);
-  if (fs.existsSync(newDb)) {
-    notes.push("A library database already exists in the new folder and will be used as-is.");
-    return notes;
-  }
-  if (fs.existsSync(oldDb)) {
-    fs.mkdirSync(path.dirname(newDb), { recursive: true });
-    for (const suffix of ["", "-wal", "-shm"]) {
-      const src = oldDb + suffix;
-      if (fs.existsSync(src)) fs.copyFileSync(src, newDb + suffix);
-    }
-    notes.push("Your library database was copied to the new folder.");
-  }
-  const oldThumbs = thumbnailRootFor(oldRoot);
-  const newThumbs = thumbnailRootFor(newRoot);
-  if (fs.existsSync(oldThumbs) && !fs.existsSync(newThumbs)) {
-    try {
-      fs.cpSync(oldThumbs, newThumbs, { recursive: true });
-      notes.push("Thumbnails were copied to the new folder.");
-    } catch {
-      notes.push("Thumbnails could not be copied — they will be rebuilt automatically.");
-    }
-  }
-  return notes;
+function stagingRootFor(lib) {
+  return path.join(libraryDataDir(lib), "staging");
 }
 
 // Tiny frameless window shown from the moment the app launches until the main
@@ -285,13 +203,15 @@ function resolveBackendCommand() {
     ...process.env,
     PM_PORT: String(apiPort),
     PM_HOST: "127.0.0.1",
-    // Staging, model cache and other system files default under userData...
+    // Model cache and logs are shared/disposable and default under userData...
     PM_DATA_DIR: app.getPath("userData"),
-    // ...while the photo library, database and thumbnails live wherever the
-    // user chose (each overrides just its own path in the backend config).
+    // ...while the database, thumbnails and import staging live inside the
+    // library folder itself (see libraryDataDir), so the whole library is
+    // self-contained and swappable.
     LIBRARY_ROOT: libraryRoot,
-    DB_PATH: dbPathFor(dataRoot),
-    THUMBNAIL_CACHE_ROOT: thumbnailRootFor(dataRoot),
+    DB_PATH: dbPathFor(libraryRoot),
+    THUMBNAIL_CACHE_ROOT: thumbnailRootFor(libraryRoot),
+    IMPORT_STAGING_ROOT: stagingRootFor(libraryRoot),
   };
 
   const isWin = process.platform === "win32";
@@ -377,7 +297,7 @@ function createWindow() {
     width: 1400,
     height: 900,
     title: "Photo Manager",
-    show: false, // shown once ready-to-show, replacing the splash without a blank flash
+    show: false, // shown once the page has loaded (did-finish-load), replacing the splash
     icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -396,10 +316,18 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
   }
 
-  mainWindow.once("ready-to-show", () => {
+  // Window is already visible (show: true). Close the splash as soon as the
+  // page loads and bring the window forward. did-finish-load is used alongside
+  // ready-to-show because ready-to-show does not fire on every setup.
+  const revealWindow = () => {
     closeSplash();
-    if (mainWindow) mainWindow.show();
-  });
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  };
+  mainWindow.once("ready-to-show", revealWindow);
+  mainWindow.webContents.once("did-finish-load", revealWindow);
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -441,9 +369,10 @@ ipcMain.handle("pm:change-library-root", async () => {
     message: "Restart Photo Manager with the new library folder?",
     detail:
       `New location:\n${chosen}\n\n` +
-      "Your photos are not moved automatically. If the new folder doesn't already " +
-      "contain your library files, move them there first (or start a fresh library). " +
-      "App data (database, thumbnails, caches) stays where it is.",
+      "Each library keeps its own database, thumbnails and staging inside its folder, so this " +
+      "switches to the library in the new folder. If it's a folder that hasn't been used as a " +
+      "library yet, a fresh empty library is started there. Your existing photo files are not " +
+      "moved automatically.",
     buttons: ["Restart now", "Cancel"],
     defaultId: 0,
     cancelId: 1,
@@ -457,61 +386,10 @@ ipcMain.handle("pm:change-library-root", async () => {
   return { changed: true, path: chosen };
 });
 
-// Settings page: current data folder (database + thumbnails), read-only.
-ipcMain.handle("pm:get-data-root", () => dataRoot);
-
-// Settings page: pick a new folder for the database and thumbnails. The
-// backend reads DB_PATH/THUMBNAIL_CACHE_ROOT at launch only, so we stop it,
-// copy the existing data over, save the choice and relaunch.
-ipcMain.handle("pm:change-data-root", async () => {
-  const picked = await dialog.showOpenDialog(mainWindow, {
-    title: "Choose a new folder for the database and thumbnails",
-    defaultPath: dataRoot || undefined,
-    properties: ["openDirectory", "createDirectory"],
-    buttonLabel: "Use this folder",
-  });
-  if (picked.canceled || picked.filePaths.length === 0) return { changed: false };
-
-  const chosen = picked.filePaths[0];
-  if (chosen === dataRoot) return { changed: false };
-
-  const confirm = await dialog.showMessageBox(mainWindow, {
-    type: "question",
-    title: "Change app-data folder",
-    message: "Restart Photo Manager with the new app-data folder?",
-    detail:
-      `New location:\n${chosen}\n\n` +
-      "Your library database and thumbnails are copied to the new folder " +
-      "(the old copies are left in place as a backup). Your photo library " +
-      "folder is not affected.",
-    buttons: ["Restart now", "Cancel"],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  });
-  if (confirm.response !== 0) return { changed: false };
-
-  // Stop the backend before copying so the SQLite files aren't mid-write.
-  stopBackend();
-  try {
-    migrateDataRoot(dataRoot, chosen);
-  } catch (err) {
-    dialog.showErrorBox(
-      "Could not copy app data",
-      `Copying the database/thumbnails to the new folder failed:\n\n${err.message}\n\nThe app-data folder was not changed.`
-    );
-    app.relaunch();
-    app.quit();
-    return { changed: false };
-  }
-  const cfg = readConfig();
-  if (chosen === app.getPath("userData")) delete cfg.dataRoot;
-  else cfg.dataRoot = chosen;
-  writeConfig(cfg);
-  app.relaunch();
-  app.quit();
-  return { changed: true, path: chosen };
-});
+// Settings page: where the database, thumbnails and staging live (read-only).
+// They always sit inside the current library folder, so there is nothing to
+// change independently — switching the library folder moves all of it.
+ipcMain.handle("pm:get-data-root", () => (libraryRoot ? libraryDataDir(libraryRoot) : ""));
 
 app.whenReady().then(async () => {
   setDevDockIcon();
@@ -527,12 +405,8 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  dataRoot = await ensureDataRoot(isFirstStart);
-  if (!dataRoot) {
-    closeSplash();
-    app.quit();
-    return;
-  }
+  // The database, thumbnails and staging live inside the library folder itself
+  // (see libraryDataDir), so there is nothing else to locate here.
 
   apiPort = await getFreePort();
   apiBaseUrl = `http://127.0.0.1:${apiPort}`;

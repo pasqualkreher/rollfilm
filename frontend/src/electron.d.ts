@@ -16,13 +16,8 @@ declare global {
        * confirms, the app restarts itself; otherwise resolves with changed: false.
        */
       changeLibraryRoot: () => Promise<{ changed: boolean; path?: string }>;
-      /** Current folder holding the database + thumbnails. */
+      /** Folder holding the database, thumbnails and staging (inside the library). */
       getDataRoot: () => Promise<string>;
-      /**
-       * Opens the folder dialog to pick a new database/thumbnails folder. If the
-       * user confirms, data is copied over and the app restarts itself.
-       */
-      changeDataRoot: () => Promise<{ changed: boolean; path?: string }>;
     };
   }
 }

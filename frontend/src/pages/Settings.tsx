@@ -207,8 +207,9 @@ export function Settings() {
             Library folder
           </h3>
           <p style={{ color: "var(--text-muted)" }}>
-            Where your photo files are stored (chosen on first start). Changing the folder
-            restarts the app; your photos are not moved automatically.
+            Where your photo files are stored (chosen on first start), together with this library's
+            database, thumbnails and staging. Changing the folder restarts the app and switches to
+            that folder's library; your existing photo files are not moved automatically.
           </p>
           <p style={{ fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
             {libraryRoot ?? "…"}
@@ -219,22 +220,20 @@ export function Settings() {
         </section>
       )}
 
-      {desktop?.changeDataRoot && (
+      {desktop?.getDataRoot && (
         <section style={{ marginBottom: 32 }}>
           <h3 className="section-title" style={{ fontSize: 15 }}>
-            App-data folder
+            Library data
           </h3>
           <p style={{ color: "var(--text-muted)" }}>
-            Where the library database and thumbnail cache are stored. Other system files
-            (caches, logs, models) stay in the standard app-data location. Changing the folder
-            copies the database and thumbnails over and restarts the app.
+            The database, thumbnails and import staging live inside the library folder, so the
+            whole library is self-contained — point the app at a different library folder to
+            switch to a separate library. (The model cache and logs stay in the standard app-data
+            location.)
           </p>
           <p style={{ fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
             {dataRoot ?? "…"}
           </p>
-          <button className="btn" onClick={() => desktop.changeDataRoot()}>
-            Change app-data folder…
-          </button>
         </section>
       )}
 
