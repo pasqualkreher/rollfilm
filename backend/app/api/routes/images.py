@@ -649,12 +649,15 @@ def _payload_adjustments(payload: schemas.ImageEdits) -> dict:
 def editor_preview(
     image_id: str,
     payload: schemas.ImageEdits,
+    full: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Live editor preview, rendered server-side with the *same* pipeline that
     saves - so what you see while editing is exactly what you get. The decoded
-    base image is cached, so only the edit pipeline re-runs per request."""
+    base image is cached, so only the edit pipeline re-runs per request.
+    `?full=1` renders on the full-resolution base - the editor requests that
+    once the sliders settle, replacing the fast downscaled render."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
@@ -669,6 +672,7 @@ def editor_preview(
             crop,
             _payload_adjustments(payload),
             distortion=_clamp100(payload.distortion),
+            full_quality=full,
         )
     except Exception:
         logger.exception("Failed to render editor preview for %s", image.id)

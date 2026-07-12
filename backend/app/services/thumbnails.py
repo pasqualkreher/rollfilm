@@ -245,18 +245,48 @@ def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
 
 
 def _denoise_image(image: PILImage.Image, amount: int) -> PILImage.Image:
-    """Real denoise: OpenCV's non-local means (the reference classic-space NR
-    algorithm - it averages *similar patches* rather than neighbouring pixels,
-    so noise vanishes while texture and edges survive). Luma is cleaned more
-    gently than chroma, like camera NR - colour confetti is what looks ugly."""
+    """Camera-style NR, split by channel in YCrCb. The ugly part of high-ISO
+    noise is the low-frequency colour blotching (rainbow mottling), whose blobs
+    are far larger than non-local means' 7px patch / 21px search window - no
+    NLM strength can reach them, it only desaturates edges while luma turns to
+    plastic. So: luma gets *gentle* NLM (quadratic ramp - low slider values
+    stay subtle), and chroma gets a large-radius guided filter driven by the
+    cleaned luma, which flattens the blotches while colour still snaps to real
+    luminance edges. The eye barely resolves chroma detail, so the chroma pass
+    can be aggressive without the result looking soft."""
     f = min(100, max(0, amount)) / 100.0
     if f <= 0:
         return image
-    bgr = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
-    h_luma = 2.0 + f * 9.0
-    h_chroma = 3.0 + f * 14.0
-    out = cv2.fastNlMeansDenoisingColored(bgr, None, h_luma, h_chroma, 7, 21)
-    return PILImage.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB), "RGB")
+    ycc = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2YCrCb)
+    y = ycc[..., 0]
+    h_luma = 7.0 * f * f
+    if h_luma >= 0.5:
+        y = cv2.fastNlMeansDenoising(y, None, h_luma, 7, 21)
+    hh, ww = ycc.shape[:2]
+    # Chroma at quarter scale: the downscale averages the fine confetti away
+    # and shrinks the blotches into NLM's patch/search window, so they get
+    # removed as a *pattern* instead of merely averaged down. The eye barely
+    # resolves chroma anyway (JPEG ships 4:2:0 for the same reason).
+    sw, sh = max(1, ww // 4), max(1, hh // 4)
+    guide = y.astype(np.float32) / 255.0
+    w = min(1.0, f * 1.5)
+    out = np.empty_like(ycc)
+    out[..., 0] = y
+    for c in (1, 2):
+        small = cv2.resize(ycc[..., c], (sw, sh), interpolation=cv2.INTER_AREA)
+        small = cv2.fastNlMeansDenoising(small, None, 3.0 + f * 12.0, 7, 21)
+        # NLM handles the per-pixel/mid-frequency part; the widest mottling is
+        # still below its patch scale even at quarter size, so finish with a
+        # Gaussian - the guided upsample below restores the colour edges.
+        small = cv2.GaussianBlur(small, (0, 0), 0.5 + f * 5.0)
+        up = cv2.resize(small, (ww, hh), interpolation=cv2.INTER_LINEAR)
+        # Joint upsampling: a small guided filter against full-res luma snaps
+        # the smoothed colour back onto real edges.
+        smooth = cv2.ximgproc.guidedFilter(guide, up.astype(np.float32) / 255.0, 8, 2e-3)
+        ch = ycc[..., c].astype(np.float32) / 255.0
+        ch = ch + (smooth - ch) * w
+        out[..., c] = np.clip(ch * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
+    return PILImage.fromarray(cv2.cvtColor(out, cv2.COLOR_YCrCb2RGB), "RGB")
 
 
 def _apply_chrome(arr: np.ndarray, chrome: int, chrome_blue: int) -> np.ndarray:
@@ -615,6 +645,15 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
     return src.convert("RGB")
 
 
+@lru_cache(maxsize=1)
+def _cached_editor_base_full(image_id: str, path_str: str, mtime_ns: int) -> PILImage.Image:
+    """Full-resolution editor base, for the settled (non-interactive) preview
+    refinement. Separate from _cached_editor_base with maxsize=1: a full-res
+    decode is ~100MB, so keeping several around would bloat the process just
+    from browsing between photos in the editor."""
+    return extract_full_preview(Path(path_str)).convert("RGB")
+
+
 def render_editor_preview_bytes(
     image: "Image",
     rotation: int,
@@ -622,15 +661,24 @@ def render_editor_preview_bytes(
     adjustments: dict,
     distortion: int = 0,
     max_px: int = EDITOR_PREVIEW_PX,
+    full_quality: bool = False,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
     (same code path as generate_derivatives/render_edited_image) on a cached,
     preview-sized base. One pipeline = the preview IS the saved look - no
-    JS mirror to drift out of sync."""
+    JS mirror to drift out of sync.
+
+    `full_quality=True` renders on the *full-resolution* base instead - too
+    slow for live slider drags, but fetched by the editor once the sliders
+    settle, so resolution-dependent passes (denoise radius, sharpen radius,
+    grain) are previewed exactly as they will be saved."""
     from app.services.filesystem import resolve_image_path
 
     path = resolve_image_path(image)
-    img = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, max_px)
+    if full_quality:
+        img = _cached_editor_base_full(image.id, str(path), path.stat().st_mtime_ns)
+    else:
+        img = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, max_px)
     if distortion:
         img = apply_distortion(img, distortion)
     img = apply_edits(img, rotation, crop)

@@ -228,8 +228,9 @@ export const api = {
     },
     // Live editor preview, rendered server-side with the exact save pipeline -
     // returns a JPEG blob. Abortable so a newer slider state cancels stale renders.
-    async editorPreview(id: string, edits: ImageEdits, signal?: AbortSignal): Promise<Blob> {
-      const res = await fetch(`${BASE_URL}/images/${id}/editor-preview`, {
+    // `full` renders on the full-resolution base (slow - fetched after settle).
+    async editorPreview(id: string, edits: ImageEdits, signal?: AbortSignal, full = false): Promise<Blob> {
+      const res = await fetch(`${BASE_URL}/images/${id}/editor-preview${full ? "?full=1" : ""}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(apiEdits(edits)),

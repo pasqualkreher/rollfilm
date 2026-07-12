@@ -133,6 +133,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Server preview plumbing: abort a stale in-flight render when a newer edit
   // state supersedes it, and ignore late responses by sequence number.
   const abortRef = useRef<AbortController | null>(null);
+  const fullAbortRef = useRef<AbortController | null>(null);
   const renderSeq = useRef(0);
 
   // Live RGB histogram of the rendered preview (Lightroom/RapidRAW-style),
@@ -252,26 +253,35 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   // Server-rendered live preview: debounce edit changes, cancel the stale
   // in-flight render, draw the returned JPEG onto the canvas. The very first
-  // render (and image switches) skip the debounce.
+  // render (and image switches) skip the debounce. Once the sliders settle, a
+  // second render on the *full-resolution* base replaces the fast one, so
+  // resolution-dependent passes (denoise, sharpen radius, grain) preview
+  // exactly as they will be saved.
   useEffect(() => {
     let cancelled = false;
+    let fullTimer: ReturnType<typeof setTimeout> | undefined;
     const seq = ++renderSeq.current;
+    const draw = async (blob: Blob, withHistogram: boolean) => {
+      const bmp = await createImageBitmap(blob);
+      if (cancelled || seq !== renderSeq.current) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      canvas.width = bmp.width;
+      canvas.height = bmp.height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(bmp, 0, 0);
+      if (withHistogram) drawHistogram(ctx.getImageData(0, 0, bmp.width, bmp.height));
+    };
     const timer = setTimeout(
       async () => {
         abortRef.current?.abort();
+        fullAbortRef.current?.abort();
         const ctrl = new AbortController();
         abortRef.current = ctrl;
         try {
           const blob = await api.images.editorPreview(image.id, previewEdits, ctrl.signal);
           if (cancelled || seq !== renderSeq.current) return;
-          const bmp = await createImageBitmap(blob);
-          const canvas = canvasRef.current;
-          if (!canvas) return;
-          canvas.width = bmp.width;
-          canvas.height = bmp.height;
-          const ctx = canvas.getContext("2d")!;
-          ctx.drawImage(bmp, 0, 0);
-          drawHistogram(ctx.getImageData(0, 0, bmp.width, bmp.height));
+          await draw(blob, true);
           setError(null);
           setLoading(false);
           setReady(true);
@@ -281,13 +291,29 @@ export function PhotoEditor({ image, onClose }: Props) {
             setError(`Couldn't render the preview: ${(e as Error).message}`);
             setLoading(false);
           }
+          return;
         }
+        // Full-quality refinement after the sliders settle. The histogram
+        // keeps the fast pass's data (statistically identical, and
+        // getImageData over a full-res canvas is not free).
+        fullTimer = setTimeout(async () => {
+          const fctrl = new AbortController();
+          fullAbortRef.current = fctrl;
+          try {
+            const blob = await api.images.editorPreview(image.id, previewEdits, fctrl.signal, true);
+            if (cancelled || seq !== renderSeq.current) return;
+            await draw(blob, false);
+          } catch {
+            // Non-fatal: the fast preview is already on screen.
+          }
+        }, 400);
       },
       ready ? 140 : 0
     );
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      if (fullTimer) clearTimeout(fullTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image.id, previewKey]);
