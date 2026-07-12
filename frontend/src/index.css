@@ -1358,9 +1358,9 @@ input.editor-preset-select {
      this is what keeps the photo from ever being clipped. */
   align-items: stretch;
   justify-content: center;
-  /* Generous top/bottom framing so the photo never sits flush against the
-     screen edges in the lightbox. */
-  padding: 64px 72px;
+  /* Same band around the photo as the edit view (.editor-stage) so the image
+     renders at the same size and position when switching between the two. */
+  padding: 40px 16px;
 }
 
 .lightbox-content {
