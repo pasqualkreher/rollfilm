@@ -15,6 +15,7 @@ import type {
   StagedFileOut,
   StagedFileUpdatePatch,
   TagUsage,
+  TrashSettings,
 } from "./types";
 import type { ImageEdits } from "../utils/adjustments";
 
@@ -176,9 +177,6 @@ export const api = {
     // original files from the library folder.
     deleteFromTrash(image_ids: string[]): Promise<void> {
       return request(`/images/trash/delete`, { method: "POST", body: JSON.stringify({ image_ids }) });
-    },
-    emptyTrash(): Promise<void> {
-      return request(`/images/trash/empty`, { method: "POST" });
     },
     // Fetches a server-built zip of the originals and saves it via a temporary
     // object URL - keeps the potentially large binary out of React state.
@@ -401,6 +399,12 @@ export const api = {
     },
   },
   settings: {
+    getTrash(): Promise<TrashSettings> {
+      return request(`/settings/trash`);
+    },
+    updateTrash(retention_days: number): Promise<TrashSettings> {
+      return request(`/settings/trash`, { method: "PUT", body: JSON.stringify({ retention_days }) });
+    },
     getImmich(): Promise<ImmichSettings> {
       return request(`/settings/immich`);
     },

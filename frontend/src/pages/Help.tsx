@@ -186,14 +186,22 @@ export function Help() {
             <strong>Photos from an external source</strong> (indexed in place) are removed from the
             catalog immediately — they don't go to the Trash, because{" "}
             <strong>their files are never deleted</strong>. The original stays untouched in your
-            folder/NAS; a future re-scan of that source would index it again.
+            folder/NAS, and the automatic scan at app start won't bring the photo back. To get it
+            into the library again, press <em>Scan now</em> on the source (a manual scan re-indexes
+            everything, including removed photos) — or import the file.
           </li>
         </ul>
         <p>
-          On the Trash page, <strong>"Delete forever"</strong> (or <strong>"Empty trash"</strong>)
-          permanently deletes the selected photos — only this step actually removes the original
-          files from your library folder, and it cannot be undone. The delete confirmation always
-          tells you exactly what will happen to your selection.
+          On the Trash page, <strong>"Delete forever"</strong> permanently deletes the selected
+          photos — only this step actually removes the original files from your library folder, and
+          it cannot be undone. The delete confirmation always tells you exactly what will happen to
+          your selection.
+        </p>
+        <p>
+          The Trash also <strong>empties itself</strong>: on every app start, photos that have been
+          in the Trash longer than the retention period (default <strong>14 days</strong>) are
+          deleted for good in the background. Change the period under{" "}
+          <em>Settings → Trash</em> — set it to 0 to keep deleted photos forever.
         </p>
 
         <H id="photo-view">The photo view</H>
@@ -214,11 +222,6 @@ export function Help() {
           <li>
             <strong>Geometry:</strong> rotate in 90° steps, crop by dragging, composition overlays
             (rule of thirds, grid, diagonals).
-          </li>
-          <li>
-            <strong>Film simulation:</strong> Fujifilm-style looks with an intensity slider — Provia,
-            Velvia, Astia, Classic Chrome, Classic Negative, Pro Neg. Std/Hi, Eterna, Eterna Bleach
-            Bypass, Acros, Monochrome, Sepia, Nostalgic Neg.
           </li>
           <li>
             <strong>Light</strong> (with live histogram): exposure, contrast, highlights, shadows,
@@ -275,8 +278,10 @@ export function Help() {
         </p>
         <ul>
           <li>
-            <strong>Deleting a photo</strong> from an external source also only removes the catalog
-            entry — the file on disk is never touched (see "Deleting &amp; the Trash").
+            <strong>Deleting a photo</strong> from an external source only removes the catalog entry
+            — the file on disk is never touched, and automatic scans at app start keep it removed.
+            Pressing <em>Scan now</em> re-indexes the whole folder, including photos you removed
+            (see "Deleting &amp; the Trash").
           </li>
           <li>
             <strong>Duplicates between library and sources:</strong> the imported library copy is

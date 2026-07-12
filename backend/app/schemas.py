@@ -240,6 +240,16 @@ class ImmichSettingsUpdate(BaseModel):
     api_key: str | None = None
 
 
+class TrashSettingsOut(BaseModel):
+    # Days a photo stays in the Trash before the startup purge deletes it for
+    # good; 0 = keep forever.
+    retention_days: int
+
+
+class TrashSettingsUpdate(BaseModel):
+    retention_days: int
+
+
 class ImmichTestResult(BaseModel):
     ok: bool
     message: str

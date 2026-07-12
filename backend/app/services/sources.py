@@ -77,16 +77,21 @@ def _update_status(source_root_id: str, **fields) -> None:
         status.update(fields)
 
 
-def start_scan(source_root_id: str) -> bool:
+def start_scan(source_root_id: str, include_excluded: bool = False) -> bool:
     """Kick off a background scan. Returns False (a no-op) if one is already
     running for this source, so overlapping triggers (startup + manual) don't
-    double-index."""
+    double-index.
+
+    include_excluded=True (an explicit user-triggered scan) also brings back
+    photos that were deleted from this source: the scan is the user saying
+    "index this folder again, all of it". The automatic startup scan passes
+    False, so deletions survive app restarts."""
     with _status_lock:
         current = _scan_status.get(source_root_id)
         if current and current.get("running"):
             return False
         _scan_status[source_root_id] = {**_blank_status(), "running": True}
-    _scan_executor.submit(_run_scan, source_root_id)
+    _scan_executor.submit(_run_scan, source_root_id, include_excluded)
     return True
 
 
@@ -108,12 +113,30 @@ def scan_all_sources() -> None:
         logger.exception("Startup source scan could not be started")
 
 
-def _pair_scanned(images: list[Image]) -> None:
+def _pair_scanned(db: Session, source_root: SourceRoot) -> None:
     """Link RAW+JPEG siblings, but only within the same directory - unlike an
     import batch, a big tree can reuse basenames (DSCF0001) across many folders,
-    so pairing purely by stem would mislink unrelated shots."""
+    so pairing purely by stem would mislink unrelated shots.
+
+    Runs over *all* of this source's still-unpaired rows, not just the ones the
+    current scan added: the two halves of a pair can be indexed in different
+    scans (e.g. one half skipped earlier because a byte-identical copy was in
+    the managed library, and picked up only after that copy was deleted) - the
+    pair must still link up once both rows exist."""
+    unpaired = (
+        db.query(Image)
+        .filter(
+            Image.source_root_id == source_root.id,
+            Image.paired_image_id.is_(None),
+            # Deleted (excluded) rows must not soak up a visible sibling's
+            # pairing slot - the visible half would show as paired to a photo
+            # that never appears.
+            Image.deleted_at.is_(None),
+        )
+        .all()
+    )
     groups: dict[tuple[str, str], list[Image]] = defaultdict(list)
-    for image in images:
+    for image in unpaired:
         p = Path(image.file_path)
         groups[(str(p.parent), p.stem.lower())].append(image)
     for group in groups.values():
@@ -164,7 +187,7 @@ def _index_file(db, source_root: SourceRoot, path: Path, sha256: str | None = No
     return image
 
 
-def _run_scan(source_root_id: str) -> None:
+def _run_scan(source_root_id: str, include_excluded: bool = False) -> None:
     db = SessionLocal()
     try:
         source_root = db.get(SourceRoot, source_root_id)
@@ -207,10 +230,21 @@ def _run_scan(source_root_id: str) -> None:
             .all()
         }
 
+        # Rows for photos the user deleted from this source (kept as hidden
+        # exclusion markers - see images.bulk_delete_images). A manual scan
+        # revives them; the automatic startup scan leaves them deleted.
+        excluded_by_path: dict[str, Image] = {
+            img.file_path: img
+            for img in db.query(Image)
+            .filter(Image.source_root_id == source_root.id, Image.deleted_at.isnot(None))
+            .all()
+        }
+
         new_images: list[Image] = []
         scanned = 0
         added = 0
         renamed = 0
+        revived = 0
         skipped_managed = 0
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.name.startswith("."):
@@ -223,6 +257,11 @@ def _run_scan(source_root_id: str) -> None:
 
             key = str(path)
             if key in already:
+                excluded = excluded_by_path.get(key)
+                if include_excluded and excluded is not None:
+                    excluded.deleted_at = None
+                    del excluded_by_path[key]
+                    revived += 1
                 continue
 
             try:
@@ -242,8 +281,17 @@ def _run_scan(source_root_id: str) -> None:
                 # place so its RAW/JPEG pairing, rating, tags and id all survive
                 # - instead of leaving a stale row and inserting a duplicate.
                 already.discard(moved.file_path)
+                excluded_by_path.pop(moved.file_path, None)
                 moved.file_path = key
                 moved.original_filename = path.name
+                if moved.deleted_at is not None:
+                    if include_excluded:
+                        moved.deleted_at = None
+                        revived += 1
+                    else:
+                        # Still deleted by the user - keep excluding it, now
+                        # under its new path.
+                        excluded_by_path[key] = moved
                 already.add(key)
                 renamed += 1
                 continue
@@ -264,6 +312,12 @@ def _run_scan(source_root_id: str) -> None:
 
         if renamed:
             logger.info("Source %s: relocated %d renamed/moved file(s)", source_root_id, renamed)
+        if revived:
+            logger.info(
+                "Source %s: manual scan revived %d previously deleted photo(s)",
+                source_root_id,
+                revived,
+            )
         if skipped_managed:
             logger.info(
                 "Source %s: skipped %d file(s) already imported into the managed library",
@@ -271,7 +325,7 @@ def _run_scan(source_root_id: str) -> None:
                 skipped_managed,
             )
 
-        _pair_scanned(new_images)
+        _pair_scanned(db, source_root)
         source_root.last_scanned_at = datetime.now(timezone.utc)
         db.commit()
 
@@ -281,7 +335,11 @@ def _run_scan(source_root_id: str) -> None:
             db.refresh(image)
             enqueue_post_import(image.id, resolve_image_path(image))
 
-        _update_status(source_root_id, running=False, scanned=scanned, added=added, error=None)
+        # Revived photos count as "added" for the status readout - from the
+        # user's point of view they (re)appeared in the library.
+        _update_status(
+            source_root_id, running=False, scanned=scanned, added=added + revived, error=None
+        )
     except Exception as exc:
         logger.exception("Scan failed for source %s", source_root_id)
         _update_status(source_root_id, running=False, error=str(exc))

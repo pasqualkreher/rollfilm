@@ -16,6 +16,10 @@ export function Trash() {
     queryKey: ["trash"],
     queryFn: () => api.images.listTrash(),
   });
+  const { data: trashSettings } = useQuery({
+    queryKey: ["trash-settings"],
+    queryFn: () => api.settings.getTrash(),
+  });
 
   function toggleSelect(id: string, index: number, shiftKey: boolean) {
     setSelected((prev) => {
@@ -61,25 +65,15 @@ export function Trash() {
     refreshAfterChange();
   }
 
-  async function emptyTrash() {
-    if (!images || images.length === 0) return;
-    if (
-      !window.confirm(
-        `Permanently delete all ${images.length} photo(s) in the Trash? This removes the original files from your library - it cannot be undone.`
-      )
-    ) {
-      return;
-    }
-    await api.images.emptyTrash();
-    refreshAfterChange();
-  }
-
   return (
     <div className="page page-timeline">
       <div className="filter-bar">
         <strong>Trash</strong>
         <span style={{ color: "var(--text-muted)" }}>
           Deleted library photos stay here until you restore them or delete them for good.
+          {trashSettings && trashSettings.retention_days > 0
+            ? ` Photos are deleted automatically after ${trashSettings.retention_days} days (change this in Settings).`
+            : ""}
         </span>
         <span style={{ flex: 1 }} />
         <button
@@ -97,13 +91,6 @@ export function Trash() {
         </button>
         <button className="btn quiet-danger btn-sm" onClick={deleteSelectedForever} disabled={selected.size === 0}>
           Delete forever
-        </button>
-        <button
-          className="btn quiet-danger btn-sm"
-          onClick={emptyTrash}
-          disabled={!images || images.length === 0}
-        >
-          Empty trash
         </button>
       </div>
       <div className="page-scroll">

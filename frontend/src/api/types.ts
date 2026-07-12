@@ -66,6 +66,12 @@ export interface ImageOut {
   album_ids: string[];
 }
 
+export interface TrashSettings {
+  // Days a photo stays in the Trash before the automatic startup cleanup
+  // deletes it for good; 0 = keep forever.
+  retention_days: number;
+}
+
 export interface CropBox {
   x: number;
   y: number;

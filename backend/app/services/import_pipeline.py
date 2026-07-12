@@ -264,6 +264,10 @@ def commit_import_session(
             promoted.source_root_id = None
             promoted.original_filename = staged.original_filename
             promoted.file_size = dest_path.stat().st_size
+            # A previously deleted source-root photo lives on as a hidden
+            # scan-exclusion row; importing the same bytes is the explicit way
+            # to bring it back.
+            promoted.deleted_at = None
             if staged.rating:
                 promoted.rating = staged.rating
             if staged.color_label != ColorLabel.none:

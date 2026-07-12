@@ -76,6 +76,26 @@ export function Settings() {
     onSuccess: (result) => setImmichTest(result),
   });
 
+  // Trash auto-cleanup: how many days deleted photos stay restorable before
+  // the startup purge removes them for good (0 = keep forever).
+  const [trashDays, setTrashDays] = useState<string>("");
+  const [trashSaved, setTrashSaved] = useState(false);
+  const { data: trashSettings } = useQuery({
+    queryKey: ["trash-settings"],
+    queryFn: () => api.settings.getTrash(),
+  });
+  useEffect(() => {
+    if (trashSettings) setTrashDays(String(trashSettings.retention_days));
+  }, [trashSettings]);
+  const saveTrash = useMutation({
+    mutationFn: () => api.settings.updateTrash(Math.max(0, parseInt(trashDays, 10) || 0)),
+    onSuccess: (result) => {
+      setTrashDays(String(result.retention_days));
+      setTrashSaved(true);
+      queryClient.invalidateQueries({ queryKey: ["trash-settings"] });
+    },
+  });
+
   const sync = useMutation({
     mutationFn: () => api.maintenance.sync(),
     onSuccess: (result) => {
@@ -271,6 +291,49 @@ export function Settings() {
               ))}
             </ul>
           </div>
+        )}
+      </section>
+
+      <section style={{ marginBottom: 32 }}>
+        <h3 className="section-title" style={{ fontSize: 15 }}>
+          Trash
+        </h3>
+        <p style={{ color: "var(--text-muted)" }}>
+          Deleted library photos stay in the Trash and can be restored. On every app start, photos
+          that have been in the Trash longer than this are deleted for good, in the background.
+          Set 0 to keep them forever.
+        </p>
+        <div className="import-toolbar" style={{ alignItems: "center" }}>
+          <label className="filter-field">
+            <span style={{ marginRight: 6, color: "var(--text-muted)" }}>Delete after</span>
+            <input
+              type="number"
+              min={0}
+              max={3650}
+              value={trashDays}
+              onChange={(e) => {
+                setTrashDays(e.target.value);
+                setTrashSaved(false);
+              }}
+              style={{ width: 80 }}
+            />
+            <span style={{ marginLeft: 6, color: "var(--text-muted)" }}>days</span>
+          </label>
+          <button
+            className="btn primary"
+            onClick={() => saveTrash.mutate()}
+            disabled={trashDays === "" || saveTrash.isPending}
+          >
+            {saveTrash.isPending ? "Saving..." : "Save"}
+          </button>
+          {trashSaved && (
+            <span style={{ color: "var(--text-muted)" }}>
+              Saved{parseInt(trashDays, 10) === 0 ? " — photos are kept forever." : "."}
+            </span>
+          )}
+        </div>
+        {saveTrash.isError && (
+          <p style={{ color: "var(--danger)" }}>{(saveTrash.error as Error).message}</p>
         )}
       </section>
 

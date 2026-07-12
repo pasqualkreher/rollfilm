@@ -121,7 +121,7 @@ def add_source(
     db.refresh(source)
 
     # Index it straight away so the photos show up without a manual step.
-    sources_service.start_scan(source.id)
+    sources_service.start_scan(source.id, include_excluded=True)
     return _to_source_out(db, source)
 
 
@@ -132,7 +132,10 @@ def scan_source(
     source = db.get(SourceRoot, source_id)
     if source is None or source.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Source not found")
-    sources_service.start_scan(source.id)
+    # An explicit "Scan now" means "index this folder again, all of it" - it
+    # also brings back photos previously deleted from this source. Only the
+    # automatic startup scan preserves those deletions.
+    sources_service.start_scan(source.id, include_excluded=True)
     return schemas.ScanStatusOut(**sources_service.get_scan_status(source.id))
 
 

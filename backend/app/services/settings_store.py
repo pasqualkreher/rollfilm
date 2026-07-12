@@ -10,6 +10,9 @@ from app.db.models import AppSetting
 IMMICH_BASE_URL = "immich_base_url"
 IMMICH_API_KEY = "immich_api_key"
 
+TRASH_RETENTION_DAYS = "trash_retention_days"
+DEFAULT_TRASH_RETENTION_DAYS = 14
+
 
 @dataclass(frozen=True)
 class ImmichConfig:
@@ -28,6 +31,17 @@ def set_setting(db: Session, key: str, value: str) -> None:
         db.add(AppSetting(key=key, value=value))
     else:
         row.value = value
+
+
+def get_trash_retention_days(db: Session) -> int:
+    """How many days a photo stays in the Trash before the startup purge
+    permanently deletes it. 0 means "keep forever" (purge disabled)."""
+    raw = get_setting(db, TRASH_RETENTION_DAYS)
+    try:
+        days = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_TRASH_RETENTION_DAYS
+    return max(0, days)
 
 
 def get_immich_config(db: Session) -> ImmichConfig | None:

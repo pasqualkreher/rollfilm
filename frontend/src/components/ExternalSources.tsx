@@ -80,8 +80,10 @@ export function ExternalSources() {
         Index an existing collection (e.g. a NAS or big folder) <strong>in place</strong>. The files
         <strong> stay exactly where they are</strong> - they are never copied or moved into the app,
         only added to your library. You can add several sources; they're re-scanned for new files each
-        time the app starts, and whenever you press <em>Scan now</em>. (Photos you bring in via the{" "}
-        <em>Import</em> tab are the ones copied into the app's managed library.)
+        time the app starts, and whenever you press <em>Scan now</em>. Photos you deleted from a source
+        stay removed on the automatic startup scan — <em>Scan now</em> re-indexes everything, bringing
+        them back too. (Photos you bring in via the <em>Import</em> tab are the ones copied into the
+        app's managed library.)
       </p>
       {electron ? (
         <p style={{ color: "var(--text-muted)" }}>
@@ -163,7 +165,11 @@ export function ExternalSources() {
                   className="btn"
                   onClick={() => scan.mutate(s.id)}
                   disabled={s.scanning || !s.available}
-                  title={!s.available ? "Reconnect the drive/folder to scan it" : undefined}
+                  title={
+                    !s.available
+                      ? "Reconnect the drive/folder to scan it"
+                      : "Re-index the whole folder - new files are added and photos you deleted from this source come back"
+                  }
                 >
                   {s.scanning ? "Scanning…" : "Scan now"}
                 </button>

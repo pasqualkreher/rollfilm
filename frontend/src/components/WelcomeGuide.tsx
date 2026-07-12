@@ -54,8 +54,8 @@ export function WelcomeGuide() {
               shortlist, then download it as a zip or add it to an album.
             </li>
             <li>
-              <strong>Edit</strong> — open a photo and use the editor: film simulations, tone,
-              color and effects. Edits never touch the original file.
+              <strong>Edit</strong> — open a photo and use the editor: tone, color and effects.
+              Edits never touch the original file.
             </li>
             <li>
               <strong>Settings</strong> — change the library folder, connect Immich, and make

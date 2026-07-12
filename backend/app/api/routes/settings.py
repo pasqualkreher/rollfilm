@@ -9,7 +9,9 @@ from app.services import immich as immich_service
 from app.services.settings_store import (
     IMMICH_API_KEY,
     IMMICH_BASE_URL,
+    TRASH_RETENTION_DAYS,
     get_setting,
+    get_trash_retention_days,
     set_setting,
 )
 from app.workers.queue import immich_upload_history
@@ -41,6 +43,26 @@ def update_immich_settings(
 
     api_key = get_setting(db, IMMICH_API_KEY)
     return schemas.ImmichSettingsOut(base_url=payload.base_url.strip(), api_key_set=bool(api_key))
+
+
+@router.get("/trash", response_model=schemas.TrashSettingsOut)
+def get_trash_settings(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    return schemas.TrashSettingsOut(retention_days=get_trash_retention_days(db))
+
+
+@router.put("/trash", response_model=schemas.TrashSettingsOut)
+def update_trash_settings(
+    payload: schemas.TrashSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # 0 = keep forever; capped at ~10 years so a typo can't store nonsense.
+    days = max(0, min(3650, payload.retention_days))
+    set_setting(db, TRASH_RETENTION_DAYS, str(days))
+    db.commit()
+    return schemas.TrashSettingsOut(retention_days=days)
 
 
 @router.get("/immich/uploads", response_model=list[schemas.ImmichUploadResult])

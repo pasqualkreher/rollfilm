@@ -3,7 +3,6 @@ import io
 import json
 import logging
 import re
-import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,12 +23,17 @@ from app.db.models import (
     FileType,
     Image,
     ImageTag,
-    ImportStagedFile,
     Tag,
     User,
 )
 from app.db.session import engine, get_db
-from app.services import embeddings, immich as immich_service, sources as sources_service, thumbnails
+from app.services import (
+    embeddings,
+    immich as immich_service,
+    sources as sources_service,
+    thumbnails,
+    trash as trash_service,
+)
 from app.services.filesystem import library_relative_path, resolve_image_path
 from app.services.hashing import perceptual_hash
 from app.services.settings_store import get_immich_config
@@ -49,38 +53,6 @@ def _try_regenerate_derivatives(image: Image) -> None:
         thumbnails.regenerate_for_image(image)
     except Exception:
         logger.exception("Failed to regenerate thumbnails for image %s after edit", image.id)
-
-
-def _prune_empty_dirs(start: Path, stop_at: Path) -> None:
-    """After deleting a managed original, remove any now-empty parent folders the
-    app created for it (the per-year / per-day import folders), walking upward.
-    Never touches stop_at (the library root) itself, and bails the moment it
-    would step outside it - so a bad path can't delete unrelated directories."""
-    try:
-        stop_at = stop_at.resolve()
-    except OSError:
-        return
-    current = start.parent
-    while True:
-        try:
-            resolved = current.resolve()
-        except OSError:
-            return
-        # Stop at the library root, or if we've somehow escaped above it.
-        if resolved == stop_at or stop_at not in resolved.parents:
-            return
-        try:
-            next(resolved.iterdir())
-            return  # still has contents - leave it (and everything above) alone
-        except StopIteration:
-            pass  # empty - safe to remove
-        except OSError:
-            return
-        try:
-            resolved.rmdir()
-        except OSError:
-            return
-        current = resolved.parent
 
 
 def _apply_to_pair(
@@ -197,47 +169,18 @@ def list_images(
     return query.offset(offset).limit(limit).all()
 
 
-def _hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) -> None:
-    """Remove image rows for good. paired_image_id and
-    ImportStagedFile.duplicate_of_image_id both have FK constraints (enforced -
-    see db/session.py) back to images.id; null those out first or deleting a row
-    still referenced by another would fail. Clear the deleted rows' own pairing
-    link *and* any external sibling pointing back in - when both halves of a
-    pair are selected, only nulling the sibling leaves the first half still
-    pointing at the second.
-
-    Original files are only ever touched for managed photos (delete_files=True
-    from the Trash); photos indexed from a source root always keep their file -
-    it lives in the user's own folder and was never ours to delete."""
-    image_ids = {image.id for image in images}
-    for image in images:
-        image.paired_image_id = None
-    if image_ids:
-        db.query(Image).filter(Image.paired_image_id.in_(image_ids)).update(
-            {Image.paired_image_id: None}, synchronize_session=False
-        )
-        db.query(ImportStagedFile).filter(
-            ImportStagedFile.duplicate_of_image_id.in_(image_ids)
-        ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
-    db.flush()
-
-    for image in images:
-        if delete_files and image.source_root_id is None:
-            # Managed (imported) library file - ours to delete. Also tidy the
-            # date folders the app created once they're empty, so deleting the
-            # last shot of a day/year doesn't leave hollow dirs.
-            original = settings.library_root / image.file_path
-            original.unlink(missing_ok=True)
-            _prune_empty_dirs(original, settings.library_root)
-        shutil.rmtree(thumbnails.derivative_dir(image.id), ignore_errors=True)
-        db.delete(image)
-
-
 @router.get("/trash", response_model=list[schemas.ImageOut])
 def list_trash(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Managed photos only: deleted source-root photos are also soft-deleted
+    # rows, but they act as permanent scan-exclusion markers, not as trash
+    # entries (there is no file of ours to delete or bring back).
     return (
         db.query(Image)
-        .filter(Image.owner_id == current_user.id, Image.deleted_at.isnot(None))
+        .filter(
+            Image.owner_id == current_user.id,
+            Image.deleted_at.isnot(None),
+            Image.source_root_id.is_(None),
+        )
         .order_by(Image.deleted_at.desc())
         .all()
     )
@@ -272,7 +215,10 @@ def delete_from_trash(
             status_code=400,
             detail="Only photos in the Trash can be permanently deleted. Move them to the Trash first.",
         )
-    _hard_delete_images(db, images, delete_files=True)
+    # Deleted source-root photos are skipped: their row must survive as the
+    # marker that keeps re-scans from re-indexing the (untouched) file.
+    managed = [image for image in images if image.source_root_id is None]
+    trash_service.hard_delete_images(db, managed, delete_files=True)
     db.commit()
 
 
@@ -280,10 +226,14 @@ def delete_from_trash(
 def empty_trash(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     images = (
         db.query(Image)
-        .filter(Image.owner_id == current_user.id, Image.deleted_at.isnot(None))
+        .filter(
+            Image.owner_id == current_user.id,
+            Image.deleted_at.isnot(None),
+            Image.source_root_id.is_(None),
+        )
         .all()
     )
-    _hard_delete_images(db, images, delete_files=True)
+    trash_service.hard_delete_images(db, images, delete_files=True)
     db.commit()
 
 
@@ -323,19 +273,17 @@ def bulk_delete_images(
     - Managed (imported into the library): soft-delete into the in-app Trash.
       The file stays in the library folder; it's only removed for good when the
       photo is permanently deleted from the Trash (see /trash/delete).
-    - Indexed in place from a source root: remove the library row (and cached
-      derivatives) only. The original file lives in the user's own folder and
-      is never touched.
+    - Indexed in place from a source root: removed from the library for good,
+      but the row is kept (soft-deleted, never listed in the Trash). The kept
+      row is what stops the next source scan from simply re-indexing the file -
+      scans skip paths that are already in the DB. The original file is never
+      touched; importing the same bytes later revives the entry as a managed
+      photo (see import_pipeline.commit_import_session).
     """
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
-    managed = [image for image in images if image.source_root_id is None]
-    referenced = [image for image in images if image.source_root_id is not None]
-
     now = datetime.now(timezone.utc)
-    for image in managed:
+    for image in images:
         image.deleted_at = now
-
-    _hard_delete_images(db, referenced, delete_files=False)
     db.commit()
 
 
