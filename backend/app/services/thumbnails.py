@@ -595,9 +595,10 @@ def generate_derivatives(
         # full res it would just be averaged away by the resize.
         source = apply_adjustments(source, adjustments, include_grain=False)
 
+    # The lightbox preview keeps the *original* resolution - only the grid
+    # thumbnail is ever downscaled, so nowhere outside the grid does the user
+    # look at fewer pixels than the photo really has.
     preview = source.copy()
-    # LANCZOS gives noticeably crisper downscales than the thumbnail() default.
-    preview.thumbnail((PREVIEW_MAX_PX, PREVIEW_MAX_PX), PILImage.LANCZOS)
     if adjustments:
         preview = _grain_pil(preview, adjustments)
     _save_atomic(preview, out_dir / "preview.jpg", quality=90)

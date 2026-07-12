@@ -101,7 +101,9 @@ export function AlbumDetail() {
 
   async function removeFromAlbum(imageId: string) {
     if (!id) return;
-    await api.albums.removeImage(id, imageId);
+    // In merged view the card stands for the whole RAW+JPEG shot - remove the
+    // hidden partner too, or it would linger in the album as an orphan.
+    await Promise.all(withPairedIds([imageId]).map((x) => api.albums.removeImage(id, x)));
     // Refresh both the album's photo list and its header count.
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["album", id] });
@@ -162,7 +164,9 @@ export function AlbumDetail() {
 
   async function removeSelectedFromAlbum() {
     if (!id || selected.size === 0) return;
-    await Promise.all(Array.from(selected).map((imageId) => api.albums.removeImage(id, imageId)));
+    // Merged view hides the RAW behind its JPEG - remove both halves.
+    const ids = withPairedIds(Array.from(selected));
+    await Promise.all(ids.map((imageId) => api.albums.removeImage(id, imageId)));
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["album", id] });
@@ -178,7 +182,9 @@ export function AlbumDetail() {
 
   async function addSelectedToAlbum(targetAlbumId: string) {
     if (selected.size === 0) return;
-    await api.albums.addImages(targetAlbumId, Array.from(selected));
+    // In merged view the RAW partner is hidden behind the JPEG card - add it
+    // too, so the target album holds the whole shot.
+    await api.albums.addImages(targetAlbumId, withPairedIds(Array.from(selected)));
     queryClient.invalidateQueries({ queryKey: ["albums"] });
     queryClient.invalidateQueries({ queryKey: ["album", targetAlbumId] });
   }

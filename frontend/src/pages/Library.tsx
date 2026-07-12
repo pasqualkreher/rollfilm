@@ -155,7 +155,9 @@ export function Library() {
 
   async function addSelectedToAlbum(albumId: string) {
     if (selected.size === 0) return;
-    await api.albums.addImages(albumId, Array.from(selected));
+    // In merged view the RAW partner is hidden behind the JPEG card - add it
+    // too, so the album holds the whole shot and its own merge toggle works.
+    await api.albums.addImages(albumId, withPairedIds(Array.from(selected)));
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 

@@ -200,14 +200,20 @@ export function ImageDetail() {
     queryClient.invalidateQueries({ queryKey: ["image", activeId] });
   }
 
+  // With merged pairs the photo stands for the whole RAW+JPEG shot, so album
+  // membership changes cover the hidden partner too.
+  function idsWithPair(): string[] {
+    return mergePairs && image!.paired_image_id ? [image!.id, image!.paired_image_id] : [image!.id];
+  }
+
   async function addToAlbum(albumId: string) {
-    await api.albums.addImages(albumId, [image!.id]);
+    await api.albums.addImages(albumId, idsWithPair());
     queryClient.invalidateQueries({ queryKey: ["image", activeId] });
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
   async function removeFromAlbum(albumId: string) {
-    await api.albums.removeImage(albumId, image!.id);
+    await Promise.all(idsWithPair().map((x) => api.albums.removeImage(albumId, x)));
     queryClient.invalidateQueries({ queryKey: ["image", activeId] });
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
