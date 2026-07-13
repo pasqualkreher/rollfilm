@@ -23,6 +23,7 @@ from app.db.models import (
     ImportSessionStatus,
     ImportStagedFile,
 )
+from app.services import geocode
 from app.services.exif import ExifData, new_helper, read_exif, to_float, to_int
 from app.services.filesystem import library_relative_path
 from app.services.hashing import hamming_int, perceptual_hash, phash_to_int, sha256_file
@@ -430,6 +431,9 @@ def commit_import_session(
         new_images.append(image)
 
     pair_siblings(new_images)
+    # Resolve each new photo's GPS fix to a country (offline) so it's filterable
+    # by region straight after import.
+    geocode.annotate_images(new_images)
     session.status = ImportSessionStatus.committed
     db.commit()
 

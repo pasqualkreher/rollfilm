@@ -29,6 +29,7 @@ from app.db.models import (
 from app.db.session import engine, get_db
 from app.services import (
     embeddings,
+    geocode,
     immich as immich_service,
     sources as sources_service,
     thumbnails,
@@ -109,6 +110,7 @@ def list_images(
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
+    country: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     tags: list[str] | None = Query(None),
@@ -131,6 +133,10 @@ def list_images(
         query = query.filter(Image.color_label == color_label)
     if camera_model:
         query = query.filter(Image.camera_model == camera_model)
+    if country == geocode.NO_LOCATION:
+        query = query.filter(Image.gps_lat.is_(None))
+    elif country:
+        query = query.filter(Image.gps_country == country)
     if date_from:
         query = query.filter(Image.taken_at >= date_from)
     if date_to:
@@ -167,6 +173,47 @@ def list_images(
 
     query = query.order_by(Image.taken_at.desc())
     return query.offset(offset).limit(limit).all()
+
+
+@router.get("/facets", response_model=schemas.LibraryFacets)
+def list_facets(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Distinct values for the filter dropdowns: cameras and regions present in
+    the caller's library, each with a photo count. Regions are reverse-geocoded
+    lazily here for any geotagged photo not yet resolved, so they populate
+    without a separate maintenance pass."""
+    base = db.query(Image).filter(Image.owner_id == current_user.id, Image.deleted_at.is_(None))
+    base = sources_service.exclude_unavailable(
+        base, sources_service.unavailable_source_ids(db, current_user.id)
+    )
+
+    # Backfill any geotagged photos missing a country (e.g. imported before this
+    # feature, or restored from a backup), then commit before counting.
+    missing = base.filter(Image.gps_lat.isnot(None), Image.gps_country.is_(None)).all()
+    if missing and geocode.annotate_images(missing):
+        db.commit()
+
+    cameras = [
+        schemas.Facet(value=value, count=count)
+        for value, count in (
+            base.with_entities(Image.camera_model, func.count(Image.id))
+            .filter(Image.camera_model.isnot(None), Image.camera_model != "")
+            .group_by(Image.camera_model)
+            .order_by(func.count(Image.id).desc())
+            .all()
+        )
+    ]
+    regions = [
+        schemas.Facet(value=value, count=count)
+        for value, count in (
+            base.with_entities(Image.gps_country, func.count(Image.id))
+            .filter(Image.gps_country.isnot(None))
+            .group_by(Image.gps_country)
+            .order_by(func.count(Image.id).desc())
+            .all()
+        )
+    ]
+    no_location = base.filter(Image.gps_lat.is_(None)).count()
+    return schemas.LibraryFacets(cameras=cameras, regions=regions, no_location_count=no_location)
 
 
 @router.get("/trash", response_model=list[schemas.ImageOut])

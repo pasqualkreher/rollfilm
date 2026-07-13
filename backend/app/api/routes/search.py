@@ -10,7 +10,7 @@ from app import schemas
 from app.auth import get_current_user
 from app.db.models import AlbumImage, ColorLabel, FileType, Image, ImageTag, Tag, User
 from app.db.session import engine, get_db
-from app.services import embeddings, sources as sources_service
+from app.services import embeddings, geocode, sources as sources_service
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -23,6 +23,7 @@ def _apply_scope(
     rating_min: int | None,
     color_label: ColorLabel | None,
     camera_model: str | None,
+    country: str | None,
     date_from: datetime | None,
     date_to: datetime | None,
     tags: list[str] | None,
@@ -43,6 +44,10 @@ def _apply_scope(
         query = query.filter(Image.color_label == color_label)
     if camera_model:
         query = query.filter(Image.camera_model == camera_model)
+    if country == geocode.NO_LOCATION:
+        query = query.filter(Image.gps_lat.is_(None))
+    elif country:
+        query = query.filter(Image.gps_country == country)
     if date_from:
         query = query.filter(Image.taken_at >= date_from)
     if date_to:
@@ -75,6 +80,7 @@ def search_images(
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
+    country: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     tags: list[str] | None = QueryParam(None),
@@ -97,6 +103,7 @@ def search_images(
         rating_min=rating_min,
         color_label=color_label,
         camera_model=camera_model,
+        country=country,
         date_from=date_from,
         date_to=date_to,
         tags=tags,
@@ -110,6 +117,33 @@ def search_images(
     # Same rule as the library grid: photos from a disconnected external source
     # aren't searchable while their drive/NAS is offline.
     unavailable = sources_service.unavailable_source_ids(db, current_user.id)
+
+    # Location search: when the query names a city, sort the geotagged photos in
+    # scope by distance to it (nearest first) instead of tag/visual matching.
+    # Gated on a cheap name match so ordinary queries skip the geo work entirely;
+    # falls through to normal search if the scope has no located photos.
+    if geocode.place_candidates(q):
+        geo_query = _apply_scope(db.query(Image), **scope_kwargs).filter(
+            Image.gps_lat.isnot(None), Image.gps_lon.isnot(None)
+        )
+        geo_images = sources_service.exclude_unavailable(geo_query, unavailable).all()
+        if geo_images:
+            centroid = (
+                sum(im.gps_lat for im in geo_images) / len(geo_images),
+                sum(im.gps_lon for im in geo_images) / len(geo_images),
+            )
+            place = geocode.resolve_place(q, near=centroid)
+            if place:
+                ranked = sorted(
+                    (
+                        (im, geocode.haversine_km((im.gps_lat, im.gps_lon), (place.lat, place.lon)))
+                        for im in geo_images
+                    ),
+                    key=lambda t: t[1],
+                )
+                return [
+                    schemas.SearchResultOut(image=im, distance=dist) for im, dist in ranked[:limit]
+                ]
 
     tag_query = (
         db.query(Image)

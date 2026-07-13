@@ -136,7 +136,7 @@ export function Help() {
             deleting it applies to both files.
           </li>
           <li>
-            <strong>Thumbnail size:</strong> S / M / L / XL.
+            <strong>Thumbnail size:</strong> S / M / L.
           </li>
           <li>
             <strong>Selection &amp; bulk actions:</strong> press "Select", click photos (shift-click

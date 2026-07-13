@@ -26,6 +26,7 @@ class ImageOut(BaseModel):
     focal_length: float | None
     gps_lat: float | None
     gps_lon: float | None
+    gps_country: str | None = None
     rating: int
     color_label: ColorLabel
     paired_image_id: str | None
@@ -315,6 +316,20 @@ class DirListing(BaseModel):
 class SearchResultOut(BaseModel):
     image: ImageOut
     distance: float
+
+
+class Facet(BaseModel):
+    """One filter-dropdown option and how many photos carry it."""
+
+    value: str
+    count: int
+
+
+class LibraryFacets(BaseModel):
+    cameras: list[Facet]
+    regions: list[Facet]
+    # Photos with no GPS at all - offered as an explicit "no location" bucket.
+    no_location_count: int
 
 
 class SyncResult(BaseModel):

@@ -8,6 +8,7 @@ import type {
   ImmichPushResult,
   ImmichUploadResult,
   ImportSessionOut,
+  LibraryFacets,
   LibraryFilters,
   ScanStatus,
   SearchResultOut,
@@ -190,6 +191,9 @@ export const api = {
         params.set("offset", String(page.offset));
       }
       return request(`/images?${params.toString()}`);
+    },
+    facets(): Promise<LibraryFacets> {
+      return request(`/images/facets`);
     },
     get(id: string): Promise<ImageOut> {
       return request(`/images/${id}`);

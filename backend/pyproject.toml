@@ -19,6 +19,8 @@ dependencies = [
     "numpy>=1.26",
     "opencv-contrib-python-headless>=4.10",
     "open_clip_torch>=2.26",
+    "reverse_geocoder>=1.5",
+    "pycountry>=24.0",
 ]
 
 [project.optional-dependencies]

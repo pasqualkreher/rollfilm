@@ -21,6 +21,7 @@ export function Library() {
   const [colorLabel, setColorLabel] = useState<ColorLabel>("none");
   const [albumId, setAlbumId] = useState<string>("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [camera, setCamera] = useState<string>("");
   const [dateFrom, setDateFrom] = useState<string | null>(null);
   const [dateTo, setDateTo] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -34,6 +35,9 @@ export function Library() {
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
   const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
+  // Camera + region dropdown options, refreshed with the library so new imports
+  // (and their reverse-geocoded regions) show up.
+  const { data: facets } = useQuery({ queryKey: ["facets"], queryFn: () => api.images.facets() });
 
   // "Add to Immich" only appears when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
@@ -55,6 +59,7 @@ export function Library() {
     color_label: colorLabel !== "none" ? colorLabel : undefined,
     album_id: albumId || undefined,
     tags: selectedTags.length ? selectedTags : undefined,
+    camera_model: camera || undefined,
     // Capture-date range from the date pickers: include the whole "from" day
     // through the end of the "to" day.
     date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
@@ -236,6 +241,9 @@ export function Library() {
         allTags={allTags}
         selectedTags={selectedTags}
         onTags={setSelectedTags}
+        cameras={facets?.cameras}
+        camera={camera}
+        onCamera={setCamera}
         dateFrom={dateFrom}
         dateTo={dateTo}
         onDateFrom={setDateFrom}

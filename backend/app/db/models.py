@@ -125,6 +125,9 @@ class Image(Base):
     focal_length: Mapped[float | None] = mapped_column(Float, nullable=True)
     gps_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     gps_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Country name reverse-geocoded from the GPS fix (offline), for the region
+    # filter. Null when there's no GPS or it hasn't been resolved yet.
+    gps_country: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
     rating: Mapped[int] = mapped_column(Integer, default=0)
     color_label: Mapped[ColorLabel] = mapped_column(Enum(ColorLabel), default=ColorLabel.none)

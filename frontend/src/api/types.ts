@@ -31,6 +31,7 @@ export interface ImageOut {
   focal_length: number | null;
   gps_lat: number | null;
   gps_lon: number | null;
+  gps_country: string | null;
   rating: number;
   color_label: ColorLabel;
   paired_image_id: string | null;
@@ -198,8 +199,24 @@ export interface LibraryFilters {
   rating_min?: number;
   color_label?: ColorLabel;
   camera_model?: string;
+  // Region filter: a reverse-geocoded country name, or the "__none__" sentinel
+  // for photos with no location.
+  country?: string;
   date_from?: string;
   date_to?: string;
   tags?: string[];
   limit?: number;
+}
+
+export const NO_LOCATION = "__none__";
+
+export interface Facet {
+  value: string;
+  count: number;
+}
+
+export interface LibraryFacets {
+  cameras: Facet[];
+  regions: Facet[];
+  no_location_count: number;
 }

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { AlbumOut, ColorLabel, ViewMode } from "../api/types";
+import type { AlbumOut, ColorLabel, Facet, ViewMode } from "../api/types";
 import { ViewModeToggle } from "./ViewModeToggle";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { ViewPrefsControls } from "./ViewPrefsControls";
@@ -25,6 +25,11 @@ interface Props {
   allTags?: string[];
   selectedTags?: string[];
   onTags?: (tags: string[]) => void;
+  // When provided, a "Camera" dropdown of the camera models present in the
+  // library is shown. `camera` is the selected model ("" = any).
+  cameras?: Facet[];
+  camera?: string;
+  onCamera?: (model: string) => void;
   // When provided, a "From date – To date" range is shown that filters by
   // capture date (taken_at) with month/day precision via native date pickers.
   // Both handlers must be given to enable it. Values are ISO dates ("YYYY-MM-DD").
@@ -60,6 +65,9 @@ export function PhotoFilters({
   allTags,
   selectedTags,
   onTags,
+  cameras,
+  camera,
+  onCamera,
   dateFrom,
   dateTo,
   onDateFrom,
@@ -69,11 +77,13 @@ export function PhotoFilters({
   children,
 }: Props) {
   const showDates = Boolean(onDateFrom && onDateTo);
+  const showCamera = Boolean(cameras && onCamera);
   const isFiltering =
     ratingMin > 0 ||
     colorLabel !== "none" ||
     (albumId ?? "") !== "" ||
     (selectedTags?.length ?? 0) > 0 ||
+    (camera ?? "") !== "" ||
     Boolean(dateFrom) ||
     Boolean(dateTo);
 
@@ -82,6 +92,7 @@ export function PhotoFilters({
     onColorLabel("none");
     onAlbumId?.("");
     onTags?.([]);
+    onCamera?.("");
     onDateFrom?.(null);
     onDateTo?.(null);
   }
@@ -124,6 +135,20 @@ export function PhotoFilters({
           <label className="filter-field">
             Tags
             <TagFilter options={allTags} value={selectedTags ?? []} onChange={onTags} />
+          </label>
+        )}
+
+        {showCamera && (
+          <label className="filter-field">
+            Camera
+            <select value={camera ?? ""} onChange={(e) => onCamera?.(e.target.value)}>
+              <option value="">All cameras</option>
+              {cameras!.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.value} ({c.count})
+                </option>
+              ))}
+            </select>
           </label>
         )}
 
