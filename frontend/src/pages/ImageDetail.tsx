@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
@@ -202,6 +202,32 @@ export function ImageDetail() {
     queryFn: () => api.images.similar(activeId),
     enabled: !!activeId,
   });
+
+  // A RAW+JPEG pair is the same shot, so the raw search hits both halves - and
+  // often the open photo's own partner. Collapse each pair to one suggestion
+  // (prefer the viewable JPEG) and drop the current photo's partner, so the
+  // strip proposes genuinely different photos instead of raw/jpg duplicates.
+  const shownSimilar = useMemo(() => {
+    if (!similar) return [];
+    const partnerId = image?.paired_image_id ?? null;
+    const groups = new Map<string, typeof similar>();
+    const order: string[] = [];
+    for (const r of similar) {
+      if (r.image.id === partnerId) continue;
+      const key = r.image.paired_image_id
+        ? [r.image.id, r.image.paired_image_id].sort().join("|")
+        : r.image.id;
+      if (!groups.has(key)) {
+        groups.set(key, []);
+        order.push(key);
+      }
+      groups.get(key)!.push(r);
+    }
+    return order.map((key) => {
+      const group = groups.get(key)!;
+      return group.find((g) => g.image.file_type !== "raw") ?? group[0];
+    });
+  }, [similar, image?.paired_image_id]);
 
   if (!image) return <div className="page empty-state">Loading...</div>;
 
@@ -502,11 +528,11 @@ export function ImageDetail() {
             </a>
           </div>
 
-          {similar && similar.length > 0 && (
+          {shownSimilar.length > 0 && (
             <div className="detail-section">
               <div className="detail-section-label">Similar photos</div>
               <div className="thumbnail-grid similar-grid">
-                {similar.map((r) => (
+                {shownSimilar.map((r) => (
                   <div
                     key={r.image.id}
                     className="thumb-card"

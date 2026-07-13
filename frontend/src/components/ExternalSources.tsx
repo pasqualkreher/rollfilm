@@ -85,31 +85,18 @@ export function ExternalSources() {
   });
 
   return (
-    <section style={{ marginBottom: 32 }}>
-      <h3 className="section-title" style={{ fontSize: 15 }}>
-        External photo sources
-      </h3>
-      <p style={{ color: "var(--text-muted)" }}>
-        Index an existing collection (e.g. a NAS or big folder) <strong>in place</strong>. The files
-        <strong> stay exactly where they are</strong> - they are never copied or moved into the app,
-        only added to your library. You can add several sources; they're re-scanned for new files each
-        time the app starts, and whenever you press <em>Scan now</em>. Photos you deleted from a source
-        stay removed on the automatic startup scan — <em>Scan now</em> re-indexes everything, bringing
-        them back too. (Photos you bring in via the <em>Import</em> tab are the ones copied into the
-        app's managed library.)
+    <section className="import-panel">
+      <h3 className="section-title">External photo sources</h3>
+      <p className="import-panel-desc">
+        Show photos from a folder — like a NAS or an archive — without copying them in. The files
+        stay where they are, and each source is re-scanned at startup and when you press{" "}
+        <em>Scan now</em>.
       </p>
-      {electron ? (
-        <p style={{ color: "var(--text-muted)" }}>
-          Click <em>Browse</em> and pick any folder on your computer - the app reads it directly, no
-          setup needed.
-        </p>
-      ) : (
-        <p style={{ color: "var(--text-muted)" }}>
-          Click <em>Browse</em> and pick the folder. Your computer's drives and NAS shares show up under{" "}
-          <code>/hostfs</code> (on macOS that's everything under <code>/Volumes</code>). If nothing
-          appears there, the broad mount isn't active yet - set <code>HOST_BROWSE_PATH</code> in{" "}
-          <code>.env</code> and run <code>docker compose up -d</code> once; after that it all works from
-          here.
+      {!electron && (
+        <p className="import-panel-desc">
+          Drives and NAS shares appear under <code>/hostfs</code> (on macOS, everything under{" "}
+          <code>/Volumes</code>). If nothing shows, set <code>HOST_BROWSE_PATH</code> in{" "}
+          <code>.env</code> and run <code>docker compose up -d</code> once.
         </p>
       )}
 

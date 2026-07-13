@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { ImmichTestResult } from "../api/types";
-import { ExternalSources } from "../components/ExternalSources";
 import { useTheme, type Theme } from "../state/theme";
 import { useTasks } from "../state/tasks";
 
@@ -412,8 +411,6 @@ export function Settings() {
           </p>
         )}
       </section>
-
-      <ExternalSources />
 
       <section style={{ marginBottom: 32 }}>
         <h3 className="section-title" style={{ fontSize: 15 }}>

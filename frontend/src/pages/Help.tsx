@@ -227,8 +227,10 @@ export function Help() {
         </p>
         <ul>
           <li>
-            <strong>Geometry:</strong> rotate in 90° steps, crop by dragging, composition overlays
-            (rule of thirds, grid, diagonals).
+            <strong>Geometry:</strong> rotate in 90° steps, crop by dragging — freeform or locked to
+            an aspect ratio (Original, 1:1 and all the common sizes: 3:2, 4:3, 5:4, 7:5, 16:9 and
+            their portrait counterparts) — plus composition overlays (rule of thirds, grid,
+            diagonals).
           </li>
           <li>
             <strong>Light</strong> (with live histogram): exposure, contrast, highlights, shadows,
@@ -276,8 +278,9 @@ export function Help() {
 
         <H id="external-sources">External sources</H>
         <p>
-          <em>Settings → External sources.</em> An external source is a folder that is{" "}
-          <strong>indexed in place</strong> — nothing is copied or moved, unlike Import. Ideal for a
+          <em>Import tab → External photo sources.</em> An external source is a folder that is{" "}
+          <strong>indexed in place</strong> — nothing is copied or moved, unlike the rest of Import.
+          Ideal for a
           NAS or an existing archive you don't want to reorganize. Sources are re-scanned at app
           start and on demand. If the drive is unplugged the source shows as{" "}
           <strong>Disconnected</strong> and its photos are hidden until it returns. "Remove" only
@@ -377,6 +380,20 @@ export function Help() {
               <td>Previous / next staged file, close preview</td>
             </tr>
             <tr>
+              <td>Import preview</td>
+              <td>
+                <kbd>0</kbd>–<kbd>5</kbd>
+              </td>
+              <td>Set the star rating (0 clears it)</td>
+            </tr>
+            <tr>
+              <td>Import preview</td>
+              <td>
+                <kbd>Space</kbd>
+              </td>
+              <td>Check / uncheck whether this file is imported</td>
+            </tr>
+            <tr>
               <td>Grids</td>
               <td>
                 <kbd>Shift</kbd> + click
@@ -423,7 +440,7 @@ export function Help() {
         </p>
         <h4>Photos from an external source are missing</h4>
         <p>
-          Check <em>Settings → External sources</em>: a "Disconnected" source means its drive or
+          Check <em>Import tab → External photo sources</em>: a "Disconnected" source means its drive or
           network share is offline. Its photos reappear as soon as it's back.
         </p>
         <h4>Thumbnails look wrong or outdated</h4>

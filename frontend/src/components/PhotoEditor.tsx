@@ -51,6 +51,54 @@ const MIX_CHANNELS: [number, string][] = [
   [2, "Luminance"],
 ];
 
+// Crop aspect-ratio presets. `ratio` is width/height; "orig" locks to the
+// framed image's own aspect, null lets you drag any shape.
+type AspectVal = number | "orig" | null;
+const ASPECT_OPTIONS: { value: string; label: string; ratio: AspectVal }[] = [
+  { value: "free", label: "Freeform", ratio: null },
+  { value: "orig", label: "Original", ratio: "orig" },
+  { value: "1:1", label: "1:1 · Square", ratio: 1 },
+  { value: "3:2", label: "3:2", ratio: 3 / 2 },
+  { value: "2:3", label: "2:3", ratio: 2 / 3 },
+  { value: "4:3", label: "4:3", ratio: 4 / 3 },
+  { value: "3:4", label: "3:4", ratio: 3 / 4 },
+  { value: "5:4", label: "5:4", ratio: 5 / 4 },
+  { value: "4:5", label: "4:5", ratio: 4 / 5 },
+  { value: "7:5", label: "7:5", ratio: 7 / 5 },
+  { value: "5:7", label: "5:7", ratio: 5 / 7 },
+  { value: "16:9", label: "16:9", ratio: 16 / 9 },
+  { value: "9:16", label: "9:16", ratio: 9 / 16 },
+];
+
+// The largest crop of fraction-space ratio k (= width/height in fractions of
+// the framed image), centred in the frame.
+function centeredDragForK(k: number): DragRect {
+  const fw = k >= 1 ? 1 : k;
+  const fh = k >= 1 ? 1 / k : 1;
+  const x0 = (1 - fw) / 2;
+  const y0 = (1 - fh) / 2;
+  return { x0, y0, x1: x0 + fw, y1: y0 + fh };
+}
+
+// Force a drag rect to fraction-space ratio k while keeping the anchor corner
+// fixed and staying inside [0,1].
+function constrainDragToK(r: DragRect, k: number): DragRect {
+  const sx = r.x1 >= r.x0 ? 1 : -1;
+  const sy = r.y1 >= r.y0 ? 1 : -1;
+  let adx = Math.abs(r.x1 - r.x0);
+  let ady = Math.abs(r.y1 - r.y0);
+  if (ady < 1e-9 || adx / ady > k) adx = ady * k;
+  else ady = adx / k;
+  const maxAdx = sx > 0 ? 1 - r.x0 : r.x0;
+  const maxAdy = sy > 0 ? 1 - r.y0 : r.y0;
+  let scale = 1;
+  if (adx > maxAdx) scale = Math.min(scale, maxAdx / adx);
+  if (ady > maxAdy) scale = Math.min(scale, maxAdy / ady);
+  adx *= scale;
+  ady *= scale;
+  return { x0: r.x0, y0: r.y0, x1: r.x0 + sx * adx, y1: r.y0 + sy * ady };
+}
+
 function labelFor(key: keyof Adjustments): string {
   return ADJUSTMENT_DEFS.find((d) => d.key === key)!.label;
 }
@@ -230,6 +278,8 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [cropMode, setCropMode] = useState(false);
   const [drag, setDrag] = useState<DragRect | null>(null);
   const [dragging, setDragging] = useState(false);
+  // Crop aspect-ratio lock (key into ASPECT_OPTIONS; "free" = unconstrained).
+  const [aspectKey, setAspectKey] = useState("free");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -467,6 +517,32 @@ export function PhotoEditor({ image, onClose }: Props) {
     };
   }
 
+  // Current aspect lock as a fraction-space ratio (fw/fh), or null when free.
+  // In crop mode the canvas holds the full framed image, so its pixels give the
+  // image aspect A; a target ratio R becomes k = R / A in fraction space.
+  function aspectK(): number | null {
+    const ratio = ASPECT_OPTIONS.find((o) => o.value === aspectKey)?.ratio ?? null;
+    if (ratio == null) return null;
+    const cv = canvasRef.current;
+    if (!cv || !cv.width || !cv.height) return null;
+    const A = cv.width / cv.height;
+    const R = ratio === "orig" ? A : ratio;
+    return R / A;
+  }
+
+  // Picking a preset drops a centred crop of that ratio; picking Freeform just
+  // releases the lock and keeps whatever box is drawn.
+  function pickAspect(key: string) {
+    setAspectKey(key);
+    const ratio = ASPECT_OPTIONS.find((o) => o.value === key)?.ratio ?? null;
+    if (ratio == null) return;
+    const cv = canvasRef.current;
+    if (!cv || !cv.width || !cv.height) return;
+    const A = cv.width / cv.height;
+    const R = ratio === "orig" ? A : ratio;
+    setDrag(centeredDragForK(R / A));
+  }
+
   function setBandChannel(ch: number, v: number) {
     setColorMix((m) => {
       const next: ColorMix = { ...m, [band]: [...m[band]] as [number, number, number] };
@@ -535,7 +611,10 @@ export function PhotoEditor({ image, onClose }: Props) {
               if (cropMode) {
                 if (dragging && drag) {
                   const p = fractionAt(e.clientX, e.clientY);
-                  setDrag({ ...drag, x1: p.x, y1: p.y });
+                  let next: DragRect = { ...drag, x1: p.x, y1: p.y };
+                  const k = aspectK();
+                  if (k != null) next = constrainDragToK(next, k);
+                  setDrag(next);
                 }
               } else if (panDragRef.current) {
                 setPan({ x: e.clientX - panDragRef.current.x, y: e.clientY - panDragRef.current.y });
@@ -652,10 +731,22 @@ export function PhotoEditor({ image, onClose }: Props) {
           </button>
           {cropMode && (
             <>
+              <select
+                className="editor-grid-select"
+                value={aspectKey}
+                onChange={(e) => pickAspect(e.target.value)}
+                title="Crop aspect ratio"
+              >
+                {ASPECT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
               <button className="btn btn-sm primary" disabled={!hasDrawnCrop} onClick={() => { setCrop(normalizeRect(drag!)); setCropMode(false); }}>
                 Apply
               </button>
-              <button className="btn btn-sm" disabled={!crop && !drawn} onClick={() => { setCrop(null); setDrag(null); setCropMode(false); }}>
+              <button className="btn btn-sm" disabled={!crop && !drawn} onClick={() => { setCrop(null); setDrag(null); setAspectKey("free"); setCropMode(false); }}>
                 Clear
               </button>
             </>

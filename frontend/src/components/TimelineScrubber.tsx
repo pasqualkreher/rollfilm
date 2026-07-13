@@ -26,6 +26,12 @@ function monthOf(label: string): string {
   return (label.split(" ")[0] ?? label).slice(0, 3);
 }
 
+// Markers, the handle and the drag hit-testing all map a 0..1 fraction onto the
+// rail with this end padding, so the first/last labels aren't jammed against
+// the ends. It MUST be shared: if placement (posTop) and click→fraction
+// (fracFromEvent) disagree, dragging to a visible label lands on its neighbour.
+const RAIL_INSET = 14;
+
 /**
  * Immich-style date scrubber pinned to the right edge of the library timeline:
  * year/month markers positioned by where each section sits in the scroll range,
@@ -37,6 +43,10 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
   const [currentFrac, setCurrentFrac] = useState(0);
   const [activeLabel, setActiveLabel] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // Briefly reveal the scrubber + position bubble while the user scrolls the
+  // grid, then fade back out - so scrolling shows where you are, like the drag.
+  const [scrolling, setScrolling] = useState(false);
+  const scrollHideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [railTop, setRailTop] = useState(120);
 
   const recompute = useCallback(() => {
@@ -73,14 +83,23 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
     const scroller = getScroller();
     if (!scroller) return;
     recompute();
-    scroller.addEventListener("scroll", recompute, { passive: true });
+    // Reveal the bubble on real user scrolls only (not the mount/resize
+    // recomputes), and auto-hide a moment after scrolling stops.
+    const onScroll = () => {
+      recompute();
+      setScrolling(true);
+      clearTimeout(scrollHideTimer.current);
+      scrollHideTimer.current = setTimeout(() => setScrolling(false), 900);
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
     const ro = new ResizeObserver(recompute);
     ro.observe(scroller);
     window.addEventListener("resize", recompute);
     return () => {
-      scroller.removeEventListener("scroll", recompute);
+      scroller.removeEventListener("scroll", onScroll);
       ro.disconnect();
       window.removeEventListener("resize", recompute);
+      clearTimeout(scrollHideTimer.current);
     };
   }, [getScroller, recompute]);
 
@@ -92,17 +111,19 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
       const clamped = Math.min(1, Math.max(0, frac));
       const maxScroll = scroller.scrollHeight - scroller.clientHeight;
       scroller.scrollTop = clamped * maxScroll;
-      // Reflect the nearest section in the bubble immediately while dragging.
-      let nearest = markers[0]?.label ?? null;
-      let best = Infinity;
+      // Move the indicator with the pointer right away, rather than waiting for
+      // the scroll event to round-trip through recompute().
+      setCurrentFrac(clamped);
+      // Show the section that's actually at the top after this scroll - the
+      // last marker at or above the drag position - so the bubble matches the
+      // grid (nearest-marker would flip to the next month a bit too early).
+      // markers are in document order (newest first) => ascending frac.
+      let topmost = markers[0]?.label ?? null;
       for (const m of markers) {
-        const d = Math.abs(m.frac - clamped);
-        if (d < best) {
-          best = d;
-          nearest = m.label;
-        }
+        if (m.frac <= clamped + 1e-4) topmost = m.label;
+        else break;
       }
-      setActiveLabel(nearest);
+      setActiveLabel(topmost);
     },
     [getScroller, markers]
   );
@@ -111,7 +132,10 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
     const rail = railRef.current;
     if (!rail) return 0;
     const rect = rail.getBoundingClientRect();
-    return (clientY - rect.top) / rect.height;
+    // Invert posTop()'s inset so a click on a label maps to that label's frac.
+    const usable = rect.height - RAIL_INSET * 2;
+    if (usable <= 0) return 0;
+    return Math.min(1, Math.max(0, (clientY - rect.top - RAIL_INSET) / usable));
   }, []);
 
   useEffect(() => {
@@ -129,8 +153,9 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
   if (sections.length < 2) return null;
 
   // Inset positions a little from the rail's top/bottom edges so the first and
-  // last labels aren't jammed against the ends.
-  const posTop = (frac: number) => `calc(${frac} * (100% - 28px) + 14px)`;
+  // last labels aren't jammed against the ends. Kept in lockstep with
+  // fracFromEvent via RAIL_INSET so clicks land on the label they point at.
+  const posTop = (frac: number) => `calc(${frac} * (100% - ${RAIL_INSET * 2}px) + ${RAIL_INSET}px)`;
 
   // Only render a year label once per year (at its first/earliest marker), to
   // avoid stacking the same year repeatedly down the rail.
@@ -139,7 +164,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
   return (
     <div
       ref={railRef}
-      className={`timeline-scrubber${dragging ? " dragging" : ""}`}
+      className={`timeline-scrubber${dragging ? " dragging" : ""}${scrolling ? " scrolling" : ""}`}
       style={{ top: railTop }}
       onPointerDown={(e) => {
         setDragging(true);
@@ -165,7 +190,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
       <div className="scrubber-handle" style={{ top: posTop(currentFrac) }} />
 
       {activeLabel && (
-        <div className={`scrubber-bubble${dragging ? " visible" : ""}`} style={{ top: posTop(currentFrac) }}>
+        <div className={`scrubber-bubble${dragging || scrolling ? " visible" : ""}`} style={{ top: posTop(currentFrac) }}>
           {activeLabel}
         </div>
       )}

@@ -7,6 +7,7 @@ import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
+import { ExternalSources } from "../components/ExternalSources";
 import { fileTypeBadge, tileStyle } from "../components/ThumbnailGrid";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
@@ -304,54 +305,66 @@ export function ImportWizard() {
     return (
       <div className="page">
         <h2 className="section-title">Import photos</h2>
-        <p style={{ color: "var(--text-muted)", marginTop: -8 }}>
-          Import from an SD card, camera, or folder - or pick individual photos.
+        <p className="import-intro">
+          <strong>Import</strong> copies photos into your library. An <strong>external source</strong>{" "}
+          just points to a folder and leaves the files where they are.
         </p>
         <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} />
         <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
-        <div className="import-toolbar">
-          <div className="import-menu" ref={importMenuRef}>
-            <button
-              className="btn primary"
-              onClick={() => setImportMenuOpen((v) => !v)}
-              disabled={isUploading}
-              aria-haspopup="menu"
-              aria-expanded={importMenuOpen}
-            >
-              {!isUploading
-                ? "Import photos ▾"
-                : (uploadProgress ?? 0) >= 100
-                  ? "Processing files..."
-                  : `Uploading... ${uploadProgress ?? 0}%`}
-            </button>
-            {importMenuOpen && !isUploading && (
-              <div className="import-menu-dropdown" role="menu">
-                <button
-                  className="import-menu-item"
-                  role="menuitem"
-                  onClick={() => {
-                    setImportMenuOpen(false);
-                    folderInputRef.current?.click();
-                  }}
-                >
-                  Choose folder to import
-                </button>
-                <button
-                  className="import-menu-item"
-                  role="menuitem"
-                  onClick={() => {
-                    setImportMenuOpen(false);
-                    filesInputRef.current?.click();
-                  }}
-                >
-                  Choose files…
-                </button>
-              </div>
+
+        <div className="import-panels">
+          <div className="import-panel import-panel--menu">
+            <h3 className="section-title">Import into library</h3>
+            <p className="import-panel-desc">
+              Copy photos from an SD card, camera, or folder into your library.
+            </p>
+            <div className="import-menu" ref={importMenuRef}>
+              <button
+                className="btn primary"
+                onClick={() => setImportMenuOpen((v) => !v)}
+                disabled={isUploading}
+                aria-haspopup="menu"
+                aria-expanded={importMenuOpen}
+              >
+                {!isUploading
+                  ? "Import photos ▾"
+                  : (uploadProgress ?? 0) >= 100
+                    ? "Processing files..."
+                    : `Uploading... ${uploadProgress ?? 0}%`}
+              </button>
+              {importMenuOpen && !isUploading && (
+                <div className="import-menu-dropdown" role="menu">
+                  <button
+                    className="import-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setImportMenuOpen(false);
+                      folderInputRef.current?.click();
+                    }}
+                  >
+                    Choose folder…
+                  </button>
+                  <button
+                    className="import-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setImportMenuOpen(false);
+                      filesInputRef.current?.click();
+                    }}
+                  >
+                    Choose files…
+                  </button>
+                </div>
+              )}
+            </div>
+            {pickError && <p className="import-panel-desc" style={{ color: "var(--danger)" }}>{pickError}</p>}
+            {uploadError && (
+              <p className="import-panel-desc" style={{ color: "var(--danger)" }}>Upload failed: {uploadError}</p>
             )}
           </div>
+
+          <ExternalSources />
         </div>
-        {pickError && <div className="empty-state">{pickError}</div>}
-        {uploadError && <div className="empty-state">Upload failed: {uploadError}</div>}
       </div>
     );
   }
