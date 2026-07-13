@@ -150,6 +150,14 @@ class Image(Base):
     edit_crop_y: Mapped[float | None] = mapped_column(Float, nullable=True)
     edit_crop_width: Mapped[float | None] = mapped_column(Float, nullable=True)
     edit_crop_height: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Mirror flips and a fine straighten angle (clockwise degrees), applied
+    # before the manual crop (see thumbnails.apply_edits).
+    edit_flip_h: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    edit_flip_v: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    edit_straighten: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    # Keystone / axis-tilt perspective correction, each -100..100 (0 = none).
+    edit_persp_h: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    edit_persp_v: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     # Non-destructive tonal/color slider edits, each -100..100 (0 = neutral).
     # Applied together with rotation/crop when derivatives are regenerated; the

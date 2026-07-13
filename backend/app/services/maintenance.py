@@ -237,6 +237,11 @@ def _image_to_dict(image: Image) -> dict:
         "edit_crop_y": image.edit_crop_y,
         "edit_crop_width": image.edit_crop_width,
         "edit_crop_height": image.edit_crop_height,
+        "edit_flip_h": image.edit_flip_h,
+        "edit_flip_v": image.edit_flip_v,
+        "edit_straighten": image.edit_straighten,
+        "edit_persp_h": image.edit_persp_h,
+        "edit_persp_v": image.edit_persp_v,
     }
 
 
@@ -347,6 +352,11 @@ def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dic
                     edit_crop_y=image_data["edit_crop_y"],
                     edit_crop_width=image_data["edit_crop_width"],
                     edit_crop_height=image_data["edit_crop_height"],
+                    edit_flip_h=image_data.get("edit_flip_h", False),
+                    edit_flip_v=image_data.get("edit_flip_v", False),
+                    edit_straighten=image_data.get("edit_straighten", 0.0),
+                    edit_persp_h=image_data.get("edit_persp_h", 0),
+                    edit_persp_v=image_data.get("edit_persp_v", 0),
                 )
             )
         db.flush()

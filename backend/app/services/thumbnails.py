@@ -1,12 +1,13 @@
 import io
 import json
+import math
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PIL import Image as PILImage, ImageFilter
+from PIL import Image as PILImage, ImageFilter, ImageOps
 
 from app.config import settings
 from app.services.raw import extract_full_preview
@@ -92,11 +93,98 @@ def apply_distortion(image: PILImage.Image, amount: int) -> PILImage.Image:
     return PILImage.fromarray(rgb[sy, sx], "RGB")
 
 
-def apply_edits(image: PILImage.Image, rotation: int, crop: CropBox | None) -> PILImage.Image:
-    """rotation is clockwise degrees (0/90/180/270); crop is (x, y, width,
-    height) as fractions of the already-rotated image."""
+def _max_inscribed_rect(w: float, h: float, angle_rad: float) -> tuple[float, float]:
+    """Largest axis-aligned rectangle that fits inside a w×h rectangle rotated by
+    angle_rad, so a straightened image can be cropped free of empty corners.
+    Standard result (Coproc / "rotatedRectWithMaxArea")."""
+    if w <= 0 or h <= 0:
+        return 0.0, 0.0
+    width_is_longer = w >= h
+    side_long, side_short = (w, h) if width_is_longer else (h, w)
+    sin_a, cos_a = abs(math.sin(angle_rad)), abs(math.cos(angle_rad))
+    if side_short <= 2.0 * sin_a * cos_a * side_long or abs(sin_a - cos_a) < 1e-10:
+        x = 0.5 * side_short
+        wr, hr = (x / sin_a, x / cos_a) if width_is_longer else (x / cos_a, x / sin_a)
+    else:
+        cos_2a = cos_a * cos_a - sin_a * sin_a
+        wr = (w * cos_a - h * sin_a) / cos_2a
+        hr = (h * cos_a - w * sin_a) / cos_2a
+    return wr, hr
+
+
+def _perspective_coeffs(dest: list[tuple[float, float]], source: list[tuple[float, float]]) -> list[float]:
+    """8 coefficients mapping each output point in `dest` back to its sample
+    point in `source`, for PILImage.PERSPECTIVE."""
+    matrix = []
+    for (x, y), (u, v) in zip(dest, source):
+        matrix.append([x, y, 1, 0, 0, 0, -u * x, -u * y])
+        matrix.append([0, 0, 0, x, y, 1, -v * x, -v * y])
+    a = np.array(matrix, dtype=float)
+    b = np.array(source, dtype=float).reshape(8)
+    return np.linalg.solve(a, b).tolist()
+
+
+# Max edge inset at slider 100, as a fraction of the image size.
+_PERSP_MAX = 0.30
+
+
+def apply_perspective(image: PILImage.Image, persp_h: int, persp_v: int) -> PILImage.Image:
+    """Keystone / axis tilt: sample a trapezoid of the source into the full frame
+    so verticals/horizontals can be squared up. persp_v tilts about the
+    horizontal axis (top/bottom), persp_h about the vertical axis (left/right);
+    each -100..100. Fills the frame (no empty corners)."""
+    if not persp_h and not persp_v:
+        return image
+    w, h = image.size
+    av = (persp_v / 100.0) * _PERSP_MAX
+    ah = (persp_h / 100.0) * _PERSP_MAX
+    top_in = max(0.0, av) * w
+    bot_in = max(0.0, -av) * w
+    left_in = max(0.0, ah) * h
+    right_in = max(0.0, -ah) * h
+    source = [
+        (top_in, left_in),  # top-left
+        (w - top_in, right_in),  # top-right
+        (w - bot_in, h - right_in),  # bottom-right
+        (bot_in, h - left_in),  # bottom-left
+    ]
+    dest = [(0, 0), (w, 0), (w, h), (0, h)]
+    coeffs = _perspective_coeffs(dest, source)
+    return image.transform((w, h), PILImage.PERSPECTIVE, coeffs, resample=PILImage.BICUBIC)
+
+
+def apply_edits(
+    image: PILImage.Image,
+    rotation: int,
+    crop: CropBox | None,
+    flip_h: bool = False,
+    flip_v: bool = False,
+    straighten: float = 0.0,
+    persp_h: int = 0,
+    persp_v: int = 0,
+) -> PILImage.Image:
+    """Geometry, in the order the editor shows it: mirror, quarter-turn, fine
+    straighten (auto-cropped to lose the empty corners), keystone/axis tilt, then
+    the manual crop. rotation is clockwise degrees (0/90/180/270); straighten is
+    clockwise degrees; crop is (x, y, width, height) as fractions of the frame."""
+    if flip_h:
+        image = ImageOps.mirror(image)
+    if flip_v:
+        image = ImageOps.flip(image)
     if rotation:
         image = image.rotate(-rotation, expand=True)
+    if straighten:
+        w0, h0 = image.size
+        image = image.rotate(-straighten, expand=True, resample=PILImage.BICUBIC)
+        wr, hr = _max_inscribed_rect(w0, h0, math.radians(straighten))
+        ew, eh = image.size
+        cw = max(1, min(ew, round(wr)))
+        ch = max(1, min(eh, round(hr)))
+        left = (ew - cw) // 2
+        top = (eh - ch) // 2
+        image = image.crop((left, top, left + cw, top + ch))
+    if persp_h or persp_v:
+        image = apply_perspective(image, persp_h, persp_v)
     if crop:
         x, y, w, h = crop
         iw, ih = image.size
@@ -595,6 +683,11 @@ def generate_derivatives(
     crop: CropBox | None = None,
     adjustments: dict | None = None,
     distortion: int = 0,
+    flip_h: bool = False,
+    flip_v: bool = False,
+    straighten: float = 0.0,
+    persp_h: int = 0,
+    persp_v: int = 0,
 ) -> None:
     """Writes thumbnail.jpg (grid) and preview.jpg (lightbox) for an image.
 
@@ -608,7 +701,7 @@ def generate_derivatives(
     source = extract_full_preview(source_path)
     if distortion:
         source = apply_distortion(source, distortion)
-    source = apply_edits(source, rotation, crop)
+    source = apply_edits(source, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
     if adjustments:
         # Grain is added per-derivative below, *after* the downscale - baked at
         # full res it would just be averaged away by the resize.
@@ -682,6 +775,11 @@ def render_editor_preview_bytes(
     distortion: int = 0,
     max_px: int = EDITOR_PREVIEW_PX,
     full_quality: bool = False,
+    flip_h: bool = False,
+    flip_v: bool = False,
+    straighten: float = 0.0,
+    persp_h: int = 0,
+    persp_v: int = 0,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
     (same code path as generate_derivatives/render_edited_image) on a cached,
@@ -701,7 +799,7 @@ def render_editor_preview_bytes(
         img = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, max_px)
     if distortion:
         img = apply_distortion(img, distortion)
-    img = apply_edits(img, rotation, crop)
+    img = apply_edits(img, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
     img = apply_adjustments(img, adjustments)
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=88)
@@ -723,7 +821,16 @@ def render_base_preview_bytes(image: "Image", max_px: int = PREVIEW_MAX_PX) -> b
 
 
 def render_edited_image(
-    image: "Image", rotation: int, crop: CropBox | None, adjustments: dict, distortion: int = 0
+    image: "Image",
+    rotation: int,
+    crop: CropBox | None,
+    adjustments: dict,
+    distortion: int = 0,
+    flip_h: bool = False,
+    flip_v: bool = False,
+    straighten: float = 0.0,
+    persp_h: int = 0,
+    persp_v: int = 0,
 ) -> PILImage.Image:
     """Full-resolution RGB render with the given lens/geometry and tonal edits
     baked in. Used to write a flattened edited *copy* into the library."""
@@ -732,7 +839,7 @@ def render_edited_image(
     source = extract_full_preview(resolve_image_path(image))
     if distortion:
         source = apply_distortion(source, distortion)
-    source = apply_edits(source, rotation, crop)
+    source = apply_edits(source, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
     source = apply_adjustments(source, adjustments)
     return source.convert("RGB")
 
@@ -751,6 +858,11 @@ def generate_full(image: "Image") -> Path:
         crop,
         adjustments_from_image(image),
         distortion=getattr(image, "edit_distortion", 0) or 0,
+        flip_h=bool(getattr(image, "edit_flip_h", False)),
+        flip_v=bool(getattr(image, "edit_flip_v", False)),
+        straighten=float(getattr(image, "edit_straighten", 0.0) or 0.0),
+        persp_h=int(getattr(image, "edit_persp_h", 0) or 0),
+        persp_v=int(getattr(image, "edit_persp_v", 0) or 0),
     )
     _save_atomic(rendered, out, quality=90)
     return out
@@ -793,4 +905,9 @@ def regenerate_for_image(image: "Image") -> None:
         crop=crop,
         adjustments=adjustments,
         distortion=getattr(image, "edit_distortion", 0) or 0,
+        flip_h=bool(getattr(image, "edit_flip_h", False)),
+        flip_v=bool(getattr(image, "edit_flip_v", False)),
+        straighten=float(getattr(image, "edit_straighten", 0.0) or 0.0),
+        persp_h=int(getattr(image, "edit_persp_h", 0) or 0),
+        persp_v=int(getattr(image, "edit_persp_v", 0) or 0),
     )

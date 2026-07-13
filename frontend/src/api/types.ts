@@ -40,6 +40,11 @@ export interface ImageOut {
   edit_crop_y: number | null;
   edit_crop_width: number | null;
   edit_crop_height: number | null;
+  edit_flip_h: boolean;
+  edit_flip_v: boolean;
+  edit_straighten: number;
+  edit_persp_h: number;
+  edit_persp_v: number;
   edit_exposure: number;
   edit_contrast: number;
   edit_highlights: number;

@@ -1373,6 +1373,27 @@ input.editor-preset-select {
   pointer-events: none;
 }
 
+/* Drag handles on the crop box. Visual only (pointer-events: none) - the canvas
+   does the hit-testing so a fast drag never slips off a handle. */
+.crop-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.crop-handle.nw { left: -6px; top: -6px; }
+.crop-handle.ne { right: -6px; top: -6px; }
+.crop-handle.sw { left: -6px; bottom: -6px; }
+.crop-handle.se { right: -6px; bottom: -6px; }
+.crop-handle.n { left: 50%; top: -6px; transform: translateX(-50%); }
+.crop-handle.s { left: 50%; bottom: -6px; transform: translateX(-50%); }
+.crop-handle.e { right: -6px; top: 50%; transform: translateY(-50%); }
+.crop-handle.w { left: -6px; top: 50%; transform: translateY(-50%); }
+
 .editor-geometry {
   display: flex;
   align-items: center;

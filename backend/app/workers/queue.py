@@ -24,6 +24,13 @@ def enqueue_post_import(image_id: str, source_path: Path) -> None:
     _executor.submit(_process, image_id, source_path)
 
 
+def enqueue_embedding(image_id: str, source_path: Path) -> None:
+    """Just the search embedding, for callers that already generated the
+    derivatives synchronously (e.g. Save copy, so the new photo is viewable the
+    instant the user lands on it)."""
+    _executor.submit(_embed, image_id, source_path)
+
+
 def enqueue_immich_upload(
     base_url: str,
     api_key: str,
@@ -96,7 +103,10 @@ def _process(image_id: str, source_path: Path) -> None:
         generate_derivatives(image_id, source_path)
     except Exception:
         logger.exception("Thumbnail/preview generation failed for image %s", image_id)
+    _embed(image_id, source_path)
 
+
+def _embed(image_id: str, source_path: Path) -> None:
     try:
         preview = extract_preview(source_path)
         vector = encode_image(preview)

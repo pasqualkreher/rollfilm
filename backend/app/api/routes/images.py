@@ -37,7 +37,7 @@ from app.services import (
 from app.services.filesystem import library_relative_path, resolve_image_path
 from app.services.hashing import perceptual_hash
 from app.services.settings_store import get_immich_config
-from app.workers.queue import enqueue_post_import
+from app.workers.queue import enqueue_embedding, enqueue_post_import
 
 logger = logging.getLogger(__name__)
 
@@ -571,6 +571,11 @@ def save_edits(
         c = payload.crop
         image.edit_crop_x, image.edit_crop_y = c.x, c.y
         image.edit_crop_width, image.edit_crop_height = c.width, c.height
+    image.edit_flip_h = bool(payload.flip_h)
+    image.edit_flip_v = bool(payload.flip_v)
+    image.edit_straighten = max(-45.0, min(45.0, float(payload.straighten)))
+    image.edit_persp_h = _clamp100(payload.persp_h)
+    image.edit_persp_v = _clamp100(payload.persp_v)
     image.edit_exposure = _clamp100(payload.exposure)
     image.edit_contrast = _clamp100(payload.contrast)
     image.edit_highlights = _clamp100(payload.highlights)
@@ -598,6 +603,11 @@ def save_edits(
     has_edit = bool(
         payload.rotation % 360
         or payload.crop is not None
+        or payload.flip_h
+        or payload.flip_v
+        or image.edit_straighten
+        or payload.persp_h
+        or payload.persp_v
         or image.edit_color_mix
         or any(
             int(getattr(payload, name))
@@ -673,6 +683,11 @@ def editor_preview(
             _payload_adjustments(payload),
             distortion=_clamp100(payload.distortion),
             full_quality=full,
+            flip_h=bool(payload.flip_h),
+            flip_v=bool(payload.flip_v),
+            straighten=max(-45.0, min(45.0, float(payload.straighten))),
+            persp_h=_clamp100(payload.persp_h),
+            persp_v=_clamp100(payload.persp_v),
         )
     except Exception:
         logger.exception("Failed to render editor preview for %s", image.id)
@@ -702,7 +717,16 @@ def save_copy(
 
     try:
         edited = thumbnails.render_edited_image(
-            src, payload.rotation % 360, crop, adjustments, distortion=_clamp100(payload.distortion)
+            src,
+            payload.rotation % 360,
+            crop,
+            adjustments,
+            distortion=_clamp100(payload.distortion),
+            flip_h=bool(payload.flip_h),
+            flip_v=bool(payload.flip_v),
+            straighten=max(-45.0, min(45.0, float(payload.straighten))),
+            persp_h=_clamp100(payload.persp_h),
+            persp_v=_clamp100(payload.persp_v),
         )
     except Exception:
         logger.exception("Failed to render edited copy of %s", src.id)
@@ -716,15 +740,20 @@ def save_copy(
     # number, so repeated copies of the same photo don't overwrite each other.
     # Strip an existing "_edit-<n>" suffix first, so a copy of a copy counts up
     # (DSCF0048_edit-2.jpg) instead of stacking (DSCF0048_edit-1_edit-1.jpg).
+    # library_relative_path itself de-dupes with a "_1" suffix, so probe with it:
+    # a taken name comes back changed (e.g. "_edit-1_1.jpg") - bump n and retry -
+    # while a free name comes back verbatim. (The old plain exists() check always
+    # saw a de-duped, not-yet-existing path, so it never counted past _edit-1.)
     stem = re.sub(r"_edit-\d+$", "", Path(src.original_filename).stem)
     taken_at = src.taken_at or datetime.now(timezone.utc)
     n = 1
     while True:
-        filename = f"{stem}_edit-{n}.jpg"
-        rel_path = library_relative_path(taken_at, filename, settings.library_root)
-        if not (settings.library_root / rel_path).exists():
+        candidate = f"{stem}_edit-{n}.jpg"
+        rel_path = library_relative_path(taken_at, candidate, settings.library_root)
+        if Path(rel_path).name == candidate:
             break
         n += 1
+    filename = Path(rel_path).name
     (settings.library_root / rel_path).write_bytes(data)
 
     new_image = Image(
@@ -754,8 +783,16 @@ def save_copy(
     _add_tag_to_image(db, current_user.id, new_image, "edit copy")
     db.commit()
     db.refresh(new_image)
-    # Thumbnails + search embedding for the new copy, off the request path.
-    enqueue_post_import(new_image.id, settings.library_root / rel_path)
+    # Generate the copy's thumbnail/preview *synchronously* so the photo is
+    # viewable the instant the editor navigates to it - the flattened JPEG is
+    # cheap to derive, and doing it async left a blank "no image" for a beat
+    # (longer on slow machines). The search embedding still runs in the
+    # background since it isn't needed to display the photo.
+    try:
+        thumbnails.regenerate_for_image(new_image)
+    except Exception:
+        logger.exception("Derivative generation failed for edited copy %s", new_image.id)
+    enqueue_embedding(new_image.id, settings.library_root / rel_path)
     return new_image
 
 

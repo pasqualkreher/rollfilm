@@ -29,6 +29,11 @@ export function editVersion(image: ImageOut): string {
     image.edit_crop_y ?? "",
     image.edit_crop_width ?? "",
     image.edit_crop_height ?? "",
+    image.edit_flip_h ? "fh" : "",
+    image.edit_flip_v ? "fv" : "",
+    image.edit_straighten,
+    image.edit_persp_h,
+    image.edit_persp_v,
     image.edit_exposure,
     image.edit_contrast,
     image.edit_highlights,
@@ -59,7 +64,8 @@ export function editVersion(image: ImageOut): string {
 // keys, so a camelCase key wouldn't error, it would just drop the edit (this
 // bit us: colorMix/grainSize/colorTint were lost on every save).
 function apiEdits(edits: ImageEdits) {
-  const { colorMix, grainSize, colorTint, chromeEffect, chromeBlue, ...rest } = edits;
+  const { colorMix, grainSize, colorTint, chromeEffect, chromeBlue, flipH, flipV, perspH, perspV, ...rest } =
+    edits;
   return {
     ...rest,
     color_mix: colorMix,
@@ -67,6 +73,10 @@ function apiEdits(edits: ImageEdits) {
     color_tint: colorTint,
     chrome_effect: chromeEffect,
     chrome_blue: chromeBlue,
+    flip_h: flipH,
+    flip_v: flipV,
+    persp_h: perspH,
+    persp_v: perspV,
   };
 }
 

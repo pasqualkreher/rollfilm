@@ -142,12 +142,16 @@ function Slider({
   value,
   onChange,
   min = -100,
+  max = 100,
+  step,
   format,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   min?: number;
+  max?: number;
+  step?: number;
   // Optional value formatter (e.g. exposure rendered in EV stops).
   format?: (v: number) => string;
 }) {
@@ -160,7 +164,8 @@ function Slider({
       <input
         type="range"
         min={min}
-        max={100}
+        max={max}
+        step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         onDoubleClick={() => onChange(0)}
@@ -256,6 +261,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [adj, setAdj] = useState<Adjustments>(() => adjustmentsFromImage(image));
   const [rotation, setRotation] = useState(saved.rotation);
   const [crop, setCrop] = useState<CropBox | null>(saved.crop);
+  const [flipH, setFlipH] = useState(saved.flipH);
+  const [flipV, setFlipV] = useState(saved.flipV);
+  const [straighten, setStraighten] = useState(saved.straighten);
+  const [perspH, setPerspH] = useState(saved.perspH);
+  const [perspV, setPerspV] = useState(saved.perspV);
   const [colorMix, setColorMix] = useState<ColorMix>(saved.colorMix);
   const [vignette, setVignette] = useState(saved.vignette);
   const [distortion, setDistortion] = useState(saved.distortion);
@@ -278,6 +288,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [cropMode, setCropMode] = useState(false);
   const [drag, setDrag] = useState<DragRect | null>(null);
   const [dragging, setDragging] = useState(false);
+  // Active crop gesture: draw a fresh box ("new"), move it ("move") or resize
+  // from an edge/corner ("nw".."e"). Held in a ref so the move handler reads the
+  // box as it was when the gesture began, not a stale render value.
+  const cropAction = useRef<{ mode: string; start: { x: number; y: number }; orig: CropBox } | null>(null);
+  const [cropCursor, setCropCursor] = useState("crosshair");
   // Crop aspect-ratio lock (key into ASPECT_OPTIONS; "free" = unconstrained).
   const [aspectKey, setAspectKey] = useState("free");
   const [loading, setLoading] = useState(true);
@@ -303,6 +318,11 @@ export function PhotoEditor({ image, onClose }: Props) {
     ...adj,
     rotation,
     crop,
+    flipH,
+    flipV,
+    straighten,
+    perspH,
+    perspV,
     colorMix,
     vignette,
     distortion,
@@ -321,7 +341,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   // (uncropped) frame, in compare mode the untouched original with only the
   // geometry kept so the frame doesn't jump.
   const previewEdits: ImageEdits = compare
-    ? neutralEdits(rotation, cropMode ? null : crop)
+    ? neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV)
     : { ...edits, crop: cropMode ? null : crop };
   const previewKey = JSON.stringify(previewEdits);
 
@@ -543,6 +563,82 @@ export function PhotoEditor({ image, onClose }: Props) {
     setDrag(centeredDragForK(R / A));
   }
 
+  // Which part of the crop a point hits: a corner/edge handle, "move" (inside)
+  // or "new" (draw a fresh box). tol is the handle grab distance in fractions.
+  function cropHitTest(
+    p: { x: number; y: number },
+    box: CropBox,
+    tolX: number,
+    tolY: number
+  ): string {
+    const l = box.x;
+    const r = box.x + box.width;
+    const t = box.y;
+    const b = box.y + box.height;
+    const nearL = Math.abs(p.x - l) <= tolX;
+    const nearR = Math.abs(p.x - r) <= tolX;
+    const nearT = Math.abs(p.y - t) <= tolY;
+    const nearB = Math.abs(p.y - b) <= tolY;
+    const inX = p.x >= l - tolX && p.x <= r + tolX;
+    const inY = p.y >= t - tolY && p.y <= b + tolY;
+    if (nearL && nearT) return "nw";
+    if (nearR && nearT) return "ne";
+    if (nearL && nearB) return "sw";
+    if (nearR && nearB) return "se";
+    // Edge handles only make sense without an aspect lock (a 1D drag can't keep
+    // a ratio); a locked crop resizes from its corners.
+    if (aspectK() == null) {
+      if (nearL && inY) return "w";
+      if (nearR && inY) return "e";
+      if (nearT && inX) return "n";
+      if (nearB && inX) return "s";
+    }
+    if (p.x > l && p.x < r && p.y > t && p.y < b) return "move";
+    return "new";
+  }
+
+  // Resize an existing box by dragging handle `mode` to point p. With an aspect
+  // lock, corners rebuild the box from the opposite (fixed) corner via the same
+  // ratio constraint used for drawing.
+  function resizeCrop(mode: string, orig: CropBox, p: { x: number; y: number }, k: number | null): DragRect {
+    const clampU = (v: number) => Math.min(1, Math.max(0, v));
+    if (k != null && mode.length === 2) {
+      const ax = mode.includes("e") ? orig.x : orig.x + orig.width;
+      const ay = mode.includes("s") ? orig.y : orig.y + orig.height;
+      return constrainDragToK({ x0: ax, y0: ay, x1: clampU(p.x), y1: clampU(p.y) }, k);
+    }
+    let l = orig.x;
+    let r = orig.x + orig.width;
+    let t = orig.y;
+    let b = orig.y + orig.height;
+    if (mode.includes("w")) l = clampU(p.x);
+    if (mode.includes("e")) r = clampU(p.x);
+    if (mode.includes("n")) t = clampU(p.y);
+    if (mode.includes("s")) b = clampU(p.y);
+    return { x0: l, y0: t, x1: r, y1: b };
+  }
+
+  function cropCursorFor(mode: string): string {
+    switch (mode) {
+      case "move":
+        return "move";
+      case "nw":
+      case "se":
+        return "nwse-resize";
+      case "ne":
+      case "sw":
+        return "nesw-resize";
+      case "n":
+      case "s":
+        return "ns-resize";
+      case "e":
+      case "w":
+        return "ew-resize";
+      default:
+        return "crosshair";
+    }
+  }
+
   function setBandChannel(ch: number, v: number) {
     setColorMix((m) => {
       const next: ColorMix = { ...m, [band]: [...m[band]] as [number, number, number] };
@@ -557,6 +653,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   const allNeutral =
     isNeutral(adj) &&
     rotation === 0 &&
+    !flipH &&
+    !flipV &&
+    straighten === 0 &&
+    perspH === 0 &&
+    perspV === 0 &&
     !crop &&
     mixIsNeutral(colorMix) &&
     vignette === 0 &&
@@ -595,12 +696,21 @@ export function PhotoEditor({ image, onClose }: Props) {
             className="editor-canvas"
             style={{
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-              cursor: cropMode ? "crosshair" : zoomed ? (panDragRef.current ? "grabbing" : "grab") : "default",
+              cursor: cropMode ? cropCursor : zoomed ? (panDragRef.current ? "grabbing" : "grab") : "default",
             }}
             onMouseDown={(e) => {
               if (cropMode) {
                 const p = fractionAt(e.clientX, e.clientY);
-                setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+                const rect = canvasRef.current!.getBoundingClientRect();
+                const tolX = 14 / rect.width;
+                const tolY = 14 / rect.height;
+                const mode = drawn ? cropHitTest(p, drawn, tolX, tolY) : "new";
+                if (mode === "new" || !drawn) {
+                  setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+                  cropAction.current = { mode: "new", start: p, orig: { x: p.x, y: p.y, width: 0, height: 0 } };
+                } else {
+                  cropAction.current = { mode, start: p, orig: drawn };
+                }
                 setDragging(true);
               } else if (zoomed) {
                 e.preventDefault();
@@ -609,12 +719,25 @@ export function PhotoEditor({ image, onClose }: Props) {
             }}
             onMouseMove={(e) => {
               if (cropMode) {
-                if (dragging && drag) {
-                  const p = fractionAt(e.clientX, e.clientY);
-                  let next: DragRect = { ...drag, x1: p.x, y1: p.y };
-                  const k = aspectK();
-                  if (k != null) next = constrainDragToK(next, k);
-                  setDrag(next);
+                const p = fractionAt(e.clientX, e.clientY);
+                const act = cropAction.current;
+                if (dragging && act) {
+                  if (act.mode === "new") {
+                    let next: DragRect = { x0: act.start.x, y0: act.start.y, x1: p.x, y1: p.y };
+                    const k = aspectK();
+                    if (k != null) next = constrainDragToK(next, k);
+                    setDrag(next);
+                  } else if (act.mode === "move") {
+                    const nx = Math.min(1 - act.orig.width, Math.max(0, act.orig.x + (p.x - act.start.x)));
+                    const ny = Math.min(1 - act.orig.height, Math.max(0, act.orig.y + (p.y - act.start.y)));
+                    setDrag({ x0: nx, y0: ny, x1: nx + act.orig.width, y1: ny + act.orig.height });
+                  } else {
+                    setDrag(resizeCrop(act.mode, act.orig, p, aspectK()));
+                  }
+                } else if (drawn) {
+                  // Hover feedback: cursor reflects the handle under the pointer.
+                  const rect = canvasRef.current!.getBoundingClientRect();
+                  setCropCursor(cropCursorFor(cropHitTest(p, drawn, 14 / rect.width, 14 / rect.height)));
                 }
               } else if (panDragRef.current) {
                 setPan({ x: e.clientX - panDragRef.current.x, y: e.clientY - panDragRef.current.y });
@@ -622,9 +745,12 @@ export function PhotoEditor({ image, onClose }: Props) {
             }}
             onMouseUp={() => {
               setDragging(false);
+              cropAction.current = null;
               panDragRef.current = null;
             }}
             onMouseLeave={() => {
+              setDragging(false);
+              cropAction.current = null;
               panDragRef.current = null;
             }}
             onDoubleClick={(e) => {
@@ -653,7 +779,22 @@ export function PhotoEditor({ image, onClose }: Props) {
                 width: `${drawn!.width * 100}%`,
                 height: `${drawn!.height * 100}%`,
               }}
-            />
+            >
+              {/* Visual handles only - hit-testing happens on the canvas so the
+                  handles stay pointer-transparent and the drag never breaks. */}
+              <span className="crop-handle nw" />
+              <span className="crop-handle ne" />
+              <span className="crop-handle sw" />
+              <span className="crop-handle se" />
+              {aspectK() == null && (
+                <>
+                  <span className="crop-handle n" />
+                  <span className="crop-handle s" />
+                  <span className="crop-handle e" />
+                  <span className="crop-handle w" />
+                </>
+              )}
+            </div>
           )}
           {!zoomed && <GridLines type={gridOverlay} />}
         </div>
@@ -709,11 +850,27 @@ export function PhotoEditor({ image, onClose }: Props) {
 
         {/* Geometry */}
         <div className="editor-geometry">
-          <button className="btn btn-sm" onClick={() => setRotation((r) => (r + 270) % 360)} disabled={busy}>
+          <button className="btn btn-sm" onClick={() => setRotation((r) => (r + 270) % 360)} disabled={busy} title="Rotate left 90°">
             ⟲
           </button>
-          <button className="btn btn-sm" onClick={() => setRotation((r) => (r + 90) % 360)} disabled={busy}>
+          <button className="btn btn-sm" onClick={() => setRotation((r) => (r + 90) % 360)} disabled={busy} title="Rotate right 90°">
             ⟳
+          </button>
+          <button
+            className={`btn btn-sm${flipH ? " primary" : ""}`}
+            onClick={() => setFlipH((v) => !v)}
+            disabled={busy}
+            title="Flip horizontal"
+          >
+            ⇆
+          </button>
+          <button
+            className={`btn btn-sm${flipV ? " primary" : ""}`}
+            onClick={() => setFlipV((v) => !v)}
+            disabled={busy}
+            title="Flip vertical"
+          >
+            ⇅
           </button>
           <button
             className={`btn btn-sm${cropMode ? " primary" : ""}`}
@@ -751,6 +908,22 @@ export function PhotoEditor({ image, onClose }: Props) {
               </button>
             </>
           )}
+        </div>
+
+        {/* Straighten (rotation) + perspective / axis tilt. All auto-fill the
+            frame, so nothing shows empty corners. */}
+        <div className="editor-sliders">
+          <Slider
+            label="Straighten"
+            value={straighten}
+            onChange={setStraighten}
+            min={-45}
+            max={45}
+            step={0.5}
+            format={(v) => `${v > 0 ? "+" : ""}${v}°`}
+          />
+          <Slider label="Tilt horizontal" value={perspH} onChange={setPerspH} />
+          <Slider label="Tilt vertical" value={perspV} onChange={setPerspV} />
         </div>
 
         {/* Light */}
@@ -908,6 +1081,11 @@ export function PhotoEditor({ image, onClose }: Props) {
                 setAdj(NEUTRAL);
                 setRotation(0);
                 setCrop(null);
+                setFlipH(false);
+                setFlipV(false);
+                setStraighten(0);
+                setPerspH(0);
+                setPerspV(0);
                 setColorMix(neutralMix());
                 setVignette(0);
                 setDistortion(0);

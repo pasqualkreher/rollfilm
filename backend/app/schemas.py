@@ -37,6 +37,11 @@ class ImageOut(BaseModel):
     edit_crop_y: float | None
     edit_crop_width: float | None
     edit_crop_height: float | None
+    edit_flip_h: bool = False
+    edit_flip_v: bool = False
+    edit_straighten: float = 0.0
+    edit_persp_h: int = 0
+    edit_persp_v: int = 0
     edit_exposure: int
     edit_contrast: int
     edit_highlights: int
@@ -123,6 +128,11 @@ class ImageEdits(ImageAdjustments):
 
     rotation: int = 0  # absolute, multiple of 90
     crop: CropBox | None = None
+    flip_h: bool = False  # mirror left-right
+    flip_v: bool = False  # mirror top-bottom
+    straighten: float = 0.0  # fine level angle, clockwise degrees (-45..45)
+    persp_h: int = 0  # keystone / axis tilt about the vertical axis, -100..100
+    persp_v: int = 0  # keystone / axis tilt about the horizontal axis, -100..100
     # {band: [hue, sat, lum]} each -100..100; band in red/orange/.../magenta.
     color_mix: dict[str, list[int]] | None = None
     vignette: int = 0

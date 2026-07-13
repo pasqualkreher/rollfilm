@@ -98,6 +98,11 @@ export function mixIsNeutral(mix: ColorMix): boolean {
 export interface ImageEdits extends Adjustments {
   rotation: number; // absolute, multiple of 90
   crop: CropBox | null;
+  flipH: boolean; // mirror left-right
+  flipV: boolean; // mirror top-bottom
+  straighten: number; // fine level angle, clockwise degrees (-45..45)
+  perspH: number; // keystone / axis tilt about the vertical axis, -100..100
+  perspV: number; // keystone / axis tilt about the horizontal axis, -100..100
   colorMix: ColorMix;
   vignette: number;
   distortion: number;
@@ -137,6 +142,11 @@ export function editsFromImage(image: ImageOut): ImageEdits {
             height: image.edit_crop_height as number,
           }
         : null,
+    flipH: image.edit_flip_h,
+    flipV: image.edit_flip_v,
+    straighten: image.edit_straighten,
+    perspH: image.edit_persp_h,
+    perspV: image.edit_persp_v,
     colorMix: mix,
     vignette: image.edit_vignette,
     distortion: image.edit_distortion,
@@ -154,11 +164,24 @@ export function editsFromImage(image: ImageOut): ImageEdits {
 
 // A fully-neutral edit that keeps the given geometry - used by the editor's
 // hold-to-compare so the frame doesn't jump while showing the original.
-export function neutralEdits(rotation: number, crop: CropBox | null): ImageEdits {
+export function neutralEdits(
+  rotation: number,
+  crop: CropBox | null,
+  flipH = false,
+  flipV = false,
+  straighten = 0,
+  perspH = 0,
+  perspV = 0
+): ImageEdits {
   return {
     ...NEUTRAL,
     rotation,
     crop,
+    flipH,
+    flipV,
+    straighten,
+    perspH,
+    perspV,
     colorMix: neutralMix(),
     vignette: 0,
     distortion: 0,
