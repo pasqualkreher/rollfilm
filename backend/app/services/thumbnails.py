@@ -124,33 +124,76 @@ def _perspective_coeffs(dest: list[tuple[float, float]], source: list[tuple[floa
     return np.linalg.solve(a, b).tolist()
 
 
-# Max edge inset at slider 100, as a fraction of the image size.
+# Max edge shift at slider 100, as a fraction of the image size. The tilt is
+# symmetric about the centre, so each edge moves by half this either way.
 _PERSP_MAX = 0.30
 
 
+def _largest_centred_rect(coeffs: list[float], w: int, h: int) -> tuple[int, int]:
+    """Largest centred crop (same aspect as the frame) whose every pixel still
+    samples from inside the source image, so the auto-crop leaves no empty
+    corners. `coeffs` map an output (x, y) back to its source (u, v):
+        u = (c0 x + c1 y + c2) / (c6 x + c7 y + 1)
+    That map is linear-fractional with a fixed-sign denominator here, hence
+    quasilinear, so its extrema over a rectangle fall on the corners - checking
+    the four corners is exact."""
+    c0, c1, c2, c3, c4, c5, c6, c7 = coeffs
+    cx, cy = w / 2.0, h / 2.0
+
+    def inside(k: float) -> bool:
+        hw, hh = k * w / 2.0, k * h / 2.0
+        for x, y in ((cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)):
+            den = c6 * x + c7 * y + 1.0
+            if den == 0.0:
+                return False
+            u = (c0 * x + c1 * y + c2) / den
+            v = (c3 * x + c4 * y + c5) / den
+            if u < 0.0 or u > w or v < 0.0 or v > h:
+                return False
+        return True
+
+    if inside(1.0):
+        return w, h
+    lo, hi = 0.0, 1.0
+    for _ in range(24):
+        mid = (lo + hi) / 2.0
+        if inside(mid):
+            lo = mid
+        else:
+            hi = mid
+    return max(1, round(lo * w)), max(1, round(lo * h))
+
+
 def apply_perspective(image: PILImage.Image, persp_h: int, persp_v: int) -> PILImage.Image:
-    """Keystone / axis tilt: sample a trapezoid of the source into the full frame
-    so verticals/horizontals can be squared up. persp_v tilts about the
-    horizontal axis (top/bottom), persp_h about the vertical axis (left/right);
-    each -100..100. Fills the frame (no empty corners)."""
+    """Keystone / axis tilt: apply a perspective that converges symmetrically
+    about the image centre (so the frame tilts naturally instead of stretching
+    one edge out to a wedge), then auto-crop to the largest centred rectangle
+    that stays inside the frame - the same trick `straighten` uses to hide the
+    empty corners. persp_v tilts about the horizontal axis (top/bottom), persp_h
+    about the vertical axis (left/right); each -100..100."""
     if not persp_h and not persp_v:
         return image
     w, h = image.size
-    av = (persp_v / 100.0) * _PERSP_MAX
-    ah = (persp_h / 100.0) * _PERSP_MAX
-    top_in = max(0.0, av) * w
-    bot_in = max(0.0, -av) * w
-    left_in = max(0.0, ah) * h
-    right_in = max(0.0, -ah) * h
+    # Half-shift each edge in opposite directions about the centre: one edge
+    # insets, the opposite edge outsets by the same amount (that side samples
+    # from outside the frame, which the auto-crop below removes).
+    dx = (persp_v / 100.0) * _PERSP_MAX * w / 2.0
+    dy = (persp_h / 100.0) * _PERSP_MAX * h / 2.0
     source = [
-        (top_in, left_in),  # top-left
-        (w - top_in, right_in),  # top-right
-        (w - bot_in, h - right_in),  # bottom-right
-        (bot_in, h - left_in),  # bottom-left
+        (dx, dy),  # top-left
+        (w - dx, -dy),  # top-right
+        (w + dx, h + dy),  # bottom-right
+        (-dx, h - dy),  # bottom-left
     ]
     dest = [(0, 0), (w, 0), (w, h), (0, h)]
     coeffs = _perspective_coeffs(dest, source)
-    return image.transform((w, h), PILImage.PERSPECTIVE, coeffs, resample=PILImage.BICUBIC)
+    warped = image.transform((w, h), PILImage.PERSPECTIVE, coeffs, resample=PILImage.BICUBIC)
+    cw, ch = _largest_centred_rect(coeffs, w, h)
+    if cw >= w and ch >= h:
+        return warped
+    left = (w - cw) // 2
+    top = (h - ch) // 2
+    return warped.crop((left, top, left + cw, top + ch))
 
 
 def apply_edits(

@@ -919,7 +919,7 @@ export function PhotoEditor({ image, onClose }: Props) {
             onChange={setStraighten}
             min={-45}
             max={45}
-            step={0.5}
+            step={0.25}
             format={(v) => `${v > 0 ? "+" : ""}${v}°`}
           />
           <Slider label="Tilt horizontal" value={perspH} onChange={setPerspH} />
