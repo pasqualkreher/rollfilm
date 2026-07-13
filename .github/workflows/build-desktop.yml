@@ -20,6 +20,10 @@ on:
   push:
     tags: ["v*"]
 
+# Needed so the build can create the release and upload the installers to it.
+permissions:
+  contents: write
+
 jobs:
   # Cheap ubuntu job that turns the platform choice into the build matrix -
   # lets a single failed platform be rebuilt without re-running the others
@@ -28,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
+      tag: ${{ steps.rel.outputs.tag }}
     steps:
       - id: m
         run: |
@@ -37,6 +42,25 @@ jobs:
             linux)   echo 'matrix=["ubuntu-latest"]' >> "$GITHUB_OUTPUT";;
             *)       echo 'matrix=["macos-latest","windows-latest","ubuntu-latest"]' >> "$GITHUB_OUTPUT";;
           esac
+
+      # Create (once, up front) the release the build jobs upload into. Release
+      # assets do NOT count against the Actions artifact-storage quota, so this
+      # sidesteps the "storage quota has been hit" upload failure entirely.
+      - id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="desktop-${{ github.run_id }}"
+          fi
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "${{ github.repository }}" \
+              --title "Desktop installers ($TAG)" \
+              --notes "Automated desktop build from ${{ github.sha }}." \
+              --prerelease
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
   build:
     needs: plan
@@ -93,11 +117,19 @@ jobs:
       - name: Build installer
         run: node build-desktop.js
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: photo-manager-${{ runner.os }}
-          if-no-files-found: error
-          path: |
-            electron/dist-app/*.dmg
-            electron/dist-app/*.exe
-            electron/dist-app/*.AppImage
+      # Upload straight to the GitHub Release (not an Actions artifact), so the
+      # artifact-storage quota can never block delivery. Download the installers
+      # from the release page. --clobber lets a re-run of one platform replace it.
+      - name: Publish installer to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(electron/dist-app/*.dmg electron/dist-app/*.exe electron/dist-app/*.AppImage)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No installer found in electron/dist-app/"
+            exit 1
+          fi
+          gh release upload "${{ needs.plan.outputs.tag }}" "${files[@]}" \
+            --repo "${{ github.repository }}" --clobber
