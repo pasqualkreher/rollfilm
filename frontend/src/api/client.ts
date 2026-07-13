@@ -265,8 +265,8 @@ export const api = {
     removeTag(id: string, name: string): Promise<ImageOut> {
       return request(`/images/${id}/tags/${encodeURIComponent(name)}`, { method: "DELETE" });
     },
-    similar(id: string): Promise<SearchResultOut[]> {
-      return request(`/images/${id}/similar`);
+    similar(id: string, limit = 50): Promise<SearchResultOut[]> {
+      return request(`/images/${id}/similar?limit=${limit}`);
     },
     rotate(id: string, degrees: 90 | -90): Promise<ImageOut> {
       return request(`/images/${id}/rotate`, { method: "PATCH", body: JSON.stringify({ degrees }) });

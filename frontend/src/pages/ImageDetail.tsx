@@ -7,6 +7,7 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoEditor } from "../components/PhotoEditor";
 import { TagEditor } from "../components/TagEditor";
 import { AlbumPicker } from "../components/AlbumPicker";
+import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
 import { useMergePairs } from "../state/viewPrefs";
 import { deleteConfirmMessage } from "../utils/deleteMessage";
@@ -199,7 +200,7 @@ export function ImageDetail() {
 
   const { data: similar } = useQuery({
     queryKey: ["similar", activeId],
-    queryFn: () => api.images.similar(activeId),
+    queryFn: () => api.images.similar(activeId, 50),
     enabled: !!activeId,
   });
 
@@ -527,6 +528,21 @@ export function ImageDetail() {
               Download original
             </a>
           </div>
+
+          {image.gps_lat != null && image.gps_lon != null && (
+            <div className="detail-section">
+              <div className="detail-section-label">Location</div>
+              <MiniMap
+                lat={image.gps_lat}
+                lon={image.gps_lon}
+                onClick={() =>
+                  navigate("/map", {
+                    state: { focus: { id: image.id, lat: image.gps_lat, lon: image.gps_lon } },
+                  })
+                }
+              />
+            </div>
+          )}
 
           {shownSimilar.length > 0 && (
             <div className="detail-section">

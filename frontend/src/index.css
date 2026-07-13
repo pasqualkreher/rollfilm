@@ -2412,7 +2412,13 @@ input.editor-preset-select {
 }
 
 /* Photo "pins": the thumbnail itself, framed - closer to Apple Photos than a
-   generic teardrop marker. */
+   generic teardrop marker. The images are non-interactive so pointer moves and
+   clicks pass through to the map, which resolves them against the nearest pin -
+   that way an enlarged photo never blocks the pins beneath it. */
+.map-pin {
+  pointer-events: none !important;
+}
+
 .map-pin img {
   width: 46px;
   height: 46px;
@@ -2420,12 +2426,34 @@ input.editor-preset-select {
   border-radius: 8px;
   border: 2px solid #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
-  cursor: pointer;
-  transition: transform 0.08s ease;
+  transform-origin: center center;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
-.map-pin img:hover {
-  transform: scale(1.12);
+/* The pin nearest the cursor (or the one jumped to from a photo's mini-map)
+   blows up to a proper preview and lifts clear of its neighbours - Leaflet
+   stacks markers by latitude, so override that. */
+.map-pin-active {
+  z-index: 10000 !important;
+}
+
+.map-pin-active img {
+  transform: scale(2.6);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6);
+}
+
+/* Small location preview in the photo detail panel - reads as one button. */
+.mini-map {
+  width: 100%;
+  height: 150px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.mini-map .leaflet-container {
+  cursor: pointer;
 }
 
 /* Leaflet's default UI chrome uses light colors; keep the attribution legible
