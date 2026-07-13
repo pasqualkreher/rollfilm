@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
@@ -61,15 +61,54 @@ export function Library() {
     date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
   };
 
-  const { data: images, isLoading } = useQuery({
-    queryKey: ["images", { ...filters, q }],
-    queryFn: async () => {
-      // With a search query the grid switches to scoped search (same filters,
-      // just ranked by relevance); otherwise it's the plain filtered list.
-      if (q) return (await api.search.query(q, filters)).map((r) => r.image);
-      return api.images.list(filters);
-    },
+  // Load the library in pages and append as the user scrolls, so a large
+  // library (thousands of shots) opens fast and never renders every thumbnail
+  // at once, while still growing to the full set on demand. Merge/timeline all
+  // operate on the accumulated list, so RAW+JPG pairs collapse correctly as
+  // more pages arrive.
+  const PAGE_SIZE = 200;
+  const listQuery = useInfiniteQuery({
+    queryKey: ["images", filters],
+    enabled: !q,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.images.list(filters, { limit: PAGE_SIZE, offset: pageParam }),
+    // Another page exists only when the last one came back full; a short page
+    // means we've reached the end.
+    getNextPageParam: (lastPage, pages) =>
+      lastPage.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
   });
+
+  // A search query switches to scoped search (same filters, ranked by
+  // relevance) and returns the full ranked set in one go.
+  const searchQuery = useQuery({
+    // Key starts with "images" so the same invalidateQueries(["images"]) after
+    // bulk edits/deletes refreshes search results too.
+    queryKey: ["images", "search", { ...filters, q }],
+    enabled: Boolean(q),
+    queryFn: async () => (await api.search.query(q, filters)).map((r) => r.image),
+  });
+
+  const images = q ? searchQuery.data : listQuery.data?.pages.flat();
+  const isLoading = q ? searchQuery.isLoading : listQuery.isLoading;
+
+  // Bottom sentinel: fetch the next page whenever it scrolls into view.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = listQuery;
+  useEffect(() => {
+    if (q) return;
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { rootMargin: "600px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [q, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // In combined view, either merge each RAW+JPEG pair into one JPEG card, or
   // just keep the two partners adjacent. Other view modes show a flat list.
@@ -287,6 +326,11 @@ export function Library() {
           selectMode={selectMode}
           groupByDate={!q}
         />
+      )}
+      {!q && (
+        <div ref={loadMoreRef} className="load-more-sentinel">
+          {isFetchingNextPage ? "Loading more photos…" : ""}
+        </div>
       )}
       </div>
     </div>

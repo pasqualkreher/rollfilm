@@ -80,8 +80,16 @@ def _is_quarter_rotated(orientation) -> bool:
     return "90" in text or "270" in text
 
 
-def read_exif(path: Path) -> ExifData:
-    metadata = _get_helper().get_metadata([str(path)])[0]
+def new_helper() -> exiftool.ExifToolHelper:
+    """A fresh, independent exiftool process. A single ExifToolHelper (-stay_open)
+    can't be shared across threads - its one stdin/stdout would interleave - so
+    parallel staging gives each worker its own via a small pool of these."""
+    executable = os.environ.get("EXIFTOOL_PATH") or "exiftool"
+    return exiftool.ExifToolHelper(executable=executable)
+
+
+def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> ExifData:
+    metadata = (helper or _get_helper()).get_metadata([str(path)])[0]
 
     width = to_int(metadata.get("EXIF:ExifImageWidth") or metadata.get("File:ImageWidth"))
     height = to_int(metadata.get("EXIF:ExifImageHeight") or metadata.get("File:ImageHeight"))

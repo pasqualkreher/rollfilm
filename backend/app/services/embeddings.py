@@ -2,14 +2,20 @@ import threading
 from pathlib import Path
 
 import numpy as np
-import open_clip
 import sqlite_vec
-import torch
 from PIL import Image as PILImage
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.config import settings
+
+# torch and open_clip are imported lazily inside the functions that need them
+# (see _get_model / encode_*). They pull in hundreds of MB across thousands of
+# files, so importing them at module load would block backend startup for many
+# seconds - and much longer if the virtualenv sits on throttled storage (a
+# cloud-synced folder). Keeping them out of the import path lets the API serve
+# /health immediately; the CLIP model loads only when semantic search or an
+# import embedding actually runs, on a background worker thread.
 
 EMBEDDING_DIM = 512
 
@@ -27,6 +33,8 @@ def _get_model():
     if _model is None:
         with _model_lock:
             if _model is None:
+                import open_clip
+
                 model, _, preprocess = open_clip.create_model_and_transforms(
                     settings.clip_model_name,
                     pretrained=settings.clip_model_pretrained,
@@ -40,6 +48,8 @@ def _get_model():
 
 
 def encode_image(image: PILImage.Image) -> np.ndarray:
+    import torch
+
     model, preprocess, _ = _get_model()
     with torch.no_grad():
         tensor = preprocess(image).unsqueeze(0)
@@ -49,6 +59,8 @@ def encode_image(image: PILImage.Image) -> np.ndarray:
 
 
 def encode_text(query: str) -> np.ndarray:
+    import torch
+
     model, _, tokenizer = _get_model()
     with torch.no_grad():
         tokens = tokenizer([query])

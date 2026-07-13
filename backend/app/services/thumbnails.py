@@ -5,12 +5,31 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import cv2
 import numpy as np
 from PIL import Image as PILImage, ImageFilter
 
 from app.config import settings
 from app.services.raw import extract_full_preview
+
+
+# OpenCV (cv2) is a large native package that is slow to import - and pathologically
+# slow if the virtualenv sits on throttled/cloud-synced storage. It's only needed
+# for the image-processing paths (dehaze/denoise/clarity), which always run on a
+# background worker, never during API startup. Load it lazily on first use so the
+# backend can serve /health immediately. All existing `cv2.<fn>` call sites keep
+# working unchanged through this proxy.
+class _LazyCV2:
+    _mod = None
+
+    def __getattr__(self, name):
+        if _LazyCV2._mod is None:
+            import cv2 as _cv2
+
+            _LazyCV2._mod = _cv2
+        return getattr(_LazyCV2._mod, name)
+
+
+cv2 = _LazyCV2()
 
 if TYPE_CHECKING:
     from app.db.models import Image

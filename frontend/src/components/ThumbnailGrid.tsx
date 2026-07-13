@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
@@ -24,6 +24,19 @@ interface Props {
 export function fileTypeBadge(fileType: string, paired: boolean): string {
   if (paired) return "RAW+JPG";
   return fileType === "jpeg" ? "JPG" : fileType.toUpperCase();
+}
+
+// Aspect ratio (width/height) used to size a justified grid tile. Clamped so a
+// stray panorama or missing dimensions can't blow a row's height out; falls back
+// to 3:2 landscape when the photo has no known dimensions.
+export function tileAspectRatio(width: number | null | undefined, height: number | null | undefined): number {
+  if (!width || !height) return 1.5;
+  return Math.min(2.5, Math.max(0.5, width / height));
+}
+
+// Inline CSS custom property the justified grid reads for each tile's width.
+export function tileStyle(width: number | null | undefined, height: number | null | undefined) {
+  return { "--ar": tileAspectRatio(width, height) } as CSSProperties;
 }
 
 function monthLabel(iso: string | null): string {
@@ -69,6 +82,7 @@ export function ThumbnailGrid({
     return (
       <div
         key={image.id}
+        style={tileStyle(image.width, image.height)}
         className={`thumb-card${selectMode && selectedIds?.has(image.id) ? " selected" : ""}${
           !selectMode && onRemove ? " has-remove" : ""
         }`}
@@ -123,7 +137,12 @@ export function ThumbnailGrid({
   }
 
   if (!groupByDate) {
-    return <div className="thumbnail-grid">{images.map((image, index) => renderCard(image, index))}</div>;
+    return (
+      <div className="thumbnail-grid">
+        {images.map((image, index) => renderCard(image, index))}
+        <i className="grid-filler" aria-hidden />
+      </div>
+    );
   }
 
   const sections = buildSections(images);
@@ -143,7 +162,10 @@ export function ThumbnailGrid({
             {section.label}
             <span className="timeline-header-count">{section.items.length}</span>
           </h3>
-          <div className="thumbnail-grid">{section.items.map(({ image, index }) => renderCard(image, index))}</div>
+          <div className="thumbnail-grid">
+            {section.items.map(({ image, index }) => renderCard(image, index))}
+            <i className="grid-filler" aria-hidden />
+          </div>
         </section>
       ))}
 

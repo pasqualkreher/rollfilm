@@ -46,10 +46,14 @@ export function thumbPx(key: ThumbSizeKey): number {
   return THUMB_SIZES.find((s) => s.key === key)?.px ?? 200;
 }
 
-// Push the current size into a CSS variable the grid reads, so we don't have to
-// thread inline styles through every `.thumbnail-grid`.
+// Push the current size into CSS variables the grid reads, so we don't have to
+// thread inline styles through every `.thumbnail-grid`. --row-h is the target
+// height of a justified row (see .thumbnail-grid); --thumb-min is kept for any
+// non-justified grids that still use a column min-width.
 function applyThumbVar() {
-  document.documentElement.style.setProperty("--thumb-min", `${thumbPx(readThumb())}px`);
+  const px = thumbPx(readThumb());
+  document.documentElement.style.setProperty("--thumb-min", `${px}px`);
+  document.documentElement.style.setProperty("--row-h", `${px}px`);
 }
 applyThumbVar();
 

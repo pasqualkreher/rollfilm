@@ -1,6 +1,12 @@
 import json
+import logging
+import os
+import queue
 import shutil
+import uuid
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Protocol
@@ -16,9 +22,9 @@ from app.db.models import (
     ImportSessionStatus,
     ImportStagedFile,
 )
-from app.services.exif import read_exif, to_float, to_int
+from app.services.exif import ExifData, new_helper, read_exif, to_float, to_int
 from app.services.filesystem import library_relative_path
-from app.services.hashing import hamming_distance, perceptual_hash, sha256_file
+from app.services.hashing import hamming_int, perceptual_hash, phash_to_int, sha256_file
 from app.services.pairing import pair_siblings
 from app.services.raw import classify_file_type, extract_preview
 from app.services.settings_store import get_immich_config
@@ -58,109 +64,188 @@ def compute_staged_pairs(staged_files: list[ImportStagedFile]) -> dict[str, str]
     return pairs
 
 
-def _find_near_duplicate_image(db: Session, owner_id: int, phash: str | None, filename: str) -> Image | None:
-    if not phash:
-        return None
-    candidates = (
-        db.query(Image)
-        .filter(Image.owner_id == owner_id, Image.perceptual_hash.isnot(None))
-        .all()
-    )
-    for candidate in candidates:
-        # A RAW+JPEG pair from the same shot has (near-)identical pixels but is
-        # a sibling to be paired (see pairing.py), not a duplicate to flag -
-        # same basename, different extension, is that sibling relationship.
-        if _same_shot_stem(filename, candidate.original_filename):
-            continue
-        if hamming_distance(phash, candidate.perceptual_hash) <= settings.duplicate_phash_hamming_threshold:
-            return candidate
-    return None
+logger = logging.getLogger(__name__)
+
+# Cap on the concurrent staging workers (and thus exiftool processes). Staging
+# is CPU/IO bound and each file is independent, so this scales close to linearly
+# with cores; capped so a huge import doesn't spawn an unreasonable number of
+# exiftool subprocesses.
+_STAGE_WORKERS = min(8, (os.cpu_count() or 4))
 
 
-def _find_near_duplicate_staged_file(
-    already_staged: list[ImportStagedFile], phash: str | None, filename: str
-) -> ImportStagedFile | None:
-    if not phash:
-        return None
-    for candidate in already_staged:
-        if _same_shot_stem(filename, candidate.original_filename):
-            continue
-        if hamming_distance(phash, candidate.perceptual_hash) <= settings.duplicate_phash_hamming_threshold:
-            return candidate
-    return None
+@dataclass
+class _Analyzed:
+    """The result of the heavy, per-file staging work (hashing, preview, phash,
+    exif, thumbnail) - computed in parallel, then turned into DB rows serially.
+    Carries a pre-generated id so its thumbnail can be written before the row
+    exists in the database."""
+
+    id: str
+    staged_rel_path: str
+    original_filename: str
+    file_type: str
+    sha256: str
+    perceptual_hash: str | None
+    exif_json: str
 
 
-def _stage_one_file(
-    db: Session,
-    session: ImportSession,
-    thumb_dir: Path,
-    owner_id: int,
-    already_staged: list[ImportStagedFile],
+def _analyze_file(
     staged_path: Path,
     original_filename: str,
     file_type: str,
-) -> None:
+    staged_id: str,
+    thumb_dir: Path,
+    helper,
+) -> _Analyzed:
+    """Pure computation, safe to run on a worker thread (no DB access). sha256
+    always succeeds (it just reads bytes); preview/phash/thumbnail/exif are each
+    guarded so a single corrupt file can't abort a large import - it's still
+    staged (its bytes are known) just without a preview/hash."""
     sha256 = sha256_file(staged_path)
-    preview = extract_preview(staged_path)
-    phash = perceptual_hash(preview)
-    exif = read_exif(staged_path)
+    perceptual = None
+    exif = ExifData()
 
-    # Match the library's grid thumbnail exactly (0.25 of the original, capped,
-    # LANCZOS) so the import review shows the same quality as everywhere else.
-    thumb = preview.copy()
-    tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
-    th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
-    thumb.thumbnail((tw, th), PILImage.LANCZOS)
+    try:
+        preview = extract_preview(staged_path)
+        perceptual = perceptual_hash(preview)
+        # Match the library's grid thumbnail exactly (0.25 of the original,
+        # capped, LANCZOS) so the import review shows the same quality.
+        thumb = preview.copy()
+        tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
+        th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
+        thumb.thumbnail((tw, th), PILImage.LANCZOS)
+        thumb.save(thumb_dir / f"{staged_id}.jpg", "JPEG", quality=88)
+    except Exception:
+        logger.exception("Preview/thumbnail failed for %s (staged without one)", original_filename)
 
-    staged_file = ImportStagedFile(
-        import_session_id=session.id,
-        staged_path=str(staged_path.relative_to(settings.import_staging_root)),
+    try:
+        exif = read_exif(staged_path, helper=helper)
+    except Exception:
+        logger.exception("EXIF read failed for %s", original_filename)
+
+    return _Analyzed(
+        id=staged_id,
+        staged_rel_path=str(staged_path.relative_to(settings.import_staging_root)),
         original_filename=original_filename,
-        file_type=FileType(file_type),
+        file_type=file_type,
         sha256=sha256,
-        perceptual_hash=phash,
+        perceptual_hash=perceptual,
         exif_json=exif.to_json(),
     )
-    db.add(staged_file)
-    db.flush()
 
-    thumb.save(thumb_dir / f"{staged_file.id}.jpg", "JPEG", quality=88)
 
-    # Check the already-committed library first, then files already staged
-    # earlier in this same batch (e.g. an SD card with two copies of a shot) -
-    # both are "duplicates" from the user's point of view, just against
-    # different things.
-    exact_image_match = (
-        db.query(Image).filter(Image.owner_id == owner_id, Image.file_hash == sha256).first()
-    )
-    if exact_image_match:
-        staged_file.duplicate_of_image_id = exact_image_match.id
-        if exact_image_match.source_root_id is None:
-            # Byte-identical to a photo already in the managed library - don't
-            # import it again by default (the API also rejects re-selecting it -
-            # see update_staged_file in api/routes/import_.py).
+def _analyze_parallel(tasks: list[tuple[Path, str, str, str]], thumb_dir: Path) -> list[_Analyzed]:
+    """Run _analyze_file across a thread pool. Each worker gets its own exiftool
+    process (a shared -stay_open helper can't be used from multiple threads).
+    Results come back in task order so batch-dedup and pairing stay stable."""
+    if not tasks:
+        return []
+    workers = min(_STAGE_WORKERS, len(tasks))
+    helpers = [new_helper() for _ in range(workers)]
+    pool: queue.Queue = queue.Queue()
+    for h in helpers:
+        pool.put(h)
+
+    def run(task: tuple[Path, str, str, str]) -> _Analyzed:
+        staged_path, original_filename, file_type, staged_id = task
+        helper = pool.get()
+        try:
+            return _analyze_file(staged_path, original_filename, file_type, staged_id, thumb_dir, helper)
+        finally:
+            pool.put(helper)
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            return list(executor.map(run, tasks))
+    finally:
+        for h in helpers:
+            try:
+                h.terminate()
+            except Exception:
+                pass
+
+
+def _persist_analyzed(
+    db: Session, session: ImportSession, owner_id: int, analyzed: list[_Analyzed]
+) -> None:
+    """Turn analysis results into ImportStagedFile rows and flag duplicates.
+    Runs serially (the SQLAlchemy session isn't thread-safe). All the dedup
+    lookup data is loaded once up front instead of re-querying the whole image
+    table per file, and hashes are compared as ints - that's what keeps a big
+    import from degrading into O(files x library) database round-trips."""
+    threshold = settings.duplicate_phash_hamming_threshold
+
+    # Preload the library's dedup indexes once.
+    image_by_hash: dict[str, object] = {}
+    image_phashes: list[tuple[int, str, object]] = []  # (int phash, filename, row)
+    for row in db.query(
+        Image.id, Image.file_hash, Image.perceptual_hash, Image.original_filename, Image.source_root_id
+    ).filter(Image.owner_id == owner_id):
+        image_by_hash.setdefault(row.file_hash, row)
+        if row.perceptual_hash:
+            image_phashes.append((phash_to_int(row.perceptual_hash), row.original_filename, row))
+
+    # Seed the in-batch indexes with anything already staged in this session (so
+    # a later upload batch is still deduped against earlier ones).
+    staged_by_hash: dict[str, ImportStagedFile] = {}
+    staged_phashes: list[tuple[int, str, ImportStagedFile]] = []
+    for existing in session.staged_files:
+        staged_by_hash.setdefault(existing.sha256, existing)
+        if existing.perceptual_hash:
+            staged_phashes.append((phash_to_int(existing.perceptual_hash), existing.original_filename, existing))
+
+    def _near(phash_int: int, filename: str, candidates) -> object | None:
+        for other_int, other_name, ref in candidates:
+            # A RAW+JPEG pair from the same shot has near-identical pixels but is
+            # a sibling to be paired (see pairing.py), not a duplicate.
+            if _same_shot_stem(filename, other_name):
+                continue
+            if hamming_int(phash_int, other_int) <= threshold:
+                return ref
+        return None
+
+    for a in analyzed:
+        staged_file = ImportStagedFile(
+            id=a.id,
+            import_session_id=session.id,
+            staged_path=a.staged_rel_path,
+            original_filename=a.original_filename,
+            file_type=FileType(a.file_type),
+            sha256=a.sha256,
+            perceptual_hash=a.perceptual_hash,
+            exif_json=a.exif_json,
+        )
+
+        # Exact library match first, then exact match earlier in this session,
+        # then a perceptual near-duplicate against the library, then the session.
+        exact_image = image_by_hash.get(a.sha256)
+        if exact_image is not None:
+            staged_file.duplicate_of_image_id = exact_image.id
+            if exact_image.source_root_id is None:
+                # Byte-identical to a managed-library photo - don't re-import by
+                # default (the API also rejects re-selecting it).
+                staged_file.selected = False
+            # else: only copy is indexed in place from an external source root;
+            # importing promotes it, so leave it selected.
+        elif a.sha256 in staged_by_hash:
+            staged_file.duplicate_of_staged_file_id = staged_by_hash[a.sha256].id
             staged_file.selected = False
-        # else: the only copy is indexed in place from an external source root.
-        # A copy imported *into* the library is the source of truth, so this
-        # stays selected - committing promotes the external row to a managed
-        # one instead of creating a duplicate (see commit_import_session).
-    else:
-        exact_staged_match = next((s for s in already_staged if s.sha256 == sha256), None)
-        if exact_staged_match:
-            staged_file.duplicate_of_staged_file_id = exact_staged_match.id
-            staged_file.selected = False
-        else:
-            near_image_match = _find_near_duplicate_image(db, owner_id, phash, original_filename)
-            if near_image_match:
-                staged_file.duplicate_of_image_id = near_image_match.id
+        elif a.perceptual_hash:
+            phash_int = phash_to_int(a.perceptual_hash)
+            near_image = _near(phash_int, a.original_filename, image_phashes)
+            if near_image is not None:
+                staged_file.duplicate_of_image_id = near_image.id
                 staged_file.is_near_duplicate = True
             else:
-                near_staged_match = _find_near_duplicate_staged_file(already_staged, phash, original_filename)
-                if near_staged_match:
-                    staged_file.duplicate_of_staged_file_id = near_staged_match.id
+                near_staged = _near(phash_int, a.original_filename, staged_phashes)
+                if near_staged is not None:
+                    staged_file.duplicate_of_staged_file_id = near_staged.id
                     staged_file.is_near_duplicate = True
 
-    already_staged.append(staged_file)
+        db.add(staged_file)
+        staged_by_hash.setdefault(a.sha256, staged_file)
+        if a.perceptual_hash:
+            staged_phashes.append((phash_to_int(a.perceptual_hash), a.original_filename, staged_file))
 
 
 def stage_uploaded_files(
@@ -198,10 +283,9 @@ def _stage_uploads_into(
     thumb_dir = session_dir / ".thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
-    # Seed with what's already staged (empty for a fresh session) so files in a
-    # later batch are checked for duplicates against earlier batches too.
-    already_staged: list[ImportStagedFile] = list(session.staged_files)
-
+    # 1) Write each upload to the staging folder. Serial because it drains the
+    #    per-request upload streams; cheap next to the analysis below.
+    tasks: list[tuple[Path, str, str, str]] = []
     for upload in uploads:
         original_filename = Path(upload.filename or "").name
         if not original_filename or original_filename.startswith("."):
@@ -219,9 +303,12 @@ def _stage_uploads_into(
         with staged_path.open("wb") as out:
             shutil.copyfileobj(upload.file, out)
 
-        _stage_one_file(
-            db, session, thumb_dir, owner_id, already_staged, staged_path, original_filename, file_type
-        )
+        tasks.append((staged_path, original_filename, file_type, str(uuid.uuid4())))
+
+    # 2) Hash/preview/phash/exif/thumbnail every file in parallel (the slow part,
+    #    independent per file), then 3) write the rows + dedup serially.
+    analyzed = _analyze_parallel(tasks, thumb_dir)
+    _persist_analyzed(db, session, owner_id, analyzed)
 
 
 def commit_import_session(

@@ -7,7 +7,7 @@ import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
-import { fileTypeBadge } from "../components/ThumbnailGrid";
+import { fileTypeBadge, tileStyle } from "../components/ThumbnailGrid";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
@@ -419,8 +419,8 @@ export function ImportWizard() {
 
       {selectMode && (
         <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
-          Click photos to select them for import - shift-click to select a range. The checkbox on
-          each card works anytime.
+          Click photos to select them for import - shift-click to select a range. Or open a photo
+          and press Space to toggle it, 0-5 to rate.
         </p>
       )}
 
@@ -429,7 +429,11 @@ export function ImportWizard() {
       ) : (
         <div className="thumbnail-grid">
           {visibleFiles.map((f, i) => (
-            <div key={f.id} className={`import-card${f.selected ? " selected" : ""}`}>
+            <div
+              key={f.id}
+              style={tileStyle(f.width, f.height)}
+              className={`import-card${f.selected ? " selected" : ""}`}
+            >
               <div
                 className={`thumb-card${f.selected ? " selected" : ""}`}
                 onClick={(e) => (selectMode ? toggleStagedSelect(i, e.shiftKey) : setLightboxIndex(i))}
@@ -472,14 +476,11 @@ export function ImportWizard() {
                   ⤢
                 </button>
               </div>
+              {/* No per-card import checkbox here: it's cramped at grid sizes and
+                  crowds the stars. Toggle import via "Select" mode (overlay
+                  checkbox / click) or in the large preview (Space key). The
+                  footer keeps just rating + color, which have room now. */}
               <div className="import-card-footer">
-                <input
-                  type="checkbox"
-                  checked={f.selected}
-                  disabled={isExactDuplicate(f)}
-                  title={isExactDuplicate(f) ? "Already in your library - can't be imported again" : undefined}
-                  onChange={(e) => updateStaged.mutate({ fileId: f.id, patch: { selected: e.target.checked } })}
-                />
                 <RatingStars
                   rating={f.rating}
                   onChange={(rating) => updateStaged.mutate({ fileId: f.id, patch: { rating } })}
@@ -491,6 +492,7 @@ export function ImportWizard() {
               </div>
             </div>
           ))}
+          <i className="grid-filler" aria-hidden />
         </div>
       )}
       </div>

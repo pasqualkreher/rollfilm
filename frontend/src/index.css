@@ -243,9 +243,12 @@ button {
   padding: 16px 20px 20px;
 }
 
-/* Timeline pages reserve a right gutter so the grid clears the fixed scrubber. */
+/* Timeline pages reserve a right gutter so the grid clears the fixed scrubber,
+   plus generous room at the foot so the last row of photos isn't jammed against
+   the window edge. */
 .page-timeline .page-scroll {
   padding-right: 58px;
+  padding-bottom: 56px;
 }
 
 /* Bulk-action bar (shown when photos are selected): pinned to the bottom of the
@@ -655,21 +658,58 @@ textarea:focus-visible {
   color: var(--text);
 }
 
-.thumbnail-grid {
-  display: grid;
-  /* Tile width is driven by the global "Size" control (see viewPrefs); falls
-     back to the previous fixed width when the variable isn't set yet. */
-  grid-template-columns: repeat(auto-fill, minmax(var(--thumb-min, 180px), 1fr));
-  gap: 12px;
-  align-items: start;
+/* Bottom marker that triggers loading the next page as it scrolls near view. */
+.load-more-sentinel {
+  min-height: 1px;
+  padding: 12px 0 4px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
-/* Uniform square (1:1) tiles at every Size (S/M/L/XL), in both the Library and
-   album grids. The photo fills the square via object-fit: cover. Overrides the
-   base .thumb-card fixed height. */
-.thumbnail-grid .thumb-card {
-  aspect-ratio: 1 / 1;
+/* Justified rows (Google-Photos / Lightroom style): every row shares one
+   height, and each tile's width is proportional to its aspect ratio - so a
+   landscape shot is wider and a portrait one narrower, both the same height,
+   and nothing is cropped. Pure CSS via flex: each tile flex-grows in proportion
+   to --ar (its width/height), which makes the per-row height come out equal
+   (see the derivation: width_i = ar_i * (rowH + slack/sum_ar) -> height uniform).
+   --ar is set inline per tile; --row-h (the target row height) comes from the
+   Size control (see viewPrefs). */
+.thumbnail-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-content: flex-start;
+}
+
+/* Every direct child is a justified tile (a bare .thumb-card in the library /
+   album grids, or an .import-card wrapper in the import review). */
+.thumbnail-grid > .thumb-card,
+.thumbnail-grid > .import-card {
+  flex-grow: var(--ar, 1.5);
+  flex-basis: calc(var(--ar, 1.5) * var(--row-h, 240px));
+  min-width: 0;
   height: auto;
+}
+
+/* The image box carries the aspect ratio so rows line up even before images
+   load; the box ratio equals the photo's own ratio, so object-fit: cover fills
+   it without any real cropping. */
+.thumbnail-grid > .thumb-card,
+.thumbnail-grid > .import-card .thumb-card {
+  aspect-ratio: var(--ar, 1.5);
+  height: auto; /* else the base .thumb-card height:220px overrides aspect-ratio */
+}
+
+/* Trailing spacer: soaks up the slack on the final (incomplete) row so its
+   tiles stay at the target height and left-align, instead of stretching huge. */
+.thumbnail-grid > .grid-filler {
+  flex-grow: 1000000;
+  flex-basis: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 /* Immich-style date timeline: month/year sections with headers that stick to
@@ -1640,6 +1680,7 @@ input.editor-preset-select {
 
 .color-label-picker {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 5px;
   align-items: center;
 }

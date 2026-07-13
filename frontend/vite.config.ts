@@ -8,5 +8,10 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    // Fail loudly if 5173 is taken instead of silently drifting to 5174+.
+    // Electron and `wait-on` both target 5173 by name (see electron/package.json),
+    // so a drifted port would leave the desktop start hanging on wait-on forever.
+    // `predev` (scripts/dev-clean.js) frees 5173 first, so this should always bind.
+    strictPort: true,
   },
 });

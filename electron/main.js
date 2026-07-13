@@ -72,8 +72,8 @@ async function ensureLibraryRoot() {
         ? "Your photo library folder can't be found."
         : "Welcome to Photo Manager",
       detail: missing
-        ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive/folder, or choose a new location. Each library keeps its own database, thumbnails and staging inside the folder, so pointing at a different folder switches to that library.`
-        : "Pick a folder where your photo library will be stored — for example a folder on an external drive or one you back up. The library's database, thumbnails and staging are kept inside this folder too, so the whole library is self-contained. (Only the AI model cache and logs stay in the standard app-data location.)",
+        ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive/folder, or choose a new location. Each library has its own database, so pointing at a different folder switches to that library.`
+        : "Pick a folder to hold your photos. The database and thumbnails are kept separately in the app's own data area (not inside this folder), so it's safe to put your library in a cloud-synced location like iCloud, Dropbox or Nextcloud without the sync interfering with the database.",
       buttons: ["Choose folder…", "Quit"],
       defaultId: 0,
       cancelId: 1,
@@ -94,14 +94,29 @@ async function ensureLibraryRoot() {
   }
 }
 
-// The DB, thumbnails and import staging live inside the library folder itself,
-// under a hidden ".photomanager" subfolder, so each library folder is fully
-// self-contained: point the app at a different library folder and you get that
-// library's database, thumbnails and staging with it. This makes it possible to
-// keep several independent libraries and switch between them. (The CLIP model
-// cache and logs are shared/disposable and stay in userData instead.)
+// The DB, thumbnails and import staging live in the app's own data directory
+// (userData), NOT inside the library folder. This is deliberate: a library
+// folder often sits in a cloud-synced location (iCloud Desktop/Documents,
+// Nextcloud, Dropbox), and a sync client that touches an active SQLite file
+// holds locks or evicts it mid-write - which hangs the backend on migration and
+// can corrupt the database. Keeping the DB on stable local storage avoids that
+// entirely; only the photos themselves stay in the (possibly synced) library.
+//
+// Each library still gets its own isolated data folder, keyed by a stable hash
+// of its absolute path, so pointing the app at a different library switches to
+// that library's database/thumbnails and multiple libraries never collide.
+const crypto = require("crypto");
+
+function libraryKey(lib) {
+  // Normalise so the same folder always hashes the same regardless of trailing
+  // slash or symlink spelling; prefix with a readable basename for debuggability.
+  const abs = path.resolve(lib);
+  const hash = crypto.createHash("sha1").update(abs).digest("hex").slice(0, 12);
+  const name = path.basename(abs).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40) || "library";
+  return `${name}-${hash}`;
+}
 function libraryDataDir(lib) {
-  return path.join(lib, ".photomanager");
+  return path.join(app.getPath("userData"), "libraries", libraryKey(lib));
 }
 function dbPathFor(lib) {
   return path.join(libraryDataDir(lib), "db", "library.db");
@@ -111,6 +126,48 @@ function thumbnailRootFor(lib) {
 }
 function stagingRootFor(lib) {
   return path.join(libraryDataDir(lib), "staging");
+}
+
+// Older builds stored the data folder as "<library>/.photomanager". If a library
+// still has one, move its database and thumbnails to the new userData location
+// once, so existing ratings/tags/albums survive the switch. Best-effort: any
+// failure leaves the legacy folder untouched and the app starts on a fresh DB.
+function migrateLegacyLibraryData(lib) {
+  const legacyDir = path.join(lib, ".photomanager");
+  const newDir = libraryDataDir(lib);
+  const legacyDb = path.join(legacyDir, "db", "library.db");
+  const newDb = dbPathFor(lib);
+  if (!fs.existsSync(legacyDb) || fs.existsSync(newDb)) return;
+
+  console.log(`[main] migrating legacy library data: ${legacyDir} -> ${newDir}`);
+  try {
+    // Move the DB (plus any -wal/-shm sidecars) and the thumbnail cache.
+    fs.mkdirSync(path.dirname(newDb), { recursive: true });
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const src = legacyDb + suffix;
+      if (fs.existsSync(src)) movePath(src, newDb + suffix);
+    }
+    const legacyThumbs = path.join(legacyDir, "thumbnails");
+    if (fs.existsSync(legacyThumbs)) movePath(legacyThumbs, thumbnailRootFor(lib));
+    // Staging is transient; drop it rather than migrate.
+    fs.rmSync(legacyDir, { recursive: true, force: true });
+    console.log("[main] legacy library data migrated");
+  } catch (err) {
+    console.error("[main] legacy migration failed (starting fresh):", err);
+  }
+}
+
+// rename() is fastest but fails across filesystems (EXDEV); fall back to a
+// recursive copy + delete so migration works even if userData and the library
+// are on different volumes.
+function movePath(src, dest) {
+  try {
+    fs.renameSync(src, dest);
+  } catch (err) {
+    if (err.code !== "EXDEV") throw err;
+    fs.cpSync(src, dest, { recursive: true });
+    fs.rmSync(src, { recursive: true, force: true });
+  }
 }
 
 // Tiny frameless window shown from the moment the app launches until the main
@@ -405,8 +462,11 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  // The database, thumbnails and staging live inside the library folder itself
-  // (see libraryDataDir), so there is nothing else to locate here.
+  // The database, thumbnails and staging live in userData keyed by this library
+  // (see libraryDataDir) - away from any cloud sync on the library folder. Bring
+  // an older in-library ".photomanager" database across on first run after the
+  // upgrade so existing metadata isn't lost.
+  migrateLegacyLibraryData(libraryRoot);
 
   apiPort = await getFreePort();
   apiBaseUrl = `http://127.0.0.1:${apiPort}`;
@@ -478,3 +538,16 @@ app.on("window-all-closed", () => {
 
 app.on("will-quit", stopBackend);
 process.on("exit", stopBackend);
+
+// External termination (Ctrl-C in the dev terminal, `concurrently -k`, a parent
+// exiting) arrives as a signal, and neither will-quit nor process "exit" fires
+// for those - so the backend child would be orphaned and keep holding the DB
+// lock, hanging the next start on the splash spinner. Stop it explicitly, then
+// quit so normal teardown still runs.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    stopBackend();
+    app.quit();
+    process.exit(0);
+  });
+}

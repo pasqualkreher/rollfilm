@@ -173,8 +173,13 @@ function uploadBatch(
 
 export const api = {
   images: {
-    list(filters: LibraryFilters): Promise<ImageOut[]> {
-      return request(`/images?${filtersToParams(filters).toString()}`);
+    list(filters: LibraryFilters, page?: { limit: number; offset: number }): Promise<ImageOut[]> {
+      const params = filtersToParams(filters);
+      if (page) {
+        params.set("limit", String(page.limit));
+        params.set("offset", String(page.offset));
+      }
+      return request(`/images?${params.toString()}`);
     },
     get(id: string): Promise<ImageOut> {
       return request(`/images/${id}`);
