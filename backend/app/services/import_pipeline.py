@@ -3,6 +3,7 @@ import logging
 import os
 import queue
 import shutil
+import threading
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -248,6 +249,14 @@ def _persist_analyzed(
             staged_phashes.append((phash_to_int(a.perceptual_hash), a.original_filename, staged_file))
 
 
+# The client deliberately keeps two upload requests in flight: while one
+# batch's staging work (hash/preview/exif) runs here, the next batch's bytes
+# are already being received and spooled by the event loop. The staging work
+# itself must not interleave though - the dedup seeding reads everything
+# staged so far - so it's serialized behind one process-wide lock.
+_staging_lock = threading.Lock()
+
+
 def stage_uploaded_files(
     db: Session, owner_id: int, uploads: list[UploadedFile], source_label: str
 ) -> ImportSession:
@@ -257,8 +266,9 @@ def stage_uploaded_files(
     session = ImportSession(owner_id=owner_id, source_path=source_label or "Uploaded folder")
     db.add(session)
     db.flush()
-    _stage_uploads_into(db, session, owner_id, uploads)
-    db.commit()
+    with _staging_lock:
+        _stage_uploads_into(db, session, owner_id, uploads)
+        db.commit()
     db.refresh(session)
     return session
 
@@ -270,8 +280,13 @@ def append_uploaded_files(
     multipart parser caps a single request at 1000 files, so big imports are
     sent as several requests all appending to one session - duplicate checks
     and RAW+JPEG pairing still see the whole session, not just one batch."""
-    _stage_uploads_into(db, session, owner_id, uploads)
-    db.commit()
+    with _staging_lock:
+        # This request's read transaction began before the lock was acquired
+        # (the route already loaded the session row). End it so the dedup
+        # seeding below sees files a concurrent batch committed meanwhile.
+        db.rollback()
+        _stage_uploads_into(db, session, owner_id, uploads)
+        db.commit()
     db.refresh(session)
     return session
 

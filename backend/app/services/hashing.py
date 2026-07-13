@@ -4,6 +4,15 @@ from pathlib import Path
 import imagehash
 from PIL import Image as PILImage
 
+# imagehash.phash() lazily does `import scipy.fftpack` on its first call. That
+# import means loading scipy's many small files from disk, which on a cold
+# (or Nextcloud-throttled) filesystem can take tens of seconds - and it would
+# happen in the middle of the first import request, looking like a hang.
+# Trigger it here instead, so the cost is paid once at server startup.
+import scipy.fftpack  # noqa: F401  (imported for its side effect, used by imagehash)
+
+imagehash.phash(PILImage.new("L", (32, 32)))
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()

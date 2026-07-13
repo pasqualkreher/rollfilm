@@ -334,16 +334,44 @@ export const api = {
     async upload(files: File[], sourceLabel: string, onProgress?: (pct: number) => void): Promise<ImportSessionOut> {
       const BATCH_FILES = 250;
       const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1;
-      let doneBytes = 0;
-      let session: ImportSessionOut | null = null;
-      for (let i = 0; i < files.length; i += BATCH_FILES) {
-        const batch = files.slice(i, i + BATCH_FILES);
-        session = await uploadBatch(batch, sourceLabel, session?.id ?? null, (loaded) => {
-          onProgress?.(Math.min(100, Math.round(((doneBytes + loaded) / totalBytes) * 100)));
+      const batches: File[][] = [];
+      for (let i = 0; i < files.length; i += BATCH_FILES) batches.push(files.slice(i, i + BATCH_FILES));
+      const batchBytes = batches.map((b) => b.reduce((sum, f) => sum + f.size, 0));
+
+      const uploadedBytes = batches.map(() => 0);
+      const report = () => {
+        const done = uploadedBytes.reduce((a, b) => a + b, 0);
+        onProgress?.(Math.min(100, Math.round((done / totalBytes) * 100)));
+      };
+      const send = (idx: number, sessionId: string | null) =>
+        uploadBatch(batches[idx], sourceLabel, sessionId, (loaded) => {
+          // loaded includes multipart framing overhead - clamp to the batch's
+          // real payload so the total can't overshoot 100%.
+          uploadedBytes[idx] = Math.min(loaded, batchBytes[idx]);
+          report();
+        }).then((s) => {
+          uploadedBytes[idx] = batchBytes[idx];
+          report();
+          return s;
         });
-        doneBytes += batch.reduce((sum, f) => sum + f.size, 0);
+
+      // The first batch runs alone - its response carries the session id the
+      // rest append to.
+      const session = await send(0, null);
+      // Then keep two requests in flight: the server serializes the staging
+      // work, but receives the next batch's bytes while it analyzes the
+      // previous one - upload and analysis overlap instead of alternating.
+      let pending: Promise<ImportSessionOut> | null = null;
+      for (let i = 1; i < batches.length; i++) {
+        const next = send(i, session.id);
+        // If an earlier batch fails the whole upload aborts; this handler only
+        // keeps the still-running one from surfacing as an unhandled rejection.
+        next.catch(() => {});
+        if (pending) await pending;
+        pending = next;
       }
-      return session!;
+      if (pending) await pending;
+      return session;
     },
     get(id: string): Promise<ImportSessionOut> {
       return request(`/import/sessions/${id}`);

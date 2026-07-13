@@ -318,7 +318,11 @@ export function ImportWizard() {
               aria-haspopup="menu"
               aria-expanded={importMenuOpen}
             >
-              {isUploading ? `Uploading... ${uploadProgress ?? 0}%` : "Import photos ▾"}
+              {!isUploading
+                ? "Import photos ▾"
+                : (uploadProgress ?? 0) >= 100
+                  ? "Processing files..."
+                  : `Uploading... ${uploadProgress ?? 0}%`}
             </button>
             {importMenuOpen && !isUploading && (
               <div className="import-menu-dropdown" role="menu">
