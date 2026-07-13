@@ -72,8 +72,8 @@ async function ensureLibraryRoot() {
         ? "Your photo library folder can't be found."
         : "Welcome to Photo Manager",
       detail: missing
-        ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive/folder, or choose a new location. Each library has its own database, so pointing at a different folder switches to that library.`
-        : "Pick a folder to hold your photos. The database and thumbnails are kept separately in the app's own data area (not inside this folder), so it's safe to put your library in a cloud-synced location like iCloud, Dropbox or Nextcloud without the sync interfering with the database.",
+        ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive/folder, or choose a new location. Each library carries its own database and thumbnails (in a hidden .photomanager subfolder), so pointing at a different folder switches to that library.`
+        : "Pick a folder to hold your photos. The database and thumbnails live inside it, in a hidden .photomanager subfolder, so the whole library is self-contained and moves with the folder. If the folder is cloud-synced (iCloud, Dropbox, Nextcloud), exclude .photomanager from syncing - sync clients can corrupt an active database.",
       buttons: ["Choose folder…", "Quit"],
       defaultId: 0,
       cancelId: 1,
@@ -94,29 +94,20 @@ async function ensureLibraryRoot() {
   }
 }
 
-// The DB, thumbnails and import staging live in the app's own data directory
-// (userData), NOT inside the library folder. This is deliberate: a library
-// folder often sits in a cloud-synced location (iCloud Desktop/Documents,
-// Nextcloud, Dropbox), and a sync client that touches an active SQLite file
-// holds locks or evicts it mid-write - which hangs the backend on migration and
-// can corrupt the database. Keeping the DB on stable local storage avoids that
-// entirely; only the photos themselves stay in the (possibly synced) library.
+// The DB, thumbnails and import staging live in a hidden ".photomanager"
+// folder INSIDE the library folder, so each library is fully self-contained:
+// photos, database and thumbnails travel together (external drive, NAS, a
+// simple folder copy). Only install-type data stays in Electron's userData -
+// the model cache and logs, which are disposable and shared across libraries.
 //
-// Each library still gets its own isolated data folder, keyed by a stable hash
-// of its absolute path, so pointing the app at a different library switches to
-// that library's database/thumbnails and multiple libraries never collide.
+// Caveat: if the library sits in a cloud-synced location (iCloud, Nextcloud,
+// Dropbox), exclude ".photomanager" from syncing - a sync client touching a
+// live SQLite file can hold locks or evict it mid-write, which hangs the
+// backend and can corrupt the database. The first-run dialog says so too.
 const crypto = require("crypto");
 
-function libraryKey(lib) {
-  // Normalise so the same folder always hashes the same regardless of trailing
-  // slash or symlink spelling; prefix with a readable basename for debuggability.
-  const abs = path.resolve(lib);
-  const hash = crypto.createHash("sha1").update(abs).digest("hex").slice(0, 12);
-  const name = path.basename(abs).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40) || "library";
-  return `${name}-${hash}`;
-}
 function libraryDataDir(lib) {
-  return path.join(app.getPath("userData"), "libraries", libraryKey(lib));
+  return path.join(lib, ".photomanager");
 }
 function dbPathFor(lib) {
   return path.join(libraryDataDir(lib), "db", "library.db");
@@ -128,18 +119,30 @@ function stagingRootFor(lib) {
   return path.join(libraryDataDir(lib), "staging");
 }
 
-// Older builds stored the data folder as "<library>/.photomanager". If a library
-// still has one, move its database and thumbnails to the new userData location
-// once, so existing ratings/tags/albums survive the switch. Best-effort: any
-// failure leaves the legacy folder untouched and the app starts on a fresh DB.
+// Older builds kept each library's data in userData under a per-library key
+// (hash of the library's absolute path). Still used to *find* that legacy
+// folder so its database/thumbnails can be moved into the library once.
+function libraryKey(lib) {
+  // Normalise so the same folder always hashes the same regardless of trailing
+  // slash or symlink spelling; prefix with a readable basename for debuggability.
+  const abs = path.resolve(lib);
+  const hash = crypto.createHash("sha1").update(abs).digest("hex").slice(0, 12);
+  const name = path.basename(abs).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40) || "library";
+  return `${name}-${hash}`;
+}
+
+// One-time migration: move a library's data from the old userData location
+// back into the library's own hidden ".photomanager" folder, so existing
+// ratings/tags/albums survive the switch. Best-effort: any failure leaves the
+// legacy folder untouched and the app starts on a fresh DB.
 function migrateLegacyLibraryData(lib) {
-  const legacyDir = path.join(lib, ".photomanager");
+  const legacyDir = path.join(app.getPath("userData"), "libraries", libraryKey(lib));
   const newDir = libraryDataDir(lib);
   const legacyDb = path.join(legacyDir, "db", "library.db");
   const newDb = dbPathFor(lib);
   if (!fs.existsSync(legacyDb) || fs.existsSync(newDb)) return;
 
-  console.log(`[main] migrating legacy library data: ${legacyDir} -> ${newDir}`);
+  console.log(`[main] migrating library data into the library folder: ${legacyDir} -> ${newDir}`);
   try {
     // Move the DB (plus any -wal/-shm sidecars) and the thumbnail cache.
     fs.mkdirSync(path.dirname(newDb), { recursive: true });
@@ -151,9 +154,9 @@ function migrateLegacyLibraryData(lib) {
     if (fs.existsSync(legacyThumbs)) movePath(legacyThumbs, thumbnailRootFor(lib));
     // Staging is transient; drop it rather than migrate.
     fs.rmSync(legacyDir, { recursive: true, force: true });
-    console.log("[main] legacy library data migrated");
+    console.log("[main] library data migrated into the library folder");
   } catch (err) {
-    console.error("[main] legacy migration failed (starting fresh):", err);
+    console.error("[main] migration into the library folder failed (starting fresh):", err);
   }
 }
 
@@ -462,10 +465,10 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  // The database, thumbnails and staging live in userData keyed by this library
-  // (see libraryDataDir) - away from any cloud sync on the library folder. Bring
-  // an older in-library ".photomanager" database across on first run after the
-  // upgrade so existing metadata isn't lost.
+  // The database, thumbnails and staging live inside the library folder's
+  // hidden ".photomanager" subfolder (see libraryDataDir). Bring an older
+  // userData-based database across on first run after the upgrade so existing
+  // metadata isn't lost.
   migrateLegacyLibraryData(libraryRoot);
 
   apiPort = await getFreePort();

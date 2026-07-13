@@ -276,7 +276,12 @@ def _run_scan(source_root_id: str, include_excluded: bool = False) -> None:
         revived = 0
         skipped_managed = 0
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.name.startswith("."):
+            # Skip hidden files AND anything inside a hidden directory - most
+            # importantly a library's ".photomanager" data folder (database,
+            # thumbnails), whose cached JPEGs must never be indexed as photos.
+            if not path.is_file() or any(
+                part.startswith(".") for part in path.relative_to(root).parts
+            ):
                 continue
             if classify_file_type(path) is None:
                 continue

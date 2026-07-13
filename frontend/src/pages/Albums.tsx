@@ -68,6 +68,9 @@ export function Albums() {
             </button>
           </Link>
         ))}
+        {/* Same trailing spacer as the photo grids: soaks up final-row slack so
+            a lone album card keeps its normal size instead of stretching huge. */}
+        <i className="grid-filler" aria-hidden />
       </div>
     </div>
   );

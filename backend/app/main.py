@@ -13,6 +13,7 @@ from app.api.routes import (
 )
 from app.db.session import engine
 from app.services.embeddings import ensure_embeddings_table
+from app.services.maintenance import start_background_sync
 from app.services.sources import scan_all_sources
 from app.services.trash import start_background_purge
 
@@ -44,6 +45,10 @@ def on_startup() -> None:
     # since last run - runs in the background so startup isn't blocked, and is
     # incremental (only new files are indexed).
     scan_all_sources()
+    # Reconcile the DB with the library folder (same as Settings' "Sync
+    # database to library") now that the folder is selected/confirmed -
+    # backgrounded like the scans.
+    start_background_sync()
     # Permanently delete photos that sat in the Trash longer than the retention
     # configured in Settings (default 14 days, 0 = keep forever). Backgrounded
     # for the same reason as the scans.

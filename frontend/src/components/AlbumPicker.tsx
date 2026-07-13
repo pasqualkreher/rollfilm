@@ -18,7 +18,7 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
     : [];
 
   return (
-    <div>
+    <div className="album-picker">
       {currentAlbumIds && currentAlbums.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
           {currentAlbums.map((a) => (
@@ -48,7 +48,7 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
         ))}
       </select>
       {(albums ?? []).length === 0 && (
-        <p style={{ color: "var(--text-muted)", fontSize: 12, margin: "6px 0 0" }}>
+        <p className="album-picker-hint" style={{ color: "var(--text-muted)", fontSize: 12, margin: "6px 0 0" }}>
           No albums yet — create one on the Albums page.
         </p>
       )}

@@ -226,10 +226,12 @@ export function Settings() {
             Library data
           </h3>
           <p style={{ color: "var(--text-muted)" }}>
-            The database, thumbnails and import staging live inside the library folder, so the
-            whole library is self-contained — point the app at a different library folder to
-            switch to a separate library. (The model cache and logs stay in the standard app-data
-            location.)
+            The database, thumbnails and import staging live in a hidden{" "}
+            <code>.photomanager</code> subfolder inside the library folder, so the whole library is
+            self-contained and moves with the folder — point the app at a different library folder
+            to switch to a separate library. If the folder is cloud-synced, exclude{" "}
+            <code>.photomanager</code> from syncing. (The model cache and logs stay in the standard
+            app-data location.)
           </p>
           <p style={{ fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
             {dataRoot ?? "…"}
@@ -332,7 +334,8 @@ export function Settings() {
         <p style={{ color: "var(--text-muted)" }}>
           Deleted library photos stay in the Trash and can be restored. On every app start, photos
           that have been in the Trash longer than this are deleted for good, in the background.
-          Set 0 to keep them forever.
+          Set 0 to keep them forever. (Photos from external sources never go to the Trash -
+          deleting one only removes it from the catalog, the file on the source is untouched.)
         </p>
         <div className="import-toolbar" style={{ alignItems: "center" }}>
           <label className="filter-field">
@@ -443,7 +446,10 @@ export function Settings() {
           Backup &amp; restore
         </h3>
         <p style={{ color: "var(--text-muted)" }}>
-          Download a backup containing every photo plus all ratings, colors, albums, and edits.
+          Download a backup of your managed library: every imported photo file plus its ratings,
+          color labels, albums, and edits. Photos from external sources are not bundled - they stay
+          on their own storage and can be re-indexed by re-adding the source. Tags are not included
+          in the backup.
         </p>
         <a className="btn primary" href={api.maintenance.backupUrl()} style={{ display: "inline-block" }}>
           Download backup
@@ -451,7 +457,8 @@ export function Settings() {
 
         <p style={{ color: "var(--text-muted)", marginTop: 20 }}>
           Restoring a backup <strong>replaces everything currently in your library</strong> with the
-          backup's contents.
+          backup's contents. Files on external sources are not touched; their catalog entries are
+          rebuilt on the next scan.
         </p>
         <input
           ref={restoreFileInputRef}

@@ -281,30 +281,43 @@ export function Library() {
         </div>
       )}
       {selected.size > 0 && (
+        // Related controls are grouped so a narrow window wraps whole groups
+        // to the next line instead of splitting them mid-cluster; Delete
+        // right-aligns on whatever line it ends up on (margin-left auto).
         <div className="filter-bar action-bar--bottom">
-          <span>{selected.size} selected</span>
-          <RatingStars rating={0} onChange={(r) => applyBulk({ rating: r })} />
-          <ColorLabelPicker value="none" onChange={(c) => applyBulk({ color_label: c })} />
-          <BulkTagInput onAdd={addTagToSelected} />
-          <AlbumPicker onAdd={addSelectedToAlbum} />
-          <button className="btn" onClick={() => selects.add(Array.from(selected))}>
-            Add to selects
-          </button>
-          {immichConfigured && (
-            <button
-              className="btn"
-              onClick={addSelectedToImmich}
-              disabled={immichBusy}
-              title="Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
-            >
-              {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+          <div className="control-group">
+            <span>{selected.size} selected</span>
+            <RatingStars rating={0} onChange={(r) => applyBulk({ rating: r })} />
+            <ColorLabelPicker value="none" onChange={(c) => applyBulk({ color_label: c })} />
+          </div>
+          <div className="control-group">
+            <BulkTagInput onAdd={addTagToSelected} />
+            <AlbumPicker onAdd={addSelectedToAlbum} />
+          </div>
+          <div className="control-group">
+            <button className="btn" onClick={() => selects.add(Array.from(selected))}>
+              Add to selects
             </button>
-          )}
-          <button className="btn" onClick={resetSelectedMetadata}>
-            Reset stars/tags/colors
-          </button>
-          <span style={{ flex: 1 }} />
-          <button className="btn quiet-danger btn-sm" onClick={deleteSelected} title="Delete the selected photos">
+            {immichConfigured && (
+              <button
+                className="btn"
+                onClick={addSelectedToImmich}
+                disabled={immichBusy}
+                title="Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
+              >
+                {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+              </button>
+            )}
+            <button className="btn" onClick={resetSelectedMetadata}>
+              Reset stars/tags/colors
+            </button>
+          </div>
+          <button
+            className="btn quiet-danger btn-sm"
+            style={{ marginLeft: "auto" }}
+            onClick={deleteSelected}
+            title="Delete the selected photos"
+          >
             Delete
           </button>
           {immichMsg && <span style={{ color: "var(--text-muted)" }}>{immichMsg}</span>}

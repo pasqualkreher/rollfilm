@@ -1,17 +1,15 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { api, editVersion } from "../api/client";
+import { api } from "../api/client";
 import type { ImageOut } from "../api/types";
 import { useSelects } from "../state/selects";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 import { ViewPrefsControls } from "../components/ViewPrefsControls";
-import { fileTypeBadge } from "../components/ThumbnailGrid";
+import { ThumbnailGrid } from "../components/ThumbnailGrid";
 
 export function Selects() {
   const { ids, count, remove, clear } = useSelects();
   const mergePairs = useMergePairs();
-  const navigate = useNavigate();
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [immichBusy, setImmichBusy] = useState(false);
@@ -104,29 +102,10 @@ export function Selects() {
             {error && <span style={{ color: "var(--danger)" }}>{error}</span>}
           </div>
 
-          <div className="thumbnail-grid">
-            {images.map((image) => (
-              <div key={image.id} className="thumb-card">
-                <img
-                  src={api.images.thumbnailUrl(image.id, editVersion(image))}
-                  loading="lazy"
-                  alt={image.original_filename}
-                  onClick={() => navigate(`/image/${image.id}`)}
-                />
-                <span className="badge">{fileTypeBadge(image.file_type, Boolean(image.paired_image_id))}</span>
-                <button
-                  className="selects-remove"
-                  title="Remove from selects"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    remove(image.id);
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
+          {/* The shared grid handles justified tile sizing (--ar + filler) and
+              the enlarged 1-2 photo layout - the previous hand-rolled grid
+              lacked both, so a lone select stretched huge and got cut off. */}
+          <ThumbnailGrid images={images} onRemove={remove} removeTitle="Remove from selects" />
         </>
       )}
     </div>

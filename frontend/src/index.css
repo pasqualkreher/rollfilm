@@ -181,6 +181,10 @@ button {
 
 .page {
   flex: 1;
+  /* Without this, a page whose content is taller than the viewport (e.g. the
+     detail view before the photo is fitted) grows past the app shell and gets
+     clipped by its overflow:hidden - the flex chain must be allowed to shrink. */
+  min-height: 0;
   padding: 20px;
   overflow: auto;
   display: flex;
@@ -275,6 +279,25 @@ button {
   padding-bottom: 96px;
 }
 
+/* Inside the bulk action bar the album picker must stay a single-line inline
+   control: no room for its "No albums yet" hint (it made the whole bar two
+   lines tall and knocked the row out of alignment). */
+.action-bar--bottom .album-picker {
+  display: inline-flex;
+  align-items: center;
+}
+
+.action-bar--bottom .album-picker-hint {
+  display: none;
+}
+
+/* Let the tag input give up width on narrow windows instead of forcing its
+   whole group onto the next line prematurely. */
+.action-bar--bottom input[type="text"] {
+  min-width: 0;
+  max-width: 200px;
+}
+
 /* Related controls grouped tightly (filters | view | actions), so each reads as
    part of a purpose rather than one long undifferentiated row. */
 .control-group {
@@ -304,6 +327,24 @@ button {
   .control-group--actions {
     padding-left: 0;
     border-left: none;
+  }
+
+  /* Let the top bar wrap instead of squeezing the nav links off-screen; the
+     search field drops to its own full-width row. */
+  .top-bar {
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    padding: 10px 16px;
+  }
+
+  .nav-links {
+    flex-wrap: wrap;
+  }
+
+  .search-bar {
+    flex: 1 1 100%;
+    max-width: none;
+    order: 10;
   }
 }
 
@@ -712,6 +753,47 @@ textarea:focus-visible {
   border: 0;
 }
 
+/* A view with only one or two photos: enlarge them to fill the visible app
+   area instead of rendering row-height tiles - capped by the viewport height
+   (minus top bar, filter bar and action bar) so no scrolling is ever needed
+   to see the whole photo. Width comes from height × aspect-ratio, additionally
+   capped to the grid width (cqw) so wide panoramas can't overflow sideways. */
+.thumbnail-grid--few {
+  container-type: inline-size;
+  /* Room the photo may take vertically before it would push into a scroll. */
+  --few-max-h: max(240px, calc(100vh - 290px));
+  justify-content: center;
+}
+
+/* The slack-soaking filler would push the (now fixed-size) photos back to the
+   left edge - without it they sit centered in the app area. */
+.thumbnail-grid--few > .grid-filler {
+  display: none;
+}
+
+.thumbnail-grid--few > .thumb-card,
+.thumbnail-grid--few > .import-card {
+  flex: 0 0 auto;
+  width: min(100cqw, calc(var(--few-max-h) * var(--ar, 1.5)));
+}
+
+/* Two photos share the row: each is capped to half the grid width. */
+.thumbnail-grid--few > :nth-child(1):nth-last-child(3),
+.thumbnail-grid--few > :nth-child(2):nth-last-child(2) {
+  width: min(calc((100cqw - 12px) / 2), calc(var(--few-max-h) * var(--ar, 1.5)));
+}
+
+/* Import cards carry a footer below the photo - budget its height in so the
+   card as a whole still fits without scrolling. */
+.thumbnail-grid--few > .import-card {
+  width: min(100cqw, calc((var(--few-max-h) - 56px) * var(--ar, 1.5)));
+}
+
+.thumbnail-grid--few > .import-card:nth-child(1):nth-last-child(3),
+.thumbnail-grid--few > .import-card:nth-child(2):nth-last-child(2) {
+  width: min(calc((100cqw - 12px) / 2), calc((var(--few-max-h) - 56px) * var(--ar, 1.5)));
+}
+
 /* Immich-style date timeline: month/year sections with headers that stick to
    the top of the scroll area as you pass through each month. */
 .timeline {
@@ -1053,12 +1135,41 @@ textarea:focus-visible {
   border: none;
 }
 
+/* Stars and color swatches are the SAME size on every card: sized from --row-h
+   (the grid Size control), not the individual tile, so a portrait card's
+   controls match its landscape neighbors' exactly. The clamps floor at the
+   M-grid sizes (11px stars / 9px swatches) - symbols never get smaller than
+   that. The footer is always the same two stacked rows (stars, then swatches)
+   so every card reads identically - a conditional single row on wide cards
+   made the grid look inconsistent. */
 .import-card-footer {
+  /* One shared symbol size: stars and color circles are always exactly the
+     same size as each other, on every card and at every grid size. */
+  --sym: clamp(11px, calc(var(--row-h, 240px) * 0.05 - 2px), 16px);
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   padding: 6px 8px;
+}
+
+.import-card-footer .rating-stars {
+  gap: 1px;
+}
+
+.import-card-footer .rating-stars button {
+  font-size: var(--sym);
+  line-height: 1;
+}
+
+.import-card-footer .color-label-picker {
+  flex-wrap: nowrap;
+  gap: max(2px, calc(var(--row-h, 240px) * 0.008));
+}
+
+.import-card-footer .color-swatch {
+  width: var(--sym);
+  height: var(--sym);
 }
 
 /* ---- Adjustments editor (Exposure/Contrast/… with live canvas preview) ---- */
@@ -1448,6 +1559,20 @@ input.editor-preset-select {
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
+}
+
+/* Small screens: the photo needs the room more than the decorative band does,
+   and the control bar should span the full width instead of overflowing it. */
+@media (max-width: 700px) {
+  .lightbox-overlay {
+    padding: 14px 8px;
+  }
+
+  .lightbox-controls {
+    width: 100%;
+    padding: 10px 12px;
+    gap: 8px 16px;
+  }
 }
 
 .lightbox-filename {
@@ -1861,7 +1986,12 @@ input.editor-preset-select {
    the photo column and side panel both get the full available height. */
 .detail-layout {
   display: flex;
-  flex-wrap: wrap;
+  /* No wrapping on desktop: in a wrapped flex container the line is sized to
+     its content, so a tall photo would blow the row past the viewport and get
+     clipped (overflow: hidden on .detail-page). A single line stretches to the
+     container height instead, which is what keeps the photo fitted. The
+     stacked small-screen layout re-enables wrapping (media query below). */
+  flex-wrap: nowrap;
   gap: 40px;
   flex: 1;
   min-height: 0;
@@ -2002,11 +2132,25 @@ input.editor-preset-select {
   aspect-ratio: 1 / 1;
 }
 
-@media (max-width: 700px) {
+/* 800px, not 700: the side panel starts wrapping under the photo at ~760px
+   (400px image basis + 40px gap + 280px panel + page padding), and once it
+   wraps the non-scrolling desktop layout would clip it - so the stacked,
+   scrollable layout must kick in before that point. */
+@media (max-width: 800px) {
   /* Stacked layout: let the page scroll as a whole again so the image and panel
      don't get clipped when they can't sit side by side. */
   .detail-page {
     overflow-y: auto;
+  }
+
+  /* Re-enable wrapping (desktop is nowrap) so the panel drops below the photo. */
+  .detail-layout {
+    flex-wrap: wrap;
+  }
+
+  /* Tighter band around the photo - 40px insets waste space on small screens. */
+  .detail-image {
+    padding: 16px 10px;
   }
 
   .detail-image {

@@ -136,9 +136,14 @@ export function ThumbnailGrid({
     );
   }
 
+  // With only one or two photos in the view, the grid enlarges them to fill
+  // the visible area (no scrolling needed) instead of rendering tiny tiles -
+  // see .thumbnail-grid--few in index.css.
+  const fewClass = images.length <= 2 ? " thumbnail-grid--few" : "";
+
   if (!groupByDate) {
     return (
-      <div className="thumbnail-grid">
+      <div className={`thumbnail-grid${fewClass}`}>
         {images.map((image, index) => renderCard(image, index))}
         <i className="grid-filler" aria-hidden />
       </div>
@@ -162,7 +167,7 @@ export function ThumbnailGrid({
             {section.label}
             <span className="timeline-header-count">{section.items.length}</span>
           </h3>
-          <div className="thumbnail-grid">
+          <div className={`thumbnail-grid${fewClass}`}>
             {section.items.map(({ image, index }) => renderCard(image, index))}
             <i className="grid-filler" aria-hidden />
           </div>

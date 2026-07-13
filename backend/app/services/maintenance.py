@@ -1,7 +1,9 @@
 import json
+import logging
 import os
 import shutil
 import tempfile
+import threading
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,9 +21,43 @@ from app.services.trash import hard_delete_images
 from app.workers.queue import enqueue_post_import
 
 
+logger = logging.getLogger(__name__)
+
+
 class UploadedFile(Protocol):
     filename: str | None
     file: BinaryIO
+
+
+def start_background_sync() -> None:
+    """Run the same reconciliation as Settings' "Sync database to library" once
+    on every app start, in the background: by the time the backend launches the
+    desktop shell has confirmed (or asked the user to re-select) the library
+    folder, so the DB is brought in line with whatever changed on disk while
+    the app was closed. Backgrounded because hashing and thumbnail regeneration
+    can take a while and /health must come up fast."""
+
+    def _run() -> None:
+        # Never reconcile against a missing/unreadable library root - with the
+        # folder gone, every managed file "is missing" and the whole catalog
+        # would be wiped. The desktop shell prevents this, but a bare backend
+        # run (Docker, dev) has no such gate.
+        if not settings.library_root.is_dir():
+            logger.warning("Startup library sync skipped: library root %s not found", settings.library_root)
+            return
+        from app.auth import LOCAL_USER_ID
+        from app.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            result = sync_db_with_library(db, LOCAL_USER_ID)
+            logger.info("Startup library sync: %s", result)
+        except Exception:
+            logger.exception("Startup library sync failed")
+        finally:
+            db.close()
+
+    threading.Thread(target=_run, name="startup-library-sync", daemon=True).start()
 
 
 def sync_db_with_library(db: Session, owner_id: int) -> dict:
@@ -146,7 +182,27 @@ def wipe_library(db: Session, owner_id: int) -> None:
     db.query(Image).filter(Image.owner_id == owner_id).delete(synchronize_session=False)
     db.commit()
 
-    for root in (settings.library_root, settings.thumbnail_cache_root, settings.import_staging_root):
+    # The library's data folder (".photomanager": database, thumbnails,
+    # staging) lives INSIDE the library folder, so the library must not be
+    # rmtree'd wholesale - that would unlink the live SQLite file out from
+    # under the open connection pool, and everything restored afterwards would
+    # silently vanish with the unlinked inode. Clear the library's photo
+    # contents but keep the data folder; thumbnails and staging are then
+    # cleared explicitly via their own configured roots.
+    if settings.library_root.is_dir():
+        for child in settings.library_root.iterdir():
+            if child.name == ".photomanager":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                try:
+                    child.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    settings.library_root.mkdir(parents=True, exist_ok=True)
+
+    for root in (settings.thumbnail_cache_root, settings.import_staging_root):
         shutil.rmtree(root, ignore_errors=True)
         root.mkdir(parents=True, exist_ok=True)
 

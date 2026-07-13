@@ -396,23 +396,21 @@ export function ImportWizard() {
       <div className="page-scroll">
       <div className="filter-bar action-bar--bottom">
         <span>{selectedCount} of {files?.length ?? 0} selected for import</span>
-        <label
-          className="filter-field filter-field-inline"
-          title={
-            immichConfigured
-              ? "Upload the selected JPEGs to Immich after import (RAW files are never uploaded)"
-              : "Add your Immich host and API key in Settings to enable this"
-          }
-          style={immichConfigured ? undefined : { opacity: 0.5 }}
-        >
-          <input
-            type="checkbox"
-            checked={uploadToImmich && immichConfigured}
-            disabled={!immichConfigured}
-            onChange={(e) => setUploadToImmich(e.target.checked)}
-          />{" "}
-          Also upload to Immich (JPG only)
-        </label>
+        {/* Only shown when Immich is configured in Settings - an inert greyed
+            checkbox is just clutter for everyone who doesn't use Immich. */}
+        {immichConfigured && (
+          <label
+            className="filter-field filter-field-inline"
+            title="Upload the selected JPEGs to Immich after import (RAW files are never uploaded)"
+          >
+            <input
+              type="checkbox"
+              checked={uploadToImmich}
+              onChange={(e) => setUploadToImmich(e.target.checked)}
+            />{" "}
+            Also upload to Immich (JPG only)
+          </label>
+        )}
         <button className="btn primary" onClick={handleCommitClick} disabled={selectedCount === 0 || commit.isPending}>
           {commit.isPending ? "Importing..." : `Import ${selectedCount} photo(s)`}
         </button>
@@ -431,7 +429,7 @@ export function ImportWizard() {
       {isLoading ? (
         <div className="empty-state">Processing uploaded files...</div>
       ) : (
-        <div className="thumbnail-grid">
+        <div className={`thumbnail-grid${visibleFiles.length <= 2 ? " thumbnail-grid--few" : ""}`}>
           {visibleFiles.map((f, i) => (
             <div
               key={f.id}
