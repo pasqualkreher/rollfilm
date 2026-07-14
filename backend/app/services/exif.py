@@ -88,8 +88,31 @@ def new_helper() -> exiftool.ExifToolHelper:
     return exiftool.ExifToolHelper(executable=executable)
 
 
+# Only the tags read below. get_tags() lets exiftool skip formatting every
+# other tag it finds - crucially the big MakerNote / embedded-preview blocks in
+# RAW files - which is a large chunk of the per-file staging cost on a big
+# import. Keys come back group-prefixed because the helper runs with -G (its
+# default common_args), matching how the metadata is read out here.
+_EXIF_TAGS = [
+    "EXIF:ExifImageWidth",
+    "File:ImageWidth",
+    "EXIF:ExifImageHeight",
+    "File:ImageHeight",
+    "EXIF:Orientation",
+    "EXIF:ExposureTime",
+    "EXIF:DateTimeOriginal",
+    "EXIF:Make",
+    "EXIF:Model",
+    "EXIF:ISO",
+    "EXIF:FNumber",
+    "EXIF:FocalLength",
+    "Composite:GPSLatitude",
+    "Composite:GPSLongitude",
+]
+
+
 def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> ExifData:
-    metadata = (helper or _get_helper()).get_metadata([str(path)])[0]
+    metadata = (helper or _get_helper()).get_tags([str(path)], _EXIF_TAGS)[0]
 
     width = to_int(metadata.get("EXIF:ExifImageWidth") or metadata.get("File:ImageWidth"))
     height = to_int(metadata.get("EXIF:ExifImageHeight") or metadata.get("File:ImageHeight"))

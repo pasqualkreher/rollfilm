@@ -1,8 +1,9 @@
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 
 interface Props {
-  onAdd: (albumId: string) => void;
+  onAdd: (albumId: string) => void | Promise<unknown>;
   currentAlbumIds?: string[];
   onRemove?: (albumId: string) => void;
 }
@@ -12,6 +13,32 @@ interface Props {
 // detail sidebar and the bulk action bar.
 export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
+
+  // Adding is otherwise invisible (the dropdown just snaps back to its
+  // placeholder), so confirm briefly that it actually happened.
+  const [flash, setFlash] = useState<{ text: string; error: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const flashTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
+
+  function showFlash(text: string, error = false) {
+    setFlash({ text, error });
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlash(null), 2500);
+  }
+
+  async function handleAdd(albumId: string) {
+    const name = (albums ?? []).find((a) => a.id === albumId)?.name ?? "album";
+    setBusy(true);
+    try {
+      await onAdd(albumId);
+      showFlash(`Added to “${name}” ✓`);
+    } catch {
+      showFlash(`Could not add to “${name}”`, true);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const currentAlbums = currentAlbumIds
     ? (albums ?? []).filter((a) => currentAlbumIds.includes(a.id))
@@ -36,8 +63,9 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
 
       <select
         value=""
+        disabled={busy}
         onChange={(e) => {
-          if (e.target.value) onAdd(e.target.value);
+          if (e.target.value) handleAdd(e.target.value);
         }}
       >
         <option value="">Add to album...</option>
@@ -47,6 +75,17 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
           </option>
         ))}
       </select>
+      {flash && (
+        <span
+          style={{
+            marginLeft: 8,
+            fontSize: 13,
+            color: flash.error ? "var(--danger, #d33)" : "var(--text-muted)",
+          }}
+        >
+          {flash.text}
+        </span>
+      )}
       {(albums ?? []).length === 0 && (
         <p className="album-picker-hint" style={{ color: "var(--text-muted)", fontSize: 12, margin: "6px 0 0" }}>
           No albums yet — create one on the Albums page.

@@ -196,6 +196,12 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
+  async function toggleAlbumImmichSync(enabled: boolean) {
+    await api.albums.setImmichSync(id!, enabled);
+    queryClient.invalidateQueries({ queryKey: ["album", id] });
+    queryClient.invalidateQueries({ queryKey: ["albums"] });
+  }
+
   async function addSelectedToImmich() {
     if (selected.size === 0) return;
     setImmichBusy(true);
@@ -215,6 +221,20 @@ export function AlbumDetail() {
       <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {album?.name ?? "Album"}
         {album && <span className="count-pill">{album.image_count} photos</span>}
+        {album && immichConfigured && immich?.sync_mode === "selective" && (
+          <label
+            className="filter-field filter-field-inline"
+            style={{ fontSize: 13, fontWeight: 400 }}
+            title="Mirror this album to Immich and upload its JPEGs"
+          >
+            <input
+              type="checkbox"
+              checked={album.immich_sync}
+              onChange={(e) => toggleAlbumImmichSync(e.target.checked)}
+            />{" "}
+            Sync to Immich
+          </label>
+        )}
         <span style={{ flex: 1 }} />
         {album && (
           <button
@@ -308,7 +328,8 @@ export function AlbumDetail() {
             <button className="btn" onClick={() => selects.add(Array.from(selected))}>
               Add to selects
             </button>
-            {immichConfigured && (
+            {/* Hidden in full sync mode - everything uploads automatically there. */}
+            {immichConfigured && immich?.sync_mode !== "full" && (
               <button
                 className="btn"
                 onClick={addSelectedToImmich}

@@ -29,6 +29,8 @@ class ImageOut(BaseModel):
     gps_country: str | None = None
     rating: int
     color_label: ColorLabel
+    # Flagged for selective Immich sync (see settings_store sync modes).
+    immich_sync: bool = False
     paired_image_id: str | None
     # Set when this photo was indexed in place from an external source root
     # (e.g. a NAS) rather than imported into the managed library.
@@ -169,6 +171,11 @@ class ImmichPushRequest(BaseModel):
     image_ids: list[str]
 
 
+class ImmichSyncToggleRequest(BaseModel):
+    image_ids: list[str]
+    enabled: bool
+
+
 class ImmichPushResult(BaseModel):
     uploaded: int
     duplicate: int
@@ -195,10 +202,16 @@ class AlbumOut(BaseModel):
     description: str | None
     created_at: datetime
     image_count: int = 0
+    # Mirror this album to Immich (selective sync).
+    immich_sync: bool = False
 
 
 class AlbumAddImages(BaseModel):
     image_ids: list[str]
+
+
+class AlbumImmichSyncRequest(BaseModel):
+    enabled: bool
 
 
 class ImportSessionOut(BaseModel):
@@ -226,29 +239,60 @@ class StagedFileOut(BaseModel):
     camera_model: str | None
     width: int | None
     height: int | None
+    # Flagged for selective Immich sync during import review.
+    immich_sync: bool = False
 
 
 class StagedFileUpdate(BaseModel):
     selected: bool | None = None
     rating: int | None = None
     color_label: ColorLabel | None = None
+    immich_sync: bool | None = None
+
+
+class StagedFilesBulkUpdate(BaseModel):
+    """One patch applied to many staged files in a single request/transaction -
+    "Select all" on a big import used to fire one PATCH per file, which took
+    seconds of pure HTTP/commit overhead."""
+
+    file_ids: list[str]
+    selected: bool | None = None
+    rating: int | None = None
+    color_label: ColorLabel | None = None
+    immich_sync: bool | None = None
 
 
 class CommitImportRequest(BaseModel):
     # Also push the selected JPEGs (never RAWs) to Immich after import.
     upload_to_immich: bool = False
+    # Selective sync: flag *every* imported photo for Immich sync (the
+    # action-bar checkbox); individual photos can instead be flagged one by
+    # one during review (StagedFileUpdate.immich_sync).
+    sync_all_to_immich: bool = False
+
+
+class ImportProgressOut(BaseModel):
+    # "staging" | "commit" | "idle"
+    phase: str
+    processed: int
+    total: int
+    # Rolling estimate of seconds remaining in this phase; null until known.
+    eta_seconds: float | None = None
 
 
 class ImmichSettingsOut(BaseModel):
     base_url: str | None
     # The stored API key itself is never returned - only whether one is set.
     api_key_set: bool
+    # "manual" | "selective" | "full" - see settings_store.IMMICH_MODES.
+    sync_mode: str
 
 
 class ImmichSettingsUpdate(BaseModel):
     base_url: str
     # Omit / send null to keep the existing key when only changing the URL.
     api_key: str | None = None
+    sync_mode: str | None = None
 
 
 class TrashSettingsOut(BaseModel):

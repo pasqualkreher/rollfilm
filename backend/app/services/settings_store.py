@@ -9,6 +9,19 @@ from app.db.models import AppSetting
 
 IMMICH_BASE_URL = "immich_base_url"
 IMMICH_API_KEY = "immich_api_key"
+IMMICH_SYNC_MODE = "immich_sync_mode"
+
+# How photos reach Immich:
+#   manual    - the current workflow: a per-import "upload to Immich" checkbox
+#               plus the on-demand "Add to Immich" buttons. Nothing automatic.
+#   selective - only photos/albums the user has flagged (immich_sync=True) are
+#               synced, automatically, whenever they're imported or flagged.
+#   full      - every JPEG and every album is synced to Immich automatically.
+IMMICH_MODE_MANUAL = "manual"
+IMMICH_MODE_SELECTIVE = "selective"
+IMMICH_MODE_FULL = "full"
+IMMICH_MODES = (IMMICH_MODE_MANUAL, IMMICH_MODE_SELECTIVE, IMMICH_MODE_FULL)
+DEFAULT_IMMICH_SYNC_MODE = IMMICH_MODE_MANUAL
 
 TRASH_RETENTION_DAYS = "trash_retention_days"
 DEFAULT_TRASH_RETENTION_DAYS = 14
@@ -18,6 +31,12 @@ DEFAULT_TRASH_RETENTION_DAYS = 14
 class ImmichConfig:
     base_url: str
     api_key: str
+    sync_mode: str = DEFAULT_IMMICH_SYNC_MODE
+
+    @property
+    def album_sync(self) -> bool:
+        """Both selective and full modes mirror app albums into Immich albums."""
+        return self.sync_mode in (IMMICH_MODE_SELECTIVE, IMMICH_MODE_FULL)
 
 
 def get_setting(db: Session, key: str) -> str | None:
@@ -44,6 +63,11 @@ def get_trash_retention_days(db: Session) -> int:
     return max(0, days)
 
 
+def get_immich_sync_mode(db: Session) -> str:
+    mode = get_setting(db, IMMICH_SYNC_MODE)
+    return mode if mode in IMMICH_MODES else DEFAULT_IMMICH_SYNC_MODE
+
+
 def get_immich_config(db: Session) -> ImmichConfig | None:
     """Both a URL and a key must be present for uploads to be attempted -
     a half-configured integration is treated as "not configured"."""
@@ -51,4 +75,4 @@ def get_immich_config(db: Session) -> ImmichConfig | None:
     api_key = (get_setting(db, IMMICH_API_KEY) or "").strip()
     if not base_url or not api_key:
         return None
-    return ImmichConfig(base_url=base_url, api_key=api_key)
+    return ImmichConfig(base_url=base_url, api_key=api_key, sync_mode=get_immich_sync_mode(db))

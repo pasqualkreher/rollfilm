@@ -15,6 +15,15 @@ import { useImportSession } from "../state/importSession";
 import { useTasks } from "../state/tasks";
 import { useMergePairs } from "../state/viewPrefs";
 
+// Human-readable "time remaining" for the import ETA (e.g. "45s", "2m 10s").
+function formatEta(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem ? `${m}m ${rem}s` : `${m}m`;
+}
+
 // Byte-identical to a photo already in the library or elsewhere in this same
 // batch - the backend refuses to import these, so the UI shouldn't let you
 // select them in the first place.
@@ -41,8 +50,16 @@ function findIncompletePairs(files: StagedFileOut[]): StagedFileOut[] {
 }
 
 export function ImportWizard() {
-  const { sessionId, sourceLabel, uploadProgress, uploadError, isUploading, startUpload, reset } =
-    useImportSession();
+  const {
+    sessionId,
+    sourceLabel,
+    uploadProgress,
+    uploadError,
+    isUploading,
+    startUpload,
+    cancelUpload,
+    reset,
+  } = useImportSession();
   const [hideDuplicates, setHideDuplicates] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("combined");
   const [ratingMin, setRatingMin] = useState(0);
@@ -52,6 +69,8 @@ export function ImportWizard() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [uploadToImmich, setUploadToImmich] = useState(false);
+  // Selective sync: flag *everything* imported for Immich sync at commit.
+  const [syncAllToImmich, setSyncAllToImmich] = useState(false);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
@@ -64,6 +83,7 @@ export function ImportWizard() {
     queryFn: () => api.settings.getImmich(),
   });
   const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
+  const immichMode = immich?.sync_mode ?? "manual";
 
   const mergePairs = useMergePairs();
 
@@ -81,7 +101,7 @@ export function ImportWizard() {
       patch,
     }: {
       fileId: string;
-      patch: { selected?: boolean; rating?: number; color_label?: ColorLabel };
+      patch: { selected?: boolean; rating?: number; color_label?: ColorLabel; immich_sync?: boolean };
     }) => {
       await api.import.updateStagedFile(sessionId!, fileId, patch);
       // Merged view shows only the JPEG of a pair, so mirror the change onto the
@@ -95,7 +115,12 @@ export function ImportWizard() {
   });
 
   const commit = useMutation({
-    mutationFn: () => api.import.commit(sessionId!, uploadToImmich && immichConfigured),
+    mutationFn: () =>
+      api.import.commit(
+        sessionId!,
+        uploadToImmich && immichConfigured,
+        syncAllToImmich && immichConfigured && immichMode === "selective"
+      ),
     onSuccess: () => {
       // The freshly-imported photos won't appear on the Library until its
       // ["images"] query refetches - invalidate so they show up immediately
@@ -109,6 +134,50 @@ export function ImportWizard() {
       navigate("/");
     },
   });
+
+  // Poll the backend's staging/commit progress while an import is in flight, so
+  // the otherwise feature-less "Processing…/Importing…" spinners can show a live
+  // count and estimated time remaining.
+  const { data: importProgress } = useQuery({
+    queryKey: ["import-progress", sessionId],
+    queryFn: () => api.import.progress(sessionId!),
+    enabled: !!sessionId && (isUploading || commit.isPending),
+    refetchInterval: 500,
+  });
+  const progressSuffix = useMemo(() => {
+    if (!importProgress || importProgress.total === 0 || importProgress.phase === "idle") return "";
+    const eta =
+      importProgress.eta_seconds != null ? ` · ~${formatEta(importProgress.eta_seconds)} left` : "";
+    return ` ${importProgress.processed}/${importProgress.total}${eta}`;
+  }, [importProgress]);
+
+  // Estimate the upload's own time remaining from how fast the byte-percentage
+  // is climbing (the backend ETA above only covers the staging phase that
+  // follows). Timed from when the upload starts so the projection settles
+  // quickly, and cleared as soon as bytes are done / the upload ends.
+  const uploadStartRef = useRef<number | null>(null);
+  const [uploadEta, setUploadEta] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isUploading) {
+      uploadStartRef.current = null;
+      setUploadEta(null);
+      return;
+    }
+    if (uploadStartRef.current === null) uploadStartRef.current = Date.now();
+    const pct = uploadProgress ?? 0;
+    const elapsed = (Date.now() - uploadStartRef.current) / 1000;
+    // Only project once there's a real sample to extrapolate from: the first
+    // few percent (or first second) give a division-by-tiny-number estimate
+    // that swings wildly, which read as the ETA "crashing". Guard against a
+    // non-finite result too, so the label never shows NaN/Infinity.
+    if (pct >= 3 && pct < 100 && elapsed >= 1) {
+      const eta = (elapsed / pct) * (100 - pct);
+      setUploadEta(Number.isFinite(eta) ? eta : null);
+    } else {
+      setUploadEta(null);
+    }
+  }, [isUploading, uploadProgress]);
+  const uploadEtaSuffix = uploadEta != null ? ` · ~${formatEta(uploadEta)} left` : "";
 
   const discard = useMutation({
     mutationFn: () => api.import.discard(sessionId!),
@@ -177,7 +246,7 @@ export function ImportWizard() {
     if (shiftKey && lastIndex !== null) {
       const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
       const range = withPartners(visibleFiles.slice(start, end + 1)).filter((f) => !isExactDuplicate(f));
-      await Promise.all(range.map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected: true })));
+      await api.import.bulkUpdateStagedFiles(sessionId!, range.map((f) => f.id), { selected: true });
       queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
     } else {
       updateStaged.mutate({ fileId: target.id, patch: { selected: !target.selected } });
@@ -186,21 +255,20 @@ export function ImportWizard() {
   }
 
   async function selectAll(selected: boolean) {
-    await Promise.all(
-      withPartners(visibleFiles)
-        .filter((f) => !selected || !isExactDuplicate(f))
-        .map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected }))
-    );
+    const ids = withPartners(visibleFiles)
+      .filter((f) => !selected || !isExactDuplicate(f))
+      .map((f) => f.id);
+    await api.import.bulkUpdateStagedFiles(sessionId!, ids, { selected });
     queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
   }
 
   async function applyFilterToSelection() {
     const visibleIds = new Set(withPartners(visibleFiles).map((f) => f.id));
-    await Promise.all(
-      (files ?? [])
-        .filter((f) => !(visibleIds.has(f.id) && isExactDuplicate(f)))
-        .map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected: visibleIds.has(f.id) }))
-    );
+    const targets = (files ?? []).filter((f) => !(visibleIds.has(f.id) && isExactDuplicate(f)));
+    const selectIds = targets.filter((f) => visibleIds.has(f.id)).map((f) => f.id);
+    const deselectIds = targets.filter((f) => !visibleIds.has(f.id)).map((f) => f.id);
+    if (selectIds.length) await api.import.bulkUpdateStagedFiles(sessionId!, selectIds, { selected: true });
+    if (deselectIds.length) await api.import.bulkUpdateStagedFiles(sessionId!, deselectIds, { selected: false });
     queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
   }
 
@@ -329,9 +397,18 @@ export function ImportWizard() {
                 {!isUploading
                   ? "Import photos ▾"
                   : (uploadProgress ?? 0) >= 100
-                    ? "Processing files..."
-                    : `Uploading... ${uploadProgress ?? 0}%`}
+                    ? `Processing files...${progressSuffix}`
+                    : `Importing... ${uploadProgress ?? 0}%${uploadEtaSuffix}`}
               </button>
+              {/* Bail out of a long SD-card upload without waiting for it to
+                  finish - aborts the in-flight request and clears the screen.
+                  Hidden once the server is past receiving bytes ("Processing"),
+                  since at that point the batch is already staging server-side. */}
+              {isUploading && (uploadProgress ?? 0) < 100 && (
+                <button className="btn" style={{ marginLeft: 8 }} onClick={cancelUpload}>
+                  Cancel
+                </button>
+              )}
               {importMenuOpen && !isUploading && (
                 <div className="import-menu-dropdown" role="menu">
                   <button
@@ -410,8 +487,10 @@ export function ImportWizard() {
       <div className="filter-bar action-bar--bottom">
         <span>{selectedCount} of {files?.length ?? 0} selected for import</span>
         {/* Only shown when Immich is configured in Settings - an inert greyed
-            checkbox is just clutter for everyone who doesn't use Immich. */}
-        {immichConfigured && (
+            checkbox is just clutter for everyone who doesn't use Immich. In
+            selective/full sync modes the per-import checkbox is replaced by a
+            status chip, since uploads are driven by the sync mode instead. */}
+        {immichConfigured && immichMode === "manual" && (
           <label
             className="filter-field filter-field-inline"
             title="Upload the selected JPEGs to Immich after import (RAW files are never uploaded)"
@@ -421,11 +500,33 @@ export function ImportWizard() {
               checked={uploadToImmich}
               onChange={(e) => setUploadToImmich(e.target.checked)}
             />{" "}
-            Also upload to Immich (JPG only)
+            Add to Immich (JPG only)
           </label>
         )}
+        {immichConfigured && immichMode === "selective" && (
+          <label
+            className="filter-field filter-field-inline"
+            title="Flag every imported photo for Immich sync (JPG only — RAW files are never uploaded). Individual photos can be flagged in the preview instead."
+          >
+            <input
+              type="checkbox"
+              checked={syncAllToImmich}
+              onChange={(e) => setSyncAllToImmich(e.target.checked)}
+            />{" "}
+            Sync to Immich (JPG only)
+          </label>
+        )}
+        {immichConfigured && immichMode === "full" && (
+          <span
+            className="filter-field filter-field-inline"
+            style={{ color: "var(--text-muted)" }}
+            title="Change this under Settings → Immich integration → Sync mode"
+          >
+            🔄 Immich full sync is on — every imported JPEG uploads automatically.
+          </span>
+        )}
         <button className="btn primary" onClick={handleCommitClick} disabled={selectedCount === 0 || commit.isPending}>
-          {commit.isPending ? "Importing..." : `Import ${selectedCount} photo(s)`}
+          {commit.isPending ? `Importing...${progressSuffix}` : `Import ${selectedCount} photo(s)`}
         </button>
         <button className="btn" onClick={() => discard.mutate()} disabled={discard.isPending}>
           Discard
@@ -520,6 +621,7 @@ export function ImportWizard() {
           onIndexChange={setLightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onUpdate={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
+          showImmichSync={immichConfigured && immichMode === "selective"}
         />
       )}
     </div>

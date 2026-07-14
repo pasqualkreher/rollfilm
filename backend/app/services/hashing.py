@@ -14,6 +14,20 @@ import scipy.fftpack  # noqa: F401  (imported for its side effect, used by image
 imagehash.phash(PILImage.new("L", (32, 32)))
 
 
+def sha1_file(path: Path) -> str | None:
+    """SHA-1 hex digest, or None if the file can't be read. SHA-1 is Immich's
+    checksum algorithm - used to match library photos to Immich assets that
+    were uploaded before asset ids were recorded (see services/immich_sync)."""
+    digest = hashlib.sha1()
+    try:
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:

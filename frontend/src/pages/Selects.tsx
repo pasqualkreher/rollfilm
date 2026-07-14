@@ -84,7 +84,8 @@ export function Selects() {
             <button className="btn primary" onClick={downloadAll} disabled={downloading}>
               {downloading ? "Preparing zip..." : `Download all (${count})`}
             </button>
-            {immichConfigured && (
+            {/* Hidden in full sync mode - everything uploads automatically there. */}
+            {immichConfigured && immich?.sync_mode !== "full" && (
               <button
                 className="btn"
                 onClick={addToImmich}

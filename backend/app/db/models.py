@@ -132,6 +132,18 @@ class Image(Base):
     rating: Mapped[int] = mapped_column(Integer, default=0)
     color_label: Mapped[ColorLabel] = mapped_column(Enum(ColorLabel), default=ColorLabel.none)
 
+    # Selective Immich sync: when set, this photo is synced to Immich (JPEG only)
+    # automatically - on import and when the flag is toggled on. Ignored in the
+    # "manual" and "full" sync modes (manual uses the per-import checkbox; full
+    # syncs everything regardless of this flag). See services/settings_store.py.
+    immich_sync: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", index=True)
+    # Immich asset UUID, recorded whenever an upload succeeds (Immich also
+    # returns it for checksum duplicates, so re-syncs backfill it). It's what
+    # lets a permanent deletion here remove the matching asset over there.
+    # Null = not known to be on Immich (never uploaded, or uploaded before this
+    # column existed - removal then falls back to a SHA-1 lookup).
+    immich_asset_id: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # Self-referential RAW<->JPEG sibling pairing for the "combined" library
     # view (see services/pairing.py). Only set on one side or the other is
     # enough to reconstruct the pair; we set it symmetrically for simpler
@@ -240,6 +252,9 @@ class Album(Base):
     # Reserved for future nested albums; MVP UI treats albums as a flat list.
     parent_album_id: Mapped[str | None] = mapped_column(ForeignKey("albums.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Selective Immich sync: when set, this album is mirrored to an Immich album
+    # of the same name and its JPEG photos are uploaded and added to it.
+    immich_sync: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     images: Mapped[list["AlbumImage"]] = relationship(back_populates="album", cascade="all, delete-orphan")
 
@@ -313,5 +328,30 @@ class ImportStagedFile(Base):
     # rating/color_label the committed Image row ends up with.
     rating: Mapped[int] = mapped_column(Integer, default=0)
     color_label: Mapped[ColorLabel] = mapped_column(Enum(ColorLabel), default=ColorLabel.none)
+    # Selective Immich sync: flag set during import review; transferred to the
+    # committed Image row, which then uploads right after import (selective
+    # mode only - see import_pipeline.commit_import_session).
+    immich_sync: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     import_session: Mapped["ImportSession"] = relationship(back_populates="staged_files")
+
+
+class ImmichPendingDeletion(Base):
+    """A durable "remove this asset from Immich" to-do, written in the same
+    transaction that permanently deletes a synced photo (see
+    services/trash.hard_delete_images). Processed - and only then removed - by
+    the background Immich sync loop (services/immich_sync.py), so a slow or
+    unreachable Immich never blocks the deletion nor silently loses the
+    removal."""
+
+    __tablename__ = "immich_pending_deletions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    # The Immich asset UUID when the deleted photo had one recorded; otherwise
+    # sha1_checksum (hex of the deleted file, Immich's checksum algorithm) is
+    # set and resolved against the server at sync time.
+    asset_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    sha1_checksum: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Only for logging/history - the photo row is gone by the time this runs.
+    filename: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

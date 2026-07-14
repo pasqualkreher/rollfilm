@@ -11,6 +11,13 @@ RAW_EXTENSIONS = {
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
 PNG_EXTENSIONS = {".png"}
 
+# extract_preview() feeds hashing, the grid-sized thumbnail and the CLIP
+# encoder - none of which need more than ~1600px. Decoding a full 24-40MP camera
+# JPEG just to throw most of it away is the biggest per-JPEG staging cost, so we
+# ask libjpeg to decode at the largest DCT scale (1/2, 1/4, 1/8) that still lands
+# at or above this size. draft() is a no-op for non-JPEG formats.
+_PREVIEW_DECODE_PX = 1600
+
 
 def is_raw(path: Path) -> bool:
     return path.suffix.lower() in RAW_EXTENSIONS
@@ -27,6 +34,19 @@ def classify_file_type(path: Path) -> str | None:
     return None
 
 
+def _load_jpeg_preview(im: PILImage.Image) -> PILImage.Image:
+    """Decode an already-opened JPEG (or other PIL-native image) at a reduced
+    DCT scale when it's larger than we need. The draft box is scaled to the
+    image's aspect ratio so the *long* edge lands near _PREVIEW_DECODE_PX - a
+    square box would gate on the short edge and never reduce a wide photo."""
+    w, h = im.size
+    long_edge = max(w, h)
+    if long_edge > _PREVIEW_DECODE_PX:
+        scale = _PREVIEW_DECODE_PX / long_edge
+        im.draft("RGB", (max(1, round(w * scale)), max(1, round(h * scale))))
+    return ImageOps.exif_transpose(im).convert("RGB")
+
+
 def extract_preview(path: Path) -> PILImage.Image:
     """Fast, decode-cheap preview used for hashing/thumbnailing.
 
@@ -39,7 +59,7 @@ def extract_preview(path: Path) -> PILImage.Image:
     orientation tag to read (e.g. the postprocess() array below has none).
     """
     if not is_raw(path):
-        return ImageOps.exif_transpose(PILImage.open(path)).convert("RGB")
+        return _load_jpeg_preview(PILImage.open(path))
 
     with rawpy.imread(str(path)) as raw:
         try:
@@ -53,6 +73,34 @@ def extract_preview(path: Path) -> PILImage.Image:
 
         rgb = raw.postprocess(use_camera_wb=True, half_size=True)
         return PILImage.fromarray(rgb)
+
+
+def _oriented_size(im: PILImage.Image) -> tuple[int, int]:
+    """The image's displayed (width, height) from its header alone - swapping
+    the stored dimensions when the EXIF orientation is a quarter turn, the same
+    way exif_transpose() would. Read before any draft()-reduced decode, so it
+    reports the *true* original size, not the shrunken preview's."""
+    w, h = im.size
+    if im.getexif().get(0x0112) in (5, 6, 7, 8):
+        return h, w
+    return w, h
+
+
+def extract_preview_with_size(path: Path) -> tuple[PILImage.Image, tuple[int, int]]:
+    """extract_preview() plus the true displayed dimensions of the *original*.
+
+    For JPEG the preview is decoded at a reduced DCT scale (see extract_preview),
+    so its own .size is smaller than the original - a caller sizing a thumbnail
+    as a fraction of the original (staging) needs these full dimensions instead.
+    For RAW the size is the preview's own, matching the prior thumbnail sizing.
+    """
+    if not is_raw(path):
+        im = PILImage.open(path)
+        original_size = _oriented_size(im)
+        return _load_jpeg_preview(im), original_size
+
+    preview = extract_preview(path)
+    return preview, preview.size
 
 
 def extract_full_preview(path: Path) -> PILImage.Image:

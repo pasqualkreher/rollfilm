@@ -281,6 +281,14 @@ export function ImageDetail() {
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
+  async function toggleImageImmichSync() {
+    if (!image) return;
+    const ids = paired ? [image.id, paired.id] : [image.id];
+    await api.images.setImmichSync(ids, !image.immich_sync);
+    queryClient.invalidateQueries({ queryKey: ["image", activeId] });
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+  }
+
   async function addToImmich() {
     if (!image) return;
     setImmichBusy(true);
@@ -417,7 +425,22 @@ export function ImageDetail() {
             >
               {selects.has(image.id) ? "✓ In selects" : "+ Add to selects"}
             </button>
-            {immichConfigured && (
+            {immichConfigured && immich?.sync_mode === "selective" && (
+              <label
+                className="filter-field filter-field-inline"
+                title="Flag this photo for automatic Immich sync (JPEG only; RAW is skipped)"
+              >
+                <input
+                  type="checkbox"
+                  checked={image.immich_sync}
+                  onChange={toggleImageImmichSync}
+                />{" "}
+                Sync to Immich
+              </label>
+            )}
+            {/* Manual mode only: selective shows the sync checkbox instead, and
+                in full mode everything uploads automatically anyway. */}
+            {immichConfigured && immich?.sync_mode === "manual" && (
               <button
                 className="btn"
                 onClick={addToImmich}

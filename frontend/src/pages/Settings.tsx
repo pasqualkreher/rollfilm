@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
-import type { ImmichTestResult } from "../api/types";
+import type { ImmichSyncMode, ImmichTestResult } from "../api/types";
 import { useTheme, type Theme } from "../state/theme";
 import { useTasks } from "../state/tasks";
 
@@ -75,6 +75,15 @@ export function Settings() {
   const testImmich = useMutation({
     mutationFn: () => api.settings.testImmich(),
     onSuccess: (result) => setImmichTest(result),
+  });
+
+  const setSyncMode = useMutation({
+    mutationFn: (mode: ImmichSyncMode) =>
+      api.settings.updateImmich({
+        base_url: (immich?.base_url ?? immichUrl).trim(),
+        sync_mode: mode,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["immich-settings"] }),
   });
 
   // Trash auto-cleanup: how many days deleted photos stay restorable before
@@ -305,6 +314,64 @@ export function Settings() {
             {immichTest.ok ? "✓ " : "✗ "}
             {immichTest.message}
           </p>
+        )}
+        {immich?.api_key_set && (
+          <div style={{ marginTop: 18 }}>
+            <h4 style={{ margin: "0 0 4px", fontSize: 13 }}>Sync mode</h4>
+            <p style={{ color: "var(--text-muted)", margin: "0 0 8px", fontSize: 13 }}>
+              How photos reach Immich. Only JPEGs are uploaded — RAW files always stay in this
+              library only.
+            </p>
+            {(
+              [
+                {
+                  value: "manual",
+                  title: "Ask on import",
+                  desc: "Show the “Also upload to Immich” checkbox on import, plus the manual “Add to Immich” buttons. Nothing is synced automatically.",
+                },
+                {
+                  value: "selective",
+                  title: "Selective sync",
+                  desc: "Sync only the photos and albums you flag with “Sync to Immich”. Flagged items upload automatically and albums are mirrored.",
+                },
+                {
+                  value: "full",
+                  title: "Full sync",
+                  desc: "Automatically upload every imported JPEG and mirror every album to Immich.",
+                },
+              ] as { value: ImmichSyncMode; title: string; desc: string }[]
+            ).map((opt) => (
+              <label
+                key={opt.value}
+                className="filter-field"
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "flex-start",
+                  padding: "6px 0",
+                  cursor: setSyncMode.isPending ? "wait" : "pointer",
+                }}
+              >
+                <input
+                  type="radio"
+                  name="immich-sync-mode"
+                  checked={(immich?.sync_mode ?? "manual") === opt.value}
+                  disabled={setSyncMode.isPending}
+                  onChange={() => setSyncMode.mutate(opt.value)}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  <strong>{opt.title}</strong>
+                  <span style={{ display: "block", color: "var(--text-muted)", fontSize: 12 }}>
+                    {opt.desc}
+                  </span>
+                </span>
+              </label>
+            ))}
+            {setSyncMode.isError && (
+              <p style={{ color: "var(--danger)" }}>{(setSyncMode.error as Error).message}</p>
+            )}
+          </div>
         )}
         {immichUploads && immichUploads.length > 0 && (
           <div style={{ marginTop: 16 }}>

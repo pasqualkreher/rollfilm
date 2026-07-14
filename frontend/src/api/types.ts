@@ -34,6 +34,7 @@ export interface ImageOut {
   gps_country: string | null;
   rating: number;
   color_label: ColorLabel;
+  immich_sync: boolean;
   paired_image_id: string | null;
   source_root_id: string | null;
   edit_rotation: number;
@@ -91,6 +92,14 @@ export interface AlbumOut {
   description: string | null;
   created_at: string;
   image_count: number;
+  immich_sync: boolean;
+}
+
+export interface ImportProgress {
+  phase: "staging" | "commit" | "idle";
+  processed: number;
+  total: number;
+  eta_seconds: number | null;
 }
 
 export type ImportSessionStatus = "staging" | "committed" | "discarded";
@@ -118,12 +127,14 @@ export interface StagedFileOut {
   camera_model: string | null;
   width: number | null;
   height: number | null;
+  immich_sync: boolean;
 }
 
 export interface StagedFileUpdatePatch {
   selected?: boolean;
   rating?: number;
   color_label?: ColorLabel;
+  immich_sync?: boolean;
 }
 
 export interface SearchResultOut {
@@ -131,9 +142,12 @@ export interface SearchResultOut {
   distance: number;
 }
 
+export type ImmichSyncMode = "manual" | "selective" | "full";
+
 export interface ImmichSettings {
   base_url: string | null;
   api_key_set: boolean;
+  sync_mode: ImmichSyncMode;
 }
 
 export interface ImmichTestResult {

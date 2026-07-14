@@ -226,6 +226,33 @@ export function Library() {
     }
   }
 
+  // Selective sync: the checkbox flags/unflags the whole selection - flagged
+  // photos upload in the background and stay marked as synced; unflagging
+  // stops syncing them but leaves what's already on Immich alone.
+  async function toggleSelectedImmichSync(enabled: boolean) {
+    if (selected.size === 0) return;
+    setImmichBusy(true);
+    setImmichMsg(null);
+    try {
+      const updated = await api.images.setImmichSync(Array.from(selected), enabled);
+      setImmichMsg(
+        enabled
+          ? `Flagged ${updated.length} photo(s) for Immich sync — uploading in the background.`
+          : `Stopped syncing ${updated.length} photo(s) to Immich.`
+      );
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+    } catch (e) {
+      setImmichMsg((e as Error).message);
+    } finally {
+      setImmichBusy(false);
+    }
+  }
+
+  // Checked when every selected photo is flagged - so ticking it flags the
+  // rest, and unticking always unflags everything selected.
+  const allSelectedSynced =
+    selected.size > 0 && (images ?? []).filter((im) => selected.has(im.id)).every((im) => im.immich_sync);
+
   return (
     <div className="page page-timeline">
       <PhotoFilters
@@ -306,7 +333,23 @@ export function Library() {
             <button className="btn" onClick={() => selects.add(Array.from(selected))}>
               Add to selects
             </button>
-            {immichConfigured && (
+            {immichConfigured && immich?.sync_mode === "selective" && (
+              <label
+                className="filter-field filter-field-inline"
+                title="Sync the selected photos to Immich — JPEGs upload in the background (RAW files are skipped). Untick to stop syncing them."
+              >
+                <input
+                  type="checkbox"
+                  checked={allSelectedSynced}
+                  disabled={immichBusy}
+                  onChange={(e) => toggleSelectedImmichSync(e.target.checked)}
+                />{" "}
+                Sync to Immich
+              </label>
+            )}
+            {/* Manual mode only: selective shows the sync checkbox instead, and
+                in full mode everything uploads automatically anyway. */}
+            {immichConfigured && immich?.sync_mode === "manual" && (
               <button
                 className="btn"
                 onClick={addSelectedToImmich}

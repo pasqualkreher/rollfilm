@@ -4,9 +4,11 @@ import type {
   ImageOut,
   DirListing,
   ImmichSettings,
+  ImmichSyncMode,
   ImmichTestResult,
   ImmichPushResult,
   ImmichUploadResult,
+  ImportProgress,
   ImportSessionOut,
   LibraryFacets,
   LibraryFilters,
@@ -157,9 +159,14 @@ function uploadBatch(
   files: File[],
   sourceLabel: string,
   sessionId: string | null,
-  onLoaded?: (bytes: number) => void
+  onLoaded?: (bytes: number) => void,
+  signal?: AbortSignal
 ): Promise<ImportSessionOut> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Upload cancelled", "AbortError"));
+      return;
+    }
     const formData = new FormData();
     files.forEach((f) => formData.append("files", f, f.name));
     formData.append("source_label", sourceLabel);
@@ -178,6 +185,10 @@ function uploadBatch(
       }
     };
     xhr.onerror = () => reject(new Error("Upload failed: network error"));
+    // Cancel-in-flight: abort the XHR (stops sending bytes) and reject with an
+    // AbortError the caller recognises as a user cancel, not a failure.
+    xhr.onabort = () => reject(new DOMException("Upload cancelled", "AbortError"));
+    if (signal) signal.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.send(formData);
   });
 }
@@ -260,6 +271,14 @@ export const api = {
     pushToImmich(image_ids: string[]): Promise<ImmichPushResult> {
       return request(`/images/immich`, { method: "POST", body: JSON.stringify({ image_ids }) });
     },
+    // Selective Immich sync: flag/unflag photos. Enabling also queues an
+    // immediate upload of each JPEG. Returns the updated rows.
+    setImmichSync(image_ids: string[], enabled: boolean): Promise<ImageOut[]> {
+      return request(`/images/immich-sync`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids, enabled }),
+      });
+    },
     bulkReset(image_ids: string[]): Promise<ImageOut[]> {
       return request(`/images/bulk-reset`, { method: "POST", body: JSON.stringify({ image_ids }) });
     },
@@ -339,13 +358,30 @@ export const api = {
     removeImage(albumId: string, imageId: string): Promise<void> {
       return request(`/albums/${albumId}/images/${imageId}`, { method: "DELETE" });
     },
+    // Selective Immich sync: mirror this album to Immich. Enabling queues an
+    // upload of every JPEG in the album into a same-named Immich album.
+    setImmichSync(albumId: string, enabled: boolean): Promise<AlbumOut> {
+      return request(`/albums/${albumId}/immich-sync`, {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      });
+    },
   },
   import: {
     // The server's multipart parser rejects a request with more than 1000
     // files, so big imports (a whole archive folder) are sent as several
     // batches: the first creates the staging session, the rest append to it.
     // Batches well under the cap keep each request's memory bounded too.
-    async upload(files: File[], sourceLabel: string, onProgress?: (pct: number) => void): Promise<ImportSessionOut> {
+    // `signal` cancels an in-flight upload (see startUpload's Cancel button);
+    // `onSession` fires as soon as the staging session exists so the caller can
+    // clean it up if the user then cancels mid-upload.
+    async upload(
+      files: File[],
+      sourceLabel: string,
+      onProgress?: (pct: number) => void,
+      signal?: AbortSignal,
+      onSession?: (id: string) => void
+    ): Promise<ImportSessionOut> {
       const BATCH_FILES = 250;
       const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1;
       const batches: File[][] = [];
@@ -363,7 +399,7 @@ export const api = {
           // real payload so the total can't overshoot 100%.
           uploadedBytes[idx] = Math.min(loaded, batchBytes[idx]);
           report();
-        }).then((s) => {
+        }, signal).then((s) => {
           uploadedBytes[idx] = batchBytes[idx];
           report();
           return s;
@@ -372,6 +408,7 @@ export const api = {
       // The first batch runs alone - its response carries the session id the
       // rest append to.
       const session = await send(0, null);
+      onSession?.(session.id);
       // Then keep two requests in flight: the server serializes the staging
       // work, but receives the next batch's bytes while it analyzes the
       // previous one - upload and analysis overlap instead of alternating.
@@ -390,6 +427,9 @@ export const api = {
     get(id: string): Promise<ImportSessionOut> {
       return request(`/import/sessions/${id}`);
     },
+    progress(id: string): Promise<ImportProgress> {
+      return request(`/import/sessions/${id}/progress`);
+    },
     files(id: string): Promise<StagedFileOut[]> {
       return request(`/import/sessions/${id}/files`);
     },
@@ -405,10 +445,25 @@ export const api = {
         body: JSON.stringify(patch),
       });
     },
-    commit(id: string, uploadToImmich = false): Promise<ImageOut[]> {
+    // One request/transaction for "select all"-style bulk changes - a PATCH
+    // per file made selecting a big import take seconds.
+    bulkUpdateStagedFiles(
+      sessionId: string,
+      fileIds: string[],
+      patch: StagedFileUpdatePatch
+    ): Promise<StagedFileOut[]> {
+      return request(`/import/sessions/${sessionId}/files`, {
+        method: "PATCH",
+        body: JSON.stringify({ file_ids: fileIds, ...patch }),
+      });
+    },
+    commit(id: string, uploadToImmich = false, syncAllToImmich = false): Promise<ImageOut[]> {
       return request(`/import/sessions/${id}/commit`, {
         method: "POST",
-        body: JSON.stringify({ upload_to_immich: uploadToImmich }),
+        body: JSON.stringify({
+          upload_to_immich: uploadToImmich,
+          sync_all_to_immich: syncAllToImmich,
+        }),
       });
     },
     discard(id: string): Promise<void> {
@@ -487,7 +542,11 @@ export const api = {
     getImmich(): Promise<ImmichSettings> {
       return request(`/settings/immich`);
     },
-    updateImmich(patch: { base_url: string; api_key?: string | null }): Promise<ImmichSettings> {
+    updateImmich(patch: {
+      base_url: string;
+      api_key?: string | null;
+      sync_mode?: ImmichSyncMode;
+    }): Promise<ImmichSettings> {
       return request(`/settings/immich`, { method: "PUT", body: JSON.stringify(patch) });
     },
     testImmich(): Promise<ImmichTestResult> {

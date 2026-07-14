@@ -13,6 +13,7 @@ from app.api.routes import (
 )
 from app.db.session import engine
 from app.services.embeddings import ensure_embeddings_table
+from app.services.immich_sync import start_background_immich_sync
 from app.services.maintenance import start_background_sync
 from app.services.sources import scan_all_sources
 from app.services.trash import start_background_purge
@@ -53,6 +54,11 @@ def on_startup() -> None:
     # configured in Settings (default 14 days, 0 = keep forever). Backgrounded
     # for the same reason as the scans.
     start_background_purge()
+    # Reconcile the library with Immich now and then every minute: upload
+    # whatever should be synced but isn't yet, remove trashed/deleted photos
+    # from Immich (see services/immich_sync.py). No-op in manual mode or while
+    # Immich isn't configured.
+    start_background_immich_sync()
 
 
 @app.get("/health")

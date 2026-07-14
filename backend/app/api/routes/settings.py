@@ -9,11 +9,16 @@ from app.services import immich as immich_service
 from app.services.settings_store import (
     IMMICH_API_KEY,
     IMMICH_BASE_URL,
+    IMMICH_MODES,
+    IMMICH_SYNC_MODE,
     TRASH_RETENTION_DAYS,
+    get_immich_sync_mode,
     get_setting,
     get_trash_retention_days,
     set_setting,
 )
+from app.services.immich_sync import run_immich_sync_soon
+from app.services.trash import run_purge_soon
 from app.workers.queue import immich_upload_history
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -25,7 +30,9 @@ def get_immich_settings(
 ):
     base_url = get_setting(db, IMMICH_BASE_URL)
     api_key = get_setting(db, IMMICH_API_KEY)
-    return schemas.ImmichSettingsOut(base_url=base_url, api_key_set=bool(api_key))
+    return schemas.ImmichSettingsOut(
+        base_url=base_url, api_key_set=bool(api_key), sync_mode=get_immich_sync_mode(db)
+    )
 
 
 @router.put("/immich", response_model=schemas.ImmichSettingsOut)
@@ -39,10 +46,19 @@ def update_immich_settings(
     # the host without re-typing the key); an empty string clears it.
     if payload.api_key is not None:
         set_setting(db, IMMICH_API_KEY, payload.api_key.strip())
+    if payload.sync_mode is not None and payload.sync_mode in IMMICH_MODES:
+        set_setting(db, IMMICH_SYNC_MODE, payload.sync_mode)
     db.commit()
+    # A mode/server change may make photos newly syncable (or removable) -
+    # reconcile now instead of on the next timed pass.
+    run_immich_sync_soon()
 
     api_key = get_setting(db, IMMICH_API_KEY)
-    return schemas.ImmichSettingsOut(base_url=payload.base_url.strip(), api_key_set=bool(api_key))
+    return schemas.ImmichSettingsOut(
+        base_url=payload.base_url.strip(),
+        api_key_set=bool(api_key),
+        sync_mode=get_immich_sync_mode(db),
+    )
 
 
 @router.get("/trash", response_model=schemas.TrashSettingsOut)
@@ -62,6 +78,9 @@ def update_trash_settings(
     days = max(0, min(3650, payload.retention_days))
     set_setting(db, TRASH_RETENTION_DAYS, str(days))
     db.commit()
+    # Apply the new retention right away (in the background) instead of at the
+    # next periodic pass - shortening it should visibly clean the Trash now.
+    run_purge_soon()
     return schemas.TrashSettingsOut(retention_days=days)
 
 

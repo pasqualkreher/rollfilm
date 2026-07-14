@@ -16,6 +16,7 @@ from app.services.import_pipeline import (
     commit_import_session,
     compute_staged_pairs,
     discard_import_session,
+    get_import_progress,
     stage_uploaded_files,
 )
 from app.services.raw import extract_full_preview
@@ -43,6 +44,7 @@ def _to_staged_file_out(f: ImportStagedFile, paired_id: str | None = None) -> sc
         camera_model=exif.get("camera_model"),
         width=exif.get("width"),
         height=exif.get("height"),
+        immich_sync=f.immich_sync,
     )
 
 
@@ -162,11 +164,52 @@ def update_staged_file(
         staged.rating = payload.rating
     if payload.color_label is not None:
         staged.color_label = payload.color_label
+    if payload.immich_sync is not None:
+        staged.immich_sync = payload.immich_sync
     db.commit()
     db.refresh(staged)
 
     pairs = compute_staged_pairs(session.staged_files)
     return _to_staged_file_out(staged, pairs.get(staged.id))
+
+
+@router.patch("/sessions/{session_id}/files", response_model=list[schemas.StagedFileOut])
+def bulk_update_staged_files(
+    session_id: str,
+    payload: schemas.StagedFilesBulkUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Apply one patch to many staged files at once (select all / range select /
+    flag-for-sync). One transaction instead of a request per file. Files that
+    can't take the change (exact duplicates being selected) are skipped rather
+    than failing the whole batch - mirroring what the per-file UI allows."""
+    session = get_owned_import_session(db, current_user.id, session_id)
+    by_id = {f.id: f for f in session.staged_files}
+    for file_id in payload.file_ids:
+        staged = by_id.get(file_id)
+        if staged is None:
+            continue
+        if payload.selected is not None:
+            is_exact_duplicate = (
+                staged.duplicate_of_image_id or staged.duplicate_of_staged_file_id
+            ) and not staged.is_near_duplicate
+            allowed = not payload.selected or not is_exact_duplicate
+            if not allowed and staged.duplicate_of_image_id:
+                dup_image = db.get(Image, staged.duplicate_of_image_id)
+                allowed = dup_image is not None and dup_image.source_root_id is not None
+            if allowed:
+                staged.selected = payload.selected
+        if payload.rating is not None:
+            staged.rating = payload.rating
+        if payload.color_label is not None:
+            staged.color_label = payload.color_label
+        if payload.immich_sync is not None:
+            staged.immich_sync = payload.immich_sync
+    db.commit()
+    db.refresh(session)
+    pairs = compute_staged_pairs(session.staged_files)
+    return [_to_staged_file_out(f, pairs.get(f.id)) for f in session.staged_files]
 
 
 @router.post("/sessions/{session_id}/commit", response_model=list[schemas.ImageOut])
@@ -179,7 +222,26 @@ def commit_session(
     session = get_owned_import_session(db, current_user.id, session_id)
     if session.status != ImportSessionStatus.staging:
         raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
-    return commit_import_session(db, session, current_user.id, payload.upload_to_immich)
+    return commit_import_session(
+        db,
+        session,
+        current_user.id,
+        payload.upload_to_immich,
+        sync_all_to_immich=payload.sync_all_to_immich,
+    )
+
+
+@router.get("/sessions/{session_id}/progress", response_model=schemas.ImportProgressOut)
+def import_session_progress(
+    session_id: str, current_user: User = Depends(get_current_user)
+):
+    """Live staging/commit progress for the UI's ETA. Reads only in-memory
+    counters (no DB) so polling it never contends with the write transaction the
+    commit itself is holding. Single-user app, so no per-session ownership check."""
+    progress = get_import_progress(session_id)
+    if progress is None:
+        return schemas.ImportProgressOut(phase="idle", processed=0, total=0, eta_seconds=None)
+    return schemas.ImportProgressOut(**progress)
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

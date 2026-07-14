@@ -4,6 +4,7 @@ import os
 import queue
 import shutil
 import threading
+import time
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -28,8 +29,13 @@ from app.services.exif import ExifData, new_helper, read_exif, to_float, to_int
 from app.services.filesystem import library_relative_path
 from app.services.hashing import hamming_int, perceptual_hash, phash_to_int, sha256_file
 from app.services.pairing import pair_siblings
-from app.services.raw import classify_file_type, extract_preview
-from app.services.settings_store import get_immich_config
+from app.services.raw import classify_file_type, extract_preview_with_size
+from app.services.settings_store import (
+    IMMICH_MODE_FULL,
+    IMMICH_MODE_MANUAL,
+    IMMICH_MODE_SELECTIVE,
+    get_immich_config,
+)
 from app.services.thumbnails import THUMBNAIL_MAX_PX, THUMBNAIL_SCALE
 from app.workers.queue import enqueue_immich_upload, enqueue_post_import
 
@@ -68,11 +74,14 @@ def compute_staged_pairs(staged_files: list[ImportStagedFile]) -> dict[str, str]
 
 logger = logging.getLogger(__name__)
 
-# Cap on the concurrent staging workers (and thus exiftool processes). Staging
-# is CPU/IO bound and each file is independent, so this scales close to linearly
-# with cores; capped so a huge import doesn't spawn an unreasonable number of
-# exiftool subprocesses.
-_STAGE_WORKERS = min(8, (os.cpu_count() or 4))
+# Cap on the concurrent staging workers (and thus exiftool processes). Each file
+# is independent and its work is a mix of GIL-releasing native code (hashing,
+# image decode, phash) and blocking waits (its exiftool subprocess, disk reads),
+# so throughput keeps climbing past the core count - idle workers waiting on a
+# subprocess/disk overlap with the busy ones. Oversubscribed to ~2x cores for
+# that overlap, capped so a huge import can't spawn a runaway number of exiftool
+# processes (each staging worker holds one, plus a small decoded preview).
+_STAGE_WORKERS = min(16, max(4, (os.cpu_count() or 4) * 2))
 
 
 @dataclass
@@ -89,6 +98,21 @@ class _Analyzed:
     sha256: str
     perceptual_hash: str | None
     exif_json: str
+
+
+@dataclass
+class _CommitEntry:
+    """A staged file that will be imported, with its resolved library
+    destination - computed serially, then moved in parallel and turned into a
+    DB row serially (see commit_import_session)."""
+
+    staged: "ImportStagedFile"
+    promoted: "Image | None"
+    exif_dict: dict
+    taken_at: datetime
+    relative_dest: str
+    dest_path: Path
+    staged_full_path: Path
 
 
 def _analyze_file(
@@ -108,13 +132,15 @@ def _analyze_file(
     exif = ExifData()
 
     try:
-        preview = extract_preview(staged_path)
+        preview, (orig_w, orig_h) = extract_preview_with_size(staged_path)
         perceptual = perceptual_hash(preview)
         # Match the library's grid thumbnail exactly (0.25 of the original,
-        # capped, LANCZOS) so the import review shows the same quality.
+        # capped, LANCZOS) so the import review shows the same quality. The
+        # target is computed from the true original size (the JPEG preview above
+        # is already DCT-downscaled), and thumbnail() only ever shrinks.
         thumb = preview.copy()
-        tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
-        th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
+        tw = min(THUMBNAIL_MAX_PX, max(1, round(orig_w * THUMBNAIL_SCALE)))
+        th = min(THUMBNAIL_MAX_PX, max(1, round(orig_h * THUMBNAIL_SCALE)))
         thumb.thumbnail((tw, th), PILImage.LANCZOS)
         thumb.save(thumb_dir / f"{staged_id}.jpg", "JPEG", quality=88)
     except Exception:
@@ -136,7 +162,9 @@ def _analyze_file(
     )
 
 
-def _analyze_parallel(tasks: list[tuple[Path, str, str, str]], thumb_dir: Path) -> list[_Analyzed]:
+def _analyze_parallel(
+    tasks: list[tuple[Path, str, str, str]], thumb_dir: Path, progress_session_id: str | None = None
+) -> list[_Analyzed]:
     """Run _analyze_file across a thread pool. Each worker gets its own exiftool
     process (a shared -stay_open helper can't be used from multiple threads).
     Results come back in task order so batch-dedup and pairing stay stable."""
@@ -155,6 +183,8 @@ def _analyze_parallel(tasks: list[tuple[Path, str, str, str]], thumb_dir: Path) 
             return _analyze_file(staged_path, original_filename, file_type, staged_id, thumb_dir, helper)
         finally:
             pool.put(helper)
+            if progress_session_id is not None:
+                _progress_step(progress_session_id)
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -258,6 +288,56 @@ def _persist_analyzed(
 _staging_lock = threading.Lock()
 
 
+# --- Import progress (for the UI's "processing"/"importing" phase ETA) --------
+# Upload byte-progress is reported by the browser itself, but the two backend
+# phases with no feedback are staging analysis (hash/preview/exif/thumbnail) and
+# commit. Track processed/total per session here so a poll endpoint can surface
+# a live count and an estimated time remaining.
+_progress: dict[str, dict] = {}
+_progress_lock = threading.Lock()
+
+
+def _progress_begin(session_id: str, phase: str, total: int) -> None:
+    with _progress_lock:
+        _progress[session_id] = {
+            "phase": phase,
+            "processed": 0,
+            "total": total,
+            "started": time.monotonic(),
+        }
+
+
+def _progress_step(session_id: str, n: int = 1) -> None:
+    with _progress_lock:
+        p = _progress.get(session_id)
+        if p is not None:
+            p["processed"] += n
+
+
+def _progress_done(session_id: str) -> None:
+    with _progress_lock:
+        p = _progress.get(session_id)
+        if p is not None:
+            p["phase"] = "idle"
+            p["processed"] = p["total"]
+
+
+def get_import_progress(session_id: str) -> dict | None:
+    """Live progress for the given import session, or None if nothing is (or was
+    recently) running. `eta_seconds` is a rolling estimate from the observed
+    rate so far; None until at least one item has finished."""
+    with _progress_lock:
+        p = _progress.get(session_id)
+        if p is None:
+            return None
+        phase, processed, total, started = p["phase"], p["processed"], p["total"], p["started"]
+    eta = None
+    if phase != "idle" and processed > 0 and total > processed:
+        elapsed = time.monotonic() - started
+        eta = elapsed / processed * (total - processed)
+    return {"phase": phase, "processed": processed, "total": total, "eta_seconds": eta}
+
+
 def stage_uploaded_files(
     db: Session, owner_id: int, uploads: list[UploadedFile], source_label: str
 ) -> ImportSession:
@@ -323,12 +403,20 @@ def _stage_uploads_into(
 
     # 2) Hash/preview/phash/exif/thumbnail every file in parallel (the slow part,
     #    independent per file), then 3) write the rows + dedup serially.
-    analyzed = _analyze_parallel(tasks, thumb_dir)
-    _persist_analyzed(db, session, owner_id, analyzed)
+    _progress_begin(session.id, "staging", len(tasks))
+    try:
+        analyzed = _analyze_parallel(tasks, thumb_dir, progress_session_id=session.id)
+        _persist_analyzed(db, session, owner_id, analyzed)
+    finally:
+        _progress_done(session.id)
 
 
 def commit_import_session(
-    db: Session, session: ImportSession, owner_id: int, upload_to_immich: bool = False
+    db: Session,
+    session: ImportSession,
+    owner_id: int,
+    upload_to_immich: bool = False,
+    sync_all_to_immich: bool = False,
 ) -> list[Image]:
     def _exact_referenced_duplicate(f: ImportStagedFile) -> Image | None:
         """The scan-in-place (source root) image this staged file is a
@@ -355,11 +443,18 @@ def commit_import_session(
     ]
     new_images: list[Image] = []
 
+    # Decide which staged files actually import, and where each lands, *before*
+    # touching disk. The exact-duplicate promotion logic is order-dependent (an
+    # earlier file in this commit can promote a shared source-root row, which
+    # then makes a later identical copy a no-op), so replay it serially here
+    # rather than inside the parallel move below. `promoted_ids` mirrors the
+    # source_root_id=None mutation the real promotion does, without writing yet.
+    plan: list[_CommitEntry] = []
+    promoted_ids: set[str] = set()
     for staged in selected_files:
-        # Re-checked per file (not just in the filter above) because an earlier
-        # file in this same commit may have already promoted the shared
-        # duplicate target - importing this one too would duplicate it.
         promoted = _exact_referenced_duplicate(staged)
+        if promoted is not None and promoted.id in promoted_ids:
+            promoted = None  # already claimed by an earlier file in this commit
         if _is_exact_duplicate(staged) and promoted is None:
             continue
 
@@ -374,7 +469,32 @@ def commit_import_session(
 
         relative_dest = library_relative_path(taken_at, staged.original_filename, settings.library_root)
         dest_path = settings.library_root / relative_dest
-        shutil.move(str(staged_full_path), str(dest_path))
+        if promoted is not None:
+            promoted_ids.add(promoted.id)
+        plan.append(
+            _CommitEntry(staged, promoted, exif_dict, taken_at, relative_dest, dest_path, staged_full_path)
+        )
+
+    _progress_begin(session.id, "commit", len(plan))
+
+    # Move the staged files into the library in parallel - independent disk I/O
+    # (a rename on the same filesystem, or a copy across one), the slowest part
+    # of the commit. DB row creation stays serial below (the SQLAlchemy Session
+    # isn't thread-safe). Moves must all finish before any row is created, since
+    # a row records the post-move library path and size.
+    if plan:
+        move_workers = min(_STAGE_WORKERS, len(plan))
+        with ThreadPoolExecutor(max_workers=move_workers) as pool:
+            list(pool.map(lambda e: shutil.move(str(e.staged_full_path), str(e.dest_path)), plan))
+
+    for entry in plan:
+        _progress_step(session.id)
+        staged = entry.staged
+        promoted = entry.promoted
+        exif_dict = entry.exif_dict
+        taken_at = entry.taken_at
+        relative_dest = entry.relative_dest
+        dest_path = entry.dest_path
 
         if promoted is not None:
             # Same bytes, previously only indexed in place from an external
@@ -394,6 +514,8 @@ def commit_import_session(
                 promoted.rating = staged.rating
             if staged.color_label != ColorLabel.none:
                 promoted.color_label = staged.color_label
+            if staged.immich_sync:
+                promoted.immich_sync = True
             image = promoted
         else:
             image = Image(
@@ -425,6 +547,7 @@ def commit_import_session(
                 gps_lon=to_float(exif_dict.get("gps_lon")),
                 rating=staged.rating,
                 color_label=staged.color_label,
+                immich_sync=staged.immich_sync,
             )
             db.add(image)
         db.flush()
@@ -436,23 +559,39 @@ def commit_import_session(
     geocode.annotate_images(new_images)
     session.status = ImportSessionStatus.committed
     db.commit()
+    _progress_done(session.id)
 
-    # Only attempt Immich uploads when the user asked for it *and* the
-    # integration is configured; a missing/half-set config silently skips.
-    immich = get_immich_config(db) if upload_to_immich else None
+    # Decide whether freshly imported photos go to Immich. In "full" mode every
+    # JPEG is synced automatically; in "manual" mode only when the user ticked
+    # the per-import checkbox; in "selective" mode the photos flagged during
+    # review (or all of them, via the action-bar "sync all" checkbox) are
+    # flagged and uploaded.
+    immich = get_immich_config(db)
+    selective = immich is not None and immich.sync_mode == IMMICH_MODE_SELECTIVE
+    if selective and sync_all_to_immich:
+        for image in new_images:
+            image.immich_sync = True
+        db.commit()
+    upload_all = immich is not None and (
+        immich.sync_mode == IMMICH_MODE_FULL
+        or (immich.sync_mode == IMMICH_MODE_MANUAL and upload_to_immich)
+    )
 
     for image in new_images:
         db.refresh(image)
         image_path = settings.library_root / image.file_path
         enqueue_post_import(image.id, image_path)
 
-        # Per the import option: push only the JPEGs to Immich, never the RAWs.
-        if immich and image.file_type == FileType.jpeg:
+        # Push only the JPEGs to Immich, never the RAWs.
+        if immich and image.file_type == FileType.jpeg and (
+            upload_all or (selective and image.immich_sync)
+        ):
             enqueue_immich_upload(
                 immich.base_url,
                 immich.api_key,
                 image_path,
                 image.taken_at,
+                image_id=image.id,
             )
 
     shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)

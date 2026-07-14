@@ -2,6 +2,8 @@ import io
 import json
 import math
 import os
+import threading
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -66,10 +68,42 @@ ADJUSTMENT_FIELDS = (
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 
 
+def _srgb_to_linear(arr: np.ndarray) -> np.ndarray:
+    """Decode sRGB-encoded values (0..1) to linear light. Light-transport edits
+    (exposure, white balance) are physically a multiply in *linear* light -
+    doing them on the gamma-encoded values instead shifts midtone brightness and
+    hue, which is the muddiness/colour-cast the old naive-sRGB path had."""
+    a = np.clip(arr, 0.0, 1.0)
+    return np.where(a <= 0.04045, a / 12.92, np.power((a + 0.055) / 1.055, 2.4))
+
+
+def _linear_to_srgb(arr: np.ndarray) -> np.ndarray:
+    """Re-encode linear light back to sRGB (inverse of _srgb_to_linear)."""
+    a = np.clip(arr, 0.0, 1.0)
+    return np.where(a <= 0.0031308, a * 12.92, 1.055 * np.power(a, 1.0 / 2.4) - 0.055)
+
+
 def derivative_dir(image_id: str) -> Path:
     path = settings.thumbnail_cache_root / image_id
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+# One generation at a time per image: right after an import, the grid's
+# thumbnail requests race the post-import worker to generate the same
+# derivatives - without this, every request thread ran its own full (RAW)
+# decode of the same photo, multiplying the post-import CPU load for nothing.
+# RLock so ensure_derivatives can call generate_derivatives under its own lock.
+_gen_locks: dict[str, threading.RLock] = {}
+_gen_locks_guard = threading.Lock()
+
+
+def _gen_lock(image_id: str) -> threading.RLock:
+    with _gen_locks_guard:
+        lock = _gen_locks.get(image_id)
+        if lock is None:
+            lock = _gen_locks[image_id] = threading.RLock()
+        return lock
 
 
 def apply_distortion(image: PILImage.Image, amount: int) -> PILImage.Image:
@@ -411,7 +445,17 @@ def _denoise_image(image: PILImage.Image, amount: int) -> PILImage.Image:
     y = ycc[..., 0]
     h_luma = 7.0 * f * f
     if h_luma >= 0.5:
-        y = cv2.fastNlMeansDenoising(y, None, h_luma, 7, 21)
+        y_dn = cv2.fastNlMeansDenoising(y, None, h_luma, 7, 21)
+        # NR must not re-tone the image ("denoise changes the contrast"): NLM
+        # nudges the low-frequency luma too (clipped shadow noise, plateau
+        # averaging), which reads as lifted blacks / flattened contrast at
+        # higher amounts. Add back the *original* image's low-frequency luma so
+        # denoising only ever removes fine-grained texture, never tonality.
+        sigma = max(4.0, min(ycc.shape[:2]) / 200.0)
+        tone_shift = cv2.GaussianBlur(y.astype(np.float32), (0, 0), sigma) - cv2.GaussianBlur(
+            y_dn.astype(np.float32), (0, 0), sigma
+        )
+        y = np.clip(y_dn.astype(np.float32) + tone_shift, 0.0, 255.0).astype(np.uint8)
     hh, ww = ycc.shape[:2]
     # Chroma at quarter scale: the downscale averages the fine confetti away
     # and shrinks the blotches into NLM's patch/search window, so they get
@@ -514,13 +558,23 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     t = adj.get("temperature", 0) / 100.0
     n = adj.get("tint", 0) / 100.0
 
-    if e:
-        arr = arr * (2.0 ** (2.0 * e))  # +/- two stops at the extremes (a useful range)
-    if t:
-        arr[..., 0] *= 1.0 + 0.3 * t  # warm: more red
-        arr[..., 2] *= 1.0 - 0.3 * t  # ...less blue
-    if n:
-        arr[..., 1] *= 1.0 - 0.3 * n  # +tint = magenta (less green)
+    # Exposure and white balance are light-transport operations: do them in
+    # linear light (decode sRGB -> multiply -> re-encode) rather than on the
+    # gamma-encoded values. Linear exposure is a true stop multiply with a clean
+    # highlight roll-off; linear WB shifts colour without the midtone darkening
+    # the old naive-sRGB channel scaling produced.
+    if e or t or n:
+        lin = _srgb_to_linear(arr)
+        if e:
+            lin = lin * (2.0 ** (2.0 * e))  # +/- two stops at the extremes
+        if t or n:
+            # Channel gains: warm = more red / less blue; +tint = magenta (less
+            # green). Renormalised by luma so a neutral grey keeps its brightness
+            # (white balance shouldn't also change exposure).
+            gain = np.array([1.0 + 0.3 * t, 1.0 - 0.3 * n, 1.0 - 0.3 * t], dtype=np.float32)
+            gain = gain / float(_LUMA @ gain)
+            lin = lin * gain
+        arr = _linear_to_srgb(np.clip(lin, 0.0, 1.0)).astype(np.float32)
     np.clip(arr, 0.0, 1.0, out=arr)
 
     # Fuji-style tone masks: shadows lift fades to zero at pure black (keeps the
@@ -563,7 +617,16 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     arr = _apply_chrome(arr, adj.get("chrome_effect", 0), adj.get("chrome_blue", 0))
     if s:
         luma = (arr @ _LUMA)[..., None]
-        arr = luma + (arr - luma) * (1.0 + s)
+        if s > 0:
+            # Positive saturation behaves as *vibrance*: push muted colours more
+            # than already-saturated ones, so skin tones stay natural and vivid
+            # colours don't smear into a clipped neon block. Chroma (distance
+            # from the grey axis) estimates how saturated each pixel already is.
+            chroma = np.abs(arr - luma).max(axis=-1, keepdims=True)
+            weight = 1.0 - np.clip(chroma * 1.4, 0.0, 1.0) * 0.6
+            arr = luma + (arr - luma) * (1.0 + s * weight)
+        else:
+            arr = luma + (arr - luma) * (1.0 + s)
 
     return np.clip(arr, 0.0, 1.0)
 
@@ -611,8 +674,10 @@ def _apply_grain(arr: np.ndarray, amount: int, size: int = 0) -> np.ndarray:
 
     # Particle sizes relative to resolution. The size slider's low end is
     # near-pixel salt (crisp fine-ISO texture), growing to chunky pushed-film
-    # clumps at the top.
-    p_fine = max(0.7, (long_edge / 1500.0) * (0.35 + 1.25 * size_f))
+    # clumps at the top. The low end sits noticeably below the old tuning
+    # (0.35 base / 0.7px floor): at size 0 the grain should be right at the
+    # edge of resolvability, not already visibly speckled.
+    p_fine = max(0.55, (long_edge / 1500.0) * (0.22 + 1.38 * size_f))
     p_clump = p_fine * (2.2 + size_f * 2.8)
 
     fine = _grain_field(h, w, p_fine)
@@ -621,7 +686,7 @@ def _apply_grain(arr: np.ndarray, amount: int, size: int = 0) -> np.ndarray:
     # Barely any clump layer at the fine end - its blobs read as "big grain"
     # even when the fine layer is tiny.
     fine_weight = 1.0 - 0.45 * size_f
-    clump_weight = 0.15 + 0.6 * size_f
+    clump_weight = 0.08 + 0.67 * size_f
     luma = np.clip(arr @ _LUMA, 0.0, 1.0)
     midtone = np.power(4.0 * luma * (1.0 - luma), 0.75)
     combined = (fine * fine_weight + clump * clump_weight) * midtone
@@ -638,19 +703,35 @@ def _unsharp(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
 
 
 def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
-    """Fujifilm-style clarity: large-radius local contrast weighted toward the
-    midtones (so highlights/shadows aren't crushed). The structural base comes
-    from an edge-preserving *guided filter* rather than a Gaussian blur - a
-    Gaussian bleeds across strong edges, which turned into bright/dark halos
-    around subjects at higher amounts; the guided filter stops at edges, so
-    only genuine local texture gets amplified. The midtone mask is a raised
-    tent (^1.5) easing out toward the tonal extremes. Positive = punchier
-    mids, negative = softer."""
+    """Fujifilm-style clarity (their -5..+5 maps roughly onto Lightroom's
+    -50..+50 clarity, i.e. our -100..+100 slider covers the same span).
+
+    Positive: local contrast over a band that reaches from *fine lines* (the
+    "bite" on skin, fabric, foliage that Fuji clarity is known for) up to broad
+    structure - only per-pixel content (noise, grain) is excluded, so it never
+    turns gritty. The band = small-Gaussian smooth minus a large-radius
+    guided-filter base: a ~1px blur can't halo, and the guided filter stops at
+    strong edges, so no bright/dark halos around subjects either. (Two guided
+    filters at different radii don't work here: measured on sine gratings, the
+    small-radius one suppresses fine detail *more* than the large-radius one,
+    which turned the band negative at fine scales.) A midtone tent mask (^1.5)
+    keeps highlights/shadows from crushing, and the added contrast is weighted
+    slightly toward darkening - the deepened, punchy character of the
+    in-camera rendering rather than an HDR-ish glow.
+
+    Negative: softens that same band. The diffusion glow that completes Fuji's
+    negative-clarity look (reviews compare it to a Pro-Mist filter) is layered
+    on in apply_adjustments via _mist."""
     src = np.clip(arr, 0.0, 1.0).astype(np.float32)
-    base = cv2.ximgproc.guidedFilter(src, src, int(max(4, radius)), 0.01)
+    smooth = cv2.GaussianBlur(src, (0, 0), max(0.8, radius / 40.0))
+    base = cv2.ximgproc.guidedFilter(smooth, smooth, int(max(4, radius)), 0.01)
+    band = smooth - base
     luma = arr @ _LUMA
     mask = np.power(1.0 - np.abs(2.0 * luma - 1.0), 1.5)[..., None]  # peaks at midtones
-    return np.clip(arr + amount * (src - base) * mask, 0.0, 1.0)
+    delta = amount * band * mask
+    if amount > 0:
+        delta -= 0.15 * amount * np.abs(band) * mask
+    return np.clip(arr + delta, 0.0, 1.0)
 
 
 def _has_edits(adj: dict) -> bool:
@@ -694,7 +775,12 @@ def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = Tr
     # contrast, sharpness = small-radius edge enhancement.
     cl = adj.get("clarity", 0)
     if cl:
-        arr = _clarity(arr, max(3.0, long_edge / 60.0), cl / 100.0 * 0.9)
+        arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
+        if cl < 0:
+            # Fuji's negative clarity doesn't just flatten - it diffuses like a
+            # Pro-Mist filter (soft halation around brights). Layer a gentle
+            # mist on top of the band softening; strength follows the slider.
+            arr = _mist(arr, min(50, int(-cl * 0.35)))
     sp = adj.get("sharpness", 0)
     if sp:
         # +sharpen / -soften share the unsharp formula (negative amount blends
@@ -731,8 +817,10 @@ def generate_derivatives(
     straighten: float = 0.0,
     persp_h: int = 0,
     persp_v: int = 0,
-) -> None:
-    """Writes thumbnail.jpg (grid) and preview.jpg (lightbox) for an image.
+) -> PILImage.Image:
+    """Writes thumbnail.jpg (grid) and preview.jpg (lightbox) for an image, and
+    returns the decoded full-resolution base image (before edits) so a caller
+    can reuse it (e.g. for the CLIP embedding) instead of decoding the RAW again.
 
     Browsers can't render RAW files directly, so for RAW sources preview.jpg
     is the only viewable representation - it's a true demosaic (not the
@@ -740,38 +828,57 @@ def generate_derivatives(
     color rendering - see extract_full_preview()), then the user's manual
     rotation/crop (if any) is layered on top before resizing.
     """
-    out_dir = derivative_dir(image_id)
-    source = extract_full_preview(source_path)
-    if distortion:
-        source = apply_distortion(source, distortion)
-    source = apply_edits(source, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
-    if adjustments:
-        # Grain is added per-derivative below, *after* the downscale - baked at
-        # full res it would just be averaged away by the resize.
-        source = apply_adjustments(source, adjustments, include_grain=False)
+    with _gen_lock(image_id):
+        out_dir = derivative_dir(image_id)
+        base = extract_full_preview(source_path)
+        source = base
+        if distortion:
+            source = apply_distortion(source, distortion)
+        source = apply_edits(source, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
+        if adjustments:
+            # Grain is added per-derivative below, *after* the downscale - baked at
+            # full res it would just be averaged away by the resize.
+            source = apply_adjustments(source, adjustments, include_grain=False)
 
-    # The lightbox preview keeps the *original* resolution - only the grid
-    # thumbnail is ever downscaled, so nowhere outside the grid does the user
-    # look at fewer pixels than the photo really has.
-    preview = source.copy()
-    if adjustments:
-        preview = _grain_pil(preview, adjustments)
-    _save_atomic(preview, out_dir / "preview.jpg", quality=90)
+        # The lightbox preview keeps the *original* resolution - only the grid
+        # thumbnail is ever downscaled, so nowhere outside the grid does the user
+        # look at fewer pixels than the photo really has.
+        preview = source.copy()
+        if adjustments:
+            preview = _grain_pil(preview, adjustments)
+        _save_atomic(preview, out_dir / "preview.jpg", quality=92)
 
-    thumb = source.copy()
-    # Grid thumbnail at a quarter of the original's dimensions (a lot cheaper to
-    # generate than a large fixed size, so a full-library rebuild stays quick),
-    # capped so huge originals don't still produce oversized thumbnails.
-    tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
-    th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
-    thumb.thumbnail((tw, th), PILImage.LANCZOS)
-    if adjustments:
-        thumb = _grain_pil(thumb, adjustments)
-    _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=88)
+        thumb = source.copy()
+        # Grid thumbnail at a quarter of the original's dimensions (a lot cheaper to
+        # generate than a large fixed size, so a full-library rebuild stays quick),
+        # capped so huge originals don't still produce oversized thumbnails.
+        tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
+        th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
+        thumb.thumbnail((tw, th), PILImage.LANCZOS)
+        if adjustments:
+            thumb = _grain_pil(thumb, adjustments)
+        _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=88)
 
-    # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
-    # is regenerated on next request with the new edits.
-    (out_dir / "full.jpg").unlink(missing_ok=True)
+        # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
+        # is regenerated on next request with the new edits.
+        (out_dir / "full.jpg").unlink(missing_ok=True)
+        return base
+
+
+def has_derivatives(image_id: str) -> bool:
+    out_dir = settings.thumbnail_cache_root / image_id
+    return (out_dir / "thumbnail.jpg").exists() and (out_dir / "preview.jpg").exists()
+
+
+def ensure_derivatives(image: "Image") -> None:
+    """Generate thumbnail/preview only if they're missing. Used by the serve
+    path: if the post-import worker is generating this image right now, this
+    blocks until it's done and then skips the (now redundant) regeneration
+    instead of decoding the same photo a second time."""
+    with _gen_lock(image.id):
+        if has_derivatives(image.id):
+            return
+        regenerate_for_image(image)
 
 
 def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
@@ -779,8 +886,11 @@ def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
     thumbnail endpoint can generate a derivative on-demand at the same time the
     background worker is writing it after import; an atomic rename means a
     reader always sees either the old file or a fully-written new one, never a
-    half-written JPEG."""
-    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    half-written JPEG. The temp name must be unique per *call*, not just per
+    process (uuid, not pid): two threads of this one backend writing the same
+    derivative used to share a pid-named temp file - one renamed it away and
+    the other crashed with FileNotFoundError."""
+    tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.tmp")
     image.save(tmp, "JPEG", quality=quality)
     os.replace(tmp, dest)
 
@@ -789,25 +899,34 @@ def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
 # on-screen image, small enough that a full pipeline pass stays interactive.
 EDITOR_PREVIEW_PX = 1600
 
+# Resolution for the settled "refinement" render. NOT the image's true full
+# resolution: a live preview at 40-60MP turns every numpy pass in the pipeline
+# (each a float32 RGB array of the whole frame, several live at once through
+# dehaze/clarity/denoise) into hundreds of MB, and several settle-renders
+# overlapping in the request threadpool stacked into multiple GB and wedged the
+# app. Capped here instead - the resolution-dependent passes (grain, sharpen,
+# denoise, clarity radii) all scale with the long edge, so they *look* the same
+# at this size as at full res, which is the whole point of the refinement pass.
+FULL_EDITOR_PREVIEW_PX = 2600
 
-@lru_cache(maxsize=4)
+# Only one settled full-quality render at a time. It's the memory-heavy path, so
+# serialising it keeps peak RAM to a single pipeline's worth even when a flurry
+# of slider settles each kick one off (the stale ones are aborted client-side,
+# but a numpy pass already running can't be interrupted).
+_full_render_lock = threading.Lock()
+
+
+@lru_cache(maxsize=6)
 def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int) -> PILImage.Image:
     """The decoded, downscaled base image the editor preview renders on top of.
     Cached so slider moves only re-run the edit pipeline, not the (expensive)
     RAW decode. Keyed by file mtime so an on-disk change invalidates. Treat the
-    returned image as immutable - every pipeline step copies."""
+    returned image as immutable - every pipeline step copies. maxsize covers both
+    the interactive (EDITOR_PREVIEW_PX) and settled (FULL_EDITOR_PREVIEW_PX)
+    entry for a couple of images being browsed between in the editor."""
     src = extract_full_preview(Path(path_str))
     src.thumbnail((max_px, max_px), PILImage.LANCZOS)
     return src.convert("RGB")
-
-
-@lru_cache(maxsize=1)
-def _cached_editor_base_full(image_id: str, path_str: str, mtime_ns: int) -> PILImage.Image:
-    """Full-resolution editor base, for the settled (non-interactive) preview
-    refinement. Separate from _cached_editor_base with maxsize=1: a full-res
-    decode is ~100MB, so keeping several around would bloat the process just
-    from browsing between photos in the editor."""
-    return extract_full_preview(Path(path_str)).convert("RGB")
 
 
 def render_editor_preview_bytes(
@@ -829,23 +948,51 @@ def render_editor_preview_bytes(
     preview-sized base. One pipeline = the preview IS the saved look - no
     JS mirror to drift out of sync.
 
-    `full_quality=True` renders on the *full-resolution* base instead - too
-    slow for live slider drags, but fetched by the editor once the sliders
-    settle, so resolution-dependent passes (denoise radius, sharpen radius,
-    grain) are previewed exactly as they will be saved."""
+    `full_quality=True` renders on a larger (but still bounded, see
+    FULL_EDITOR_PREVIEW_PX) base instead - too slow for live slider drags, but
+    fetched by the editor once the sliders settle, so resolution-dependent passes
+    (denoise radius, sharpen radius, grain) are previewed at the size they'll
+    look like when saved."""
     from app.services.filesystem import resolve_image_path
 
     path = resolve_image_path(image)
+    base_px = FULL_EDITOR_PREVIEW_PX if full_quality else max_px
     if full_quality:
-        img = _cached_editor_base_full(image.id, str(path), path.stat().st_mtime_ns)
-    else:
-        img = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, max_px)
+        # Serialise + bound resolution so a burst of settle-renders can't stack
+        # into many GB of concurrent full-frame numpy arrays.
+        with _full_render_lock:
+            return _render_editor_bytes(
+                image, path, base_px, rotation, crop, adjustments, distortion,
+                flip_h, flip_v, straighten, persp_h, persp_v, quality=95,
+            )
+    return _render_editor_bytes(
+        image, path, base_px, rotation, crop, adjustments, distortion,
+        flip_h, flip_v, straighten, persp_h, persp_v, quality=88,
+    )
+
+
+def _render_editor_bytes(
+    image: "Image",
+    path: Path,
+    base_px: int,
+    rotation: int,
+    crop: CropBox | None,
+    adjustments: dict,
+    distortion: int,
+    flip_h: bool,
+    flip_v: bool,
+    straighten: float,
+    persp_h: int,
+    persp_v: int,
+    quality: int,
+) -> bytes:
+    img = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, base_px)
     if distortion:
         img = apply_distortion(img, distortion)
     img = apply_edits(img, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
     img = apply_adjustments(img, adjustments)
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=88)
+    img.convert("RGB").save(buf, "JPEG", quality=quality)
     return buf.getvalue()
 
 

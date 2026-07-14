@@ -11,10 +11,23 @@ interface Props {
   index: number;
   onIndexChange: (index: number) => void;
   onClose: () => void;
-  onUpdate: (fileId: string, patch: { selected?: boolean; rating?: number; color_label?: ColorLabel }) => void;
+  onUpdate: (
+    fileId: string,
+    patch: { selected?: boolean; rating?: number; color_label?: ColorLabel; immich_sync?: boolean }
+  ) => void;
+  // Selective Immich sync is active - show the per-photo "Sync to Immich" checkbox.
+  showImmichSync?: boolean;
 }
 
-export function ImportLightbox({ sessionId, files, index, onIndexChange, onClose, onUpdate }: Props) {
+export function ImportLightbox({
+  sessionId,
+  files,
+  index,
+  onIndexChange,
+  onClose,
+  onUpdate,
+  showImmichSync = false,
+}: Props) {
   const file = files[index];
 
   useEffect(() => {
@@ -85,15 +98,32 @@ export function ImportLightbox({ sessionId, files, index, onIndexChange, onClose
             </span>
           </div>
           <div className="lightbox-controls-actions">
-            <label className={`lightbox-import-toggle${isExactDuplicate ? " disabled" : ""}`}>
-              <input
-                type="checkbox"
-                checked={file.selected}
-                disabled={isExactDuplicate}
-                onChange={(e) => onUpdate(file.id, { selected: e.target.checked })}
-              />{" "}
-              {isExactDuplicate ? "Already in library" : "Import this file"}
-            </label>
+            {/* Selective sync replaces the import checkbox with the sync one -
+                two checkboxes crowded the bar, and import is still toggled by
+                Space (or Select mode in the grid). */}
+            {showImmichSync && !isExactDuplicate ? (
+              <label
+                className="lightbox-import-toggle"
+                title="Flag this photo for Immich sync — it uploads right after import (JPG only; RAW is skipped)"
+              >
+                <input
+                  type="checkbox"
+                  checked={file.immich_sync}
+                  onChange={(e) => onUpdate(file.id, { immich_sync: e.target.checked })}
+                />{" "}
+                Sync to Immich
+              </label>
+            ) : (
+              <label className={`lightbox-import-toggle${isExactDuplicate ? " disabled" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={file.selected}
+                  disabled={isExactDuplicate}
+                  onChange={(e) => onUpdate(file.id, { selected: e.target.checked })}
+                />{" "}
+                {isExactDuplicate ? "Already in library" : "Import this file"}
+              </label>
+            )}
             <RatingStars rating={file.rating} onChange={(rating) => onUpdate(file.id, { rating })} />
             <ColorLabelPicker value={file.color_label} onChange={(color_label) => onUpdate(file.id, { color_label })} />
           </div>

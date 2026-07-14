@@ -303,12 +303,95 @@ export function Help() {
 
         <H id="immich">Immich</H>
         <p>
-          <em>Settings → Immich integration:</em> enter your server's address and an API key (create
-          one in Immich under <em>Account Settings → API Keys</em>), then "Test connection". Once
-          configured you can upload during import or send any selection later. Only JPEGs are
-          uploaded — RAW files always stay local. Uploads run in the background and are retried a few
-          times on network hiccups; the outcome of each one appears under{" "}
-          <em>Settings → Immich → Recent uploads</em>.
+          The Immich integration can mirror (parts of) your library to an{" "}
+          <a href="https://immich.app" target="_blank" rel="noreferrer">
+            Immich
+          </a>{" "}
+          server — e.g. to view your photos on your phone or share them with family. Only JPEGs are
+          ever uploaded; RAW files always stay local.
+        </p>
+        <h4>Setting it up</h4>
+        <ol>
+          <li>
+            <strong>Server address:</strong> under <em>Settings → Immich integration</em>, enter the
+            URL you use to open Immich in the browser, e.g.{" "}
+            <code>https://immich.example.com</code> or <code>http://192.168.1.50:2283</code>.
+          </li>
+          <li>
+            <strong>API key:</strong> in Immich (not in this app), click your avatar →{" "}
+            <em>Account Settings → API Keys → New API Key</em>. The key is shown{" "}
+            <strong>only once</strong> — copy it right away and paste it into the API key field
+            here.
+          </li>
+          <li>
+            <strong>Test connection</strong> confirms the address and key work — it should greet
+            you with your Immich account name.
+          </li>
+        </ol>
+        <h4>Which API key permissions are needed?</h4>
+        <p>
+          Newer Immich versions let you restrict an API key to specific permissions when creating
+          it. Selecting <strong>"All"</strong> simply works. If you prefer a minimal key, it needs:
+        </p>
+        <ul>
+          <li>
+            <strong>Assets:</strong> <code>asset.upload</code> (send photos — also covers
+            recognizing photos Immich already has), <code>asset.delete</code> (remove photos you
+            trash or delete here)
+          </li>
+          <li>
+            <strong>Albums:</strong> <code>album.create</code>, <code>album.read</code>,{" "}
+            <code>album.update</code>, <code>album.delete</code> — plus{" "}
+            <code>albumAsset.create</code> / <code>albumAsset.delete</code> for putting photos into
+            / taking them out of mirrored albums
+          </li>
+          <li>
+            <strong>User:</strong> <code>user.read</code> (used by "Test connection")
+          </li>
+        </ul>
+        <p>
+          Older Immich versions don't ask — their keys always have full access. If something fails
+          with a permission error in <em>Recent uploads</em>, recreate the key with "All".
+        </p>
+        <h4>Sync modes</h4>
+        <ul>
+          <li>
+            <strong>Manual</strong> (default): nothing happens automatically. You push photos
+            yourself — the "Also upload to Immich" checkbox during import, or "Add to Immich" on a
+            selection.
+          </li>
+          <li>
+            <strong>Selective:</strong> you mark what should live on Immich — the "Sync to Immich"
+            checkbox on a selection in the Library, or on an album. Marked photos upload
+            automatically and stay in sync.
+          </li>
+          <li>
+            <strong>Full:</strong> every JPEG and every album is mirrored automatically.
+          </li>
+        </ul>
+        <h4>What "in sync" means</h4>
+        <p>
+          In the selective and full modes, Immich mirrors what's visible in your library. A
+          background check runs at every app start and once a minute, so changes follow within
+          about a minute even if Immich was briefly unreachable:
+        </p>
+        <ul>
+          <li>New or restored photos are uploaded; photos in the Trash are removed from Immich.</li>
+          <li>
+            <strong>"Delete forever"</strong> also removes the photo from Immich, permanently.
+          </li>
+          <li>
+            Mirrored albums follow along: adding/removing photos, renaming and deleting an album
+            all happen on Immich too (deleting an album never deletes photos — on either side).
+          </li>
+          <li>
+            Unticking a "Sync to Immich" checkbox only <em>stops syncing</em> — photos already on
+            Immich stay there. Removing happens exclusively via the Trash.
+          </li>
+        </ul>
+        <p>
+          Every upload and removal is listed with ✓ or the exact error under{" "}
+          <em>Settings → Immich → Recent uploads</em>; network hiccups are retried automatically.
         </p>
 
         <H id="backup">Backup, restore &amp; maintenance</H>

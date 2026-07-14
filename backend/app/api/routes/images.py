@@ -37,8 +37,15 @@ from app.services import (
 )
 from app.services.filesystem import library_relative_path, resolve_image_path
 from app.services.hashing import perceptual_hash
+from app.services.immich_sync import immich_album_names as _immich_album_names
+from app.services.immich_sync import run_immich_sync_soon
 from app.services.settings_store import get_immich_config
-from app.workers.queue import enqueue_embedding, enqueue_post_import
+from app.workers.queue import (
+    enqueue_embedding,
+    enqueue_immich_upload,
+    enqueue_post_import,
+    store_immich_asset_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +250,9 @@ def restore_from_trash(
     for image in images:
         image.deleted_at = None
     db.commit()
+    # Restored photos are upload candidates again - put them back on Immich now
+    # rather than on the next timed pass.
+    run_immich_sync_soon()
     for image in images:
         db.refresh(image)
     return images
@@ -267,6 +277,7 @@ def delete_from_trash(
     managed = [image for image in images if image.source_root_id is None]
     trash_service.hard_delete_images(db, managed, delete_files=True)
     db.commit()
+    run_immich_sync_soon()
 
 
 @router.post("/trash/empty", status_code=204)
@@ -282,6 +293,7 @@ def empty_trash(db: Session = Depends(get_db), current_user: User = Depends(get_
     )
     trash_service.hard_delete_images(db, images, delete_files=True)
     db.commit()
+    run_immich_sync_soon()
 
 
 @router.get("/{image_id}", response_model=schemas.ImageOut)
@@ -332,6 +344,9 @@ def bulk_delete_images(
     for image in images:
         image.deleted_at = now
     db.commit()
+    # Synced photos must leave Immich as soon as they're trashed (they come
+    # back if restored) - wake the sync loop instead of waiting a minute.
+    run_immich_sync_soon()
 
 
 @router.post("/download-zip")
@@ -402,14 +417,27 @@ def push_images_to_immich(
         if not path.exists():
             failed += 1
             continue
+        album_names = _immich_album_names(db, image, immich)
         try:
-            status = immich_service.upload_asset(
+            status, asset_id = immich_service.upload_asset(
                 immich.base_url, immich.api_key, path, image.taken_at
             )
+            store_immich_asset_id(image.id, asset_id)
             if status == "duplicate":
                 duplicate += 1
             else:
                 uploaded += 1
+            # Mirror the photo's (flagged) albums into Immich albums.
+            for name in album_names:
+                try:
+                    album_id = immich_service.get_or_create_album(
+                        immich.base_url, immich.api_key, name
+                    )
+                    immich_service.add_assets_to_album(
+                        immich.base_url, immich.api_key, album_id, [asset_id]
+                    )
+                except Exception:
+                    logger.exception("Immich album add failed for image %s -> %r", image.id, name)
         except Exception:
             logger.exception("Immich upload failed for image %s", image.id)
             failed += 1
@@ -425,6 +453,41 @@ def push_images_to_immich(
         uploaded=uploaded, duplicate=duplicate, skipped=skipped, failed=failed,
         message=", ".join(parts) + ".",
     )
+
+
+@router.post("/immich-sync", response_model=list[schemas.ImageOut])
+def set_images_immich_sync(
+    payload: schemas.ImmichSyncToggleRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Flag/unflag photos for selective Immich sync. Flagging on also queues an
+    immediate background upload of each JPEG (with its flagged albums mirrored);
+    unflagging just clears the flag - photos already on Immich are left there."""
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    for image in images:
+        image.immich_sync = payload.enabled
+    db.commit()
+
+    immich = get_immich_config(db)
+    if payload.enabled and immich is not None:
+        for image in images:
+            if image.file_type != FileType.jpeg:
+                continue
+            path = resolve_image_path(image)
+            if not path.exists():
+                continue
+            enqueue_immich_upload(
+                immich.base_url,
+                immich.api_key,
+                path,
+                image.taken_at,
+                _immich_album_names(db, image, immich),
+                image_id=image.id,
+            )
+    for image in images:
+        db.refresh(image)
+    return images
 
 
 @router.post("/bulk-tags", response_model=list[schemas.ImageOut])
@@ -853,7 +916,10 @@ def _serve_derivative(image: Image, name: str, not_ready_detail: str) -> FileRes
     path = thumbnails.derivative_dir(image.id) / name
     if not path.exists():
         try:
-            thumbnails.regenerate_for_image(image)
+            # ensure_derivatives (not regenerate) so a request arriving while
+            # the post-import worker is already generating this image waits for
+            # that result instead of decoding the same photo again in parallel.
+            thumbnails.ensure_derivatives(image)
         except Exception:
             logger.exception("On-demand %s generation failed for image %s", name, image.id)
             raise HTTPException(status_code=404, detail=not_ready_detail)

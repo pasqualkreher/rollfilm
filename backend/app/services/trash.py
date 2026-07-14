@@ -14,10 +14,16 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Image, ImportStagedFile
+from app.db.models import FileType, Image, ImmichPendingDeletion, ImportStagedFile
 from app.db.session import SessionLocal
 from app.services import thumbnails
-from app.services.settings_store import get_trash_retention_days
+from app.services.hashing import sha1_file
+from app.services.settings_store import (
+    IMMICH_MODE_FULL,
+    IMMICH_MODE_SELECTIVE,
+    get_immich_config,
+    get_trash_retention_days,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +60,38 @@ def prune_empty_dirs(start: Path, stop_at: Path) -> None:
         current = resolved.parent
 
 
+def _queue_immich_removals(db: Session, images: list[Image]) -> None:
+    """For each currently-synced photo about to be permanently deleted, write a
+    durable ImmichPendingDeletion row (same transaction as the deletion) that
+    the background sync loop turns into an Immich-side delete. Nothing is
+    queued in manual mode - there uploads are one-off pushes, not a sync, and
+    silently deleting from Immich would be a surprise. Likewise, selective-mode
+    photos whose flag was turned off stay on Immich, matching the unflag
+    behavior ("photos already on Immich are left there")."""
+    config = get_immich_config(db)
+    if config is None or config.sync_mode not in (IMMICH_MODE_SELECTIVE, IMMICH_MODE_FULL):
+        return
+    for image in images:
+        if config.sync_mode == IMMICH_MODE_SELECTIVE and not image.immich_sync:
+            continue
+        if image.immich_asset_id:
+            db.add(
+                ImmichPendingDeletion(
+                    asset_id=image.immich_asset_id, filename=image.original_filename
+                )
+            )
+        elif image.file_type == FileType.jpeg and image.source_root_id is None:
+            # Synced before asset ids were recorded: hash the file while it
+            # still exists; the sync loop resolves it against Immich later.
+            checksum = sha1_file(settings.library_root / image.file_path)
+            if checksum:
+                db.add(
+                    ImmichPendingDeletion(
+                        sha1_checksum=checksum, filename=image.original_filename
+                    )
+                )
+
+
 def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) -> None:
     """Remove image rows for good. paired_image_id and
     ImportStagedFile.duplicate_of_image_id both have FK constraints (enforced -
@@ -65,7 +103,15 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
 
     Original files are only ever touched for managed photos (delete_files=True
     from the Trash); photos indexed from a source root always keep their file -
-    it lives in the user's own folder and was never ours to delete."""
+    it lives in the user's own folder and was never ours to delete.
+
+    Trash deletions (delete_files=True) also queue the Immich-side removal of
+    synced photos. The maintenance cleanup of vanished files (delete_files=
+    False) deliberately doesn't: the file disappearing outside the app isn't
+    the user asking for the photo to be gone from Immich."""
+    if delete_files:
+        # Before anything is unlinked - the checksum fallback needs the file.
+        _queue_immich_removals(db, images)
     image_ids = {image.id for image in images}
     for image in images:
         image.paired_image_id = None
@@ -120,19 +166,50 @@ def purge_expired() -> int:
                 len(expired),
                 days,
             )
+            # Process any Immich removals the deletion just queued right away.
+            from app.services.immich_sync import run_immich_sync_soon
+
+            run_immich_sync_soon()
         return len(expired)
     finally:
         db.close()
 
 
+# Re-check the trash a few times a day: the desktop app can stay open for
+# days/weeks, and with a purge that only ran at process start, photos sat in
+# the Trash long past their retention until the next relaunch ("trash clean
+# does not work"). Startup still purges immediately; this keeps it honest
+# for long-running sessions.
+_PURGE_INTERVAL_S = 6 * 60 * 60
+
+_purge_wakeup = threading.Event()
+_purge_thread_started = threading.Lock()
+_purge_running = False
+
+
+def run_purge_soon() -> None:
+    """Wake the purge loop now (e.g. right after the user changes the retention
+    setting, so a shorter retention takes effect immediately, not hours later)."""
+    _purge_wakeup.set()
+
+
 def start_background_purge() -> None:
-    """Run the purge off the startup path - deleting many originals can take a
-    while and must never delay or break the API coming up."""
+    """Purge on startup and then periodically, off the request/startup path -
+    deleting many originals can take a while and must never delay or break the
+    API coming up."""
+    global _purge_running
+    with _purge_thread_started:
+        if _purge_running:
+            return
+        _purge_running = True
 
     def _run() -> None:
-        try:
-            purge_expired()
-        except Exception:
-            logger.exception("Trash auto-purge failed")
+        while True:
+            try:
+                purge_expired()
+            except Exception:
+                logger.exception("Trash auto-purge failed")
+            _purge_wakeup.wait(timeout=_PURGE_INTERVAL_S)
+            _purge_wakeup.clear()
 
     threading.Thread(target=_run, name="trash-purge", daemon=True).start()
