@@ -8,7 +8,7 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
 import { ExternalSources } from "../components/ExternalSources";
-import { fileTypeBadge, tileStyle } from "../components/ThumbnailGrid";
+import { fileTypeBadge, fileTypeBadgeClass, tileStyle } from "../components/ThumbnailGrid";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
@@ -47,6 +47,29 @@ function findIncompletePairs(files: StagedFileOut[]): StagedFileOut[] {
     }
   }
   return missingHalf;
+}
+
+// The import always flows Choose → Review (staging) → Library. Showing the
+// three steps up front is what makes the staging area self-explanatory:
+// nothing reaches the library until step 3.
+function ImportSteps({ current }: { current: 1 | 2 }) {
+  const steps = ["Choose photos", "Review & select", "In your library"];
+  return (
+    <ol className="import-steps" aria-label="Import steps">
+      {steps.map((label, i) => {
+        const n = i + 1;
+        const state = n === current ? " active" : n < current ? " done" : "";
+        return (
+          <li key={label} className={`import-step${state}`}>
+            <span className="import-step-num" aria-hidden>
+              {n < current ? "✓" : n}
+            </span>
+            {label}
+          </li>
+        );
+      })}
+    </ol>
+  );
 }
 
 export function ImportWizard() {
@@ -192,7 +215,7 @@ export function ImportWizard() {
   // the Settings maintenance tasks and the Immich upload.
   const { setBusyLabel } = useTasks();
   useEffect(() => {
-    setBusyLabel(commit.isPending ? "Importing photos…" : null);
+    setBusyLabel(commit.isPending ? "Adding photos to your library…" : null);
   }, [commit.isPending, setBusyLabel]);
   useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
@@ -373,6 +396,7 @@ export function ImportWizard() {
     return (
       <div className="page">
         <h2 className="section-title">Import photos</h2>
+        <ImportSteps current={1} />
         <p className="import-intro">
           <strong>Import</strong> copies photos into your library. An <strong>external source</strong>{" "}
           just points to a folder and leaves the files where they are.
@@ -448,7 +472,14 @@ export function ImportWizard() {
 
   return (
     <div className="page">
-      <h2 className="section-title">Review import ({sourceLabel})</h2>
+      <div className="import-review-head">
+        <ImportSteps current={2} />
+        <h2 className="section-title">Review &amp; choose what to keep</h2>
+        <p className="import-review-sub">
+          From <strong>{sourceLabel}</strong> — these photos are staged, nothing is in your
+          library yet. Rate, compare and select, then press "Add to library".
+        </p>
+      </div>
       <PhotoFilters
         viewMode={viewMode}
         onViewMode={setViewMode}
@@ -525,11 +556,33 @@ export function ImportWizard() {
             🔄 Immich full sync is on — every imported JPEG uploads automatically.
           </span>
         )}
-        <button className="btn primary" onClick={handleCommitClick} disabled={selectedCount === 0 || commit.isPending}>
-          {commit.isPending ? `Importing...${progressSuffix}` : `Import ${selectedCount} photo(s)`}
+        <button
+          className="btn primary"
+          onClick={handleCommitClick}
+          disabled={selectedCount === 0 || commit.isPending}
+          title="Copies the selected photos into your library"
+        >
+          {commit.isPending
+            ? `Adding to library...${progressSuffix}`
+            : `Add ${selectedCount} photo(s) to library`}
         </button>
-        <button className="btn" onClick={() => discard.mutate()} disabled={discard.isPending}>
-          Discard
+        <button
+          className="btn"
+          onClick={() => {
+            // Throwing away a whole reviewed batch (ratings, selection work)
+            // deserves a confirmation - and the dialog doubles as the place to
+            // reassure that the original files are untouched.
+            if (
+              window.confirm(
+                "Discard this import batch? Nothing has been added to your library, and the original files stay where they are."
+              )
+            ) {
+              discard.mutate();
+            }
+          }}
+          disabled={discard.isPending}
+        >
+          Discard batch
         </button>
       </div>
 
@@ -580,17 +633,19 @@ export function ImportWizard() {
                     {f.is_near_duplicate ? "Possible duplicate" : "Already in library"}
                   </span>
                 )}
-                <span className="badge">{fileTypeBadge(f.file_type, Boolean(f.paired_staged_file_id))}</span>
-                <button
-                  className="card-expand"
-                  title="Preview"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setLightboxIndex(i);
-                  }}
+                <span
+                  className={fileTypeBadgeClass(
+                    f.file_type,
+                    mergePairs && viewMode === "combined" && Boolean(f.paired_staged_file_id)
+                  )}
                 >
-                  ⤢
-                </button>
+                  {fileTypeBadge(
+                    f.file_type,
+                    // "RAW+JPG" only when this card is a merged stand-in for the
+                    // pair; unmerged/filtered views show each file's own type.
+                    mergePairs && viewMode === "combined" && Boolean(f.paired_staged_file_id)
+                  )}
+                </span>
               </div>
               {/* No per-card import checkbox here: it's cramped at grid sizes and
                   crowds the stars. Toggle import via "Select" mode (overlay
@@ -622,6 +677,7 @@ export function ImportWizard() {
           onClose={() => setLightboxIndex(null)}
           onUpdate={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
           showImmichSync={immichConfigured && immichMode === "selective"}
+          pairsMerged={mergePairs && viewMode === "combined"}
         />
       )}
     </div>

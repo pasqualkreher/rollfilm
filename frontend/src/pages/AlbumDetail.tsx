@@ -14,6 +14,7 @@ import { useTasks } from "../state/tasks";
 import { groupPairsAdjacent } from "../utils/pairing";
 import { deleteConfirmMessage } from "../utils/deleteMessage";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
+import { selectionSharedMeta } from "../utils/selectionMeta";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
@@ -84,6 +85,8 @@ export function AlbumDetail() {
         ? collapsePairs(images ?? [])
         : groupPairsAdjacent(images ?? [], (img) => img.paired_image_id)
       : images ?? [];
+
+  const sharedMeta = selectionSharedMeta(images ?? [], selected);
 
   // Expand a set of ids with each one's RAW/JPEG partner, but only in merged
   // view where the partner is hidden behind the shown card (the split view lets
@@ -317,8 +320,8 @@ export function AlbumDetail() {
         <div className="filter-bar action-bar--bottom">
           <div className="control-group">
             <span>{selected.size} selected</span>
-            <RatingStars rating={0} onChange={(r) => applyBulk({ rating: r })} />
-            <ColorLabelPicker value="none" onChange={(c) => applyBulk({ color_label: c })} />
+            <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
+            <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
           </div>
           <div className="control-group">
             <BulkTagInput onAdd={addTagToSelected} />

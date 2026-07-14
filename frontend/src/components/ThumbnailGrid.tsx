@@ -4,6 +4,7 @@ import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
+import { useMergePairs } from "../state/viewPrefs";
 
 interface Props {
   images: ImageOut[];
@@ -19,11 +20,19 @@ interface Props {
   removeTitle?: string;
 }
 
-// Short badge shown on every thumbnail so the file kind is obvious at a glance:
-// a RAW+JPEG pair, or the lone type (RAW / JPG / PNG).
-export function fileTypeBadge(fileType: string, paired: boolean): string {
-  if (paired) return "RAW+JPG";
+// Short badge shown on every thumbnail so the file kind is obvious at a glance.
+// "RAW+JPG" only when this one card stands in for a merged pair; when both
+// halves are shown as separate cards, each shows its own type (RAW / JPG / PNG).
+export function fileTypeBadge(fileType: string, merged: boolean): string {
+  if (merged) return "RAW+JPG";
   return fileType === "jpeg" ? "JPG" : fileType.toUpperCase();
+}
+
+// Badge class so RAW (and merged pairs) get a distinct color from JPG — the
+// text alone is too small to tell the kinds apart when scanning a grid.
+export function fileTypeBadgeClass(fileType: string, merged: boolean, base = "badge"): string {
+  if (merged) return `${base} badge-pair`;
+  return fileType === "raw" ? `${base} badge-raw` : base;
 }
 
 // Aspect ratio (width/height) used to size a justified grid tile. Clamped so a
@@ -69,6 +78,7 @@ export function ThumbnailGrid({
   removeTitle = "Remove",
 }: Props) {
   const navigate = useNavigate();
+  const mergePairs = useMergePairs();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -95,7 +105,9 @@ export function ThumbnailGrid({
         }}
       >
         <img src={api.images.thumbnailUrl(image.id, editVersion(image))} loading="lazy" alt={image.original_filename} />
-        <span className="badge">{fileTypeBadge(image.file_type, Boolean(image.paired_image_id))}</span>
+        <span className={fileTypeBadgeClass(image.file_type, mergePairs && Boolean(image.paired_image_id))}>
+          {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
+        </span>
         {!selectMode && onRemove && (
           <button
             className="card-remove"

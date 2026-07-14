@@ -14,6 +14,7 @@ import { useTasks } from "../state/tasks";
 import { groupPairsAdjacent } from "../utils/pairing";
 import { deleteConfirmMessage } from "../utils/deleteMessage";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
+import { selectionSharedMeta } from "../utils/selectionMeta";
 
 export function Library() {
   const [viewMode, setViewMode] = useState<ViewMode>("combined");
@@ -253,6 +254,8 @@ export function Library() {
   const allSelectedSynced =
     selected.size > 0 && (images ?? []).filter((im) => selected.has(im.id)).every((im) => im.immich_sync);
 
+  const sharedMeta = selectionSharedMeta(images ?? [], selected);
+
   return (
     <div className="page page-timeline">
       <PhotoFilters
@@ -322,8 +325,8 @@ export function Library() {
         <div className="filter-bar action-bar--bottom">
           <div className="control-group">
             <span>{selected.size} selected</span>
-            <RatingStars rating={0} onChange={(r) => applyBulk({ rating: r })} />
-            <ColorLabelPicker value="none" onChange={(c) => applyBulk({ color_label: c })} />
+            <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
+            <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
           </div>
           <div className="control-group">
             <BulkTagInput onAdd={addTagToSelected} />

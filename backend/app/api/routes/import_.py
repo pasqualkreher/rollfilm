@@ -1,15 +1,19 @@
 import io
 import json
+import logging
+import os
+import threading
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
+from PIL import Image as PILImage
 from sqlalchemy.orm import Session
 
 from app import schemas
 from app.api.deps import get_owned_import_session
 from app.auth import get_current_user
 from app.config import settings
-from app.db.models import Image, ImportSessionStatus, ImportStagedFile, User
+from app.db.models import FileType, Image, ImportSessionStatus, ImportStagedFile, User
 from app.db.session import get_db
 from app.services.import_pipeline import (
     append_uploaded_files,
@@ -20,8 +24,18 @@ from app.services.import_pipeline import (
     stage_uploaded_files,
 )
 from app.services.raw import extract_full_preview
+from app.services.thumbnails import THUMBNAIL_MAX_PX
+
+logger = logging.getLogger(__name__)
 
 LIGHTBOX_PREVIEW_PX = 2048
+
+# Staging thumbnails RAW files from the embedded camera JPEG (fast, but it has
+# the camera's JPEG rendering baked in) makes a RAW card pixel-identical to its
+# JPEG sibling in the review grid. Demosaiced replacements are generated lazily
+# here on first request instead - same philosophy as the lightbox preview - and
+# this gate keeps a grid full of RAWs from demosaicing all at once.
+_RAW_THUMB_SLOTS = threading.BoundedSemaphore(min(4, max(2, (os.cpu_count() or 4) // 2)))
 
 router = APIRouter(prefix="/import", tags=["import"])
 
@@ -94,7 +108,37 @@ def get_staged_file_thumbnail(
     current_user: User = Depends(get_current_user),
 ):
     get_owned_import_session(db, current_user.id, session_id)
-    thumb_path = settings.import_staging_root / session_id / ".thumbnails" / f"{file_id}.jpg"
+    thumb_dir = settings.import_staging_root / session_id / ".thumbnails"
+
+    # RAW cards get a demosaiced thumbnail so they look like the actual sensor
+    # data (as in the library) instead of the camera-rendered embedded JPEG,
+    # which is indistinguishable from the JPEG sibling's card. Generated lazily
+    # and cached; any failure falls back to the staging-time embedded thumb.
+    staged = db.get(ImportStagedFile, file_id)
+    if staged is not None and staged.import_session_id == session_id and staged.file_type == FileType.raw:
+        demosaic_path = thumb_dir / f"{file_id}.demosaic.jpg"
+        if not demosaic_path.exists():
+            source_path = settings.import_staging_root / staged.staged_path
+            if source_path.exists():
+                try:
+                    with _RAW_THUMB_SLOTS:
+                        if not demosaic_path.exists():
+                            preview = extract_full_preview(source_path)
+                            # Match the staging thumb's sizing: a quarter of the
+                            # original (the demosaic is half-size, so half of it),
+                            # capped like the library's grid thumbnails.
+                            tw = min(max(1, round(preview.width * 0.5)), THUMBNAIL_MAX_PX)
+                            th = min(max(1, round(preview.height * 0.5)), THUMBNAIL_MAX_PX)
+                            preview.thumbnail((tw, th), PILImage.LANCZOS)
+                            tmp_path = thumb_dir / f"{file_id}.demosaic.tmp"
+                            preview.save(tmp_path, "JPEG", quality=88)
+                            os.replace(tmp_path, demosaic_path)
+                except Exception:
+                    logger.exception("Demosaiced staging thumbnail failed for %s", staged.original_filename)
+        if demosaic_path.exists():
+            return FileResponse(demosaic_path)
+
+    thumb_path = thumb_dir / f"{file_id}.jpg"
     if not thumb_path.exists():
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return FileResponse(thumb_path)

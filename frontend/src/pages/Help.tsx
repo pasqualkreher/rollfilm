@@ -115,8 +115,8 @@ export function Help() {
             <em>Settings → Immich → Recent uploads</em>.
           </li>
           <li>
-            <strong>"Import N photos"</strong> copies the selection into your library folder;
-            "Discard" throws the staging session away.
+            <strong>"Add N photos to library"</strong> copies the selection into your library
+            folder; "Discard batch" throws the staging session away.
           </li>
         </ol>
 

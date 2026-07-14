@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
@@ -51,29 +51,130 @@ function SourceScanWatcher() {
   return null;
 }
 
-function ImportNavLink() {
-  const { isUploading, uploadProgress } = useImportSession();
+// Smart start: with an empty library the only useful first move is importing,
+// so a fresh app launch lands on the Import tab instead of an empty grid.
+// Runs exactly once per app start, and only if the user is still sitting on
+// the default Library route by the time the probe answers - a deep link or an
+// early manual navigation is never overridden.
+function EmptyLibraryRedirect() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { sessionId, isUploading } = useImportSession();
+  const ran = useRef(false);
+  const { data } = useQuery({
+    queryKey: ["images", "startup-probe"],
+    queryFn: () => api.images.list({ view_mode: "combined" }, { limit: 1, offset: 0 }),
+    staleTime: Infinity,
+  });
+  useEffect(() => {
+    if (ran.current || !data) return;
+    ran.current = true;
+    if (data.length === 0 && location.pathname === "/" && !sessionId && !isUploading) {
+      navigate("/import", { replace: true });
+    }
+  }, [data, location.pathname, sessionId, isUploading, navigate]);
+  return null;
+}
+
+function ImportNavLink({ onNavigate }: { onNavigate?: () => void }) {
+  const { isUploading, uploadProgress, sessionId } = useImportSession();
+  // While uploading show live progress; a staged-but-unreviewed batch gets a
+  // dot so it's obvious from anywhere that photos are waiting for review.
+  const suffix = isUploading ? ` (${uploadProgress ?? 0}%)` : sessionId ? " •" : "";
   return (
-    <NavLink to="/import">
-      Import{isUploading ? ` (${uploadProgress ?? 0}%)` : ""}
+    <NavLink
+      to="/import"
+      onClick={onNavigate}
+      title={
+        !isUploading && sessionId
+          ? "An import batch is staged and waiting for your review"
+          : undefined
+      }
+    >
+      Import{suffix}
     </NavLink>
   );
 }
 
-function SelectsNavLink() {
+function SelectsNavLink({ onNavigate }: { onNavigate?: () => void }) {
   const { count } = useSelects();
   return (
-    <NavLink to="/selects">
+    <NavLink to="/selects" onClick={onNavigate}>
       Selects{count > 0 ? ` (${count})` : ""}
     </NavLink>
   );
 }
 
+// One list of links used by both navs: the full row of tabs on wide windows
+// and the burger-menu dropdown on narrow ones.
+function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <>
+      <NavLink to="/" end onClick={onNavigate}>
+        Library
+      </NavLink>
+      <NavLink to="/albums" onClick={onNavigate}>Albums</NavLink>
+      <NavLink to="/map" onClick={onNavigate}>Map</NavLink>
+      <ImportNavLink onNavigate={onNavigate} />
+      <SelectsNavLink onNavigate={onNavigate} />
+      <NavLink to="/trash" onClick={onNavigate}>Trash</NavLink>
+      <NavLink to="/settings" onClick={onNavigate}>Settings</NavLink>
+      <NavLink to="/help" onClick={onNavigate}>Help</NavLink>
+    </>
+  );
+}
+
+// "Where am I" label shown next to the burger button while the full nav row is
+// collapsed away on narrow windows.
+const PAGE_TITLES: Array<[string, string]> = [
+  ["/albums", "Albums"],
+  ["/map", "Map"],
+  ["/import", "Import"],
+  ["/selects", "Selects"],
+  ["/trash", "Trash"],
+  ["/settings", "Settings"],
+  ["/help", "Help"],
+  ["/image", "Photo"],
+];
+
+function currentPageTitle(pathname: string): string {
+  for (const [prefix, title] of PAGE_TITLES) {
+    if (pathname.startsWith(prefix)) return title;
+  }
+  return "Library";
+}
+
 // Top bar: while a blocking Settings task runs, the nav is locked (you can't
-// switch tabs) and a spinner + label shows what's happening.
+// switch tabs) and a spinner + label shows what's happening. On narrow windows
+// the tab row collapses into a burger menu instead of wrapping onto extra rows.
 function TopBar() {
   const { busyLabel } = useTasks();
   const locked = busyLabel !== null;
+  const location = useLocation();
+  const { isUploading, sessionId } = useImportSession();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the burger menu on an outside click or Escape (link clicks close it
+  // via onNavigate).
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
   return (
     <div className="top-bar">
       <span className="brand">Photo Manager</span>
@@ -82,17 +183,33 @@ function TopBar() {
         aria-disabled={locked}
         title={locked ? "Please wait until the current task finishes" : undefined}
       >
-        <NavLink to="/" end>
-          Library
-        </NavLink>
-        <NavLink to="/albums">Albums</NavLink>
-        <NavLink to="/map">Map</NavLink>
-        <ImportNavLink />
-        <SelectsNavLink />
-        <NavLink to="/trash">Trash</NavLink>
-        <NavLink to="/settings">Settings</NavLink>
-        <NavLink to="/help">Help</NavLink>
+        <NavLinks />
       </nav>
+      <div
+        className={`nav-burger-wrap${locked ? " nav-links--locked" : ""}`}
+        ref={menuRef}
+        aria-disabled={locked}
+        title={locked ? "Please wait until the current task finishes" : undefined}
+      >
+        <button
+          className="nav-burger"
+          aria-label="Menu"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((v) => !v)}
+        >
+          ☰
+          {/* Activity dot: an upload/staged batch is easy to miss while its
+              nav link is hidden inside the collapsed menu. */}
+          {(isUploading || sessionId) && <span className="nav-burger-dot" aria-hidden />}
+        </button>
+        <span className="nav-current">{currentPageTitle(location.pathname)}</span>
+        {menuOpen && (
+          <nav className="nav-menu" role="menu">
+            <NavLinks onNavigate={() => setMenuOpen(false)} />
+          </nav>
+        )}
+      </div>
       {locked && (
         <span className="nav-task" role="status" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
@@ -111,6 +228,7 @@ export default function App() {
         <ImportSessionProvider>
           <div className="app-shell">
             <SourceScanWatcher />
+            <EmptyLibraryRedirect />
             <TopBar />
 
             <Routes>

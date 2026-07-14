@@ -42,7 +42,8 @@ export function WelcomeGuide() {
           <ol className="welcome-steps">
             <li>
               <strong>Import photos</strong> — go to <em>Import</em>, drop in files or pick a
-              folder. Duplicates are detected before anything is copied into your library.
+              folder. They land in a review area first: nothing is copied into your library
+              until you press <em>Add to library</em>. Duplicates are flagged automatically.
             </li>
             <li>
               <strong>Browse &amp; cull</strong> — in <em>Library</em>, give photos star ratings,

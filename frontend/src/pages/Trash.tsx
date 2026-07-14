@@ -76,22 +76,24 @@ export function Trash() {
             : ""}
         </span>
         <span style={{ flex: 1 }} />
-        <button
-          className="btn"
-          onClick={() => setSelected(new Set((images ?? []).map((im) => im.id)))}
-          disabled={!images || images.length === 0}
-        >
-          Select all
-        </button>
-        <button className="btn" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
-          Clear selection
-        </button>
-        <button className="btn" onClick={restoreSelected} disabled={selected.size === 0}>
-          Restore
-        </button>
-        <button className="btn quiet-danger btn-sm" onClick={deleteSelectedForever} disabled={selected.size === 0}>
-          Delete forever
-        </button>
+        <div className="control-group" style={{ flexWrap: "nowrap" }}>
+          <button
+            className="btn"
+            onClick={() => setSelected(new Set((images ?? []).map((im) => im.id)))}
+            disabled={!images || images.length === 0}
+          >
+            Select all
+          </button>
+          <button className="btn" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
+            Clear selection
+          </button>
+          <button className="btn" onClick={restoreSelected} disabled={selected.size === 0}>
+            Restore
+          </button>
+          <button className="btn quiet-danger btn-sm" onClick={deleteSelectedForever} disabled={selected.size === 0}>
+            Delete forever
+          </button>
+        </div>
       </div>
       <div className="page-scroll">
         {selected.size > 0 && (

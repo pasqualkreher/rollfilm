@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ImageOut } from "../api/types";
 import { useSelects } from "../state/selects";
+import { useTasks } from "../state/tasks";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
-import { ViewPrefsControls } from "../components/ViewPrefsControls";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 
 export function Selects() {
@@ -14,6 +14,13 @@ export function Selects() {
   const [error, setError] = useState<string | null>(null);
   const [immichBusy, setImmichBusy] = useState(false);
   const [immichMsg, setImmichMsg] = useState<string | null>(null);
+  // Same select mode as the Library / Album / Import grids, but ON by default
+  // here with everything pre-selected: the set is already curated, so the
+  // common move is unticking a few photos and downloading the rest. No
+  // separate bulk bar - the toolbar's own actions apply to the selection.
+  const [selectMode, setSelectMode] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [lastIndex, setLastIndex] = useState<number | null>(null);
 
   // The "Add to Immich" action only appears when the integration is configured
   // in Settings (both host and API key present).
@@ -22,6 +29,14 @@ export function Selects() {
     queryFn: () => api.settings.getImmich(),
   });
   const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
+
+  // Lock the nav + show the top-bar spinner while uploading to Immich, same as
+  // the Library and Album pages.
+  const { setBusyLabel } = useTasks();
+  useEffect(() => {
+    setBusyLabel(immichBusy ? "Uploading to Immich…" : null);
+  }, [immichBusy, setBusyLabel]);
+  useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
   // One query per selected id; deleted photos simply resolve to nothing and are
   // filtered out below so the list never shows a broken tile.
@@ -38,12 +53,76 @@ export function Selects() {
   // When merging, a selected RAW+JPEG pair shows as its single JPEG card.
   const images = mergePairs ? collapsePairs(loadedImages) : loadedImages;
 
-  async function downloadAll() {
-    if (count === 0) return;
+  const hasSelection = selected.size > 0;
+  // While photos are selected the toolbar actions target just those; otherwise
+  // they act on the whole working set.
+  const actionIds = hasSelection ? Array.from(selected) : ids;
+
+  // Select-all by default: each photo is auto-selected the first time it
+  // appears (the per-id queries resolve at different times), but only once -
+  // a photo the user unticked stays unticked.
+  const seenRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const newIds = images.map((im) => im.id).filter((id) => !seenRef.current.has(id));
+    if (newIds.length === 0) return;
+    newIds.forEach((id) => seenRef.current.add(id));
+    setSelected((prev) => new Set([...prev, ...newIds]));
+  }, [images]);
+
+  // Expand a set of ids with each one's RAW/JPEG partner, but only in merged
+  // view where the partner is hidden behind the shown card (the split view lets
+  // the user pick each half, so we keep their selection exact there).
+  function withPairedIds(imageIds: string[]): string[] {
+    if (!mergePairs) return imageIds;
+    const byId = new Map(loadedImages.map((im) => [im.id, im]));
+    const out = new Set(imageIds);
+    for (const imgId of imageIds) {
+      const partner = byId.get(imgId)?.paired_image_id;
+      if (partner) out.add(partner);
+    }
+    return Array.from(out);
+  }
+
+  // Click = toggle; shift-click = select the whole range since the last click,
+  // like the library grid - makes selecting a long run of photos fast.
+  function toggleSelect(imageId: string, index: number, shiftKey: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastIndex !== null) {
+        const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
+        for (let i = start; i <= end; i++) next.add(images[i].id);
+      } else if (next.has(imageId)) {
+        next.delete(imageId);
+      } else {
+        next.add(imageId);
+      }
+      return next;
+    });
+    setLastIndex(index);
+  }
+
+  function selectAll() {
+    setSelected(new Set(images.map((img) => img.id)));
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+    setLastIndex(null);
+  }
+
+  function removeSelectedFromSelects() {
+    if (!hasSelection) return;
+    // Merged view hides the RAW behind its JPEG - drop both halves of the shot.
+    withPairedIds(Array.from(selected)).forEach(remove);
+    clearSelection();
+  }
+
+  async function downloadZip(imageIds: string[]) {
+    if (imageIds.length === 0) return;
     setDownloading(true);
     setError(null);
     try {
-      await api.images.downloadZip(ids);
+      await api.images.downloadZip(imageIds);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -51,13 +130,13 @@ export function Selects() {
     }
   }
 
-  async function addToImmich() {
-    if (count === 0) return;
+  async function addToImmich(imageIds: string[]) {
+    if (imageIds.length === 0) return;
     setImmichBusy(true);
     setImmichMsg(null);
     setError(null);
     try {
-      const result = await api.images.pushToImmich(ids);
+      const result = await api.images.pushToImmich(imageIds);
       setImmichMsg(result.message);
     } catch (e) {
       setError((e as Error).message);
@@ -76,37 +155,93 @@ export function Selects() {
       {count === 0 ? (
         <div className="empty-state">
           No selects yet. Gather photos from the library, an album, or a photo's page to collect the shots you want to
-          edit or download.
+          generate a zip of.
         </div>
       ) : (
         <>
           <div className="filter-bar">
-            <button className="btn primary" onClick={downloadAll} disabled={downloading}>
-              {downloading ? "Preparing zip..." : `Download all (${count})`}
-            </button>
-            {/* Hidden in full sync mode - everything uploads automatically there. */}
-            {immichConfigured && immich?.sync_mode !== "full" && (
-              <button
-                className="btn"
-                onClick={addToImmich}
-                disabled={immichBusy}
-                title="Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
-              >
-                {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+            <div className="control-group">
+              <button className="btn primary" onClick={() => downloadZip(actionIds)} disabled={downloading}>
+                {downloading
+                  ? "Generating zip..."
+                  : hasSelection
+                    ? `Generate zip (${selected.size} selected)`
+                    : `Generate zip (all ${count})`}
               </button>
-            )}
-            <button className="btn ghost" onClick={clear}>
-              Clear selects
-            </button>
-            <ViewPrefsControls />
+              {/* Hidden in full sync mode - everything uploads automatically there. */}
+              {immichConfigured && immich?.sync_mode !== "full" && (
+                <button
+                  className="btn"
+                  onClick={() => addToImmich(actionIds)}
+                  disabled={immichBusy}
+                  title={
+                    hasSelection
+                      ? "Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
+                      : "Upload all JPEGs in your selects to Immich (RAW files are skipped)"
+                  }
+                >
+                  {immichBusy
+                    ? "Uploading to Immich..."
+                    : hasSelection
+                      ? `Add ${selected.size} to Immich`
+                      : "Add to Immich"}
+                </button>
+              )}
+              <button className="btn ghost" onClick={clear}>
+                Clear selects
+              </button>
+            </div>
+            <div className="control-group control-group--actions">
+              <button
+                className={`btn${selectMode ? " primary" : ""}`}
+                onClick={() => {
+                  setSelectMode((v) => !v);
+                  // Leaving select mode clears the picks; re-entering starts
+                  // from the default again - everything selected.
+                  if (selectMode) clearSelection();
+                  else selectAll();
+                }}
+              >
+                {selectMode ? "Done selecting" : "Select"}
+              </button>
+              {selectMode && (
+                <>
+                  <button className="btn" onClick={selectAll}>
+                    Select all
+                  </button>
+                  <button className="btn" onClick={clearSelection} disabled={!hasSelection}>
+                    Clear selection
+                  </button>
+                </>
+              )}
+              {hasSelection && (
+                <button className="btn" onClick={removeSelectedFromSelects}>
+                  Remove from selects
+                </button>
+              )}
+            </div>
             {immichMsg && <span style={{ color: "var(--text-muted)" }}>{immichMsg}</span>}
             {error && <span style={{ color: "var(--danger)" }}>{error}</span>}
           </div>
 
+          {selectMode && (
+            <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
+              Click photos to select them - shift-click to select a range. Generate zip/Immich act on
+              your selection while one exists.
+            </p>
+          )}
+
           {/* The shared grid handles justified tile sizing (--ar + filler) and
               the enlarged 1-2 photo layout - the previous hand-rolled grid
               lacked both, so a lone select stretched huge and got cut off. */}
-          <ThumbnailGrid images={images} onRemove={remove} removeTitle="Remove from selects" />
+          <ThumbnailGrid
+            images={images}
+            selectedIds={selected}
+            onToggleSelect={toggleSelect}
+            selectMode={selectMode}
+            onRemove={remove}
+            removeTitle="Remove from selects"
+          />
         </>
       )}
     </div>
