@@ -122,7 +122,7 @@ export function Library() {
     viewMode === "combined"
       ? mergePairs
         ? collapsePairs(images ?? [])
-        : groupPairsAdjacent(images ?? [], (img) => img.paired_image_id)
+        : groupPairsAdjacent(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
       : images ?? [];
 
   // Expand a set of ids with each one's RAW/JPEG partner, but only in merged

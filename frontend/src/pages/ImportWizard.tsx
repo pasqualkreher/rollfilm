@@ -254,7 +254,7 @@ export function ImportWizard() {
     viewMode === "combined"
       ? mergePairs
         ? collapsePairsBy(filteredFiles, (f) => f.file_type, (f) => f.paired_staged_file_id)
-        : groupPairsAdjacent(filteredFiles, (f) => f.paired_staged_file_id)
+        : groupPairsAdjacent(filteredFiles, (f) => f.file_type, (f) => f.paired_staged_file_id)
       : filteredFiles;
   const selectedCount = (files ?? []).filter((f) => f.selected).length;
 

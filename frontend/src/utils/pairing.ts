@@ -1,10 +1,11 @@
 // Reorders a list so that a paired item (RAW+JPEG shot together) always sits
 // immediately next to its partner, while keeping the overall order otherwise
 // unchanged (the pair is placed at the position of whichever half appears
-// first). Without this, two files sharing near-identical EXIF timestamps
-// can still end up separated by ties in the sort or by other photos.
+// first, JPEG before RAW). Without this, two files sharing near-identical EXIF
+// timestamps can still end up separated by ties in the sort or by other photos.
 export function groupPairsAdjacent<T extends { id: string }>(
   items: T[],
+  fileType: (item: T) => string,
   pairedId: (item: T) => string | null | undefined
 ): T[] {
   const byId = new Map(items.map((item) => [item.id, item]));
@@ -13,16 +14,17 @@ export function groupPairsAdjacent<T extends { id: string }>(
 
   for (const item of items) {
     if (emitted.has(item.id)) continue;
-    result.push(item);
-    emitted.add(item.id);
 
     const partnerId = pairedId(item);
-    if (partnerId && !emitted.has(partnerId)) {
-      const partner = byId.get(partnerId);
-      if (partner) {
-        result.push(partner);
-        emitted.add(partner.id);
-      }
+    const partner = partnerId && !emitted.has(partnerId) ? byId.get(partnerId) : undefined;
+    if (partner) {
+      const [first, second] = fileType(item) === "raw" ? [partner, item] : [item, partner];
+      result.push(first, second);
+      emitted.add(first.id);
+      emitted.add(second.id);
+    } else {
+      result.push(item);
+      emitted.add(item.id);
     }
   }
 

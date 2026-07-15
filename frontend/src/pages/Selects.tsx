@@ -5,6 +5,7 @@ import type { ImageOut } from "../api/types";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
+import { groupPairsAdjacent } from "../utils/pairing";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 
 export function Selects() {
@@ -50,8 +51,11 @@ export function Selects() {
   const loadedImages = results
     .map((r) => r.data)
     .filter((img): img is ImageOut => Boolean(img));
-  // When merging, a selected RAW+JPEG pair shows as its single JPEG card.
-  const images = mergePairs ? collapsePairs(loadedImages) : loadedImages;
+  // When merging, a selected RAW+JPEG pair shows as its single JPEG card;
+  // otherwise both halves sit adjacent (JPEG first), same as the other grids.
+  const images = mergePairs
+    ? collapsePairs(loadedImages)
+    : groupPairsAdjacent(loadedImages, (img) => img.file_type, (img) => img.paired_image_id);
 
   const hasSelection = selected.size > 0;
   // While photos are selected the toolbar actions target just those; otherwise
