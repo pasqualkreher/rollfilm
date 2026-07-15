@@ -13,6 +13,7 @@ from app.api.routes import (
 )
 from app.db.session import engine
 from app.services.embeddings import ensure_embeddings_table
+from app.services.geocode import warm_in_background as warm_geocoder
 from app.services.immich_sync import start_background_immich_sync
 from app.services.maintenance import start_background_sync
 from app.services.sources import scan_all_sources
@@ -59,6 +60,10 @@ def on_startup() -> None:
     # from Immich (see services/immich_sync.py). No-op in manual mode or while
     # Immich isn't configured.
     start_background_immich_sync()
+    # Parse the reverse-geocoding dataset now instead of inside the first
+    # import commit (the desktop app restarts the backend on every launch, so
+    # that first-commit stall was paid every session).
+    warm_geocoder()
 
 
 @app.get("/health")

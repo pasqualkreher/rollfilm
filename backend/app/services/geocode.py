@@ -14,11 +14,38 @@ import csv
 import logging
 import math
 import os
+import threading
 from dataclasses import dataclass
 
 import pycountry
 
 logger = logging.getLogger(__name__)
+
+_warm_started = False
+
+
+def warm_in_background() -> None:
+    """Load the reverse-geocoding dataset on a daemon thread. reverse_geocoder
+    parses a ~25MB cities CSV and builds its k-d tree on first use ("Loading
+    formatted geocoded file..."), which otherwise happens *inside* the first
+    import commit after every backend start - a noticeable stall in the
+    desktop app, where the backend is relaunched with the app. rg.search()
+    memoises the loaded tree module-globally, so one throwaway query here
+    makes every later commit's lookup instant."""
+    global _warm_started
+    if _warm_started:
+        return
+    _warm_started = True
+
+    def _warm() -> None:
+        try:
+            import reverse_geocoder as rg
+
+            rg.search([(0.0, 0.0)], mode=1)
+        except Exception:  # pragma: no cover - missing dataset already handled per-lookup
+            logger.exception("Reverse-geocoder warm-up failed")
+
+    threading.Thread(target=_warm, name="geocode-warm", daemon=True).start()
 
 # Sentinel region value meaning "photos with no location at all", so the region
 # filter can offer an explicit "no location" bucket alongside real countries.
