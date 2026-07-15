@@ -11,7 +11,9 @@ from app.api.routes import (
     sources,
     tags,
 )
+from app.config import settings as app_settings
 from app.db.session import engine
+from app.services.cloudfiles import rehydrate_dirs_in_background
 from app.services.embeddings import ensure_embeddings_table
 from app.services.geocode import warm_in_background as warm_geocoder
 from app.services.immich_sync import start_background_immich_sync
@@ -64,6 +66,16 @@ def on_startup() -> None:
     # import commit (the desktop app restarts the backend on every launch, so
     # that first-commit stall was paid every session).
     warm_geocoder()
+    # If the library sits in a cloud-synced folder (iCloud/Nextcloud), the
+    # provider may have evicted thumbnails or staged files to placeholders;
+    # the first read of one blocks until it re-downloads, which shows up as
+    # random multi-second hangs in the grid or an import. Re-download them all
+    # now on a background thread so foreground reads stay warm.
+    rehydrate_dirs_in_background(
+        app_settings.thumbnail_cache_root,
+        app_settings.import_staging_root,
+        app_settings.db_path.parent,
+    )
 
 
 @app.get("/health")

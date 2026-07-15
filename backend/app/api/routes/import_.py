@@ -22,7 +22,6 @@ from app.services.import_pipeline import (
     discard_import_session,
     get_import_progress,
     stage_uploaded_files,
-    staging_pending,
 )
 from app.services.raw import extract_full_preview
 from app.services.thumbnails import THUMBNAIL_MAX_PX
@@ -267,11 +266,6 @@ def commit_session(
     session = get_owned_import_session(db, current_user.id, session_id)
     if session.status != ImportSessionStatus.staging:
         raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
-    # Staging analysis now runs in the background after the upload request
-    # returns - committing mid-analysis would import a partial session (and
-    # race the analyzer's own DB writes).
-    if staging_pending(session_id):
-        raise HTTPException(status_code=409, detail="Photos are still being processed")
     return commit_import_session(
         db,
         session,

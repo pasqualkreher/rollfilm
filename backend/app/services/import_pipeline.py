@@ -6,7 +6,7 @@ import shutil
 import threading
 import time
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -287,32 +287,6 @@ def _persist_analyzed(
 # staged so far - so it's serialized behind one process-wide lock.
 _staging_lock = threading.Lock()
 
-# Upload requests now only write bytes to the staging folder and return; the
-# heavy analysis (hash/preview/phash/exif/thumbnail) runs on this single-worker
-# executor in the background. One worker on purpose: batches analyze in arrival
-# order, which _persist_analyzed's dedup seeding depends on, and the review UI
-# polls /progress + refetches the file list while cards trickle in.
-_stage_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="import-stage")
-
-# Outstanding background analysis jobs per session, so the commit route can
-# refuse to run while photos of that session are still being processed.
-_pending_staging: dict[str, int] = defaultdict(int)
-_pending_lock = threading.Lock()
-
-# Serializes the write-to-staging loop of concurrent upload batches: the
-# filename collision counter below does exists()-then-create, which would race
-# when two batches of the same folder carry equal basenames (flattened
-# subfolders). Analysis no longer runs under this, so it's held only for the
-# cheap disk writes.
-_write_lock = threading.Lock()
-
-
-def staging_pending(session_id: str) -> bool:
-    """True while background analysis jobs for this session are queued or
-    running - i.e. the session's staged-file list is still growing."""
-    with _pending_lock:
-        return _pending_staging.get(session_id, 0) > 0
-
 
 # --- Import progress (for the UI's "processing"/"importing" phase ETA) --------
 # Upload byte-progress is reported by the browser itself, but the two backend
@@ -323,31 +297,26 @@ _progress: dict[str, dict] = {}
 _progress_lock = threading.Lock()
 
 
+# How many recent completions the ETA rate is computed from. Big enough to
+# smooth per-file variance (JPEG vs RAW), small enough that the estimate
+# tracks the *current* rate instead of averaging over the whole session -
+# an average lies badly when the quick JPEGs finish first or when I/O stalls.
+_ETA_WINDOW = 20
+
+
+def _progress_new(phase: str, total: int) -> dict:
+    return {
+        "phase": phase,
+        "processed": 0,
+        "total": total,
+        "started": time.monotonic(),
+        "recent": deque(maxlen=_ETA_WINDOW),
+    }
+
+
 def _progress_begin(session_id: str, phase: str, total: int) -> None:
     with _progress_lock:
-        _progress[session_id] = {
-            "phase": phase,
-            "processed": 0,
-            "total": total,
-            "started": time.monotonic(),
-        }
-
-
-def _progress_add(session_id: str, phase: str, n: int) -> None:
-    """Grow the phase's total instead of resetting it - upload batches enqueue
-    analysis work incrementally, and the UI's counter should cover the whole
-    session, not just the newest batch."""
-    with _progress_lock:
-        p = _progress.get(session_id)
-        if p is None or p["phase"] != phase:
-            _progress[session_id] = {
-                "phase": phase,
-                "processed": 0,
-                "total": n,
-                "started": time.monotonic(),
-            }
-        else:
-            p["total"] += n
+        _progress[session_id] = _progress_new(phase, total)
 
 
 def _progress_step(session_id: str, n: int = 1) -> None:
@@ -355,6 +324,9 @@ def _progress_step(session_id: str, n: int = 1) -> None:
         p = _progress.get(session_id)
         if p is not None:
             p["processed"] += n
+            now = time.monotonic()
+            for _ in range(n):
+                p["recent"].append(now)
 
 
 def _progress_done(session_id: str) -> None:
@@ -374,10 +346,19 @@ def get_import_progress(session_id: str) -> dict | None:
         if p is None:
             return None
         phase, processed, total, started = p["phase"], p["processed"], p["total"], p["started"]
+        recent = list(p["recent"])
     eta = None
     if phase != "idle" and processed > 0 and total > processed:
-        elapsed = time.monotonic() - started
-        eta = elapsed / processed * (total - processed)
+        now = time.monotonic()
+        # Rate over the most recent completions, measured up to *now* rather
+        # than up to the last finish - so a stall (slow RAWs, throttled I/O)
+        # makes the ETA honestly grow instead of freezing at a stale value.
+        if len(recent) >= 2 and now > recent[0]:
+            rate = len(recent) / (now - recent[0])
+            eta = (total - processed) / rate
+        else:
+            elapsed = now - started
+            eta = elapsed / processed * (total - processed)
     return {"phase": phase, "processed": processed, "total": total, "eta_seconds": eta}
 
 
@@ -386,17 +367,14 @@ def stage_uploaded_files(
 ) -> ImportSession:
     """Handles photos picked via the browser's native folder dialog and
     uploaded over HTTP - the backend never needs filesystem access to
-    wherever the user's SD card/folder actually is. Only writes the bytes to
-    the staging folder; the analysis runs in the background (see
-    _enqueue_analysis), so this request returns as soon as the upload is
-    drained and the next batch's bytes can start flowing."""
+    wherever the user's SD card/folder actually is."""
     session = ImportSession(owner_id=owner_id, source_path=source_label or "Uploaded folder")
     db.add(session)
-    # Commit (not just flush) before enqueueing: the background job loads the
-    # session row through its own DB session.
-    db.commit()
-    tasks, thumb_dir = _write_uploads(session, uploads)
-    _enqueue_analysis(session.id, owner_id, tasks, thumb_dir)
+    db.flush()
+    with _staging_lock:
+        _stage_uploads_into(db, session, owner_id, uploads)
+        db.commit()
+    db.refresh(session)
     return session
 
 
@@ -405,93 +383,73 @@ def append_uploaded_files(
 ) -> ImportSession:
     """Stage another batch of uploads into an existing staging session. The
     multipart parser caps a single request at 1000 files, so big imports are
-    sent as several requests all appending to one session - the single-worker
-    analysis executor processes them in order, so duplicate checks and
-    RAW+JPEG pairing still see the whole session, not just one batch."""
-    tasks, thumb_dir = _write_uploads(session, uploads)
-    _enqueue_analysis(session.id, owner_id, tasks, thumb_dir)
+    sent as several requests all appending to one session - duplicate checks
+    and RAW+JPEG pairing still see the whole session, not just one batch."""
+    with _staging_lock:
+        # This request's read transaction began before the lock was acquired
+        # (the route already loaded the session row). End it so the dedup
+        # seeding below sees files a concurrent batch committed meanwhile.
+        db.rollback()
+        _stage_uploads_into(db, session, owner_id, uploads)
+        db.commit()
+    db.refresh(session)
     return session
 
 
-def _write_uploads(
-    session: ImportSession, uploads: list[UploadedFile]
-) -> tuple[list[tuple[Path, str, str, str]], Path]:
-    """Drain the request's upload streams into the session's staging folder.
-    Cheap disk I/O only - no hashing/decoding here."""
+def _stage_uploads_into(
+    db: Session, session: ImportSession, owner_id: int, uploads: list[UploadedFile]
+) -> None:
     session_dir = settings.import_staging_root / session.id
     thumb_dir = session_dir / ".thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
+    # 1) Write each upload to the staging folder. Serial because it drains the
+    #    per-request upload streams; cheap next to the analysis below.
+    write_started = time.monotonic()
+    total_bytes = 0
     tasks: list[tuple[Path, str, str, str]] = []
-    with _write_lock:
-        for upload in uploads:
-            original_filename = Path(upload.filename or "").name
-            if not original_filename or original_filename.startswith("."):
-                continue
-            file_type = classify_file_type(Path(original_filename))
-            if file_type is None:
-                continue
+    for upload in uploads:
+        original_filename = Path(upload.filename or "").name
+        if not original_filename or original_filename.startswith("."):
+            continue
+        file_type = classify_file_type(Path(original_filename))
+        if file_type is None:
+            continue
 
-            staged_path = session_dir / original_filename
-            counter = 1
-            while staged_path.exists():
-                staged_path = session_dir / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
-                counter += 1
+        staged_path = session_dir / original_filename
+        counter = 1
+        while staged_path.exists():
+            staged_path = session_dir / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
+            counter += 1
 
-            with staged_path.open("wb") as out:
-                shutil.copyfileobj(upload.file, out)
+        with staged_path.open("wb") as out:
+            shutil.copyfileobj(upload.file, out)
 
-            tasks.append((staged_path, original_filename, file_type, str(uuid.uuid4())))
-    return tasks, thumb_dir
+        total_bytes += staged_path.stat().st_size
+        tasks.append((staged_path, original_filename, file_type, str(uuid.uuid4())))
 
-
-def _enqueue_analysis(
-    session_id: str, owner_id: int, tasks: list[tuple[Path, str, str, str]], thumb_dir: Path
-) -> None:
-    """Queue the heavy per-file analysis of one uploaded batch. Progress is
-    registered here (in the request) so /progress immediately reports the
-    session as busy, even while the job is still waiting for the worker."""
-    if not tasks:
-        return
-    _progress_add(session_id, "staging", len(tasks))
-    with _pending_lock:
-        _pending_staging[session_id] += 1
-    _stage_executor.submit(_analyze_job, session_id, owner_id, tasks, thumb_dir)
-
-
-def _analyze_job(
-    session_id: str, owner_id: int, tasks: list[tuple[Path, str, str, str]], thumb_dir: Path
-) -> None:
-    """Background half of staging: hash/preview/phash/exif/thumbnail the batch
-    in parallel, then persist rows + dedup serially, with its own DB session
-    (the upload request's session is long gone)."""
-    from app.db.session import SessionLocal
-
+    # 2) Hash/preview/phash/exif/thumbnail every file in parallel (the slow part,
+    #    independent per file), then 3) write the rows + dedup serially.
+    analyze_started = time.monotonic()
+    _progress_begin(session.id, "staging", len(tasks))
     try:
-        with _staging_lock:
-            db = SessionLocal()
-            try:
-                session = db.get(ImportSession, session_id)
-                if session is None or session.status != ImportSessionStatus.staging:
-                    return  # discarded/committed while queued - staged bytes are already gone
-                analyzed = _analyze_parallel(tasks, thumb_dir, progress_session_id=session_id)
-                _persist_analyzed(db, session, owner_id, analyzed)
-                db.commit()
-            finally:
-                db.close()
-    except Exception:
-        # A discard mid-analysis surfaces here (staged files vanish under the
-        # readers); anything else is a real bug but must not wedge the pending
-        # counter, or the session could never be committed.
-        logger.exception("Background staging analysis failed for session %s", session_id)
+        analyzed = _analyze_parallel(tasks, thumb_dir, progress_session_id=session.id)
+        _persist_analyzed(db, session, owner_id, analyzed)
     finally:
-        with _pending_lock:
-            _pending_staging[session_id] -= 1
-            done = _pending_staging[session_id] <= 0
-            if done:
-                _pending_staging.pop(session_id, None)
-        if done:
-            _progress_done(session_id)
+        _progress_done(session.id)
+
+    # One line per batch so a slow import is diagnosable from the server log
+    # alone: time spent draining the upload's bytes vs. analyzing them. (The
+    # bytes' journey from the source medium to this request happens in the
+    # browser and is invisible here - a fast write + fast analyze but a slow
+    # overall import points at the client/source side.)
+    logger.info(
+        "import batch staged: %d files (%.0f MB) - received/written in %.1fs, analyzed in %.1fs",
+        len(tasks),
+        total_bytes / 1e6,
+        analyze_started - write_started,
+        time.monotonic() - analyze_started,
+    )
 
 
 def commit_import_session(

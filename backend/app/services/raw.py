@@ -58,21 +58,7 @@ def extract_preview(path: Path) -> PILImage.Image:
     behavior in any photo viewer. exif_transpose() is a no-op when there's no
     orientation tag to read (e.g. the postprocess() array below has none).
     """
-    if not is_raw(path):
-        return _load_jpeg_preview(PILImage.open(path))
-
-    with rawpy.imread(str(path)) as raw:
-        try:
-            thumb = raw.extract_thumb()
-        except rawpy.LibRawNoThumbnailError:
-            thumb = None
-
-        if thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG:
-            img = PILImage.open(io.BytesIO(thumb.data))
-            return ImageOps.exif_transpose(img).convert("RGB")
-
-        rgb = raw.postprocess(use_camera_wb=True, half_size=True)
-        return PILImage.fromarray(rgb)
+    return extract_preview_with_size(path)[0]
 
 
 def _oriented_size(im: PILImage.Image) -> tuple[int, int]:
@@ -89,18 +75,31 @@ def _oriented_size(im: PILImage.Image) -> tuple[int, int]:
 def extract_preview_with_size(path: Path) -> tuple[PILImage.Image, tuple[int, int]]:
     """extract_preview() plus the true displayed dimensions of the *original*.
 
-    For JPEG the preview is decoded at a reduced DCT scale (see extract_preview),
-    so its own .size is smaller than the original - a caller sizing a thumbnail
-    as a fraction of the original (staging) needs these full dimensions instead.
-    For RAW the size is the preview's own, matching the prior thumbnail sizing.
+    The preview is decoded at a reduced DCT scale when the source is larger
+    than needed (see _load_jpeg_preview) - including a RAW's embedded JPEG,
+    which cameras store at full sensor resolution. The size is read from the
+    header *before* the reduced decode, so a caller sizing a thumbnail as a
+    fraction of the original (staging) still sees the full dimensions.
     """
     if not is_raw(path):
         im = PILImage.open(path)
         original_size = _oriented_size(im)
         return _load_jpeg_preview(im), original_size
 
-    preview = extract_preview(path)
-    return preview, preview.size
+    with rawpy.imread(str(path)) as raw:
+        try:
+            thumb = raw.extract_thumb()
+        except rawpy.LibRawNoThumbnailError:
+            thumb = None
+
+        if thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG:
+            im = PILImage.open(io.BytesIO(thumb.data))
+            original_size = _oriented_size(im)
+            return _load_jpeg_preview(im), original_size
+
+        rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+        preview = PILImage.fromarray(rgb)
+        return preview, preview.size
 
 
 def extract_full_preview(path: Path) -> PILImage.Image:
