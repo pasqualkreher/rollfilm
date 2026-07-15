@@ -11,13 +11,20 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$HERE"
 
 VENV="$HERE/.venv"
-[ -x "$VENV/bin/pyinstaller" ] || {
-  echo "error: $VENV/bin/pyinstaller not found. Create the backend venv first." >&2
+[ -x "$VENV/bin/python" ] || {
+  echo "error: $VENV/bin/python not found. Create the backend venv first." >&2
+  exit 1
+}
+"$VENV/bin/python" -c "import PyInstaller" 2>/dev/null || {
+  echo "error: PyInstaller is not installed in $VENV." >&2
   exit 1
 }
 
 echo "==> Building backend with PyInstaller (this is slow — torch is large)"
-"$VENV/bin/pyinstaller" photo_manager_backend.spec \
+# `python -m PyInstaller` instead of the bin/pyinstaller entry script: the
+# script hardcodes the venv's absolute path in its shebang, which breaks
+# whenever the checkout is moved after the venv was created.
+"$VENV/bin/python" -m PyInstaller photo_manager_backend.spec \
   --noconfirm --clean \
   --distpath "$HERE/pyi-dist" \
   --workpath "$HERE/pyi-build"
