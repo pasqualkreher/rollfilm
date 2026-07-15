@@ -11,8 +11,10 @@ import type {
   FolderScanOut,
   ImportProgress,
   ImportSessionOut,
+  GeoImage,
   LibraryFacets,
   LibraryFilters,
+  LibraryIndexImage,
   ScanStatus,
   SearchResultOut,
   SourceRoot,
@@ -62,6 +64,45 @@ export function editVersion(image: ImageOut): string {
     image.edit_mist,
   ].join("-");
 }
+
+// Version string of a never-edited photo (every edit field at its default).
+// The library index sends thumb_version: "" for those (the vast majority) to
+// keep the payload small - substitute this constant so the grid's thumbnail
+// URLs stay identical to the ones every other view builds via editVersion().
+export const DEFAULT_EDIT_VERSION = editVersion({
+  edit_rotation: 0,
+  edit_crop_x: null,
+  edit_crop_y: null,
+  edit_crop_width: null,
+  edit_crop_height: null,
+  edit_flip_h: false,
+  edit_flip_v: false,
+  edit_straighten: 0,
+  edit_persp_h: 0,
+  edit_persp_v: 0,
+  edit_exposure: 0,
+  edit_contrast: 0,
+  edit_highlights: 0,
+  edit_shadows: 0,
+  edit_whites: 0,
+  edit_blacks: 0,
+  edit_saturation: 0,
+  edit_temperature: 0,
+  edit_tint: 0,
+  edit_color_mix: null,
+  edit_vignette: 0,
+  edit_distortion: 0,
+  edit_dehaze: 0,
+  edit_grain: 0,
+  edit_grain_size: 0,
+  edit_denoise: 0,
+  edit_clarity: 0,
+  edit_sharpness: 0,
+  edit_color_tint: 0,
+  edit_chrome_effect: 0,
+  edit_chrome_blue: 0,
+  edit_mist: 0,
+} as ImageOut);
 
 // The editor state uses camelCase; the API's pydantic model is snake_case.
 // Multi-word fields MUST be renamed here - pydantic silently ignores unknown
@@ -173,6 +214,10 @@ function uploadBatch(
     files.forEach((f) => formData.append("files", f, f.name));
     formData.append("source_label", sourceLabel);
     formData.append("total_bytes", String(totalBytes));
+    // Source modification times (epoch seconds), aligned with `files` -
+    // multipart doesn't carry them, and they're the capture-date fallback for
+    // photos without EXIF (otherwise those sort by import time).
+    formData.append("mtimes", JSON.stringify(files.map((f) => f.lastModified / 1000)));
     if (sessionId) formData.append("session_id", sessionId);
 
     const xhr = new XMLHttpRequest();
@@ -221,6 +266,20 @@ export const api = {
     },
     facets(): Promise<LibraryFacets> {
       return request(`/images/facets`);
+    },
+    // Total photos the filter set matches.
+    count(filters: LibraryFilters): Promise<{ count: number }> {
+      return request(`/images/count?${filtersToParams(filters).toString()}`);
+    },
+    // The whole filtered library as one slim ordered list - drives the
+    // virtual grid: exact scrollbar range and jump-anywhere without paging.
+    index(filters: LibraryFilters): Promise<{ images: LibraryIndexImage[] }> {
+      return request(`/images/index?${filtersToParams(filters).toString()}`);
+    },
+    // Every geotagged photo (slim rows, newest first) - the map clusters
+    // these client-side per zoom level.
+    geo(): Promise<{ images: GeoImage[] }> {
+      return request(`/images/geo`);
     },
     get(id: string): Promise<ImageOut> {
       return request(`/images/${id}`);
@@ -542,6 +601,9 @@ export const api = {
     query(q: string, filters?: Partial<LibraryFilters>): Promise<SearchResultOut[]> {
       const params = filtersToParams(filters ?? {});
       params.set("q", q);
+      // The UI language, so country/city queries work in it ("italien",
+      // "münchen") as well as in English.
+      params.set("lang", navigator.language || "en");
       return request(`/search?${params.toString()}`);
     },
   },
@@ -556,6 +618,12 @@ export const api = {
     },
     rebuildThumbnails(): Promise<{ rebuilt: number }> {
       return request(`/maintenance/rebuild-thumbnails`, { method: "POST" });
+    },
+    // Re-read every photo's EXIF capture date and fix wrongly stored ones
+    // (photos imported before the reader understood CreateDate/XMP fallbacks
+    // sorted by their import moment instead of their capture date).
+    repairDates(): Promise<{ checked: number; fixed: number }> {
+      return request(`/maintenance/repair-dates`, { method: "POST" });
     },
     backupUrl(): string {
       return assetUrl(`/maintenance/backup`);

@@ -1,10 +1,12 @@
 import json
 import logging
 import os
+import queue
 import shutil
 import tempfile
 import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Protocol
@@ -13,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models import Album, AlbumImage, ColorLabel, FileType, Image, ImportSession, ImportStagedFile
-from app.services.exif import read_exif
+from app.services.exif import capture_date_from_filename, new_helper, read_exif
 from app.services.filesystem import resolve_image_path
 from app.services.raw import classify_file_type
 from app.services.thumbnails import derivative_dir, regenerate_for_image
@@ -164,6 +166,79 @@ def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
             rebuilt += 1
     db.commit()
     return {"rebuilt": rebuilt}
+
+
+def _same_moment(a: datetime | None, b: datetime | None) -> bool:
+    if a is None or b is None:
+        return a is b
+    # Stored values can be naive (EXIF) or aware (old mtime fallback wrote
+    # UTC-aware) - strip tzinfo for a tolerant compare; sub-second EXIF noise
+    # shouldn't count as a difference either.
+    if a.tzinfo is not None:
+        a = a.replace(tzinfo=None)
+    if b.tzinfo is not None:
+        b = b.replace(tzinfo=None)
+    return abs((a - b).total_seconds()) < 1
+
+
+def repair_capture_dates(db: Session, owner_id: int) -> dict:
+    """Re-read every photo's EXIF capture date from its original file and fix
+    rows where the stored taken_at differs. Heals photos imported before the
+    EXIF reader understood CreateDate/XMP fallbacks and non-standard date
+    formats (e.g. '2026-06-07 12:04:42' with dashes, as some editing apps
+    write) - those got the import moment as their date and sorted to the top
+    of the library instead of onto their capture day. Photos whose files carry
+    no readable capture date keep their current value.
+
+    EXIF reads run on a small worker pool (one exiftool process each, the same
+    pattern as import staging); only the row updates happen serially."""
+    images = db.query(Image).filter(Image.owner_id == owner_id).all()
+    tasks = [(img, resolve_image_path(img)) for img in images]
+    tasks = [(img, path) for img, path in tasks if path.exists()]
+
+    workers = min(8, max(2, (os.cpu_count() or 4)))
+    helpers = [new_helper() for _ in range(workers)]
+    helper_pool: queue.Queue = queue.Queue()
+    for h in helpers:
+        helper_pool.put(h)
+
+    def read_date(task: tuple[Image, Path]) -> tuple[Image, datetime | None]:
+        img, path = task
+        helper = helper_pool.get()
+        try:
+            taken_at = read_exif(path, helper=helper).taken_at
+        except Exception:
+            logger.exception("repair-dates: EXIF read failed for %s", path)
+            taken_at = None
+        finally:
+            helper_pool.put(helper)
+        # Metadata carries no date at all (WhatsApp strips EXIF): a date
+        # embedded in the filename still beats the stored import moment.
+        return img, taken_at or capture_date_from_filename(img.original_filename)
+
+    fixed = 0
+    with_date = 0
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for img, taken_at in executor.map(read_date, tasks):
+                if taken_at is None:
+                    continue
+                with_date += 1
+                if not _same_moment(img.taken_at, taken_at):
+                    img.taken_at = taken_at
+                    fixed += 1
+    finally:
+        for h in helpers:
+            try:
+                h.terminate()
+            except Exception:
+                pass
+    db.commit()
+    logger.info(
+        "repair-dates: %d photos checked, %d had a readable capture date, %d corrected",
+        len(tasks), with_date, fixed,
+    )
+    return {"checked": len(tasks), "fixed": fixed}
 
 
 def wipe_library(db: Session, owner_id: int) -> None:

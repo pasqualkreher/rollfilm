@@ -10,6 +10,7 @@ from app.db.session import get_db
 from app.services.maintenance import (
     build_backup_zip,
     rebuild_all_thumbnails,
+    repair_capture_dates,
     restore_from_backup,
     sync_db_with_library,
     wipe_library,
@@ -31,6 +32,11 @@ def sync_library(db: Session = Depends(get_db), current_user: User = Depends(get
 @router.post("/rebuild-thumbnails", response_model=schemas.RebuildThumbnailsResult)
 def rebuild_thumbnails(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return rebuild_all_thumbnails(db, current_user.id)
+
+
+@router.post("/repair-dates", response_model=schemas.RepairDatesResult)
+def repair_dates(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return repair_capture_dates(db, current_user.id)
 
 
 @router.get("/backup")

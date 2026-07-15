@@ -48,6 +48,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
   const [scrolling, setScrolling] = useState(false);
   const scrollHideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [railTop, setRailTop] = useState(120);
+  const [railHeight, setRailHeight] = useState(0);
 
   const recompute = useCallback(() => {
     const scroller = getScroller();
@@ -75,6 +76,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
       if (offset <= scroller.scrollTop + 4) topmost = label;
     }
     setMarkers(next);
+    setRailHeight(railRef.current?.getBoundingClientRect().height ?? 0);
     setCurrentFrac(scroller.scrollTop / maxScroll);
     if (!dragging) setActiveLabel(topmost ?? next[0]?.label ?? null);
   }, [getScroller, getSectionEl, getAnchor, sections, dragging]);
@@ -157,9 +159,54 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
   // fracFromEvent via RAIL_INSET so clicks land on the label they point at.
   const posTop = (frac: number) => `calc(${frac} * (100% - ${RAIL_INSET * 2}px) + ${RAIL_INSET}px)`;
 
-  // Only render a year label once per year (at its first/earliest marker), to
-  // avoid stacking the same year repeatedly down the rail.
+  // Declutter: with many months (or a short rail) the raw markers overlap into
+  // an unreadable stack. Ticks are centered on their position (translateY -50%);
+  // a year tick is two lines (~22px), a month tick one (~10px). Years are
+  // placed first and always win their space; a month label only renders when
+  // it clears the previously placed tick AND the next year tick below it -
+  // without that look-ahead, months sat right on top of the next year's label.
+  // Dropped months are only labels: dragging still scrolls through them.
+  const YEAR_SPACING = 30;
+  const MONTH_TO_MONTH = 16;
+  const MONTH_TO_YEAR = 22;
+  const usable = Math.max(0, railHeight - RAIL_INSET * 2);
   const seenYears = new Set<string>();
+  const annotated = markers.map((m) => {
+    const isYearStart = !seenYears.has(m.year);
+    if (isYearStart) seenYears.add(m.year);
+    return { m, y: m.frac * usable, isYearStart };
+  });
+  const yearTicks: typeof annotated = [];
+  let lastYearY = -Infinity;
+  for (const a of annotated) {
+    if (a.isYearStart && a.y - lastYearY >= YEAR_SPACING) {
+      yearTicks.push(a);
+      lastYearY = a.y;
+    }
+  }
+  const yearTickSet = new Set(yearTicks);
+  const shown: { marker: Marker; showYear: boolean }[] = [];
+  let nextYearIdx = 0;
+  let prevY = -Infinity;
+  let prevWasYear = false;
+  for (const a of annotated) {
+    if (yearTickSet.has(a)) {
+      shown.push({ marker: a.m, showYear: true });
+      prevY = a.y;
+      prevWasYear = true;
+      nextYearIdx++;
+      continue;
+    }
+    // A year-start whose year label was dropped (years too dense): showing it
+    // as a bare month would just re-crowd the space the drop freed up.
+    if (a.isYearStart) continue;
+    if (a.y - prevY < (prevWasYear ? MONTH_TO_YEAR : MONTH_TO_MONTH)) continue;
+    const nextYear = yearTicks[nextYearIdx];
+    if (nextYear && nextYear.y - a.y < MONTH_TO_YEAR) continue;
+    shown.push({ marker: a.m, showYear: false });
+    prevY = a.y;
+    prevWasYear = false;
+  }
 
   return (
     <div
@@ -171,9 +218,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
         scrollToFrac(fracFromEvent(e.clientY));
       }}
     >
-      {markers.map((m) => {
-        const showYear = !seenYears.has(m.year);
-        if (showYear) seenYears.add(m.year);
+      {shown.map(({ marker: m, showYear }) => {
         const isActive = m.label === activeLabel;
         return (
           <div

@@ -77,10 +77,12 @@ function EmptyLibraryRedirect() {
 }
 
 function ImportNavLink({ onNavigate }: { onNavigate?: () => void }) {
-  const { isUploading, uploadProgress, sessionId } = useImportSession();
-  // While uploading show live progress; a staged-but-unreviewed batch gets a
-  // dot so it's obvious from anywhere that photos are waiting for review.
-  const suffix = isUploading ? ` (${uploadProgress ?? 0}%)` : sessionId ? " •" : "";
+  const { isUploading, effectiveUploadPct, sessionId } = useImportSession();
+  // While uploading show live progress - the same number as the wizard's
+  // progress bar (see effectiveUploadPct), so the two can never disagree.
+  // A staged-but-unreviewed batch gets a dot so it's obvious from anywhere
+  // that photos are waiting for review.
+  const suffix = isUploading ? ` (${effectiveUploadPct ?? 0}%)` : sessionId ? " •" : "";
   return (
     <NavLink
       to="/import"

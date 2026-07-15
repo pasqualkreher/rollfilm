@@ -81,6 +81,7 @@ def upload_import_session(
     source_label: str = Form("Uploaded folder"),
     session_id: str | None = Form(None),
     total_bytes: int = Form(0),
+    mtimes: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -90,9 +91,24 @@ def upload_import_session(
     to it. `total_bytes` is the size of the *whole* planned import (all
     batches), sent by the client so the very first request can be rejected
     with a clear message when the import can never fit on the disk - instead
-    of dying halfway through with what looks like a network error."""
+    of dying halfway through with what looks like a network error.
+
+    `mtimes` is an optional JSON array of epoch seconds, aligned with `files`,
+    carrying each source file's modification time (the browser's
+    File.lastModified) - multipart itself doesn't transport it. Staging stamps
+    it on the staged copy so photos without an EXIF capture date still sort by
+    their real file date."""
     if not files:
         raise HTTPException(status_code=400, detail="No files were uploaded")
+
+    if mtimes:
+        try:
+            parsed_mtimes = json.loads(mtimes)
+        except ValueError:
+            parsed_mtimes = []
+        for f, m in zip(files, parsed_mtimes):
+            if isinstance(m, (int, float)) and m > 0:
+                f.mtime = m  # type: ignore[attr-defined]  # read via getattr in staging
 
     free = _free_disk_bytes()
     if not session_id and total_bytes and total_bytes + _DISK_SPACE_RESERVE_BYTES > free:
@@ -124,11 +140,17 @@ def upload_import_session(
 class _LocalUpload:
     """Presents a file already on local disk through the same structural
     interface as FastAPI's UploadFile (filename + file), so the direct folder
-    import reuses the staging pipeline of the HTTP upload unchanged."""
+    import reuses the staging pipeline of the HTTP upload unchanged. `mtime`
+    lets staging preserve the source file's modification time (the capture-date
+    fallback for files without EXIF)."""
 
     def __init__(self, path: Path):
         self.filename = path.name
         self.file = path.open("rb")
+        try:
+            self.mtime: float | None = path.stat().st_mtime
+        except OSError:
+            self.mtime = None
 
 
 @router.post("/scan-folder", response_model=schemas.FolderScanOut)

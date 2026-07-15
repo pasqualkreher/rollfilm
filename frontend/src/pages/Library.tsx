@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
+import type { ColorLabel, ImageOut, LibraryFilters, LibraryIndexImage, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
+import { VirtualTimeline } from "../components/VirtualTimeline";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { AlbumPicker } from "../components/AlbumPicker";
@@ -11,10 +12,15 @@ import { BulkTagInput } from "../components/BulkTagInput";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
-import { groupPairsAdjacent } from "../utils/pairing";
+import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { deleteConfirmMessage } from "../utils/deleteMessage";
-import { collapsePairs, useMergePairs } from "../state/viewPrefs";
+import { useMergePairs } from "../state/viewPrefs";
 import { selectionSharedMeta } from "../utils/selectionMeta";
+
+// Browse mode works on slim index entries (the whole library in one query),
+// search mode on full rows - the shared selection/bulk handlers only touch
+// the fields both carry.
+type GridImage = LibraryIndexImage | ImageOut;
 
 export function Library() {
   const [viewMode, setViewMode] = useState<ViewMode>("combined");
@@ -67,21 +73,16 @@ export function Library() {
     date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
   };
 
-  // Load the library in pages and append as the user scrolls, so a large
-  // library (thousands of shots) opens fast and never renders every thumbnail
-  // at once, while still growing to the full set on demand. Merge/timeline all
-  // operate on the accumulated list, so RAW+JPG pairs collapse correctly as
-  // more pages arrive.
-  const PAGE_SIZE = 200;
-  const listQuery = useInfiniteQuery({
-    queryKey: ["images", filters],
+  // Browse mode loads the library INDEX: one slim row per photo (id, aspect
+  // ratio, date, badges) for the whole filtered library. The virtual grid
+  // computes every tile's position from it up front - exact scrollbar, jump
+  // anywhere - and only ever fetches the thumbnails near the viewport. Key
+  // starts with "images" so invalidateQueries(["images"]) after imports/
+  // edits/deletes refreshes it too.
+  const indexQuery = useQuery({
+    queryKey: ["images", "index", filters],
     enabled: !q,
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.images.list(filters, { limit: PAGE_SIZE, offset: pageParam }),
-    // Another page exists only when the last one came back full; a short page
-    // means we've reached the end.
-    getNextPageParam: (lastPage, pages) =>
-      lastPage.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
+    queryFn: () => api.images.index(filters),
   });
 
   // A search query switches to scoped search (same filters, ranked by
@@ -94,34 +95,15 @@ export function Library() {
     queryFn: async () => (await api.search.query(q, filters)).map((r) => r.image),
   });
 
-  const images = q ? searchQuery.data : listQuery.data?.pages.flat();
-  const isLoading = q ? searchQuery.isLoading : listQuery.isLoading;
-
-  // Bottom sentinel: fetch the next page whenever it scrolls into view.
-  const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = listQuery;
-  useEffect(() => {
-    if (q) return;
-    const el = loadMoreRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
-          fetchNextPage();
-        }
-      },
-      { rootMargin: "600px" }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [q, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const images: GridImage[] | undefined = q ? searchQuery.data : indexQuery.data?.images;
+  const isLoading = q ? searchQuery.isLoading : indexQuery.isLoading;
 
   // In combined view, either merge each RAW+JPEG pair into one JPEG card, or
   // just keep the two partners adjacent. Other view modes show a flat list.
-  const orderedImages =
+  const orderedImages: GridImage[] =
     viewMode === "combined"
       ? mergePairs
-        ? collapsePairs(images ?? [])
+        ? collapsePairsBy(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
         : groupPairsAdjacent(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
       : images ?? [];
 
@@ -385,19 +367,21 @@ export function Library() {
 
       {isLoading ? (
         <div className="empty-state">Loading...</div>
-      ) : (
+      ) : q ? (
         <ThumbnailGrid
-          images={orderedImages}
+          images={orderedImages as ImageOut[]}
           selectedIds={selected}
           onToggleSelect={toggleSelect}
           selectMode={selectMode}
-          groupByDate={!q}
+          groupByDate={false}
         />
-      )}
-      {!q && (
-        <div ref={loadMoreRef} className="load-more-sentinel">
-          {isFetchingNextPage ? "Loading more photos…" : ""}
-        </div>
+      ) : (
+        <VirtualTimeline
+          images={orderedImages as LibraryIndexImage[]}
+          selectedIds={selected}
+          onToggleSelect={toggleSelect}
+          selectMode={selectMode}
+        />
       )}
       </div>
     </div>

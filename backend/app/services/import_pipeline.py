@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -25,7 +26,14 @@ from app.db.models import (
     ImportStagedFile,
 )
 from app.services import geocode
-from app.services.exif import ExifData, new_helper, read_exif, to_float, to_int
+from app.services.exif import (
+    ExifData,
+    capture_date_from_filename,
+    new_helper,
+    read_exif,
+    to_float,
+    to_int,
+)
 from app.services.filesystem import library_relative_path
 from app.services.hashing import hamming_int, perceptual_hash, phash_to_int, sha256_file
 from app.services.pairing import pair_siblings
@@ -44,7 +52,12 @@ from PIL import Image as PILImage
 
 class UploadedFile(Protocol):
     """Structural type matching FastAPI's UploadFile - kept narrow so this
-    module doesn't need to import Starlette directly."""
+    module doesn't need to import Starlette directly.
+
+    An upload may additionally carry an `mtime` attribute (epoch seconds of the
+    *source* file, read via getattr) - staging stamps it onto the staged copy,
+    so a photo without an EXIF capture date still sorts by its real file date
+    instead of the moment it was imported."""
 
     filename: str | None
     file: BinaryIO
@@ -113,6 +126,9 @@ class _CommitEntry:
     relative_dest: str
     dest_path: Path
     staged_full_path: Path
+    # A previous commit attempt that failed after its move phase already
+    # placed this file in the library - don't move it again.
+    already_moved: bool = False
 
 
 def _analyze_file(
@@ -122,12 +138,14 @@ def _analyze_file(
     staged_id: str,
     thumb_dir: Path,
     helper,
+    sha256: str,
 ) -> _Analyzed:
     """Pure computation, safe to run on a worker thread (no DB access). sha256
-    always succeeds (it just reads bytes); preview/phash/thumbnail/exif are each
-    guarded so a single corrupt file can't abort a large import - it's still
-    staged (its bytes are known) just without a preview/hash."""
-    sha256 = sha256_file(staged_path)
+    was already computed while the file streamed into staging (see
+    _hash_and_copy) so the bytes aren't read a second time here;
+    preview/phash/thumbnail/exif are each guarded so a single corrupt file
+    can't abort a large import - it's still staged (its bytes are known) just
+    without a preview/hash."""
     perceptual = None
     exif = ExifData()
 
@@ -162,39 +180,21 @@ def _analyze_file(
     )
 
 
-def _analyze_parallel(
-    tasks: list[tuple[Path, str, str, str]], thumb_dir: Path, progress_session_id: str | None = None
-) -> list[_Analyzed]:
-    """Run _analyze_file across a thread pool. Each worker gets its own exiftool
-    process (a shared -stay_open helper can't be used from multiple threads).
-    Results come back in task order so batch-dedup and pairing stay stable."""
-    if not tasks:
-        return []
-    workers = min(_STAGE_WORKERS, len(tasks))
-    helpers = [new_helper() for _ in range(workers)]
-    pool: queue.Queue = queue.Queue()
-    for h in helpers:
-        pool.put(h)
-
-    def run(task: tuple[Path, str, str, str]) -> _Analyzed:
-        staged_path, original_filename, file_type, staged_id = task
-        helper = pool.get()
-        try:
-            return _analyze_file(staged_path, original_filename, file_type, staged_id, thumb_dir, helper)
-        finally:
-            pool.put(helper)
-            if progress_session_id is not None:
-                _progress_step(progress_session_id)
-
-    try:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            return list(executor.map(run, tasks))
-    finally:
-        for h in helpers:
-            try:
-                h.terminate()
-            except Exception:
-                pass
+def _hash_and_copy(src: BinaryIO, dest: Path) -> tuple[str, int]:
+    """Stream an upload to its staging path, hashing while the bytes pass
+    through - so the source medium is read exactly once instead of copied and
+    then re-read for sha256."""
+    digest = hashlib.sha256()
+    size = 0
+    with dest.open("wb") as out:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            out.write(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
 
 
 def _persist_analyzed(
@@ -403,11 +403,9 @@ def _stage_uploads_into(
     thumb_dir = session_dir / ".thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) Write each upload to the staging folder. Serial because it drains the
-    #    per-request upload streams; cheap next to the analysis below.
-    write_started = time.monotonic()
-    total_bytes = 0
-    tasks: list[tuple[Path, str, str, str]] = []
+    # Filter down to importable files first so the progress total covers the
+    # whole batch before the first byte is copied.
+    incoming: list[tuple[UploadedFile, str, str]] = []
     for upload in uploads:
         original_filename = Path(upload.filename or "").name
         if not original_filename or original_filename.startswith("."):
@@ -415,40 +413,90 @@ def _stage_uploads_into(
         file_type = classify_file_type(Path(original_filename))
         if file_type is None:
             continue
+        incoming.append((upload, original_filename, file_type))
 
-        staged_path = session_dir / original_filename
-        counter = 1
-        while staged_path.exists():
-            staged_path = session_dir / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
-            counter += 1
+    # Pipelined staging: this thread streams files from the source into staging
+    # one at a time (hashing in-flight, see _hash_and_copy), and hands each
+    # finished copy straight to the analysis pool. The slow source read (SD
+    # card, NAS, upload spool) overlaps the CPU-heavy preview/phash/exif work
+    # instead of running before it, and the progress counter ticks from the
+    # first analyzed file on instead of staying frozen through the copy phase.
+    # Copying stays serial: sequential reads are what source media do best, and
+    # analysis keeps up alongside. Each analysis worker gets its own exiftool
+    # process (a shared -stay_open helper can't be used from multiple threads).
+    # Futures are collected in submission order so batch-dedup and pairing stay
+    # stable.
+    started = time.monotonic()
+    total_bytes = 0
+    _progress_begin(session.id, "staging", len(incoming))
 
-        with staged_path.open("wb") as out:
-            shutil.copyfileobj(upload.file, out)
+    workers = min(_STAGE_WORKERS, max(1, len(incoming)))
+    helpers = [new_helper() for _ in range(workers)]
+    helper_pool: queue.Queue = queue.Queue()
+    for h in helpers:
+        helper_pool.put(h)
 
-        total_bytes += staged_path.stat().st_size
-        tasks.append((staged_path, original_filename, file_type, str(uuid.uuid4())))
+    def analyze(
+        staged_path: Path, original_filename: str, file_type: str, staged_id: str, sha256: str
+    ) -> _Analyzed:
+        helper = helper_pool.get()
+        try:
+            return _analyze_file(
+                staged_path, original_filename, file_type, staged_id, thumb_dir, helper, sha256
+            )
+        finally:
+            helper_pool.put(helper)
+            _progress_step(session.id)
 
-    # 2) Hash/preview/phash/exif/thumbnail every file in parallel (the slow part,
-    #    independent per file), then 3) write the rows + dedup serially.
-    analyze_started = time.monotonic()
-    _progress_begin(session.id, "staging", len(tasks))
     try:
-        analyzed = _analyze_parallel(tasks, thumb_dir, progress_session_id=session.id)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = []
+            for upload, original_filename, file_type in incoming:
+                staged_path = session_dir / original_filename
+                counter = 1
+                while staged_path.exists():
+                    staged_path = (
+                        session_dir
+                        / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
+                    )
+                    counter += 1
+
+                sha256, size = _hash_and_copy(upload.file, staged_path)
+                total_bytes += size
+                # Carry the source file's modification time onto the staged
+                # copy. Without this the staged mtime is "just now", and the
+                # commit-time fallback for photos lacking an EXIF capture date
+                # would date them to the import instead of the original file.
+                source_mtime = getattr(upload, "mtime", None)
+                if source_mtime:
+                    try:
+                        os.utime(staged_path, (source_mtime, source_mtime))
+                    except OSError:
+                        pass
+                futures.append(
+                    executor.submit(
+                        analyze, staged_path, original_filename, file_type, str(uuid.uuid4()), sha256
+                    )
+                )
+            analyzed = [f.result() for f in futures]
         _persist_analyzed(db, session, owner_id, analyzed)
     finally:
         _progress_done(session.id)
+        for h in helpers:
+            try:
+                h.terminate()
+            except Exception:
+                pass
 
     # One line per batch so a slow import is diagnosable from the server log
-    # alone: time spent draining the upload's bytes vs. analyzing them. (The
-    # bytes' journey from the source medium to this request happens in the
-    # browser and is invisible here - a fast write + fast analyze but a slow
-    # overall import points at the client/source side.)
+    # alone. Copy and analysis overlap now, so the wall time is roughly
+    # max(source read, analysis) - if it tracks the batch's byte size at the
+    # source medium's read speed, the source is the bottleneck, not this code.
     logger.info(
-        "import batch staged: %d files (%.0f MB) - received/written in %.1fs, analyzed in %.1fs",
-        len(tasks),
+        "import batch staged: %d files (%.0f MB) in %.1fs (copy pipelined with analysis)",
+        len(incoming),
         total_bytes / 1e6,
-        analyze_started - write_started,
-        time.monotonic() - analyze_started,
+        time.monotonic() - started,
     )
 
 
@@ -477,6 +525,34 @@ def commit_import_session(
             (f.duplicate_of_image_id or f.duplicate_of_staged_file_id) and not f.is_near_duplicate
         )
 
+    def _find_moved_library_copy(staged: ImportStagedFile, taken_at: datetime) -> Path | None:
+        """Locate a staged file that a previous, mid-way-failed commit attempt
+        already moved into the library. The move phase runs before the DB
+        transaction lands, and a rollback can't un-move files - so on retry the
+        staging copy is gone but the bytes sit at the destination the failed
+        attempt computed. Match by name pattern + content hash, and only claim
+        files no DB row owns yet."""
+        day_dir = settings.library_root / f"{taken_at.year:04d}" / taken_at.strftime("%Y-%m-%d")
+        if not day_dir.is_dir():
+            return None
+        stem = Path(staged.original_filename).stem
+        suffix = Path(staged.original_filename).suffix
+        candidates = [day_dir / staged.original_filename] + sorted(
+            p
+            for p in day_dir.iterdir()
+            if p.name.startswith(f"{stem}_") and p.suffix == suffix
+        )
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            if sha256_file(candidate) != staged.sha256:
+                continue
+            rel = str(candidate.relative_to(settings.library_root))
+            owned = db.query(Image.id).filter(Image.file_path == rel).first()
+            if owned is None:
+                return candidate
+        return None
+
     selected_files = [
         f
         for f in session.staged_files
@@ -492,6 +568,20 @@ def commit_import_session(
     # source_root_id=None mutation the real promotion does, without writing yet.
     plan: list[_CommitEntry] = []
     promoted_ids: set[str] = set()
+    # Destinations claimed by earlier files in this plan. The filesystem check
+    # inside library_relative_path can't see them (nothing is moved until the
+    # whole plan is final), so without this, two same-name shots from the same
+    # day would both plan the same path - one overwriting the other on move and
+    # the second row then failing the UNIQUE(file_path) constraint.
+    planned_dests: set[str] = set()
+
+    def _dest_taken(rel: str) -> bool:
+        if rel in planned_dests:
+            return True
+        # Also veto paths a DB row still claims even though no file is there
+        # (e.g. a trashed photo whose file left the library folder).
+        return db.query(Image.id).filter(Image.file_path == rel).first() is not None
+
     for staged in selected_files:
         promoted = _exact_referenced_duplicate(staged)
         if promoted is not None and promoted.id in promoted_ids:
@@ -501,19 +591,60 @@ def commit_import_session(
 
         exif_dict = json.loads(staged.exif_json) if staged.exif_json else {}
         staged_full_path = settings.import_staging_root / staged.staged_path
+        staged_missing = not staged_full_path.exists()
 
         taken_at = (
             datetime.fromisoformat(exif_dict["taken_at"]) if exif_dict.get("taken_at") else None
         )
         if taken_at is None:
+            # No date in the metadata at all (WhatsApp strips EXIF entirely):
+            # a date embedded in the filename still beats the mtime fallback.
+            taken_at = capture_date_from_filename(staged.original_filename)
+        if taken_at is None:
+            if staged_missing:
+                logger.warning(
+                    "commit: skipping %s - staging copy is gone and it has no EXIF "
+                    "capture date to locate an already-moved library copy by",
+                    staged.original_filename,
+                )
+                continue
             taken_at = datetime.fromtimestamp(staged_full_path.stat().st_mtime, tz=timezone.utc)
 
-        relative_dest = library_relative_path(taken_at, staged.original_filename, settings.library_root)
-        dest_path = settings.library_root / relative_dest
+        if staged_missing:
+            # A previous commit attempt failed after moving this file into the
+            # library; adopt that copy instead of failing the whole commit.
+            moved_copy = _find_moved_library_copy(staged, taken_at)
+            if moved_copy is None:
+                logger.warning(
+                    "commit: skipping %s - missing from staging and no matching "
+                    "unclaimed library copy found",
+                    staged.original_filename,
+                )
+                continue
+            relative_dest = str(moved_copy.relative_to(settings.library_root))
+            dest_path = moved_copy
+            already_moved = True
+        else:
+            relative_dest = library_relative_path(
+                taken_at, staged.original_filename, settings.library_root, is_taken=_dest_taken
+            )
+            dest_path = settings.library_root / relative_dest
+            already_moved = False
+
+        planned_dests.add(relative_dest)
         if promoted is not None:
             promoted_ids.add(promoted.id)
         plan.append(
-            _CommitEntry(staged, promoted, exif_dict, taken_at, relative_dest, dest_path, staged_full_path)
+            _CommitEntry(
+                staged,
+                promoted,
+                exif_dict,
+                taken_at,
+                relative_dest,
+                dest_path,
+                staged_full_path,
+                already_moved,
+            )
         )
 
     _progress_begin(session.id, "commit", len(plan))
@@ -523,10 +654,11 @@ def commit_import_session(
     # of the commit. DB row creation stays serial below (the SQLAlchemy Session
     # isn't thread-safe). Moves must all finish before any row is created, since
     # a row records the post-move library path and size.
-    if plan:
-        move_workers = min(_STAGE_WORKERS, len(plan))
+    to_move = [e for e in plan if not e.already_moved]
+    if to_move:
+        move_workers = min(_STAGE_WORKERS, len(to_move))
         with ThreadPoolExecutor(max_workers=move_workers) as pool:
-            list(pool.map(lambda e: shutil.move(str(e.staged_full_path), str(e.dest_path)), plan))
+            list(pool.map(lambda e: shutil.move(str(e.staged_full_path), str(e.dest_path)), to_move))
 
     for entry in plan:
         _progress_step(session.id)

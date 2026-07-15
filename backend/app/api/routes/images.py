@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app import schemas
@@ -110,22 +110,22 @@ def _remove_tag_from_image(db: Session, owner_id: int, image: Image, name: str) 
     db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
 
 
-@router.get("", response_model=list[schemas.ImageOut])
-def list_images(
-    view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
-    album_id: str | None = None,
-    rating_min: int | None = None,
-    color_label: ColorLabel | None = None,
-    camera_model: str | None = None,
-    country: str | None = None,
-    date_from: datetime | None = None,
-    date_to: datetime | None = None,
-    tags: list[str] | None = Query(None),
-    limit: int = 100,
-    offset: int = 0,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+def _filtered_images_query(
+    db: Session,
+    current_user: User,
+    view_mode: str,
+    album_id: str | None,
+    rating_min: int | None,
+    color_label: ColorLabel | None,
+    camera_model: str | None,
+    country: str | None,
+    date_from: datetime | None,
+    date_to: datetime | None,
+    tags: list[str] | None,
 ):
+    """The library listing's filter set, shared by the list endpoint and the
+    count endpoint so the total the scrollbar is sized from can never drift
+    from what scrolling actually returns."""
     query = db.query(Image).filter(
         Image.owner_id == current_user.id, Image.deleted_at.is_(None)
     )
@@ -174,12 +174,229 @@ def list_images(
     # Hide photos indexed from an external source that isn't currently connected
     # (unplugged drive / unmounted NAS) - the index stays, they reappear when it
     # reconnects.
-    query = sources_service.exclude_unavailable(
+    return sources_service.exclude_unavailable(
         query, sources_service.unavailable_source_ids(db, current_user.id)
     )
 
-    query = query.order_by(Image.taken_at.desc())
+
+@router.get("", response_model=list[schemas.ImageOut])
+def list_images(
+    view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
+    album_id: str | None = None,
+    rating_min: int | None = None,
+    color_label: ColorLabel | None = None,
+    camera_model: str | None = None,
+    country: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    tags: list[str] | None = Query(None),
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = _filtered_images_query(
+        db, current_user, view_mode, album_id, rating_min, color_label,
+        camera_model, country, date_from, date_to, tags,
+    )
+    # Newest capture first. The extra keys make the order total: burst shots
+    # share the same capture second and photos without any capture date all
+    # sort together - without deterministic tie-breakers their relative order
+    # is whatever the query planner felt like, so photos jump around between
+    # requests and pagination can duplicate/skip rows at page boundaries.
+    query = query.order_by(
+        Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc()
+    )
     return query.offset(offset).limit(limit).all()
+
+
+# Same fields, same order as the frontend's editVersion() in api/client.ts -
+# the two must produce equal strings for unedited photos (all-defaults), and
+# matching strings for edited ones so the grid and the detail view share one
+# cached thumbnail URL per edit state.
+_EDIT_VERSION_FIELDS = [
+    "edit_rotation", "edit_crop_x", "edit_crop_y", "edit_crop_width", "edit_crop_height",
+    "edit_flip_h", "edit_flip_v", "edit_straighten", "edit_persp_h", "edit_persp_v",
+    "edit_exposure", "edit_contrast", "edit_highlights", "edit_shadows", "edit_whites",
+    "edit_blacks", "edit_saturation", "edit_temperature", "edit_tint", "edit_color_mix",
+    "edit_vignette", "edit_distortion", "edit_dehaze", "edit_grain", "edit_grain_size",
+    "edit_denoise", "edit_clarity", "edit_sharpness", "edit_color_tint",
+    "edit_chrome_effect", "edit_chrome_blue", "edit_mist",
+]
+# Fields the frontend maps null -> "" (its `?? ""`); everywhere else null
+# stringifies to "null" like JS String(null).
+_EDIT_VERSION_NULL_BLANK = {
+    "edit_crop_x", "edit_crop_y", "edit_crop_width", "edit_crop_height", "edit_color_mix"
+}
+
+
+def _edit_version(row) -> str:
+    """Python replica of the frontend's editVersion() cache-buster."""
+    parts: list[str] = []
+    for field in _EDIT_VERSION_FIELDS:
+        value = getattr(row, field)
+        if field == "edit_flip_h":
+            parts.append("fh" if value else "")
+        elif field == "edit_flip_v":
+            parts.append("fv" if value else "")
+        elif value is None:
+            parts.append("" if field in _EDIT_VERSION_NULL_BLANK else "null")
+        elif isinstance(value, float):
+            # JS String(1.0) is "1", Python str(1.0) is "1.0" - match JS.
+            parts.append(str(int(value)) if value.is_integer() else repr(value))
+        else:
+            parts.append(str(value))
+    return "-".join(parts)
+
+
+def _is_edited_expr():
+    """SQL expression: 1 when any edit field differs from its default. Lets the
+    index query fetch 12 columns instead of 43 - the 32 edit columns are only
+    loaded (in a small second query) for the handful of edited photos."""
+    conditions = []
+    for field in _EDIT_VERSION_FIELDS:
+        col = getattr(Image, field)
+        if field in _EDIT_VERSION_NULL_BLANK:
+            conditions.append(col.isnot(None))
+        elif field in ("edit_flip_h", "edit_flip_v"):
+            conditions.append(col.is_(True))
+        else:
+            conditions.append(col != 0)
+    return case((or_(*conditions), 1), else_=0)
+
+
+@router.get("/index")
+def library_index(
+    view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
+    album_id: str | None = None,
+    rating_min: int | None = None,
+    color_label: ColorLabel | None = None,
+    camera_model: str | None = None,
+    country: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    tags: list[str] | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The whole filtered library as one slim, ordered list: for each photo
+    just what a grid tile needs (id, aspect ratio, date, badge/selection state,
+    thumbnail cache-buster - see LibraryIndexImage in the frontend types). The
+    grid lays out every photo up front (exact scrollbar, jump anywhere) and
+    fetches only thumbnails on demand.
+
+    Serialized by hand instead of via response_model: a big library is tens of
+    thousands of rows and per-row pydantic + encoder overhead multiplied out to
+    seconds. `thumb_version` is sent as "" for never-edited photos (the vast
+    majority) - the client substitutes its own default-version constant."""
+    query = _filtered_images_query(
+        db, current_user, view_mode, album_id, rating_min, color_label,
+        camera_model, country, date_from, date_to, tags,
+    )
+    rows = (
+        query.with_entities(
+            Image.id, Image.original_filename, Image.file_type, Image.width,
+            Image.height, Image.taken_at, Image.rating, Image.color_label,
+            Image.immich_sync, Image.paired_image_id, Image.source_root_id,
+            _is_edited_expr().label("edited"),
+        )
+        .order_by(Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc())
+        .all()
+    )
+
+    # Version strings only for the (few) edited photos, loaded in one small
+    # follow-up query; everyone else gets "" (client substitutes its default).
+    edited_ids = [r.id for r in rows if r.edited]
+    versions: dict[str, str] = {}
+    for chunk_start in range(0, len(edited_ids), 500):
+        chunk = edited_ids[chunk_start : chunk_start + 500]
+        for er in (
+            db.query(Image.id, *[getattr(Image, f) for f in _EDIT_VERSION_FIELDS])
+            .filter(Image.id.in_(chunk))
+            .all()
+        ):
+            versions[er.id] = _edit_version(er)
+
+    images = [
+        {
+            "id": r.id,
+            "original_filename": r.original_filename,
+            "file_type": r.file_type.value,
+            "width": r.width,
+            "height": r.height,
+            "taken_at": r.taken_at.isoformat() if r.taken_at else None,
+            "rating": r.rating,
+            "color_label": r.color_label.value,
+            "immich_sync": r.immich_sync,
+            "paired_image_id": r.paired_image_id,
+            "source_root_id": r.source_root_id,
+            "thumb_version": versions.get(r.id, ""),
+        }
+        for r in rows
+    ]
+    return Response(
+        content=json.dumps({"images": images}, separators=(",", ":")),
+        media_type="application/json",
+    )
+
+
+@router.get("/geo")
+def geo_index(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Every geotagged photo as one slim row (id, lat, lon, pairing) - the map
+    clusters these client-side per zoom level, so it needs the full set, not a
+    page. Hand-serialized for the same reason as /images/index."""
+    query = _filtered_images_query(
+        db, current_user, "combined", None, None, None, None, None, None, None, None
+    )
+    rows = (
+        query.with_entities(
+            Image.id, Image.gps_lat, Image.gps_lon, Image.paired_image_id, Image.original_filename
+        )
+        .filter(Image.gps_lat.isnot(None), Image.gps_lon.isnot(None))
+        .order_by(Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc())
+        .all()
+    )
+    images = [
+        {
+            "id": r.id,
+            "lat": r.gps_lat,
+            "lon": r.gps_lon,
+            "paired_image_id": r.paired_image_id,
+            "original_filename": r.original_filename,
+        }
+        for r in rows
+    ]
+    return Response(
+        content=json.dumps({"images": images}, separators=(",", ":")),
+        media_type="application/json",
+    )
+
+
+@router.get("/count", response_model=schemas.ImageCountOut)
+def count_images(
+    view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
+    album_id: str | None = None,
+    rating_min: int | None = None,
+    color_label: ColorLabel | None = None,
+    camera_model: str | None = None,
+    country: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    tags: list[str] | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """How many photos the current filter set matches in total. The library
+    sizes its scrollbar from this - the scroll range covers the whole
+    (filtered) library, not just the pages fetched so far."""
+    query = _filtered_images_query(
+        db, current_user, view_mode, album_id, rating_min, color_label,
+        camera_model, country, date_from, date_to, tags,
+    )
+    return schemas.ImageCountOut(count=query.count())
 
 
 @router.get("/facets", response_model=schemas.LibraryFacets)

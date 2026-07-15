@@ -218,6 +218,36 @@ export interface TagUsage {
   count: number;
 }
 
+// One photo in the library index: just enough to lay out and interact with a
+// grid tile. The index endpoint returns the WHOLE filtered library in one
+// slim response - the virtual grid computes every tile's position up front
+// (exact scrollbar, jump anywhere) and fetches only thumbnails on demand.
+export interface LibraryIndexImage {
+  id: string;
+  original_filename: string;
+  file_type: FileType;
+  width: number | null;
+  height: number | null;
+  taken_at: string | null;
+  rating: number;
+  color_label: ColorLabel;
+  immich_sync: boolean;
+  paired_image_id: string | null;
+  source_root_id: string | null;
+  // Server-computed equivalent of editVersion() - cache-buster for the
+  // thumbnail URL that changes whenever the photo's edits change.
+  thumb_version: string;
+}
+
+// One geotagged photo on the map, slim like the library index.
+export interface GeoImage {
+  id: string;
+  lat: number;
+  lon: number;
+  paired_image_id: string | null;
+  original_filename: string;
+}
+
 export interface LibraryFilters {
   view_mode: ViewMode;
   album_id?: string;

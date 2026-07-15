@@ -72,10 +72,17 @@ def _apply_scope(
     return query
 
 
+# A "city" query returns the photos taken around that city, not the whole
+# geotagged library sorted by distance - beyond this radius a photo has
+# nothing to do with the place, and the slots are better spent on similarity.
+_CITY_RADIUS_KM = 75.0
+
+
 @router.get("", response_model=list[schemas.SearchResultOut])
 def search_images(
     q: str,
     limit: int = 40,
+    lang: str | None = None,
     album_id: str | None = None,
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
@@ -88,11 +95,14 @@ def search_images(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Free-text photo search combining exact tag matches (a precise, explicit
-    signal - a photo tagged "sunset" almost certainly is one) with CLIP
-    visual similarity (which finds photos matching the *description* even
-    without any tags). Tag matches are listed first, then similarity results
-    fill any remaining slots.
+    """Free-text photo search, ranked by how explicit the signal is:
+
+    1. Tag matches - a photo tagged "sunset" almost certainly is one.
+    2. Location matches - a query naming a country or city (in English or the
+       UI language passed as `lang`, e.g. "italien"/"münchen") pulls the
+       photos taken there: a whole country newest-first, a city by distance.
+    3. CLIP visual similarity fills the remaining slots - finds photos
+       matching the *description* even without tags or GPS.
 
     Everything is constrained to the caller-supplied scope (album + rating /
     color / date / tag filters), so search acts on the grid the user is
@@ -114,37 +124,17 @@ def search_images(
     results: list[schemas.SearchResultOut] = []
     seen_ids: set[str] = set()
 
+    def add(image: Image, distance: float) -> None:
+        if image.id in seen_ids:
+            return
+        seen_ids.add(image.id)
+        results.append(schemas.SearchResultOut(image=image, distance=distance))
+
     # Same rule as the library grid: photos from a disconnected external source
     # aren't searchable while their drive/NAS is offline.
     unavailable = sources_service.unavailable_source_ids(db, current_user.id)
 
-    # Location search: when the query names a city, sort the geotagged photos in
-    # scope by distance to it (nearest first) instead of tag/visual matching.
-    # Gated on a cheap name match so ordinary queries skip the geo work entirely;
-    # falls through to normal search if the scope has no located photos.
-    if geocode.place_candidates(q):
-        geo_query = _apply_scope(db.query(Image), **scope_kwargs).filter(
-            Image.gps_lat.isnot(None), Image.gps_lon.isnot(None)
-        )
-        geo_images = sources_service.exclude_unavailable(geo_query, unavailable).all()
-        if geo_images:
-            centroid = (
-                sum(im.gps_lat for im in geo_images) / len(geo_images),
-                sum(im.gps_lon for im in geo_images) / len(geo_images),
-            )
-            place = geocode.resolve_place(q, near=centroid)
-            if place:
-                ranked = sorted(
-                    (
-                        (im, geocode.haversine_km((im.gps_lat, im.gps_lon), (place.lat, place.lon)))
-                        for im in geo_images
-                    ),
-                    key=lambda t: t[1],
-                )
-                return [
-                    schemas.SearchResultOut(image=im, distance=dist) for im, dist in ranked[:limit]
-                ]
-
+    # 1) Tag matches - the most explicit signal there is.
     tag_query = (
         db.query(Image)
         .join(ImageTag, ImageTag.image_id == Image.id)
@@ -158,8 +148,58 @@ def search_images(
         .all()
     )
     for image in tag_matches:
-        seen_ids.add(image.id)
-        results.append(schemas.SearchResultOut(image=image, distance=0.0))
+        add(image, 0.0)
+
+    # 2) Location matches. A country query (English or UI language) pulls that
+    # country's photos newest-first; a city query pulls the photos within
+    # _CITY_RADIUS_KM, nearest first. Gated on cheap name lookups so ordinary
+    # queries skip the geo work entirely.
+    if len(results) < limit:
+        country_name = geocode.country_from_query(q, lang=lang)
+        if country_name:
+            country_matches = (
+                sources_service.exclude_unavailable(
+                    _apply_scope(db.query(Image), **scope_kwargs).filter(
+                        Image.gps_country == country_name
+                    ),
+                    unavailable,
+                )
+                .order_by(Image.taken_at.desc())
+                .limit(limit)
+                .all()
+            )
+            for image in country_matches:
+                add(image, 0.0)
+        elif geocode.place_candidates(q, lang=lang):
+            geo_query = _apply_scope(db.query(Image), **scope_kwargs).filter(
+                Image.gps_lat.isnot(None), Image.gps_lon.isnot(None)
+            )
+            geo_images = sources_service.exclude_unavailable(geo_query, unavailable).all()
+            if geo_images:
+                # Disambiguate same-named places toward where this library's
+                # photos actually are (Rome, IT vs Rome, GA).
+                centroid = (
+                    sum(im.gps_lat for im in geo_images) / len(geo_images),
+                    sum(im.gps_lon for im in geo_images) / len(geo_images),
+                )
+                place = geocode.resolve_place(q, near=centroid, lang=lang)
+                if place:
+                    ranked = sorted(
+                        (
+                            (
+                                im,
+                                geocode.haversine_km(
+                                    (im.gps_lat, im.gps_lon), (place.lat, place.lon)
+                                ),
+                            )
+                            for im in geo_images
+                        ),
+                        key=lambda t: t[1],
+                    )
+                    for im, dist in ranked:
+                        if dist > _CITY_RADIUS_KM or len(results) >= limit:
+                            break
+                        add(im, dist)
 
     if len(results) < limit:
         vector = embeddings.encode_text(q)

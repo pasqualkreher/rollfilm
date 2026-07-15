@@ -17,6 +17,7 @@ export function Settings() {
   const { setBusyLabel } = useTasks();
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
+  const [repairDatesResult, setRepairDatesResult] = useState<string | null>(null);
   const [restoreConfirmation, setRestoreConfirmation] = useState("");
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreResult, setRestoreResult] = useState<string | null>(null);
@@ -140,6 +141,18 @@ export function Settings() {
     },
   });
 
+  const repairDates = useMutation({
+    mutationFn: () => api.maintenance.repairDates(),
+    onSuccess: (result) => {
+      setRepairDatesResult(
+        result.fixed > 0
+          ? `Corrected the capture date of ${result.fixed} photo(s) (${result.checked} checked) — the timeline now sorts them onto their real day.`
+          : `All ${result.checked} photo(s) already carry their correct capture date.`
+      );
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+    },
+  });
+
   const restore = useMutation({
     mutationFn: () => api.maintenance.restore(restoreFile!, restoreConfirmation),
     onSuccess: (result) => {
@@ -177,9 +190,11 @@ export function Settings() {
     ? "Syncing library…"
     : rebuildThumbnails.isPending
       ? "Rebuilding thumbnails…"
-      : restore.isPending
-        ? "Restoring backup…"
-        : null;
+      : repairDates.isPending
+        ? "Repairing capture dates…"
+        : restore.isPending
+          ? "Restoring backup…"
+          : null;
   useEffect(() => {
     setBusyLabel(runningLabel);
   }, [runningLabel, setBusyLabel]);
@@ -503,6 +518,17 @@ export function Settings() {
           {rebuildThumbnails.isPending ? "Rebuilding..." : "Rebuild all thumbnails"}
         </button>
         {rebuildResult && <p style={{ color: "var(--text-muted)" }}>{rebuildResult}</p>}
+
+        <p style={{ color: "var(--text-muted)", marginTop: 16 }}>
+          Photos imported by older versions could end up sorted by their import moment instead of
+          when they were taken (their capture date wasn't read from every EXIF variant yet). This
+          re-reads the capture date from every photo's file and fixes the stored one where it
+          differs - nothing else about the photos changes.
+        </p>
+        <button className="btn" onClick={() => repairDates.mutate()} disabled={repairDates.isPending}>
+          {repairDates.isPending ? "Repairing dates..." : "Repair capture dates"}
+        </button>
+        {repairDatesResult && <p style={{ color: "var(--text-muted)" }}>{repairDatesResult}</p>}
       </section>
 
       <section style={{ marginBottom: 32 }}>

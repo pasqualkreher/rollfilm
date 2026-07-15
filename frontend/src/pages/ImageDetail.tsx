@@ -11,7 +11,9 @@ import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
 import { useMergePairs } from "../state/viewPrefs";
 import { deleteConfirmMessage } from "../utils/deleteMessage";
-import type { ColorLabel } from "../api/types";
+import { preloadImage } from "../utils/preload";
+import { rememberLastViewedImage } from "../utils/lastViewed";
+import type { ColorLabel, ImageOut } from "../api/types";
 
 // exiftool delivers the exposure time as a plain decimal ("0.003571428571");
 // photographers read shutter speeds as fractions ("1/280") or whole seconds.
@@ -89,6 +91,14 @@ export function ImageDetail() {
   // toggle state from the previous photo would stick around on the new one.
   useEffect(() => {
     setActiveId(id!);
+  }, [id]);
+
+  // Record which photo is on screen so the grid we came from can scroll back
+  // to it on return (see utils/lastViewed.ts). Deliberately the route id, not
+  // activeId: the RAW/JPEG toggle can show a partner that has no own card in
+  // a merged grid, while the route id always does.
+  useEffect(() => {
+    if (id) rememberLastViewedImage(id);
   }, [id]);
 
   // Drop back to fit-view whenever the shown photo changes (arrow-key nav or
@@ -185,6 +195,16 @@ export function ImageDetail() {
         return;
       }
 
+      // Number keys set the star rating (0 clears it) - same shortcut as the
+      // import lightbox. Skipped while a control has focus so typing into the
+      // tag input or a text field never rates the photo.
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      const inControl = tag === "INPUT" || tag === "BUTTON" || tag === "SELECT" || tag === "TEXTAREA";
+      if (!inControl && image && e.key >= "0" && e.key <= "5") {
+        setRating(Number(e.key));
+        return;
+      }
+
       if (!imageIds || imageIds.length === 0) return;
       const currentIndex = imageIds.indexOf(id!);
       if (currentIndex === -1) return;
@@ -197,6 +217,30 @@ export function ImageDetail() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [imageIds, id, navigate, adjustOpen, image, paired, activeId, zoomed]);
+
+  // While the current photo is on screen, pull its neighbors (the previous and
+  // next photo of the browsed set) into memory: their metadata into the query
+  // cache and their preview pixels into the browser cache. Arrow-key zapping
+  // then swaps instantly instead of showing an empty frame per photo. The
+  // preview URL is version-stamped for edited photos, so the metadata has to
+  // arrive first - a bare previewUrl(id) would miss the edited render.
+  useEffect(() => {
+    if (!imageIds || imageIds.length === 0) return;
+    const currentIndex = imageIds.indexOf(id!);
+    if (currentIndex === -1) return;
+    for (const neighborId of [imageIds[currentIndex + 1], imageIds[currentIndex - 1]]) {
+      if (!neighborId) continue;
+      queryClient
+        .prefetchQuery({
+          queryKey: ["image", neighborId],
+          queryFn: () => api.images.get(neighborId),
+        })
+        .then(() => {
+          const neighbor = queryClient.getQueryData<ImageOut>(["image", neighborId]);
+          if (neighbor) preloadImage(api.images.previewUrl(neighbor.id, editVersion(neighbor)));
+        });
+    }
+  }, [imageIds, id, queryClient]);
 
   const { data: similar } = useQuery({
     queryKey: ["similar", activeId],

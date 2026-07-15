@@ -4,6 +4,7 @@ import type { ColorLabel, StagedFileOut } from "../api/types";
 import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
+import { preloadImage } from "../utils/preload";
 
 interface Props {
   sessionId: string;
@@ -60,6 +61,16 @@ export function ImportLightbox({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [index, files.length, onIndexChange, onClose, onUpdate, file]);
+
+  // Pull the previous/next photo's preview into memory while this one is on
+  // screen - zapping through a fresh import with the arrow keys then swaps
+  // instantly. This also triggers the server's lazy preview generation for
+  // RAW files one photo ahead, hiding that first-request cost.
+  useEffect(() => {
+    for (const neighbor of [files[index + 1], files[index - 1]]) {
+      if (neighbor) preloadImage(api.import.stagedPreviewUrl(sessionId, neighbor.id));
+    }
+  }, [files, index, sessionId]);
 
   if (!file) return null;
 

@@ -1,4 +1,5 @@
 import { createContext, useContext, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 
 interface ImportSessionState {
@@ -16,6 +17,13 @@ interface ImportSessionState {
   // Folder import only: how many photos the scan found / are fully staged.
   totalFileCount: number | null;
   stagedFileCount: number;
+  // Folder import: live per-photo count including the batch currently being
+  // analyzed (backend poll), so counters tick instead of jumping per batch.
+  liveStagedCount: number | null;
+  // THE display percentage for this import - photo-count based for folder
+  // imports (live), byte-based for browser uploads. Every progress readout
+  // (nav tab, wizard button) must use this one number so they never disagree.
+  effectiveUploadPct: number | null;
   startUpload: (files: File[], label: string) => void;
   // Desktop-only: import a folder by absolute path - the backend reads the
   // files itself (no browser upload). Same progress/cancel plumbing.
@@ -158,6 +166,30 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
       });
   }
 
+  // Poll the backend's per-photo staging progress while a folder import runs.
+  // Lives HERE (not in the wizard) so the nav tab shows the same live number
+  // even when the wizard is unmounted - previously the tab lagged a whole
+  // batch behind on a byte-based percentage while the wizard counted photos.
+  const progressPollId = sessionId ?? stagingSessionId;
+  const { data: importProgress } = useQuery({
+    queryKey: ["import-progress", progressPollId],
+    queryFn: () => api.import.progress(progressPollId!),
+    enabled: !!progressPollId && isUploading,
+    refetchInterval: 500,
+  });
+  const folderImportActive = importMode === "folder" && isUploading;
+  const liveStagedCount =
+    folderImportActive && totalFileCount
+      ? Math.min(
+          totalFileCount,
+          stagedFileCount + (importProgress?.phase === "staging" ? importProgress.processed : 0)
+        )
+      : null;
+  const effectiveUploadPct =
+    folderImportActive && totalFileCount && liveStagedCount !== null
+      ? Math.round((liveStagedCount / totalFileCount) * 100)
+      : uploadProgress;
+
   function cancelUpload() {
     abortRef.current?.abort();
   }
@@ -187,6 +219,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         stagingSessionId,
         totalFileCount,
         stagedFileCount,
+        liveStagedCount,
+        effectiveUploadPct,
         startUpload,
         startFolderImport,
         cancelUpload,

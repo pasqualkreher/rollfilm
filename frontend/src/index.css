@@ -66,6 +66,19 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
+  /* Native-app feel: clicking around the UI (especially shift-click range
+     select in the grids) must never highlight label text by accident.
+     Re-enabled below only where selecting text is the point. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Typing fields keep normal text selection. */
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 a {
@@ -2632,6 +2645,25 @@ input.editor-preset-select {
 /* The pin nearest the cursor (or the one jumped to from a photo's mini-map)
    blows up to a proper preview and lifts clear of its neighbours - Leaflet
    stacks markers by latitude, so override that. */
+/* Cluster size badge in the pin's corner. Scales with the pin on hover via the
+   shared parent transform-friendly positioning. */
+.map-pin-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
 .map-pin-active {
   z-index: 10000 !important;
 }

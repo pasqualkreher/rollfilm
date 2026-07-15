@@ -1,11 +1,13 @@
-import type { ImageOut } from "../api/types";
-
 // Deleting means two different things (mirroring the backend's bulk-delete):
 // managed photos move to the in-app Trash and can be restored; photos indexed
 // in place from an external folder are removed from the library only - their
 // files on disk are never touched. Build one confirm message that says exactly
-// what will happen to the current selection.
-export function deleteConfirmMessage(images: ImageOut[], hiddenPaired = 0): string {
+// what will happen to the current selection. Typed structurally (not ImageOut)
+// so the library's slim index entries qualify too.
+export function deleteConfirmMessage(
+  images: { source_root_id: string | null }[],
+  hiddenPaired = 0
+): string {
   const managed = images.filter((im) => im.source_root_id === null).length;
   const referenced = images.length - managed;
   const pairSuffix =

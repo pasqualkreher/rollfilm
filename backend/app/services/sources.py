@@ -20,7 +20,7 @@ from sqlalchemy.orm import Query, Session
 
 from app.db.models import FileType, Image, SourceRoot
 from app.db.session import SessionLocal
-from app.services.exif import read_exif
+from app.services.exif import capture_date_from_filename, read_exif
 from app.services.filesystem import resolve_image_path
 from app.services.hashing import perceptual_hash, sha256_file
 from app.services.raw import classify_file_type, extract_preview
@@ -186,7 +186,10 @@ def _index_file(db, source_root: SourceRoot, path: Path, sha256: str | None = No
     taken_at = (
         datetime.fromisoformat(exif["taken_at"])
         if exif.get("taken_at")
-        else datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        # Metadata carries no date at all: a date embedded in the filename
+        # (WhatsApp etc.) still beats the file's modification time.
+        else capture_date_from_filename(path.name)
+        or datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
     )
 
     image = Image(

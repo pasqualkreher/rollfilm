@@ -1,10 +1,12 @@
-import { useRef, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { useMergePairs } from "../state/viewPrefs";
+import { watchNearViewport } from "../utils/preload";
+import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 
 interface Props {
   images: ImageOut[];
@@ -48,6 +50,80 @@ export function tileStyle(width: number | null | undefined, height: number | nul
   return { "--ar": tileAspectRatio(width, height) } as CSSProperties;
 }
 
+// Delay before a near-viewport tile actually issues its request. A tile that
+// merely flies through the preload zone during a fast scroll leaves it again
+// within this window and never hits the network at all.
+const LOAD_STABILIZE_MS = 150;
+
+// Grid thumbnail that starts loading shortly after it comes within the
+// preload margin of the viewport (see utils/preload.ts) - well before it's
+// visible. Replaces native loading="lazy", whose preload distance is
+// browser-chosen and (especially in Safari) short enough to read as pop-in.
+// Fast scrolling stays cheap twice over: the stabilize delay keeps fly-by
+// tiles from requesting at all, and a tile that leaves the preload zone with
+// its request still in flight aborts it (src cleared), freeing the connection
+// for the region the user actually stopped at. Once a thumbnail has fully
+// loaded it stays loaded - scrolling back never re-fetches. Also used by the
+// import review grid, which otherwise fired every staged request at once.
+export function Thumb({ src, alt }: { src: string; alt: string }) {
+  const ref = useRef<HTMLImageElement | null>(null);
+  const [shownSrc, setShownSrc] = useState<string | undefined>(undefined);
+  const doneRef = useRef(false);
+  // Tiles stay visually blank (just the card background) until the pixels
+  // have actually arrived - never a broken-image glyph or alt text flash
+  // while pending/aborted.
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (doneRef.current) {
+      // Loaded once already - just follow src changes (edit-version bumps);
+      // never unload again.
+      setShownSrc(src);
+      return;
+    }
+    let timer: number | null = null;
+    const unwatch = watchNearViewport(el, {
+      enter: () => {
+        if (timer === null && !doneRef.current) {
+          timer = window.setTimeout(() => {
+            timer = null;
+            setShownSrc(src);
+          }, LOAD_STABILIZE_MS);
+        }
+      },
+      leave: () => {
+        if (timer !== null) {
+          window.clearTimeout(timer);
+          timer = null;
+        }
+        // Far away again with the request still in flight: removing src makes
+        // the browser abort it. No-op when the image already finished.
+        if (!doneRef.current) setShownSrc(undefined);
+      },
+    });
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      unwatch();
+    };
+  }, [src]);
+
+  return (
+    <img
+      ref={ref}
+      src={shownSrc}
+      decoding="async"
+      alt={alt}
+      style={visible ? undefined : { visibility: "hidden" }}
+      onLoad={() => {
+        doneRef.current = true;
+        setVisible(true);
+      }}
+    />
+  );
+}
+
 function monthLabel(iso: string | null): string {
   if (!iso) return "Unknown date";
   const d = new Date(iso);
@@ -81,6 +157,22 @@ export function ThumbnailGrid({
   const mergePairs = useMergePairs();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
+  const cardEls = useRef<Map<string, HTMLElement>>(new Map());
+
+  // Coming back from the detail view: scroll the photo the user was looking
+  // at back into view instead of landing at the top. The marker is one-shot -
+  // consumed by the first grid that renders with data (which is exactly the
+  // grid the back navigation returns to), found or not, so it can never cause
+  // a surprise jump in some later, unrelated grid.
+  const pendingScrollId = useRef<string | null>(peekLastViewedImage());
+  const hasImages = images.length > 0;
+  useEffect(() => {
+    if (!hasImages || pendingScrollId.current === null) return;
+    const target = cardEls.current.get(pendingScrollId.current);
+    pendingScrollId.current = null;
+    clearLastViewedImage();
+    target?.scrollIntoView({ block: "center" });
+  }, [hasImages]);
 
   if (images.length === 0) {
     return <div className="empty-state">No photos here yet.</div>;
@@ -92,6 +184,10 @@ export function ThumbnailGrid({
     return (
       <div
         key={image.id}
+        ref={(el) => {
+          if (el) cardEls.current.set(image.id, el);
+          else cardEls.current.delete(image.id);
+        }}
         style={tileStyle(image.width, image.height)}
         className={`thumb-card${selectMode && selectedIds?.has(image.id) ? " selected" : ""}${
           !selectMode && onRemove ? " has-remove" : ""
@@ -104,7 +200,7 @@ export function ThumbnailGrid({
           }
         }}
       >
-        <img src={api.images.thumbnailUrl(image.id, editVersion(image))} loading="lazy" alt={image.original_filename} />
+        <Thumb src={api.images.thumbnailUrl(image.id, editVersion(image))} alt={image.original_filename} />
         <span className={fileTypeBadgeClass(image.file_type, mergePairs && Boolean(image.paired_image_id))}>
           {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
         </span>

@@ -8,7 +8,7 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
 import { ExternalSources } from "../components/ExternalSources";
-import { fileTypeBadge, fileTypeBadgeClass, tileStyle } from "../components/ThumbnailGrid";
+import { fileTypeBadge, fileTypeBadgeClass, tileStyle, Thumb } from "../components/ThumbnailGrid";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
@@ -82,7 +82,8 @@ export function ImportWizard() {
     importMode,
     stagingSessionId,
     totalFileCount,
-    stagedFileCount,
+    liveStagedCount,
+    effectiveUploadPct,
     startUpload,
     startFolderImport,
     cancelUpload,
@@ -161,12 +162,25 @@ export function ImportWizard() {
       reset();
       navigate("/");
     },
+    // A failed commit used to be completely invisible (no state change, no
+    // message) - the button just looked dead. Staged files survive a failed
+    // commit server-side, so tell the user retrying is safe.
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      window.alert(
+        `Import failed: ${message}\n\nYour photos are still in the staging area - nothing was lost. Please try again.`
+      );
+    },
   });
 
   // Poll the backend's staging/commit progress while an import is in flight, so
   // the otherwise feature-less "Processing…/Importing…" spinners can show a live
   // count and estimated time remaining. During a folder import the review
   // session isn't published yet - poll via the staging session id instead.
+  // (The staging-phase percentage itself - effectiveUploadPct/liveStagedCount -
+  // comes from the import-session context, shared with the nav tab so the two
+  // readouts always agree; this query re-uses the same key/cache and only
+  // extends the polling into the commit phase, which the context doesn't track.)
   const progressPollId = sessionId ?? stagingSessionId;
   const { data: importProgress } = useQuery({
     queryKey: ["import-progress", progressPollId],
@@ -175,22 +189,8 @@ export function ImportWizard() {
     refetchInterval: 500,
   });
 
-  // Folder import: a per-photo live counter instead of the batch-jumping byte
-  // percentage. `stagedFileCount` covers finished batches; the backend's
-  // staging progress covers the batch currently being analyzed, so the number
-  // ticks up every poll instead of once per 250-file batch.
   const folderImportActive = importMode === "folder" && isUploading;
-  const liveStagedCount =
-    folderImportActive && totalFileCount
-      ? Math.min(
-          totalFileCount,
-          stagedFileCount + (importProgress?.phase === "staging" ? importProgress.processed : 0)
-        )
-      : null;
-  const effectiveUploadPct =
-    folderImportActive && totalFileCount && liveStagedCount !== null
-      ? Math.round((liveStagedCount / totalFileCount) * 100)
-      : uploadProgress;
+
   const progressSuffix = useMemo(() => {
     if (!importProgress || importProgress.total === 0 || importProgress.phase === "idle") return "";
     const eta =
@@ -320,7 +320,12 @@ export function ImportWizard() {
   }
 
   async function handleCommitClick() {
-    const missingHalf = findIncompletePairs(files ?? []);
+    // Exact duplicates can't be selected (the backend 400s), so never offer to
+    // auto-include one as a pair's "missing half" - and even if a select still
+    // fails, the commit below must run regardless (allSettled, not all): a
+    // rejected select used to abort this handler silently, making the import
+    // button appear dead.
+    const missingHalf = findIncompletePairs(files ?? []).filter((f) => !isExactDuplicate(f));
     if (missingHalf.length > 0) {
       const includeBoth = window.confirm(
         `${missingHalf.length} shot(s) have only the RAW or only the JPEG selected. ` +
@@ -328,7 +333,7 @@ export function ImportWizard() {
           `OK = include both, Cancel = keep your current selection as-is.`
       );
       if (includeBoth) {
-        await Promise.all(
+        await Promise.allSettled(
           missingHalf.map((f) => api.import.updateStagedFile(sessionId!, f.id, { selected: true }))
         );
         queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
@@ -665,7 +670,7 @@ export function ImportWizard() {
                     : "Click to preview"
                 }
               >
-                <img src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
+                <Thumb src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
                 {selectMode && (
                   <input
                     className="select-checkbox"

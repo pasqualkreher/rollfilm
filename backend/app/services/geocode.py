@@ -11,11 +11,13 @@ ISO country code to a display name. The datasets load into memory on first use.
 from __future__ import annotations
 
 import csv
+import gettext
 import logging
 import math
 import os
 import threading
 from dataclasses import dataclass
+from functools import lru_cache
 
 import pycountry
 
@@ -107,6 +109,67 @@ def annotate_images(images) -> int:
     return resolved
 
 
+# --- Query-language helpers -------------------------------------------------
+
+# pycountry ships gettext translations for country names (ISO 3166-1); build a
+# reverse lookup "translated name -> alpha-2" per UI language, so a German
+# user's "Italien" finds the photos stored under gps_country "Italy".
+@lru_cache(maxsize=8)
+def _country_translations(lang: str) -> dict[str, str]:
+    try:
+        tr = gettext.translation("iso3166-1", pycountry.LOCALES_DIR, languages=[lang])
+    except (FileNotFoundError, OSError):
+        return {}
+    return {tr.gettext(c.name).casefold(): c.alpha_2 for c in pycountry.countries}
+
+
+def country_from_query(query: str, lang: str | None = None) -> str | None:
+    """The stored gps_country display name for a query that names a country -
+    in English ("italy") or the caller's UI language ("italien"). None when
+    the query isn't a country name."""
+    qn = (query or "").strip().casefold()
+    if not qn:
+        return None
+    for c in pycountry.countries:
+        names = {c.name, getattr(c, "common_name", None), getattr(c, "official_name", None)}
+        if qn in {n.casefold() for n in names if n}:
+            return _country_name(c.alpha_2)
+    if lang:
+        cc = _country_translations(lang.split("-")[0].lower()).get(qn)
+        if cc:
+            return _country_name(cc)
+    return None
+
+
+# The cities dataset stores English exonyms ("Munich", "Cologne"); map the
+# common German names onto them so a German-language user finds their photos.
+# Small and curated on purpose - names identical in both languages (Berlin,
+# Paris, Madrid) need no entry.
+_CITY_EXONYMS_DE = {
+    "münchen": "munich", "köln": "cologne", "nürnberg": "nuremberg", "wien": "vienna",
+    "zürich": "zurich", "genf": "geneva", "brüssel": "brussels", "antwerpen": "antwerp",
+    "den haag": "the hague", "rom": "rome", "mailand": "milan", "venedig": "venice",
+    "florenz": "florence", "neapel": "naples", "genua": "genoa", "nizza": "nice",
+    "prag": "prague", "warschau": "warsaw", "krakau": "krakow", "moskau": "moscow",
+    "sankt petersburg": "saint petersburg", "kiew": "kyiv", "athen": "athens",
+    "lissabon": "lisbon", "kopenhagen": "copenhagen", "bukarest": "bucharest",
+    "belgrad": "belgrade", "tokio": "tokyo", "peking": "beijing", "kairo": "cairo",
+    "havanna": "havana", "kapstadt": "cape town", "singapur": "singapore",
+    "sevilla": "seville", "neu-delhi": "new delhi",
+}
+
+
+def _localized_city_names(name: str, lang: str | None) -> list[str]:
+    """The dataset lookup keys to try for a city name typed in the UI
+    language: the name itself, plus its English exonym when known."""
+    names = [name]
+    if lang and lang.split("-")[0].lower() == "de":
+        exonym = _CITY_EXONYMS_DE.get(name)
+        if exonym:
+            names.append(exonym)
+    return names
+
+
 # --- Forward geocoding (place name -> coordinates) -------------------------
 
 
@@ -163,11 +226,13 @@ def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
     return 2 * r * math.asin(math.sqrt(h))
 
 
-def place_candidates(query: str) -> list[Place]:
+def place_candidates(query: str, lang: str | None = None) -> list[Place]:
     """Cities whose name matches `query`. Accepts a bare name ("rome") or a
     qualified one ("rome, italy" / "rome, it" / "rome, latium"); the qualifier,
     when present, narrows by country code, country name, or admin region. Cheap:
-    a dict lookup, so callers can gate the (heavier) proximity work on a match."""
+    a dict lookup, so callers can gate the (heavier) proximity work on a match.
+    `lang` additionally resolves the UI language's exonyms ("münchen" finds the
+    dataset's "Munich")."""
     q = (query or "").strip().lower()
     if not q:
         return []
@@ -177,7 +242,11 @@ def place_candidates(query: str) -> list[Place]:
     # name will switch to location mode - the accepted trade-off of auto-detect.
     # A city stored under a longer official name, e.g. "New York City", needs to
     # be typed in full; a partial like "new york" falls through to text search.)
-    rows = _load_city_index().get(parts[0])
+    rows = None
+    for name in _localized_city_names(parts[0], lang):
+        rows = _load_city_index().get(name)
+        if rows:
+            break
     if not rows:
         return []
     qualifier = parts[1] if len(parts) > 1 and parts[1] else None
@@ -194,11 +263,13 @@ def place_candidates(query: str) -> list[Place]:
     return out
 
 
-def resolve_place(query: str, near: tuple[float, float] | None = None) -> Place | None:
+def resolve_place(
+    query: str, near: tuple[float, float] | None = None, lang: str | None = None
+) -> Place | None:
     """Best single place for `query`. When the name is ambiguous (e.g. Rome, IT
     vs Rome, GA) and `near` is given, pick the candidate closest to it - so a
     library shot mostly in Europe resolves "rome" to Rome, Italy."""
-    candidates = place_candidates(query)
+    candidates = place_candidates(query, lang=lang)
     if not candidates:
         return None
     if near is None or len(candidates) == 1:

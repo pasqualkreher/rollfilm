@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -59,11 +60,58 @@ def to_float(value) -> float | None:
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
-    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y:%m:%d %H:%M:%S%z"):
+    value = str(value)
+    for fmt in (
+        "%Y:%m:%d %H:%M:%S",
+        "%Y:%m:%d %H:%M:%S%z",
+        # Sub-second variants (some phones write DateTimeOriginal with .%f).
+        "%Y:%m:%d %H:%M:%S.%f",
+        "%Y:%m:%d %H:%M:%S.%f%z",
+    ):
         try:
             return datetime.strptime(value, fmt)
         except ValueError:
             continue
+    # XMP dates come ISO-formatted ("2024-05-01T12:00:00+02:00") rather than
+    # in exiftool's colon-date format.
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+# Filename conventions that embed the capture date: Android/most cameras
+# (IMG_20180816_180748, 20180816_180748), WhatsApp (IMG-20180816-WA0015),
+# screenshots and exports (Screenshot_2018-08-16..., 2018-08-16 18.07.48).
+_NAME_DATETIME_RE = re.compile(
+    # Optional 3 trailing digits: Pixel phones append milliseconds
+    # (PXL_20230101_123456789 = 12:34:56.789).
+    r"(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})[_-]?(\d{2})(\d{2})(\d{2})(?:\d{3})?(?!\d)"
+)
+_NAME_DASHED_DATE_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})-(\d{2})-(\d{2})(?!\d)")
+_NAME_COMPACT_DATE_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)")
+
+
+def capture_date_from_filename(name: str) -> datetime | None:
+    """Best-effort capture date parsed from the filename. Used only for files
+    whose metadata carries no capture date at all (WhatsApp strips EXIF
+    entirely, for example) - a date embedded in the name still beats dating
+    the photo to the moment it was imported. Date-only matches get 12:00 so
+    they sort into the middle of their day; impossible dates (month 13 etc.)
+    fall through and return None."""
+    m = _NAME_DATETIME_RE.search(name)
+    if m:
+        try:
+            return datetime(int(m[1]), int(m[2]), int(m[3]), int(m[4]), int(m[5]), int(m[6]))
+        except ValueError:
+            pass
+    for pattern in (_NAME_DASHED_DATE_RE, _NAME_COMPACT_DATE_RE):
+        m = pattern.search(name)
+        if m:
+            try:
+                return datetime(int(m[1]), int(m[2]), int(m[3]), 12, 0, 0)
+            except ValueError:
+                continue
     return None
 
 
@@ -101,6 +149,10 @@ _EXIF_TAGS = [
     "EXIF:Orientation",
     "EXIF:ExposureTime",
     "EXIF:DateTimeOriginal",
+    "EXIF:CreateDate",
+    "XMP:DateCreated",
+    "XMP:CreateDate",
+    "EXIF:ModifyDate",
     "EXIF:Make",
     "EXIF:Model",
     "EXIF:ISO",
@@ -127,7 +179,20 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
     return ExifData(
         width=width,
         height=height,
-        taken_at=_parse_datetime(metadata.get("EXIF:DateTimeOriginal")),
+        # Capture date with fallbacks: not every camera/app writes
+        # DateTimeOriginal (screenshots, edited exports, some phones) - without
+        # a fallback those photos sort by import time and scatter through the
+        # timeline instead of landing on their capture date. EXIF:ModifyDate
+        # comes last: straight from a camera it equals the capture time (e.g.
+        # old HTC phones write ONLY this), and for files whose better tags were
+        # stripped it's still the in-file date, not the copy date.
+        taken_at=_parse_datetime(
+            metadata.get("EXIF:DateTimeOriginal")
+            or metadata.get("EXIF:CreateDate")
+            or metadata.get("XMP:DateCreated")
+            or metadata.get("XMP:CreateDate")
+            or metadata.get("EXIF:ModifyDate")
+        ),
         camera_make=metadata.get("EXIF:Make"),
         camera_model=metadata.get("EXIF:Model"),
         iso=to_int(metadata.get("EXIF:ISO")),

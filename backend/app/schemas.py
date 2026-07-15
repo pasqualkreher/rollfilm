@@ -406,6 +406,16 @@ class LibraryFacets(BaseModel):
     no_location_count: int
 
 
+class ImageCountOut(BaseModel):
+    """Total photos matching a filter set - sizes the library's scrollbar."""
+
+    count: int
+
+
+# The /images/index response is hand-serialized for speed (see the route) -
+# its per-photo shape is documented by LibraryIndexImage in the frontend types.
+
+
 class SyncResult(BaseModel):
     removed_missing_files: int
     untracked_files_found: int
@@ -415,6 +425,14 @@ class SyncResult(BaseModel):
 
 class RebuildThumbnailsResult(BaseModel):
     rebuilt: int
+
+
+class RepairDatesResult(BaseModel):
+    """Outcome of the capture-date repair: photos checked on disk, rows whose
+    taken_at actually changed."""
+
+    checked: int
+    fixed: int
 
 
 class DangerZoneRequest(BaseModel):
