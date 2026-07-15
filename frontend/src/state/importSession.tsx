@@ -7,7 +7,19 @@ interface ImportSessionState {
   uploadProgress: number | null;
   uploadError: string | null;
   isUploading: boolean;
+  // Which kind of import is in flight - the folder import surfaces richer
+  // live progress (per-photo counts via the backend's /progress endpoint).
+  importMode: "upload" | "folder" | null;
+  // Session id while a folder import is still staging (sessionId itself is
+  // only set at the end, since setting it flips the wizard into review).
+  stagingSessionId: string | null;
+  // Folder import only: how many photos the scan found / are fully staged.
+  totalFileCount: number | null;
+  stagedFileCount: number;
   startUpload: (files: File[], label: string) => void;
+  // Desktop-only: import a folder by absolute path - the backend reads the
+  // files itself (no browser upload). Same progress/cancel plumbing.
+  startFolderImport: (folderPath: string) => void;
   cancelUpload: () => void;
   reset: () => void;
 }
@@ -28,6 +40,10 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [importMode, setImportMode] = useState<"upload" | "folder" | null>(null);
+  const [stagingSessionId, setStagingSessionId] = useState<string | null>(null);
+  const [totalFileCount, setTotalFileCount] = useState<number | null>(null);
+  const [stagedFileCount, setStagedFileCount] = useState(0);
   // Held for the lifetime of an in-flight upload so cancelUpload() can abort the
   // XHRs; the created staging session id is captured so a mid-upload cancel can
   // clean up whatever was already staged on the backend.
@@ -38,6 +54,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     const controller = new AbortController();
     abortRef.current = controller;
     uploadSessionRef.current = null;
+    setImportMode("upload");
     setIsUploading(true);
     setUploadError(null);
     setUploadProgress(0);
@@ -64,6 +81,80 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         if (abortRef.current === controller) abortRef.current = null;
         setIsUploading(false);
         setUploadProgress(null);
+        setImportMode(null);
+      });
+  }
+
+  function startFolderImport(folderPath: string) {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    uploadSessionRef.current = null;
+    setImportMode("folder");
+    setStagingSessionId(null);
+    setTotalFileCount(null);
+    setStagedFileCount(0);
+    setIsUploading(true);
+    setUploadError(null);
+    setUploadProgress(0);
+
+    const label = folderPath.split("/").filter(Boolean).pop() || folderPath;
+    const BATCH_PATHS = 250;
+
+    (async () => {
+      const scan = await api.import.scanFolder(folderPath, controller.signal);
+      if (scan.files.length === 0) {
+        throw new Error("No importable photos found in this folder");
+      }
+      setTotalFileCount(scan.files.length);
+      const totalBytes = scan.total_bytes || 1;
+      let stagedBytes = 0;
+      let stagedFiles = 0;
+      let session: Awaited<ReturnType<typeof api.import.stagePaths>> | null = null;
+      for (let i = 0; i < scan.files.length; i += BATCH_PATHS) {
+        if (controller.signal.aborted) throw new DOMException("Upload cancelled", "AbortError");
+        const batch = scan.files.slice(i, i + BATCH_PATHS);
+        session = await api.import.stagePaths(
+          batch.map((f) => f.path),
+          label,
+          session?.id ?? null,
+          totalBytes,
+          controller.signal
+        );
+        if (!uploadSessionRef.current) {
+          uploadSessionRef.current = session.id;
+          // Published separately from sessionId: the review screen must not
+          // open yet, but the wizard needs the id to poll live per-photo
+          // progress of the batch currently staging.
+          setStagingSessionId(session.id);
+        }
+        stagedBytes += batch.reduce((sum, f) => sum + f.size, 0);
+        stagedFiles += batch.length;
+        setStagedFileCount(stagedFiles);
+        setUploadProgress(Math.min(100, Math.round((stagedBytes / totalBytes) * 100)));
+      }
+      return session!;
+    })()
+      .then((session) => {
+        setSourceLabel(session.source_path);
+        setSessionId(session.id);
+      })
+      .catch((err: Error) => {
+        if (controller.signal.aborted || err.name === "AbortError") {
+          const staged = uploadSessionRef.current;
+          if (staged) api.import.discard(staged).catch(() => {});
+          reset();
+        } else {
+          setUploadError(err.message);
+        }
+      })
+      .finally(() => {
+        if (abortRef.current === controller) abortRef.current = null;
+        setIsUploading(false);
+        setUploadProgress(null);
+        setImportMode(null);
+        setStagingSessionId(null);
+        setTotalFileCount(null);
+        setStagedFileCount(0);
       });
   }
 
@@ -78,6 +169,10 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setSessionId(null);
     setSourceLabel("");
     setUploadError(null);
+    setImportMode(null);
+    setStagingSessionId(null);
+    setTotalFileCount(null);
+    setStagedFileCount(0);
   }
 
   return (
@@ -88,7 +183,12 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         uploadProgress,
         uploadError,
         isUploading,
+        importMode,
+        stagingSessionId,
+        totalFileCount,
+        stagedFileCount,
         startUpload,
+        startFolderImport,
         cancelUpload,
         reset,
       }}

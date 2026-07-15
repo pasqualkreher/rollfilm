@@ -79,7 +79,12 @@ export function ImportWizard() {
     uploadProgress,
     uploadError,
     isUploading,
+    importMode,
+    stagingSessionId,
+    totalFileCount,
+    stagedFileCount,
     startUpload,
+    startFolderImport,
     cancelUpload,
     reset,
   } = useImportSession();
@@ -160,13 +165,32 @@ export function ImportWizard() {
 
   // Poll the backend's staging/commit progress while an import is in flight, so
   // the otherwise feature-less "Processing…/Importing…" spinners can show a live
-  // count and estimated time remaining.
+  // count and estimated time remaining. During a folder import the review
+  // session isn't published yet - poll via the staging session id instead.
+  const progressPollId = sessionId ?? stagingSessionId;
   const { data: importProgress } = useQuery({
-    queryKey: ["import-progress", sessionId],
-    queryFn: () => api.import.progress(sessionId!),
-    enabled: !!sessionId && (isUploading || commit.isPending),
+    queryKey: ["import-progress", progressPollId],
+    queryFn: () => api.import.progress(progressPollId!),
+    enabled: !!progressPollId && (isUploading || commit.isPending),
     refetchInterval: 500,
   });
+
+  // Folder import: a per-photo live counter instead of the batch-jumping byte
+  // percentage. `stagedFileCount` covers finished batches; the backend's
+  // staging progress covers the batch currently being analyzed, so the number
+  // ticks up every poll instead of once per 250-file batch.
+  const folderImportActive = importMode === "folder" && isUploading;
+  const liveStagedCount =
+    folderImportActive && totalFileCount
+      ? Math.min(
+          totalFileCount,
+          stagedFileCount + (importProgress?.phase === "staging" ? importProgress.processed : 0)
+        )
+      : null;
+  const effectiveUploadPct =
+    folderImportActive && totalFileCount && liveStagedCount !== null
+      ? Math.round((liveStagedCount / totalFileCount) * 100)
+      : uploadProgress;
   const progressSuffix = useMemo(() => {
     if (!importProgress || importProgress.total === 0 || importProgress.phase === "idle") return "";
     const eta =
@@ -187,7 +211,7 @@ export function ImportWizard() {
       return;
     }
     if (uploadStartRef.current === null) uploadStartRef.current = Date.now();
-    const pct = uploadProgress ?? 0;
+    const pct = effectiveUploadPct ?? 0;
     const elapsed = (Date.now() - uploadStartRef.current) / 1000;
     // Only project once there's a real sample to extrapolate from: the first
     // few percent (or first second) give a division-by-tiny-number estimate
@@ -199,7 +223,7 @@ export function ImportWizard() {
     } else {
       setUploadEta(null);
     }
-  }, [isUploading, uploadProgress]);
+  }, [isUploading, effectiveUploadPct]);
   const uploadEtaSuffix = uploadEta != null ? ` · ~${formatEta(uploadEta)} left` : "";
 
   const discard = useMutation({
@@ -420,9 +444,13 @@ export function ImportWizard() {
               >
                 {!isUploading
                   ? "Import photos ▾"
-                  : (uploadProgress ?? 0) >= 100
-                    ? `Processing files...${progressSuffix}`
-                    : `Importing... ${uploadProgress ?? 0}%${uploadEtaSuffix}`}
+                  : folderImportActive
+                    ? totalFileCount
+                      ? `Importing... ${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}`
+                      : "Scanning folder…"
+                    : (uploadProgress ?? 0) >= 100
+                      ? `Processing files...${progressSuffix}`
+                      : `Importing... ${uploadProgress ?? 0}%${uploadEtaSuffix}`}
               </button>
               {/* Bail out of a long SD-card upload without waiting for it to
                   finish - aborts the in-flight request and clears the screen.
@@ -438,8 +466,22 @@ export function ImportWizard() {
                   <button
                     className="import-menu-item"
                     role="menuitem"
-                    onClick={() => {
+                    onClick={async () => {
                       setImportMenuOpen(false);
+                      // Desktop app: use the native folder dialog and let the
+                      // backend read the files straight from disk - no browser
+                      // upload, which for a big SD card/drive is both much
+                      // faster and immune to upload aborts. Browser build
+                      // falls back to the webkitdirectory picker.
+                      const pickFolder = window.photoManager?.pickFolder;
+                      if (pickFolder) {
+                        const folder = await pickFolder();
+                        if (folder) {
+                          setPickError(null);
+                          startFolderImport(folder);
+                        }
+                        return;
+                      }
                       folderInputRef.current?.click();
                     }}
                   >
@@ -458,6 +500,15 @@ export function ImportWizard() {
                 </div>
               )}
             </div>
+            {isUploading && (
+              <p className="import-panel-desc" style={{ color: "var(--text-muted)" }}>
+                {folderImportActive
+                  ? totalFileCount
+                    ? "Photos are being copied and analyzed (duplicates, previews, metadata) — the counter above ticks up as each one finishes. Nothing is added to your library until you review."
+                    : "Looking for photos in the selected folder…"
+                  : "Photos are being received and processed — the review screen opens when this finishes."}
+              </p>
+            )}
             {pickError && <p className="import-panel-desc" style={{ color: "var(--danger)" }}>{pickError}</p>}
             {uploadError && (
               <p className="import-panel-desc" style={{ color: "var(--danger)" }}>Upload failed: {uploadError}</p>

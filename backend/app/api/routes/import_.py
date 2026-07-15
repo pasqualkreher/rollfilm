@@ -2,7 +2,9 @@ import io
 import json
 import logging
 import os
+import shutil
 import threading
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -23,7 +25,7 @@ from app.services.import_pipeline import (
     get_import_progress,
     stage_uploaded_files,
 )
-from app.services.raw import extract_full_preview
+from app.services.raw import classify_file_type, extract_full_preview
 from app.services.thumbnails import THUMBNAIL_MAX_PX
 
 logger = logging.getLogger(__name__)
@@ -62,26 +64,173 @@ def _to_staged_file_out(f: ImportStagedFile, paired_id: str | None = None) -> sc
     )
 
 
+# Keep this much of the disk out of reach of an import: the staged bytes are
+# *moved* into the library at commit (a rename, no second copy), but the
+# in-flight batch is spooled to the temp dir while it parses, and a macOS
+# system volume that runs completely full takes the whole machine down with it.
+_DISK_SPACE_RESERVE_BYTES = 10 * 1024**3
+
+
+def _free_disk_bytes() -> int:
+    return shutil.disk_usage(settings.import_staging_root).free
+
+
 @router.post("/sessions/upload", response_model=schemas.ImportSessionOut)
 def upload_import_session(
     files: list[UploadFile] = File(...),
     source_label: str = Form("Uploaded folder"),
     session_id: str | None = Form(None),
+    total_bytes: int = Form(0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Stage uploaded photos. The multipart parser rejects requests with more
     than 1000 files, so large imports are uploaded in several batches: the
     first call creates the session, follow-ups pass its `session_id` to append
-    to it."""
+    to it. `total_bytes` is the size of the *whole* planned import (all
+    batches), sent by the client so the very first request can be rejected
+    with a clear message when the import can never fit on the disk - instead
+    of dying halfway through with what looks like a network error."""
     if not files:
         raise HTTPException(status_code=400, detail="No files were uploaded")
+
+    free = _free_disk_bytes()
+    if not session_id and total_bytes and total_bytes + _DISK_SPACE_RESERVE_BYTES > free:
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"Not enough disk space for this import: it needs about "
+                f"{total_bytes / 1e9:.0f} GB, but only {max(free - _DISK_SPACE_RESERVE_BYTES, 0) / 1e9:.0f} GB "
+                f"are usable. Free up space or import a smaller selection."
+            ),
+        )
+    if free < _DISK_SPACE_RESERVE_BYTES:
+        # Mid-import floor: something else filled the disk since the preflight
+        # (or an old client didn't send total_bytes) - stop cleanly now rather
+        # than letting a staging write fail halfway through a batch.
+        raise HTTPException(
+            status_code=507,
+            detail="The disk is almost full - the import was stopped so the system stays usable.",
+        )
+
     if session_id:
         session = get_owned_import_session(db, current_user.id, session_id)
         if session.status != ImportSessionStatus.staging:
             raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
         return append_uploaded_files(db, session, current_user.id, files)
     return stage_uploaded_files(db, current_user.id, files, source_label)
+
+
+class _LocalUpload:
+    """Presents a file already on local disk through the same structural
+    interface as FastAPI's UploadFile (filename + file), so the direct folder
+    import reuses the staging pipeline of the HTTP upload unchanged."""
+
+    def __init__(self, path: Path):
+        self.filename = path.name
+        self.file = path.open("rb")
+
+
+@router.post("/scan-folder", response_model=schemas.FolderScanOut)
+def scan_folder(
+    payload: schemas.FolderScanRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """List the importable photos under a local folder, for the desktop app's
+    direct import: the renderer picks a folder via the native dialog, and the
+    backend - which runs on the same machine - reads the files itself instead
+    of pumping them through a browser upload. (Like the rest of the API this
+    trusts its caller; the backend binds to localhost for exactly that reason.)"""
+    root = Path(payload.path)
+    if not root.is_absolute() or not root.is_dir():
+        raise HTTPException(status_code=400, detail="Not a folder that exists on this machine")
+
+    library_root = settings.library_root.resolve()
+    files: list[schemas.ScannedFileOut] = []
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Never descend into hidden folders (.photomanager holds the app's own
+        # database/staging) or into the library itself - scanning the library's
+        # parent folder must not re-import the whole library.
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if not d.startswith(".") and (Path(dirpath) / d).resolve() != library_root
+        ]
+        for name in sorted(filenames):
+            if name.startswith(".") or classify_file_type(Path(name)) is None:
+                continue
+            p = Path(dirpath) / name
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue  # unreadable/vanished - skip rather than fail the scan
+            files.append(schemas.ScannedFileOut(path=str(p), name=name, size=size))
+            total += size
+    return schemas.FolderScanOut(files=files, total_bytes=total)
+
+
+@router.post("/sessions/stage-paths", response_model=schemas.ImportSessionOut)
+def stage_local_paths(
+    payload: schemas.StagePathsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stage one batch of a direct folder import (see scan_folder). Same
+    batching contract and disk preflight as the multipart upload route."""
+    if not payload.paths:
+        raise HTTPException(status_code=400, detail="No files given")
+
+    free = _free_disk_bytes()
+    if (
+        not payload.session_id
+        and payload.total_bytes
+        and payload.total_bytes + _DISK_SPACE_RESERVE_BYTES > free
+    ):
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"Not enough disk space for this import: it needs about "
+                f"{payload.total_bytes / 1e9:.0f} GB, but only "
+                f"{max(free - _DISK_SPACE_RESERVE_BYTES, 0) / 1e9:.0f} GB are usable."
+            ),
+        )
+    if free < _DISK_SPACE_RESERVE_BYTES:
+        raise HTTPException(
+            status_code=507,
+            detail="The disk is almost full - the import was stopped so the system stays usable.",
+        )
+
+    uploads: list[_LocalUpload] = []
+    try:
+        for path_str in payload.paths:
+            p = Path(path_str)
+            try:
+                if p.is_absolute() and p.is_file():
+                    uploads.append(_LocalUpload(p))
+            except OSError:
+                continue  # vanished between scan and stage - skip
+        if not uploads:
+            raise HTTPException(status_code=400, detail="None of the given files are readable")
+        if len(uploads) < len(payload.paths):
+            logger.warning(
+                "folder import: %d of %d files vanished between scan and staging",
+                len(payload.paths) - len(uploads),
+                len(payload.paths),
+            )
+
+        if payload.session_id:
+            session = get_owned_import_session(db, current_user.id, payload.session_id)
+            if session.status != ImportSessionStatus.staging:
+                raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
+            return append_uploaded_files(db, session, current_user.id, uploads)
+        return stage_uploaded_files(db, current_user.id, uploads, payload.source_label)
+    finally:
+        for u in uploads:
+            try:
+                u.file.close()
+            except OSError:
+                pass
 
 
 @router.get("/sessions/{session_id}", response_model=schemas.ImportSessionOut)

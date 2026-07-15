@@ -102,6 +102,17 @@ export interface ImportProgress {
   eta_seconds: number | null;
 }
 
+export interface ScannedFile {
+  path: string;
+  name: string;
+  size: number;
+}
+
+export interface FolderScanOut {
+  files: ScannedFile[];
+  total_bytes: number;
+}
+
 export type ImportSessionStatus = "staging" | "committed" | "discarded";
 
 export interface ImportSessionOut {

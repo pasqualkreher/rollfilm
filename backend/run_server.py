@@ -29,6 +29,40 @@ def run_migrations() -> None:
     command.upgrade(cfg, "head")
 
 
+def run_migrations_with_retry(attempts: int = 5, delay_s: float = 2.0) -> None:
+    """Run the migrations, absorbing transient filesystem refusals.
+
+    A library on an external exFAT/NTFS drive (macOS mounts these through
+    FSKit) can briefly report the freshly created database as read-only or
+    locked right after the volume is first written - seen as
+    'attempt to write a readonly database' on the very first launch after
+    switching the library folder, while a relaunch seconds later works. Retry
+    a few times before giving up so that hiccup doesn't present as a crash."""
+    import time
+
+    from sqlalchemy.exc import OperationalError
+
+    for attempt in range(1, attempts + 1):
+        try:
+            run_migrations()
+            return
+        except OperationalError as exc:
+            message = str(exc).lower()
+            transient = (
+                "readonly database" in message
+                or "database is locked" in message
+                or "disk i/o error" in message
+            )
+            if not transient or attempt == attempts:
+                raise
+            print(
+                f"[startup] database not writable yet ({exc.orig}); retrying in {delay_s:.0f}s "
+                f"(attempt {attempt}/{attempts}) - external drives can take a moment to accept writes",
+                flush=True,
+            )
+            time.sleep(delay_s)
+
+
 def rehydrate_database() -> None:
     """A cloud-synced library folder (iCloud & co.) may have evicted the SQLite
     files to dataless placeholders. The very first read would then block inside
@@ -50,7 +84,7 @@ def main() -> None:
         sys.path.insert(0, str(BASE_DIR))
 
     rehydrate_database()
-    run_migrations()
+    run_migrations_with_retry()
 
     # Root logging config so the app's own INFO lines (e.g. the per-batch
     # import timing) reach the console next to uvicorn's - without this only
@@ -59,7 +93,9 @@ def main() -> None:
     import logging
 
     logging.basicConfig(
-        level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s", force=True
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s:     %(name)s - %(message)s",
+        force=True,
     )
 
     import uvicorn

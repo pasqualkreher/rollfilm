@@ -8,6 +8,7 @@ import type {
   ImmichTestResult,
   ImmichPushResult,
   ImmichUploadResult,
+  FolderScanOut,
   ImportProgress,
   ImportSessionOut,
   LibraryFacets,
@@ -159,6 +160,7 @@ function uploadBatch(
   files: File[],
   sourceLabel: string,
   sessionId: string | null,
+  totalBytes: number,
   onLoaded?: (bytes: number) => void,
   signal?: AbortSignal
 ): Promise<ImportSessionOut> {
@@ -170,6 +172,7 @@ function uploadBatch(
     const formData = new FormData();
     files.forEach((f) => formData.append("files", f, f.name));
     formData.append("source_label", sourceLabel);
+    formData.append("total_bytes", String(totalBytes));
     if (sessionId) formData.append("session_id", sessionId);
 
     const xhr = new XMLHttpRequest();
@@ -181,7 +184,20 @@ function uploadBatch(
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(JSON.parse(xhr.responseText));
       } else {
-        reject(new Error(`Upload failed: ${xhr.status} ${xhr.responseText}`));
+        // Surface the API's human-readable message (e.g. the disk-full
+        // preflight) instead of a raw JSON blob; keep the status on the error
+        // so the retry loop can tell client errors from transient ones.
+        let detail = xhr.responseText;
+        try {
+          detail = JSON.parse(xhr.responseText).detail ?? detail;
+        } catch {
+          /* not JSON - show as-is */
+        }
+        const err = new Error(detail || `Upload failed (HTTP ${xhr.status})`) as Error & {
+          status?: number;
+        };
+        err.status = xhr.status;
+        reject(err);
       }
     };
     xhr.onerror = () => reject(new Error("Upload failed: network error"));
@@ -393,8 +409,8 @@ export const api = {
         const done = uploadedBytes.reduce((a, b) => a + b, 0);
         onProgress?.(Math.min(100, Math.round((done / totalBytes) * 100)));
       };
-      const send = (idx: number, sessionId: string | null) =>
-        uploadBatch(batches[idx], sourceLabel, sessionId, (loaded) => {
+      const sendOnce = (idx: number, sessionId: string | null) =>
+        uploadBatch(batches[idx], sourceLabel, sessionId, totalBytes, (loaded) => {
           // loaded includes multipart framing overhead - clamp to the batch's
           // real payload so the total can't overshoot 100%.
           uploadedBytes[idx] = Math.min(loaded, batchBytes[idx]);
@@ -404,6 +420,27 @@ export const api = {
           report();
           return s;
         });
+      // A multi-hour import shouldn't die because one batch hit a transient
+      // hiccup (backend momentarily busy, socket reset). Retry each batch a
+      // couple of times with a pause - but never on a user cancel, and never
+      // on a 4xx/507 (those are real answers, a retry can't change them).
+      const RETRIES = 2;
+      const send = async (idx: number, sessionId: string | null) => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await sendOnce(idx, sessionId);
+          } catch (err) {
+            const e = err as Error & { status?: number; name?: string };
+            const retriable =
+              e.name !== "AbortError" && (e.status === undefined || e.status >= 500) && e.status !== 507;
+            if (!retriable || attempt >= RETRIES) throw err;
+            uploadedBytes[idx] = 0;
+            report();
+            await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+            if (signal?.aborted) throw new DOMException("Upload cancelled", "AbortError");
+          }
+        }
+      };
 
       // The first batch runs alone - its response carries the session id the
       // rest append to.
@@ -426,6 +463,34 @@ export const api = {
     },
     get(id: string): Promise<ImportSessionOut> {
       return request(`/import/sessions/${id}`);
+    },
+    // Direct desktop import: the backend scans and reads the folder itself,
+    // so nothing is pumped through a browser upload. Electron-only (needs a
+    // native absolute folder path from the OS dialog).
+    scanFolder(path: string, signal?: AbortSignal): Promise<FolderScanOut> {
+      return request(`/import/scan-folder`, {
+        method: "POST",
+        body: JSON.stringify({ path }),
+        signal,
+      });
+    },
+    stagePaths(
+      paths: string[],
+      sourceLabel: string,
+      sessionId: string | null,
+      totalBytes: number,
+      signal?: AbortSignal
+    ): Promise<ImportSessionOut> {
+      return request(`/import/sessions/stage-paths`, {
+        method: "POST",
+        body: JSON.stringify({
+          paths,
+          source_label: sourceLabel,
+          session_id: sessionId,
+          total_bytes: totalBytes,
+        }),
+        signal,
+      });
     },
     progress(id: string): Promise<ImportProgress> {
       return request(`/import/sessions/${id}/progress`);

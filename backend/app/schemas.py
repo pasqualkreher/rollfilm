@@ -262,6 +262,36 @@ class StagedFilesBulkUpdate(BaseModel):
     immich_sync: bool | None = None
 
 
+class FolderScanRequest(BaseModel):
+    path: str
+
+
+class ScannedFileOut(BaseModel):
+    path: str
+    name: str
+    size: int
+
+
+class FolderScanOut(BaseModel):
+    """Importable files found under a local folder - the desktop app's direct
+    (no-HTTP-upload) import path scans first, then stages in path batches."""
+
+    files: list[ScannedFileOut]
+    total_bytes: int
+
+
+class StagePathsRequest(BaseModel):
+    """One batch of a direct folder import: absolute paths of local files the
+    backend reads itself. Mirrors the multipart upload's batching contract -
+    the first call (no session_id) creates the session, follow-ups append.
+    `total_bytes` is the whole planned import, for the disk-space preflight."""
+
+    paths: list[str]
+    source_label: str = "Local folder"
+    session_id: str | None = None
+    total_bytes: int = 0
+
+
 class CommitImportRequest(BaseModel):
     # Also push the selected JPEGs (never RAWs) to Immich after import.
     upload_to_immich: bool = False
