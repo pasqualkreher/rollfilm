@@ -4,7 +4,7 @@
   "description": "Photo Manager — native desktop app",
   "main": "main.js",
   "author": "Pasqual Kreher",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "start": "npm run copy:renderer && electron .",

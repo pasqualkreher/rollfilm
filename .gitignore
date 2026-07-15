@@ -5,8 +5,9 @@
 Thumbs.db
 desktop.ini
 
-# ---- Editors / IDE ----
+# ---- Editors / IDE / AI tooling ----
 .vscode/
+.claude/
 .idea/
 *.swp
 *.swo
