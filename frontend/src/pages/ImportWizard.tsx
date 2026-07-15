@@ -160,13 +160,34 @@ export function ImportWizard() {
 
   // Poll the backend's staging/commit progress while an import is in flight, so
   // the otherwise feature-less "Processing…/Importing…" spinners can show a live
-  // count and estimated time remaining.
+  // count and estimated time remaining. Staging analysis runs in the background
+  // *after* the upload request returns, so polling is driven by the reported
+  // phase too, not just by the client's own in-flight requests.
   const { data: importProgress } = useQuery({
     queryKey: ["import-progress", sessionId],
     queryFn: () => api.import.progress(sessionId!),
-    enabled: !!sessionId && (isUploading || commit.isPending),
-    refetchInterval: 500,
+    enabled: !!sessionId,
+    refetchInterval: (query) =>
+      isUploading || commit.isPending || query.state.data?.phase === "staging" ? 500 : false,
   });
+  const stagingActive = importProgress?.phase === "staging";
+
+  // While the background analysis is running, keep refetching the staged-file
+  // list so cards appear as they're processed - plus one final refetch when
+  // the phase flips to idle, so the last batch's cards (and dedup flags) land.
+  const wasStagingRef = useRef(false);
+  useEffect(() => {
+    if (wasStagingRef.current && !stagingActive) {
+      queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+    }
+    wasStagingRef.current = stagingActive;
+    if (!stagingActive || !sessionId) return;
+    const timer = setInterval(
+      () => queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] }),
+      1000
+    );
+    return () => clearInterval(timer);
+  }, [stagingActive, sessionId, queryClient]);
   const progressSuffix = useMemo(() => {
     if (!importProgress || importProgress.total === 0 || importProgress.phase === "idle") return "";
     const eta =
@@ -479,6 +500,11 @@ export function ImportWizard() {
           From <strong>{sourceLabel}</strong> — these photos are staged, nothing is in your
           library yet. Rate, compare and select, then press "Add to library".
         </p>
+        {stagingActive && (
+          <p className="import-review-sub" style={{ color: "var(--text-muted)" }}>
+            ⏳ Processing photos…{progressSuffix} — cards appear below as they're ready.
+          </p>
+        )}
       </div>
       <PhotoFilters
         viewMode={viewMode}
@@ -559,12 +585,18 @@ export function ImportWizard() {
         <button
           className="btn primary"
           onClick={handleCommitClick}
-          disabled={selectedCount === 0 || commit.isPending}
-          title="Copies the selected photos into your library"
+          disabled={selectedCount === 0 || commit.isPending || stagingActive}
+          title={
+            stagingActive
+              ? "Photos are still being processed — importing unlocks when they're done"
+              : "Copies the selected photos into your library"
+          }
         >
           {commit.isPending
             ? `Adding to library...${progressSuffix}`
-            : `Add ${selectedCount} photo(s) to library`}
+            : stagingActive
+              ? `Processing photos...${progressSuffix}`
+              : `Add ${selectedCount} photo(s) to library`}
         </button>
         <button
           className="btn"
@@ -593,8 +625,8 @@ export function ImportWizard() {
         </p>
       )}
 
-      {isLoading ? (
-        <div className="empty-state">Processing uploaded files...</div>
+      {isLoading || (stagingActive && (files?.length ?? 0) === 0) ? (
+        <div className="empty-state">Processing uploaded files...{progressSuffix}</div>
       ) : (
         <div className={`thumbnail-grid${visibleFiles.length <= 2 ? " thumbnail-grid--few" : ""}`}>
           {visibleFiles.map((f, i) => (
