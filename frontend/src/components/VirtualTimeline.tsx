@@ -8,6 +8,7 @@ import { Thumb, fileTypeBadge, fileTypeBadgeClass, tileAspectRatio } from "./Thu
 import { useMergePairs } from "../state/viewPrefs";
 import { thumbPx, useThumbSize } from "../state/viewPrefs";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
+import { preloadImage } from "../utils/preload";
 
 // Layout constants mirroring the CSS grid (.thumbnail-grid gap, month header
 // pill + margin, section spacing). They only need to be internally consistent:
@@ -20,7 +21,11 @@ const SECTION_MB = 8;
 // scrolling always meets already-mounted tiles (whose thumbnails are loading
 // via the near-viewport preloader), small enough that a jump across the
 // library only mounts the landing area.
-const OVERSCAN = 1200;
+const OVERSCAN = 2000;
+// Beyond the mounted band, thumbnails for the next stretch in both directions
+// are pre-warmed into the browser's cache (see utils/preload.ts) - when those
+// rows mount during scrolling, their pixels are already local.
+const PREWARM = 3000;
 // Scroll positions are quantized before landing in React state, so a smooth
 // scroll re-renders every ~2 tile rows instead of every frame.
 const SCROLL_QUANTUM = 400;
@@ -258,6 +263,32 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       }
     }
   }, [layout, images.length]);
+
+  // Pre-warm the browser cache for the stretches just outside the mounted
+  // band, so tiles scrolling in have their pixels already local. Runs on the
+  // quantized window, i.e. every ~2 rows of scrolling, and preloadImage
+  // dedups per URL - photos are fetched at most once.
+  useEffect(() => {
+    if (!layout) return;
+    const zones: [number, number][] = [
+      [window_.bottom + OVERSCAN, window_.bottom + OVERSCAN + PREWARM],
+      [window_.top - OVERSCAN - PREWARM, window_.top - OVERSCAN],
+    ];
+    for (const s of layout.sections) {
+      for (const [zoneTop, zoneBottom] of zones) {
+        if (s.top + s.height <= zoneTop || s.top >= zoneBottom) continue;
+        for (const r of s.rows) {
+          const rowTop = s.top + r.top;
+          if (rowTop + r.height <= zoneTop || rowTop >= zoneBottom) continue;
+          for (const t of r.tiles) {
+            preloadImage(
+              api.images.thumbnailUrl(t.image.id, t.image.thumb_version || DEFAULT_EDIT_VERSION)
+            );
+          }
+        }
+      }
+    }
+  }, [layout, window_]);
 
   if (images.length === 0) {
     return <div className="empty-state">No photos here yet.</div>;

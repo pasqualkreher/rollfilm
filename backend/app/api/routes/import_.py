@@ -41,6 +41,12 @@ _RAW_THUMB_SLOTS = threading.BoundedSemaphore(min(4, max(2, (os.cpu_count() or 4
 
 router = APIRouter(prefix="/import", tags=["import"])
 
+# Staged thumbnails/previews are stable for the (short) life of a review
+# session - let the browser cache them so scrolling back through a big review
+# grid or re-zapping the lightbox never re-downloads. Not immutable: a RAW's
+# thumb can upgrade once from the embedded fallback to the demosaiced render.
+_STAGED_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
+
 
 def _to_staged_file_out(f: ImportStagedFile, paired_id: str | None = None) -> schemas.StagedFileOut:
     exif = json.loads(f.exif_json) if f.exif_json else {}
@@ -307,12 +313,12 @@ def get_staged_file_thumbnail(
                 except Exception:
                     logger.exception("Demosaiced staging thumbnail failed for %s", staged.original_filename)
         if demosaic_path.exists():
-            return FileResponse(demosaic_path)
+            return FileResponse(demosaic_path, headers=_STAGED_CACHE_HEADERS)
 
     thumb_path = thumb_dir / f"{file_id}.jpg"
     if not thumb_path.exists():
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return FileResponse(thumb_path)
+    return FileResponse(thumb_path, headers=_STAGED_CACHE_HEADERS)
 
 
 @router.get("/sessions/{session_id}/files/{file_id}/preview")
@@ -338,7 +344,11 @@ def get_staged_file_preview(
     preview.thumbnail((LIGHTBOX_PREVIEW_PX, LIGHTBOX_PREVIEW_PX))
     buf = io.BytesIO()
     preview.save(buf, "JPEG", quality=88)
-    return Response(content=buf.getvalue(), media_type="image/jpeg")
+    # Rendered on demand (RAW decode!) - caching saves the full re-render when
+    # the user zaps back to a photo in the lightbox.
+    return Response(
+        content=buf.getvalue(), media_type="image/jpeg", headers=_STAGED_CACHE_HEADERS
+    )
 
 
 @router.patch("/sessions/{session_id}/files/{file_id}", response_model=schemas.StagedFileOut)

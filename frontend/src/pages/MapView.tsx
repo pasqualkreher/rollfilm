@@ -31,6 +31,9 @@ export function MapView() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layerRef = useRef<L.LayerGroup | null>(null);
+  // Whether the initial fit-all-points framing already happened (it must not
+  // repeat on background refetches of the geo data).
+  const fittedRef = useRef(false);
 
   // Slim geo rows for EVERY located photo (the old page-limited full-row query
   // silently capped the map at 2000 photos). Clustering below keeps the marker
@@ -38,6 +41,9 @@ export function MapView() {
   const { data, isLoading } = useQuery({
     queryKey: ["images", "geo"],
     queryFn: () => api.images.geo(),
+    // Keep the pins on screen through background refetches.
+    placeholderData: (prev) => prev,
+    staleTime: 15_000,
   });
 
   const points = useMemo(() => geotagged(data?.images ?? []), [data]);
@@ -89,15 +95,6 @@ export function MapView() {
 
     type Pin = { id: string; count: number; latlng: L.LatLng; marker: L.Marker };
     let pins: Pin[] = [];
-    let active: Pin | null = null;
-
-    const setActive = (pin: Pin | null) => {
-      if (pin === active) return;
-      active?.marker.getElement()?.classList.remove("map-pin-active");
-      active = pin;
-      active?.marker.getElement()?.classList.add("map-pin-active");
-      map.getContainer().style.cursor = pin ? "pointer" : "";
-    };
 
     const addPin = (id: string, lat: number, lon: number, count: number, title?: string) => {
       const badge =
@@ -108,11 +105,22 @@ export function MapView() {
         iconSize: [46, 46],
         iconAnchor: [23, 23],
       });
-      // Non-interactive: the marker never captures the pointer, so moves and
-      // clicks reach the map and we resolve them against the nearest pin.
       const latlng = L.latLng(lat, lon);
-      const marker = L.marker(latlng, { icon, title, interactive: false }).addTo(layer);
-      pins.push({ id, count, latlng, marker });
+      // Plain interactive markers: with clustering there are only a few dozen
+      // pins on screen, so Leaflet's own hover/click handling is reliable and
+      // riseOnHover keeps the enlarged photo above its neighbors. (The old
+      // cursor-distance hit-testing predates clustering, when thousands of
+      // overlapping pins made per-marker events unusable.)
+      const marker = L.marker(latlng, { icon, title, riseOnHover: true }).addTo(layer);
+      const pin: Pin = { id, count, latlng, marker };
+      marker.on("mouseover", () => marker.getElement()?.classList.add("map-pin-active"));
+      marker.on("mouseout", () => marker.getElement()?.classList.remove("map-pin-active"));
+      marker.on("click", () => {
+        // A cluster zooms in toward its photos; a single pin opens the photo.
+        if (pin.count > 1) map.setView(pin.latlng, Math.min(map.getZoom() + 2, 18));
+        else navigate(`/image/${pin.id}`);
+      });
+      pins.push(pin);
     };
 
     // One pin per ~72px screen cell at the current zoom; the newest photo of
@@ -121,7 +129,6 @@ export function MapView() {
     const rebuild = () => {
       layer.clearLayers();
       pins = [];
-      active = null;
       const zoom = map.getZoom();
       const bounds = map.getBounds().pad(0.5);
       const cells = new Map<string, { rep: GeoImage; count: number }>();
@@ -141,55 +148,29 @@ export function MapView() {
       if (focus && !pins.some((p) => p.id === focus.id)) {
         addPin(focus.id, focus.lat, focus.lon, 1);
       }
-      if (focus) setActive(pins.find((p) => p.id === focus.id) ?? null);
+      if (focus) {
+        pins
+          .find((p) => p.id === focus.id)
+          ?.marker.getElement()
+          ?.classList.add("map-pin-active");
+      }
     };
 
-    // Which pin is blown up. Picked by cursor distance rather than by which
-    // element sits on top, so an enlarged photo never blocks the pins beneath
-    // it. With clustering the pin count is small, so the per-move scan stays
-    // cheap even while panning across a dense library.
-    const HIT_RADIUS = 46; // px in screen space
-    const nearest = (pt: L.Point): Pin | null => {
-      let best: Pin | null = null;
-      let bestD = HIT_RADIUS;
-      for (const pin of pins) {
-        const d = pt.distanceTo(map.latLngToContainerPoint(pin.latlng));
-        if (d <= bestD) {
-          bestD = d;
-          best = pin;
-        }
-      }
-      return best;
-    };
-    const onMove = (e: L.LeafletMouseEvent) => setActive(nearest(e.containerPoint));
-    const onClick = (e: L.LeafletMouseEvent) => {
-      const pin = nearest(e.containerPoint);
-      if (!pin) return;
-      // A cluster zooms in toward its photos; a single pin opens the photo.
-      if (pin.count > 1) map.setView(pin.latlng, Math.min(map.getZoom() + 2, 18));
-      else navigate(`/image/${pin.id}`);
-    };
-    const onOut = () => setActive(null);
-    map.on("mousemove", onMove);
-    map.on("click", onClick);
-    map.on("mouseout", onOut);
     map.on("moveend zoomend", rebuild);
 
     // Arriving from a photo's mini-map: hold on that spot and pop it big.
-    // Otherwise frame them all. Both trigger moveend -> rebuild; still rebuild
-    // once directly for the no-op-view case (e.g. world view already fits).
+    // Otherwise frame them all - but only when the photo set first arrives,
+    // not on every background refetch (which used to yank the view back).
     if (focus) {
       map.setView([focus.lat, focus.lon], 15);
-    } else if (points.length > 0) {
+    } else if (points.length > 0 && !fittedRef.current) {
+      fittedRef.current = true;
       const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lon] as [number, number]));
       map.fitBounds(bounds, { padding: [60, 60], maxZoom: 14 });
     }
     rebuild();
 
     return () => {
-      map.off("mousemove", onMove);
-      map.off("click", onClick);
-      map.off("mouseout", onOut);
       map.off("moveend zoomend", rebuild);
     };
   }, [points, navigate, focus]);

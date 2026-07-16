@@ -83,6 +83,11 @@ export function Library() {
     queryKey: ["images", "index", filters],
     enabled: !q,
     queryFn: () => api.images.index(filters),
+    // Refetches (after edits/imports, or filter changes) keep showing the
+    // previous grid until the new index arrives, instead of blanking to a
+    // "Loading..." screen - on a busy backend that request can take seconds.
+    placeholderData: (prev) => prev,
+    staleTime: 15_000,
   });
 
   // A search query switches to scoped search (same filters, ranked by

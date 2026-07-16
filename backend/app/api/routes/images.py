@@ -1142,7 +1142,14 @@ def _serve_derivative(image: Image, name: str, not_ready_detail: str) -> FileRes
             raise HTTPException(status_code=404, detail=not_ready_detail)
     if not path.exists():
         raise HTTPException(status_code=404, detail=not_ready_detail)
-    return FileResponse(path)
+    # Cache hard: the URLs are content-versioned (?v= carries the edit state,
+    # plus a global buster the frontend bumps after thumbnail rebuilds), so a
+    # given URL's bytes never change. Lets the browser keep grid/preview images
+    # in its memory/disk cache instead of re-requesting them on every mount -
+    # scrolled-back grid areas and re-opened photos then render instantly.
+    return FileResponse(
+        path, headers={"Cache-Control": "private, max-age=31536000, immutable"}
+    )
 
 
 @router.get("/{image_id}/thumbnail")

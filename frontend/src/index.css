@@ -2627,8 +2627,11 @@ input.editor-preset-select {
    generic teardrop marker. The images are non-interactive so pointer moves and
    clicks pass through to the map, which resolves them against the nearest pin -
    that way an enlarged photo never blocks the pins beneath it. */
+/* Interactive thumbnail pins: hover enlarges (see .map-pin-active), click
+   opens the photo / zooms a cluster. Cursor comes from Leaflet's own
+   .leaflet-interactive class. */
 .map-pin {
-  pointer-events: none !important;
+  pointer-events: auto;
 }
 
 .map-pin img {
