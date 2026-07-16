@@ -672,6 +672,11 @@ export const api = {
     updateTrash(retention_days: number): Promise<TrashSettings> {
       return request(`/settings/trash`, { method: "PUT", body: JSON.stringify({ retention_days }) });
     },
+    // Live Immich upload activity - drives the top-bar sync indicator (and
+    // the desktop shell's quit warning, which calls it directly).
+    immichActivity(): Promise<{ pending_uploads: number; sync_mode: string }> {
+      return request(`/settings/immich/activity`);
+    },
     getImmich(): Promise<ImmichSettings> {
       return request(`/settings/immich`);
     },

@@ -19,9 +19,24 @@ from app.services.settings_store import (
 )
 from app.services.immich_sync import run_immich_sync_soon
 from app.services.trash import run_purge_soon
-from app.workers.queue import immich_upload_history
+from app.workers.queue import immich_pending_uploads, immich_upload_history
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+@router.get("/immich/activity", response_model=schemas.ImmichActivityOut)
+def immich_activity(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """How much Immich upload work is queued or in flight right now. Polled by
+    the web UI's sync indicator, and by the desktop shell when the window is
+    closed - the upload queue is in-memory, so the shell warns before a quit
+    would drop unfinished uploads. sync_mode is included so the warning can say
+    whether the startup sync loop will catch up the remainder (full/selective)
+    or the uploads are simply gone (manual)."""
+    return schemas.ImmichActivityOut(
+        pending_uploads=immich_pending_uploads(), sync_mode=get_immich_sync_mode(db)
+    )
 
 
 @router.get("/immich", response_model=schemas.ImmichSettingsOut)

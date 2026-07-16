@@ -43,6 +43,17 @@ _executor = ThreadPoolExecutor(
 # import. CPU work and network waits now never compete.
 _immich_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="immich-upload")
 
+# Queued + in-flight Immich uploads. The desktop shell asks for this when the
+# window closes: the queue is in-memory, so quitting mid-upload silently drops
+# whatever hasn't finished - the shell warns and offers to finish first.
+_immich_pending = 0
+_immich_pending_lock = Lock()
+
+
+def immich_pending_uploads() -> int:
+    with _immich_pending_lock:
+        return _immich_pending
+
 
 def enqueue_post_import(image_id: str, source_path: Path) -> None:
     _executor.submit(_process, image_id, source_path)
@@ -70,14 +81,22 @@ def enqueue_immich_upload(
     named Immich album (created if missing). When ``image_id`` is given, the
     Immich asset id is stored on that row after the upload, so a later
     permanent deletion can remove the asset from Immich too."""
+    global _immich_pending
+    with _immich_pending_lock:
+        _immich_pending += 1
+
+    def _run() -> None:
+        global _immich_pending
+        try:
+            _upload_to_immich(
+                base_url, api_key, source_path, file_created_at, tuple(album_names), image_id
+            )
+        finally:
+            with _immich_pending_lock:
+                _immich_pending -= 1
+
     _immich_executor.submit(
-        _upload_to_immich,
-        base_url,
-        api_key,
-        source_path,
-        file_created_at,
-        tuple(album_names),
-        image_id,
+        _run,
     )
 
 

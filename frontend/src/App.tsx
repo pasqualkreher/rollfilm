@@ -218,8 +218,33 @@ function TopBar() {
           {busyLabel}
         </span>
       )}
+      <ImmichSyncIndicator />
       <SearchBar />
     </div>
+  );
+}
+
+// Quiet top-bar pill while Immich uploads run in the background, so the user
+// knows a sync is happening (and why quitting would interrupt something) even
+// though nothing blocks. Polls faster while active, lazily when idle.
+function ImmichSyncIndicator() {
+  const { data } = useQuery({
+    queryKey: ["immich-activity"],
+    queryFn: () => api.settings.immichActivity(),
+    refetchInterval: (query) => ((query.state.data?.pending_uploads ?? 0) > 0 ? 3000 : 20000),
+  });
+  const pending = data?.pending_uploads ?? 0;
+  if (pending === 0) return null;
+  return (
+    <span
+      className="nav-task"
+      role="status"
+      aria-live="polite"
+      title="Photos are uploading to Immich in the background. You'll be asked before quitting would interrupt this."
+    >
+      <span className="spinner" aria-hidden="true" />
+      Immich sync: {pending} left
+    </span>
   );
 }
 

@@ -427,6 +427,14 @@ class RebuildThumbnailsResult(BaseModel):
     rebuilt: int
 
 
+class ImmichActivityOut(BaseModel):
+    """Live Immich upload activity: queued + in-flight uploads, plus the sync
+    mode so the desktop quit-warning can phrase what quitting would mean."""
+
+    pending_uploads: int
+    sync_mode: str
+
+
 class RepairDatesResult(BaseModel):
     """Outcome of the capture-date repair: photos checked on disk, rows whose
     taken_at actually changed."""
