@@ -233,6 +233,10 @@ class StagedFileOut(BaseModel):
     duplicate_of_image_id: str | None
     duplicate_of_staged_file_id: str | None
     is_near_duplicate: bool
+    # The exact duplicate this file matches is a managed photo sitting in the
+    # Trash: importing it is allowed and restores that photo (so the review UI
+    # says "restores from Trash" instead of "already in library").
+    duplicate_in_trash: bool = False
     paired_staged_file_id: str | None
     taken_at: datetime | None
     camera_make: str | None
@@ -438,10 +442,19 @@ class RebuildThumbnailsResult(BaseModel):
 
 class ImmichActivityOut(BaseModel):
     """Live Immich upload activity: queued + in-flight uploads, plus the sync
-    mode so the desktop quit-warning can phrase what quitting would mean."""
+    mode so the desktop quit-warning can phrase what quitting would mean.
+    synced/total drive the Settings progress display: how many of the photos
+    the current mode wants on Immich are known to be there already."""
 
     pending_uploads: int
     sync_mode: str
+    synced: int
+    total: int
+    paused: bool
+
+
+class ImmichPauseUpdate(BaseModel):
+    paused: bool
 
 
 class RepairDatesResult(BaseModel):

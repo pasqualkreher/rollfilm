@@ -475,6 +475,18 @@ def restore_from_trash(
     return images
 
 
+def _require_library_mounted() -> None:
+    """Refuse permanent deletions while the library folder is unreachable (the
+    external drive is asleep/unplugged): the rows would vanish but the actual
+    files would sit orphaned on the absent drive forever."""
+    if not settings.library_root.is_dir():
+        raise HTTPException(
+            status_code=409,
+            detail="Your library drive is not connected. Reconnect it before permanently "
+            "deleting photos - otherwise the files would be left behind on the drive.",
+        )
+
+
 @router.post("/trash/delete", status_code=204)
 def delete_from_trash(
     payload: schemas.BulkDeleteRequest,
@@ -483,6 +495,7 @@ def delete_from_trash(
 ):
     """Permanently delete photos that are already in the Trash - this is the
     step that actually removes the original files from the library folder."""
+    _require_library_mounted()
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     if any(image.deleted_at is None for image in images):
         raise HTTPException(
@@ -499,6 +512,7 @@ def delete_from_trash(
 
 @router.post("/trash/empty", status_code=204)
 def empty_trash(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _require_library_mounted()
     images = (
         db.query(Image)
         .filter(

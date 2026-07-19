@@ -51,6 +51,19 @@ export function Settings() {
     refetchInterval: 10_000,
   });
 
+  // Sync progress (X of Y on Immich) + pause state. Polled so the counter
+  // visibly climbs while the background sync works through the library.
+  const { data: immichActivity } = useQuery({
+    queryKey: ["immich-activity"],
+    queryFn: () => api.settings.immichActivity(),
+    refetchInterval: 5_000,
+  });
+
+  const setImmichPaused = useMutation({
+    mutationFn: (paused: boolean) => api.settings.setImmichPaused(paused),
+    onSuccess: (activity) => queryClient.setQueryData(["immich-activity"], activity),
+  });
+
   // Seed the host field from the server once, without clobbering edits in
   // progress. The API key is never sent back down (only whether one is set),
   // so its field stays blank and acts as "leave unchanged unless you type one".
@@ -385,6 +398,70 @@ export function Settings() {
             ))}
             {setSyncMode.isError && (
               <p style={{ color: "var(--danger)" }}>{(setSyncMode.error as Error).message}</p>
+            )}
+            {immichActivity && (
+              <div style={{ marginTop: 16 }}>
+                <h4 style={{ margin: "0 0 4px", fontSize: 13 }}>Sync status</h4>
+                <p style={{ color: "var(--text-muted)", margin: "0 0 6px", fontSize: 13 }}>
+                  {immichActivity.synced} of {immichActivity.total} photos on Immich
+                  {immichActivity.pending_uploads > 0 &&
+                    ` — ${immichActivity.pending_uploads} uploading`}
+                  {immichActivity.paused && " — sync paused"}
+                </p>
+                <div
+                  style={{
+                    height: 6,
+                    maxWidth: 420,
+                    borderRadius: 3,
+                    background: "var(--border)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      height: "100%",
+                      width: `${
+                        immichActivity.total > 0
+                          ? Math.round((immichActivity.synced / immichActivity.total) * 100)
+                          : 100
+                      }%`,
+                      background: immichActivity.paused ? "var(--text-muted)" : "var(--accent)",
+                      transition: "width 0.4s ease",
+                    }}
+                  />
+                </div>
+                <label
+                  className="filter-field"
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "flex-start",
+                    marginTop: 12,
+                    cursor: setImmichPaused.isPending ? "wait" : "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={immichActivity.paused}
+                    disabled={setImmichPaused.isPending}
+                    onChange={(e) => setImmichPaused.mutate(e.target.checked)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span>
+                    <strong>Pause automatic sync</strong>
+                    <span style={{ display: "block", color: "var(--text-muted)", fontSize: 12 }}>
+                      Stops background uploads until you resume — useful on mobile data or another
+                      metered connection. Manual “Add to Immich” still works, and resuming catches
+                      up automatically.
+                    </span>
+                  </span>
+                </label>
+                {setImmichPaused.isError && (
+                  <p style={{ color: "var(--danger)" }}>
+                    {(setImmichPaused.error as Error).message}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}

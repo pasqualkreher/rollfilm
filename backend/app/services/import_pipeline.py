@@ -338,12 +338,18 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
             if exact_image is not None:
                 image_id, source_root_id = exact_image
                 staged.duplicate_of_image_id = image_id
-                if source_root_id is None:
-                    # Byte-identical to a managed-library photo - don't re-import by
-                    # default (the API also rejects re-selecting it).
+                # Trash state is read fresh (not from the session-lifetime dedup
+                # index): the user may well have trashed the photo just before
+                # re-importing it.
+                dup_row = db.get(Image, image_id) if source_root_id is None else None
+                if source_root_id is None and (dup_row is None or dup_row.deleted_at is None):
+                    # Byte-identical to a visible managed-library photo - don't
+                    # re-import by default (the API also rejects re-selecting it).
                     staged.selected = False
-                # else: only copy is indexed in place from an external source root;
-                # importing promotes it, so leave it selected.
+                # else: the only copy is indexed in place from an external source
+                # root (importing promotes it) or sits in the Trash (importing
+                # the same bytes is the explicit way to bring it back, mirroring
+                # the source-root rule) - leave it selected.
             elif a.sha256 in state.staged_by_hash:
                 staged.duplicate_of_staged_file_id = state.staged_by_hash[a.sha256]
                 staged.selected = False
@@ -685,15 +691,19 @@ def commit_import_session(
     sync_all_to_immich: bool = False,
 ) -> list[Image]:
     def _exact_referenced_duplicate(f: ImportStagedFile) -> Image | None:
-        """The scan-in-place (source root) image this staged file is a
-        byte-identical copy of, if any. That's the one exact-duplicate case
-        where importing is still allowed: a copy imported *into* the library
-        is the source of truth, so committing promotes the referenced row to
-        a managed one instead of creating a duplicate."""
+        """The existing image this staged file is a byte-identical copy of, if
+        importing it again is allowed. Two exact-duplicate cases qualify: a
+        scan-in-place (source root) row - a copy imported *into* the library is
+        the source of truth, so committing promotes that row to a managed one -
+        and a managed row sitting in the Trash, where importing the same bytes
+        is the explicit way to bring the photo back (it's restored at commit
+        instead of staying invisibly trashed forever)."""
         if not f.duplicate_of_image_id or f.is_near_duplicate:
             return None
         existing = db.get(Image, f.duplicate_of_image_id)
-        if existing is not None and existing.source_root_id is not None:
+        if existing is None:
+            return None
+        if existing.source_root_id is not None or existing.deleted_at is not None:
             return existing
         return None
 
@@ -772,6 +782,33 @@ def commit_import_session(
 
         exif_dict = json.loads(staged.exif_json) if staged.exif_json else {}
         staged_full_path = settings.import_staging_root / staged.staged_path
+
+        # A managed photo sitting in the Trash whose original is still in the
+        # library folder (trash keeps files on disk until permanent deletion):
+        # restore it in place. Same bytes, same path - nothing to move, the
+        # staged copy is simply discarded with the session. The commit loop's
+        # promoted branch clears deleted_at.
+        if (
+            promoted is not None
+            and promoted.source_root_id is None
+            and (settings.library_root / promoted.file_path).exists()
+        ):
+            promoted_ids.add(promoted.id)
+            planned_dests.add(promoted.file_path)
+            plan.append(
+                _CommitEntry(
+                    staged,
+                    promoted,
+                    exif_dict,
+                    promoted.taken_at or datetime.now(timezone.utc),
+                    promoted.file_path,
+                    settings.library_root / promoted.file_path,
+                    staged_full_path,
+                    already_moved=True,
+                )
+            )
+            continue
+
         staged_missing = not staged_full_path.exists()
 
         taken_at = (
@@ -870,8 +907,8 @@ def commit_import_session(
             promoted.original_filename = staged.original_filename
             promoted.file_size = dest_path.stat().st_size
             # A previously deleted source-root photo lives on as a hidden
-            # scan-exclusion row; importing the same bytes is the explicit way
-            # to bring it back.
+            # scan-exclusion row, and a managed photo may sit in the Trash;
+            # importing the same bytes is the explicit way to bring either back.
             promoted.deleted_at = None
             if staged.rating:
                 promoted.rating = staged.rating

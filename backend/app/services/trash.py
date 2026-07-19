@@ -143,6 +143,15 @@ def purge_expired() -> int:
     Only managed rows are purged: deleted source-root photos are also
     soft-deleted rows, but they act as permanent scan-exclusion markers and
     must survive (see images.bulk_delete_images)."""
+    # With the library root unreachable (external drive asleep/unplugged),
+    # purging would delete the DB rows and queue Immich removals while the
+    # actual files sit untouched on the absent drive - orphaning them there
+    # forever. Skip the pass; the next one after the drive returns purges.
+    if not settings.library_root.is_dir():
+        logger.warning(
+            "Trash purge skipped: library root %s not found", settings.library_root
+        )
+        return 0
     db = SessionLocal()
     try:
         days = get_trash_retention_days(db)

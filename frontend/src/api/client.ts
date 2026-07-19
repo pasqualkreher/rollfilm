@@ -3,6 +3,7 @@ import type {
   CropBox,
   ImageOut,
   DirListing,
+  ImmichActivity,
   ImmichSettings,
   ImmichSyncMode,
   ImmichTestResult,
@@ -672,10 +673,17 @@ export const api = {
     updateTrash(retention_days: number): Promise<TrashSettings> {
       return request(`/settings/trash`, { method: "PUT", body: JSON.stringify({ retention_days }) });
     },
-    // Live Immich upload activity - drives the top-bar sync indicator (and
-    // the desktop shell's quit warning, which calls it directly).
-    immichActivity(): Promise<{ pending_uploads: number; sync_mode: string }> {
+    // Live Immich upload activity - drives the top-bar sync indicator, the
+    // Settings sync-status panel (and the desktop shell's quit warning, which
+    // calls it directly).
+    immichActivity(): Promise<ImmichActivity> {
       return request(`/settings/immich/activity`);
+    },
+    setImmichPaused(paused: boolean): Promise<ImmichActivity> {
+      return request(`/settings/immich/pause`, {
+        method: "PUT",
+        body: JSON.stringify({ paused }),
+      });
     },
     getImmich(): Promise<ImmichSettings> {
       return request(`/settings/immich`);

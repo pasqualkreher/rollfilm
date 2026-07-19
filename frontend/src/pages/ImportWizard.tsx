@@ -26,9 +26,14 @@ function formatEta(seconds: number): string {
 
 // Byte-identical to a photo already in the library or elsewhere in this same
 // batch - the backend refuses to import these, so the UI shouldn't let you
-// select them in the first place.
+// select them in the first place. Exception: a copy of a photo sitting in the
+// Trash may be imported (it restores that photo), so it stays selectable.
 function isExactDuplicate(f: StagedFileOut): boolean {
-  return Boolean(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && !f.is_near_duplicate;
+  return (
+    Boolean(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) &&
+    !f.is_near_duplicate &&
+    !f.duplicate_in_trash
+  );
 }
 
 // Shots where exactly one half of a RAW+JPEG pair is selected - used to ask
@@ -167,8 +172,11 @@ export function ImportWizard() {
     onSuccess: () => {
       // The freshly-imported photos won't appear on the Library until its
       // ["images"] query refetches - invalidate so they show up immediately
-      // instead of only after a manual page refresh.
+      // instead of only after a manual page refresh. The Trash too: importing
+      // a copy of a trashed photo restores it, so its thumb must leave the
+      // Trash grid right away.
       queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["trash"] });
       // Without this, the session tracked in context (see state/importSession)
       // stays set after a successful commit, so revisiting /import re-opens
       // this same now-committed session - and Discard then 400s because it's
@@ -258,7 +266,14 @@ export function ImportWizard() {
   useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
   const filteredFiles: StagedFileOut[] = (files ?? []).filter((f) => {
-    if (hideDuplicates && (f.duplicate_of_image_id || f.duplicate_of_staged_file_id)) return false;
+    // Trash-restores stay visible even under "Hide duplicates": unlike blocked
+    // duplicates they actively do something on import (restore the photo).
+    if (
+      hideDuplicates &&
+      (f.duplicate_of_image_id || f.duplicate_of_staged_file_id) &&
+      !f.duplicate_in_trash
+    )
+      return false;
     if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
     if (viewMode === "raw_only" && f.file_type !== "raw") return false;
     if (ratingMin > 0 && f.rating < ratingMin) return false;
@@ -723,7 +738,9 @@ export function ImportWizard() {
                   selectMode
                     ? isExactDuplicate(f)
                       ? "Already in your library - can't be imported"
-                      : "Click to select, shift-click for a range"
+                      : f.duplicate_in_trash
+                        ? "This photo is in the Trash - importing it restores it"
+                        : "Click to select, shift-click for a range"
                     : "Click to preview"
                 }
               >
@@ -752,7 +769,11 @@ export function ImportWizard() {
                 )}
                 {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
                   <span className="duplicate-badge">
-                    {f.is_near_duplicate ? "Possible duplicate" : "Already in library"}
+                    {f.is_near_duplicate
+                      ? "Possible duplicate"
+                      : f.duplicate_in_trash
+                        ? "In Trash - restores"
+                        : "Already in library"}
                   </span>
                 )}
                 <span

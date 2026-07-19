@@ -82,6 +82,15 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
     removal. External (source-root) photos are governed by their own scan
     lifecycle and must NOT be pruned just because e.g. the NAS is momentarily
     unmounted - that would wipe the whole index."""
+    # Hard refusal, not just a startup-path guard: with the library root gone
+    # (external drive asleep/unplugged), every managed file "is missing" and
+    # this reconcile would wipe the whole catalog. The Settings button can be
+    # clicked at exactly that moment, so the check belongs here.
+    if not settings.library_root.is_dir():
+        raise RuntimeError(
+            f"Library folder not found at {settings.library_root} - reconnect the drive "
+            "before syncing the database to the library."
+        )
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
     missing = [
         image

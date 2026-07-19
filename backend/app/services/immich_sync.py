@@ -12,6 +12,11 @@ Immich mirrors the *visible* library. Each pass:
   selective: the immich_sync-flagged ones) but has no recorded asset id yet is
   uploaded and its asset id stored. Immich dedups by checksum server-side, so
   photos that are already there just get their asset id backfilled.
+- Album membership: photos *already* on Immich are added to the Immich albums
+  they belong in (full mode: all their albums; selective: the flagged ones).
+  Uploads only mirror albums at upload time, so without this a photo added to
+  an album after its upload - or a library synced before full mode was turned
+  on - would never appear in the Immich album.
 - Permanent deletions: immich_pending_deletions rows (written when a photo is
   hard-deleted - see trash.hard_delete_images - covering the gap where a photo
   is trashed and permanently deleted before this loop ever saw it) are
@@ -29,22 +34,28 @@ import time
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Album, FileType, Image, ImmichPendingDeletion
+from app.db.models import Album, AlbumImage, FileType, Image, ImmichPendingDeletion
 from app.db.session import SessionLocal
 from app.services.filesystem import resolve_image_path
 from app.services.hashing import sha1_file
-from app.services.immich import delete_assets, find_asset_ids_by_checksums, upload_asset
+from app.services.immich import (
+    add_assets_to_album,
+    delete_assets,
+    find_asset_ids_by_checksums,
+    upload_asset,
+)
 from app.services.settings_store import (
     IMMICH_MODE_FULL,
     IMMICH_MODE_SELECTIVE,
     ImmichConfig,
     get_immich_config,
+    get_immich_sync_paused,
 )
 
 # Shared with the fire-and-forget upload path on purpose: the sync loop's
 # uploads/removals land in the same Settings activity history, and album
 # mirroring must behave identically no matter which path uploaded the photo.
-from app.workers.queue import _add_to_albums, _record_upload
+from app.workers.queue import _add_to_albums, _record_upload, _resolve_album_id
 
 logger = logging.getLogger(__name__)
 
@@ -216,15 +227,79 @@ def _upload_missing(db: Session, config: ImmichConfig) -> None:
             _note_failure(image.id)
 
 
+# (album name, asset id) pairs this process already pushed to Immich, so the
+# every-minute reconcile doesn't re-PUT every album's full membership forever.
+# In-memory on purpose (same as _trash_checked), and cleared every hour: adds
+# are idempotent on Immich, so a restart or reset just costs one repeated batch
+# add per album - and the hourly full push heals memberships this set wrongly
+# remembers as synced (e.g. a photo removed from an album and re-added while
+# Immich was unreachable).
+_album_pairs_synced: set[tuple[str, str]] = set()
+_ALBUM_FULL_RESYNC_S = 3600
+_album_pairs_cleared_at = 0.0
+
+
+def _sync_album_membership(db: Session, config: ImmichConfig) -> None:
+    """Add photos that are *already* on Immich to the Immich albums they belong
+    in. Uploads mirror albums only at upload time, which misses membership that
+    changed afterwards: a photo added to an album later, an album flagged for
+    sync after its photos were uploaded, or a whole library uploaded before
+    full mode / album sync was switched on. Add-only by design - removals stay
+    event-driven (enqueue_immich_album_remove_assets), so this pass can never
+    fight photos the user added to an Immich album by hand."""
+    if not config.album_sync:
+        return
+    global _album_pairs_cleared_at
+    now = time.monotonic()
+    if now - _album_pairs_cleared_at >= _ALBUM_FULL_RESYNC_S:
+        _album_pairs_synced.clear()
+        _album_pairs_cleared_at = now
+    query = (
+        db.query(Album.name, Image.immich_asset_id)
+        .join(AlbumImage, AlbumImage.album_id == Album.id)
+        .join(Image, AlbumImage.image_id == Image.id)
+        .filter(Image.deleted_at.is_(None), Image.immich_asset_id.isnot(None))
+    )
+    # Selective mode mirrors flagged *albums* with all their members (matching
+    # set_album_immich_sync, which uploads every JPEG in a flagged album) - the
+    # per-image flag only decides which loose photos get uploaded.
+    if config.sync_mode == IMMICH_MODE_SELECTIVE:
+        query = query.filter(Album.immich_sync.is_(True))
+
+    to_push: dict[str, list[str]] = {}
+    for name, asset_id in query.all():
+        if (name, asset_id) not in _album_pairs_synced:
+            to_push.setdefault(name, []).append(asset_id)
+
+    for name, asset_ids in to_push.items():
+        try:
+            album_id = _resolve_album_id(config.base_url, config.api_key, name)
+            added = add_assets_to_album(config.base_url, config.api_key, album_id, asset_ids)
+        except Exception:
+            logger.exception("Immich album sync failed for album %r", name)
+            continue
+        _album_pairs_synced.update((name, asset_id) for asset_id in asset_ids)
+        # added == 0 means Immich already had them all (routine right after a
+        # restart, when the in-memory set is empty) - not worth a history entry.
+        if added:
+            _record_upload(name, True, f"added {added} photo(s) to Immich album (background sync)")
+            logger.info("Immich sync added %d photo(s) to album %r", added, name)
+
+
 def run_sync_once() -> None:
     db = SessionLocal()
     try:
         config = get_immich_config(db)
         if config is None or config.sync_mode not in (IMMICH_MODE_SELECTIVE, IMMICH_MODE_FULL):
             return
+        # User-requested pause (e.g. on mobile data): no Immich traffic at all
+        # until resumed - resuming wakes the loop, which then catches up.
+        if get_immich_sync_paused(db):
+            return
         _remove_trashed(db, config)
         _process_pending_deletions(db, config)
         _upload_missing(db, config)
+        _sync_album_membership(db, config)
     finally:
         db.close()
 

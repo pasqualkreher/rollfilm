@@ -137,6 +137,9 @@ export interface StagedFileOut {
   duplicate_of_image_id: string | null;
   duplicate_of_staged_file_id: string | null;
   is_near_duplicate: boolean;
+  // The matching library photo sits in the Trash: importing this file is
+  // allowed and restores it (instead of being blocked as "already in library").
+  duplicate_in_trash: boolean;
   paired_staged_file_id: string | null;
   taken_at: string | null;
   camera_make: string | null;
@@ -172,6 +175,16 @@ export interface ImmichSettings {
 export interface ImmichTestResult {
   ok: boolean;
   message: string;
+}
+
+export interface ImmichActivity {
+  pending_uploads: number;
+  sync_mode: ImmichSyncMode;
+  // Sync progress: of the `total` JPEGs the current mode wants on Immich,
+  // `synced` are known to be there already.
+  synced: number;
+  total: number;
+  paused: boolean;
 }
 
 export interface ImmichUploadResult {

@@ -49,7 +49,21 @@ router = APIRouter(prefix="/import", tags=["import"])
 _STAGED_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
 
 
-def _to_staged_file_out(f: ImportStagedFile, paired_id: str | None = None) -> schemas.StagedFileOut:
+def _trashed_duplicate_ids(db: Session, files: list[ImportStagedFile]) -> set[str]:
+    """Ids of Trash-dwelling managed images referenced by these staged files'
+    exact-duplicate links, resolved in one query - the review UI shows those
+    files as "restores from Trash" (importable) rather than "already in
+    library" (blocked)."""
+    ids = {f.duplicate_of_image_id for f in files if f.duplicate_of_image_id}
+    if not ids:
+        return set()
+    rows = db.query(Image.id).filter(Image.id.in_(ids), Image.deleted_at.isnot(None)).all()
+    return {row.id for row in rows}
+
+
+def _to_staged_file_out(
+    f: ImportStagedFile, paired_id: str | None = None, duplicate_in_trash: bool = False
+) -> schemas.StagedFileOut:
     exif = json.loads(f.exif_json) if f.exif_json else {}
     return schemas.StagedFileOut(
         id=f.id,
@@ -61,6 +75,7 @@ def _to_staged_file_out(f: ImportStagedFile, paired_id: str | None = None) -> sc
         duplicate_of_image_id=f.duplicate_of_image_id,
         duplicate_of_staged_file_id=f.duplicate_of_staged_file_id,
         is_near_duplicate=f.is_near_duplicate,
+        duplicate_in_trash=duplicate_in_trash,
         paired_staged_file_id=paired_id,
         taken_at=exif.get("taken_at"),
         camera_make=exif.get("camera_make"),
@@ -280,7 +295,11 @@ def list_staged_files(
     # polls this route, so a stuck session recovers as soon as it's looked at.
     ensure_session_processing(session)
     pairs = compute_staged_pairs(session.staged_files)
-    return [_to_staged_file_out(f, pairs.get(f.id)) for f in session.staged_files]
+    trashed = _trashed_duplicate_ids(db, session.staged_files)
+    return [
+        _to_staged_file_out(f, pairs.get(f.id), f.duplicate_of_image_id in trashed)
+        for f in session.staged_files
+    ]
 
 
 @router.get("/sessions/{session_id}/files/{file_id}/thumbnail")
@@ -380,15 +399,18 @@ def update_staged_file(
         staged.duplicate_of_image_id or staged.duplicate_of_staged_file_id
     ) and not staged.is_near_duplicate
     if payload.selected and is_exact_duplicate:
-        # One exception: a byte-identical copy of a photo that's only *indexed
-        # in place* from an external source root may be imported - the managed
-        # library copy becomes the source of truth (the existing row is
-        # promoted at commit, see import_pipeline.commit_import_session).
+        # Two exceptions: a byte-identical copy of a photo that's only *indexed
+        # in place* from an external source root may be imported (the managed
+        # library copy becomes the source of truth - the existing row is
+        # promoted at commit), and a copy of a photo sitting in the Trash may
+        # be imported to restore it (see import_pipeline.commit_import_session).
         dup_image = (
             db.get(Image, staged.duplicate_of_image_id) if staged.duplicate_of_image_id else None
         )
-        duplicates_referenced_only = dup_image is not None and dup_image.source_root_id is not None
-        if not duplicates_referenced_only:
+        reimportable = dup_image is not None and (
+            dup_image.source_root_id is not None or dup_image.deleted_at is not None
+        )
+        if not reimportable:
             raise HTTPException(
                 status_code=400,
                 detail="This file is byte-identical to another photo (already in your library, or elsewhere in "
@@ -407,7 +429,8 @@ def update_staged_file(
     db.refresh(staged)
 
     pairs = compute_staged_pairs(session.staged_files)
-    return _to_staged_file_out(staged, pairs.get(staged.id))
+    trashed = _trashed_duplicate_ids(db, [staged])
+    return _to_staged_file_out(staged, pairs.get(staged.id), staged.duplicate_of_image_id in trashed)
 
 
 @router.patch("/sessions/{session_id}/files", response_model=list[schemas.StagedFileOut])
@@ -433,8 +456,12 @@ def bulk_update_staged_files(
             ) and not staged.is_near_duplicate
             allowed = not payload.selected or not is_exact_duplicate
             if not allowed and staged.duplicate_of_image_id:
+                # Same exceptions as the per-file route: source-root promotions
+                # and restores from the Trash may be (re)selected.
                 dup_image = db.get(Image, staged.duplicate_of_image_id)
-                allowed = dup_image is not None and dup_image.source_root_id is not None
+                allowed = dup_image is not None and (
+                    dup_image.source_root_id is not None or dup_image.deleted_at is not None
+                )
             if allowed:
                 staged.selected = payload.selected
         if payload.rating is not None:
@@ -446,7 +473,11 @@ def bulk_update_staged_files(
     db.commit()
     db.refresh(session)
     pairs = compute_staged_pairs(session.staged_files)
-    return [_to_staged_file_out(f, pairs.get(f.id)) for f in session.staged_files]
+    trashed = _trashed_duplicate_ids(db, session.staged_files)
+    return [
+        _to_staged_file_out(f, pairs.get(f.id), f.duplicate_of_image_id in trashed)
+        for f in session.staged_files
+    ]
 
 
 @router.post("/sessions/{session_id}/commit", response_model=list[schemas.ImageOut])

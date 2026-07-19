@@ -2746,12 +2746,35 @@ input.editor-preset-select {
 
 /* Small location preview in the photo detail panel - reads as one button. */
 .mini-map {
+  position: relative;
   width: 100%;
   height: 150px;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--border);
   cursor: pointer;
+}
+
+.mini-map-canvas {
+  position: absolute;
+  inset: 0;
+  /* Hidden until every tile is in (MiniMap sets .is-loaded), so the panel
+     never shows a half-gray map or a mid-pan flash while paging photos. */
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.mini-map.is-loaded .mini-map-canvas {
+  opacity: 1;
+}
+
+.mini-map-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
 }
 
 .mini-map .leaflet-container {

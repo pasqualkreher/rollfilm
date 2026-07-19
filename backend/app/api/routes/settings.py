@@ -1,18 +1,22 @@
 from fastapi import APIRouter, Depends
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import schemas
 from app.auth import get_current_user
-from app.db.models import User
+from app.db.models import Album, AlbumImage, FileType, Image, User
 from app.db.session import get_db
 from app.services import immich as immich_service
 from app.services.settings_store import (
     IMMICH_API_KEY,
     IMMICH_BASE_URL,
+    IMMICH_MODE_SELECTIVE,
     IMMICH_MODES,
     IMMICH_SYNC_MODE,
+    IMMICH_SYNC_PAUSED,
     TRASH_RETENTION_DAYS,
     get_immich_sync_mode,
+    get_immich_sync_paused,
     get_setting,
     get_trash_retention_days,
     set_setting,
@@ -24,19 +28,69 @@ from app.workers.queue import immich_pending_uploads, immich_upload_history
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
+def _sync_progress(db: Session, mode: str) -> tuple[int, int]:
+    """(synced, total) for the current sync mode: how many of the JPEGs the
+    mode wants on Immich already have a recorded asset id. Full and manual
+    count the whole visible library; selective counts flagged photos plus the
+    members of flagged albums (both reach Immich in that mode)."""
+    query = db.query(Image.id).filter(
+        Image.deleted_at.is_(None), Image.file_type == FileType.jpeg
+    )
+    if mode == IMMICH_MODE_SELECTIVE:
+        flagged_album_members = (
+            db.query(AlbumImage.image_id)
+            .join(Album, Album.id == AlbumImage.album_id)
+            .filter(Album.immich_sync.is_(True))
+        )
+        query = query.filter(
+            or_(Image.immich_sync.is_(True), Image.id.in_(flagged_album_members))
+        )
+    total = query.count()
+    synced = query.filter(Image.immich_asset_id.isnot(None)).count()
+    return synced, total
+
+
+def _activity(db: Session) -> schemas.ImmichActivityOut:
+    mode = get_immich_sync_mode(db)
+    synced, total = _sync_progress(db, mode)
+    return schemas.ImmichActivityOut(
+        pending_uploads=immich_pending_uploads(),
+        sync_mode=mode,
+        synced=synced,
+        total=total,
+        paused=get_immich_sync_paused(db),
+    )
+
+
 @router.get("/immich/activity", response_model=schemas.ImmichActivityOut)
 def immich_activity(
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
-    """How much Immich upload work is queued or in flight right now. Polled by
-    the web UI's sync indicator, and by the desktop shell when the window is
-    closed - the upload queue is in-memory, so the shell warns before a quit
-    would drop unfinished uploads. sync_mode is included so the warning can say
-    whether the startup sync loop will catch up the remainder (full/selective)
-    or the uploads are simply gone (manual)."""
-    return schemas.ImmichActivityOut(
-        pending_uploads=immich_pending_uploads(), sync_mode=get_immich_sync_mode(db)
-    )
+    """How much Immich upload work is queued or in flight right now, and how
+    far the sync has come (synced/total). Polled by the web UI's sync indicator
+    and the Settings sync-status panel, and by the desktop shell when the
+    window is closed - the upload queue is in-memory, so the shell warns before
+    a quit would drop unfinished uploads. sync_mode is included so the warning
+    can say whether the startup sync loop will catch up the remainder
+    (full/selective) or the uploads are simply gone (manual)."""
+    return _activity(db)
+
+
+@router.put("/immich/pause", response_model=schemas.ImmichActivityOut)
+def set_immich_pause(
+    payload: schemas.ImmichPauseUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Pause/resume automatic Immich syncing (e.g. while on mobile data).
+    Pausing stops the background sync loop and drops queued automatic uploads;
+    explicit manual "Add to Immich" pushes still work. Resuming wakes the sync
+    loop immediately so it catches up on whatever was skipped."""
+    set_setting(db, IMMICH_SYNC_PAUSED, "1" if payload.paused else "0")
+    db.commit()
+    if not payload.paused:
+        run_immich_sync_soon()
+    return _activity(db)
 
 
 @router.get("/immich", response_model=schemas.ImmichSettingsOut)

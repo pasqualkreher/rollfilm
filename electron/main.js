@@ -11,7 +11,7 @@
 //   4. Expose a native folder picker over IPC (the whole reason for going
 //      desktop: any host path is directly readable by the native backend).
 
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } = require("electron");
 const { spawn } = require("child_process");
 const net = require("net");
 const http = require("http");
@@ -449,6 +449,80 @@ async function confirmCloseWithSyncCheck() {
   }, 5000);
 }
 
+// --- Library-disconnect watchdog --------------------------------------------
+// The library (photos + its .photomanager database) can live on an external
+// USB drive, and macOS unmounts those during sleep - so after standby the
+// library folder can be gone while the app is still running, with the backend's
+// own database yanked out from under it. Watch for that: stop the backend,
+// show a waiting screen, and once the drive is mounted again restart the
+// backend and reload the window. Nothing is written anywhere in between, so
+// reconnecting the drive picks up exactly where the app left off.
+
+let libraryWaiting = false;
+let libraryWatchTimer = null;
+
+function startLibraryWatchdog() {
+  if (libraryWatchTimer) return;
+  libraryWatchTimer = setInterval(checkLibraryMounted, 10000);
+  // Check right after wake-from-sleep too - that's exactly when an external
+  // drive is still remounting (or stayed behind). Small delay so a drive that
+  // remounts within a few seconds never even shows the waiting screen.
+  powerMonitor.on("resume", () => setTimeout(checkLibraryMounted, 3000));
+}
+
+function checkLibraryMounted() {
+  if (libraryWaiting || !libraryRoot) return;
+  if (fs.existsSync(libraryRoot)) return;
+  libraryWaiting = true;
+  console.warn(`[main] library folder disappeared: ${libraryRoot}`);
+
+  // The backend's SQLite file lives inside the vanished folder - stop the
+  // process so it can't keep writing into the void, and so the drive isn't
+  // held busy when it reappears.
+  stopBackend();
+  if (mainWindow && mainWindow.isVisible()) mainWindow.hide();
+  if (!splashWindow) createSplash();
+  setSplashStatus(
+    "Photo library not found — reconnect the drive with your library to continue…"
+  );
+
+  const poll = setInterval(async () => {
+    if (!fs.existsSync(libraryRoot)) return;
+    clearInterval(poll);
+    setSplashStatus("Library found — restarting…");
+    startBackend();
+    const result = await waitForHealth(120000);
+    if (result === "ok") {
+      closeSplash();
+      if (mainWindow) {
+        // Fresh load instead of surfacing whatever error state the renderer
+        // fell into while the backend was gone.
+        mainWindow.webContents.reload();
+        mainWindow.show();
+        mainWindow.focus();
+      } else {
+        createWindow();
+      }
+      libraryWaiting = false;
+      return;
+    }
+    closeSplash();
+    const choice = await dialog.showMessageBox({
+      type: "error",
+      title: "Backend did not restart",
+      message: "The library is back, but the backend could not be restarted.",
+      detail: `Quit and reopen Photo Manager. The log usually shows why:\n${backendLogPath()}`,
+      buttons: ["Open log folder", "Quit"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (choice.response === 0) shell.showItemInFolder(backendLogPath());
+    forceClose = true;
+    app.quit();
+  }, 2000);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -634,6 +708,10 @@ app.whenReady().then(async () => {
   setSplashStatus("Loading your library…");
 
   createWindow();
+  // From here on, watch for the library drive disappearing (sleep/eject) so a
+  // wake-up without the drive shows a clear waiting screen instead of a
+  // broken app whose database vanished mid-flight.
+  startLibraryWatchdog();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

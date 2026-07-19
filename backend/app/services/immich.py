@@ -228,10 +228,14 @@ def find_asset_ids_by_checksums(
     return found
 
 
-def add_assets_to_album(base_url: str, api_key: str, album_id: str, asset_ids: list[str]) -> None:
+def add_assets_to_album(base_url: str, api_key: str, album_id: str, asset_ids: list[str]) -> int:
     """Add the given asset ids to an Immich album (idempotent - Immich ignores
-    assets already in the album)."""
+    assets already in the album). Returns how many assets were actually added,
+    so reconcile passes can tell "changed something" from "already in sync"."""
     ids = [a for a in asset_ids if a]
     if not ids:
-        return
-    _request_json(base_url, f"albums/{album_id}/assets", api_key, "PUT", {"ids": ids})
+        return 0
+    results = _request_json(base_url, f"albums/{album_id}/assets", api_key, "PUT", {"ids": ids})
+    if not isinstance(results, list):
+        return len(ids)
+    return sum(1 for r in results if isinstance(r, dict) and r.get("success"))

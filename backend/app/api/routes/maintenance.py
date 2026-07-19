@@ -26,7 +26,12 @@ def _require_delete_confirmation(confirmation: str) -> None:
 
 @router.post("/sync", response_model=schemas.SyncResult)
 def sync_library(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return sync_db_with_library(db, current_user.id)
+    try:
+        return sync_db_with_library(db, current_user.id)
+    except RuntimeError as exc:
+        # Library root unreachable (external drive asleep/unplugged) - refuse
+        # with a clear message instead of wiping the catalog or a bare 500.
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.post("/rebuild-thumbnails", response_model=schemas.RebuildThumbnailsResult)

@@ -11,6 +11,7 @@ from PIL import Image as PILImage
 
 from app.db.models import Image
 from app.db.session import SessionLocal, engine
+from app.services.settings_store import get_immich_sync_paused
 from app.services.embeddings import encode_image, ensure_embeddings_table, upsert_embedding
 from app.services.immich import (
     add_assets_to_album,
@@ -66,6 +67,21 @@ def enqueue_embedding(image_id: str, source_path: Path) -> None:
     _executor.submit(_embed, image_id, source_path)
 
 
+def _sync_paused() -> bool:
+    """Whether the user has paused automatic Immich syncing (Settings). Read
+    fresh per enqueue - it's one key-value lookup, and the pause must take
+    effect immediately, not at the next process restart."""
+    try:
+        db = SessionLocal()
+        try:
+            return get_immich_sync_paused(db)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Could not read Immich pause state; assuming not paused")
+        return False
+
+
 def enqueue_immich_upload(
     base_url: str,
     api_key: str,
@@ -81,6 +97,14 @@ def enqueue_immich_upload(
     named Immich album (created if missing). When ``image_id`` is given, the
     Immich asset id is stored on that row after the upload, so a later
     permanent deletion can remove the asset from Immich too."""
+    if _sync_paused():
+        # Paused in Settings (e.g. on mobile data): drop the automatic upload
+        # instead of queueing it. In selective/full mode the background sync
+        # loop re-discovers the photo and uploads it after the user resumes;
+        # in manual mode surface the skip so the upload isn't silently lost.
+        _record_upload(source_path.name, False, "skipped - Immich sync is paused in Settings")
+        logger.info("Immich sync paused - skipped upload of %s", source_path.name)
+        return
     global _immich_pending
     with _immich_pending_lock:
         _immich_pending += 1

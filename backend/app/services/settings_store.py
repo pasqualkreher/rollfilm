@@ -10,6 +10,10 @@ from app.db.models import AppSetting
 IMMICH_BASE_URL = "immich_base_url"
 IMMICH_API_KEY = "immich_api_key"
 IMMICH_SYNC_MODE = "immich_sync_mode"
+# "1" while the user has paused automatic syncing (e.g. on a metered mobile
+# connection): the background sync loop and the fire-and-forget upload queue
+# stand down until resumed. Explicit manual "Add to Immich" pushes still work.
+IMMICH_SYNC_PAUSED = "immich_sync_paused"
 
 # How photos reach Immich:
 #   manual    - the current workflow: a per-import "upload to Immich" checkbox
@@ -61,6 +65,10 @@ def get_trash_retention_days(db: Session) -> int:
     except (TypeError, ValueError):
         return DEFAULT_TRASH_RETENTION_DAYS
     return max(0, days)
+
+
+def get_immich_sync_paused(db: Session) -> bool:
+    return get_setting(db, IMMICH_SYNC_PAUSED) == "1"
 
 
 def get_immich_sync_mode(db: Session) -> str:
