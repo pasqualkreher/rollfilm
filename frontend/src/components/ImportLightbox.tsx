@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { ColorLabel, StagedFileOut } from "../api/types";
 import { RatingStars } from "./RatingStars";
@@ -34,6 +34,13 @@ export function ImportLightbox({
   pairsMerged = false,
 }: Props) {
   const file = files[index];
+  // The preview failed to load (damaged/unreadable file). Show a clean error
+  // state instead of the browser's broken-image icon; rating, the import
+  // toggle and arrow-key navigation keep working.
+  const [loadFailed, setLoadFailed] = useState(false);
+  useEffect(() => {
+    setLoadFailed(false);
+  }, [file?.id]);
 
   useEffect(() => {
     if (!file) return;
@@ -94,11 +101,19 @@ export function ImportLightbox({
       </button>
 
       <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
-        <img
-          className="lightbox-image"
-          src={api.import.stagedPreviewUrl(sessionId, file.id)}
-          alt={file.original_filename}
-        />
+        {loadFailed ? (
+          <div className="lightbox-image lightbox-image-error">
+            <span className="detail-photo-error-icon" aria-hidden="true">🖼️</span>
+            <p>This photo can't be displayed - the file may be damaged or unreadable.</p>
+          </div>
+        ) : (
+          <img
+            className="lightbox-image"
+            src={api.import.stagedPreviewUrl(sessionId, file.id)}
+            alt={file.original_filename}
+            onError={() => setLoadFailed(true)}
+          />
+        )}
         <div className="lightbox-controls">
           <div className="lightbox-controls-meta">
             <span className="lightbox-filename">{file.original_filename}</span>

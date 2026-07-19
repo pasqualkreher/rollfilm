@@ -1,9 +1,12 @@
 import io
+import logging
 from pathlib import Path
 
 import rawpy
 from PIL import Image as PILImage
 from PIL import ImageOps
+
+logger = logging.getLogger(__name__)
 
 RAW_EXTENSIONS = {
     ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw",
@@ -118,9 +121,40 @@ def extract_full_preview(path: Path) -> PILImage.Image:
     if not is_raw(path):
         return ImageOps.exif_transpose(PILImage.open(path)).convert("RGB")
 
-    with rawpy.imread(str(path)) as raw:
-        # half_size only affects output resolution, not color rendering -
-        # it's unrelated to the embedded-thumbnail issue above, but without
-        # it LibRaw raises LibRawTooBigError on high-megapixel sensors.
-        rgb = raw.postprocess(use_camera_wb=True, half_size=True)
-        return PILImage.fromarray(rgb)
+    try:
+        with rawpy.imread(str(path)) as raw:
+            # half_size only affects output resolution, not color rendering -
+            # it's unrelated to the embedded-thumbnail issue above, but without
+            # it LibRaw raises LibRawTooBigError on high-megapixel sensors.
+            rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+            return PILImage.fromarray(rgb)
+    except Exception:
+        # A file whose sensor data is damaged (e.g. truncated/corrupt CFA
+        # block) fails the demosaic, but its embedded JPEG is often still
+        # intact - serve that instead of leaving the photo with no image at
+        # all. The file must be reopened: a failed postprocess() leaves the
+        # LibRaw handle unusable (extract_thumb() then raises OutOfOrderCall).
+        embedded = _embedded_jpeg(path)
+        if embedded is None:
+            raise
+        logger.warning(
+            "RAW demosaic failed for %s - falling back to the embedded JPEG preview",
+            path,
+            exc_info=True,
+        )
+        return embedded
+
+
+def _embedded_jpeg(path: Path) -> PILImage.Image | None:
+    """The RAW's embedded JPEG as a PIL image, or None if there isn't a usable
+    one. Never raises - this is the last resort for damaged files."""
+    try:
+        with rawpy.imread(str(path)) as raw:
+            thumb = raw.extract_thumb()
+            if thumb.format != rawpy.ThumbFormat.JPEG:
+                return None
+            im = PILImage.open(io.BytesIO(thumb.data))
+            im.load()
+            return ImageOps.exif_transpose(im).convert("RGB")
+    except Exception:
+        return None

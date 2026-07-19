@@ -43,6 +43,12 @@ export function ImageDetail() {
   // full render can't be fetched we fall back to the preview (never a broken img).
   const [hiRes, setHiRes] = useState(false);
   const [fullFailed, setFullFailed] = useState(false);
+  // The preview itself failed to load (damaged/unreadable file). Shows a clean
+  // error state instead of the browser's broken-image icon; navigation, rating
+  // and the info panel keep working. Retry remounts the <img> (keyed by the
+  // nonce) so the request is re-issued and a transient failure can recover.
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
   const imageBoxRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
@@ -107,6 +113,8 @@ export function ImageDetail() {
     resetZoom();
     setHiRes(false);
     setFullFailed(false);
+    setPreviewFailed(false);
+    setRetryNonce(0);
     setFit(null);
   }, [activeId]);
 
@@ -387,7 +395,24 @@ export function ImageDetail() {
       <div className="detail-layout" style={{ marginTop: 16 }}>
         <div className="detail-main">
           <div className={`detail-image${bgMode === "dark" ? " detail-image-dark" : ""}`} ref={imageBoxRef}>
+            {previewFailed ? (
+              <div className="detail-photo-error">
+                <span className="detail-photo-error-icon" aria-hidden="true">🖼️</span>
+                <p>This photo can't be displayed - the file may be damaged or unreadable.</p>
+                <p className="detail-photo-error-name">{image.original_filename}</p>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setPreviewFailed(false);
+                    setRetryNonce((n) => n + 1);
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (
             <img
+              key={retryNonce}
               ref={imgRef}
               className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}`}
               style={{
@@ -405,10 +430,14 @@ export function ImageDetail() {
               alt={image.original_filename}
               onError={() => {
                 // Full render unavailable - fall back to the preview so the
-                // photo never shows as a broken image.
+                // photo never shows as a broken image. If the preview itself
+                // fails, switch to the error state instead of leaving the
+                // browser's broken-image icon behind.
                 if (hiRes) {
                   setFullFailed(true);
                   setHiRes(false);
+                } else {
+                  setPreviewFailed(true);
                 }
               }}
               onMouseDown={(e: ReactMouseEvent<HTMLImageElement>) => {
@@ -441,6 +470,7 @@ export function ImageDetail() {
                 }
               }}
             />
+            )}
           </div>
           <div className="detail-image-toolbar">
             <span className="segmented">

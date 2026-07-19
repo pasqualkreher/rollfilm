@@ -346,7 +346,13 @@ def get_staged_file_preview(
     if not staged_full_path.exists():
         raise HTTPException(status_code=404, detail="Staged file missing from disk")
 
-    preview = extract_full_preview(staged_full_path)
+    # A damaged file must not take the request down with a 500 - the lightbox
+    # shows a clean "can't display" state on 404 and the review keeps working.
+    try:
+        preview = extract_full_preview(staged_full_path)
+    except Exception:
+        logger.exception("Staged preview render failed for %s", staged.original_filename)
+        raise HTTPException(status_code=404, detail="Preview could not be rendered")
     preview.thumbnail((LIGHTBOX_PREVIEW_PX, LIGHTBOX_PREVIEW_PX))
     buf = io.BytesIO()
     preview.save(buf, "JPEG", quality=88)

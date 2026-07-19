@@ -2247,6 +2247,40 @@ input.editor-preset-select {
   will-change: transform;
 }
 
+/* Shown in place of the photo when its preview can't be loaded (damaged or
+   unreadable file) - a clean message instead of the browser's broken-image
+   icon. Also reused by the import lightbox (.lightbox-image-error). */
+.detail-photo-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--text-muted);
+  max-width: 360px;
+}
+
+.detail-photo-error-icon {
+  font-size: 40px;
+  opacity: 0.6;
+}
+
+.detail-photo-error-name {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.lightbox-image-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.75);
+  box-shadow: none;
+}
+
 .detail-image-toolbar {
   display: flex;
   align-items: center;

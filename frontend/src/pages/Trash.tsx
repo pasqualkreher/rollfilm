@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
+import type { ImageOut } from "../api/types";
 
 // The in-app Trash: managed (imported) photos land here when deleted and can
 // be restored; only deleting them from here removes the original files from
@@ -37,6 +38,11 @@ export function Trash() {
     setLastIndex(index);
   }
 
+  // Feedback when a restore/delete request fails - without it a failed call
+  // used to abort silently before any refresh, leaving a stale grid until the
+  // next tab change.
+  const [actionError, setActionError] = useState<string | null>(null);
+
   function refreshAfterChange() {
     setSelected(new Set());
     setLastIndex(null);
@@ -46,10 +52,30 @@ export function Trash() {
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
+  // Drop the handled photos from the cached list right away: the grid updates
+  // instantly instead of waiting on the refetch (which can take seconds when
+  // the library sits on a sleeping external drive).
+  function removeFromCachedList(ids: string[]) {
+    queryClient.setQueryData<ImageOut[]>(["trash"], (old) =>
+      old?.filter((im) => !ids.includes(im.id))
+    );
+  }
+
   async function restoreSelected() {
     if (selected.size === 0) return;
-    await api.images.restoreFromTrash(Array.from(selected));
-    refreshAfterChange();
+    const ids = Array.from(selected);
+    setActionError(null);
+    try {
+      await api.images.restoreFromTrash(ids);
+      removeFromCachedList(ids);
+    } catch (e) {
+      setActionError(`Restore failed: ${(e as Error).message}`);
+    } finally {
+      // Refresh even after an error - the server may have applied the change
+      // before the request failed, and the refetch brings the view back in
+      // sync either way.
+      refreshAfterChange();
+    }
   }
 
   async function deleteSelectedForever() {
@@ -61,8 +87,16 @@ export function Trash() {
     ) {
       return;
     }
-    await api.images.deleteFromTrash(Array.from(selected));
-    refreshAfterChange();
+    const ids = Array.from(selected);
+    setActionError(null);
+    try {
+      await api.images.deleteFromTrash(ids);
+      removeFromCachedList(ids);
+    } catch (e) {
+      setActionError(`Delete failed: ${(e as Error).message}`);
+    } finally {
+      refreshAfterChange();
+    }
   }
 
   return (
@@ -96,6 +130,9 @@ export function Trash() {
         </div>
       </div>
       <div className="page-scroll">
+        {actionError && (
+          <p style={{ color: "var(--danger)", marginBottom: 16 }}>{actionError}</p>
+        )}
         {selected.size > 0 && (
           <p style={{ color: "var(--text-muted)", marginBottom: 16 }}>{selected.size} selected</p>
         )}
