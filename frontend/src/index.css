@@ -1506,8 +1506,12 @@ input.editor-preset-select {
 
 .editor-geometry {
   display: flex;
+  /* The row grows past the panel width once crop mode adds its aspect select
+     + Apply/Clear - wrap onto extra lines instead of overflowing sideways. */
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  row-gap: 6px;
   margin: 10px 0 4px;
 }
 
@@ -2477,6 +2481,36 @@ input.editor-preset-select {
   margin: 0;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+/* "Still loading in the background" notice on the review page: photos keep
+   appearing while it shows, commit stays disabled. */
+.import-staging-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft, rgba(80, 120, 255, 0.12));
+  color: var(--text);
+  font-size: 13px;
+  width: fit-content;
+}
+
+.import-staging-banner--error {
+  background: rgba(220, 80, 80, 0.14);
+}
+
+/* A staged photo that's copied but not yet analyzed - fills the card where
+   the thumbnail will appear once the background analysis reaches it. */
+.thumb-analyzing {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
 }
 
 /* On the review page the sticky filter bar zeroes the page padding (see

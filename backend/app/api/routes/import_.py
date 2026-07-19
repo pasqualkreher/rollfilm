@@ -22,6 +22,7 @@ from app.services.import_pipeline import (
     commit_import_session,
     compute_staged_pairs,
     discard_import_session,
+    ensure_session_processing,
     get_import_progress,
     stage_uploaded_files,
 )
@@ -67,6 +68,7 @@ def _to_staged_file_out(f: ImportStagedFile, paired_id: str | None = None) -> sc
         width=exif.get("width"),
         height=exif.get("height"),
         immich_sync=f.immich_sync,
+        processed=f.processed,
     )
 
 
@@ -273,6 +275,10 @@ def list_staged_files(
     session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
     session = get_owned_import_session(db, current_user.id, session_id)
+    # Self-healing: if the backend restarted mid-analysis (the worker queue is
+    # in-memory), re-enqueue whatever is still unprocessed. The review screen
+    # polls this route, so a stuck session recovers as soon as it's looked at.
+    ensure_session_processing(session)
     pairs = compute_staged_pairs(session.staged_files)
     return [_to_staged_file_out(f, pairs.get(f.id)) for f in session.staged_files]
 
@@ -447,6 +453,16 @@ def commit_session(
     session = get_owned_import_session(db, current_user.id, session_id)
     if session.status != ImportSessionStatus.staging:
         raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
+    unprocessed = sum(1 for f in session.staged_files if not f.processed)
+    if unprocessed:
+        # Copying finished but the background analysis hasn't - committing now
+        # would import files whose duplicate checks and metadata aren't done.
+        # (Kick the queue too, in case the backend restarted mid-analysis.)
+        ensure_session_processing(session)
+        raise HTTPException(
+            status_code=409,
+            detail=f"{unprocessed} photo(s) are still being analyzed - wait a moment and try again.",
+        )
     return commit_import_session(
         db,
         session,

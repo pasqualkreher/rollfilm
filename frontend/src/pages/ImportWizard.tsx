@@ -79,16 +79,26 @@ export function ImportWizard() {
     uploadProgress,
     uploadError,
     isUploading,
+    stagingError,
     importMode,
     stagingSessionId,
     totalFileCount,
     liveStagedCount,
     effectiveUploadPct,
+    analysisPending,
+    analysisProcessed,
+    analysisTotal,
     startUpload,
     startFolderImport,
     cancelUpload,
     reset,
   } = useImportSession();
+  // Review is open (sessionId set) but the remaining batches are still copying
+  // in the background: keep the grid refreshing and block commit until done.
+  const stagingInBackground = !!sessionId && isUploading;
+  // Copying is done but the background analysis (thumbnails, EXIF, duplicate
+  // detection) hasn't caught up yet - reviewing works, committing is blocked.
+  const analyzingInBackground = !!sessionId && !isUploading && analysisPending;
   const [hideDuplicates, setHideDuplicates] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("combined");
   const [ratingMin, setRatingMin] = useState(0);
@@ -120,6 +130,10 @@ export function ImportWizard() {
     queryKey: ["import-files", sessionId],
     queryFn: () => api.import.files(sessionId!),
     enabled: !!sessionId,
+    // While background copying/analysis is still running, refetch so newly
+    // copied photos appear and analyzed ones swap their placeholder for the
+    // real thumbnail + duplicate badge as they finish.
+    refetchInterval: stagingInBackground || analysisPending ? 1000 : false,
   });
 
   const filesById = useMemo(() => new Map((files ?? []).map((f) => [f.id, f])), [files]);
@@ -320,6 +334,11 @@ export function ImportWizard() {
   }
 
   async function handleCommitClick() {
+    // Never commit a session whose background copying or analysis hasn't
+    // finished - some photos aren't on disk / deduped yet. The button is
+    // disabled in this state too; this is the belt-and-braces guard (and the
+    // backend refuses with a 409 as the final line of defense).
+    if (stagingInBackground || analysisPending) return;
     // Exact duplicates can't be selected (the backend 400s), so never offer to
     // auto-include one as a pair's "missing half" - and even if a select still
     // fails, the commit below must run regardless (allSettled, not all): a
@@ -509,9 +528,9 @@ export function ImportWizard() {
               <p className="import-panel-desc" style={{ color: "var(--text-muted)" }}>
                 {folderImportActive
                   ? totalFileCount
-                    ? "Photos are being copied and analyzed (duplicates, previews, metadata) — the counter above ticks up as each one finishes. Nothing is added to your library until you review."
+                    ? "Photos are being copied — the counter ticks up as each one lands, and they're analyzed (duplicates, previews, metadata) in the background. Nothing is added to your library until you review."
                     : "Looking for photos in the selected folder…"
-                  : "Photos are being received and processed — the review screen opens when this finishes."}
+                  : "Photos are being received — the review screen opens as soon as they're copied, while analysis continues in the background."}
               </p>
             )}
             {pickError && <p className="import-panel-desc" style={{ color: "var(--danger)" }}>{pickError}</p>}
@@ -535,6 +554,34 @@ export function ImportWizard() {
           From <strong>{sourceLabel}</strong> — these photos are staged, nothing is in your
           library yet. Rate, compare and select, then press "Add to library".
         </p>
+        {/* Background copying still running: photos keep appearing, and the
+            commit button below stays disabled until this finishes. */}
+        {stagingInBackground && (
+          <p className="import-staging-banner" role="status" aria-live="polite">
+            <span className="spinner" aria-hidden="true" /> Still copying photos in the background…{" "}
+            {liveStagedCount != null && totalFileCount != null
+              ? `${liveStagedCount.toLocaleString()} / ${totalFileCount.toLocaleString()}`
+              : ""}{" "}
+            — you can start reviewing now.
+          </p>
+        )}
+        {/* Copying done, background analysis (thumbnails/EXIF/duplicates)
+            still catching up: placeholders fill in as it runs. */}
+        {analyzingInBackground && (
+          <p className="import-staging-banner" role="status" aria-live="polite">
+            <span className="spinner" aria-hidden="true" /> Analyzing photos in the background…{" "}
+            {analysisTotal > 0
+              ? `${analysisProcessed.toLocaleString()} / ${analysisTotal.toLocaleString()}`
+              : ""}{" "}
+            — you can review now; importing unlocks when the analysis finishes.
+          </p>
+        )}
+        {stagingError && !stagingInBackground && (
+          <p className="import-staging-banner import-staging-banner--error" role="alert">
+            Some photos couldn't be loaded ({stagingError}). You can still import the ones that made
+            it in below.
+          </p>
+        )}
       </div>
       <PhotoFilters
         viewMode={viewMode}
@@ -615,12 +662,22 @@ export function ImportWizard() {
         <button
           className="btn primary"
           onClick={handleCommitClick}
-          disabled={selectedCount === 0 || commit.isPending}
-          title="Copies the selected photos into your library"
+          disabled={selectedCount === 0 || commit.isPending || stagingInBackground || analysisPending}
+          title={
+            stagingInBackground
+              ? "Wait until all photos have finished copying before importing"
+              : analysisPending
+                ? "Wait until all photos have been analyzed (duplicates, metadata) before importing"
+                : "Copies the selected photos into your library"
+          }
         >
           {commit.isPending
             ? `Adding to library...${progressSuffix}`
-            : `Add ${selectedCount} photo(s) to library`}
+            : stagingInBackground
+              ? "Copying photos…"
+              : analysisPending
+                ? `Analyzing… ${analysisProcessed}/${analysisTotal}`
+                : `Add ${selectedCount} photo(s) to library`}
         </button>
         <button
           className="btn"
@@ -670,7 +727,16 @@ export function ImportWizard() {
                     : "Click to preview"
                 }
               >
-                <Thumb src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
+                {f.processed ? (
+                  <Thumb src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
+                ) : (
+                  // Copied but not yet analyzed - no thumbnail exists yet. The
+                  // 1s files refetch swaps this for the real Thumb when the
+                  // background analysis finishes this file.
+                  <div className="thumb-analyzing" title="Analyzing…">
+                    <span className="spinner" aria-hidden="true" />
+                  </div>
+                )}
                 {selectMode && (
                   <input
                     className="select-checkbox"

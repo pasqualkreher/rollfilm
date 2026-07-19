@@ -8,6 +8,14 @@ interface ImportSessionState {
   uploadProgress: number | null;
   uploadError: string | null;
   isUploading: boolean;
+  // A folder import opens the review as soon as its first batch is staged and
+  // keeps staging the rest in the background (best-practice incremental
+  // import). While that background staging runs, `isUploading` stays true even
+  // though `sessionId` is already set - the wizard uses that to keep the grid
+  // refreshing and to keep the commit button disabled until everything landed.
+  // `stagingError` carries a failure that happened *after* the review already
+  // opened, so it can be shown without throwing away the photos already staged.
+  stagingError: string | null;
   // Which kind of import is in flight - the folder import surfaces richer
   // live progress (per-photo counts via the backend's /progress endpoint).
   importMode: "upload" | "folder" | null;
@@ -17,13 +25,19 @@ interface ImportSessionState {
   // Folder import only: how many photos the scan found / are fully staged.
   totalFileCount: number | null;
   stagedFileCount: number;
-  // Folder import: live per-photo count including the batch currently being
-  // analyzed (backend poll), so counters tick instead of jumping per batch.
+  // Folder import: live per-photo count of files fully *copied* into staging
+  // (backend poll), so counters tick per file instead of jumping per batch.
   liveStagedCount: number | null;
   // THE display percentage for this import - photo-count based for folder
   // imports (live), byte-based for browser uploads. Every progress readout
   // (nav tab, wizard button) must use this one number so they never disagree.
   effectiveUploadPct: number | null;
+  // Copying is done but the backend is still analyzing files in the background
+  // (thumbnails, EXIF, duplicate detection). Review is fully usable meanwhile;
+  // committing stays blocked until this clears.
+  analysisPending: boolean;
+  analysisProcessed: number;
+  analysisTotal: number;
   startUpload: (files: File[], label: string) => void;
   // Desktop-only: import a folder by absolute path - the backend reads the
   // files itself (no browser upload). Same progress/cancel plumbing.
@@ -48,6 +62,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [stagingError, setStagingError] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<"upload" | "folder" | null>(null);
   const [stagingSessionId, setStagingSessionId] = useState<string | null>(null);
   const [totalFileCount, setTotalFileCount] = useState<number | null>(null);
@@ -103,10 +118,18 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setStagedFileCount(0);
     setIsUploading(true);
     setUploadError(null);
+    setStagingError(null);
     setUploadProgress(0);
 
     const label = folderPath.split("/").filter(Boolean).pop() || folderPath;
-    const BATCH_PATHS = 250;
+    const BATCH_PATHS = 100;
+    // The first batch is deliberately tiny: its response carries the staging
+    // session id, and the wizard/nav percent can't poll live progress until it
+    // has that id. A full-size first batch on a slow disk (RAW files can take
+    // seconds each) left the percent frozen at 0% for many minutes - staging
+    // was running, but nothing on screen moved. A short prime returns the id
+    // in seconds, so the per-photo /progress poll starts almost immediately.
+    const PRIME_PATHS = 8;
 
     (async () => {
       const scan = await api.import.scanFolder(folderPath, controller.signal);
@@ -118,9 +141,13 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
       let stagedBytes = 0;
       let stagedFiles = 0;
       let session: Awaited<ReturnType<typeof api.import.stagePaths>> | null = null;
-      for (let i = 0; i < scan.files.length; i += BATCH_PATHS) {
+      let reviewOpened = false;
+      let i = 0;
+      while (i < scan.files.length) {
         if (controller.signal.aborted) throw new DOMException("Upload cancelled", "AbortError");
-        const batch = scan.files.slice(i, i + BATCH_PATHS);
+        const size = i === 0 ? PRIME_PATHS : BATCH_PATHS;
+        const batch = scan.files.slice(i, i + size);
+        i += size;
         session = await api.import.stagePaths(
           batch.map((f) => f.path),
           label,
@@ -130,27 +157,34 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         );
         if (!uploadSessionRef.current) {
           uploadSessionRef.current = session.id;
-          // Published separately from sessionId: the review screen must not
-          // open yet, but the wizard needs the id to poll live per-photo
-          // progress of the batch currently staging.
           setStagingSessionId(session.id);
         }
         stagedBytes += batch.reduce((sum, f) => sum + f.size, 0);
         stagedFiles += batch.length;
         setStagedFileCount(stagedFiles);
         setUploadProgress(Math.min(100, Math.round((stagedBytes / totalBytes) * 100)));
+        // Incremental import: open the review as soon as the first batch is
+        // staged, then keep staging the remaining batches in the background.
+        // The user starts culling immediately instead of staring at a bar
+        // through a slow copy; the grid refreshes as more photos land, and the
+        // commit button stays disabled (isUploading) until staging finishes.
+        if (!reviewOpened) {
+          reviewOpened = true;
+          setSourceLabel(session.source_path);
+          setSessionId(session.id);
+        }
       }
-      return session!;
+      return { reviewOpened };
     })()
-      .then((session) => {
-        setSourceLabel(session.source_path);
-        setSessionId(session.id);
-      })
       .catch((err: Error) => {
         if (controller.signal.aborted || err.name === "AbortError") {
           const staged = uploadSessionRef.current;
           if (staged) api.import.discard(staged).catch(() => {});
           reset();
+        } else if (uploadSessionRef.current) {
+          // The review was already open (at least one batch staged): keep those
+          // photos and surface the failure as a banner instead of discarding.
+          setStagingError(err.message);
         } else {
           setUploadError(err.message);
         }
@@ -166,7 +200,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
       });
   }
 
-  // Poll the backend's per-photo staging progress while a folder import runs.
+  // Poll the backend's per-photo staging progress while a folder import runs
+  // AND while the background analysis is still catching up after the copy.
   // Lives HERE (not in the wizard) so the nav tab shows the same live number
   // even when the wizard is unmounted - previously the tab lagged a whole
   // batch behind on a byte-based percentage while the wizard counted photos.
@@ -174,21 +209,37 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const { data: importProgress } = useQuery({
     queryKey: ["import-progress", progressPollId],
     queryFn: () => api.import.progress(progressPollId!),
-    enabled: !!progressPollId && isUploading,
-    refetchInterval: 500,
+    enabled: !!progressPollId,
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      const pending = !!d && d.phase === "staging" && d.processed < d.total;
+      return isUploading || pending ? 500 : false;
+    },
   });
   const folderImportActive = importMode === "folder" && isUploading;
+  // Files fully copied into staging - the backend counts them one by one, so
+  // this ticks per photo. The client-side per-batch count is the fallback
+  // while the first poll is still on its way.
   const liveStagedCount =
     folderImportActive && totalFileCount
       ? Math.min(
           totalFileCount,
-          stagedFileCount + (importProgress?.phase === "staging" ? importProgress.processed : 0)
+          Math.max(stagedFileCount, importProgress?.phase === "staging" ? importProgress.copied : 0)
         )
       : null;
   const effectiveUploadPct =
     folderImportActive && totalFileCount && liveStagedCount !== null
       ? Math.round((liveStagedCount / totalFileCount) * 100)
       : uploadProgress;
+  // Background analysis still running (or not yet caught up). While uploading
+  // this is folded into the normal progress display; afterwards the wizard
+  // uses it to keep the grid refreshing and the commit button locked.
+  const analysisPending =
+    !!importProgress &&
+    importProgress.phase === "staging" &&
+    importProgress.processed < importProgress.total;
+  const analysisProcessed = importProgress?.phase === "staging" ? importProgress.processed : 0;
+  const analysisTotal = importProgress?.phase === "staging" ? importProgress.total : 0;
 
   function cancelUpload() {
     abortRef.current?.abort();
@@ -201,6 +252,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setSessionId(null);
     setSourceLabel("");
     setUploadError(null);
+    setStagingError(null);
     setImportMode(null);
     setStagingSessionId(null);
     setTotalFileCount(null);
@@ -215,12 +267,16 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         uploadProgress,
         uploadError,
         isUploading,
+        stagingError,
         importMode,
         stagingSessionId,
         totalFileCount,
         stagedFileCount,
         liveStagedCount,
         effectiveUploadPct,
+        analysisPending,
+        analysisProcessed,
+        analysisTotal,
         startUpload,
         startFolderImport,
         cancelUpload,

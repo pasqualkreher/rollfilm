@@ -30,6 +30,23 @@ def _on_connect(dbapi_connection, connection_record):
     dbapi_connection.enable_load_extension(False)
 
 
+def ensure_indexes() -> None:
+    """Indexes the hot library queries lean on, created idempotently at
+    startup (they aren't part of the Alembic history). The composite index
+    matches the grid's exact filter + ordering - owner, not-deleted, newest
+    capture first with the deterministic tie-breakers - so building the
+    library index/list is an index walk instead of a full-table sort."""
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS idx_images_owner_deleted_taken "
+            "ON images (owner_id, deleted_at, taken_at DESC, original_filename ASC, id ASC)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS idx_images_owner_country "
+            "ON images (owner_id, gps_country)"
+        )
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

@@ -12,7 +12,7 @@ from app.api.routes import (
     tags,
 )
 from app.config import settings as app_settings
-from app.db.session import engine
+from app.db.session import engine, ensure_indexes
 from app.services.cloudfiles import rehydrate_dirs_in_background
 from app.services.embeddings import ensure_embeddings_table
 from app.services.geocode import warm_in_background as warm_geocoder
@@ -45,6 +45,8 @@ def on_startup() -> None:
     # Table schema lives in Alembic migrations; the sqlite-vec virtual table
     # is bootstrapped here since it isn't a normal SQLAlchemy-managed table.
     ensure_embeddings_table(engine)
+    # Hot-path indexes for the library grid (idempotent, see ensure_indexes).
+    ensure_indexes()
     # Pick up anything new under registered external source roots (NAS/folders)
     # since last run - runs in the background so startup isn't blocked, and is
     # incremental (only new files are indexed).

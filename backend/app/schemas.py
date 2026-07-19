@@ -241,6 +241,10 @@ class StagedFileOut(BaseModel):
     height: int | None
     # Flagged for selective Immich sync during import review.
     immich_sync: bool = False
+    # False while the background analysis (thumbnail/EXIF/duplicates) for this
+    # file is still running - the review grid shows a placeholder card until
+    # it flips, and commit is refused while any file is unprocessed.
+    processed: bool = True
 
 
 class StagedFileUpdate(BaseModel):
@@ -304,8 +308,13 @@ class CommitImportRequest(BaseModel):
 class ImportProgressOut(BaseModel):
     # "staging" | "commit" | "idle"
     phase: str
+    # Staging phase: files whose background analysis finished, out of `total`
+    # staged so far. Commit phase: photos moved/recorded, out of the plan.
     processed: int
     total: int
+    # Staging phase only: files whose bytes are fully copied into the staging
+    # folder - runs ahead of `processed` while analysis catches up.
+    copied: int = 0
     # Rolling estimate of seconds remaining in this phase; null until known.
     eta_seconds: float | None = None
 

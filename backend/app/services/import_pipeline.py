@@ -2,7 +2,6 @@ import hashlib
 import json
 import logging
 import os
-import queue
 import shutil
 import threading
 import time
@@ -25,6 +24,7 @@ from app.db.models import (
     ImportSessionStatus,
     ImportStagedFile,
 )
+from app.db.session import SessionLocal
 from app.services import geocode
 from app.services.exif import (
     ExifData,
@@ -87,13 +87,14 @@ def compute_staged_pairs(staged_files: list[ImportStagedFile]) -> dict[str, str]
 
 logger = logging.getLogger(__name__)
 
-# Cap on the concurrent staging workers (and thus exiftool processes). Each file
-# is independent and its work is a mix of GIL-releasing native code (hashing,
-# image decode, phash) and blocking waits (its exiftool subprocess, disk reads),
-# so throughput keeps climbing past the core count - idle workers waiting on a
-# subprocess/disk overlap with the busy ones. Oversubscribed to ~2x cores for
-# that overlap, capped so a huge import can't spawn a runaway number of exiftool
-# processes (each staging worker holds one, plus a small decoded preview).
+# Cap on the concurrent analysis workers (and thus exiftool processes). Each
+# file is independent and its work is a mix of GIL-releasing native code
+# (image decode, phash) and blocking waits (its exiftool subprocess, disk
+# reads), so throughput keeps climbing past the core count - idle workers
+# waiting on a subprocess/disk overlap with the busy ones. Oversubscribed to
+# ~2x cores for that overlap, capped so a huge import can't spawn a runaway
+# number of exiftool processes (each worker holds one, plus a small decoded
+# preview).
 _STAGE_WORKERS = min(16, max(4, (os.cpu_count() or 4) * 2))
 
 
@@ -197,102 +198,272 @@ def _hash_and_copy(src: BinaryIO, dest: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
-def _persist_analyzed(
-    db: Session, session: ImportSession, owner_id: int, analyzed: list[_Analyzed]
-) -> None:
-    """Turn analysis results into ImportStagedFile rows and flag duplicates.
-    Runs serially (the SQLAlchemy session isn't thread-safe). All the dedup
-    lookup data is loaded once up front instead of re-querying the whole image
-    table per file, and hashes are compared as ints - that's what keeps a big
-    import from degrading into O(files x library) database round-trips."""
-    threshold = settings.duplicate_phash_hamming_threshold
+# --- Background analysis ------------------------------------------------------
+# The copy phase (inside the staging request) only streams bytes into the
+# staging folder and creates unprocessed rows; everything slow - preview,
+# phash, thumbnail, EXIF, duplicate detection - runs here, on a process-wide
+# worker pool, after the request has already returned. That keeps the staging
+# requests fast and bounded (copying runs at source-medium speed) instead of
+# stalling for minutes behind the analysis of the previous batch.
+_analysis_executor = ThreadPoolExecutor(
+    max_workers=_STAGE_WORKERS, thread_name_prefix="import-analyze"
+)
 
-    # Preload the library's dedup indexes once.
-    image_by_hash: dict[str, object] = {}
-    image_phashes: list[tuple[int, str, object]] = []  # (int phash, filename, row)
+# Each analysis worker thread keeps its own exiftool -stay_open helper (the
+# helper can't be shared between threads). Created lazily, lives as long as
+# the thread; exiftool exits by itself when its stdin pipe closes on shutdown.
+_thread_helpers = threading.local()
+
+
+def _thread_helper():
+    helper = getattr(_thread_helpers, "helper", None)
+    if helper is None:
+        helper = new_helper()
+        _thread_helpers.helper = helper
+    return helper
+
+
+# Staged-file ids with an analysis job queued or running - so re-enqueueing
+# (another batch, the restart-recovery sweep) never double-processes a file.
+_inflight: set[str] = set()
+_inflight_lock = threading.Lock()
+
+
+class _SessionDedupState:
+    """Per-import-session duplicate-detection index, shared by all analysis
+    jobs of that session. The library's hash indexes are loaded once (not
+    re-queried per file - that's what keeps a big import from degrading into
+    O(files x library) database round-trips), and every processed staged file
+    is appended so later files still dedup against earlier ones. The lock also
+    serializes the per-file DB write, which keeps the "first one processed is
+    the original, the rest are its duplicates" ordering consistent."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.loaded = False
+        self.image_by_hash: dict[str, tuple[str, str | None]] = {}  # sha -> (image id, source_root_id)
+        self.image_phashes: list[tuple[int, str, str]] = []  # (int phash, filename, image id)
+        self.staged_by_hash: dict[str, str] = {}  # sha -> staged file id
+        self.staged_phashes: list[tuple[int, str, str]] = []  # (int phash, filename, staged id)
+
+
+_session_states: dict[str, _SessionDedupState] = {}
+_session_states_lock = threading.Lock()
+
+
+def _session_state(session_id: str) -> _SessionDedupState:
+    with _session_states_lock:
+        state = _session_states.get(session_id)
+        if state is None:
+            state = _session_states[session_id] = _SessionDedupState()
+        return state
+
+
+def _drop_session_state(session_id: str) -> None:
+    """Forget a finished (committed/discarded) session's in-memory dedup index
+    and progress counters."""
+    with _session_states_lock:
+        _session_states.pop(session_id, None)
+    with _progress_lock:
+        _progress.pop(session_id, None)
+
+
+def _load_dedup_state(state: _SessionDedupState, db: Session, session_id: str, owner_id: int) -> None:
+    """Load the library's dedup indexes once per session, and seed the staged
+    indexes with files of this session that are already processed (matters
+    after a backend restart mid-analysis)."""
     for row in db.query(
         Image.id, Image.file_hash, Image.perceptual_hash, Image.original_filename, Image.source_root_id
     ).filter(Image.owner_id == owner_id):
-        image_by_hash.setdefault(row.file_hash, row)
+        state.image_by_hash.setdefault(row.file_hash, (row.id, row.source_root_id))
         if row.perceptual_hash:
-            image_phashes.append((phash_to_int(row.perceptual_hash), row.original_filename, row))
-
-    # Seed the in-batch indexes with anything already staged in this session (so
-    # a later upload batch is still deduped against earlier ones).
-    staged_by_hash: dict[str, ImportStagedFile] = {}
-    staged_phashes: list[tuple[int, str, ImportStagedFile]] = []
-    for existing in session.staged_files:
-        staged_by_hash.setdefault(existing.sha256, existing)
+            state.image_phashes.append(
+                (phash_to_int(row.perceptual_hash), row.original_filename, row.id)
+            )
+    for existing in (
+        db.query(ImportStagedFile)
+        .filter(
+            ImportStagedFile.import_session_id == session_id,
+            ImportStagedFile.processed.is_(True),
+        )
+        .all()
+    ):
+        state.staged_by_hash.setdefault(existing.sha256, existing.id)
         if existing.perceptual_hash:
-            staged_phashes.append((phash_to_int(existing.perceptual_hash), existing.original_filename, existing))
+            state.staged_phashes.append(
+                (phash_to_int(existing.perceptual_hash), existing.original_filename, existing.id)
+            )
+    state.loaded = True
 
-    def _near(phash_int: int, filename: str, candidates) -> object | None:
-        for other_int, other_name, ref in candidates:
+
+def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
+    """Persist one file's analysis results and flag duplicates. Serialized per
+    session via the dedup-state lock (the index reads/updates and the 'earlier
+    file wins' duplicate ordering both need it)."""
+    threshold = settings.duplicate_phash_hamming_threshold
+    state = _session_state(session_id)
+
+    def _near(phash_int: int, filename: str, candidates: list[tuple[int, str, str]]) -> str | None:
+        for other_int, other_name, ref_id in candidates:
             # A RAW+JPEG pair from the same shot has near-identical pixels but is
             # a sibling to be paired (see pairing.py), not a duplicate.
             if _same_shot_stem(filename, other_name):
                 continue
             if hamming_int(phash_int, other_int) <= threshold:
-                return ref
+                return ref_id
         return None
 
-    for a in analyzed:
-        staged_file = ImportStagedFile(
-            id=a.id,
-            import_session_id=session.id,
-            staged_path=a.staged_rel_path,
-            original_filename=a.original_filename,
-            file_type=FileType(a.file_type),
-            sha256=a.sha256,
-            perceptual_hash=a.perceptual_hash,
-            exif_json=a.exif_json,
+    with state.lock:
+        db = SessionLocal()
+        try:
+            staged = db.get(ImportStagedFile, a.id)
+            session = db.get(ImportSession, session_id)
+            if (
+                staged is None
+                or session is None
+                or session.status != ImportSessionStatus.staging
+            ):
+                return  # session discarded/committed while this job waited
+            if staged.processed:
+                return
+            if not state.loaded:
+                _load_dedup_state(state, db, session_id, owner_id)
+
+            staged.perceptual_hash = a.perceptual_hash
+            staged.exif_json = a.exif_json
+
+            # Exact library match first, then exact match earlier in this session,
+            # then a perceptual near-duplicate against the library, then the session.
+            exact_image = state.image_by_hash.get(a.sha256)
+            if exact_image is not None:
+                image_id, source_root_id = exact_image
+                staged.duplicate_of_image_id = image_id
+                if source_root_id is None:
+                    # Byte-identical to a managed-library photo - don't re-import by
+                    # default (the API also rejects re-selecting it).
+                    staged.selected = False
+                # else: only copy is indexed in place from an external source root;
+                # importing promotes it, so leave it selected.
+            elif a.sha256 in state.staged_by_hash:
+                staged.duplicate_of_staged_file_id = state.staged_by_hash[a.sha256]
+                staged.selected = False
+            elif a.perceptual_hash:
+                phash_int = phash_to_int(a.perceptual_hash)
+                near_image = _near(phash_int, a.original_filename, state.image_phashes)
+                if near_image is not None:
+                    staged.duplicate_of_image_id = near_image
+                    staged.is_near_duplicate = True
+                else:
+                    near_staged = _near(phash_int, a.original_filename, state.staged_phashes)
+                    if near_staged is not None:
+                        staged.duplicate_of_staged_file_id = near_staged
+                        staged.is_near_duplicate = True
+
+            staged.processed = True
+            db.commit()
+
+            state.staged_by_hash.setdefault(a.sha256, a.id)
+            if a.perceptual_hash:
+                state.staged_phashes.append(
+                    (phash_to_int(a.perceptual_hash), a.original_filename, a.id)
+                )
+        finally:
+            db.close()
+
+
+def _run_analysis(session_id: str, staged_id: str) -> None:
+    """One background analysis job: read the staged row, do the heavy per-file
+    work, persist the result. Never raises - a single bad file must not take
+    the worker thread (or the import) down with it."""
+    try:
+        db = SessionLocal()
+        try:
+            staged = db.get(ImportStagedFile, staged_id)
+            session = db.get(ImportSession, session_id)
+            if (
+                staged is None
+                or staged.processed
+                or session is None
+                or session.status != ImportSessionStatus.staging
+            ):
+                return
+            owner_id = session.owner_id
+            staged_full_path = settings.import_staging_root / staged.staged_path
+            original_filename = staged.original_filename
+            file_type = staged.file_type.value
+            sha256 = staged.sha256
+        finally:
+            db.close()
+
+        thumb_dir = settings.import_staging_root / session_id / ".thumbnails"
+        analyzed = _analyze_file(
+            staged_full_path,
+            original_filename,
+            file_type,
+            staged_id,
+            thumb_dir,
+            _thread_helper(),
+            sha256,
         )
-
-        # Exact library match first, then exact match earlier in this session,
-        # then a perceptual near-duplicate against the library, then the session.
-        exact_image = image_by_hash.get(a.sha256)
-        if exact_image is not None:
-            staged_file.duplicate_of_image_id = exact_image.id
-            if exact_image.source_root_id is None:
-                # Byte-identical to a managed-library photo - don't re-import by
-                # default (the API also rejects re-selecting it).
-                staged_file.selected = False
-            # else: only copy is indexed in place from an external source root;
-            # importing promotes it, so leave it selected.
-        elif a.sha256 in staged_by_hash:
-            staged_file.duplicate_of_staged_file_id = staged_by_hash[a.sha256].id
-            staged_file.selected = False
-        elif a.perceptual_hash:
-            phash_int = phash_to_int(a.perceptual_hash)
-            near_image = _near(phash_int, a.original_filename, image_phashes)
-            if near_image is not None:
-                staged_file.duplicate_of_image_id = near_image.id
-                staged_file.is_near_duplicate = True
-            else:
-                near_staged = _near(phash_int, a.original_filename, staged_phashes)
-                if near_staged is not None:
-                    staged_file.duplicate_of_staged_file_id = near_staged.id
-                    staged_file.is_near_duplicate = True
-
-        db.add(staged_file)
-        staged_by_hash.setdefault(a.sha256, staged_file)
-        if a.perceptual_hash:
-            staged_phashes.append((phash_to_int(a.perceptual_hash), a.original_filename, staged_file))
+        _apply_analysis(session_id, owner_id, analyzed)
+        _progress_step(session_id)
+    except Exception:
+        logger.exception("Background analysis failed for staged file %s", staged_id)
+    finally:
+        with _inflight_lock:
+            _inflight.discard(staged_id)
 
 
-# The client deliberately keeps two upload requests in flight: while one
-# batch's staging work (hash/preview/exif) runs here, the next batch's bytes
-# are already being received and spooled by the event loop. The staging work
-# itself must not interleave though - the dedup seeding reads everything
-# staged so far - so it's serialized behind one process-wide lock.
+def _enqueue_analysis(session_id: str, staged_id: str) -> None:
+    with _inflight_lock:
+        if staged_id in _inflight:
+            return
+        _inflight.add(staged_id)
+    try:
+        _analysis_executor.submit(_run_analysis, session_id, staged_id)
+    except Exception:
+        with _inflight_lock:
+            _inflight.discard(staged_id)
+        raise
+
+
+def ensure_session_processing(session: ImportSession) -> None:
+    """Re-enqueue analysis for any unprocessed file of the session that has no
+    job queued or running. Called from the routes the review screen polls, so
+    a backend restart mid-analysis (the executor and its queue are in-memory)
+    heals itself the moment the UI looks at the session again."""
+    if session.status != ImportSessionStatus.staging:
+        return
+    pending = [f.id for f in session.staged_files if not f.processed]
+    if not pending:
+        return
+    # Rebuild the in-memory progress entry after a restart, so the UI's
+    # processed/total readout picks up where it left off.
+    with _progress_lock:
+        if session.id not in _progress:
+            p = _progress_new("staging", len(session.staged_files))
+            p["copied"] = len(session.staged_files)
+            p["processed"] = len(session.staged_files) - len(pending)
+            _progress[session.id] = p
+    for staged_id in pending:
+        _enqueue_analysis(session.id, staged_id)
+
+
+# The client deliberately keeps two staging requests in flight. The copy work
+# itself must not interleave though - two batches writing into the same
+# session folder could race the unique-filename check - so it's serialized
+# behind one process-wide lock. Copying is fast (analysis happens in the
+# background), so the wait is short.
 _staging_lock = threading.Lock()
 
 
 # --- Import progress (for the UI's "processing"/"importing" phase ETA) --------
-# Upload byte-progress is reported by the browser itself, but the two backend
-# phases with no feedback are staging analysis (hash/preview/exif/thumbnail) and
-# commit. Track processed/total per session here so a poll endpoint can surface
-# a live count and an estimated time remaining.
+# Upload byte-progress is reported by the browser itself, but the backend
+# phases with no feedback are the staging copy, the background analysis
+# (preview/exif/thumbnail/dedup) and the commit. Track per-session counters
+# here so a poll endpoint can surface live counts and a time estimate.
+# For the staging phase: `copied` files are fully in the staging folder,
+# `processed` of `total` have finished background analysis.
 _progress: dict[str, dict] = {}
 _progress_lock = threading.Lock()
 
@@ -308,6 +479,7 @@ def _progress_new(phase: str, total: int) -> dict:
     return {
         "phase": phase,
         "processed": 0,
+        "copied": 0,
         "total": total,
         "started": time.monotonic(),
         "recent": deque(maxlen=_ETA_WINDOW),
@@ -317,6 +489,24 @@ def _progress_new(phase: str, total: int) -> dict:
 def _progress_begin(session_id: str, phase: str, total: int) -> None:
     with _progress_lock:
         _progress[session_id] = _progress_new(phase, total)
+
+
+def _progress_add_total(session_id: str, n: int) -> None:
+    """Grow the staging phase's target by one incoming batch. Unlike
+    _progress_begin this accumulates - the analysis backlog spans batches."""
+    with _progress_lock:
+        p = _progress.get(session_id)
+        if p is None or p["phase"] != "staging":
+            p = _progress_new("staging", 0)
+            _progress[session_id] = p
+        p["total"] += n
+
+
+def _progress_copy_step(session_id: str, n: int = 1) -> None:
+    with _progress_lock:
+        p = _progress.get(session_id)
+        if p is not None:
+            p["copied"] += n
 
 
 def _progress_step(session_id: str, n: int = 1) -> None:
@@ -346,6 +536,7 @@ def get_import_progress(session_id: str) -> dict | None:
         if p is None:
             return None
         phase, processed, total, started = p["phase"], p["processed"], p["total"], p["started"]
+        copied = p.get("copied", 0)
         recent = list(p["recent"])
     eta = None
     if phase != "idle" and processed > 0 and total > processed:
@@ -359,7 +550,13 @@ def get_import_progress(session_id: str) -> dict | None:
         else:
             elapsed = now - started
             eta = elapsed / processed * (total - processed)
-    return {"phase": phase, "processed": processed, "total": total, "eta_seconds": eta}
+    return {
+        "phase": phase,
+        "processed": processed,
+        "copied": copied,
+        "total": total,
+        "eta_seconds": eta,
+    }
 
 
 def stage_uploaded_files(
@@ -387,8 +584,8 @@ def append_uploaded_files(
     and RAW+JPEG pairing still see the whole session, not just one batch."""
     with _staging_lock:
         # This request's read transaction began before the lock was acquired
-        # (the route already loaded the session row). End it so the dedup
-        # seeding below sees files a concurrent batch committed meanwhile.
+        # (the route already loaded the session row). End it so the copy phase
+        # below starts fresh against whatever a concurrent batch committed.
         db.rollback()
         _stage_uploads_into(db, session, owner_id, uploads)
         db.commit()
@@ -399,6 +596,13 @@ def append_uploaded_files(
 def _stage_uploads_into(
     db: Session, session: ImportSession, owner_id: int, uploads: list[UploadedFile]
 ) -> None:
+    """Copy phase only: stream each file into the staging folder (hashing
+    in-flight, see _hash_and_copy), create its row unprocessed, and hand it to
+    the background analysis pool. The request returns as soon as the bytes are
+    copied - all the slow per-file work (preview/phash/exif/thumbnail/dedup)
+    runs in the background while the next batch is already copying. Each row
+    is committed individually so the review grid and the analysis workers see
+    files the moment they land, not when the whole batch is done."""
     session_dir = settings.import_staging_root / session.id
     thumb_dir = session_dir / ".thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
@@ -415,85 +619,58 @@ def _stage_uploads_into(
             continue
         incoming.append((upload, original_filename, file_type))
 
-    # Pipelined staging: this thread streams files from the source into staging
-    # one at a time (hashing in-flight, see _hash_and_copy), and hands each
-    # finished copy straight to the analysis pool. The slow source read (SD
-    # card, NAS, upload spool) overlaps the CPU-heavy preview/phash/exif work
-    # instead of running before it, and the progress counter ticks from the
-    # first analyzed file on instead of staying frozen through the copy phase.
-    # Copying stays serial: sequential reads are what source media do best, and
-    # analysis keeps up alongside. Each analysis worker gets its own exiftool
-    # process (a shared -stay_open helper can't be used from multiple threads).
-    # Futures are collected in submission order so batch-dedup and pairing stay
-    # stable.
     started = time.monotonic()
     total_bytes = 0
-    _progress_begin(session.id, "staging", len(incoming))
+    _progress_add_total(session.id, len(incoming))
 
-    workers = min(_STAGE_WORKERS, max(1, len(incoming)))
-    helpers = [new_helper() for _ in range(workers)]
-    helper_pool: queue.Queue = queue.Queue()
-    for h in helpers:
-        helper_pool.put(h)
-
-    def analyze(
-        staged_path: Path, original_filename: str, file_type: str, staged_id: str, sha256: str
-    ) -> _Analyzed:
-        helper = helper_pool.get()
-        try:
-            return _analyze_file(
-                staged_path, original_filename, file_type, staged_id, thumb_dir, helper, sha256
+    # Copying stays serial: sequential reads are what source media (SD card,
+    # NAS, upload spool) do best, and the analysis pool works alongside.
+    for upload, original_filename, file_type in incoming:
+        staged_path = session_dir / original_filename
+        counter = 1
+        while staged_path.exists():
+            staged_path = (
+                session_dir
+                / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
             )
-        finally:
-            helper_pool.put(helper)
-            _progress_step(session.id)
+            counter += 1
 
-    try:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = []
-            for upload, original_filename, file_type in incoming:
-                staged_path = session_dir / original_filename
-                counter = 1
-                while staged_path.exists():
-                    staged_path = (
-                        session_dir
-                        / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
-                    )
-                    counter += 1
-
-                sha256, size = _hash_and_copy(upload.file, staged_path)
-                total_bytes += size
-                # Carry the source file's modification time onto the staged
-                # copy. Without this the staged mtime is "just now", and the
-                # commit-time fallback for photos lacking an EXIF capture date
-                # would date them to the import instead of the original file.
-                source_mtime = getattr(upload, "mtime", None)
-                if source_mtime:
-                    try:
-                        os.utime(staged_path, (source_mtime, source_mtime))
-                    except OSError:
-                        pass
-                futures.append(
-                    executor.submit(
-                        analyze, staged_path, original_filename, file_type, str(uuid.uuid4()), sha256
-                    )
-                )
-            analyzed = [f.result() for f in futures]
-        _persist_analyzed(db, session, owner_id, analyzed)
-    finally:
-        _progress_done(session.id)
-        for h in helpers:
+        sha256, size = _hash_and_copy(upload.file, staged_path)
+        total_bytes += size
+        # Carry the source file's modification time onto the staged
+        # copy. Without this the staged mtime is "just now", and the
+        # commit-time fallback for photos lacking an EXIF capture date
+        # would date them to the import instead of the original file.
+        source_mtime = getattr(upload, "mtime", None)
+        if source_mtime:
             try:
-                h.terminate()
-            except Exception:
+                os.utime(staged_path, (source_mtime, source_mtime))
+            except OSError:
                 pass
 
+        staged_id = str(uuid.uuid4())
+        db.add(
+            ImportStagedFile(
+                id=staged_id,
+                import_session_id=session.id,
+                staged_path=str(staged_path.relative_to(settings.import_staging_root)),
+                original_filename=original_filename,
+                file_type=FileType(file_type),
+                sha256=sha256,
+                processed=False,
+            )
+        )
+        # Commit per file: the row must be durable before the background job
+        # (which uses its own DB session) can pick it up.
+        db.commit()
+        _progress_copy_step(session.id)
+        _enqueue_analysis(session.id, staged_id)
+
     # One line per batch so a slow import is diagnosable from the server log
-    # alone. Copy and analysis overlap now, so the wall time is roughly
-    # max(source read, analysis) - if it tracks the batch's byte size at the
-    # source medium's read speed, the source is the bottleneck, not this code.
+    # alone. This now measures the copy only - if it tracks the batch's byte
+    # size at the source medium's read speed, the source is the bottleneck.
     logger.info(
-        "import batch staged: %d files (%.0f MB) in %.1fs (copy pipelined with analysis)",
+        "import batch copied: %d files (%.0f MB) in %.1fs (analysis continues in background)",
         len(incoming),
         total_bytes / 1e6,
         time.monotonic() - started,
@@ -553,10 +730,14 @@ def commit_import_session(
                 return candidate
         return None
 
+    # Only fully analyzed files can commit (the route refuses the request while
+    # any file is unprocessed - this filter is the belt-and-braces guard).
     selected_files = [
         f
         for f in session.staged_files
-        if f.selected and (not _is_exact_duplicate(f) or _exact_referenced_duplicate(f) is not None)
+        if f.selected
+        and f.processed
+        and (not _is_exact_duplicate(f) or _exact_referenced_duplicate(f) is not None)
     ]
     new_images: list[Image] = []
 
@@ -660,6 +841,15 @@ def commit_import_session(
         with ThreadPoolExecutor(max_workers=move_workers) as pool:
             list(pool.map(lambda e: shutil.move(str(e.staged_full_path), str(e.dest_path)), to_move))
 
+    # Release the write lock periodically: one mega-transaction over the whole
+    # loop held it for minutes on a big import, starving every other writer
+    # past its busy_timeout ("database is locked" when e.g. starting another
+    # import meanwhile). Files are moved before any row is written, so a chunk
+    # that committed stays valid even if a later one fails - the retry path
+    # (_find_moved_library_copy) adopts whatever the failed remainder left.
+    _COMMIT_CHUNK = 200
+    rows_since_commit = 0
+
     for entry in plan:
         _progress_step(session.id)
         staged = entry.staged
@@ -725,6 +915,10 @@ def commit_import_session(
             db.add(image)
         db.flush()
         new_images.append(image)
+        rows_since_commit += 1
+        if rows_since_commit >= _COMMIT_CHUNK:
+            db.commit()
+            rows_since_commit = 0
 
     pair_siblings(new_images)
     # Resolve each new photo's GPS fix to a country (offline) so it's filterable
@@ -768,10 +962,15 @@ def commit_import_session(
             )
 
     shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
+    _drop_session_state(session.id)
     return new_images
 
 
 def discard_import_session(db: Session, session: ImportSession) -> None:
-    shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
+    # Flip the status first: in-flight background analysis jobs re-check it
+    # before touching the row, so they turn into no-ops instead of racing the
+    # rmtree below.
     session.status = ImportSessionStatus.discarded
     db.commit()
+    shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
+    _drop_session_state(session.id)

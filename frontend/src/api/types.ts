@@ -97,8 +97,13 @@ export interface AlbumOut {
 
 export interface ImportProgress {
   phase: "staging" | "commit" | "idle";
+  // Staging: files whose background analysis finished, of `total` staged so
+  // far. Commit: photos moved/recorded, of the commit plan.
   processed: number;
   total: number;
+  // Staging only: files fully copied into the staging folder - runs ahead of
+  // `processed` while the background analysis catches up.
+  copied: number;
   eta_seconds: number | null;
 }
 
@@ -139,6 +144,9 @@ export interface StagedFileOut {
   width: number | null;
   height: number | null;
   immich_sync: boolean;
+  // False while the background analysis (thumbnail/EXIF/duplicates) is still
+  // running for this file - the grid shows a placeholder card until it flips.
+  processed: boolean;
 }
 
 export interface StagedFileUpdatePatch {

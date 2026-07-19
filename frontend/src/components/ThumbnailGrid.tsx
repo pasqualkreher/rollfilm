@@ -106,6 +106,11 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
     return () => {
       if (timer !== null) window.clearTimeout(timer);
       unwatch();
+      // Unmounting mid-flight (a long jump in the virtualized grid): abort
+      // the request imperatively - React only discards the node, the browser
+      // would finish the download anyway. Freeing the connection means the
+      // newest viewport's thumbnails always win over stale ones.
+      if (!doneRef.current && el.getAttribute("src")) el.removeAttribute("src");
     };
   }, [src]);
 

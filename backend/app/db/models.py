@@ -313,6 +313,14 @@ class ImportStagedFile(Base):
     perceptual_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     exif_json: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # False while the background analysis (preview/phash/EXIF/thumbnail +
+    # duplicate detection) hasn't finished for this file yet. The copy phase
+    # creates rows unprocessed and returns immediately; a background worker
+    # fills in the analysis fields and flips this. Commit refuses to run while
+    # any file in the session is unprocessed. server_default "1": rows staged
+    # before this column existed were always fully analyzed at staging time.
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="1")
+
     duplicate_of_image_id: Mapped[str | None] = mapped_column(ForeignKey("images.id"), nullable=True)
     # Duplicate of another file staged earlier in the *same* batch (e.g. an
     # SD card with two copies of a shot) - distinct from duplicate_of_image_id,

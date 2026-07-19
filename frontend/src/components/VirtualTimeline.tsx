@@ -265,29 +265,58 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
   }, [layout, images.length]);
 
   // Pre-warm the browser cache for the stretches just outside the mounted
-  // band, so tiles scrolling in have their pixels already local. Runs on the
-  // quantized window, i.e. every ~2 rows of scrolling, and preloadImage
-  // dedups per URL - photos are fetched at most once.
+  // band, so tiles scrolling in have their pixels already local. Debounced:
+  // warming fires only after the window has been stable for a moment, so
+  // scrubbing/jumping across the library never floods the network with
+  // uncancellable warm-up fetches for regions the user flew past - only the
+  // place they actually stop at gets warmed. preloadImage dedups per URL.
   useEffect(() => {
     if (!layout) return;
-    const zones: [number, number][] = [
-      [window_.bottom + OVERSCAN, window_.bottom + OVERSCAN + PREWARM],
-      [window_.top - OVERSCAN - PREWARM, window_.top - OVERSCAN],
-    ];
-    for (const s of layout.sections) {
-      for (const [zoneTop, zoneBottom] of zones) {
-        if (s.top + s.height <= zoneTop || s.top >= zoneBottom) continue;
-        for (const r of s.rows) {
-          const rowTop = s.top + r.top;
-          if (rowTop + r.height <= zoneTop || rowTop >= zoneBottom) continue;
-          for (const t of r.tiles) {
-            preloadImage(
-              api.images.thumbnailUrl(t.image.id, t.image.thumb_version || DEFAULT_EDIT_VERSION)
-            );
+    const timer = window.setTimeout(() => {
+      const zones: [number, number][] = [
+        [window_.bottom + OVERSCAN, window_.bottom + OVERSCAN + PREWARM],
+        [window_.top - OVERSCAN - PREWARM, window_.top - OVERSCAN],
+      ];
+      for (const s of layout.sections) {
+        for (const [zoneTop, zoneBottom] of zones) {
+          if (s.top + s.height <= zoneTop || s.top >= zoneBottom) continue;
+          for (const r of s.rows) {
+            const rowTop = s.top + r.top;
+            if (rowTop + r.height <= zoneTop || rowTop >= zoneBottom) continue;
+            for (const t of r.tiles) {
+              preloadImage(
+                api.images.thumbnailUrl(t.image.id, t.image.thumb_version || DEFAULT_EDIT_VERSION)
+              );
+            }
           }
         }
       }
-    }
+
+      // Also warm the DETAIL previews for what's actually on screen right now
+      // (capped): clicking any visible photo then opens the lightbox with its
+      // preview already in the browser cache - instant, no request round-trip.
+      // A dozen previews are a few MB once; preloadImage dedups so photos that
+      // stay in view cost nothing on subsequent passes.
+      const VISIBLE_PREVIEW_CAP = 12;
+      let warmed = 0;
+      for (const s of layout.sections) {
+        if (warmed >= VISIBLE_PREVIEW_CAP) break;
+        if (s.top + s.height <= window_.top || s.top >= window_.bottom) continue;
+        for (const r of s.rows) {
+          if (warmed >= VISIBLE_PREVIEW_CAP) break;
+          const rowTop = s.top + r.top;
+          if (rowTop + r.height <= window_.top || rowTop >= window_.bottom) continue;
+          for (const t of r.tiles) {
+            if (warmed >= VISIBLE_PREVIEW_CAP) break;
+            preloadImage(
+              api.images.previewUrl(t.image.id, t.image.thumb_version || DEFAULT_EDIT_VERSION)
+            );
+            warmed++;
+          }
+        }
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
   }, [layout, window_]);
 
   if (images.length === 0) {
