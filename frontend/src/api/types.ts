@@ -47,28 +47,14 @@ export interface ImageOut {
   edit_straighten: number;
   edit_persp_h: number;
   edit_persp_v: number;
-  edit_exposure: number;
-  edit_contrast: number;
-  edit_highlights: number;
-  edit_shadows: number;
-  edit_whites: number;
-  edit_blacks: number;
-  edit_saturation: number;
-  edit_temperature: number;
-  edit_tint: number;
-  edit_color_mix: string | null; // JSON: { band: [hue, sat, lum] }
-  edit_vignette: number;
-  edit_distortion: number;
-  edit_dehaze: number;
-  edit_grain: number;
-  edit_grain_size: number;
-  edit_denoise: number;
-  edit_clarity: number;
-  edit_sharpness: number;
-  edit_color_tint: number;
-  edit_chrome_effect: number;
-  edit_chrome_blue: number;
-  edit_mist: number;
+  edit_distortion: number; // lens distortion correction, geometric
+  // The whole develop state (tonal/colour/effects/curves/grading/masks) as a
+  // JSON string - see utils/adjustments.ts - or null when fully neutral. Parse
+  // with adjustmentsFromImage().
+  edit_adjustments: string | null;
+  // Per-image cache-buster, bumped whenever the edit changes. editVersion()
+  // returns String(edit_rev); the server is the single source of truth for it.
+  edit_rev: number;
   tags: string[];
   album_ids: string[];
 }

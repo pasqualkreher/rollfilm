@@ -73,11 +73,26 @@ export function ImageDetail() {
   }
 
   const MAX_ZOOM = 6;
+  const MIN_ZOOM = 0.2; // allow zooming out below fit
   const zoomed = scale > 1.001;
 
   function resetZoom() {
     setScale(1);
     setPan({ x: 0, y: 0 });
+  }
+
+  // Clamp the pan so the view stays *inside the photo* - never past its edges into
+  // the empty frame. The max offset is how far the scaled photo overhangs the
+  // visible frame; it's 0 when the photo fits or is zoomed out, so it stays centred.
+  function clampPan(p: { x: number; y: number }, s: number) {
+    const box = imageBoxRef.current;
+    if (!box || !fit) return p;
+    const cs = getComputedStyle(box);
+    const availW = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const availH = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const maxX = Math.max(0, (fit.w * s - availW) / 2);
+    const maxY = Math.max(0, (fit.h * s - availH) / 2);
+    return { x: Math.max(-maxX, Math.min(maxX, p.x)), y: Math.max(-maxY, Math.min(maxY, p.y)) };
   }
 
   // Passed from the Library grid so arrow keys can zap through the same
@@ -167,11 +182,11 @@ export function ImageDetail() {
       const dy = e.clientY - (rect.top + rect.height / 2);
       setScale((prevScale) => {
         const factor = Math.exp(-e.deltaY * 0.0015);
-        const next = Math.min(MAX_ZOOM, Math.max(1, prevScale * factor));
+        const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prevScale * factor));
         setPan((prevPan) => {
           if (next <= 1.001) return { x: 0, y: 0 };
           const ratio = next / prevScale;
-          return { x: dx - (dx - prevPan.x) * ratio, y: dy - (dy - prevPan.y) * ratio };
+          return clampPan({ x: dx - (dx - prevPan.x) * ratio, y: dy - (dy - prevPan.y) * ratio }, next);
         });
         return next;
       });
@@ -447,7 +462,7 @@ export function ImageDetail() {
               }}
               onMouseMove={(e: ReactMouseEvent<HTMLImageElement>) => {
                 if (!dragRef.current) return;
-                setPan({ x: e.clientX - dragRef.current.x, y: e.clientY - dragRef.current.y });
+                setPan(clampPan({ x: e.clientX - dragRef.current.x, y: e.clientY - dragRef.current.y }, scale));
               }}
               onMouseUp={() => {
                 dragRef.current = null;
@@ -466,7 +481,7 @@ export function ImageDetail() {
                   const img = e.currentTarget;
                   const target = Math.min(MAX_ZOOM, Math.max(1.5, img.naturalWidth / img.getBoundingClientRect().width));
                   setScale(target);
-                  setPan({ x: dx * (1 - target), y: dy * (1 - target) });
+                  setPan(clampPan({ x: dx * (1 - target), y: dy * (1 - target) }, target));
                 }
               }}
             />

@@ -2908,3 +2908,429 @@ kbd {
   color: var(--text-muted);
   font-weight: 600;
 }
+
+/* ---- Phase-2 editing UI: tone curves, colour-grading wheels, calibration ---- */
+
+/* Curves: channel tabs (Luma / Red / Green / Blue). */
+.curve-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0 6px;
+}
+
+.curve-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 4px;
+}
+
+.curve-tab-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  flex-shrink: 0;
+}
+
+/* Mode toggle (Point / Parametric) + Reset curve on one row. */
+.curve-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+
+/* The point-curve graph: a square 0..255 plot. */
+.curve-editor {
+  position: relative;
+  width: 100%;
+  padding-top: 100%; /* bulletproof square - aspect-ratio can collapse in a flex column */
+  margin: 2px 0 20px;
+}
+
+.curve-editor-svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+/* Transparent full-bleed hit surface so empty-area clicks add a point. */
+.curve-bg {
+  fill: transparent;
+}
+
+.curve-grid-line {
+  stroke: var(--border);
+  opacity: 0.7;
+}
+
+.curve-grid-diagonal {
+  stroke: var(--text-muted);
+  stroke-dasharray: 3 4;
+  opacity: 0.5;
+}
+
+.curve-line {
+  pointer-events: stroke;
+}
+
+.curve-point-dot {
+  stroke: var(--bg-elevated);
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.curve-point-hit {
+  cursor: grab;
+}
+
+.curve-point-hit:active {
+  cursor: grabbing;
+}
+
+/* Colour-grading wheels: 2x2 grid, each cell = disc + its luminance slider. */
+.grade-wheels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 12px;
+  margin: 10px 0 18px;
+}
+
+.grade-wheel-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.grade-wheel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.grade-wheel-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.grade-wheel-disc {
+  position: relative;
+  width: 100%;
+  max-width: 118px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  touch-action: none;
+  cursor: crosshair;
+  /* Conic hue ring fading to neutral grey in the centre - reads as a real
+     grading wheel. The puck angle (see ColorWheel.tsx) matches `from 0deg`. */
+  background:
+    radial-gradient(circle at center, rgba(128, 128, 128, 0.95) 0%, rgba(128, 128, 128, 0) 62%),
+    conic-gradient(
+      from 0deg,
+      hsl(0 90% 55%),
+      hsl(60 90% 55%),
+      hsl(120 90% 55%),
+      hsl(180 90% 55%),
+      hsl(240 90% 55%),
+      hsl(300 90% 55%),
+      hsl(360 90% 55%)
+    );
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.grade-wheel-disc.dragging {
+  cursor: grabbing;
+}
+
+.grade-wheel-puck {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.grade-wheel-readout {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Masks (local / per-region adjustments) ------------------------------ */
+
+/* Selected-mask guide over the canvas (mirrors .editor-grid-overlay). Stretched
+   to the framed image via viewBox 0..100 + preserveAspectRatio="none", so a
+   fractional param maps to a percent coordinate. Pointer-transparent, and it
+   carries the canvas's zoom/pan transform (set inline) so it stays registered. */
+.mask-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+  transform-origin: center center;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55));
+}
+
+.mask-overlay-shape {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.mask-overlay-fill {
+  fill: var(--accent-soft);
+}
+
+.mask-overlay-hint {
+  opacity: 0.6;
+  stroke-dasharray: 3 3;
+}
+
+/* Draggable handles on radial/linear masks: a filled accent dot with a white
+   outline so they read clearly over any photo. */
+.mask-handle {
+  fill: var(--accent);
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+/* Brush-size ring that tracks the pointer while brush mode is active. */
+.mask-brush-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
+  opacity: 0.95;
+}
+
+/* One-line helper under a mask's type controls (e.g. linear gradient width). */
+.mask-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Mask list rows */
+.mask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 8px;
+}
+
+.mask-empty {
+  margin: 4px 0 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mask-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.mask-row:hover {
+  background: var(--hover);
+}
+
+.mask-row.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.mask-eye {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px;
+}
+
+.mask-row.active .mask-eye {
+  color: var(--accent);
+}
+
+.mask-row-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mask-row-type {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mask-del {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.mask-del:hover {
+  color: var(--danger);
+}
+
+/* Add-mask control */
+.mask-add-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.mask-add-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mask-add-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Mask editor block */
+.mask-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.mask-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mask-subhead {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Colour-mask target picker */
+.mask-color-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mask-swatch {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+/* The per-mask adjustment sliders sit a touch tighter than the global panel. */
+.mask-editor .editor-sliders {
+  margin: 2px 0 0;
+  gap: 14px;
+}
+
+/* ---- Panel accordion (one group open at a time) -------------------------- */
+
+/* Group header: the editor-section-title look, but a full-width clickable row
+   with a caret on the right. The top border separates one group from the next. */
+.editor-accordion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 13px 6px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.editor-accordion-header:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.editor-accordion-header:focus-visible {
+  outline: none;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* The open group's header reads as active. */
+.editor-accordion-header.open {
+  color: var(--text);
+}
+
+/* Caret points right when collapsed, rotates down when the group is open. */
+.editor-accordion-caret {
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.editor-accordion-caret.open {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+
+.editor-accordion-body {
+  padding-block: 4px 8px;
+}

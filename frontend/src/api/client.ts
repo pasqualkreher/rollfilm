@@ -30,95 +30,23 @@ import type { ImageEdits } from "../utils/adjustments";
 // needs to change to bust the browser cache - this derives a stable version
 // key from the same fields that affect the rendered pixels.
 export function editVersion(image: ImageOut): string {
-  return [
-    image.edit_rotation,
-    image.edit_crop_x ?? "",
-    image.edit_crop_y ?? "",
-    image.edit_crop_width ?? "",
-    image.edit_crop_height ?? "",
-    image.edit_flip_h ? "fh" : "",
-    image.edit_flip_v ? "fv" : "",
-    image.edit_straighten,
-    image.edit_persp_h,
-    image.edit_persp_v,
-    image.edit_exposure,
-    image.edit_contrast,
-    image.edit_highlights,
-    image.edit_shadows,
-    image.edit_whites,
-    image.edit_blacks,
-    image.edit_saturation,
-    image.edit_temperature,
-    image.edit_tint,
-    image.edit_color_mix ?? "",
-    image.edit_vignette,
-    image.edit_distortion,
-    image.edit_dehaze,
-    image.edit_grain,
-    image.edit_grain_size,
-    image.edit_denoise,
-    image.edit_clarity,
-    image.edit_sharpness,
-    image.edit_color_tint,
-    image.edit_chrome_effect,
-    image.edit_chrome_blue,
-    image.edit_mist,
-  ].join("-");
+  return image.edit_rev ? String(image.edit_rev) : "";
 }
 
-// Version string of a never-edited photo (every edit field at its default).
-// The library index sends thumb_version: "" for those (the vast majority) to
-// keep the payload small - substitute this constant so the grid's thumbnail
-// URLs stay identical to the ones every other view builds via editVersion().
-export const DEFAULT_EDIT_VERSION = editVersion({
-  edit_rotation: 0,
-  edit_crop_x: null,
-  edit_crop_y: null,
-  edit_crop_width: null,
-  edit_crop_height: null,
-  edit_flip_h: false,
-  edit_flip_v: false,
-  edit_straighten: 0,
-  edit_persp_h: 0,
-  edit_persp_v: 0,
-  edit_exposure: 0,
-  edit_contrast: 0,
-  edit_highlights: 0,
-  edit_shadows: 0,
-  edit_whites: 0,
-  edit_blacks: 0,
-  edit_saturation: 0,
-  edit_temperature: 0,
-  edit_tint: 0,
-  edit_color_mix: null,
-  edit_vignette: 0,
-  edit_distortion: 0,
-  edit_dehaze: 0,
-  edit_grain: 0,
-  edit_grain_size: 0,
-  edit_denoise: 0,
-  edit_clarity: 0,
-  edit_sharpness: 0,
-  edit_color_tint: 0,
-  edit_chrome_effect: 0,
-  edit_chrome_blue: 0,
-  edit_mist: 0,
-} as ImageOut);
+// Never-edited photos: the library index sends thumb_version "" for them (the
+// vast majority) and this constant stands in so their thumbnail URLs match the
+// ones every other view builds via editVersion().
+export const DEFAULT_EDIT_VERSION = "";
 
-// The editor state uses camelCase; the API's pydantic model is snake_case.
-// Multi-word fields MUST be renamed here - pydantic silently ignores unknown
-// keys, so a camelCase key wouldn't error, it would just drop the edit (this
-// bit us: colorMix/grainSize/colorTint were lost on every save).
+// The editor's geometry state uses camelCase; the API's pydantic model is
+// snake_case. Multi-word geometry fields MUST be renamed here - pydantic
+// silently ignores unknown keys, so a camelCase key wouldn't error, it would
+// just drop the edit. The `adjustments` object already uses snake_case keys
+// (see utils/adjustments.ts) and passes straight through.
 function apiEdits(edits: ImageEdits) {
-  const { colorMix, grainSize, colorTint, chromeEffect, chromeBlue, flipH, flipV, perspH, perspV, ...rest } =
-    edits;
+  const { flipH, flipV, perspH, perspV, ...rest } = edits;
   return {
     ...rest,
-    color_mix: colorMix,
-    grain_size: grainSize,
-    color_tint: colorTint,
-    chrome_effect: chromeEffect,
-    chrome_blue: chromeBlue,
     flip_h: flipH,
     flip_v: flipV,
     persp_h: perspH,

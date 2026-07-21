@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image as PILImage, ImageFilter, ImageOps
 
 from app.config import settings
+from app.services import develop, develop_color, develop_effects, masks
 from app.services.raw import extract_full_preview
 
 
@@ -47,22 +48,12 @@ PREVIEW_MAX_PX = 2048
 
 CropBox = tuple[float, float, float, float]
 
-# The non-destructive slider edits, in the order the frontend editor lists them.
-# Each is an int in -100..100 (0 = neutral). The exact same math runs in the
-# browser for the live preview (see frontend utils/adjustments.ts) - keep the two
-# in sync so what you see while editing matches the saved render.
-ADJUSTMENT_FIELDS = (
-    "exposure",
-    "contrast",
-    "highlights",
-    "shadows",
-    "whites",
-    "blacks",
-    "dehaze",
-    "saturation",
-    "temperature",
-    "tint",
-)
+# The develop adjustments schema (keys, ranges, defaults) and JSON
+# (de)serialisation live in services/develop.py; the extra effect maths
+# (structure, glow, halation, flare, chromatic aberration, 4-parameter vignette,
+# AgX tone mapping) live in services/develop_effects.py. This module wires them
+# into the render pipeline. Everything runs server-side, so the editor preview
+# is pixel-identical to the saved render.
 
 # Rec. 709 luma weights, used for the highlight/shadow masks and saturation.
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
@@ -128,22 +119,22 @@ def apply_distortion(image: PILImage.Image, amount: int) -> PILImage.Image:
 
 
 def _max_inscribed_rect(w: float, h: float, angle_rad: float) -> tuple[float, float]:
-    """Largest axis-aligned rectangle that fits inside a w×h rectangle rotated by
-    angle_rad, so a straightened image can be cropped free of empty corners.
-    Standard result (Coproc / "rotatedRectWithMaxArea")."""
+    """Largest centred rectangle *of the same aspect ratio as w×h* that fits inside
+    a w×h rectangle rotated by angle_rad. Straightening auto-crops to this, so the
+    empty corners vanish WITHOUT changing the image's aspect ratio / format - it
+    just zooms in a touch. (A max-*area* inscribed rect would change the aspect
+    ratio, so the crop/format jumped every time you levelled the horizon.)
+
+    A centred W×H rect (W/H = w/h) rotated back by the angle has an axis-aligned
+    extent of (W·c + H·s) × (W·s + H·c); it fits inside w×h when both are within
+    w and h, which gives H = min(w/(a·c+s), h/(a·s+c)) with a = W/H."""
     if w <= 0 or h <= 0:
         return 0.0, 0.0
-    width_is_longer = w >= h
-    side_long, side_short = (w, h) if width_is_longer else (h, w)
-    sin_a, cos_a = abs(math.sin(angle_rad)), abs(math.cos(angle_rad))
-    if side_short <= 2.0 * sin_a * cos_a * side_long or abs(sin_a - cos_a) < 1e-10:
-        x = 0.5 * side_short
-        wr, hr = (x / sin_a, x / cos_a) if width_is_longer else (x / cos_a, x / sin_a)
-    else:
-        cos_2a = cos_a * cos_a - sin_a * sin_a
-        wr = (w * cos_a - h * sin_a) / cos_2a
-        hr = (h * cos_a - w * sin_a) / cos_2a
-    return wr, hr
+    c = abs(math.cos(angle_rad))
+    s = abs(math.sin(angle_rad))
+    a = w / h  # target aspect (the image's own)
+    hr = min(w / (a * c + s), h / (a * s + c))
+    return a * hr, hr
 
 
 def _perspective_coeffs(dest: list[tuple[float, float]], source: list[tuple[float, float]]) -> list[float]:
@@ -311,12 +302,12 @@ def _hsl_to_rgb(hue: np.ndarray, sat: np.ndarray, lum: np.ndarray) -> np.ndarray
     return np.clip(np.stack([r + m, g + m, b + m], axis=-1), 0.0, 1.0)
 
 
-def _apply_color_mix(arr: np.ndarray, mix: dict, tint: int = 0) -> np.ndarray:
+def _apply_color_mix(arr: np.ndarray, mix: dict, hue_deg: float = 0.0) -> np.ndarray:
     """Shift hue / saturation / luminance of each colour band. `mix` maps a band
-    name to [hue, sat, lum], each -100..100. `tint` rotates *all* hues
-    (-100..100 -> +/-180 deg) to shift the whole palette."""
-    bands = {b: mix.get(b, [0, 0, 0]) for b in COLOR_BANDS}
-    if not tint and not any(any(v) for v in bands.values()):
+    name to [hue, sat, lum], each -100..100. `hue_deg` rotates *all* hues by a
+    number of degrees (-180..180) to shift the whole palette."""
+    bands = {b: list(mix.get(b, [0, 0, 0])) for b in COLOR_BANDS}
+    if not hue_deg and not any(any(v) for v in bands.values()):
         return arr
     hue, sat, lum = _rgb_to_hsl(arr)
     hue_shift = np.zeros_like(hue)
@@ -334,7 +325,7 @@ def _apply_color_mix(arr: np.ndarray, mix: dict, tint: int = 0) -> np.ndarray:
     # +/-180 degrees at the extremes, so a band can be pushed all the way to a
     # different colour (with wrap, any target hue is reachable). The global tint
     # rotates every hue on top of the per-band shifts.
-    hue = (hue + hue_shift * 1.8 + tint / 100.0 * 180.0) % 360.0
+    hue = (hue + hue_shift * 1.8 + hue_deg) % 360.0
     sat0 = sat  # original saturation, before the mixer's own sat shift below
     sat = np.clip(sat * (1.0 + sat_adj / 100.0), 0.0, 1.0)
     rgb = _hsl_to_rgb(hue, sat, lum)
@@ -428,7 +419,7 @@ def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
     return np.clip(arr + (j - arr) * keep[..., None], 0.0, 1.0)
 
 
-def _denoise_image(image: PILImage.Image, amount: int) -> PILImage.Image:
+def _denoise_image(image: PILImage.Image, luma_amt: int, color_amt: int) -> PILImage.Image:
     """Camera-style NR, split by channel in YCrCb. The ugly part of high-ISO
     noise is the low-frequency colour blotching (rainbow mottling), whose blobs
     are far larger than non-local means' 7px patch / 21px search window - no
@@ -438,12 +429,13 @@ def _denoise_image(image: PILImage.Image, amount: int) -> PILImage.Image:
     cleaned luma, which flattens the blotches while colour still snaps to real
     luminance edges. The eye barely resolves chroma detail, so the chroma pass
     can be aggressive without the result looking soft."""
-    f = min(100, max(0, amount)) / 100.0
-    if f <= 0:
+    fl = min(100, max(0, luma_amt)) / 100.0
+    fc = min(100, max(0, color_amt)) / 100.0
+    if fl <= 0 and fc <= 0:
         return image
     ycc = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2YCrCb)
     y = ycc[..., 0]
-    h_luma = 7.0 * f * f
+    h_luma = 7.0 * fl * fl
     if h_luma >= 0.5:
         y_dn = cv2.fastNlMeansDenoising(y, None, h_luma, 7, 21)
         # NR must not re-tone the image ("denoise changes the contrast"): NLM
@@ -463,16 +455,16 @@ def _denoise_image(image: PILImage.Image, amount: int) -> PILImage.Image:
     # resolves chroma anyway (JPEG ships 4:2:0 for the same reason).
     sw, sh = max(1, ww // 4), max(1, hh // 4)
     guide = y.astype(np.float32) / 255.0
-    w = min(1.0, f * 1.5)
+    w = min(1.0, fc * 1.5)
     out = np.empty_like(ycc)
     out[..., 0] = y
     for c in (1, 2):
         small = cv2.resize(ycc[..., c], (sw, sh), interpolation=cv2.INTER_AREA)
-        small = cv2.fastNlMeansDenoising(small, None, 3.0 + f * 12.0, 7, 21)
+        small = cv2.fastNlMeansDenoising(small, None, 3.0 + fc * 12.0, 7, 21)
         # NLM handles the per-pixel/mid-frequency part; the widest mottling is
         # still below its patch scale even at quarter size, so finish with a
         # Gaussian - the guided upsample below restores the colour edges.
-        small = cv2.GaussianBlur(small, (0, 0), 0.5 + f * 5.0)
+        small = cv2.GaussianBlur(small, (0, 0), 0.5 + fc * 5.0)
         up = cv2.resize(small, (ww, hh), interpolation=cv2.INTER_LINEAR)
         # Joint upsampling: a small guided filter against full-res luma snaps
         # the smoothed colour back onto real edges.
@@ -512,17 +504,35 @@ def _apply_chrome(arr: np.ndarray, chrome: int, chrome_blue: int) -> np.ndarray:
     return np.clip(arr * factor[..., None], 0.0, 1.0)
 
 
-def _mist(arr: np.ndarray, amount: int) -> np.ndarray:
-    """Pro-Mist-style diffusion filter: screen-blend a large-radius blur of the
-    image, weighted toward its highlights, over the sharp original - bright
-    areas bloom and halate softly into their surroundings while shadows and
-    midtone detail stay intact. Runs on the *toned* image (after the tonal
-    pass), like a filter in front of the lens capturing the final look."""
+def _mist(arr: np.ndarray, amount: int, light_sources: bool = True) -> np.ndarray:
+    """Pro-Mist-style diffusion / halation, screen-blended over the sharp image.
+
+    `light_sources=True` (the Mist slider): only genuinely bright highlights and
+    light sources bloom. A steep brightness mask isolates them, *that masked light*
+    is blurred so it halates into its surroundings, and it's screen-blended back.
+    Midtones and merely-light areas (skin, pale walls, overcast sky) stay clean, so
+    it reads as light blooming out of the frame rather than a flat global haze.
+
+    `light_sources=False` (the negative-clarity diffusion): the softer
+    whole-highlight glow - weighted toward the brights but not isolated to point
+    sources. Runs on the *toned* image, like a filter in front of the lens."""
     f = min(100, max(0, amount)) / 100.0
     if f <= 0:
         return arr
     long_edge = max(arr.shape[:2])
-    radius = max(8.0, long_edge / 25.0)
+    radius = max(8.0, long_edge / 22.0)
+    if light_sources:
+        luma = np.clip(arr @ _LUMA, 0.0, 1.0)
+        # Steep ramp from ~0.72 (squared): only real light sources / near-clipping
+        # highlights pass; everything dimmer contributes essentially nothing.
+        mask = np.clip((luma - 0.72) / 0.28, 0.0, 1.0) ** 2
+        if float(mask.max()) <= 0.0:
+            return arr
+        bright = (arr * mask[..., None]).astype(np.float32)
+        pil = PILImage.fromarray((np.clip(bright, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
+        glow = np.asarray(pil.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
+        glow = np.clip(glow * (1.15 * f), 0.0, 1.0)
+        return 1.0 - (1.0 - arr) * (1.0 - glow)
     pil = PILImage.fromarray((np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
     blur = np.asarray(pil.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
     luma_b = np.clip(blur @ _LUMA, 0.0, 1.0)
@@ -541,32 +551,35 @@ def _apply_vignette(arr: np.ndarray, amount: int) -> np.ndarray:
 
 
 def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
-    """Apply the tonal/color slider edits to an HxWx3 float array in 0..1.
+    """Apply the tonal/colour adjustments to an HxWx3 float array in 0..1.
 
-    This is the reference pipeline; the browser preview mirrors it exactly. Order
-    matters: exposure -> white balance -> highlights/shadows -> contrast ->
-    saturation. Everything is done in naive sRGB (no linearization) - fast and
-    good enough for a simple editor, and trivially matched in JS.
+    This is the reference pipeline; the server renders it once, so the editor
+    preview is identical to the save. Order: exposure + white balance (+ optional
+    AgX tone map) in linear light -> highlights/shadows -> whites/blacks ->
+    contrast -> colour mixer + global hue -> Fuji chrome -> saturation/vibrance.
     """
-    e = adj.get("exposure", 0) / 100.0
+    ev = float(adj.get("exposure", 0.0) or 0.0) + float(adj.get("brightness", 0.0) or 0.0)
     c = adj.get("contrast", 0) / 100.0
     hi = adj.get("highlights", 0) / 100.0
     sh = adj.get("shadows", 0) / 100.0
     wh = adj.get("whites", 0) / 100.0
     bl = adj.get("blacks", 0) / 100.0
+    vib = adj.get("vibrance", 0) / 100.0
     s = adj.get("saturation", 0) / 100.0
     t = adj.get("temperature", 0) / 100.0
     n = adj.get("tint", 0) / 100.0
+    agx = adj.get("tone_mapper") == "agx"
 
-    # Exposure and white balance are light-transport operations: do them in
-    # linear light (decode sRGB -> multiply -> re-encode) rather than on the
-    # gamma-encoded values. Linear exposure is a true stop multiply with a clean
-    # highlight roll-off; linear WB shifts colour without the midtone darkening
-    # the old naive-sRGB channel scaling produced.
-    if e or t or n:
+    # Exposure, white balance and the optional AgX tone map are light-transport
+    # operations: do them in linear light (decode sRGB -> operate -> re-encode).
+    # Exposure is a true stop multiply (the EV Shift + Exposure sliders sum, each
+    # in stops); linear WB shifts colour without the midtone darkening naive-sRGB
+    # channel scaling produced. AgX is a filmic tone map with graceful highlight
+    # roll-off and desaturation.
+    if ev or t or n or agx:
         lin = _srgb_to_linear(arr)
-        if e:
-            lin = lin * (2.0 ** (2.0 * e))  # +/- two stops at the extremes
+        if ev:
+            lin = lin * (2.0 ** ev)
         if t or n:
             # Channel gains: warm = more red / less blue; +tint = magenta (less
             # green). Renormalised by luma so a neutral grey keeps its brightness
@@ -574,6 +587,8 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
             gain = np.array([1.0 + 0.3 * t, 1.0 - 0.3 * n, 1.0 - 0.3 * t], dtype=np.float32)
             gain = gain / float(_LUMA @ gain)
             lin = lin * gain
+        if agx:
+            lin = develop_effects.agx_tonemap(np.clip(lin, 0.0, None))
         arr = _linear_to_srgb(np.clip(lin, 0.0, 1.0)).astype(np.float32)
     np.clip(arr, 0.0, 1.0, out=arr)
 
@@ -610,23 +625,32 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
         arr = arr + cs * (arr * arr * (3.0 - 2.0 * arr) - arr)
         np.clip(arr, 0.0, 1.0, out=arr)
 
-    mix = adj.get("color_mix")
-    tint = adj.get("color_tint", 0)
-    if mix or tint:
-        arr = _apply_color_mix(np.clip(arr, 0.0, 1.0), mix or {}, tint)
+    # Tone curves (point or parametric per curve_mode) and camera-style colour
+    # calibration shape tone/primaries after the basic tonal controls.
+    arr = develop_color.apply_curves(arr, adj)
+    arr = develop_color.apply_color_calibration(arr, adj.get("color_calibration") or {})
+
+    mix = adj.get("hsl")
+    hue_deg = adj.get("hue", 0)
+    if (mix and any(any(v) for v in mix.values())) or hue_deg:
+        arr = _apply_color_mix(np.clip(arr, 0.0, 1.0), mix or {}, hue_deg)
     arr = _apply_chrome(arr, adj.get("chrome_effect", 0), adj.get("chrome_blue", 0))
+    # 3-way colour grading (shadows/midtones/highlights/global wheels) on the
+    # graded image, after the mixer/chrome.
+    arr = develop_color.apply_color_grading(arr, adj.get("color_grading") or {})
+    # Saturation is a plain linear chroma scale; Vibrance protects already-vivid
+    # colours (and skin tones) by weighting the boost toward muted pixels -
+    # RapidRAW keeps the two as separate controls.
     if s:
         luma = (arr @ _LUMA)[..., None]
-        if s > 0:
-            # Positive saturation behaves as *vibrance*: push muted colours more
-            # than already-saturated ones, so skin tones stay natural and vivid
-            # colours don't smear into a clipped neon block. Chroma (distance
-            # from the grey axis) estimates how saturated each pixel already is.
-            chroma = np.abs(arr - luma).max(axis=-1, keepdims=True)
-            weight = 1.0 - np.clip(chroma * 1.4, 0.0, 1.0) * 0.6
-            arr = luma + (arr - luma) * (1.0 + s * weight)
-        else:
-            arr = luma + (arr - luma) * (1.0 + s)
+        arr = luma + (arr - luma) * (1.0 + s)
+    if vib:
+        luma = (arr @ _LUMA)[..., None]
+        # Chroma (distance from the grey axis) estimates how saturated a pixel
+        # already is; muted pixels get most of the push.
+        chroma = np.abs(arr - luma).max(axis=-1, keepdims=True)
+        weight = 1.0 - np.clip(chroma * 1.4, 0.0, 1.0) * 0.6
+        arr = luma + (arr - luma) * (1.0 + vib * weight)
 
     return np.clip(arr, 0.0, 1.0)
 
@@ -653,7 +677,7 @@ def _grain_field(h: int, w: int, particle_px: float) -> np.ndarray:
     return (np.asarray(field, dtype=np.float32) - 128.0) / 90.0
 
 
-def _apply_grain(arr: np.ndarray, amount: int, size: int = 0) -> np.ndarray:
+def _apply_grain(arr: np.ndarray, amount: int, size: int = 0, roughness: int = 50) -> np.ndarray:
     """Fuji-style analog film grain.
 
     Two layers: a fine base texture plus a coarser "clump" layer approximating
@@ -672,13 +696,13 @@ def _apply_grain(arr: np.ndarray, amount: int, size: int = 0) -> np.ndarray:
     size_f = size / 100.0
     long_edge = max(h, w)
 
-    # Particle sizes relative to resolution. The size slider's low end is
-    # near-pixel salt (crisp fine-ISO texture), growing to chunky pushed-film
-    # clumps at the top. The low end sits noticeably below the old tuning
-    # (0.35 base / 0.7px floor): at size 0 the grain should be right at the
-    # edge of resolvability, not already visibly speckled.
-    p_fine = max(0.55, (long_edge / 1500.0) * (0.22 + 1.38 * size_f))
-    p_clump = p_fine * (2.2 + size_f * 2.8)
+    # Particle sizes relative to resolution, sized so the grain stays *visible*
+    # after the editor/lightbox downscale the render to fit the screen: at 0.6px
+    # (the old floor) fine grain averaged away on screen and read as "grain does
+    # nothing". A ~1.4px floor keeps a clear fine-ISO texture; size grows it to
+    # chunky pushed-film clumps at the top.
+    p_fine = max(1.4, (long_edge / 1500.0) * (1.1 + 2.4 * size_f))
+    p_clump = p_fine * (2.0 + size_f * 2.6)
 
     fine = _grain_field(h, w, p_fine)
     clump = _grain_field(h, w, p_clump)
@@ -688,18 +712,34 @@ def _apply_grain(arr: np.ndarray, amount: int, size: int = 0) -> np.ndarray:
     fine_weight = 1.0 - 0.45 * size_f
     clump_weight = 0.08 + 0.67 * size_f
     luma = np.clip(arr @ _LUMA, 0.0, 1.0)
-    midtone = np.power(4.0 * luma * (1.0 - luma), 0.75)
-    combined = (fine * fine_weight + clump * clump_weight) * midtone
-    noise = combined * (amount / 100.0) * 0.14
+    # Paper-grain tone weighting: present across the WHOLE tonal range - whites and
+    # near-blacks included, like the tooth of the paper - only gently stronger in
+    # the midtones. The old film-style bell (4*luma*(1-luma)) faded grain to zero in
+    # the whites/blacks, so bright areas came out unnaturally clean. In pure white
+    # the positive half of the noise clips, so grain there reads as fine darkening
+    # speckle - exactly how grain sits on white paper.
+    tone_w = 0.6 + 0.4 * np.power(4.0 * luma * (1.0 - luma), 0.5)
+    combined = (fine * fine_weight + clump * clump_weight) * tone_w
+    # Roughness scales grain amplitude/contrast (RapidRAW's Grain Roughness):
+    # smoother and finer at low values, coarse and pronounced near the top.
+    rough = min(100, max(0, roughness)) / 100.0
+    noise = combined * (amount / 100.0) * 0.18 * (0.6 + 0.85 * rough)
     return np.clip(arr + noise[..., None], 0.0, 1.0)
 
 
-def _unsharp(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
+def _unsharp(arr: np.ndarray, radius: float, amount: float, threshold: float = 0.0) -> np.ndarray:
     """Unsharp mask: out = in + amount*(in - blur(in)). Positive amount sharpens,
-    negative softens. Small radius = sharpness."""
+    negative softens. Small radius = sharpness. `threshold` (0..80, in 0..255 luma
+    units) gates sharpening to real edges: high-pass detail weaker than the
+    threshold (sensor noise, film grain, smooth skin) is attenuated so only
+    genuine edges get crisper - RapidRAW's sharpening Threshold."""
     pil = PILImage.fromarray((np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
     blur = np.asarray(pil.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255.0
-    return np.clip(arr + amount * (arr - blur), 0.0, 1.0)
+    hp = arr - blur
+    if threshold > 0 and amount > 0:
+        thr = threshold / 255.0
+        hp = hp * np.clip(np.abs(hp) / thr, 0.0, 1.0)
+    return np.clip(arr + amount * hp, 0.0, 1.0)
 
 
 def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
@@ -719,39 +759,93 @@ def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
     slightly toward darkening - the deepened, punchy character of the
     in-camera rendering rather than an HDR-ish glow.
 
-    Negative: softens that same band. The diffusion glow that completes Fuji's
-    negative-clarity look (reviews compare it to a Pro-Mist filter) is layered
-    on in apply_adjustments via _mist."""
+    Negative: the Fuji negative-clarity *softening* look - reduces the
+    local-contrast band and then blends toward an edge-preserving smooth so fine
+    detail (wrinkles, pores, skin/fabric texture) goes soft and less visible while
+    genuine edges stay sharp. The diffusion glow that completes the look (reviews
+    compare it to a Pro-Mist filter) is layered on in apply_adjustments via
+    _mist."""
     src = np.clip(arr, 0.0, 1.0).astype(np.float32)
-    smooth = cv2.GaussianBlur(src, (0, 0), max(0.8, radius / 40.0))
-    base = cv2.ximgproc.guidedFilter(smooth, smooth, int(max(4, radius)), 0.01)
-    band = smooth - base
-    luma = arr @ _LUMA
-    mask = np.power(1.0 - np.abs(2.0 * luma - 1.0), 1.5)[..., None]  # peaks at midtones
-    delta = amount * band * mask
     if amount > 0:
+        # Positive clarity: midtone local contrast (definition / "bite").
+        smooth = cv2.GaussianBlur(src, (0, 0), max(0.8, radius / 40.0))
+        base = cv2.ximgproc.guidedFilter(smooth, smooth, int(max(4, radius)), 0.01)
+        band = smooth - base
+        luma = arr @ _LUMA
+        mask = np.power(1.0 - np.abs(2.0 * luma - 1.0), 1.5)[..., None]  # peaks at midtones
+        delta = amount * band * mask
         delta -= 0.15 * amount * np.abs(band) * mask
-    return np.clip(arr + delta, 0.0, 1.0)
-
-
-def _has_edits(adj: dict) -> bool:
-    if any(adj.get(k, 0) for k in ADJUSTMENT_FIELDS):
-        return True
-    for k in ("vignette", "grain", "denoise", "clarity", "sharpness", "color_tint", "chrome_effect", "chrome_blue", "mist"):
-        if adj.get(k, 0):
-            return True
-    mix = adj.get("color_mix") or {}
-    return any(any(v) for v in mix.values())
+        return np.clip(arr + delta, 0.0, 1.0)
+    # Negative clarity: a pure fine-detail *softener* (the Fuji look), NOT a
+    # contrast control. Blend the image toward an edge-preserving guided-filter
+    # smooth so low-contrast fine texture (wrinkles, pores, skin) goes soft and
+    # less visible while genuine edges (face outline, eyes) stay crisp. Overall and
+    # local contrast are left untouched - it reads as softening, not as reduced
+    # contrast. The diffusion glow that completes the look is layered on via _mist.
+    fine = cv2.ximgproc.guidedFilter(src, src, int(max(2.0, radius / 6.0)), 7e-3)
+    blend = min(0.9, abs(amount) * 0.8)
+    return np.clip(arr * (1.0 - blend) + fine * blend, 0.0, 1.0)
 
 
 def _grain_pil(image: PILImage.Image, adj: dict) -> PILImage.Image:
     """Apply the film-grain pass to a PIL image at its *current* resolution."""
-    g = adj.get("grain", 0)
+    g = adj.get("grain_amount", 0)
     if g <= 0:
         return image
     arr = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
-    arr = _apply_grain(arr, g, adj.get("grain_size", 0))
+    arr = _apply_grain(arr, g, adj.get("grain_size", 25), adj.get("grain_roughness", 50))
     return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
+
+
+def _apply_local_adjustments(arr: np.ndarray, madj: dict) -> np.ndarray:
+    """Render a mask's local adjustments on a copy of the (already globally-toned)
+    array: the spatial detail passes it can use (clarity/structure/sharpness/
+    dehaze) plus the tonal/colour pass. Whole-image effects (grain, vignette,
+    glow, mist) are global-only and never applied per mask."""
+    full = develop.normalize(madj)
+    long_edge = max(arr.shape[:2])
+    cl = full.get("clarity", 0)
+    if cl:
+        arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
+    st = full.get("structure", 0)
+    if st:
+        arr = develop_effects.apply_structure(arr, st)
+    sp = full.get("sharpness", 0)
+    if sp:
+        arr = _unsharp(
+            arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
+            threshold=full.get("sharpness_threshold", 0),
+        )
+    dh = full.get("dehaze", 0)
+    if dh:
+        arr = _dehaze(arr, dh)
+    return _adjust_array(arr, full)
+
+
+def apply_masks(arr: np.ndarray, adj: dict) -> np.ndarray:
+    """Blend each mask's local adjustments into the image, weighted by the mask's
+    generated field * opacity (inverted if the mask is inverted). Masks with no
+    region or no non-default adjustment are skipped."""
+    mask_list = adj.get("masks") or []
+    if not mask_list:
+        return arr
+    for mask in mask_list:
+        if not mask.get("visible", True) or not mask.get("sub_masks"):
+            continue
+        madj = mask.get("adjustments") or {}
+        if develop.is_neutral(madj):
+            continue
+        field = masks.generate_mask_field(mask, arr)
+        m = field * (mask.get("opacity", 100) / 100.0)
+        if mask.get("invert"):
+            m = 1.0 - m
+        m = np.clip(m, 0.0, 1.0)
+        if float(m.max()) <= 0.0:
+            continue
+        adjusted = _apply_local_adjustments(arr.copy(), madj)
+        m3 = m[..., None]
+        arr = arr * (1.0 - m3) + adjusted * m3
+    return np.clip(arr, 0.0, 1.0)
 
 
 def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = True) -> PILImage.Image:
@@ -762,45 +856,73 @@ def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = Tr
     *after* downscaling to the output size (see generate_derivatives): grain
     baked at full resolution gets averaged away by the LANCZOS downscale to the
     preview/thumbnail, so what you saw in the editor vanished after saving."""
-    if not _has_edits(adj):
+    if develop.is_neutral(adj):
         return image
     long_edge = max(image.size)
-    # Denoise first (spatial): chroma smoothing + gentle luma median in YCbCr.
-    dn = adj.get("denoise", 0)
-    if dn > 0:
-        image = _denoise_image(image.convert("RGB"), dn)
+    # Denoise first (spatial), split into Luminance + Colour like RapidRAW.
+    ln = adj.get("luma_noise_reduction", 0)
+    cn = adj.get("color_noise_reduction", 0)
+    if ln > 0 or cn > 0:
+        image = _denoise_image(image.convert("RGB"), ln, cn)
     rgb = image.convert("RGB")
     arr = np.asarray(rgb, dtype=np.float32) / 255.0
     # Detail (spatial), before the tonal pass: clarity = large-radius local
-    # contrast, sharpness = small-radius edge enhancement.
+    # contrast, structure = medium-radius local contrast, sharpness = small-radius
+    # edge enhancement.
     cl = adj.get("clarity", 0)
     if cl:
         arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
         if cl < 0:
             # Fuji's negative clarity doesn't just flatten - it diffuses like a
             # Pro-Mist filter (soft halation around brights). Layer a gentle
-            # mist on top of the band softening; strength follows the slider.
-            arr = _mist(arr, min(50, int(-cl * 0.35)))
+            # whole-highlight glow (not the light-source-only Mist) on top of the
+            # band softening; strength follows the slider.
+            arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False)
+    st = adj.get("structure", 0)
+    if st:
+        arr = develop_effects.apply_structure(arr, st)
     sp = adj.get("sharpness", 0)
     if sp:
         # +sharpen / -soften share the unsharp formula (negative amount blends
-        # toward the blur). Radius is capped: Fuji-style sharpening is a fine,
-        # tight edge enhancement - an uncapped radius grew to ~4px on full-res
-        # renders, which produced visible halos.
-        arr = _unsharp(arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2)
+        # toward the blur). Radius is capped so sharpening stays a fine, tight
+        # edge enhancement; Threshold gates it away from noise/smooth areas.
+        arr = _unsharp(
+            arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
+            threshold=adj.get("sharpness_threshold", 0),
+        )
+    ca_rc = adj.get("chromatic_aberration_red_cyan", 0)
+    ca_by = adj.get("chromatic_aberration_blue_yellow", 0)
+    if ca_rc or ca_by:
+        arr = develop_effects.apply_chromatic_aberration(arr, ca_rc, ca_by)
     # Dehaze is spatial too (transmission map from the dark channel), so it runs
     # here rather than in the per-pixel tonal pass.
     dh = adj.get("dehaze", 0)
     if dh:
         arr = _dehaze(arr, dh)
     arr = _adjust_array(arr, adj)
-    # Mist blooms the *toned* image, so it runs after the tonal pass.
+    # Local (per-region) mask adjustments layer on the globally-toned image,
+    # before the global finishing effects (bloom/vignette/grain).
+    arr = apply_masks(arr, adj)
+    # Highlight-bloom / diffusion effects run on the *toned* image (like a filter
+    # in front of the lens), after the tonal pass.
     if adj.get("mist", 0) > 0:
         arr = _mist(arr, adj["mist"])
-    if adj.get("vignette", 0):
-        arr = _apply_vignette(arr, adj["vignette"])
-    if include_grain and adj.get("grain", 0) > 0:
-        arr = _apply_grain(arr, adj["grain"], adj.get("grain_size", 0))
+    if adj.get("glow_amount", 0) > 0:
+        arr = develop_effects.apply_glow(arr, adj["glow_amount"])
+    if adj.get("halation_amount", 0) > 0:
+        arr = develop_effects.apply_halation(arr, adj["halation_amount"])
+    if adj.get("flare_amount", 0) > 0:
+        arr = develop_effects.apply_flare(arr, adj["flare_amount"])
+    if adj.get("vignette_amount", 0):
+        arr = develop_effects.apply_vignette(
+            arr,
+            adj["vignette_amount"],
+            adj.get("vignette_midpoint", 50),
+            adj.get("vignette_roundness", 0),
+            adj.get("vignette_feather", 50),
+        )
+    if include_grain and adj.get("grain_amount", 0) > 0:
+        arr = _apply_grain(arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50))
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     return PILImage.fromarray(out, "RGB")
 
@@ -1059,26 +1181,10 @@ def generate_full(image: "Image") -> Path:
 
 
 def adjustments_from_image(image: "Image") -> dict:
-    """The full tonal/color edit dict (sliders + colour mixer + vignette) read off
-    an Image row, ready for apply_adjustments / generate_derivatives."""
-    adj = {name: getattr(image, f"edit_{name}", 0) or 0 for name in ADJUSTMENT_FIELDS}
-    adj["vignette"] = getattr(image, "edit_vignette", 0) or 0
-    adj["grain"] = getattr(image, "edit_grain", 0) or 0
-    adj["grain_size"] = getattr(image, "edit_grain_size", 0) or 0
-    adj["denoise"] = getattr(image, "edit_denoise", 0) or 0
-    adj["clarity"] = getattr(image, "edit_clarity", 0) or 0
-    adj["sharpness"] = getattr(image, "edit_sharpness", 0) or 0
-    adj["color_tint"] = getattr(image, "edit_color_tint", 0) or 0
-    adj["chrome_effect"] = getattr(image, "edit_chrome_effect", 0) or 0
-    adj["chrome_blue"] = getattr(image, "edit_chrome_blue", 0) or 0
-    adj["mist"] = getattr(image, "edit_mist", 0) or 0
-    raw = getattr(image, "edit_color_mix", None)
-    if raw:
-        try:
-            adj["color_mix"] = json.loads(raw)
-        except (ValueError, TypeError):
-            adj["color_mix"] = None
-    return adj
+    """The full develop adjustments dict for an Image row (parsed from the
+    edit_adjustments JSON and normalized to defaults), ready for
+    apply_adjustments / generate_derivatives."""
+    return develop.loads(getattr(image, "edit_adjustments", None))
 
 
 def regenerate_for_image(image: "Image") -> None:

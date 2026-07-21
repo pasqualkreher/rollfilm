@@ -4,22 +4,42 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
 import {
-  ADJUSTMENT_DEFS,
   adjustmentsFromImage,
   BAND_SWATCH,
   COLOR_BANDS,
+  defaultAdjustments,
+  editsAreNeutral,
   editsFromImage,
-  isNeutral,
-  mixIsNeutral,
+  MASK_ADJUST_FIELDS,
+  MASK_TYPES,
   neutralEdits,
-  neutralMix,
-  NEUTRAL,
+  newMask,
+  normalizeAdjustments,
+  SCALAR_SPEC,
+  SECTIONS,
+  TONE_MAPPERS,
   type Adjustments,
   type ColorBand,
-  type ColorMix,
+  type ColorCalibration,
+  type ColorGrading,
+  type CurvePoint,
+  type FieldDef,
+  type GradeWheel,
   type ImageEdits,
+  type MaskDef,
+  type ParamCurveChannel,
+  type ParametricCurve,
+  type PointCurves,
+  type ScalarDef,
+  type ScalarKey,
+  type SubMask,
+  type SubMaskParams,
+  type SubMaskType,
 } from "../utils/adjustments";
 import { loadPresets, savePreset, deletePreset, type EditPreset } from "../utils/presets";
+import { CurveEditor } from "./CurveEditor";
+import { ColorWheel } from "./ColorWheel";
+import { MaskOverlay } from "./MaskOverlay";
 
 interface Props {
   image: ImageOut;
@@ -36,8 +56,6 @@ interface DragRect {
 // The live preview is rendered *server-side* by the exact save pipeline
 // (POST /images/:id/editor-preview), debounced per edit change - one
 // implementation of every effect, preview always identical to the save.
-const LIGHT_KEYS: (keyof Adjustments)[] = ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "dehaze"];
-const COLOR_KEYS: (keyof Adjustments)[] = ["temperature", "tint", "saturation"];
 type GridOverlay = "none" | "thirds" | "grid" | "diagonal";
 const GRID_OPTIONS: { value: GridOverlay; label: string }[] = [
   { value: "none", label: "No grid" },
@@ -49,6 +67,45 @@ const MIX_CHANNELS: [number, string][] = [
   [0, "Hue"],
   [1, "Saturation"],
   [2, "Luminance"],
+];
+
+// Curves: the four channels share the same key set across point + parametric
+// curves. Each carries a display colour for its graph line / dot.
+type CurveChannel = keyof PointCurves;
+const CURVE_CHANNELS: { key: CurveChannel; label: string; color: string }[] = [
+  { key: "luma", label: "Luma", color: "var(--text)" },
+  { key: "red", label: "Red", color: "#e5484d" },
+  { key: "green", label: "Green", color: "#46a758" },
+  { key: "blue", label: "Blue", color: "#3a6df0" },
+];
+
+// Colour-grading wheels: the four tonal ranges (blending/balance are separate
+// scalars on ColorGrading).
+type GradeRange = "shadows" | "midtones" | "highlights" | "global";
+const GRADE_RANGES: { key: GradeRange; label: string }[] = [
+  { key: "shadows", label: "Shadows" },
+  { key: "midtones", label: "Midtones" },
+  { key: "highlights", label: "Highlights" },
+  { key: "global", label: "Global" },
+];
+
+// Mask editing on the canvas: minimum radial radius (fraction), the grab radius
+// for overlay handles (screen px, converted to a fraction tolerance per axis),
+// and how far above the ellipse top the rotation handle sits (fraction).
+const MASK_MIN_R = 0.02;
+const MASK_HANDLE_PX = 13;
+const MASK_ROT_OFF = 0.07;
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+// Colour calibration: seven -100..100 sliders.
+const CALIB_FIELDS: { key: keyof ColorCalibration; label: string }[] = [
+  { key: "shadows_tint", label: "Shadows Tint" },
+  { key: "red_hue", label: "Red Primary Hue" },
+  { key: "red_saturation", label: "Red Primary Saturation" },
+  { key: "green_hue", label: "Green Primary Hue" },
+  { key: "green_saturation", label: "Green Primary Saturation" },
+  { key: "blue_hue", label: "Blue Primary Hue" },
+  { key: "blue_saturation", label: "Blue Primary Saturation" },
 ];
 
 // Crop aspect-ratio presets. `ratio` is width/height; "orig" locks to the
@@ -99,10 +156,6 @@ function constrainDragToK(r: DragRect, k: number): DragRect {
   return { x0: r.x0, y0: r.y0, x1: r.x0 + sx * adx, y1: r.y0 + sy * ady };
 }
 
-function labelFor(key: keyof Adjustments): string {
-  return ADJUSTMENT_DEFS.find((d) => d.key === key)!.label;
-}
-
 function normalizeRect(r: DragRect): CropBox {
   return {
     x: Math.min(r.x0, r.x1),
@@ -145,6 +198,7 @@ function Slider({
   max = 100,
   step,
   format,
+  resetValue = 0,
 }: {
   label: string;
   value: number;
@@ -154,6 +208,9 @@ function Slider({
   step?: number;
   // Optional value formatter (e.g. exposure rendered in EV stops).
   format?: (v: number) => string;
+  // Value a double-click resets to - the field's real default, which isn't
+  // always 0 (grain size, vignette midpoint/feather, sharpness threshold).
+  resetValue?: number;
 }) {
   return (
     <label className="editor-slider">
@@ -168,55 +225,49 @@ function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        onDoubleClick={() => onChange(0)}
+        onDoubleClick={() => onChange(resetValue)}
         title="Double-click to reset"
       />
     </label>
   );
 }
 
-export function PhotoEditor({ image, onClose }: Props) {
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const stageMainRef = useRef<HTMLDivElement | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const panDragRef = useRef<{ x: number; y: number } | null>(null);
-  const histRef = useRef<HTMLCanvasElement | null>(null);
-  // Server preview plumbing: abort a stale in-flight render when a newer edit
-  // state supersedes it, and ignore late responses by sequence number.
-  const abortRef = useRef<AbortController | null>(null);
-  const fullAbortRef = useRef<AbortController | null>(null);
-  const renderSeq = useRef(0);
+// Compute an RGB histogram (3 x 256 bins) from a rendered preview, sampling
+// ~120k pixels regardless of size.
+function computeHistBins(img: ImageData): Uint32Array[] {
+  const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+  const d = img.data;
+  const step = Math.max(1, Math.floor(d.length / 4 / 120000)) * 4;
+  for (let i = 0; i < d.length; i += step) {
+    bins[0][d[i]]++;
+    bins[1][d[i + 1]]++;
+    bins[2][d[i + 2]]++;
+  }
+  return bins;
+}
 
-  // Live RGB histogram of the rendered preview (Lightroom/RapidRAW-style),
-  // redrawn on every preview render. Screen-blended channel fills; sqrt scaling
-  // so shadows/highlights detail stays readable next to big midtone peaks.
-  function drawHistogram(img: ImageData) {
-    const hc = histRef.current;
+// A live RGB histogram (Lightroom/RapidRAW-style): screen-blended channel fills,
+// sqrt scaling so shadow/highlight detail stays readable next to midtone peaks.
+// Driven by `bins` from state so it survives being unmounted/remounted as
+// accordion groups open and close - it redraws on mount AND when the bins change
+// (the old version only drew on preview render, so a collapsed group's histogram
+// was blank until the next edit).
+function Histogram({ bins }: { bins: Uint32Array[] | null }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const hc = ref.current;
     if (!hc) return;
     const ctx = hc.getContext("2d")!;
     const W = hc.width;
     const H = hc.height;
-    const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
-    const d = img.data;
-    // Sample ~120k pixels regardless of preview size.
-    const step = Math.max(1, Math.floor(d.length / 4 / 120000)) * 4;
-    for (let i = 0; i < d.length; i += step) {
-      bins[0][d[i]]++;
-      bins[1][d[i + 1]]++;
-      bins[2][d[i + 2]]++;
-    }
-    // Scale by the max over the interior bins so clipped-end spikes don't
-    // flatten the rest of the curve (the ends still draw, just capped).
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#141416";
+    ctx.fillRect(0, 0, W, H);
+    if (!bins) return;
     let max = 1;
     for (let ch = 0; ch < 3; ch++) {
       for (let v = 1; v < 255; v++) if (bins[ch][v] > max) max = bins[ch][v];
     }
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = "#141416";
-    ctx.fillRect(0, 0, W, H);
     ctx.globalCompositeOperation = "screen";
     const colors = ["#c33f3f", "#3f9c4a", "#3f63c3"];
     for (let ch = 0; ch < 3; ch++) {
@@ -232,7 +283,30 @@ export function PhotoEditor({ image, onClose }: Props) {
       ctx.fill();
     }
     ctx.globalCompositeOperation = "source-over";
-  }
+  }, [bins]);
+  return <canvas ref={ref} className="editor-histogram" width={256} height={64} />;
+}
+
+export function PhotoEditor({ image, onClose }: Props) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageMainRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const panDragRef = useRef<{ x: number; y: number } | null>(null);
+  // RGB histogram bins of the latest preview; the <Histogram> components (in the
+  // Basic and Curves groups) draw from this and redraw when it changes or on mount.
+  const [histBins, setHistBins] = useState<Uint32Array[] | null>(null);
+  // Server preview plumbing: abort a stale in-flight render when a newer edit
+  // state supersedes it, and ignore late responses by sequence number.
+  const abortRef = useRef<AbortController | null>(null);
+  const fullAbortRef = useRef<AbortController | null>(null);
+  const renderSeq = useRef(0);
+
+  // The RGB histogram is drawn by the module-level <Histogram> component from the
+  // bins computed after each preview render (see setHistBins below); it appears in
+  // both the Basic and Curves groups and survives accordion open/close.
 
   // The canvas's on-screen size must not follow its bitmap size (the default
   // for a canvas): the fast preview and the full-resolution refinement that
@@ -266,19 +340,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [straighten, setStraighten] = useState(saved.straighten);
   const [perspH, setPerspH] = useState(saved.perspH);
   const [perspV, setPerspV] = useState(saved.perspV);
-  const [colorMix, setColorMix] = useState<ColorMix>(saved.colorMix);
-  const [vignette, setVignette] = useState(saved.vignette);
   const [distortion, setDistortion] = useState(saved.distortion);
-  const [grain, setGrain] = useState(saved.grain);
-  const [grainSize, setGrainSize] = useState(saved.grainSize);
-  const [denoise, setDenoise] = useState(saved.denoise);
-  const [clarity, setClarity] = useState(saved.clarity);
-  const [sharpness, setSharpness] = useState(saved.sharpness);
-  const [colorTint, setColorTint] = useState(saved.colorTint);
-  const [chromeEffect, setChromeEffect] = useState(saved.chromeEffect);
-  const [chromeBlue, setChromeBlue] = useState(saved.chromeBlue);
-  const [mistAmount, setMistAmount] = useState(saved.mist);
+  // Which colour band the HSL mixer edits (the values live in adj.hsl).
   const [band, setBand] = useState<ColorBand>("red");
+  // Which channel the curves editor targets (point + parametric share it).
+  const [curveChannel, setCurveChannel] = useState<CurveChannel>("luma");
   const [gridOverlay, setGridOverlay] = useState<GridOverlay>("none");
   const [presets, setPresets] = useState<Record<string, EditPreset>>(() => loadPresets());
   const [selectedPreset, setSelectedPreset] = useState("");
@@ -292,9 +358,39 @@ export function PhotoEditor({ image, onClose }: Props) {
   // from an edge/corner ("nw".."e"). Held in a ref so the move handler reads the
   // box as it was when the gesture began, not a stale render value.
   const cropAction = useRef<{ mode: string; start: { x: number; y: number }; orig: CropBox } | null>(null);
+  // Active on-canvas mask gesture (radial/linear drag or brush stroke). Held in
+  // a ref so the move handler reads the anchor as it was at pointer-down, and so
+  // dragging doesn't hinge on a state update landing first.
+  // Active on-canvas mask gesture: which mask, what the pointer-down hit
+  // ("create" | "move" | resize handle "e".."sw" | "rotate" for radial;
+  // "create" | "start" | "end" | "line" for linear; "paint" for brush), the
+  // pointer-down fraction, and a snapshot of the shape's params at grab time so
+  // move/resize stay relative to the grab, not the live (changing) value.
+  const maskGesture = useRef<{
+    type: SubMaskType;
+    maskId: string;
+    mode: string;
+    start: { x: number; y: number };
+    orig: Record<string, number>;
+  } | null>(null);
+  const brushLast = useRef<{ x: number; y: number } | null>(null);
   const [cropCursor, setCropCursor] = useState("crosshair");
   // Crop aspect-ratio lock (key into ASPECT_OPTIONS; "free" = unconstrained).
   const [aspectKey, setAspectKey] = useState("free");
+  // Masks (local adjustments). One mask is selected at a time; drawing a
+  // radial/linear/brush sub-mask happens on the canvas in mask-draw mode
+  // (mutually exclusive with crop mode). The colour eyedropper samples the next
+  // canvas click for a colour sub-mask's target.
+  const [selectedMaskId, setSelectedMaskId] = useState<string | null>(null);
+  const [maskDrawMode, setMaskDrawMode] = useState(false);
+  const [colorPickMode, setColorPickMode] = useState(false);
+  // Live cursor over the canvas while editing a mask (reflects the handle/body
+  // under the pointer), and the pointer position for the brush-size ring.
+  const [maskCursor, setMaskCursor] = useState("crosshair");
+  const [maskCursorPos, setMaskCursorPos] = useState<{ x: number; y: number } | null>(null);
+  // Which control-panel accordion group is expanded. Only one is open at a time
+  // ("" = all collapsed); purely presentational grouping of the existing panel.
+  const [openGroup, setOpenGroup] = useState<string>("basic");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -307,6 +403,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const MAX_ZOOM = 6;
+  const MIN_ZOOM = 0.2; // allow zooming out below fit
   const zoomed = scale > 1.001;
 
   function resetZoom() {
@@ -314,34 +411,28 @@ export function PhotoEditor({ image, onClose }: Props) {
     setPan({ x: 0, y: 0 });
   }
 
-  const edits: ImageEdits = {
-    ...adj,
-    rotation,
-    crop,
-    flipH,
-    flipV,
-    straighten,
-    perspH,
-    perspV,
-    colorMix,
-    vignette,
-    distortion,
-    grain,
-    grainSize,
-    denoise,
-    clarity,
-    sharpness,
-    colorTint,
-    chromeEffect,
-    chromeBlue,
-    mist: mistAmount,
-  };
+  // Clamp the pan so the view stays *inside the image* - you can never pan past
+  // the image edges into the empty frame. The max offset is how far the scaled
+  // image overhangs the viewport; it's 0 when the image fits or is zoomed out, so
+  // it stays centred then.
+  function clampPan(p: { x: number; y: number }, s: number) {
+    const cv = canvasRef.current;
+    const stage = stageMainRef.current;
+    if (!cv || !stage) return p;
+    const dispW = parseFloat(cv.style.width) || 0;
+    const dispH = parseFloat(cv.style.height) || 0;
+    const maxX = Math.max(0, (dispW * s - stage.clientWidth) / 2);
+    const maxY = Math.max(0, (dispH * s - stage.clientHeight) / 2);
+    return { x: Math.max(-maxX, Math.min(maxX, p.x)), y: Math.max(-maxY, Math.min(maxY, p.y)) };
+  }
+
+  const edits: ImageEdits = { rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion, adjustments: adj };
 
   // What the preview should actually show right now: in crop mode the full
   // (uncropped) frame, in compare mode the untouched original with only the
   // geometry kept so the frame doesn't jump.
   const previewEdits: ImageEdits = compare
-    ? neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV)
+    ? neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion)
     : { ...edits, crop: cropMode ? null : crop };
   const previewKey = JSON.stringify(previewEdits);
 
@@ -365,7 +456,7 @@ export function PhotoEditor({ image, onClose }: Props) {
       fitCanvasToStage();
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
-      if (withHistogram) drawHistogram(ctx.getImageData(0, 0, bmp.width, bmp.height));
+      if (withHistogram) setHistBins(computeHistBins(ctx.getImageData(0, 0, bmp.width, bmp.height)));
     };
     const timer = setTimeout(
       async () => {
@@ -434,11 +525,11 @@ export function PhotoEditor({ image, onClose }: Props) {
       const dy = e.clientY - (rect.top + rect.height / 2);
       setScale((prev) => {
         const factor = Math.exp(-e.deltaY * 0.0015);
-        const next = Math.min(MAX_ZOOM, Math.max(1, prev * factor));
+        const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prev * factor));
         setPan((pp) =>
           next <= 1.001
             ? { x: 0, y: 0 }
-            : { x: dx - (dx - pp.x) * (next / prev), y: dy - (dy - pp.y) * (next / prev) }
+            : clampPan({ x: dx - (dx - pp.x) * (next / prev), y: dy - (dy - pp.y) * (next / prev) }, next)
         );
         return next;
       });
@@ -448,39 +539,15 @@ export function PhotoEditor({ image, onClose }: Props) {
   }, []);
 
   function applyPreset(p: EditPreset) {
-    setAdj({ ...NEUTRAL, ...p.adj });
-    setColorMix(p.colorMix ? { ...neutralMix(), ...p.colorMix } : neutralMix());
-    setVignette(p.vignette ?? 0);
-    setDistortion(p.distortion ?? 0);
-    setGrain(p.grain ?? 0);
-    setGrainSize(p.grainSize ?? 0);
-    setDenoise(p.denoise ?? 0);
-    setClarity(p.clarity ?? 0);
-    setSharpness(p.sharpness ?? 0);
-    setColorTint(p.colorTint ?? 0);
-    setChromeEffect(p.chromeEffect ?? 0);
-    setChromeBlue(p.chromeBlue ?? 0);
-    setMistAmount(p.mist ?? 0);
+    // Normalise so presets saved under an older/looser shape still land on a
+    // complete, in-range Adjustments object. Geometry is untouched by presets.
+    setAdj(normalizeAdjustments(p.adjustments));
   }
 
   function confirmSavePreset() {
     const name = presetName.trim();
     if (!name) return;
-    savePreset(name, {
-      adj,
-      colorMix,
-      vignette,
-      distortion,
-      grain,
-      grainSize,
-      denoise,
-      clarity,
-      sharpness,
-      colorTint,
-      chromeEffect,
-      chromeBlue,
-      mist: mistAmount,
-    });
+    savePreset(name, { adjustments: adj });
     setPresets(loadPresets());
     setSelectedPreset(name);
     setNamingPreset(false);
@@ -522,12 +589,15 @@ export function PhotoEditor({ image, onClose }: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      if (cropMode) setCropMode(false);
+      // Peel back the active on-canvas mode first, then close the editor.
+      if (colorPickMode) setColorPickMode(false);
+      else if (maskDrawMode) setMaskDrawMode(false);
+      else if (cropMode) setCropMode(false);
       else if (!busy) onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy, cropMode]);
+  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode]);
 
   function fractionAt(clientX: number, clientY: number) {
     const box = canvasRef.current!.getBoundingClientRect();
@@ -640,37 +710,505 @@ export function PhotoEditor({ image, onClose }: Props) {
   }
 
   function setBandChannel(ch: number, v: number) {
-    setColorMix((m) => {
-      const next: ColorMix = { ...m, [band]: [...m[band]] as [number, number, number] };
-      next[band][ch] = v;
+    setAdj((a) => {
+      const hsl = { ...a.hsl, [band]: [...a.hsl[band]] as [number, number, number] };
+      hsl[band][ch] = v;
+      return { ...a, hsl };
+    });
+  }
+
+  // ---- Nested writers for the Phase-2 groups. All immutable, so the preview
+  // (which re-renders on any adj change) picks each edit up live.
+  function setPointCurve(ch: CurveChannel, pts: CurvePoint[]) {
+    setAdj((a) => {
+      const point_curves: PointCurves = { ...a.point_curves, [ch]: pts };
+      return { ...a, point_curves };
+    });
+  }
+  function setParamCurve(ch: CurveChannel, patch: Partial<ParamCurveChannel>) {
+    setAdj((a) => {
+      const parametric_curve: ParametricCurve = {
+        ...a.parametric_curve,
+        [ch]: { ...a.parametric_curve[ch], ...patch },
+      };
+      return { ...a, parametric_curve };
+    });
+  }
+  function resetCurve() {
+    if (adj.curve_mode === "point") {
+      setPointCurve(curveChannel, [
+        [0, 0],
+        [255, 255],
+      ]);
+    } else {
+      setParamCurve(curveChannel, { highlights: 0, lights: 0, darks: 0, shadows: 0, white_level: 0, black_level: 0 });
+    }
+  }
+  function setGrade(range: GradeRange, patch: Partial<GradeWheel>) {
+    setAdj((a) => {
+      const color_grading: ColorGrading = {
+        ...a.color_grading,
+        [range]: { ...a.color_grading[range], ...patch },
+      };
+      return { ...a, color_grading };
+    });
+  }
+  function setGradeScalar(key: "blending" | "balance", v: number) {
+    setAdj((a) => {
+      const color_grading: ColorGrading = { ...a.color_grading, [key]: v };
+      return { ...a, color_grading };
+    });
+  }
+  function setCalib(key: keyof ColorCalibration, v: number) {
+    setAdj((a) => {
+      const color_calibration: ColorCalibration = { ...a.color_calibration, [key]: v };
+      return { ...a, color_calibration };
+    });
+  }
+
+  // ---- Mask writers. All immutable: map over adj.masks and rebuild only the
+  // changed mask (and, for sub-mask/param edits, its index-0 sub-mask) so the
+  // object identity changes and the server preview re-renders live.
+  function updateMask(id: string, patch: Partial<MaskDef>) {
+    setAdj((a) => ({ ...a, masks: a.masks.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
+  }
+  function updateSubMaskParams(id: string, patch: SubMaskParams) {
+    setAdj((a) => ({
+      ...a,
+      masks: a.masks.map((m) => {
+        if (m.id !== id) return m;
+        const sub = m.sub_masks[0];
+        if (!sub) return m;
+        const nextSub: SubMask = { ...sub, parameters: { ...sub.parameters, ...patch } };
+        return { ...m, sub_masks: [nextSub, ...m.sub_masks.slice(1)] };
+      }),
+    }));
+  }
+  function updateMaskAdjust(id: string, key: ScalarKey, v: number) {
+    setAdj((a) => ({
+      ...a,
+      masks: a.masks.map((m) => (m.id === id ? { ...m, adjustments: { ...m.adjustments, [key]: v } } : m)),
+    }));
+  }
+  // Append one brush point [x, y, size] to the index-0 sub-mask's strokes.
+  function appendStroke(id: string, x: number, y: number, size: number) {
+    appendStrokes(id, [[x, y, size]]);
+  }
+  // Append several stroke points at once (a fast drag interpolates a run of
+  // evenly-spaced points) in a single immutable update.
+  function appendStrokes(id: string, pts: number[][]) {
+    if (pts.length === 0) return;
+    setAdj((a) => ({
+      ...a,
+      masks: a.masks.map((m) => {
+        if (m.id !== id) return m;
+        const sub = m.sub_masks[0];
+        if (!sub || sub.type !== "brush") return m;
+        const strokes = Array.isArray(sub.parameters.strokes) ? (sub.parameters.strokes as number[][]) : [];
+        const nextSub: SubMask = { ...sub, parameters: { ...sub.parameters, strokes: [...strokes, ...pts] } };
+        return { ...m, sub_masks: [nextSub, ...m.sub_masks.slice(1)] };
+      }),
+    }));
+  }
+
+  // Read a numeric sub-mask parameter (parameters hold number | number[][]).
+  function subNum(sub: SubMask, key: string, def: number): number {
+    const v = sub.parameters[key];
+    return typeof v === "number" ? v : def;
+  }
+  const isSpatial = (t: SubMaskType | undefined) => t === "radial" || t === "linear" || t === "brush";
+
+  function addMask(type: SubMaskType) {
+    const mask = newMask(type);
+    setAdj((a) => ({ ...a, masks: [...a.masks, mask] }));
+    setSelectedMaskId(mask.id);
+    setColorPickMode(false);
+    setOpenGroup("masks");
+    if (isSpatial(type)) {
+      // Radial/linear/brush are drawn on the image - drop into draw mode (and
+      // out of crop mode, which shares the canvas pointer).
+      setCropMode(false);
+      setMaskDrawMode(true);
+    } else {
+      setMaskDrawMode(false);
+    }
+  }
+  function deleteMask(id: string) {
+    setAdj((a) => ({ ...a, masks: a.masks.filter((m) => m.id !== id) }));
+    if (selectedMaskId === id) {
+      setSelectedMaskId(null);
+      setMaskDrawMode(false);
+      setColorPickMode(false);
+    }
+  }
+  // Selecting a mask ends any active draw/pick so the pointer doesn't keep
+  // editing the previously-selected mask; re-enter per the new mask's type.
+  function selectMask(id: string) {
+    setSelectedMaskId(id);
+    setMaskDrawMode(false);
+    setColorPickMode(false);
+    setOpenGroup("masks");
+  }
+  function toggleMaskDraw() {
+    setMaskDrawMode((on) => {
+      const next = !on;
+      if (next) {
+        setCropMode(false);
+        setColorPickMode(false);
+      }
       return next;
     });
+  }
+  function toggleColorPick() {
+    setColorPickMode((on) => {
+      const next = !on;
+      if (next) {
+        setCropMode(false);
+        setMaskDrawMode(false);
+      }
+      return next;
+    });
+  }
+
+  // Eyedropper: read the rendered pixel under the pointer off the canvas and set
+  // the selected colour mask's target_r/g/b (channels 0..1). Same-origin JPEG so
+  // getImageData isn't tainted (the histogram reads the canvas the same way).
+  function pickColorAt(clientX: number, clientY: number) {
+    const canvas = canvasRef.current;
+    const mask = adj.masks.find((m) => m.id === selectedMaskId);
+    const sub = mask?.sub_masks[0];
+    if (!canvas || !mask || !sub || sub.type !== "color") return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const f = fractionAt(clientX, clientY);
+    const px = Math.min(canvas.width - 1, Math.max(0, Math.floor(f.x * canvas.width)));
+    const py = Math.min(canvas.height - 1, Math.max(0, Math.floor(f.y * canvas.height)));
+    const d = ctx.getImageData(px, py, 1, 1).data;
+    updateSubMaskParams(mask.id, { target_r: d[0] / 255, target_g: d[1] / 255, target_b: d[2] / 255 });
+  }
+
+  // ---- Mask hit-testing (all in 0..1 fraction space). Handle grab tolerance is
+  // a screen-pixel radius converted to a per-axis fraction so it stays a fixed
+  // on-screen size on non-square images.
+  type Pt = { x: number; y: number };
+  const radialParams = (sub: SubMask) => ({
+    center_x: subNum(sub, "center_x", 0.5),
+    center_y: subNum(sub, "center_y", 0.5),
+    radius_x: subNum(sub, "radius_x", 0.25),
+    radius_y: subNum(sub, "radius_y", 0.25),
+    rotation: subNum(sub, "rotation", 0),
+  });
+  const linearParams = (sub: SubMask) => ({
+    start_x: subNum(sub, "start_x", 0.5),
+    start_y: subNum(sub, "start_y", 0.2),
+    end_x: subNum(sub, "end_x", 0.5),
+    end_y: subNum(sub, "end_y", 0.8),
+  });
+  function maskTol() {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const w = rect?.width || 1;
+    const h = rect?.height || 1;
+    return { tolX: MASK_HANDLE_PX / w, tolY: MASK_HANDLE_PX / h };
+  }
+  const nearHandle = (p: Pt, h: Pt, tolX: number, tolY: number) => {
+    const dx = (p.x - h.x) / tolX;
+    const dy = (p.y - h.y) / tolY;
+    return dx * dx + dy * dy <= 1;
+  };
+  // Radial handle positions (centre, 4 edges, 4 corners, rotation) rotated about
+  // the centre by `rotation` - matches the SVG rotate() in MaskOverlay exactly.
+  function radialHandlePts(prm: ReturnType<typeof radialParams>) {
+    const { center_x: cx, center_y: cy, radius_x: rx, radius_y: ry, rotation } = prm;
+    const rad = (rotation * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const R = (ox: number, oy: number): Pt => ({ x: cx + ox * cos - oy * sin, y: cy + ox * sin + oy * cos });
+    return {
+      move: { x: cx, y: cy } as Pt,
+      e: R(rx, 0), w: R(-rx, 0), n: R(0, -ry), s: R(0, ry),
+      ne: R(rx, -ry), nw: R(-rx, -ry), se: R(rx, ry), sw: R(-rx, ry),
+      rotate: R(0, -(ry + MASK_ROT_OFF)),
+    };
+  }
+  function insideRadial(p: Pt, prm: ReturnType<typeof radialParams>) {
+    const { center_x: cx, center_y: cy, radius_x: rx, radius_y: ry, rotation } = prm;
+    const rad = (rotation * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const lx = dx * cos + dy * sin; // project onto the rotated x-axis
+    const ly = -dx * sin + dy * cos; // and the rotated y-axis
+    return (lx / rx) ** 2 + (ly / ry) ** 2 <= 1;
+  }
+  // Which part of the mask the pointer is over: handles first, then body, then a
+  // fresh draw only when clearly outside.
+  function radialHitTest(p: Pt, prm: ReturnType<typeof radialParams>): string {
+    const { tolX, tolY } = maskTol();
+    const H = radialHandlePts(prm);
+    if (nearHandle(p, H.rotate, tolX, tolY)) return "rotate";
+    for (const k of ["ne", "nw", "se", "sw"] as const) if (nearHandle(p, H[k], tolX, tolY)) return k;
+    for (const k of ["e", "w", "n", "s"] as const) if (nearHandle(p, H[k], tolX, tolY)) return k;
+    if (nearHandle(p, H.move, tolX, tolY)) return "move";
+    if (insideRadial(p, prm)) return "move";
+    return "create";
+  }
+  // A graduated filter: the gradient runs along start->end; the iso-lines are
+  // perpendicular to it through start / midpoint / end. Handles: rotation (off
+  // the centre line), the two band edges (at start / end), and the centre (at
+  // M). Grabbing a whole iso-line works too. Distance to an iso-line (whose
+  // direction is perpendicular to the axis) is just |offset . axisUnit|.
+  function linearHitTest(p: Pt, prm: ReturnType<typeof linearParams>): string {
+    const { tolX, tolY } = maskTol();
+    const tol = (tolX + tolY) / 2;
+    const { start_x: sx, start_y: sy, end_x: ex, end_y: ey } = prm;
+    const mx = (sx + ex) / 2;
+    const my = (sy + ey) / 2;
+    let ux = ex - sx;
+    let uy = ey - sy;
+    const len = Math.hypot(ux, uy) || 1;
+    ux /= len;
+    uy /= len;
+    if (nearHandle(p, { x: sx, y: sy }, tolX, tolY)) return "start";
+    if (nearHandle(p, { x: ex, y: ey }, tolX, tolY)) return "end";
+    if (nearHandle(p, { x: mx, y: my }, tolX, tolY)) return "line";
+    const distIso = (qx: number, qy: number) => Math.abs((p.x - qx) * ux + (p.y - qy) * uy);
+    if (distIso(mx, my) <= tol) return "line";
+    if (distIso(sx, sy) <= tol) return "start";
+    if (distIso(ex, ey) <= tol) return "end";
+    return "create";
+  }
+  function maskCursorFor(type: SubMaskType, mode: string): string {
+    if (type === "brush") return "none"; // the brush ring stands in for the cursor
+    switch (mode) {
+      case "move":
+      case "line":
+        return "move";
+      case "start":
+      case "end":
+      case "rotate":
+        return "grab";
+      case "e":
+      case "w":
+        return "ew-resize";
+      case "n":
+      case "s":
+        return "ns-resize";
+      case "ne":
+      case "sw":
+        return "nesw-resize";
+      case "nw":
+      case "se":
+        return "nwse-resize";
+      default:
+        return "crosshair"; // create
+    }
+  }
+  // Hover (no active gesture): reflect the handle/body under the pointer in the
+  // cursor, and track the pointer for the brush-size ring.
+  function updateMaskHover(p: Pt) {
+    const sub = adj.masks.find((m) => m.id === selectedMaskId)?.sub_masks[0];
+    if (!sub || !isSpatial(sub.type)) {
+      setMaskCursorPos(null);
+      setMaskCursor("crosshair");
+      return;
+    }
+    if (sub.type === "brush") {
+      setMaskCursorPos(p);
+      setMaskCursor("none");
+      return;
+    }
+    setMaskCursorPos(null);
+    const mode = sub.type === "radial" ? radialHitTest(p, radialParams(sub)) : linearHitTest(p, linearParams(sub));
+    setMaskCursor(maskCursorFor(sub.type, mode));
+  }
+
+  // Pointer-down: hit-test the existing shape and begin the matching gesture
+  // (move / resize / rotate / translate / paint), or a fresh draw when outside.
+  function maskPointerDown(clientX: number, clientY: number) {
+    const mask = adj.masks.find((m) => m.id === selectedMaskId);
+    const sub = mask?.sub_masks[0];
+    if (!mask || !sub || !isSpatial(sub.type)) return;
+    const p = fractionAt(clientX, clientY);
+    if (sub.type === "radial") {
+      const prm = radialParams(sub);
+      const mode = radialHitTest(p, prm);
+      maskGesture.current = { type: "radial", maskId: mask.id, mode, start: p, orig: prm };
+      setMaskCursor(maskCursorFor("radial", mode));
+      if (mode === "create") {
+        updateSubMaskParams(mask.id, { center_x: p.x, center_y: p.y, radius_x: MASK_MIN_R, radius_y: MASK_MIN_R, rotation: 0 });
+      }
+    } else if (sub.type === "linear") {
+      const prm = linearParams(sub);
+      const mode = linearHitTest(p, prm);
+      maskGesture.current = { type: "linear", maskId: mask.id, mode, start: p, orig: prm };
+      setMaskCursor(maskCursorFor("linear", mode));
+      if (mode === "create") {
+        updateSubMaskParams(mask.id, { start_x: p.x, start_y: p.y, end_x: p.x, end_y: p.y });
+      }
+    } else {
+      maskGesture.current = { type: "brush", maskId: mask.id, mode: "paint", start: p, orig: {} };
+      brushLast.current = p;
+      setMaskCursorPos(p);
+      appendStroke(mask.id, p.x, p.y, subNum(sub, "size", 0.06));
+    }
+  }
+  function maskPointerMove(clientX: number, clientY: number) {
+    const p = fractionAt(clientX, clientY);
+    const g = maskGesture.current;
+    if (!g) {
+      updateMaskHover(p);
+      return;
+    }
+    if (g.type === "radial") {
+      const o = g.orig;
+      if (g.mode === "create") {
+        updateSubMaskParams(g.maskId, {
+          center_x: g.start.x,
+          center_y: g.start.y,
+          radius_x: Math.max(MASK_MIN_R, Math.abs(p.x - g.start.x)),
+          radius_y: Math.max(MASK_MIN_R, Math.abs(p.y - g.start.y)),
+        });
+      } else if (g.mode === "move") {
+        updateSubMaskParams(g.maskId, {
+          center_x: clamp01(o.center_x + (p.x - g.start.x)),
+          center_y: clamp01(o.center_y + (p.y - g.start.y)),
+        });
+      } else if (g.mode === "rotate") {
+        const deg = (Math.atan2(p.x - o.center_x, -(p.y - o.center_y)) * 180) / Math.PI;
+        updateSubMaskParams(g.maskId, { rotation: Math.round(deg) });
+      } else {
+        // Resize from an edge/corner: project the pointer onto the ellipse's
+        // (possibly rotated) axes and set the half-extent(s) - symmetric about
+        // the fixed centre.
+        const rad = (o.rotation * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const dx = p.x - o.center_x;
+        const dy = p.y - o.center_y;
+        const patch: SubMaskParams = {};
+        if (g.mode.includes("e") || g.mode.includes("w")) patch.radius_x = Math.max(MASK_MIN_R, Math.abs(dx * cos + dy * sin));
+        if (g.mode.includes("n") || g.mode.includes("s")) patch.radius_y = Math.max(MASK_MIN_R, Math.abs(-dx * sin + dy * cos));
+        updateSubMaskParams(g.maskId, patch);
+      }
+    } else if (g.type === "linear") {
+      const o = g.orig;
+      if (g.mode === "line") {
+        // Centre line / handle: translate the whole gradient, clamping the delta
+        // so neither endpoint leaves [0,1].
+        const clampD = (d: number, a: number, b: number) => Math.max(Math.max(-a, -b), Math.min(Math.min(1 - a, 1 - b), d));
+        const ddx = clampD(p.x - g.start.x, o.start_x, o.end_x);
+        const ddy = clampD(p.y - g.start.y, o.start_y, o.end_y);
+        updateSubMaskParams(g.maskId, {
+          start_x: o.start_x + ddx,
+          start_y: o.start_y + ddy,
+          end_x: o.end_x + ddx,
+          end_y: o.end_y + ddy,
+        });
+      } else if (g.mode === "start") {
+        // Band edge: drag `start` freely (end fixed). Its distance from `end` sets
+        // the width (= softness) and its angle sets the gradient's rotation - so no
+        // separate rotation handle is needed.
+        updateSubMaskParams(g.maskId, { start_x: clamp01(p.x), start_y: clamp01(p.y) });
+      } else if (g.mode === "end") {
+        updateSubMaskParams(g.maskId, { end_x: clamp01(p.x), end_y: clamp01(p.y) });
+      } else {
+        updateSubMaskParams(g.maskId, { start_x: g.start.x, start_y: g.start.y, end_x: p.x, end_y: p.y });
+      }
+    } else {
+      // Brush: interpolate evenly-spaced points along the segment since the last
+      // stamp so a fast drag paints a continuous, gap-free stroke.
+      const sub = adj.masks.find((m) => m.id === g.maskId)?.sub_masks[0];
+      const size = sub ? subNum(sub, "size", 0.06) : 0.06;
+      setMaskCursorPos(p);
+      const step = Math.max(0.003, size * 0.5);
+      const last = brushLast.current ?? p;
+      const dist = Math.hypot(p.x - last.x, p.y - last.y);
+      if (dist >= step) {
+        const n = Math.floor(dist / step);
+        const pts: number[][] = [];
+        for (let i = 1; i <= n; i++) {
+          const t = (i * step) / dist;
+          pts.push([last.x + (p.x - last.x) * t, last.y + (p.y - last.y) * t, size]);
+        }
+        appendStrokes(g.maskId, pts);
+        const lastPt = pts[pts.length - 1];
+        brushLast.current = { x: lastPt[0], y: lastPt[1] };
+      }
+    }
+  }
+  function endMaskGesture() {
+    maskGesture.current = null;
+    brushLast.current = null;
+  }
+
+  // ---- Panel accordion. Groups collapse to a single open one at a time: each
+  // header toggles openGroup, and each body renders only when it's the open id.
+  const sectionFields = (title: string): FieldDef[] => SECTIONS.find((s) => s.title === title)?.fields ?? [];
+  // A group of scalar sliders bound straight to adj[key] (Basic/Color/Details/
+  // Effects control blocks - unchanged behaviour, just factored out).
+  function scalarSliders(fields: FieldDef[]) {
+    return (
+      <div className="editor-sliders">
+        {fields.map((field) => {
+          // Narrow to ScalarDef: indexing SCALAR_SPEC by a union key gives a
+          // union of value shapes; the union is assignable to ScalarDef.
+          const spec: ScalarDef = SCALAR_SPEC[field.key];
+          return (
+            <Slider
+              key={field.key}
+              label={field.label}
+              value={adj[field.key]}
+              min={spec.min}
+              max={spec.max}
+              step={spec.step}
+              resetValue={spec.def}
+              format={field.format}
+              onChange={(v) => setAdj((a) => ({ ...a, [field.key]: v }))}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+  // A clickable group header (editor-section-title look) + a caret that rotates
+  // when this group is open. Clicking an open group collapses it ("").
+  function accordionHeader(id: string, title: string) {
+    const open = openGroup === id;
+    const toggle = () => setOpenGroup(open ? "" : id);
+    return (
+      <div
+        className={`editor-accordion-header${open ? " open" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+      >
+        <span>{title}</span>
+        <span className={`editor-accordion-caret${open ? " open" : ""}`} aria-hidden>
+          ›
+        </span>
+      </div>
+    );
   }
 
   const drawn = drag ? normalizeRect(drag) : null;
   const hasDrawnCrop = drawn && drawn.width > 0.02 && drawn.height > 0.02;
   const dirty = JSON.stringify(edits) !== JSON.stringify(saved);
-  const allNeutral =
-    isNeutral(adj) &&
-    rotation === 0 &&
-    !flipH &&
-    !flipV &&
-    straighten === 0 &&
-    perspH === 0 &&
-    perspV === 0 &&
-    !crop &&
-    mixIsNeutral(colorMix) &&
-    vignette === 0 &&
-    distortion === 0 &&
-    grain === 0 &&
-    grainSize === 0 &&
-    denoise === 0 &&
-    clarity === 0 &&
-    sharpness === 0 &&
-    colorTint === 0 &&
-    chromeEffect === 0 &&
-    chromeBlue === 0 &&
-    mistAmount === 0;
+  const allNeutral = editsAreNeutral(edits);
+
+  // The selected mask (if any), its index-0 sub-mask, and - when that sub-mask
+  // is a drawable type - the sub used for the on-canvas overlay.
+  const selectedMask = selectedMaskId ? adj.masks.find((m) => m.id === selectedMaskId) ?? null : null;
+  const selSub = selectedMask?.sub_masks[0] ?? null;
+  const selSpatialSub = selSub && isSpatial(selSub.type) ? selSub : null;
+  const maskLabel = (m: MaskDef) => MASK_TYPES.find((t) => t.value === m.sub_masks[0]?.type)?.label ?? "Mask";
 
   return (
     <div className="editor-overlay">
@@ -696,9 +1234,30 @@ export function PhotoEditor({ image, onClose }: Props) {
             className="editor-canvas"
             style={{
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-              cursor: cropMode ? cropCursor : zoomed ? (panDragRef.current ? "grabbing" : "grab") : "default",
+              cursor: colorPickMode
+                ? "crosshair"
+                : maskDrawMode
+                  ? maskCursor
+                  : cropMode
+                    ? cropCursor
+                    : zoomed
+                      ? panDragRef.current
+                        ? "grabbing"
+                        : "grab"
+                      : "default",
             }}
             onMouseDown={(e) => {
+              // Mask-draw / eyedropper take over the canvas pointer, ahead of
+              // crop and zoom-pan, and consume the event.
+              if (colorPickMode) {
+                pickColorAt(e.clientX, e.clientY);
+                setColorPickMode(false);
+                return;
+              }
+              if (maskDrawMode) {
+                maskPointerDown(e.clientX, e.clientY);
+                return;
+              }
               if (cropMode) {
                 const p = fractionAt(e.clientX, e.clientY);
                 const rect = canvasRef.current!.getBoundingClientRect();
@@ -718,6 +1277,10 @@ export function PhotoEditor({ image, onClose }: Props) {
               }
             }}
             onMouseMove={(e) => {
+              if (maskDrawMode) {
+                maskPointerMove(e.clientX, e.clientY);
+                return;
+              }
               if (cropMode) {
                 const p = fractionAt(e.clientX, e.clientY);
                 const act = cropAction.current;
@@ -740,18 +1303,21 @@ export function PhotoEditor({ image, onClose }: Props) {
                   setCropCursor(cropCursorFor(cropHitTest(p, drawn, 14 / rect.width, 14 / rect.height)));
                 }
               } else if (panDragRef.current) {
-                setPan({ x: e.clientX - panDragRef.current.x, y: e.clientY - panDragRef.current.y });
+                setPan(clampPan({ x: e.clientX - panDragRef.current.x, y: e.clientY - panDragRef.current.y }, scale));
               }
             }}
             onMouseUp={() => {
               setDragging(false);
               cropAction.current = null;
               panDragRef.current = null;
+              endMaskGesture();
             }}
             onMouseLeave={() => {
               setDragging(false);
               cropAction.current = null;
               panDragRef.current = null;
+              endMaskGesture();
+              setMaskCursorPos(null);
             }}
             onDoubleClick={(e) => {
               if (cropMode) return;
@@ -766,7 +1332,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                 const cv = canvasRef.current!;
                 const target = Math.min(MAX_ZOOM, Math.max(2, cv.width / rect.width));
                 setScale(target);
-                setPan({ x: dx - dx * target, y: dy - dy * target });
+                setPan(clampPan({ x: dx - dx * target, y: dy - dy * target }, target));
               }
             }}
           />
@@ -797,6 +1363,22 @@ export function PhotoEditor({ image, onClose }: Props) {
             </div>
           )}
           {!zoomed && <GridLines type={gridOverlay} />}
+          {/* Selected-mask guide + editable handles, transformed to track the
+              canvas under zoom/pan. aspect keeps the round handles round on
+              non-square images; cursor draws the brush-size ring. */}
+          {selSpatialSub && (
+            <MaskOverlay
+              sub={selSpatialSub}
+              handles={maskDrawMode}
+              aspect={canvasRef.current && canvasRef.current.height ? canvasRef.current.width / canvasRef.current.height : 1}
+              cursor={
+                selSpatialSub.type === "brush" && maskDrawMode && maskCursorPos
+                  ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(selSpatialSub, "size", 0.06) }
+                  : null
+              }
+              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: "center center" }}
+            />
+          )}
         </div>
         </div>
         {!loading && !error && (
@@ -832,6 +1414,10 @@ export function PhotoEditor({ image, onClose }: Props) {
           Non-destructive. Save updates this photo; Save copy makes a new edited photo.
         </p>
 
+        {/* Transform: composition grid, rotate/flip/crop, straighten + tilt. */}
+        {accordionHeader("transform", "Transform")}
+        {openGroup === "transform" && (
+          <div className="editor-accordion-body">
         {/* Composition grid overlay - its own row above rotate/crop. */}
         <div className="editor-geometry">
           <select
@@ -878,8 +1464,14 @@ export function PhotoEditor({ image, onClose }: Props) {
             onClick={() => {
               setCropMode((on) => {
                 const next = !on;
-                if (next && crop) setDrag({ x0: crop.x, y0: crop.y, x1: crop.x + crop.width, y1: crop.y + crop.height });
-                else if (next) setDrag(null);
+                if (next) {
+                  // Crop and mask-draw share the canvas pointer - only one at a time.
+                  setMaskDrawMode(false);
+                  setColorPickMode(false);
+                  setOpenGroup("transform");
+                  if (crop) setDrag({ x0: crop.x, y0: crop.y, x1: crop.x + crop.width, y1: crop.y + crop.height });
+                  else setDrag(null);
+                }
                 return next;
               });
             }}
@@ -924,77 +1516,401 @@ export function PhotoEditor({ image, onClose }: Props) {
           />
           <Slider label="Tilt horizontal" value={perspH} onChange={setPerspH} />
           <Slider label="Tilt vertical" value={perspV} onChange={setPerspV} />
-        </div>
-
-        {/* Light */}
-        <div className="editor-section-title">Light</div>
-        {/* Live RGB histogram of the current preview, right with the tonal
-            controls it responds to. */}
-        <canvas ref={histRef} className="editor-histogram" width={256} height={64} />
-        <div className="editor-sliders">
-          {LIGHT_KEYS.map((k) => (
-            <Slider
-              key={k}
-              label={labelFor(k)}
-              value={adj[k]}
-              onChange={(v) => setAdj((a) => ({ ...a, [k]: v }))}
-              // Exposure maps to +/-2 stops; show the actual EV so the number
-              // means something photographic.
-              format={k === "exposure" ? (v) => `${v > 0 ? "+" : ""}${((v / 100) * 2).toFixed(2)} EV` : undefined}
-            />
-          ))}
-        </div>
-
-        {/* Color */}
-        <div className="editor-section-title">Color</div>
-        <div className="editor-sliders">
-          {COLOR_KEYS.map((k) => (
-            <Slider key={k} label={labelFor(k)} value={adj[k]} onChange={(v) => setAdj((a) => ({ ...a, [k]: v }))} />
-          ))}
-          {/* Fuji in-camera colour depth options. */}
-          <Slider label="Color chrome" value={chromeEffect} onChange={setChromeEffect} min={0} />
-          <Slider label="Chrome blue" value={chromeBlue} onChange={setChromeBlue} min={0} />
-        </div>
-
-        {/* Color mixer */}
-        <div className="editor-section-title">Color mixer</div>
-        <div className="mixer-bands">
-          {COLOR_BANDS.map((b) => (
-            <button
-              key={b}
-              className={`mixer-band${band === b ? " active" : ""}${!colorMix[b].every((v) => v === 0) ? " edited" : ""}`}
-              style={{ background: BAND_SWATCH[b] }}
-              title={b}
-              onClick={() => setBand(b)}
-            />
-          ))}
-        </div>
-        <div className="editor-sliders">
-          {MIX_CHANNELS.map(([ch, lbl]) => (
-            <Slider key={ch} label={lbl} value={colorMix[band][ch]} onChange={(v) => setBandChannel(ch, v)} />
-          ))}
-        </div>
-
-        {/* Detail */}
-        <div className="editor-section-title">Detail</div>
-        <div className="editor-sliders">
-          <Slider label="Clarity" value={clarity} onChange={setClarity} />
-          <Slider label="Sharpness" value={sharpness} onChange={setSharpness} />
-          <Slider label="Denoise" value={denoise} onChange={setDenoise} min={0} />
-        </div>
-
-        {/* Lens / effects */}
-        <div className="editor-section-title">Lens &amp; effects</div>
-        <div className="editor-sliders">
           <Slider label="Distortion" value={distortion} onChange={setDistortion} />
-          <Slider label="Vignette" value={vignette} onChange={setVignette} />
-          <Slider label="Mist" value={mistAmount} onChange={setMistAmount} min={0} />
-          <Slider label="Grain" value={grain} onChange={setGrain} min={0} />
-          <Slider label="Grain size" value={grainSize} onChange={setGrainSize} min={0} />
         </div>
+
+          </div>
+        )}
+
+        {/* Basic: tone mapper + histogram + the Basic sliders. */}
+        {accordionHeader("basic", "Basic")}
+        {openGroup === "basic" && (
+          <div className="editor-accordion-body">
+            {/* Base transfer curve the tonal sliders ride on. */}
+            <select
+              className="editor-grid-select"
+              value={adj.tone_mapper}
+              onChange={(e) => setAdj((a) => ({ ...a, tone_mapper: e.target.value as Adjustments["tone_mapper"] }))}
+              title="Tone mapper"
+            >
+              {TONE_MAPPERS.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+            {/* Live RGB histogram of the current preview, with the tonal controls. */}
+            <Histogram bins={histBins} />
+            {scalarSliders(sectionFields("Basic"))}
+          </div>
+        )}
+
+        {/* Curves: channel tabs + Point/Parametric toggle + editor/sliders. */}
+        {accordionHeader("curves", "Curves")}
+        {openGroup === "curves" && (
+          <div className="editor-accordion-body">
+            {/* Histogram of the current preview, to shape the tone curve against. */}
+            <Histogram bins={histBins} />
+            <div className="curve-tabs">
+              {CURVE_CHANNELS.map((c) => (
+                <button
+                  key={c.key}
+                  className={`btn btn-sm curve-tab${curveChannel === c.key ? " primary" : ""}`}
+                  onClick={() => setCurveChannel(c.key)}
+                >
+                  <span className="curve-tab-dot" style={{ background: c.color }} />
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <div className="curve-toolbar">
+              <span className="segmented">
+                <button
+                  className={adj.curve_mode === "point" ? "active" : ""}
+                  onClick={() => setAdj((a) => ({ ...a, curve_mode: "point" }))}
+                >
+                  Point
+                </button>
+                <button
+                  className={adj.curve_mode === "parametric" ? "active" : ""}
+                  onClick={() => setAdj((a) => ({ ...a, curve_mode: "parametric" }))}
+                >
+                  Parametric
+                </button>
+              </span>
+              <button className="btn btn-sm ghost" onClick={resetCurve} title="Reset the active channel">
+                Reset curve
+              </button>
+            </div>
+            {adj.curve_mode === "point" ? (
+              <CurveEditor
+                points={adj.point_curves[curveChannel]}
+                color={CURVE_CHANNELS.find((c) => c.key === curveChannel)!.color}
+                onChange={(pts) => setPointCurve(curveChannel, pts)}
+              />
+            ) : (
+              <div className="editor-sliders">
+                <Slider
+                  label="Highlights"
+                  value={adj.parametric_curve[curveChannel].highlights}
+                  onChange={(v) => setParamCurve(curveChannel, { highlights: v })}
+                />
+                <Slider
+                  label="Lights"
+                  value={adj.parametric_curve[curveChannel].lights}
+                  onChange={(v) => setParamCurve(curveChannel, { lights: v })}
+                />
+                <Slider
+                  label="Darks"
+                  value={adj.parametric_curve[curveChannel].darks}
+                  onChange={(v) => setParamCurve(curveChannel, { darks: v })}
+                />
+                <Slider
+                  label="Shadows"
+                  value={adj.parametric_curve[curveChannel].shadows}
+                  onChange={(v) => setParamCurve(curveChannel, { shadows: v })}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Color: Color sliders + HSL mixer + Color Grading + Calibration. */}
+        {accordionHeader("color", "Color")}
+        {openGroup === "color" && (
+          <div className="editor-accordion-body">
+            {scalarSliders(sectionFields("Color"))}
+
+            {/* HSL colour mixer: per-band Hue / Saturation / Luminance (adj.hsl). */}
+            <div className="editor-section-title">Color mixer</div>
+            <div className="mixer-bands">
+              {COLOR_BANDS.map((b) => (
+                <button
+                  key={b}
+                  className={`mixer-band${band === b ? " active" : ""}${!adj.hsl[b].every((v) => v === 0) ? " edited" : ""}`}
+                  style={{ background: BAND_SWATCH[b] }}
+                  title={b}
+                  onClick={() => setBand(b)}
+                />
+              ))}
+            </div>
+            <div className="editor-sliders">
+              {MIX_CHANNELS.map(([ch, lbl]) => (
+                <Slider key={ch} label={lbl} value={adj.hsl[band][ch]} onChange={(v) => setBandChannel(ch, v)} />
+              ))}
+            </div>
+
+            {/* Colour grading: four hue/saturation wheels + blending / balance. */}
+            <div className="editor-section-title">Color Grading</div>
+            <div className="grade-wheels">
+              {GRADE_RANGES.map((r) => (
+                <div key={r.key} className="grade-wheel-cell">
+                  <ColorWheel
+                    label={r.label}
+                    hue={adj.color_grading[r.key].hue}
+                    saturation={adj.color_grading[r.key].saturation}
+                    onChange={(v) => setGrade(r.key, v)}
+                    onReset={() => setGrade(r.key, { hue: 0, saturation: 0 })}
+                  />
+                  <Slider
+                    label="Luminance"
+                    value={adj.color_grading[r.key].luminance}
+                    onChange={(v) => setGrade(r.key, { luminance: v })}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="editor-sliders">
+              <Slider
+                label="Blending"
+                value={adj.color_grading.blending}
+                min={0}
+                max={100}
+                resetValue={50}
+                onChange={(v) => setGradeScalar("blending", v)}
+              />
+              <Slider label="Balance" value={adj.color_grading.balance} onChange={(v) => setGradeScalar("balance", v)} />
+            </div>
+
+            {/* Colour calibration: seven primary hue/saturation + shadow tint. */}
+            <div className="editor-section-title">Calibration</div>
+            <div className="editor-sliders">
+              {CALIB_FIELDS.map((f) => (
+                <Slider
+                  key={f.key}
+                  label={f.label}
+                  value={adj.color_calibration[f.key]}
+                  onChange={(v) => setCalib(f.key, v)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Details */}
+        {accordionHeader("details", "Details")}
+        {openGroup === "details" && <div className="editor-accordion-body">{scalarSliders(sectionFields("Details"))}</div>}
+
+        {/* Effects */}
+        {accordionHeader("effects", "Effects")}
+        {openGroup === "effects" && <div className="editor-accordion-body">{scalarSliders(sectionFields("Effects"))}</div>}
+
+        {/* Masks (local / per-region adjustments). Everything writes into
+            adj.masks, which rides along in previewEdits, so the server preview
+            re-renders on every change. */}
+        {accordionHeader("masks", "Masks")}
+        {openGroup === "masks" && (
+          <div className="editor-accordion-body">
+        <div className="mask-list">
+          {adj.masks.length === 0 && <p className="mask-empty">No masks yet — add one to adjust part of the photo.</p>}
+          {adj.masks.map((m) => (
+            <div
+              key={m.id}
+              className={`mask-row${selectedMaskId === m.id ? " active" : ""}`}
+              onClick={() => selectMask(m.id)}
+            >
+              <button
+                className="mask-eye"
+                title={m.visible ? "Hide mask" : "Show mask"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  updateMask(m.id, { visible: !m.visible });
+                }}
+              >
+                {m.visible ? "◉" : "◯"}
+              </button>
+              <span className="mask-row-name">
+                {m.name}
+                <span className="mask-row-type">{maskLabel(m)}</span>
+              </span>
+              <button
+                className="mask-del"
+                title="Delete mask"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteMask(m.id);
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="mask-add-row">
+          <span className="mask-add-label">Add mask</span>
+          <div className="mask-add-btns">
+            {MASK_TYPES.map((t) => (
+              <button key={t.value} className="btn btn-sm" onClick={() => addMask(t.value)}>
+                + {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {selectedMask && selSub && (
+          <div className="mask-editor">
+            <Slider
+              label="Opacity"
+              value={selectedMask.opacity}
+              min={0}
+              max={100}
+              resetValue={100}
+              onChange={(v) => updateMask(selectedMask.id, { opacity: v })}
+            />
+            <div className="mask-btn-row">
+              <button
+                className={`btn btn-sm${selectedMask.invert ? " primary" : ""}`}
+                onClick={() => updateMask(selectedMask.id, { invert: !selectedMask.invert })}
+                title="Invert this mask"
+              >
+                Invert
+              </button>
+              {isSpatial(selSub.type) && (
+                <button
+                  className={`btn btn-sm${maskDrawMode ? " primary" : ""}`}
+                  onClick={toggleMaskDraw}
+                  title="Draw this mask directly on the image"
+                >
+                  {maskDrawMode ? "Drawing on image…" : "Edit on image"}
+                </button>
+              )}
+            </div>
+
+            {/* Sub-mask (index 0) controls, by type. */}
+            {selSub.type === "brush" && (
+              <Slider
+                label="Brush size"
+                value={Math.round(subNum(selSub, "size", 0.06) * 500)}
+                min={1}
+                max={40}
+                resetValue={30}
+                onChange={(v) => updateSubMaskParams(selectedMask.id, { size: v / 500 })}
+              />
+            )}
+            {(selSub.type === "radial" || selSub.type === "brush") && (
+              <Slider
+                label="Feather"
+                value={subNum(selSub, "feather", 50)}
+                min={0}
+                max={100}
+                resetValue={50}
+                onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
+              />
+            )}
+            {/* Linear has no Feather: the band width (start->end distance) IS the
+                softness, so the edge lines set it directly on the image. */}
+            {selSub.type === "linear" && <p className="mask-hint">Drag the outer lines to set the gradient width.</p>}
+            {selSub.type === "brush" && (
+              <button
+                className="btn btn-sm ghost"
+                disabled={!Array.isArray(selSub.parameters.strokes) || (selSub.parameters.strokes as number[][]).length === 0}
+                onClick={() => updateSubMaskParams(selectedMask.id, { strokes: [] })}
+              >
+                Clear strokes
+              </button>
+            )}
+
+            {selSub.type === "luminance" && (
+              <>
+                <Slider
+                  label="Range min"
+                  value={subNum(selSub, "range_min", 0)}
+                  min={0}
+                  max={100}
+                  resetValue={0}
+                  onChange={(v) => updateSubMaskParams(selectedMask.id, { range_min: v })}
+                />
+                <Slider
+                  label="Range max"
+                  value={subNum(selSub, "range_max", 50)}
+                  min={0}
+                  max={100}
+                  resetValue={50}
+                  onChange={(v) => updateSubMaskParams(selectedMask.id, { range_max: v })}
+                />
+                <Slider
+                  label="Feather"
+                  value={subNum(selSub, "feather", 35)}
+                  min={0}
+                  max={100}
+                  resetValue={35}
+                  onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
+                />
+              </>
+            )}
+
+            {selSub.type === "color" && (
+              <>
+                <div className="mask-color-row">
+                  <button
+                    className={`btn btn-sm${colorPickMode ? " primary" : ""}`}
+                    onClick={toggleColorPick}
+                    title="Sample the target colour from the image"
+                  >
+                    {colorPickMode ? "Click the image…" : "Pick color"}
+                  </button>
+                  <span
+                    className="mask-swatch"
+                    style={{
+                      background: `rgb(${Math.round(subNum(selSub, "target_r", 0.5) * 255)}, ${Math.round(
+                        subNum(selSub, "target_g", 0.5) * 255
+                      )}, ${Math.round(subNum(selSub, "target_b", 0.5) * 255)})`,
+                    }}
+                  />
+                </div>
+                <Slider
+                  label="Tolerance"
+                  value={subNum(selSub, "tolerance", 20)}
+                  min={1}
+                  max={100}
+                  resetValue={20}
+                  onChange={(v) => updateSubMaskParams(selectedMask.id, { tolerance: v })}
+                />
+                <Slider
+                  label="Feather"
+                  value={subNum(selSub, "feather", 35)}
+                  min={0}
+                  max={100}
+                  resetValue={35}
+                  onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
+                />
+              </>
+            )}
+
+            {/* Per-mask local adjustments: MASK_ADJUST_FIELDS -> sparse adjustments. */}
+            <div className="mask-subhead">Adjustments</div>
+            <div className="editor-sliders">
+              {MASK_ADJUST_FIELDS.map((field) => {
+                const spec: ScalarDef = SCALAR_SPEC[field.key];
+                return (
+                  <Slider
+                    key={field.key}
+                    label={field.label}
+                    value={selectedMask.adjustments[field.key] ?? spec.def}
+                    min={spec.min}
+                    max={spec.max}
+                    step={spec.step}
+                    resetValue={spec.def}
+                    format={field.format}
+                    onChange={(v) => updateMaskAdjust(selectedMask.id, field.key, v)}
+                  />
+                );
+              })}
+            </div>
+
+            <button className="btn btn-sm ghost" onClick={() => deleteMask(selectedMask.id)}>
+              Delete mask
+            </button>
+          </div>
+        )}
+          </div>
+        )}
 
         {/* Presets */}
-        <div className="editor-section-title">Presets</div>
+        {accordionHeader("presets", "Presets")}
+        {openGroup === "presets" && (
+          <div className="editor-accordion-body">
         {namingPreset ? (
           <div className="editor-preset-row">
             <input
@@ -1066,6 +1982,8 @@ export function PhotoEditor({ image, onClose }: Props) {
             </button>
           </div>
         )}
+          </div>
+        )}
 
         </div>
 
@@ -1078,7 +1996,7 @@ export function PhotoEditor({ image, onClose }: Props) {
               className="btn ghost btn-sm"
               disabled={allNeutral}
               onClick={() => {
-                setAdj(NEUTRAL);
+                setAdj(defaultAdjustments());
                 setRotation(0);
                 setCrop(null);
                 setFlipH(false);
@@ -1086,18 +2004,10 @@ export function PhotoEditor({ image, onClose }: Props) {
                 setStraighten(0);
                 setPerspH(0);
                 setPerspV(0);
-                setColorMix(neutralMix());
-                setVignette(0);
                 setDistortion(0);
-                setGrain(0);
-                setGrainSize(0);
-                setDenoise(0);
-                setClarity(0);
-                setSharpness(0);
-                setColorTint(0);
-                setChromeEffect(0);
-                setChromeBlue(0);
-                setMistAmount(0);
+                setSelectedMaskId(null);
+                setMaskDrawMode(false);
+                setColorPickMode(false);
               }}
             >
               Reset all

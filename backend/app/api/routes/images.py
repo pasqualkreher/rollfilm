@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.db.session import engine, get_db
 from app.services import (
+    develop,
     embeddings,
     geocode,
     immich as immich_service,
@@ -210,59 +211,10 @@ def list_images(
     return query.offset(offset).limit(limit).all()
 
 
-# Same fields, same order as the frontend's editVersion() in api/client.ts -
-# the two must produce equal strings for unedited photos (all-defaults), and
-# matching strings for edited ones so the grid and the detail view share one
-# cached thumbnail URL per edit state.
-_EDIT_VERSION_FIELDS = [
-    "edit_rotation", "edit_crop_x", "edit_crop_y", "edit_crop_width", "edit_crop_height",
-    "edit_flip_h", "edit_flip_v", "edit_straighten", "edit_persp_h", "edit_persp_v",
-    "edit_exposure", "edit_contrast", "edit_highlights", "edit_shadows", "edit_whites",
-    "edit_blacks", "edit_saturation", "edit_temperature", "edit_tint", "edit_color_mix",
-    "edit_vignette", "edit_distortion", "edit_dehaze", "edit_grain", "edit_grain_size",
-    "edit_denoise", "edit_clarity", "edit_sharpness", "edit_color_tint",
-    "edit_chrome_effect", "edit_chrome_blue", "edit_mist",
-]
-# Fields the frontend maps null -> "" (its `?? ""`); everywhere else null
-# stringifies to "null" like JS String(null).
-_EDIT_VERSION_NULL_BLANK = {
-    "edit_crop_x", "edit_crop_y", "edit_crop_width", "edit_crop_height", "edit_color_mix"
-}
-
-
-def _edit_version(row) -> str:
-    """Python replica of the frontend's editVersion() cache-buster."""
-    parts: list[str] = []
-    for field in _EDIT_VERSION_FIELDS:
-        value = getattr(row, field)
-        if field == "edit_flip_h":
-            parts.append("fh" if value else "")
-        elif field == "edit_flip_v":
-            parts.append("fv" if value else "")
-        elif value is None:
-            parts.append("" if field in _EDIT_VERSION_NULL_BLANK else "null")
-        elif isinstance(value, float):
-            # JS String(1.0) is "1", Python str(1.0) is "1.0" - match JS.
-            parts.append(str(int(value)) if value.is_integer() else repr(value))
-        else:
-            parts.append(str(value))
-    return "-".join(parts)
-
-
-def _is_edited_expr():
-    """SQL expression: 1 when any edit field differs from its default. Lets the
-    index query fetch 12 columns instead of 43 - the 32 edit columns are only
-    loaded (in a small second query) for the handful of edited photos."""
-    conditions = []
-    for field in _EDIT_VERSION_FIELDS:
-        col = getattr(Image, field)
-        if field in _EDIT_VERSION_NULL_BLANK:
-            conditions.append(col.isnot(None))
-        elif field in ("edit_flip_h", "edit_flip_v"):
-            conditions.append(col.is_(True))
-        else:
-            conditions.append(col != 0)
-    return case((or_(*conditions), 1), else_=0)
+# The per-image thumbnail cache-buster is the server-owned `edit_rev` counter,
+# bumped on every edit save (edits/rotate/crop). The library index sends
+# String(edit_rev) and the frontend's editVersion() just echoes it - no per-field
+# version string is recomputed on either side any more.
 
 
 @router.get("/index")
@@ -298,24 +250,11 @@ def library_index(
             Image.id, Image.original_filename, Image.file_type, Image.width,
             Image.height, Image.taken_at, Image.rating, Image.color_label,
             Image.immich_sync, Image.paired_image_id, Image.source_root_id,
-            _is_edited_expr().label("edited"),
+            Image.edit_rev,
         )
         .order_by(Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc())
         .all()
     )
-
-    # Version strings only for the (few) edited photos, loaded in one small
-    # follow-up query; everyone else gets "" (client substitutes its default).
-    edited_ids = [r.id for r in rows if r.edited]
-    versions: dict[str, str] = {}
-    for chunk_start in range(0, len(edited_ids), 500):
-        chunk = edited_ids[chunk_start : chunk_start + 500]
-        for er in (
-            db.query(Image.id, *[getattr(Image, f) for f in _EDIT_VERSION_FIELDS])
-            .filter(Image.id.in_(chunk))
-            .all()
-        ):
-            versions[er.id] = _edit_version(er)
 
     images = [
         {
@@ -330,7 +269,7 @@ def library_index(
             "immich_sync": r.immich_sync,
             "paired_image_id": r.paired_image_id,
             "source_root_id": r.source_root_id,
-            "thumb_version": versions.get(r.id, ""),
+            "thumb_version": str(r.edit_rev) if r.edit_rev else "",
         }
         for r in rows
     ]
@@ -821,6 +760,7 @@ def rotate_image(
     image.edit_rotation = (image.edit_rotation + payload.degrees) % 360
     # A crop drawn against the old orientation doesn't map onto the new one.
     image.edit_crop_x = image.edit_crop_y = image.edit_crop_width = image.edit_crop_height = None
+    image.edit_rev = (image.edit_rev or 0) + 1
     db.commit()
     db.refresh(image)
     _try_regenerate_derivatives(image)
@@ -843,6 +783,7 @@ def crop_image(
             raise HTTPException(status_code=400, detail="Crop box must be within the image bounds")
         image.edit_crop_x, image.edit_crop_y = c.x, c.y
         image.edit_crop_width, image.edit_crop_height = c.width, c.height
+    image.edit_rev = (image.edit_rev or 0) + 1
     db.commit()
     db.refresh(image)
     _try_regenerate_derivatives(image)
@@ -867,21 +808,6 @@ def base_preview(
 
 
 _clamp100 = lambda v: max(-100, min(100, int(v)))  # noqa: E731
-
-
-def _clean_color_mix(mix: dict | None) -> str | None:
-    """Clamp the per-band HSL mixer and drop it entirely when fully neutral, so a
-    neutral edit stores NULL rather than a no-op JSON blob."""
-    if not mix:
-        return None
-    cleaned = {
-        band: [_clamp100(v) for v in (vals or [0, 0, 0])[:3]]
-        for band, vals in mix.items()
-        if band in thumbnails.COLOR_BANDS
-    }
-    if not any(any(v) for v in cleaned.values()):
-        return None
-    return json.dumps(cleaned)
 
 
 def _validate_crop(crop: schemas.CropBox | None) -> None:
@@ -917,30 +843,12 @@ def save_edits(
     image.edit_straighten = max(-45.0, min(45.0, float(payload.straighten)))
     image.edit_persp_h = _clamp100(payload.persp_h)
     image.edit_persp_v = _clamp100(payload.persp_v)
-    image.edit_exposure = _clamp100(payload.exposure)
-    image.edit_contrast = _clamp100(payload.contrast)
-    image.edit_highlights = _clamp100(payload.highlights)
-    image.edit_shadows = _clamp100(payload.shadows)
-    image.edit_whites = _clamp100(payload.whites)
-    image.edit_blacks = _clamp100(payload.blacks)
-    image.edit_dehaze = _clamp100(payload.dehaze)
-    image.edit_saturation = _clamp100(payload.saturation)
-    image.edit_temperature = _clamp100(payload.temperature)
-    image.edit_tint = _clamp100(payload.tint)
-    image.edit_vignette = _clamp100(payload.vignette)
     image.edit_distortion = _clamp100(payload.distortion)
-    image.edit_grain = max(0, min(100, int(payload.grain)))
-    image.edit_grain_size = max(0, min(100, int(payload.grain_size)))
-    image.edit_denoise = max(0, min(100, int(payload.denoise)))
-    image.edit_clarity = _clamp100(payload.clarity)
-    image.edit_sharpness = _clamp100(payload.sharpness)
-    image.edit_color_tint = _clamp100(payload.color_tint)
-    image.edit_chrome_effect = max(0, min(100, int(payload.chrome_effect)))
-    image.edit_chrome_blue = max(0, min(100, int(payload.chrome_blue)))
-    image.edit_mist = max(0, min(100, int(payload.mist)))
-    image.edit_color_mix = _clean_color_mix(payload.color_mix)
+    adj = develop.normalize(payload.adjustments)
+    image.edit_adjustments = develop.dumps(adj)
     # Tag edited photos "edit" so they're easy to find; drop the tag if the edit
-    # was reset back to the original look.
+    # was reset back to the original look. Bump the per-image cache-buster so the
+    # thumbnail/preview URLs refresh; a reset back to neutral drops it to 0 (no ?v=).
     has_edit = bool(
         payload.rotation % 360
         or payload.crop is not None
@@ -949,24 +857,10 @@ def save_edits(
         or image.edit_straighten
         or payload.persp_h
         or payload.persp_v
-        or image.edit_color_mix
-        or any(
-            int(getattr(payload, name))
-            for name in (
-                *thumbnails.ADJUSTMENT_FIELDS,
-                "vignette",
-                "distortion",
-                "grain",
-                "denoise",
-                "clarity",
-                "sharpness",
-                "color_tint",
-                "chrome_effect",
-                "chrome_blue",
-                "mist",
-            )
-        )
+        or payload.distortion
+        or image.edit_adjustments is not None
     )
+    image.edit_rev = (image.edit_rev or 0) + 1 if has_edit else 0
     if has_edit:
         _add_tag_to_image(db, current_user.id, image, "edit")
     else:
@@ -978,22 +872,9 @@ def save_edits(
 
 
 def _payload_adjustments(payload: schemas.ImageEdits) -> dict:
-    """The clamped tonal/effect adjustments dict off an edits payload, ready
-    for the thumbnails pipeline. Shared by save-copy and the editor preview."""
-    adjustments = {name: _clamp100(getattr(payload, name)) for name in thumbnails.ADJUSTMENT_FIELDS}
-    adjustments["vignette"] = _clamp100(payload.vignette)
-    adjustments["grain"] = max(0, min(100, int(payload.grain)))
-    adjustments["grain_size"] = max(0, min(100, int(payload.grain_size)))
-    adjustments["denoise"] = max(0, min(100, int(payload.denoise)))
-    adjustments["clarity"] = _clamp100(payload.clarity)
-    adjustments["sharpness"] = _clamp100(payload.sharpness)
-    adjustments["color_tint"] = _clamp100(payload.color_tint)
-    adjustments["chrome_effect"] = max(0, min(100, int(payload.chrome_effect)))
-    adjustments["chrome_blue"] = max(0, min(100, int(payload.chrome_blue)))
-    adjustments["mist"] = max(0, min(100, int(payload.mist)))
-    cleaned_mix = _clean_color_mix(payload.color_mix)
-    adjustments["color_mix"] = json.loads(cleaned_mix) if cleaned_mix else None
-    return adjustments
+    """The normalized develop adjustments dict off an edits payload, ready for the
+    thumbnails pipeline. Shared by save-copy and the editor preview."""
+    return develop.normalize(payload.adjustments)
 
 
 @router.post("/{image_id}/editor-preview")
@@ -1211,13 +1092,59 @@ def get_similar_images(
 ):
     image = get_owned_image(db, current_user.id, image_id)
     vector = embeddings.get_embedding(engine, image.id)
+    if vector is None and image.paired_image_id:
+        # Same shot as its RAW/JPEG partner - reuse the partner's embedding so a
+        # JPEG whose own embedding never landed still finds similar photos.
+        vector = embeddings.get_embedding(engine, image.paired_image_id)
+    if vector is None:
+        # Self-heal a missing embedding: generate it on demand and cache it rather
+        # than failing - fixes JPEGs/photos whose background embedding never landed
+        # (also makes them findable by semantic search from then on). Prefer the
+        # already-rendered preview.jpg (always a clean RGB JPEG) so this can't trip
+        # on a RAW decode or a source-path quirk; fall back to the source file.
+        try:
+            from PIL import Image as PILImage
+
+            from app.services.raw import extract_preview
+
+            preview_path = thumbnails.derivative_dir(image.id) / "preview.jpg"
+            src_img = (
+                PILImage.open(preview_path).convert("RGB")
+                if preview_path.exists()
+                else extract_preview(resolve_image_path(image))
+            )
+            vector = embeddings.encode_image(src_img)
+            embeddings.ensure_embeddings_table(engine)
+            embeddings.upsert_embedding(engine, image.id, vector)
+        except Exception:
+            logger.exception("On-demand embedding generation failed for %s", image.id)
     if vector is None:
         raise HTTPException(status_code=404, detail="Embedding not ready yet")
 
     matches = embeddings.query_similar(engine, vector, k=limit, exclude_id=image.id)
     results = []
+    # Never suggest the photo itself or its RAW/JPEG partner.
+    seen: set[str] = {image.id}
+    if image.paired_image_id:
+        seen.add(image.paired_image_id)
     for match_id, distance in matches:
         match_image = db.get(Image, match_id)
-        if match_image and match_image.owner_id == current_user.id and match_image.deleted_at is None:
-            results.append(schemas.SearchResultOut(image=match_image, distance=distance))
+        if not (match_image and match_image.owner_id == current_user.id and match_image.deleted_at is None):
+            continue
+        # RAW+JPEG pairs are the same shot: always surface the viewable JPEG (the
+        # user browses JPEGs), so a match that landed on the RAW half shows its
+        # JPEG partner instead. Falls back to whatever exists if there's no JPEG.
+        if match_image.file_type == FileType.raw and match_image.paired_image_id:
+            partner = db.get(Image, match_image.paired_image_id)
+            if (
+                partner
+                and partner.owner_id == current_user.id
+                and partner.deleted_at is None
+                and partner.file_type != FileType.raw
+            ):
+                match_image = partner
+        if match_image.id in seen:
+            continue
+        seen.add(match_image.id)
+        results.append(schemas.SearchResultOut(image=match_image, distance=distance))
     return results

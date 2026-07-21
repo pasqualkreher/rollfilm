@@ -14,10 +14,10 @@ from app.services.thumbnails import derivative_dir
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
-# Where the folder picker starts. /hostfs is the broad host mount (your drives /
-# NAS - see docker-compose.yml), /sources the conventional smaller mount; fall
-# back to the filesystem root. From the start point the user can navigate to any
-# folder the backend can see (anything must be mounted in to be reachable).
+# Where the folder picker starts. /hostfs and /sources are legacy container
+# mount points (kept so old setups still resolve); the desktop app falls back to
+# the filesystem root. From the start point the user can navigate to any folder
+# the backend can see.
 FS_ROOT = Path("/")
 BROWSE_START_CANDIDATES = [Path("/hostfs"), Path("/sources")]
 
@@ -104,8 +104,8 @@ def add_source(
     if not Path(path).is_dir():
         raise HTTPException(
             status_code=400,
-            detail=f"'{path}' is not a folder the app can see. Make sure it is mounted into the "
-            "backend container (see docker-compose volumes).",
+            detail=f"'{path}' is not a folder the app can see. Check that the drive is "
+            "connected and the path is spelled correctly.",
         )
     existing = (
         db.query(SourceRoot)

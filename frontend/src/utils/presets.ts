@@ -1,23 +1,12 @@
-import type { Adjustments, ColorMix } from "./adjustments";
+import type { Adjustments } from "./adjustments";
 
-// A saved editing preset: the tonal sliders + colour mixer + vignette +
-// distortion. Geometry (rotation/crop) is intentionally excluded - it's per
-// photo, not a look. Stored in localStorage so presets persist across sessions.
+// A saved editing preset: the whole develop object (tone / colour / presence /
+// details / effects, plus the nested curves / grading / masks). Geometry
+// (rotation / crop / flip / straighten / perspective / distortion) is
+// intentionally excluded - it's per photo, not a look. Stored in localStorage so
+// presets persist across sessions.
 export interface EditPreset {
-  adj: Adjustments;
-  colorMix: ColorMix;
-  vignette: number;
-  distortion: number;
-  grain: number;
-  grainSize: number;
-  denoise: number;
-  clarity: number;
-  sharpness: number;
-  colorTint: number;
-  // Optional so presets saved before these existed still load.
-  chromeEffect?: number;
-  chromeBlue?: number;
-  mist?: number;
+  adjustments: Adjustments;
 }
 
 const KEY = "pm.editorPresets";

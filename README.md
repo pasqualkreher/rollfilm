@@ -59,23 +59,7 @@ Everything runs locally — the only network access is the initial CLIP model do
 
 ## Getting started
 
-### Option 1: Docker Compose (recommended for servers)
-
-```bash
-git clone <this repo>
-cd photo-manager
-cp .env.example .env   # optional — every value has a sensible default
-docker compose up --build
-```
-
-- Web UI: http://localhost:5173
-- API: http://localhost:8000
-
-All data (library, database, thumbnails, model cache) is persisted under `./data/` by default. Point the `HOST_*` variables in `.env` at other locations (e.g. an external drive) if you prefer — see the comments in [.env.example](.env.example), it documents every option.
-
-### Option 2: Native desktop app (Electron)
-
-Requires Node.js and a Python 3.11+ that supports loading SQLite extensions (on macOS use Homebrew Python, not the system one).
+Photo Manager is a native desktop app (Electron). Requires Node.js and a Python 3.11+ that supports loading SQLite extensions (on macOS use Homebrew Python, not the system one).
 
 ```bash
 # Development (Vite dev server + Electron)
@@ -87,9 +71,9 @@ npm run dev
 npm run dist
 ```
 
-There is also a GitHub Actions workflow ([.github/workflows/build-desktop.yml](.github/workflows/build-desktop.yml)) that builds macOS, Windows, and Linux installers.
+There is also a GitHub Actions workflow ([.github/workflows/build-desktop.yml](.github/workflows/build-desktop.yml)) that builds macOS, Windows, and Linux installers, and a one-command local build (`node build-desktop.js`).
 
-### Option 3: Backend standalone
+### Backend standalone (development)
 
 ```bash
 cd backend
@@ -100,7 +84,7 @@ python run_server.py   # runs Alembic migrations, then starts the API on localho
 
 ## Configuration
 
-All configuration lives in [.env.example](.env.example) — ports, data locations, external source mounts, and the CLIP model choice. The Immich server URL and API key are deliberately **not** environment variables: they are entered in the app under Settings → Immich integration and stored in the database.
+The desktop app configures itself (data directory, ports) and stores everything under your user data folder. The Immich server URL and API key are deliberately **not** environment variables: they are entered in the app under Settings → Immich integration and stored in the database. For backend development, `PM_DATA_DIR` overrides where the library/database live.
 
 ## Architecture
 
@@ -113,9 +97,8 @@ photo-manager/
 │       │             thumbnails/editor rendering, EXIF, geocoding, trash, ...)
 │       ├── workers/  Background queue (embeddings, Immich uploads)
 │       └── db/       SQLAlchemy models + Alembic migrations
-├── frontend/         React SPA (talks to the backend via REST)
-├── electron/         Desktop shell (spawns the bundled backend as a child process)
-└── docker-compose.yml
+├── frontend/         React UI (talks to the backend via REST)
+└── electron/         Desktop shell (spawns the bundled backend as a child process)
 ```
 
 Notable design decisions:

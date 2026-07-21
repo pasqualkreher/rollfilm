@@ -92,14 +92,6 @@ export function ExternalSources() {
         stay where they are, and each source is re-scanned at startup and when you press{" "}
         <em>Scan now</em>.
       </p>
-      {!electron && (
-        <p className="import-panel-desc">
-          Drives and NAS shares appear under <code>/hostfs</code> (on macOS, everything under{" "}
-          <code>/Volumes</code>). If nothing shows, set <code>HOST_BROWSE_PATH</code> in{" "}
-          <code>.env</code> and run <code>docker compose up -d</code> once.
-        </p>
-      )}
-
       <div className="import-toolbar" style={{ flexWrap: "wrap" }}>
         <input
           type="text"

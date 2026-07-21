@@ -210,6 +210,19 @@ class Image(Base):
     # Pro-Mist-style diffusion (0..100): highlights bloom/halate softly.
     edit_mist: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
+    # --- Develop adjustments v2 ------------------------------------------------
+    # The whole non-geometry develop state - tone, colour, presence, details,
+    # effects, tone curves, colour grading, colour calibration and per-mask local
+    # adjustments - as one JSON object (see services/develop.py). This supersedes
+    # the individual edit_* tonal/effect columns above, which are kept only so a
+    # pre-v2 edit can still be recovered and are no longer read by the render
+    # pipeline. Null when the develop state is fully neutral.
+    edit_adjustments: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Per-image cache-buster, bumped on every edit save (edits/rotate/crop). The
+    # thumbnail URL's ?v= is String(edit_rev); the server is the sole source of
+    # truth for it, replacing the old recomputed per-field version string.
+    edit_rev: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
     albums: Mapped[list["AlbumImage"]] = relationship(back_populates="image", cascade="all, delete-orphan")
     tag_links: Mapped[list["ImageTag"]] = relationship(cascade="all, delete-orphan")
 

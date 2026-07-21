@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.db.models import ColorLabel, FileType, ImportSessionStatus
 
@@ -45,45 +46,19 @@ class ImageOut(BaseModel):
     edit_straighten: float = 0.0
     edit_persp_h: int = 0
     edit_persp_v: int = 0
-    edit_exposure: int
-    edit_contrast: int
-    edit_highlights: int
-    edit_shadows: int
-    edit_whites: int
-    edit_blacks: int
-    edit_saturation: int
-    edit_temperature: int
-    edit_tint: int
-    edit_color_mix: str | None
-    edit_vignette: int
-    edit_distortion: int
-    edit_dehaze: int
-    edit_grain: int
-    edit_grain_size: int
-    edit_denoise: int
-    edit_clarity: int
-    edit_sharpness: int
-    edit_color_tint: int
-    edit_chrome_effect: int
-    edit_chrome_blue: int
-    edit_mist: int
+    edit_distortion: int = 0
+    # The full develop state as a JSON string (see services/develop.py), or null
+    # when neutral; parsed client-side. Supersedes the flat edit_* tonal columns.
+    edit_adjustments: str | None = None
+    # Per-image cache-buster; String(edit_rev) is the thumbnail URL's ?v=.
+    edit_rev: int = 0
     tags: list[str]
     album_ids: list[str]
 
 
-class ImageAdjustments(BaseModel):
-    """Non-destructive tonal/color slider edits, each -100..100 (0 = neutral)."""
-
-    exposure: int = 0
-    contrast: int = 0
-    highlights: int = 0
-    shadows: int = 0
-    whites: int = 0
-    blacks: int = 0
-    dehaze: int = 0
-    saturation: int = 0
-    temperature: int = 0
-    tint: int = 0
+# The develop adjustments (exposure/contrast/colour/effects/curves/grading/masks)
+# are no longer a flat pydantic model - they travel as a single JSON `adjustments`
+# object on ImageEdits, validated and clamped server-side by services/develop.py.
 
 
 
@@ -124,10 +99,12 @@ class CropRequest(BaseModel):
     crop: CropBox | None  # null clears the crop
 
 
-class ImageEdits(ImageAdjustments):
-    """The full non-destructive edit: geometry (rotation + crop), the tonal
-    sliders, a per-hue colour mixer and a vignette. Used both to save edits in
-    place and to bake an edited copy."""
+class ImageEdits(BaseModel):
+    """The full non-destructive edit: geometry (rotation/crop/flip/straighten/
+    perspective/distortion) plus the develop `adjustments` object (tone, colour,
+    presence, details, effects, tone curves, colour grading and per-mask local
+    adjustments - see services/develop.py). Used to save edits in place, render
+    the live preview and bake an edited copy."""
 
     rotation: int = 0  # absolute, multiple of 90
     crop: CropBox | None = None
@@ -136,19 +113,9 @@ class ImageEdits(ImageAdjustments):
     straighten: float = 0.0  # fine level angle, clockwise degrees (-45..45)
     persp_h: int = 0  # keystone / axis tilt about the vertical axis, -100..100
     persp_v: int = 0  # keystone / axis tilt about the horizontal axis, -100..100
-    # {band: [hue, sat, lum]} each -100..100; band in red/orange/.../magenta.
-    color_mix: dict[str, list[int]] | None = None
-    vignette: int = 0
-    distortion: int = 0  # lens distortion correction, geometric
-    grain: int = 0  # film grain amount, 0..100
-    grain_size: int = 0  # film grain coarseness, 0..100
-    denoise: int = 0  # noise reduction, 0..100
-    clarity: int = 0  # midtone local contrast, -100..100
-    sharpness: int = 0  # edge sharpening / softening, -100..100
-    color_tint: int = 0  # global hue rotation, -100..100 -> +/-180 deg
-    chrome_effect: int = 0  # Fuji Color Chrome Effect: deepen saturated colours, 0..100
-    chrome_blue: int = 0  # Fuji Color Chrome FX Blue: deepen blues, 0..100
-    mist: int = 0  # Pro-Mist diffusion: highlight bloom/halation, 0..100
+    distortion: int = 0  # lens distortion correction, geometric, -100..100
+    # The develop state; arbitrary shape, validated/clamped by develop.normalize().
+    adjustments: dict[str, Any] = Field(default_factory=dict)
 
 
 class BulkImageUpdate(BaseModel):
