@@ -180,7 +180,9 @@ function TopBar() {
   return (
     <div className="top-bar">
       <span className="brand">
-        <img src="/rollfilm.svg" alt="" style={{ height: 20, width: 20, verticalAlign: "-4px", marginRight: 8 }} />
+        {/* BASE_URL ("./" in builds) keeps the path working under file:// in Electron,
+    where an absolute "/rollfilm.svg" would point at the filesystem root. */}
+        <img src={`${import.meta.env.BASE_URL}rollfilm.svg`} alt="" style={{ height: 20, width: 20, verticalAlign: "-4px", marginRight: 8 }} />
         Rollfilm
       </span>
       <nav

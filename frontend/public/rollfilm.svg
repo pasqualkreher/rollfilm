@@ -1,25 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Rollfilm logo: a 35mm film cartridge with the leader strip pulled out
-       (matches electron/build/icon.png). Painter's algorithm: strip first, a
-       background-coloured circle carves the leader's concave curve, cartridge
-       drawn on top. -->
-  <rect x="0" y="0" width="512" height="512" rx="116" fill="#f8f8f9"/>
-  <!-- film strip -->
-  <rect x="240" y="146" width="102" height="200" rx="8" fill="#232f52"/>
-  <rect x="300" y="146" width="152" height="102" rx="20" fill="#232f52"/>
-  <rect x="300" y="146" width="80" height="64" fill="#232f52"/>
-  <rect x="342" y="248" width="30" height="52" fill="#232f52"/>
-  <circle cx="402" cy="290" r="50" fill="#f8f8f9"/>
-  <!-- sprocket holes -->
-  <g fill="#f8f8f9">
-    <rect x="268" y="158" width="20" height="20" rx="4"/>
-    <rect x="310" y="158" width="20" height="20" rx="4"/>
-    <rect x="352" y="158" width="20" height="20" rx="4"/>
-    <rect x="394" y="158" width="20" height="20" rx="4"/>
-  </g>
-  <!-- cartridge -->
-  <rect x="146" y="62" width="44" height="46" rx="6" fill="#232f52"/>
-  <rect x="82" y="96" width="180" height="44" rx="10" fill="#232f52"/>
-  <rect x="82" y="372" width="180" height="44" rx="10" fill="#232f52"/>
-  <rect x="92" y="124" width="160" height="264" rx="8" fill="#e8912a"/>
+  <!-- Rollfilm logo: a classic rangefinder camera (Leica-style silver top
+       plate, navy body, orange lens ring as the brand accent). Flat shapes
+       only so it still reads at 20px in the top bar. Painter's algorithm:
+       navy body, light top plate squared off at its bottom edge, windows,
+       then the lens drawn over both. -->
+  <rect width="512" height="512" rx="116" fill="#f8f8f9"/>
+  <!-- top controls: rewind knob, shutter dial, orange shutter release -->
+  <rect x="92" y="120" width="54" height="50" rx="12" fill="#232f52"/>
+  <rect x="382" y="120" width="46" height="50" rx="12" fill="#232f52"/>
+  <circle cx="350" cy="146" r="15" fill="#e8912a"/>
+  <!-- body -->
+  <rect x="52" y="158" width="408" height="232" rx="44" fill="#232f52"/>
+  <!-- silver top plate (second rect squares off the rounded bottom corners) -->
+  <rect x="52" y="158" width="408" height="74" rx="44" fill="#c6ccdb"/>
+  <rect x="52" y="188" width="408" height="44" fill="#c6ccdb"/>
+  <!-- rangefinder + viewfinder windows -->
+  <rect x="302" y="176" width="20" height="34" rx="6" fill="#232f52"/>
+  <rect x="344" y="172" width="76" height="42" rx="10" fill="#232f52"/>
+  <!-- lens: orange ring, barrel, glass, highlight -->
+  <circle cx="222" cy="288" r="98" fill="#e8912a"/>
+  <circle cx="222" cy="288" r="70" fill="#232f52"/>
+  <circle cx="222" cy="288" r="46" fill="#45568c"/>
+  <circle cx="204" cy="270" r="15" fill="#f8f8f9" opacity="0.9"/>
 </svg>
