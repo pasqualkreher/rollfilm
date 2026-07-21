@@ -2036,6 +2036,13 @@ input.editor-preset-select {
   outline-offset: 1px;
 }
 
+/* The lightbox control bar is dark regardless of theme, so the selected
+   highlight can't follow --text - in light theme that's near-black and
+   invisible against the bar, making a clicked color look un-highlighted. */
+.lightbox-controls .color-swatch.selected {
+  outline-color: #fff;
+}
+
 .btn {
   padding: 7px 14px;
   border-radius: var(--radius-sm);

@@ -137,8 +137,17 @@ export function ImportWizard() {
     enabled: !!sessionId,
     // While background copying/analysis is still running, refetch so newly
     // copied photos appear and analyzed ones swap their placeholder for the
-    // real thumbnail + duplicate badge as they finish.
-    refetchInterval: stagingInBackground || analysisPending ? 1000 : false,
+    // real thumbnail + duplicate badge as they finish. Also keep polling while
+    // the *fetched data itself* still contains unprocessed files: the 500ms
+    // progress poll can report "done" a beat before the last files' processed
+    // flag reached this query, which used to stop the interval with stale data
+    // - those cards' spinners then spun until some incidental refetch (window
+    // focus) picked up the final state. Polling /files also drives the
+    // backend's self-healing re-enqueue for files whose analysis job was lost.
+    refetchInterval: (query) =>
+      stagingInBackground || analysisPending || (query.state.data ?? []).some((f) => !f.processed)
+        ? 1000
+        : false,
   });
 
   const filesById = useMemo(() => new Map((files ?? []).map((f) => [f.id, f])), [files]);
