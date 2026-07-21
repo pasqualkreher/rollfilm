@@ -1,7 +1,7 @@
 {
-  "name": "photo-manager-desktop",
+  "name": "rollfilm-desktop",
   "version": "0.1.0",
-  "description": "Photo Manager — native desktop app",
+  "description": "Rollfilm — native desktop photo library & film-look editor",
   "main": "main.js",
   "author": "Pasqual Kreher",
   "license": "MIT",
@@ -27,8 +27,8 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "com.pasqualkreher.photomanager",
-    "productName": "Photo Manager",
+    "appId": "com.pasqualkreher.rollfilm",
+    "productName": "Rollfilm",
     "files": [
       "main.js",
       "preload.js",

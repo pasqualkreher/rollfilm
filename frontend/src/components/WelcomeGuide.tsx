@@ -27,10 +27,10 @@ export function WelcomeGuide() {
   }
 
   return (
-    <div className="modal-overlay" role="dialog" aria-label="Welcome to Photo Manager">
+    <div className="modal-overlay" role="dialog" aria-label="Welcome to Rollfilm">
       <div className="modal welcome-guide">
         <div className="welcome-guide-header">
-          <h2>Welcome to Photo Manager</h2>
+          <h2>Welcome to Rollfilm</h2>
           <button className="modal-close" onClick={dismiss} aria-label="Close">
             ✕
           </button>

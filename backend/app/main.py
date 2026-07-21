@@ -21,7 +21,7 @@ from app.services.maintenance import start_background_sync
 from app.services.sources import scan_all_sources
 from app.services.trash import start_background_purge
 
-app = FastAPI(title="Photo Manager API")
+app = FastAPI(title="Rollfilm API")
 
 app.add_middleware(
     CORSMiddleware,

@@ -49,7 +49,7 @@ def backup(db: Session = Depends(get_db), current_user: User = Depends(get_curre
     zip_path = build_backup_zip(db, current_user.id)
     return FileResponse(
         zip_path,
-        filename="photo-manager-backup.zip",
+        filename="rollfilm-backup.zip",
         media_type="application/zip",
         background=BackgroundTask(zip_path.unlink),
     )

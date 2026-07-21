@@ -391,6 +391,17 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Which control-panel accordion group is expanded. Only one is open at a time
   // ("" = all collapsed); purely presentational grouping of the existing panel.
   const [openGroup, setOpenGroup] = useState<string>("basic");
+
+  // Leaving the Masks group hides the mask guides/handles on the image (see the
+  // MaskOverlay render condition) - also drop out of draw/pick mode so canvas
+  // clicks go back to zoom/pan/crop.
+  useEffect(() => {
+    if (openGroup !== "masks") {
+      setMaskDrawMode(false);
+      setColorPickMode(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openGroup]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -1366,7 +1377,7 @@ export function PhotoEditor({ image, onClose }: Props) {
           {/* Selected-mask guide + editable handles, transformed to track the
               canvas under zoom/pan. aspect keeps the round handles round on
               non-square images; cursor draws the brush-size ring. */}
-          {selSpatialSub && (
+          {selSpatialSub && openGroup === "masks" && (
             <MaskOverlay
               sub={selSpatialSub}
               handles={maskDrawMode}

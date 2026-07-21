@@ -42,7 +42,7 @@ export function Help() {
       <div className="help-inner">
         <h2 className="section-title">Help</h2>
         <p style={{ color: "var(--text-muted)" }}>
-          Everything Photo Manager can do, in the order you'll meet it.
+          Everything Rollfilm can do, in the order you'll meet it.
         </p>
 
         <nav className="help-toc" aria-label="Contents">
@@ -54,7 +54,7 @@ export function Help() {
         </nav>
 
         <H id="basics">The basics: where your photos live</H>
-        <p>Photo Manager keeps everything for a library together in one place:</p>
+        <p>Rollfilm keeps everything for a library together in one place:</p>
         <ul>
           <li>
             <strong>Your library folder</strong> — the folder you picked on first start. Imported
@@ -93,7 +93,7 @@ export function Help() {
             progress).
           </li>
           <li>
-            Photo Manager checks every staged file against your library.{" "}
+            Rollfilm checks every staged file against your library.{" "}
             <strong>"Already in library"</strong> means byte-identical — these can't be imported
             again. <strong>"Possible duplicate"</strong> means visually near-identical — you decide.
             "Hide duplicates" (on by default) keeps them out of view. Exception: a photo that so far
@@ -499,13 +499,13 @@ export function Help() {
         </p>
         <ul>
           <li>
-            macOS: <code>~/Library/Application Support/photo-manager-desktop/logs/backend.log</code>
+            macOS: <code>~/Library/Application Support/Rollfilm/logs/backend.log</code>
           </li>
           <li>
-            Windows: <code>%APPDATA%\photo-manager-desktop\logs\backend.log</code>
+            Windows: <code>%APPDATA%\Rollfilm\logs\backend.log</code>
           </li>
           <li>
-            Linux: <code>~/.config/photo-manager-desktop/logs/backend.log</code>
+            Linux: <code>~/.config/Rollfilm/logs/backend.log</code>
           </li>
         </ul>
         <h4>An Immich upload didn't arrive</h4>

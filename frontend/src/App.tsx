@@ -179,7 +179,10 @@ function TopBar() {
 
   return (
     <div className="top-bar">
-      <span className="brand">Photo Manager</span>
+      <span className="brand">
+        <img src="/rollfilm.svg" alt="" style={{ height: 20, width: 20, verticalAlign: "-4px", marginRight: 8 }} />
+        Rollfilm
+      </span>
       <nav
         className={`nav-links${locked ? " nav-links--locked" : ""}`}
         aria-disabled={locked}

@@ -1,4 +1,4 @@
-// Electron main process for the Photo Manager desktop app.
+// Electron main process for the Rollfilm desktop app.
 //
 // Responsibilities:
 //   1. Start the FastAPI backend natively as a child process, bound to
@@ -33,6 +33,35 @@ let splashWindow = null;
 // this folder (see libraryDataDir); only the model cache and logs stay in
 // userData.
 let libraryRoot = "";
+
+// One-time migration for the Photo Manager -> Rollfilm rename: userData (the
+// remembered library location in app-config.json, model cache, logs) used to
+// live under the old app name. Move it to the new location so the rename
+// doesn't look like a fresh install. The library itself is untouched - it
+// lives inside the user's photo folder (.photomanager) and is found again via
+// the migrated app-config.json.
+function migrateRenamedUserData() {
+  try {
+    const appData = app.getPath("appData");
+    const newDir = app.getPath("userData");
+    if (fs.existsSync(path.join(newDir, "app-config.json"))) return; // already migrated
+    for (const oldName of ["Photo Manager", "photo-manager-desktop"]) {
+      const oldDir = path.join(appData, oldName);
+      if (oldDir === newDir || !fs.existsSync(path.join(oldDir, "app-config.json"))) continue;
+      if (!fs.existsSync(newDir) || fs.readdirSync(newDir).length === 0) {
+        fs.rmSync(newDir, { recursive: true, force: true });
+        fs.renameSync(oldDir, newDir);
+      } else {
+        // New dir already has content (but no config) - just carry the config over.
+        fs.copyFileSync(path.join(oldDir, "app-config.json"), path.join(newDir, "app-config.json"));
+      }
+      return;
+    }
+  } catch {
+    // Migration is best-effort; worst case the app asks for the library folder again.
+  }
+}
+migrateRenamedUserData();
 
 // Small JSON config in userData that remembers the user's chosen library
 // location across launches. Kept separate from the backend DB on purpose: it's
@@ -70,7 +99,7 @@ async function ensureLibraryRoot() {
       title: "Choose your photo library location",
       message: missing
         ? "Your photo library folder can't be found."
-        : "Welcome to Photo Manager",
+        : "Welcome to Rollfilm",
       detail: missing
         ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive/folder, or choose a new location. Each library carries its own database and thumbnails (in a hidden .photomanager subfolder), so pointing at a different folder switches to that library.`
         : "Pick a folder to hold your photos. The database and thumbnails live inside it, in a hidden .photomanager subfolder, so the whole library is self-contained and moves with the folder. If the folder is cloud-synced (iCloud, Dropbox, Nextcloud), exclude .photomanager from syncing - sync clients can corrupt an active database.",
@@ -511,7 +540,7 @@ function checkLibraryMounted() {
       type: "error",
       title: "Backend did not restart",
       message: "The library is back, but the backend could not be restarted.",
-      detail: `Quit and reopen Photo Manager. The log usually shows why:\n${backendLogPath()}`,
+      detail: `Quit and reopen Rollfilm. The log usually shows why:\n${backendLogPath()}`,
       buttons: ["Open log folder", "Quit"],
       defaultId: 0,
       cancelId: 1,
@@ -527,7 +556,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    title: "Photo Manager",
+    title: "Rollfilm",
     show: false, // shown once the page has loaded (did-finish-load), replacing the splash
     icon: windowIconPath(),
     webPreferences: {
@@ -605,7 +634,7 @@ ipcMain.handle("pm:change-library-root", async () => {
   const confirm = await dialog.showMessageBox(mainWindow, {
     type: "question",
     title: "Change library folder",
-    message: "Restart Photo Manager with the new library folder?",
+    message: "Restart Rollfilm with the new library folder?",
     detail:
       `New location:\n${chosen}\n\n` +
       "Each library keeps its own database, thumbnails and staging inside its folder, so this " +
@@ -673,7 +702,7 @@ app.whenReady().then(async () => {
       const choice = await dialog.showMessageBox({
         type: "error",
         title: "Backend did not start",
-        message: "The Photo Manager backend stopped unexpectedly.",
+        message: "The Rollfilm backend stopped unexpectedly.",
         detail: `The log usually shows why:\n${backendLogPath()}`,
         buttons: ["Open log folder", "Quit"],
         defaultId: 0,
@@ -688,7 +717,7 @@ app.whenReady().then(async () => {
     const choice = await dialog.showMessageBox({
       type: "warning",
       title: "Backend is taking a while",
-      message: "The Photo Manager backend is still starting.",
+      message: "The Rollfilm backend is still starting.",
       detail:
         "The first launch can take several minutes (macOS verifies the app and the " +
         `image engine loads). You can keep waiting or quit.\n\nLog file:\n${backendLogPath()}`,

@@ -1,4 +1,4 @@
-# Photo Manager
+# Rollfilm
 
 A self-hosted, privacy-first photo library manager with semantic search, map & timeline browsing, RAW support — and first-class [Immich](https://immich.app) integration.
 
@@ -59,7 +59,7 @@ Everything runs locally — the only network access is the initial CLIP model do
 
 ## Getting started
 
-Photo Manager is a native desktop app (Electron). Requires Node.js and a Python 3.11+ that supports loading SQLite extensions (on macOS use Homebrew Python, not the system one).
+Rollfilm is a native desktop app (Electron). Requires Node.js and a Python 3.11+ that supports loading SQLite extensions (on macOS use Homebrew Python, not the system one).
 
 ```bash
 # Development (Vite dev server + Electron)
@@ -89,7 +89,7 @@ The desktop app configures itself (data directory, ports) and stores everything 
 ## Architecture
 
 ```
-photo-manager/
+rollfilm/
 ├── backend/          FastAPI app
 │   └── app/
 │       ├── api/      REST routes (images, albums, import, search, tags, ...)
