@@ -57,7 +57,29 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 
 Everything runs locally — the only network access is the initial CLIP model download and your own Immich server (if configured).
 
-## Getting started
+## Download & installation
+
+Prebuilt installers for macOS, Windows, and Linux are available on the [Releases page](https://github.com/pasqualkreher/Rollfilm/releases/latest).
+
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS (Apple Silicon) | `Rollfilm-<version>-arm64.dmg` | See [macOS first launch](#macos-first-launch) below — the app is not code-signed yet. |
+| Windows | `Rollfilm Setup <version>.exe` | SmartScreen may warn about an unknown publisher — choose **More info → Run anyway**. |
+| Linux | `Rollfilm-<version>.AppImage` | Make it executable (`chmod +x Rollfilm-*.AppImage`) and run it. |
+
+On first start the app downloads the CLIP model for semantic search; after that everything works offline.
+
+### macOS first launch
+
+The app is not notarized with Apple (no paid developer certificate), so Gatekeeper will block it with a "damaged or unverified" warning. After dragging Rollfilm into `/Applications`, remove the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Rollfilm.app"
+```
+
+Then start the app normally. Alternatively: right-click the app → **Open** → **Open** on the first launch.
+
+## Getting started (development)
 
 Rollfilm is a native desktop app (Electron). Requires Node.js and a Python 3.11+ that supports loading SQLite extensions (on macOS use Homebrew Python, not the system one).
 

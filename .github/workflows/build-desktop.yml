@@ -1,8 +1,8 @@
 # The "press play" build: produces all three desktop installers in parallel.
 #
-#   macOS runner   -> Photo Manager-<ver>-arm64.dmg
-#   Windows runner -> Photo Manager Setup <ver>.exe (NSIS)
-#   Linux runner   -> Photo Manager-<ver>.AppImage
+#   macOS runner   -> Rollfilm-<ver>-arm64.dmg
+#   Windows runner -> Rollfilm Setup <ver>.exe (NSIS)
+#   Linux runner   -> Rollfilm-<ver>.AppImage
 #
 # Trigger it from the GitHub UI: Actions -> "Build desktop installers" ->
 # "Run workflow" (or push a v* tag). The installers appear as downloadable
