@@ -36,7 +36,7 @@ from app.services.exif import (
 )
 from app.services.filesystem import library_relative_path
 from app.services.hashing import hamming_int, perceptual_hash, phash_to_int, sha256_file
-from app.services.pairing import pair_siblings
+from app.services.pairing import pair_library, pair_siblings
 from app.services.raw import classify_file_type, extract_preview_with_size
 from app.services.settings_store import (
     IMMICH_MODE_FULL,
@@ -958,6 +958,15 @@ def commit_import_session(
             rows_since_commit = 0
 
     pair_siblings(new_images)
+    # Cross-import pairing: a photo's RAW/JPEG partner may already be in the
+    # library from an earlier import - link those up too (only the stems this
+    # import touched, so the pass stays cheap).
+    if new_images:
+        pair_library(
+            db,
+            new_images[0].owner_id,
+            stems={Path(img.original_filename).stem.lower() for img in new_images},
+        )
     # Resolve each new photo's GPS fix to a country (offline) so it's filterable
     # by region straight after import.
     geocode.annotate_images(new_images)

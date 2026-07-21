@@ -1223,17 +1223,17 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   return (
     <div className="editor-overlay">
-      <div className="editor-header">
-        <button
-          className="icon-btn back-btn"
-          onClick={onClose}
-          disabled={busy}
-          title="Back (Esc)"
-          aria-label="Back"
-        >
-          ←
-        </button>
-      </div>
+      {/* Floating back button in the top-left corner - no header bar, so the
+          stage gets the full height. */}
+      <button
+        className="icon-btn back-btn editor-back-float"
+        onClick={onClose}
+        disabled={busy}
+        title="Back (Esc)"
+        aria-label="Back"
+      >
+        ←
+      </button>
       <div className="editor-body">
         <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
         <div className="editor-stage-main" ref={stageMainRef}>

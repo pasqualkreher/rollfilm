@@ -1352,8 +1352,11 @@ textarea:focus-visible {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  /* Same generous band around the photo as the lightbox (.detail-image). */
-  padding: 40px 16px;
+  /* Generous band around the photo like the lightbox (.detail-image). Top must
+     clear the floating back button (14px offset + 38px button = 52px), so the
+     image can never slide underneath it in small windows; a bit more at the
+     bottom keeps the compare/background row breathing. */
+  padding: 60px 16px 56px;
   overflow: hidden;
   transition: background 0.15s ease;
 }
@@ -3333,4 +3336,29 @@ kbd {
 
 .editor-accordion-body {
   padding-block: 4px 8px;
+}
+
+/* Editor: floating back button (the header bar is gone - the stage runs to the
+   top). Translucent pill over the photo, aligned with the stage's corner. */
+.editor-back-float {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 30;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-back-float:hover {
+  background: var(--bg-elevated);
 }

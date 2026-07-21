@@ -54,6 +54,15 @@ def start_background_sync() -> None:
         try:
             result = sync_db_with_library(db, LOCAL_USER_ID)
             logger.info("Startup library sync: %s", result)
+            # Re-pair pass: link any still-unpaired RAW+JPEG siblings (halves
+            # imported in different sessions, or libraries from before the
+            # metadata-aware pairing). Idempotent and cheap once caught up.
+            from app.services.pairing import pair_library
+
+            paired = pair_library(db, LOCAL_USER_ID)
+            if paired:
+                db.commit()
+                logger.info("Startup re-pair: linked %d RAW+JPEG pair(s)", paired)
         except Exception:
             logger.exception("Startup library sync failed")
         finally:
