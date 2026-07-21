@@ -1,25 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Rollfilm logo: a classic rangefinder camera (Leica-style silver top
-       plate, navy body, orange lens ring as the brand accent). Flat shapes
-       only so it still reads at 20px in the top bar. Painter's algorithm:
-       navy body, light top plate squared off at its bottom edge, windows,
-       then the lens drawn over both. -->
+  <!-- Rollfilm logo: a rangefinder camera in the style of a Fujifilm X-Pro1.
+       All-black body with rounded corners, big hybrid-viewfinder window at
+       the top left, lens centre-right with a silver accent ring and blue
+       coated glass. Flat shapes only so it still reads at 20px in the top
+       bar. This file is the single source of truth: favicon and top-bar logo
+       use it directly, electron/build/icon.png is rendered from it. -->
   <rect width="512" height="512" rx="116" fill="#f8f8f9"/>
-  <!-- top controls: rewind knob, shutter dial, orange shutter release -->
-  <rect x="92" y="120" width="54" height="50" rx="12" fill="#232f52"/>
-  <rect x="382" y="120" width="46" height="50" rx="12" fill="#232f52"/>
-  <circle cx="350" cy="146" r="15" fill="#e8912a"/>
+  <!-- top plate: shutter speed dial + shutter release, flat like the X-Pro1 -->
+  <rect x="368" y="128" width="56" height="34" rx="11" fill="#1e1e23"/>
+  <circle cx="334" cy="148" r="13" fill="#4a4a55"/>
   <!-- body -->
-  <rect x="52" y="158" width="408" height="232" rx="44" fill="#232f52"/>
-  <!-- silver top plate (second rect squares off the rounded bottom corners) -->
-  <rect x="52" y="158" width="408" height="74" rx="44" fill="#c6ccdb"/>
-  <rect x="52" y="188" width="408" height="44" fill="#c6ccdb"/>
-  <!-- rangefinder + viewfinder windows -->
-  <rect x="302" y="176" width="20" height="34" rx="6" fill="#232f52"/>
-  <rect x="344" y="172" width="76" height="42" rx="10" fill="#232f52"/>
-  <!-- lens: orange ring, barrel, glass, highlight -->
-  <circle cx="222" cy="288" r="98" fill="#e8912a"/>
-  <circle cx="222" cy="288" r="70" fill="#232f52"/>
-  <circle cx="222" cy="288" r="46" fill="#45568c"/>
-  <circle cx="204" cy="270" r="15" fill="#f8f8f9" opacity="0.9"/>
+  <rect x="52" y="158" width="408" height="232" rx="52" fill="#1e1e23"/>
+  <!-- hybrid viewfinder window, top left -->
+  <rect x="88" y="186" width="88" height="52" rx="14" fill="#f8f8f9"/>
+  <!-- lens: dark barrel, silver accent ring, blue coated glass, highlight -->
+  <circle cx="300" cy="286" r="96" fill="#34343d"/>
+  <circle cx="300" cy="286" r="70" fill="#b9bec9"/>
+  <circle cx="300" cy="286" r="56" fill="#1e1e23"/>
+  <circle cx="300" cy="286" r="42" fill="#3d4d78"/>
+  <circle cx="284" cy="270" r="13" fill="#f8f8f9" opacity="0.9"/>
 </svg>
