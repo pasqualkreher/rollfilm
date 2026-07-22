@@ -162,6 +162,12 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
     [images, width, rowH]
   );
 
+  // While the library is empty the early-return below skips rendering the
+  // root div entirely - so this must re-run when the first photos arrive
+  // (very first import), or the observer never attaches, width stays 0 and
+  // no layout is ever built until a remount (tab switch).
+  const isEmpty = images.length === 0;
+
   // Track container width and the scroller's visible window (quantized, so
   // scrolling doesn't re-render per frame).
   useEffect(() => {
@@ -197,7 +203,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       scroller.removeEventListener("scroll", onScroll);
       ro.disconnect();
     };
-  }, []);
+  }, [isEmpty]);
 
   // Re-anchor across layout changes: when the tile size (S/M/L), the window
   // width or the image set changes, every position shifts - raw scrollTop
