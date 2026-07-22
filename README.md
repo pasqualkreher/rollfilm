@@ -1,8 +1,8 @@
 # Rollfilm
 
-A self-hosted, privacy-first photo library manager with semantic search, map & timeline browsing, RAW support — and first-class [Immich](https://immich.app) integration.
+A privacy-first **desktop app** for managing your photo library, with semantic search, map & timeline browsing, RAW support — and first-class [Immich](https://immich.app) integration. Installers are available for macOS, Windows, and Linux — no server, no Docker, no setup.
 
-Your photos stay on your own machine (or NAS). The app imports them into a managed library, makes them searchable with natural language, and can optionally mirror your library to an existing Immich server.
+Your photos stay on your own machine. The app imports them into a managed library, makes them searchable with natural language, and can optionally mirror your library to an existing Immich server.
 
 > **Project status: work in progress.**
 > This is an early but already very usable release that I wanted to share. The core — import pipeline, library organization, semantic search, and especially the Immich integration — works well. The built-in photo editor is experimental and should be seen as a fun extra rather than a finished feature (see [Photo editor](#photo-editor-experimental)).
@@ -42,20 +42,9 @@ This is one of the highlights of the project: keep your library mirrored to an e
 ### Photo editor (experimental)
 A non-destructive editor is included, but consider it a gimmick for now — it's fun to play with, not a Lightroom replacement.
 
-- All rendering happens **server-side**, so the live preview is pixel-identical to the exported result
+- All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
 - Edits are stored as values in the database; originals are never touched
 - Exposure/contrast/highlights/shadows, white balance, 8-band HSL color mixer, crop/rotate/perspective, and effects like grain, vignette, clarity, and film-style diffusion
-
-## Tech stack
-
-| Layer | Tech |
-| --- | --- |
-| Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, SQLite + `sqlite-vec` |
-| ML / imaging | OpenCLIP (ViT-B-32), Pillow, rawpy, OpenCV, ImageHash, ExifTool |
-| Frontend | React 18, TypeScript, Vite, TanStack Query, Leaflet |
-| Desktop | Electron 33 + electron-builder, backend bundled with PyInstaller |
-
-Everything runs locally — the only network access is the initial CLIP model download and your own Immich server (if configured).
 
 ## Download & installation
 
@@ -78,6 +67,17 @@ xattr -dr com.apple.quarantine "/Applications/Rollfilm.app"
 ```
 
 Then start the app normally. Alternatively: right-click the app → **Open** → **Open** on the first launch.
+
+## Tech stack
+
+| Layer | Tech |
+| --- | --- |
+| Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, SQLite + `sqlite-vec` |
+| ML / imaging | OpenCLIP (ViT-B-32), Pillow, rawpy, OpenCV, ImageHash, ExifTool |
+| Frontend | React 18, TypeScript, Vite, TanStack Query, Leaflet |
+| Desktop | Electron 33 + electron-builder, backend bundled with PyInstaller |
+
+Everything runs locally — the only network access is the initial CLIP model download and your own Immich server (if configured).
 
 ## Getting started (development)
 
@@ -124,7 +124,7 @@ rollfilm/
 ```
 
 Notable design decisions:
-- **Single local user, no auth** — this is a personal, self-hosted tool. Don't expose it to the public internet as-is (CORS is wide open for localhost use).
+- **Single local user, no auth** — this is a personal desktop app. The bundled backend listens on localhost for the app's own UI; don't expose it to a network as-is (CORS is wide open for localhost use).
 - External sources are mounted **read-only** — the app can never modify your originals.
 - Database migrations run automatically on startup, with retry logic for external drives.
 - Handles cloud-synced folders (iCloud/Nextcloud placeholder files) and exFAT/NTFS drives.
