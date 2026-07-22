@@ -93,32 +93,58 @@ export function MapView() {
     const layer = layerRef.current;
     if (!map || !layer) return;
 
-    type Pin = { id: string; count: number; latlng: L.LatLng; marker: L.Marker };
+    type Pin = { id: string; members: string[]; latlng: L.LatLng; marker: L.Marker };
     let pins: Pin[] = [];
 
-    const addPin = (id: string, lat: number, lon: number, count: number, title?: string) => {
+    // The deepest zoom a cluster click drives toward. Photos whose pixel
+    // spread at THIS zoom still fits one grid cell can never be separated by
+    // zooming - clicking such a cluster must open the photos instead.
+    const MAX_PIN_ZOOM = 18;
+
+    // Would zooming all the way in actually break this cluster apart?
+    const splittable = (members: GeoImage[]): boolean => {
+      if (members.length < 2) return false;
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const m of members) {
+        const pt = map.project([m.lat, m.lon], MAX_PIN_ZOOM);
+        minX = Math.min(minX, pt.x); maxX = Math.max(maxX, pt.x);
+        minY = Math.min(minY, pt.y); maxY = Math.max(maxY, pt.y);
+      }
+      return maxX - minX >= CELL || maxY - minY >= CELL;
+    };
+
+    const addPin = (rep: GeoImage, members: GeoImage[], title?: string) => {
+      const count = members.length;
       const badge =
         count > 1 ? `<span class="map-pin-count">${count > 99 ? "99+" : count}</span>` : "";
       const icon = L.divIcon({
         className: "map-pin",
-        html: `<div style="position:relative"><img src="${api.images.thumbnailUrl(id)}" alt="" />${badge}</div>`,
+        html: `<div style="position:relative"><img src="${api.images.thumbnailUrl(rep.id)}" alt="" />${badge}</div>`,
         iconSize: [46, 46],
         iconAnchor: [23, 23],
       });
-      const latlng = L.latLng(lat, lon);
+      const latlng = L.latLng(rep.lat, rep.lon);
       // Plain interactive markers: with clustering there are only a few dozen
       // pins on screen, so Leaflet's own hover/click handling is reliable and
       // riseOnHover keeps the enlarged photo above its neighbors. (The old
       // cursor-distance hit-testing predates clustering, when thousands of
       // overlapping pins made per-marker events unusable.)
       const marker = L.marker(latlng, { icon, title, riseOnHover: true }).addTo(layer);
-      const pin: Pin = { id, count, latlng, marker };
+      const canSplit = splittable(members);
+      const pin: Pin = { id: rep.id, members: members.map((m) => m.id), latlng, marker };
       marker.on("mouseover", () => marker.getElement()?.classList.add("map-pin-active"));
       marker.on("mouseout", () => marker.getElement()?.classList.remove("map-pin-active"));
       marker.on("click", () => {
-        // A cluster zooms in toward its photos; a single pin opens the photo.
-        if (pin.count > 1) map.setView(pin.latlng, Math.min(map.getZoom() + 2, 18));
-        else navigate(`/image/${pin.id}`);
+        // A splittable cluster zooms in toward its photos. A single pin - or a
+        // cluster of photos taken at (virtually) the same spot, which no zoom
+        // level can separate - opens the photo, with the rest of the cluster
+        // reachable via the arrow keys. Without the second case, same-spot
+        // clusters used to swallow every click once the zoom cap was reached.
+        if (pin.members.length > 1 && canSplit && map.getZoom() < MAX_PIN_ZOOM) {
+          map.setView(pin.latlng, Math.min(map.getZoom() + 2, MAX_PIN_ZOOM));
+        } else {
+          navigate(`/image/${pin.id}`, { state: { imageIds: pin.members } });
+        }
       });
       pins.push(pin);
     };
@@ -131,22 +157,26 @@ export function MapView() {
       pins = [];
       const zoom = map.getZoom();
       const bounds = map.getBounds().pad(0.5);
-      const cells = new Map<string, { rep: GeoImage; count: number }>();
+      const cells = new Map<string, GeoImage[]>();
       for (const p of points) {
         if (!bounds.contains([p.lat, p.lon])) continue;
         const pt = map.project([p.lat, p.lon], zoom);
         const key = `${Math.floor(pt.x / CELL)}:${Math.floor(pt.y / CELL)}`;
         const cell = cells.get(key);
-        if (cell) cell.count++;
-        else cells.set(key, { rep: p, count: 1 });
+        if (cell) cell.push(p);
+        else cells.set(key, [p]);
       }
-      for (const { rep, count } of cells.values()) {
-        addPin(rep.id, rep.lat, rep.lon, count, rep.original_filename);
+      for (const members of cells.values()) {
+        // Newest photo of the cell fronts it (points arrive newest-first).
+        addPin(members[0], members, members[0].original_filename);
       }
       // The focused shot always gets a pin to zoom to and enlarge, even when
       // its cell is fronted by a newer photo.
       if (focus && !pins.some((p) => p.id === focus.id)) {
-        addPin(focus.id, focus.lat, focus.lon, 1);
+        const rep =
+          points.find((p) => p.id === focus.id) ??
+          ({ id: focus.id, lat: focus.lat, lon: focus.lon } as GeoImage);
+        addPin(rep, [rep]);
       }
       if (focus) {
         pins
