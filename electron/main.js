@@ -33,6 +33,10 @@ let splashWindow = null;
 // this folder (see libraryDataDir); only the model cache and logs stay in
 // userData.
 let libraryRoot = "";
+// True when this launch is a genuine first run (no library folder was
+// configured yet). The renderer reads it (pm:is-first-run) to decide whether to
+// show the first-start onboarding wizard.
+let firstRunThisSession = false;
 
 // One-time migration for the Photo Manager -> Rollfilm rename: userData (the
 // remembered library location in app-config.json, model cache, logs) used to
@@ -62,6 +66,56 @@ function migrateRenamedUserData() {
   }
 }
 migrateRenamedUserData();
+
+// --- Leftover files from the Photo Manager -> Rollfilm rename ----------------
+// The rename migration (above) brings the *config* across but, when the new
+// userData folder already exists, leaves the old app-data folders sitting in
+// place. They're dead weight — model caches and logs from the previous name —
+// so the first-start wizard offers to delete them. Detection and removal both
+// go through these helpers.
+const LEGACY_APP_DIR_NAMES = ["Photo Manager", "photo-manager-desktop"];
+
+function legacyUserDataDirs() {
+  const dirs = [];
+  try {
+    const appData = app.getPath("appData");
+    const current = app.getPath("userData");
+    for (const name of LEGACY_APP_DIR_NAMES) {
+      const dir = path.join(appData, name);
+      if (dir !== current && fs.existsSync(dir)) dirs.push(dir);
+    }
+  } catch {
+    // Best-effort: if appData can't be resolved, report nothing to clean.
+  }
+  return dirs;
+}
+
+// Total size of a folder in bytes (iterative walk so a deep tree can't blow the
+// stack). Best-effort: unreadable entries are skipped rather than throwing, so
+// a partial number is still shown instead of failing the whole scan.
+function dirSizeBytes(dir) {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const cur = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(cur, entry.name);
+      try {
+        if (entry.isDirectory()) stack.push(full);
+        else if (entry.isFile()) total += fs.statSync(full).size;
+      } catch {
+        // Skip entries that vanish or can't be stat'd mid-walk.
+      }
+    }
+  }
+  return total;
+}
 
 // Small JSON config in userData that remembers the user's chosen library
 // location across launches. Kept separate from the backend DB on purpose: it's
@@ -659,6 +713,34 @@ ipcMain.handle("pm:change-library-root", async () => {
 // change independently — switching the library folder moves all of it.
 ipcMain.handle("pm:get-data-root", () => (libraryRoot ? libraryDataDir(libraryRoot) : ""));
 
+// First-start wizard: was this launch a genuine first run (no library folder
+// configured yet)? Drives whether the onboarding wizard appears.
+ipcMain.handle("pm:is-first-run", () => firstRunThisSession);
+
+// First-start wizard, "Clean up" step: leftover app-data folders from the old
+// Photo Manager / photo-manager-desktop app names, with their sizes so the
+// wizard can say how much space removing them frees.
+ipcMain.handle("pm:scan-legacy-data", () =>
+  legacyUserDataDirs().map((p) => ({ path: p, sizeBytes: dirSizeBytes(p) }))
+);
+
+// First-start wizard, "Clean up" step: delete those leftover folders. Reports
+// what was removed and what couldn't be (e.g. a permissions error) so the
+// wizard can show an honest result rather than claiming success blindly.
+ipcMain.handle("pm:remove-legacy-data", () => {
+  const removed = [];
+  const failed = [];
+  for (const dir of legacyUserDataDirs()) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      removed.push(dir);
+    } catch (err) {
+      failed.push({ path: dir, error: err.message });
+    }
+  }
+  return { removed, failed };
+});
+
 app.whenReady().then(async () => {
   setDevDockIcon();
   createSplash();
@@ -666,6 +748,7 @@ app.whenReady().then(async () => {
   // Block on the first-run library-location prompt before anything else - the
   // backend needs LIBRARY_ROOT set when it starts.
   const isFirstStart = !readConfig().libraryRoot;
+  firstRunThisSession = isFirstStart;
   setSplashStatus(isFirstStart ? "Checking library folder…" : "Loading…");
   libraryRoot = await ensureLibraryRoot();
   if (!libraryRoot) {

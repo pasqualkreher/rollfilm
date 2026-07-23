@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.db.session import engine, get_db
 from app.services import (
+    auto_develop,
     develop,
     embeddings,
     geocode,
@@ -40,7 +41,7 @@ from app.services.filesystem import library_relative_path, resolve_image_path
 from app.services.hashing import perceptual_hash
 from app.services.immich_sync import immich_album_names as _immich_album_names
 from app.services.immich_sync import run_immich_sync_soon
-from app.services.settings_store import get_immich_config
+from app.services.settings_store import get_auto_develop_groups, get_immich_config
 from app.workers.queue import (
     enqueue_embedding,
     enqueue_immich_upload,
@@ -109,6 +110,35 @@ def _remove_tag_from_image(db: Session, owner_id: int, image: Image, name: str) 
     if tag is None:
         return
     db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
+
+
+def _has_any_edit(image: Image) -> bool:
+    """True when the photo carries any non-destructive edit - geometry or develop.
+    Mirrors the has_edit check in save_edits so the auto-managed "edit" tag and
+    the edit_rev cache-buster stay consistent across every edit path."""
+    return bool(
+        (image.edit_rotation or 0) % 360
+        or image.edit_crop_width is not None
+        or image.edit_flip_h
+        or image.edit_flip_v
+        or image.edit_straighten
+        or image.edit_persp_h
+        or image.edit_persp_v
+        or image.edit_distortion
+        or image.edit_adjustments is not None
+    )
+
+
+def _sync_edit_state(db: Session, owner_id: int, image: Image) -> None:
+    """After a develop/geometry change, refresh the edit_rev cache-buster and the
+    auto-managed "edit" tag from the image's current state (drops both back to
+    the un-edited baseline when nothing is left)."""
+    if _has_any_edit(image):
+        image.edit_rev = (image.edit_rev or 0) + 1
+        _add_tag_to_image(db, owner_id, image, "edit")
+    else:
+        image.edit_rev = 0
+        _remove_tag_from_image(db, owner_id, image, "edit")
 
 
 def _filtered_images_query(
@@ -682,18 +712,109 @@ def bulk_reset_metadata(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Clears rating, color label, and all tags - back to the state a photo
-    is in right after import."""
+    """Reset the selected aspects of each photo back to its just-imported state.
+    Which aspects are cleared is chosen per-flag (see BulkResetRequest): rating,
+    colour label, tags, develop sliders, geometry (crop/rotation/...), and album
+    membership. Photos whose develop or geometry was reset get re-rendered."""
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     image_ids = [image.id for image in images]
-    db.query(ImageTag).filter(ImageTag.image_id.in_(image_ids)).delete(synchronize_session=False)
+
+    if payload.tags:
+        db.query(ImageTag).filter(ImageTag.image_id.in_(image_ids)).delete(synchronize_session=False)
+    if payload.albums:
+        db.query(AlbumImage).filter(AlbumImage.image_id.in_(image_ids)).delete(synchronize_session=False)
+
     for image in images:
-        image.rating = 0
-        image.color_label = ColorLabel.none
+        if payload.rating:
+            image.rating = 0
+        if payload.color_label:
+            image.color_label = ColorLabel.none
+        if payload.develop:
+            image.edit_adjustments = None
+        if payload.geometry:
+            image.edit_rotation = 0
+            image.edit_crop_x = image.edit_crop_y = image.edit_crop_width = image.edit_crop_height = None
+            image.edit_flip_h = image.edit_flip_v = False
+            image.edit_straighten = 0.0
+            image.edit_persp_h = image.edit_persp_v = image.edit_distortion = 0
+        # Re-derive the "edit" tag / cache-buster whenever an edit was touched, or
+        # when a tag reset may have stripped the auto "edit" tag off a still-edited
+        # photo.
+        if payload.develop or payload.geometry or payload.tags:
+            _sync_edit_state(db, current_user.id, image)
+
+    db.commit()
+    edited = payload.develop or payload.geometry
+    for image in images:
+        db.refresh(image)
+        if edited:
+            _try_regenerate_derivatives(image)
+    return images
+
+
+@router.post("/bulk-develop", response_model=list[schemas.ImageOut])
+def bulk_develop(
+    payload: schemas.BulkDevelopRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Apply one develop object (e.g. an editor preset) to every selected photo
+    in place and re-render them. Geometry is left untouched - a preset is a look,
+    not a composition - and a neutral object simply clears the develop sliders."""
+    blob = develop.dumps(develop.normalize(payload.adjustments))
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    for image in images:
+        image.edit_adjustments = blob
+        _sync_edit_state(db, current_user.id, image)
     db.commit()
     for image in images:
         db.refresh(image)
+        _try_regenerate_derivatives(image)
     return images
+
+
+@router.post("/bulk-auto-develop", response_model=schemas.BulkAutoDevelopResult)
+def bulk_auto_develop(
+    payload: schemas.BulkAutoDevelopRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Auto-develop every selected photo: each gets its own suggestion learned
+    from the user's saved edits (CLIP k-NN), restricted to the groups enabled in
+    Settings and merged over that photo's current develop state. Photos with no
+    embedding yet, or nothing similar to learn from, are skipped and counted."""
+    groups = get_auto_develop_groups(db)
+    if not groups:
+        raise HTTPException(
+            status_code=400,
+            detail="Auto develop is set to affect no settings - enable at least one group in Settings",
+        )
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    changed: list[Image] = []
+    for image in images:
+        vector = _embedding_for_image(image)
+        if vector is None:
+            continue
+        suggestion = auto_develop.suggest_adjustments(db, engine, image, vector)
+        if suggestion is None:
+            continue
+        adjustments, _ = suggestion
+        partial = auto_develop.filter_to_groups(adjustments, groups)
+        # Merge over this photo's own current develop state, exactly like the
+        # editor spreads the suggestion over its live sliders (defaults when the
+        # photo is un-edited); unchecked groups keep whatever was there.
+        merged = {**develop.loads(image.edit_adjustments), **partial}
+        image.edit_adjustments = develop.dumps(develop.normalize(merged))
+        _sync_edit_state(db, current_user.id, image)
+        changed.append(image)
+    db.commit()
+    for image in images:
+        db.refresh(image)
+    for image in changed:
+        _try_regenerate_derivatives(image)
+    return schemas.BulkAutoDevelopResult(
+        images=images, applied=len(changed), skipped=len(images) - len(changed)
+    )
 
 
 @router.patch("/{image_id}", response_model=schemas.ImageOut)
@@ -999,6 +1120,10 @@ def save_copy(
         focal_length=src.focal_length,
         gps_lat=src.gps_lat,
         gps_lon=src.gps_lon,
+        # Remember the develop settings baked into this copy - not for rendering
+        # (the pixels already contain them), but so auto-develop can learn from
+        # saved copies too (see services/auto_develop.py).
+        applied_adjustments=develop.dumps(adjustments),
     )
     db.add(new_image)
     db.flush()
@@ -1083,25 +1208,19 @@ def get_original(image_id: str, db: Session = Depends(get_db), current_user: Use
     return FileResponse(path, filename=image.original_filename)
 
 
-@router.get("/{image_id}/similar", response_model=list[schemas.SearchResultOut])
-def get_similar_images(
-    image_id: str,
-    limit: int = 20,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    image = get_owned_image(db, current_user.id, image_id)
+def _embedding_for_image(image: Image):
+    """The image's CLIP embedding, self-healing when it's missing. Reuses the
+    RAW/JPEG partner's vector (same shot) when the image's own never landed;
+    otherwise generates and caches one on demand rather than failing - fixes
+    photos whose background embedding never landed (also makes them findable by
+    semantic search from then on). Prefers the already-rendered preview.jpg
+    (always a clean RGB JPEG) so this can't trip on a RAW decode or a
+    source-path quirk; falls back to the source file. None when all of that
+    failed."""
     vector = embeddings.get_embedding(engine, image.id)
     if vector is None and image.paired_image_id:
-        # Same shot as its RAW/JPEG partner - reuse the partner's embedding so a
-        # JPEG whose own embedding never landed still finds similar photos.
         vector = embeddings.get_embedding(engine, image.paired_image_id)
     if vector is None:
-        # Self-heal a missing embedding: generate it on demand and cache it rather
-        # than failing - fixes JPEGs/photos whose background embedding never landed
-        # (also makes them findable by semantic search from then on). Prefer the
-        # already-rendered preview.jpg (always a clean RGB JPEG) so this can't trip
-        # on a RAW decode or a source-path quirk; fall back to the source file.
         try:
             from PIL import Image as PILImage
 
@@ -1118,6 +1237,53 @@ def get_similar_images(
             embeddings.upsert_embedding(engine, image.id, vector)
         except Exception:
             logger.exception("On-demand embedding generation failed for %s", image.id)
+    return vector
+
+
+@router.get("/{image_id}/auto-adjust", response_model=schemas.AutoAdjustOut)
+def auto_adjust(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Suggest develop settings for this photo, learned from the user's own
+    saved edits: the most visually similar edited photos (CLIP k-NN) vote with
+    their settings, weighted by similarity. Purely a suggestion - nothing is
+    stored; the editor applies it to its sliders and the user decides whether
+    to save. Returns a *partial* develop object: only the adjustment groups
+    enabled in Settings are included, so unchecked groups keep whatever value
+    the editor currently holds."""
+    groups = get_auto_develop_groups(db)
+    if not groups:
+        raise HTTPException(
+            status_code=400,
+            detail="Auto develop is set to affect no settings - enable at least one group in Settings",
+        )
+    image = get_owned_image(db, current_user.id, image_id)
+    vector = _embedding_for_image(image)
+    if vector is None:
+        raise HTTPException(status_code=404, detail="Embedding not ready yet")
+    suggestion = auto_develop.suggest_adjustments(db, engine, image, vector)
+    if suggestion is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No edited photos to learn from yet - save some edits first",
+        )
+    adjustments, samples = suggestion
+    return schemas.AutoAdjustOut(
+        adjustments=auto_develop.filter_to_groups(adjustments, groups), samples=samples
+    )
+
+
+@router.get("/{image_id}/similar", response_model=list[schemas.SearchResultOut])
+def get_similar_images(
+    image_id: str,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    image = get_owned_image(db, current_user.id, image_id)
+    vector = _embedding_for_image(image)
     if vector is None:
         raise HTTPException(status_code=404, detail="Embedding not ready yet")
 

@@ -81,7 +81,42 @@ class BulkTagRequest(BaseModel):
 
 
 class BulkResetRequest(BaseModel):
+    """Reset selected aspects of each photo back to its just-imported state.
+    Each flag is opt-in so the caller (the grid's Reset menu) can reset any
+    combination of metadata and edits. The three metadata flags default to True
+    to preserve the original all-metadata behaviour of callers that only send
+    ``image_ids``."""
+
     image_ids: list[str]
+    rating: bool = True  # stars back to 0
+    color_label: bool = True  # colour label back to none
+    tags: bool = True  # remove every user tag
+    develop: bool = False  # clear the develop sliders (edit_adjustments)
+    geometry: bool = False  # clear crop / rotation / straighten / flip / perspective
+    albums: bool = False  # remove from every album
+
+
+class BulkDevelopRequest(BaseModel):
+    """Apply one develop object (e.g. an editor preset) to every listed photo,
+    in place. Geometry (crop/rotation/...) is left untouched - a preset is a
+    look, not a composition."""
+
+    image_ids: list[str]
+    adjustments: dict[str, Any] = Field(default_factory=dict)
+
+
+class BulkAutoDevelopRequest(BaseModel):
+    image_ids: list[str]
+
+
+class BulkAutoDevelopResult(BaseModel):
+    """Outcome of a bulk auto-develop: the (possibly partially) updated rows,
+    plus how many photos actually got a suggestion vs. were skipped for having
+    no embedding yet or nothing similar to learn from."""
+
+    images: list[ImageOut]
+    applied: int
+    skipped: int
 
 
 class RotateRequest(BaseModel):
@@ -116,6 +151,14 @@ class ImageEdits(BaseModel):
     distortion: int = 0  # lens distortion correction, geometric, -100..100
     # The develop state; arbitrary shape, validated/clamped by develop.normalize().
     adjustments: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutoAdjustOut(BaseModel):
+    """A develop suggestion learned from the user's saved edits: the blended
+    adjustments plus how many similar edited photos it was derived from."""
+
+    adjustments: dict[str, Any]
+    samples: int
 
 
 class BulkImageUpdate(BaseModel):
@@ -313,6 +356,24 @@ class TrashSettingsOut(BaseModel):
 
 class TrashSettingsUpdate(BaseModel):
     retention_days: int
+
+
+class AutoDevelopSettingsOut(BaseModel):
+    enabled: bool
+    # Which adjustment groups the Auto suggestion may touch (subset of
+    # settings_store.AUTO_DEVELOP_GROUP_NAMES); unchecked groups keep their
+    # current slider values when Auto runs.
+    enabled_groups: list[str]
+    # How many edited photos the suggestion can currently learn from - shown in
+    # Settings so "more edits = better suggestions" is concrete, not abstract.
+    example_count: int
+
+
+class AutoDevelopSettingsUpdate(BaseModel):
+    enabled: bool
+    # None leaves the stored group selection untouched (the on/off toggle
+    # doesn't need to know it); a list replaces it.
+    enabled_groups: list[str] | None = None
 
 
 class ImmichTestResult(BaseModel):

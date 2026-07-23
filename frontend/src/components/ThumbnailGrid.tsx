@@ -120,7 +120,10 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
       src={shownSrc}
       decoding="async"
       alt={alt}
-      style={visible ? undefined : { visibility: "hidden" }}
+      // Fades in via opacity once the pixels arrive (see .thumb-card img in
+      // index.css) instead of snapping to visible - a soft appearance rather
+      // than a hard pop-in. Stays blank (opacity 0) while pending/aborted.
+      className={visible ? "is-loaded" : undefined}
       onLoad={() => {
         doneRef.current = true;
         setVisible(true);

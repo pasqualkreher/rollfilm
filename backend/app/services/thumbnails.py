@@ -927,6 +927,28 @@ def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = Tr
     return PILImage.fromarray(out, "RGB")
 
 
+def add_frame(image: PILImage.Image, adj: dict | None) -> PILImage.Image:
+    """Composite a solid white border around the image as the final render step.
+
+    The width is a percentage of the shorter edge, computed per output size, so it
+    is resolution-independent (a preview, thumbnail and full render all get a
+    proportional frame) and equally thick on portrait and landscape. Expands the
+    canvas - the whole photo stays visible, matted like a print. No-op at 0.
+
+    Run this *after* grain so the border stays a clean, un-textured white."""
+    pct = adj.get("frame_width", 0) if adj else 0
+    if not pct or pct <= 0:
+        return image
+    rgb = image.convert("RGB")
+    w, h = rgb.size
+    border = int(round(min(w, h) * pct / 100.0))
+    if border <= 0:
+        return rgb
+    framed = PILImage.new("RGB", (w + 2 * border, h + 2 * border), (255, 255, 255))
+    framed.paste(rgb, (border, border))
+    return framed
+
+
 def generate_derivatives(
     image_id: str,
     source_path: Path,
@@ -968,6 +990,7 @@ def generate_derivatives(
         preview = source.copy()
         if adjustments:
             preview = _grain_pil(preview, adjustments)
+            preview = add_frame(preview, adjustments)
         _save_atomic(preview, out_dir / "preview.jpg", quality=92)
 
         thumb = source.copy()
@@ -979,6 +1002,7 @@ def generate_derivatives(
         thumb.thumbnail((tw, th), PILImage.LANCZOS)
         if adjustments:
             thumb = _grain_pil(thumb, adjustments)
+            thumb = add_frame(thumb, adjustments)
         _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=88)
 
         # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
@@ -1113,6 +1137,7 @@ def _render_editor_bytes(
         img = apply_distortion(img, distortion)
     img = apply_edits(img, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
     img = apply_adjustments(img, adjustments)
+    img = add_frame(img, adjustments)
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=quality)
     return buf.getvalue()
@@ -1153,6 +1178,7 @@ def render_edited_image(
         source = apply_distortion(source, distortion)
     source = apply_edits(source, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
     source = apply_adjustments(source, adjustments)
+    source = add_frame(source, adjustments)
     return source.convert("RGB")
 
 

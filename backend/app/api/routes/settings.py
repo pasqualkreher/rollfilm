@@ -8,6 +8,9 @@ from app.db.models import Album, AlbumImage, FileType, Image, User
 from app.db.session import get_db
 from app.services import immich as immich_service
 from app.services.settings_store import (
+    AUTO_DEVELOP_ENABLED,
+    AUTO_DEVELOP_GROUP_NAMES,
+    AUTO_DEVELOP_GROUPS,
     IMMICH_API_KEY,
     IMMICH_BASE_URL,
     IMMICH_MODE_SELECTIVE,
@@ -15,6 +18,8 @@ from app.services.settings_store import (
     IMMICH_SYNC_MODE,
     IMMICH_SYNC_PAUSED,
     TRASH_RETENTION_DAYS,
+    get_auto_develop_enabled,
+    get_auto_develop_groups,
     get_immich_sync_mode,
     get_immich_sync_paused,
     get_setting,
@@ -151,6 +156,52 @@ def update_trash_settings(
     # next periodic pass - shortening it should visibly clean the Trash now.
     run_purge_soon()
     return schemas.TrashSettingsOut(retention_days=days)
+
+
+def _auto_develop_example_count(db: Session, owner_id: int) -> int:
+    """How many photos currently teach the auto-develop suggestion: still in
+    the library (not trashed) and carrying a saved edit - either in place
+    (edit_adjustments) or baked into a saved copy (applied_adjustments)."""
+    return (
+        db.query(Image.id)
+        .filter(
+            Image.owner_id == owner_id,
+            Image.deleted_at.is_(None),
+            or_(Image.edit_adjustments.isnot(None), Image.applied_adjustments.isnot(None)),
+        )
+        .count()
+    )
+
+
+@router.get("/auto-develop", response_model=schemas.AutoDevelopSettingsOut)
+def get_auto_develop_settings(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    return schemas.AutoDevelopSettingsOut(
+        enabled=get_auto_develop_enabled(db),
+        enabled_groups=get_auto_develop_groups(db),
+        example_count=_auto_develop_example_count(db, current_user.id),
+    )
+
+
+@router.put("/auto-develop", response_model=schemas.AutoDevelopSettingsOut)
+def update_auto_develop_settings(
+    payload: schemas.AutoDevelopSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    set_setting(db, AUTO_DEVELOP_ENABLED, "1" if payload.enabled else "0")
+    if payload.enabled_groups is not None:
+        # Keep canonical order and drop unknown/duplicate names; an empty list
+        # is stored as "" (= nothing enabled), distinct from unset (= all).
+        names = [n for n in AUTO_DEVELOP_GROUP_NAMES if n in payload.enabled_groups]
+        set_setting(db, AUTO_DEVELOP_GROUPS, ",".join(names))
+    db.commit()
+    return schemas.AutoDevelopSettingsOut(
+        enabled=payload.enabled,
+        enabled_groups=get_auto_develop_groups(db),
+        example_count=_auto_develop_example_count(db, current_user.id),
+    )
 
 
 @router.get("/immich/uploads", response_model=list[schemas.ImmichUploadResult])

@@ -222,6 +222,12 @@ class Image(Base):
     # thumbnail URL's ?v= is String(edit_rev); the server is the sole source of
     # truth for it, replacing the old recomputed per-field version string.
     edit_rev: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # For photos created via "save copy": the develop JSON that was baked into
+    # this flattened JPEG. Never read by the render pipeline (the pixels already
+    # contain the edit - re-applying would double it); it exists purely as
+    # training data for the auto-develop suggestion (services/auto_develop.py),
+    # so a saved copy teaches the feature just like an in-place edit does.
+    applied_adjustments: Mapped[str | None] = mapped_column(String, nullable=True)
 
     albums: Mapped[list["AlbumImage"]] = relationship(back_populates="image", cascade="all, delete-orphan")
     tag_links: Mapped[list["ImageTag"]] = relationship(cascade="all, delete-orphan")

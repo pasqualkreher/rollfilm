@@ -13,7 +13,7 @@ import { Trash } from "./pages/Trash";
 import { MapView } from "./pages/MapView";
 import { Help } from "./pages/Help";
 import { SearchBar } from "./components/SearchBar";
-import { WelcomeGuide } from "./components/WelcomeGuide";
+import { OnboardingWizard } from "./components/OnboardingWizard";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
@@ -276,7 +276,7 @@ export default function App() {
             <Route path="/help" element={<Help />} />
             </Routes>
 
-            <WelcomeGuide />
+            <OnboardingWizard />
           </div>
         </ImportSessionProvider>
       </SelectsProvider>

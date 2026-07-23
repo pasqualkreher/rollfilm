@@ -18,6 +18,15 @@ declare global {
       changeLibraryRoot: () => Promise<{ changed: boolean; path?: string }>;
       /** Folder holding the database, thumbnails and staging (inside the library). */
       getDataRoot: () => Promise<string>;
+      /** Whether this launch is a genuine first run (no library configured yet). */
+      isFirstRun: () => Promise<boolean>;
+      /** Leftover app-data folders from the old app name, with their sizes. */
+      scanLegacyData: () => Promise<{ path: string; sizeBytes: number }[]>;
+      /** Deletes those leftover folders; resolves with what was removed/failed. */
+      removeLegacyData: () => Promise<{
+        removed: string[];
+        failed: { path: string; error: string }[];
+      }>;
     };
   }
 }

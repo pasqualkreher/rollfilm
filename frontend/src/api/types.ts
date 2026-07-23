@@ -65,6 +65,44 @@ export interface TrashSettings {
   retention_days: number;
 }
 
+export interface AutoDevelopSettings {
+  // Whether the editor shows the Auto develop button.
+  enabled: boolean;
+  // Which adjustment groups Auto may touch ("tone" | "white_balance" | "color"
+  // | "details" | "curves" | "effects"); unchecked groups keep their current
+  // slider values when Auto runs.
+  enabled_groups: string[];
+  // How many edited photos the suggestion can currently learn from.
+  example_count: number;
+}
+
+// Which aspects a bulk reset should clear. Omitted flags use the server
+// defaults: the three metadata flags default true, edits/albums false.
+export interface BulkResetOptions {
+  rating?: boolean; // stars
+  color_label?: boolean; // colour label
+  tags?: boolean;
+  develop?: boolean; // the develop sliders (edit_adjustments)
+  geometry?: boolean; // crop / rotation / straighten / flip / perspective
+  albums?: boolean; // remove from every album
+}
+
+export interface BulkAutoDevelopResult {
+  images: ImageOut[];
+  // How many photos actually got a suggestion.
+  applied: number;
+  // How many were skipped (no embedding yet, or nothing similar to learn from).
+  skipped: number;
+}
+
+export interface AutoAdjustResult {
+  // A *partial* server-normalized develop object: only the fields of the
+  // groups enabled in Settings. The editor spreads it over its current state.
+  adjustments: Record<string, unknown>;
+  // How many similar edited photos the suggestion was blended from.
+  samples: number;
+}
+
 export interface CropBox {
   x: number;
   y: number;

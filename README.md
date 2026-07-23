@@ -22,6 +22,7 @@ Your photos stay on your own machine. The app imports them into a managed librar
 - Image-to-image similarity search
 - **Map view** (Leaflet) of all geotagged photos
 - Timeline scrubber, thumbnail grid, lightbox
+- Multiple light & dark **color themes** (skins) — from a clean Light/Dark to Sepia, Nord, Forest and more
 
 ### Immich integration ⭐
 This is one of the highlights of the project: keep your library mirrored to an existing [Immich](https://immich.app) server without giving up local-first management.
@@ -44,7 +45,8 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 
 - All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
 - Edits are stored as values in the database; originals are never touched
-- Exposure/contrast/highlights/shadows, white balance, 8-band HSL color mixer, crop/rotate/perspective, and effects like grain, vignette, clarity, and film-style diffusion
+- Exposure/contrast/highlights/shadows, white balance, HSL color mixer, tone curves, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
+- **Auto develop** — an optional "Auto" button that suggests develop settings *learned from your own edits*: a local CLIP k-nearest-neighbor recommender finds the photos you've already edited that look most like the one you're working on and blends their settings. No training step, no cloud — every edit you save immediately makes the next suggestion better. Works on a single photo or a whole selection at once
 
 ## Download & installation
 

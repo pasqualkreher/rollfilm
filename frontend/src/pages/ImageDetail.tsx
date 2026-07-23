@@ -49,6 +49,14 @@ export function ImageDetail() {
   // nonce) so the request is re-issued and a transient failure can recover.
   const [previewFailed, setPreviewFailed] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
+  // Fades the photo in once its pixels arrive (see .detail-photo in index.css)
+  // instead of it snapping in. Reset per shown photo, not per src change, so a
+  // hi-res upgrade while zoomed doesn't blink.
+  const [photoLoaded, setPhotoLoaded] = useState(false);
+  // True once any photo has been shown. Gates the fade-in to the very first
+  // open (from the grid): while paging through a set we keep the current frame
+  // on screen and swap in place, so there's no fade-out/in wash between photos.
+  const shownOnceRef = useRef(false);
   const imageBoxRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
@@ -76,7 +84,12 @@ export function ImageDetail() {
   const MIN_ZOOM = 0.2; // allow zooming out below fit
   const zoomed = scale > 1.001;
 
-  function resetZoom() {
+  // Whether the next transform change should ease (discrete zoom: double-click,
+  // Esc-to-fit) or snap (wheel-zoom / pan-drag, which must track the input).
+  const [zoomAnim, setZoomAnim] = useState(false);
+
+  function resetZoom(animate = false) {
+    setZoomAnim(animate);
     setScale(1);
     setPan({ x: 0, y: 0 });
   }
@@ -130,7 +143,15 @@ export function ImageDetail() {
     setFullFailed(false);
     setPreviewFailed(false);
     setRetryNonce(0);
-    setFit(null);
+    // Only blank + fade for the first open. When paging through a set, keep the
+    // current photo (and its size) on screen until the next one's pixels have
+    // decoded, then swap in place - the browser holds the old <img> content
+    // until the new src is ready (neighbors are prefetched below), so paging
+    // reads as a clean swap instead of a fade-out/in wash.
+    if (!shownOnceRef.current) {
+      setFit(null);
+      setPhotoLoaded(false);
+    }
   }, [activeId]);
 
   // Once zoomed in, upgrade to the full-resolution render (loaded lazily) unless
@@ -177,6 +198,7 @@ export function ImageDetail() {
     if (!el) return;
     function onWheel(e: WheelEvent) {
       e.preventDefault();
+      setZoomAnim(false);
       const rect = el!.getBoundingClientRect();
       const dx = e.clientX - (rect.left + rect.width / 2);
       const dy = e.clientY - (rect.top + rect.height / 2);
@@ -208,7 +230,7 @@ export function ImageDetail() {
       // Esc closes the lightbox - but first drop back to fit if zoomed in, so
       // one press doesn't do both.
       if (e.key === "Escape") {
-        if (zoomed) resetZoom();
+        if (zoomed) resetZoom(true);
         else goBack();
         return;
       }
@@ -429,13 +451,18 @@ export function ImageDetail() {
             <img
               key={retryNonce}
               ref={imgRef}
-              className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}`}
+              className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}${zoomAnim ? " zoom-anim" : ""}`}
               style={{
                 ...(fit ? { width: fit.w, height: fit.h } : null),
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
                 cursor: zoomed ? (dragRef.current ? "grabbing" : "grab") : "default",
+                opacity: photoLoaded ? 1 : 0,
               }}
-              onLoad={refitImage}
+              onLoad={() => {
+                refitImage();
+                setPhotoLoaded(true);
+                shownOnceRef.current = true;
+              }}
               draggable={false}
               src={
                 hiRes
@@ -458,6 +485,7 @@ export function ImageDetail() {
               onMouseDown={(e: ReactMouseEvent<HTMLImageElement>) => {
                 if (!zoomed) return;
                 e.preventDefault();
+                setZoomAnim(false);
                 dragRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
               }}
               onMouseMove={(e: ReactMouseEvent<HTMLImageElement>) => {
@@ -476,10 +504,11 @@ export function ImageDetail() {
                 const dx = e.clientX - (box.left + box.width / 2);
                 const dy = e.clientY - (box.top + box.height / 2);
                 if (zoomed) {
-                  resetZoom();
+                  resetZoom(true);
                 } else {
                   const img = e.currentTarget;
                   const target = Math.min(MAX_ZOOM, Math.max(1.5, img.naturalWidth / img.getBoundingClientRect().width));
+                  setZoomAnim(true);
                   setScale(target);
                   setPan(clampPan({ x: dx * (1 - target), y: dy * (1 - target) }, target));
                 }
@@ -674,6 +703,10 @@ export function ImageDetail() {
                     <img
                       src={api.images.thumbnailUrl(r.image.id, editVersion(r.image))}
                       alt={r.image.original_filename}
+                      // Plain <img> (not the Thumb component), so add the
+                      // fade-in class ourselves on load - otherwise the shared
+                      // `.thumb-card img { opacity: 0 }` keeps it invisible.
+                      onLoad={(e) => e.currentTarget.classList.add("is-loaded")}
                     />
                   </div>
                 ))}

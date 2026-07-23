@@ -1,5 +1,9 @@
 import type {
   AlbumOut,
+  AutoAdjustResult,
+  AutoDevelopSettings,
+  BulkAutoDevelopResult,
+  BulkResetOptions,
   CropBox,
   ImageOut,
   DirListing,
@@ -283,8 +287,30 @@ export const api = {
         body: JSON.stringify({ image_ids, enabled }),
       });
     },
-    bulkReset(image_ids: string[]): Promise<ImageOut[]> {
-      return request(`/images/bulk-reset`, { method: "POST", body: JSON.stringify({ image_ids }) });
+    // Reset selected aspects (stars/colors/tags/develop/geometry/albums) back to
+    // the just-imported state. Omitted flags fall back to the server defaults
+    // (the three metadata flags default true, edits/albums false).
+    bulkReset(image_ids: string[], opts?: BulkResetOptions): Promise<ImageOut[]> {
+      return request(`/images/bulk-reset`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids, ...opts }),
+      });
+    },
+    // Apply one develop object (an editor preset) to every selected photo in
+    // place. Geometry is untouched; a neutral object clears the develop sliders.
+    bulkDevelop(image_ids: string[], adjustments: Record<string, unknown>): Promise<ImageOut[]> {
+      return request(`/images/bulk-develop`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids, adjustments }),
+      });
+    },
+    // Auto-develop every selected photo (each learns its own suggestion). Returns
+    // the updated rows plus how many were applied vs. skipped (no embedding yet).
+    bulkAutoDevelop(image_ids: string[]): Promise<BulkAutoDevelopResult> {
+      return request(`/images/bulk-auto-develop`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids }),
+      });
     },
     addTag(id: string, name: string): Promise<ImageOut> {
       return request(`/images/${id}/tags`, { method: "POST", body: JSON.stringify({ name }) });
@@ -313,6 +339,11 @@ export const api = {
       });
       if (!res.ok) throw new Error(`preview render failed: ${res.status}`);
       return res.blob();
+    },
+    // Develop suggestion learned from the user's own saved edits (CLIP k-NN
+    // over edited photos). Pure suggestion - nothing is stored server-side.
+    autoAdjust(id: string): Promise<AutoAdjustResult> {
+      return request(`/images/${id}/auto-adjust`);
     },
     // Save the full non-destructive edit (rotation + crop + tonal) in place.
     saveEdits(id: string, edits: ImageEdits): Promise<ImageOut> {
@@ -595,6 +626,13 @@ export const api = {
     },
   },
   settings: {
+    getAutoDevelop(): Promise<AutoDevelopSettings> {
+      return request(`/settings/auto-develop`);
+    },
+    // enabled_groups omitted/undefined leaves the stored group selection as is.
+    updateAutoDevelop(patch: { enabled: boolean; enabled_groups?: string[] }): Promise<AutoDevelopSettings> {
+      return request(`/settings/auto-develop`, { method: "PUT", body: JSON.stringify(patch) });
+    },
     getTrash(): Promise<TrashSettings> {
       return request(`/settings/trash`);
     },

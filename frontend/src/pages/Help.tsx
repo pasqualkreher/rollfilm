@@ -13,10 +13,12 @@ const SECTIONS: { id: string; title: string }[] = [
   { id: "trash", title: "Deleting & the Trash" },
   { id: "photo-view", title: "The photo view" },
   { id: "editing", title: "Editing photos" },
+  { id: "auto-develop", title: "Auto develop" },
   { id: "albums", title: "Albums" },
   { id: "map", title: "Map" },
   { id: "external-sources", title: "External sources" },
   { id: "immich", title: "Immich" },
+  { id: "appearance", title: "Appearance & themes" },
   { id: "backup", title: "Backup, restore & maintenance" },
   { id: "shortcuts", title: "Keyboard shortcuts" },
   { id: "troubleshooting", title: "Troubleshooting" },
@@ -141,7 +143,10 @@ export function Help() {
           <li>
             <strong>Selection &amp; bulk actions:</strong> press "Select", click photos (shift-click
             for a range), then use the bottom bar: set stars or a color label, add a tag, add to an
-            album, add to Selects, send to Immich, reset stars/tags/colors — or delete.
+            album, add to Selects, send to Immich, <strong>Auto develop</strong> the whole selection
+            or <strong>apply a saved editor preset</strong> to it (see "Editing photos" and "Auto
+            develop"), <strong>Reset…</strong> chosen aspects back to the just-imported state (pick
+            any of stars, colors, tags, albums, edits, crop &amp; geometry) — or delete.
           </li>
         </ul>
         <p>
@@ -245,11 +250,14 @@ export function Help() {
           </li>
           <li>
             <strong>Detail:</strong> clarity, sharpness, denoise. <strong>Lens &amp; effects:</strong>{" "}
-            distortion, vignette, mist, grain and grain size.
+            distortion, vignette, mist, grain and grain size, plus a <strong>white frame</strong> — a
+            matte border drawn around the photo that saves and exports with it like any other
+            adjustment.
           </li>
           <li>
             <strong>Presets:</strong> save your current look under a name and reapply it to other
-            photos (crop/rotation are not part of a preset).
+            photos (crop/rotation are not part of a preset). You can also apply a saved preset to a
+            whole selection at once from the Library's bulk bar ("Apply preset…").
           </li>
           <li>
             Handy: <strong>double-click a slider</strong> to reset it; <strong>hold "Compare"</strong>{" "}
@@ -259,6 +267,54 @@ export function Help() {
             <strong>Save</strong> updates this photo's edit. <strong>Save copy</strong> creates a new
             photo (auto-tagged "edited") and leaves the original untouched. "Reset all" clears every
             adjustment.
+          </li>
+        </ul>
+
+        <H id="auto-develop">Auto develop</H>
+        <p>
+          Auto develop suggests edit settings <strong>learned from your own editing</strong> — there's
+          no cloud and no generic "AI look". It's off until you turn it on under{" "}
+          <em>Settings → Auto develop</em>, which also explains how it learns.
+        </p>
+        <p>How it works:</p>
+        <ul>
+          <li>
+            Every photo you've edited — saved in place or saved as a copy — becomes an example. When
+            you ask for a suggestion, Auto develop finds the examples that look most{" "}
+            <strong>visually similar</strong> to the current photo and blends the settings you chose
+            for them, weighting the closest matches most. So it works from a single edited photo, and
+            the more you edit, the closer the matches and the better the suggestions.
+          </li>
+          <li>
+            RAW and JPEG photos learn from their own kind where possible (a RAW is developed from
+            flat, a camera JPEG only fine-tuned), and it never learns from the photo you're editing or
+            its RAW+JPEG partner.
+          </li>
+          <li>
+            It suggests the sliders and color settings, but never <strong>crop, rotation or
+            masks</strong> — those belong to one specific photo and don't transfer.
+          </li>
+        </ul>
+        <p>Using it:</p>
+        <ul>
+          <li>
+            <strong>In the editor:</strong> once enabled, an <strong>Auto</strong> button appears in
+            the footer. It only fills the sliders with a suggestion — nothing is applied to your photo
+            until you <em>Save</em> — so you can tweak it further or reset and try again. Masks you've
+            drawn are kept.
+          </li>
+          <li>
+            <strong>On a selection:</strong> pick photos in the Library and press{" "}
+            <strong>Auto develop</strong> in the bulk bar to develop each one with its own suggestion.
+            Photos with nothing similar to learn from yet (or whose analysis isn't ready) are skipped
+            and counted. This one <em>does</em> change the photos — it asks first if any already have
+            edits.
+          </li>
+          <li>
+            <strong>Which settings it may change:</strong> in Settings you can limit Auto to specific
+            groups — Tone, White balance, Color, Details, Curves, Effects. Unchecked groups keep
+            whatever the sliders currently hold, so you can let it handle, say, tone and color while
+            you set the rest yourself.
           </li>
         </ul>
 
@@ -392,6 +448,15 @@ export function Help() {
         <p>
           Every upload and removal is listed with ✓ or the exact error under{" "}
           <em>Settings → Immich → Recent uploads</em>; network hiccups are retried automatically.
+        </p>
+
+        <H id="appearance">Appearance &amp; themes</H>
+        <p>
+          Under <em>Settings → Appearance</em> you can pick a color theme (skin). Choose{" "}
+          <strong>System</strong> to follow your operating system's light/dark setting, or pick one
+          of the light skins (Light, Soft Grey, Sepia, Rosé) or dark skins (Dim, Dark, Vintage, Nord,
+          Forest). Each tile previews its own colors, and the choice is remembered per computer — it
+          applies to the whole app immediately.
         </p>
 
         <H id="backup">Backup, restore &amp; maintenance</H>

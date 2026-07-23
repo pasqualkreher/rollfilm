@@ -67,6 +67,11 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     "chrome_effect": (0, 0, 100, False),
     "chrome_blue": (0, 0, 100, False),
     "mist": (0, 0, 100, False),
+    # Frame: a solid white border composited as the very last render step, its
+    # width a percentage of the shorter edge (so it's resolution-independent and
+    # equally thick on portrait/landscape). Compositional rather than tonal, so
+    # it's excluded from auto-develop style transfer (see auto_develop.GROUP_FIELDS).
+    "frame_width": (0, 0, 20, False),
 }
 
 # Enumerated (string) adjustments: key -> (default, allowed values).

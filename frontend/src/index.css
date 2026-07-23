@@ -57,6 +57,239 @@
 /* User forced light: the :root defaults already are light, so nothing more is
    needed - setting data-theme="light" simply disables the OS-dark rule above. */
 
+/* ---- Colour skins (Settings → Appearance) ------------------------------------
+   Each block is a full palette keyed off data-theme, driven by state/theme.ts
+   (the picker's swatch colours mirror --bg / --bg-elevated / --text / --accent
+   here). color-scheme per skin keeps native controls (scrollbars, date pickers,
+   form widgets) in step with the palette. */
+
+/* Soft Grey — a calm light grey rather than stark white; elevated reads lighter
+   than the page so cards still lift off it. */
+:root[data-theme="soft-grey"] {
+  --bg: #e8e8ea;
+  --bg-elevated: #f2f2f4;
+  --hover: #dcdce0;
+  --border: #cbcbd0;
+  --text: #26262a;
+  --text-muted: #66666d;
+  --accent: #3a6df0;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(58, 109, 240, 0.12);
+  --danger: #c9382b;
+  color-scheme: light;
+}
+
+/* Sepia — warm cream paper with dark-brown ink and a terracotta accent. */
+:root[data-theme="sepia"] {
+  --bg: #f4ecdd;
+  --bg-elevated: #ece2cf;
+  --hover: #e4d8c0;
+  --border: #d8c9ac;
+  --text: #3d3226;
+  --text-muted: #7d6f57;
+  --accent: #b5651d;
+  --accent-contrast: #fff8ec;
+  --accent-soft: rgba(181, 101, 29, 0.15);
+  --danger: #b3402e;
+  color-scheme: light;
+}
+
+/* Rosé — soft warm blush with a dusty-rose accent. */
+:root[data-theme="rose"] {
+  --bg: #f7edea;
+  --bg-elevated: #fbf3f1;
+  --hover: #f0e0db;
+  --border: #e6cfc8;
+  --text: #43322f;
+  --text-muted: #8a6f69;
+  --accent: #c25d6e;
+  --accent-contrast: #fff6f4;
+  --accent-soft: rgba(194, 93, 110, 0.15);
+  --danger: #bb3b46;
+  color-scheme: light;
+}
+
+/* Dim — a soft slate that's dark but not black; easier on the eyes at night. */
+:root[data-theme="dim"] {
+  --bg: #2c2f36;
+  --bg-elevated: #363a43;
+  --hover: #40454f;
+  --border: #474d58;
+  --text: #e6e8ec;
+  --text-muted: #a3a9b4;
+  --accent: #7aa2f7;
+  --accent-contrast: #1a1c20;
+  --accent-soft: rgba(122, 162, 247, 0.18);
+  --danger: #e0685b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+/* Vintage — warm charcoal ("light black") with a vintage-orange accent. */
+:root[data-theme="vintage"] {
+  --bg: #24211d;
+  --bg-elevated: #2e2a24;
+  --hover: #38332b;
+  --border: #423c33;
+  --text: #ece4d6;
+  --text-muted: #a89e8c;
+  --accent: #e08a3c;
+  --accent-contrast: #201d18;
+  --accent-soft: rgba(224, 138, 60, 0.18);
+  --danger: #cf5b3c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Nord — cool blue-grey with a frost-cyan accent. */
+:root[data-theme="nord"] {
+  --bg: #2e3440;
+  --bg-elevated: #3b4252;
+  --hover: #434c5e;
+  --border: #4c566a;
+  --text: #eceff4;
+  --text-muted: #a9b1c2;
+  --accent: #88c0d0;
+  --accent-contrast: #2e3440;
+  --accent-soft: rgba(136, 192, 208, 0.2);
+  --danger: #bf616a;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+/* Forest — deep green with a leafy accent. */
+:root[data-theme="forest"] {
+  --bg: #1a2620;
+  --bg-elevated: #223029;
+  --hover: #2b3b32;
+  --border: #35473c;
+  --text: #e4ede6;
+  --text-muted: #96a89c;
+  --accent: #6fbf8b;
+  --accent-contrast: #121a15;
+  --accent-soft: rgba(111, 191, 139, 0.18);
+  --danger: #e0685b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+/* Solarized Light — the classic warm-cream base with a cyan accent. */
+:root[data-theme="solarized-light"] {
+  --bg: #fdf6e3;
+  --bg-elevated: #eee8d5;
+  --hover: #e6dfc4;
+  --border: #ddd5b8;
+  --text: #586e75;
+  --text-muted: #93a1a1;
+  --accent: #268bd2;
+  --accent-contrast: #fdf6e3;
+  --accent-soft: rgba(38, 139, 210, 0.14);
+  --danger: #dc322f;
+  color-scheme: light;
+}
+
+/* Lavender — cool light lilac with a violet accent. */
+:root[data-theme="lavender"] {
+  --bg: #f1eef8;
+  --bg-elevated: #f8f6fc;
+  --hover: #e7e1f3;
+  --border: #d8cfec;
+  --text: #322b47;
+  --text-muted: #746b8c;
+  --accent: #7c5cd6;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(124, 92, 214, 0.14);
+  --danger: #cc3b57;
+  color-scheme: light;
+}
+
+/* Mint — crisp pale green with a teal accent. */
+:root[data-theme="mint"] {
+  --bg: #ecf5ef;
+  --bg-elevated: #f4faf6;
+  --hover: #ddece2;
+  --border: #cbe0d3;
+  --text: #223a2e;
+  --text-muted: #5f7d6d;
+  --accent: #10967e;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(16, 150, 126, 0.14);
+  --danger: #cc4136;
+  color-scheme: light;
+}
+
+/* Dracula — dark blue-grey with a vivid purple accent. */
+:root[data-theme="dracula"] {
+  --bg: #282a36;
+  --bg-elevated: #343746;
+  --hover: #3d4054;
+  --border: #474b5e;
+  --text: #f8f8f2;
+  --text-muted: #a0a3b8;
+  --accent: #bd93f9;
+  --accent-contrast: #21222c;
+  --accent-soft: rgba(189, 147, 249, 0.2);
+  --danger: #ff5555;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Solarized Dark — the classic teal-charcoal base with a blue accent. */
+:root[data-theme="solarized-dark"] {
+  --bg: #002b36;
+  --bg-elevated: #073642;
+  --hover: #0d4450;
+  --border: #16505c;
+  --text: #eee8d5;
+  --text-muted: #8ba1a6;
+  --accent: #268bd2;
+  --accent-contrast: #002b36;
+  --accent-soft: rgba(38, 139, 210, 0.22);
+  --danger: #dc322f;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Midnight — deep navy with an electric-blue accent. */
+:root[data-theme="midnight"] {
+  --bg: #10141f;
+  --bg-elevated: #192030;
+  --hover: #222b40;
+  --border: #2c374f;
+  --text: #e5eaf5;
+  --text-muted: #8b95ad;
+  --accent: #4d8dff;
+  --accent-contrast: #0a0d16;
+  --accent-soft: rgba(77, 141, 255, 0.2);
+  --danger: #e0685b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+/* Plum — warm dark aubergine with a magenta accent. */
+:root[data-theme="plum"] {
+  --bg: #241b2b;
+  --bg-elevated: #2f2338;
+  --hover: #3a2c45;
+  --border: #453551;
+  --text: #efe6f2;
+  --text-muted: #a897ad;
+  --accent: #d16ba5;
+  --accent-contrast: #1c141f;
+  --accent-soft: rgba(209, 107, 165, 0.2);
+  --danger: #e0685b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -151,6 +384,40 @@ button {
 @keyframes pm-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Soft entrance animations shared across views, so navigating in/out of pages,
+   the lightbox and the editor eases in gently instead of snapping. Kept subtle
+   (short, small movement) so the app still feels quick, not sluggish. */
+@keyframes pm-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pm-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pm-overlay-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
@@ -287,6 +554,11 @@ button {
   overflow: auto;
   display: flex;
   flex-direction: column;
+  /* Ease each page (incl. the lightbox and back-navigation) in gently instead
+     of it snapping into place. Opacity + a tiny rise; the scroller and timeline
+     root translate together, so this never disturbs the virtual grid's
+     measurements. */
+  animation: pm-page-in 0.28s ease both;
 }
 
 /* Hide the native OS scrollbar on the app's scroll containers - the timeline
@@ -416,6 +688,17 @@ button {
 
 .action-bar--bottom .album-picker-hint {
   display: none;
+}
+
+/* Status messages get their own full-width row below the button groups, so
+   even a short message never sits inline crowding the actions. */
+.action-bar-messages {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 /* Let the tag input give up width on narrow windows instead of forcing its
@@ -614,7 +897,9 @@ textarea:focus-visible {
   font-family: inherit;
   text-transform: none;
   letter-spacing: normal;
-  color-scheme: light;
+  /* Follow the active skin's color-scheme (set on :root per skin) so the native
+     picker stays light on light skins and dark on dark ones. */
+  color-scheme: inherit;
 }
 
 .filter-bar input[type="date"]::-webkit-calendar-picker-indicator {
@@ -624,12 +909,6 @@ textarea:focus-visible {
 
 .filter-bar input[type="date"]::-webkit-calendar-picker-indicator:hover {
   opacity: 1;
-}
-
-@media (prefers-color-scheme: dark) {
-  .filter-bar input[type="date"] {
-    color-scheme: dark;
-  }
 }
 
 /* Banner shown above a grid when a scoped search is active. */
@@ -1117,6 +1396,28 @@ textarea:focus-visible {
   height: 100%;
   object-fit: cover;
   display: block;
+  /* Blank until the pixels arrive, then fade in softly instead of snapping in
+     (the JS toggles .is-loaded on load - see Thumb in ThumbnailGrid.tsx). */
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+
+.thumb-card img.is-loaded {
+  opacity: 1;
+}
+
+/* Users who prefer reduced motion get everything immediately, no fades or
+   entrance animations. */
+@media (prefers-reduced-motion: reduce) {
+  .thumb-card img,
+  .detail-photo {
+    transition: none;
+  }
+  .page,
+  .editor-overlay,
+  .detail-photo {
+    animation: none;
+  }
 }
 
 .thumb-card .badge {
@@ -1328,6 +1629,9 @@ textarea:focus-visible {
   flex-direction: column;
   background: var(--bg);
   color: var(--text);
+  /* Fade + a hair of scale so opening the editor eases in, matching the soft
+     page/lightbox transitions rather than popping over the view. */
+  animation: pm-overlay-in 0.25s ease both;
 }
 
 /* Slim top bar holding the back arrow, so it never overlaps the photo. */
@@ -1928,6 +2232,60 @@ input.editor-preset-select {
   cursor: pointer;
 }
 
+/* Reset menu: a checkbox popover on the bottom action bar, so it opens upward. */
+.reset-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.reset-menu-caret {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.reset-menu-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 200px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+.reset-menu-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.reset-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.reset-menu-item:hover {
+  background: var(--hover);
+}
+
+.reset-menu-item input {
+  cursor: pointer;
+}
+
+.reset-menu-apply {
+  margin-top: 8px;
+  width: 100%;
+  justify-content: center;
+}
+
 .tag-chip button {
   background: none;
   border: none;
@@ -2255,6 +2613,19 @@ input.editor-preset-select {
 .detail-photo {
   transform-origin: center center;
   will-change: transform;
+  /* Only opacity eases by default (the soft fade on load / when paging through
+     photos, driven by ImageDetail) - deliberately NOT transform, so wheel-zoom
+     and pan still track the input directly with no lag. A gentle ease-out over
+     ~0.3s reads as a soft appearance rather than a hard pop-in, while staying
+     short enough that arrowing through a set still feels responsive. */
+  transition: opacity 0.32s ease-out;
+}
+
+/* Discrete zoom (double-click to 100%, Esc/double-click back to fit) eases the
+   transform so it glides instead of snapping. Toggled by ImageDetail via the
+   zoomAnim flag, and removed again for wheel-zoom / pan so those stay direct. */
+.detail-photo.zoom-anim {
+  transition: transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.32s ease-out;
 }
 
 /* Shown in place of the photo when its preview can't be loaded (damaged or
@@ -2404,20 +2775,9 @@ input.editor-preset-select {
   }
 }
 
-/* Settings: full-width page, each section separated by a divider for a clear,
-   consistent rhythm. */
-.settings-page section {
-  border-top: 1px solid var(--border);
-  padding-top: 22px;
-}
-
-.settings-page section:first-of-type {
-  border-top: none;
-  padding-top: 0;
-}
-
-/* Section dividers span the full width, but keep the content (text, inputs,
-   toolbars) in a comfortable reading column so nothing stretches edge to edge. */
+/* Keep the section content (text, inputs, toolbars) in a comfortable reading
+   column so nothing stretches edge to edge on wide windows. The section chrome
+   (card border/background) lives in the .settings-section rules below. */
 .settings-page section > * {
   max-width: 640px;
 }
@@ -2799,42 +3159,154 @@ input.editor-preset-select {
 }
 
 /* First-run welcome guide + Help page */
-.welcome-guide {
-  width: min(620px, 100%);
+/* First-start onboarding wizard (components/OnboardingWizard.tsx). */
+.onboarding {
+  width: min(640px, 100%);
 }
 
-.welcome-guide-header {
+.onboarding-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   padding: 18px 20px 0;
 }
 
-.welcome-guide-header h2 {
+.onboarding-header h2 {
   margin: 0;
   font-size: 18px;
 }
 
-.welcome-guide-body {
-  padding: 8px 20px;
+.onboarding-progress-label {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.onboarding-dots {
+  display: flex;
+  gap: 6px;
+  padding: 12px 20px 4px;
+}
+
+.onboarding-dot {
+  width: 22px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.2s ease;
+}
+
+.onboarding-dot.done {
+  background: var(--accent-soft);
+}
+
+.onboarding-dot.active {
+  background: var(--accent);
+}
+
+.onboarding-body {
+  padding: 8px 20px 4px;
   overflow-y: auto;
 }
 
-.welcome-steps {
+.onboarding-step-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.onboarding-lead {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.onboarding-list,
+.onboarding-workflow {
   margin: 0;
   padding-left: 20px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 9px;
+  line-height: 1.5;
 }
 
-.welcome-guide-footer {
+.onboarding-paths {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.onboarding-paths li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.onboarding-paths code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.onboarding-size {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.onboarding-field {
+  margin-bottom: 8px;
+}
+
+.onboarding-field-label {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.onboarding-field-value {
+  display: block;
+  font-size: 13px;
+  word-break: break-all;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.onboarding-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 14px 20px 18px;
   border-top: 1px solid var(--border);
   margin-top: 12px;
+}
+
+.onboarding-footer-right {
+  display: flex;
+  gap: 8px;
+}
+
+.btn.subtle {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+
+.btn.subtle:hover {
+  color: var(--text);
 }
 
 /* .help-page is the scroll container (.page), so it must stay full-width —
@@ -3368,4 +3840,161 @@ kbd {
 
 .editor-back-float:hover {
   background: var(--bg-elevated);
+}
+
+/* ---- Settings: colour-skin picker --------------------------------------- */
+
+/* A responsive grid of skin tiles, each a live preview + label. The previews
+   use the skin's own colours (from state/theme.ts) so they read correctly no
+   matter which skin is currently active. */
+.theme-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 12px;
+  max-width: 620px;
+  margin-top: 14px;
+}
+
+.theme-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.1s ease;
+}
+
+.theme-tile:hover {
+  border-color: var(--text-muted);
+  transform: translateY(-1px);
+}
+
+.theme-tile:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.theme-tile.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* A mini mock of the app painted in the skin's own colours: a header row with a
+   text line + accent "button", then a row of three "cards". Laid out with flex
+   (no absolute positioning) so it renders reliably inside the tile. */
+.theme-tile-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 74px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.28);
+  overflow: hidden;
+}
+
+.tp-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.tp-line {
+  height: 6px;
+  width: 42%;
+  border-radius: 3px;
+  opacity: 0.9;
+}
+
+.tp-pill {
+  height: 12px;
+  width: 24px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.tp-body {
+  display: flex;
+  gap: 5px;
+  flex: 1;
+  min-height: 0;
+}
+
+.tp-swatch {
+  flex: 1;
+  border-radius: 4px;
+}
+
+/* "System" tile: a light half beside a dark half so it reads as "follows OS". */
+.theme-tile-preview.tp-split {
+  flex-direction: row;
+  padding: 0;
+  gap: 0;
+}
+
+.tp-half {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 9px;
+}
+
+.theme-tile-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.theme-tile-check {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* A quiet caption above each skin group (Light / Dark). */
+.theme-group-label {
+  margin: 18px 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ---- Settings: flat sections, separated by a divider -------------------- */
+
+.settings-section {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+  margin-bottom: 22px;
+}
+
+.settings-section:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+/* Plain section title — no card chrome. */
+.settings-section-header {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.settings-section-body {
+  padding: 0;
 }

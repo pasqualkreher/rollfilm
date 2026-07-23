@@ -1,20 +1,41 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { ImmichSyncMode, ImmichTestResult } from "../api/types";
-import { useTheme, type Theme } from "../state/theme";
+import { ThemePicker } from "../components/ThemePicker";
 import { useTasks } from "../state/tasks";
 
-const THEME_OPTIONS: { value: Theme; label: string }[] = [
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
-  { value: "system", label: "System" },
+// A collapsible Settings section, driven as an accordion: opening one closes
+// the others (the parent tracks a single open title). Clicking the open one
+// closes it, so all sections can be shut. Nothing is open by default.
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="settings-section">
+      <h3 className="settings-section-header">{title}</h3>
+      <div className="settings-section-body">{children}</div>
+    </section>
+  );
+}
+
+// The adjustment groups the Auto develop suggestion may touch. Keys mirror the
+// backend's AUTO_DEVELOP_GROUP_NAMES (services/settings_store.py); the field
+// lists live in services/auto_develop.py (GROUP_FIELDS).
+const AUTO_DEVELOP_GROUPS: { key: string; label: string; desc: string }[] = [
+  { key: "tone", label: "Tone", desc: "Exposure, contrast, highlights, shadows, whites, blacks" },
+  { key: "white_balance", label: "White balance", desc: "Temperature, tint" },
+  { key: "color", label: "Color", desc: "Vibrance, saturation, hue, HSL mixer, color grading, calibration" },
+  { key: "details", label: "Details", desc: "Sharpness, clarity, dehaze, structure, noise reduction" },
+  { key: "curves", label: "Curves", desc: "Point and parametric tone curves" },
+  { key: "effects", label: "Effects", desc: "Grain, vignette, glow, halation, mist, LUT strength" },
 ];
 
 export function Settings() {
   const queryClient = useQueryClient();
-  const [theme, setTheme] = useTheme();
   const { setBusyLabel } = useTasks();
+
+  // Sections are always open (no accordion) - sectionProps just carries the
+  // title so every call site stays unchanged.
+  const sectionProps = (title: string) => ({ title });
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
   const [repairDatesResult, setRepairDatesResult] = useState<string | null>(null);
@@ -99,6 +120,25 @@ export function Settings() {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["immich-settings"] }),
   });
+
+  // Auto develop: opt-in for the editor's Auto button, which suggests develop
+  // settings learned from the user's own saved edits.
+  const { data: autoDevelop } = useQuery({
+    queryKey: ["auto-develop-settings"],
+    queryFn: () => api.settings.getAutoDevelop(),
+  });
+  const setAutoDevelop = useMutation({
+    mutationFn: (patch: { enabled: boolean; enabled_groups?: string[] }) =>
+      api.settings.updateAutoDevelop(patch),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["auto-develop-settings"] }),
+  });
+  function toggleAutoGroup(key: string, on: boolean) {
+    if (!autoDevelop) return;
+    const next = on
+      ? [...autoDevelop.enabled_groups, key]
+      : autoDevelop.enabled_groups.filter((g) => g !== key);
+    setAutoDevelop.mutate({ enabled: autoDevelop.enabled, enabled_groups: next });
+  }
 
   // Trash auto-cleanup: how many days deleted photos stay restorable before
   // the startup purge removes them for good (0 = keep forever).
@@ -217,31 +257,16 @@ export function Settings() {
     <div className="page settings-page">
       <h2 className="section-title">Settings</h2>
 
-      <section style={{ marginBottom: 32 }}>
-        <h3 className="section-title" style={{ fontSize: 15 }}>
-          Appearance
-        </h3>
+      <Section {...sectionProps("Appearance")}>
         <p style={{ color: "var(--text-muted)" }}>
-          Choose a light or dark look, or follow your system setting.
+          Pick a colour skin, or follow your system's light/dark setting. The
+          preview on each tile shows its own colours.
         </p>
-        <span className="segmented">
-          {THEME_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              className={theme === o.value ? "active" : ""}
-              onClick={() => setTheme(o.value)}
-            >
-              {o.label}
-            </button>
-          ))}
-        </span>
-      </section>
+        <ThemePicker />
+      </Section>
 
       {desktop?.changeLibraryRoot && (
-        <section style={{ marginBottom: 32 }}>
-          <h3 className="section-title" style={{ fontSize: 15 }}>
-            Library folder
-          </h3>
+        <Section {...sectionProps("Library folder")}>
           <p style={{ color: "var(--text-muted)" }}>
             Where your photo files are stored (chosen on first start), together with this library's
             database, thumbnails and staging. Changing the folder restarts the app and switches to
@@ -253,14 +278,11 @@ export function Settings() {
           <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
             Change library folder…
           </button>
-        </section>
+        </Section>
       )}
 
       {desktop?.getDataRoot && (
-        <section style={{ marginBottom: 32 }}>
-          <h3 className="section-title" style={{ fontSize: 15 }}>
-            Library data
-          </h3>
+        <Section {...sectionProps("Library data")}>
           <p style={{ color: "var(--text-muted)" }}>
             The database, thumbnails and import staging live in a hidden{" "}
             <code>.photomanager</code> subfolder inside the library folder, so the whole library is
@@ -272,13 +294,10 @@ export function Settings() {
           <p style={{ fontFamily: "monospace", fontSize: 13, wordBreak: "break-all" }}>
             {dataRoot ?? "…"}
           </p>
-        </section>
+        </Section>
       )}
 
-      <section style={{ marginBottom: 32 }}>
-        <h3 className="section-title" style={{ fontSize: 15 }}>
-          Immich integration
-        </h3>
+      <Section {...sectionProps("Immich integration")}>
         <p style={{ color: "var(--text-muted)" }}>
           Add your Immich host and an API key here to enable the{" "}
           <em>"Also upload to Immich"</em> option during import. Only JPEGs are uploaded - RAW files
@@ -483,12 +502,86 @@ export function Settings() {
             </ul>
           </div>
         )}
-      </section>
+      </Section>
 
-      <section style={{ marginBottom: 32 }}>
-        <h3 className="section-title" style={{ fontSize: 15 }}>
-          Trash
-        </h3>
+      <Section {...sectionProps("Auto develop")}>
+        <p style={{ color: "var(--text-muted)" }}>
+          Adds an <strong>Auto</strong> button to the photo editor that suggests develop settings
+          learned from your own editing: it finds the photos most similar to the one you're editing
+          among those you've saved (in place or as a copy) and blends the settings you chose for
+          them. The more photos you edit, the better the suggestions get. Suggestions only fill the
+          sliders — nothing is applied to your photo until you save.
+        </p>
+        <label
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "flex-start",
+            cursor: setAutoDevelop.isPending ? "wait" : "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={autoDevelop?.enabled ?? false}
+            disabled={autoDevelop === undefined || setAutoDevelop.isPending}
+            onChange={(e) => setAutoDevelop.mutate({ enabled: e.target.checked })}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            <strong>Show the Auto button in the editor</strong>
+            <span style={{ display: "block", color: "var(--text-muted)", fontSize: 12 }}>
+              {autoDevelop === undefined
+                ? "…"
+                : autoDevelop.example_count === 0
+                  ? "No edited photos yet — save an edit (or an edited copy) and Auto can start learning from it."
+                  : `Currently learning from ${autoDevelop.example_count} edited photo${autoDevelop.example_count === 1 ? "" : "s"} in your library.`}
+            </span>
+          </span>
+        </label>
+        {autoDevelop?.enabled && (
+          <div style={{ marginTop: 12, marginLeft: 24 }}>
+            <p style={{ color: "var(--text-muted)", fontSize: 12, margin: "0 0 8px" }}>
+              Which settings Auto is allowed to change — unchecked groups keep their current values:
+            </p>
+            {AUTO_DEVELOP_GROUPS.map((g) => (
+              <label
+                key={g.key}
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "flex-start",
+                  padding: "3px 0",
+                  cursor: setAutoDevelop.isPending ? "wait" : "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoDevelop.enabled_groups.includes(g.key)}
+                  disabled={setAutoDevelop.isPending}
+                  onChange={(e) => toggleAutoGroup(g.key, e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  {g.label}
+                  <span style={{ display: "block", color: "var(--text-muted)", fontSize: 12 }}>
+                    {g.desc}
+                  </span>
+                </span>
+              </label>
+            ))}
+            {autoDevelop.enabled_groups.length === 0 && (
+              <p style={{ color: "var(--danger)", fontSize: 12 }}>
+                All groups are unchecked — the Auto button won't change anything.
+              </p>
+            )}
+          </div>
+        )}
+        {setAutoDevelop.isError && (
+          <p style={{ color: "var(--danger)" }}>{(setAutoDevelop.error as Error).message}</p>
+        )}
+      </Section>
+
+      <Section {...sectionProps("Trash")}>
         <p style={{ color: "var(--text-muted)" }}>
           Deleted library photos stay in the Trash and can be restored. On every app start, photos
           that have been in the Trash longer than this are deleted for good, in the background.
@@ -527,12 +620,9 @@ export function Settings() {
         {saveTrash.isError && (
           <p style={{ color: "var(--danger)" }}>{(saveTrash.error as Error).message}</p>
         )}
-      </section>
+      </Section>
 
-      <section style={{ marginBottom: 32 }}>
-        <h3 className="section-title" style={{ fontSize: 15 }}>
-          Tags
-        </h3>
+      <Section {...sectionProps("Tags")}>
         <p style={{ color: "var(--text-muted)" }}>
           Unused tags are ones no photo carries anymore (left behind after retagging or deleting
           photos). Remove them to keep the tag filter tidy.
@@ -569,12 +659,9 @@ export function Settings() {
             {((removeTag.error || pruneTags.error) as Error).message}
           </p>
         )}
-      </section>
+      </Section>
 
-      <section style={{ marginBottom: 32 }}>
-        <h3 className="section-title" style={{ fontSize: 15 }}>
-          Library maintenance
-        </h3>
+      <Section {...sectionProps("Library maintenance")}>
         <p style={{ color: "var(--text-muted)" }}>
           The library folder on disk is the source of truth. This removes database entries whose
           files are no longer there (e.g. deleted outside the app), cleans up thumbnails that belong
@@ -606,12 +693,9 @@ export function Settings() {
           {repairDates.isPending ? "Repairing dates..." : "Repair capture dates"}
         </button>
         {repairDatesResult && <p style={{ color: "var(--text-muted)" }}>{repairDatesResult}</p>}
-      </section>
+      </Section>
 
-      <section style={{ marginBottom: 32 }}>
-        <h3 className="section-title" style={{ fontSize: 15 }}>
-          Backup &amp; restore
-        </h3>
+      <Section {...sectionProps("Backup & restore")}>
         <p style={{ color: "var(--text-muted)" }}>
           Download a backup of your managed library: every imported photo file plus its ratings,
           color labels, albums, and edits. Photos from external sources are not bundled - they stay
@@ -653,7 +737,7 @@ export function Settings() {
         {restore.isError && (
           <p style={{ color: "var(--danger)" }}>{(restore.error as Error).message}</p>
         )}
-      </section>
+      </Section>
     </div>
   );
 }

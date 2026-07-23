@@ -61,6 +61,9 @@ export const SCALAR_SPEC = {
   chrome_effect: { def: 0, min: 0, max: 100 },
   chrome_blue: { def: 0, min: 0, max: 100 },
   mist: { def: 0, min: 0, max: 100 },
+  // Frame: white border width as a % of the shorter edge, composited last
+  // (compositional, not tonal - lives under Transform, kept out of auto-develop).
+  frame_width: { def: 0, min: 0, max: 20 },
 } satisfies Record<string, ScalarDef>;
 
 export type ScalarKey = keyof typeof SCALAR_SPEC;

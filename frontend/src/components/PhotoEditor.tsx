@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
 import {
@@ -442,9 +442,18 @@ export function PhotoEditor({ image, onClose }: Props) {
   // What the preview should actually show right now: in crop mode the full
   // (uncropped) frame, in compare mode the untouched original with only the
   // geometry kept so the frame doesn't jump.
+  // The white frame expands the canvas, which would offset the crop-rect and
+  // mask overlays (they're positioned as fractions of the displayed image). So
+  // while a spatial overlay is live, render the preview without the frame - it
+  // still shows (and always saves) whenever no overlay needs pixel alignment.
+  const overlayActive = cropMode || openGroup === "masks";
   const previewEdits: ImageEdits = compare
     ? neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion)
-    : { ...edits, crop: cropMode ? null : crop };
+    : {
+        ...edits,
+        crop: cropMode ? null : crop,
+        adjustments: overlayActive && adj.frame_width ? { ...adj, frame_width: 0 } : adj,
+      };
   const previewKey = JSON.stringify(previewEdits);
 
   // Server-rendered live preview: debounce edit changes, cancel the stale
@@ -594,6 +603,42 @@ export function PhotoEditor({ image, onClose }: Props) {
       navigate(`/image/${created.id}`, { state: { backTo: "/" } });
     },
   });
+
+  // Auto develop: ask the backend for settings learned from the user's own
+  // saved edits (CLIP k-NN over visually similar edited photos) and load them
+  // into the sliders. Purely a suggestion - nothing is stored until Save, and
+  // any masks the user drew are kept (masks are spatial and never suggested).
+  const autoDevelopSettings = useQuery({
+    queryKey: ["auto-develop-settings"],
+    queryFn: () => api.settings.getAutoDevelop(),
+  });
+  const autoAdjust = useMutation({
+    mutationFn: () => api.images.autoAdjust(image.id),
+    onSuccess: (res) => {
+      // The response is *partial* - only the groups enabled in Settings.
+      // Spreading it over the current state leaves every unchecked group's
+      // sliders exactly where the user has them.
+      setAdj((a) => ({
+        ...normalizeAdjustments({ ...a, ...(res.adjustments as Partial<Adjustments>) }),
+        masks: a.masks,
+      }));
+    },
+  });
+
+  // Auto-dismiss the auto-develop error banner a few seconds after it appears.
+  useEffect(() => {
+    if (!autoAdjust.isError) return;
+    const t = setTimeout(() => autoAdjust.reset(), 5000);
+    return () => clearTimeout(t);
+  }, [autoAdjust.isError, autoAdjust.reset]);
+
+  function autoErrorText(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("No edited photos")) return "No edited photos to learn from yet – save an edit or a copy first.";
+    if (msg.includes("Embedding not ready")) return "This photo's analysis isn't ready yet – try again in a moment.";
+    if (msg.includes("affect no settings")) return "Auto develop is set to affect no settings – enable at least one group in Settings.";
+    return "Auto develop failed.";
+  }
 
   const busy = saveEdits.isPending || saveCopy.isPending;
 
@@ -1528,13 +1573,25 @@ export function PhotoEditor({ image, onClose }: Props) {
           <Slider label="Tilt horizontal" value={perspH} onChange={setPerspH} />
           <Slider label="Tilt vertical" value={perspV} onChange={setPerspV} />
           <Slider label="Distortion" value={distortion} onChange={setDistortion} />
+          {/* White frame: a matte border added around the photo, drawn last.
+              Bound to the develop object (not geometry), so it round-trips
+              through Save and Save copy like every other adjustment. */}
+          <Slider
+            label="White frame"
+            value={adj.frame_width}
+            onChange={(v) => setAdj((a) => ({ ...a, frame_width: v }))}
+            min={SCALAR_SPEC.frame_width.min}
+            max={SCALAR_SPEC.frame_width.max}
+            resetValue={SCALAR_SPEC.frame_width.def}
+            format={(v) => `${v}%`}
+          />
         </div>
 
           </div>
         )}
 
-        {/* Basic: tone mapper + histogram + the Basic sliders. */}
-        {accordionHeader("basic", "Basic")}
+        {/* Tone: tone mapper + histogram + the tone sliders. */}
+        {accordionHeader("basic", "Tone")}
         {openGroup === "basic" && (
           <div className="editor-accordion-body">
             {/* Base transfer curve the tonal sliders ride on. */}
@@ -2002,7 +2059,18 @@ export function PhotoEditor({ image, onClose }: Props) {
           {(saveEdits.isError || saveCopy.isError) && (
             <p className="editor-footer-error">{((saveEdits.error || saveCopy.error) as Error).message}</p>
           )}
+          {autoAdjust.isError && <p className="editor-footer-error">{autoErrorText(autoAdjust.error)}</p>}
           <div className="editor-footer-secondary">
+            {autoDevelopSettings.data?.enabled && (
+              <button
+                className="btn ghost btn-sm"
+                disabled={autoAdjust.isPending || busy}
+                onClick={() => autoAdjust.mutate()}
+                title="Suggest develop settings learned from your edited photos"
+              >
+                {autoAdjust.isPending ? "Auto…" : "Auto"}
+              </button>
+            )}
             <button
               className="btn ghost btn-sm"
               disabled={allNeutral}

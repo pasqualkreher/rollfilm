@@ -2,13 +2,15 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
+import type { BulkResetOptions, ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { AlbumPicker } from "../components/AlbumPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
+import { ResetMenu } from "../components/ResetMenu";
 import { PhotoFilters } from "../components/PhotoFilters";
+import { loadPresets } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
 import { groupPairsAdjacent } from "../utils/pairing";
@@ -47,6 +49,15 @@ export function AlbumDetail() {
   const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
   const [immichBusy, setImmichBusy] = useState(false);
   const [immichMsg, setImmichMsg] = useState<string | null>(null);
+  const [developBusy, setDevelopBusy] = useState(false);
+  const [developMsg, setDevelopMsg] = useState<string | null>(null);
+  // Auto-dismiss the develop status after a moment, like the other flash messages.
+  useEffect(() => {
+    if (!developMsg) return;
+    const t = window.setTimeout(() => setDevelopMsg(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [developMsg]);
+  const presetNames = Object.keys(loadPresets());
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Settings maintenance tasks.
@@ -178,9 +189,11 @@ export function AlbumDetail() {
 
   async function addTagToSelected(name: string) {
     if (selected.size === 0 || !name.trim()) return;
-    await api.images.bulkAddTags(Array.from(selected), [name.trim()]);
+    const tag = name.trim();
+    await api.images.bulkAddTags(Array.from(selected), [tag]);
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });
+    setDevelopMsg(`Added tag “${tag}” to ${selected.size} photo(s).`);
   }
 
   async function addSelectedToAlbum(targetAlbumId: string) {
@@ -192,11 +205,66 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["album", targetAlbumId] });
   }
 
-  async function resetSelectedMetadata() {
+  async function resetSelected(opts: BulkResetOptions) {
     if (selected.size === 0) return;
-    if (!window.confirm(`Reset stars, colors, and tags for ${selected.size} photo(s)?`)) return;
-    await api.images.bulkReset(Array.from(selected));
+    await api.images.bulkReset(Array.from(selected), opts);
     queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
+    queryClient.invalidateQueries({ queryKey: ["album", id] });
+    queryClient.invalidateQueries({ queryKey: ["albums"] });
+  }
+
+  async function autoDevelopSelected() {
+    if (selected.size === 0) return;
+    const editedCount = (images ?? []).filter((im) => selected.has(im.id) && im.edit_rev).length;
+    if (
+      editedCount > 0 &&
+      !window.confirm(
+        `Auto-develop ${selected.size} photo(s)? This overwrites the develop settings of ${editedCount} already-edited photo(s).`
+      )
+    )
+      return;
+    setDevelopBusy(true);
+    setDevelopMsg(null);
+    try {
+      const result = await api.images.bulkAutoDevelop(Array.from(selected));
+      setDevelopMsg(
+        result.skipped > 0
+          ? `Auto-developed ${result.applied} photo(s); skipped ${result.skipped} (no similar edits to learn from yet).`
+          : `Auto-developed ${result.applied} photo(s).`
+      );
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["album", id] });
+    } catch (e) {
+      setDevelopMsg((e as Error).message);
+    } finally {
+      setDevelopBusy(false);
+    }
+  }
+
+  async function applyPresetToSelected(name: string) {
+    const preset = loadPresets()[name];
+    if (selected.size === 0 || !preset) return;
+    const editedCount = (images ?? []).filter((im) => selected.has(im.id) && im.edit_rev).length;
+    if (
+      editedCount > 0 &&
+      !window.confirm(
+        `Apply preset “${name}” to ${selected.size} photo(s)? This overwrites the develop settings of ${editedCount} already-edited photo(s).`
+      )
+    )
+      return;
+    setDevelopBusy(true);
+    setDevelopMsg(null);
+    try {
+      await api.images.bulkDevelop(Array.from(selected), preset.adjustments as Record<string, unknown>);
+      setDevelopMsg(`Applied preset “${name}” to ${selected.size} photo(s).`);
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["album", id] });
+    } catch (e) {
+      setDevelopMsg((e as Error).message);
+    } finally {
+      setDevelopBusy(false);
+    }
   }
 
   async function toggleAlbumImmichSync(enabled: boolean) {
@@ -342,12 +410,38 @@ export function AlbumDetail() {
                 {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
               </button>
             )}
-            <button className="btn" onClick={resetSelectedMetadata}>
-              Reset stars/tags/colors
-            </button>
             <button className="btn" onClick={removeSelectedFromAlbum}>
               Remove from this album
             </button>
+          </div>
+          <div className="control-group">
+            <button
+              className="btn"
+              onClick={autoDevelopSelected}
+              disabled={developBusy}
+              title="Develop each selected photo automatically, learned from your own saved edits"
+            >
+              {developBusy ? "Working…" : "Auto develop"}
+            </button>
+            {presetNames.length > 0 && (
+              <select
+                className="preset-select"
+                value=""
+                disabled={developBusy}
+                onChange={(e) => {
+                  if (e.target.value) applyPresetToSelected(e.target.value);
+                }}
+                title="Apply a saved editor preset to the whole selection"
+              >
+                <option value="">Apply preset…</option>
+                {presetNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <ResetMenu count={selected.size} onReset={resetSelected} />
           </div>
           <button
             className="btn quiet-danger btn-sm"
@@ -357,7 +451,12 @@ export function AlbumDetail() {
           >
             Delete
           </button>
-          {immichMsg && <span style={{ color: "var(--text-muted)" }}>{immichMsg}</span>}
+          {(immichMsg || developMsg) && (
+            <div className="action-bar-messages">
+              {immichMsg && <span>{immichMsg}</span>}
+              {developMsg && <span>{developMsg}</span>}
+            </div>
+          )}
         </div>
       )}
       {selectMode && (

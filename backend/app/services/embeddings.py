@@ -102,6 +102,23 @@ def get_embedding(engine: Engine, image_id: str) -> np.ndarray | None:
     return np.frombuffer(row[0], dtype=np.float32)
 
 
+def get_embeddings(engine: Engine, image_ids: list[str]) -> dict[str, np.ndarray]:
+    """Embeddings for many images on one connection (missing ids are absent).
+    Point lookups per id rather than a vec0 full scan: the caller's id list
+    (e.g. auto-develop's edited photos) is typically a small slice of the
+    library, and scanning every stored vector to find them would dwarf the
+    lookups themselves."""
+    out: dict[str, np.ndarray] = {}
+    with engine.connect() as conn:
+        for image_id in image_ids:
+            row = conn.execute(
+                text("SELECT embedding FROM image_embeddings WHERE id = :id"), {"id": image_id}
+            ).fetchone()
+            if row is not None:
+                out[image_id] = np.frombuffer(row[0], dtype=np.float32)
+    return out
+
+
 def query_similar(engine: Engine, vector: np.ndarray, k: int, exclude_id: str | None = None) -> list[tuple[str, float]]:
     # Over-fetch slightly so we can drop exclude_id (e.g. the query image
     # itself) without going back for another page.

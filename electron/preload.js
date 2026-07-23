@@ -20,4 +20,10 @@ contextBridge.exposeInMainWorld("photoManager", {
   changeLibraryRoot: () => ipcRenderer.invoke("pm:change-library-root"),
   // Folder holding the database, thumbnails and staging (inside the library).
   getDataRoot: () => ipcRenderer.invoke("pm:get-data-root"),
+  // First-start wizard: whether this launch is a genuine first run.
+  isFirstRun: () => ipcRenderer.invoke("pm:is-first-run"),
+  // Leftover app-data folders from the old app name, as { path, sizeBytes }[].
+  scanLegacyData: () => ipcRenderer.invoke("pm:scan-legacy-data"),
+  // Deletes those leftover folders; resolves with { removed, failed }.
+  removeLegacyData: () => ipcRenderer.invoke("pm:remove-legacy-data"),
 });

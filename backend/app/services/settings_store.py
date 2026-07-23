@@ -30,6 +30,17 @@ DEFAULT_IMMICH_SYNC_MODE = IMMICH_MODE_MANUAL
 TRASH_RETENTION_DAYS = "trash_retention_days"
 DEFAULT_TRASH_RETENTION_DAYS = 14
 
+# "1" when the Auto develop button is shown in the editor. Off by default: the
+# suggestion only becomes useful once the user has saved a few edits, so it's
+# an explicit opt-in from Settings (which explains how it learns).
+AUTO_DEVELOP_ENABLED = "auto_develop_enabled"
+# Which adjustment groups the Auto suggestion may touch, as a comma-separated
+# subset of AUTO_DEVELOP_GROUP_NAMES. Unset = all of them; the field lists per
+# group live in services/auto_develop.py (GROUP_FIELDS). Groups the user
+# unchecks keep their current slider values when Auto runs.
+AUTO_DEVELOP_GROUPS = "auto_develop_groups"
+AUTO_DEVELOP_GROUP_NAMES = ("tone", "white_balance", "color", "details", "curves", "effects")
+
 
 @dataclass(frozen=True)
 class ImmichConfig:
@@ -65,6 +76,19 @@ def get_trash_retention_days(db: Session) -> int:
     except (TypeError, ValueError):
         return DEFAULT_TRASH_RETENTION_DAYS
     return max(0, days)
+
+
+def get_auto_develop_enabled(db: Session) -> bool:
+    return get_setting(db, AUTO_DEVELOP_ENABLED) == "1"
+
+
+def get_auto_develop_groups(db: Session) -> list[str]:
+    """The adjustment groups Auto develop may touch. Unset means all of them;
+    an explicitly empty selection means none (the user unchecked everything)."""
+    raw = get_setting(db, AUTO_DEVELOP_GROUPS)
+    if raw is None:
+        return list(AUTO_DEVELOP_GROUP_NAMES)
+    return [n for n in raw.split(",") if n in AUTO_DEVELOP_GROUP_NAMES]
 
 
 def get_immich_sync_paused(db: Session) -> bool:
