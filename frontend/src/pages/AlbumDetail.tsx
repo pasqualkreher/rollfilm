@@ -410,9 +410,6 @@ export function AlbumDetail() {
                 {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
               </button>
             )}
-            <button className="btn" onClick={removeSelectedFromAlbum}>
-              Remove from this album
-            </button>
           </div>
           <div className="control-group">
             <button
@@ -442,6 +439,9 @@ export function AlbumDetail() {
               </select>
             )}
             <ResetMenu count={selected.size} onReset={resetSelected} />
+            <button className="btn" onClick={removeSelectedFromAlbum}>
+              Remove from this album
+            </button>
           </div>
           <button
             className="btn quiet-danger btn-sm"

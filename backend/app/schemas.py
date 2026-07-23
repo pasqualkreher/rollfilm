@@ -348,6 +348,15 @@ class ImmichSettingsUpdate(BaseModel):
     sync_mode: str | None = None
 
 
+class RawDecodeSettingsOut(BaseModel):
+    # True = load RAWs with no brightness processing (native sensor exposure).
+    native_decode: bool
+
+
+class RawDecodeSettingsUpdate(BaseModel):
+    native_decode: bool
+
+
 class TrashSettingsOut(BaseModel):
     # Days a photo stays in the Trash before the startup purge deletes it for
     # good; 0 = keep forever.

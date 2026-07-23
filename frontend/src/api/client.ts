@@ -26,6 +26,7 @@ import type {
   StagedFileOut,
   StagedFileUpdatePatch,
   TagUsage,
+  RawDecodeSettings,
   TrashSettings,
 } from "./types";
 import type { ImageEdits } from "../utils/adjustments";
@@ -330,8 +331,16 @@ export const api = {
     // Live editor preview, rendered server-side with the exact save pipeline -
     // returns a JPEG blob. Abortable so a newer slider state cancels stale renders.
     // `full` renders on the full-resolution base (slow - fetched after settle).
-    async editorPreview(id: string, edits: ImageEdits, signal?: AbortSignal, full = false): Promise<Blob> {
-      const res = await fetch(`${BASE_URL}/images/${id}/editor-preview${full ? "?full=1" : ""}`, {
+    // mode: "scrub" = fast small-base frame drawn while dragging a control,
+    // "fast" = accurate render on release, "full" = settled full-quality pass.
+    async editorPreview(
+      id: string,
+      edits: ImageEdits,
+      signal?: AbortSignal,
+      mode: "scrub" | "fast" | "full" = "fast"
+    ): Promise<Blob> {
+      const q = mode === "full" ? "?full=1" : mode === "scrub" ? "?scrub=1" : "";
+      const res = await fetch(`${BASE_URL}/images/${id}/editor-preview${q}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(apiEdits(edits)),
@@ -638,6 +647,12 @@ export const api = {
     },
     updateTrash(retention_days: number): Promise<TrashSettings> {
       return request(`/settings/trash`, { method: "PUT", body: JSON.stringify({ retention_days }) });
+    },
+    getRawDecode(): Promise<RawDecodeSettings> {
+      return request(`/settings/raw`);
+    },
+    updateRawDecode(native_decode: boolean): Promise<RawDecodeSettings> {
+      return request(`/settings/raw`, { method: "PUT", body: JSON.stringify({ native_decode }) });
     },
     // Live Immich upload activity - drives the top-bar sync indicator, the
     // Settings sync-status panel (and the desktop shell's quit warning, which

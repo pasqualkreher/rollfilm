@@ -435,7 +435,6 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       <TimelineScrubber
         getScroller={() => scrollerRef.current}
         getSectionEl={(label) => sectionEls.current.get(label) ?? null}
-        getAnchor={() => rootRef.current}
         sections={(layout?.sections ?? []).map((s) => ({ label: s.label }))}
       />
     </div>

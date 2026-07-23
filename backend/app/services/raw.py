@@ -1,12 +1,95 @@
 import io
 import logging
+import math
 from pathlib import Path
 
+import numpy as np
 import rawpy
 from PIL import Image as PILImage
 from PIL import ImageOps
 
 logger = logging.getLogger(__name__)
+
+# Rec.709 luma weights, for measuring overall image brightness.
+_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+# Auto tone: lift a native-exposure demosaic to a normal brightness *without
+# burning the highlights*. The exposure gain is measured from the MIDTONES (the
+# median), not the brightest point - so a sunlit subject (skin, snow) isn't
+# chased up into clipping the way "expose to the right" does. A Reinhard shoulder
+# on the LUMINANCE then rolls the highlights off smoothly toward white, so
+# nothing hard-clips. _TARGET_MED_LIN is the median target in *linear* light
+# (~sRGB 0.36); _MAX_GAIN caps the lift so a very dark frame isn't amplified
+# into noise. The cap can be generous because the shoulder protects the top end
+# - and it has to be: DR-mode Fuji RAFs demosaic 2-3 stops dark, so a tight cap
+# left every such frame underexposed.
+_TARGET_MED_LIN = 0.10
+_MAX_GAIN = 8.0
+
+
+def _srgb_to_linear(c: np.ndarray) -> np.ndarray:
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def _linear_to_srgb(c: np.ndarray) -> np.ndarray:
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
+
+# When True, RAWs are loaded with NO brightness processing at all - just the
+# native (camera-white-balanced, no auto-bright) demosaic, exactly as the sensor
+# recorded it. Toggled from Settings ("load RAWs without processing"); the app
+# sets it at startup and whenever the setting changes (see set_native_decode).
+_native_decode = False
+
+
+def set_native_decode(enabled: bool) -> None:
+    """Enable/disable no-processing RAW loading (native exposure, no lift)."""
+    global _native_decode
+    _native_decode = bool(enabled)
+
+
+def native_decode_enabled() -> bool:
+    return _native_decode
+
+
+def _auto_expose(rgb: np.ndarray) -> np.ndarray:
+    """Auto-tone a native-exposure demosaic to a normal brightness that can't
+    burn the highlights.
+
+    Two steps, both in linear light:
+    1. Exposure from the *midtones*: measure the median luma and pick a gain that
+       brings it to _TARGET_MED_LIN. Basing it on the median (not the brightest
+       point) means a sunlit subject isn't dragged up into clipping.
+    2. A Reinhard shoulder with the white point set to that same gain, which lifts
+       shadows/midtones by the gain, rolls the highlights off smoothly, and pins
+       pure white to pure white - so nothing hard-clips. A well-exposed frame
+       (gain ~1) passes through essentially unchanged.
+
+    The shoulder is applied to the LUMINANCE and the RGB channels are scaled by
+    one shared ratio. Running the curve per channel instead compresses the
+    brightest channel of a colour hardest, so bright saturated subjects (sunlit
+    skin above all - red is its top channel) converge toward grey and come out
+    chalky-white even though nothing clips - the actual cause of "the skin is
+    burning out". One ratio per pixel preserves hue and saturation through the
+    lift; the rare pixel a bright channel pushes past 1.0 just clips."""
+    x = rgb.astype(np.float32) / 255.0
+    lin = _srgb_to_linear(x)
+    # Median midtone level (strided sample so a full-frame demosaic is cheap).
+    s = max(1, int(math.sqrt(rgb.shape[0] * rgb.shape[1] / 90_000)))
+    med = float(np.median(lin[::s, ::s] @ _LUMA))
+    if med <= 1e-4:  # essentially black - nothing to lift
+        return rgb
+    gain = min(_MAX_GAIN, max(1.0, _TARGET_MED_LIN / med))
+    if gain <= 1.0 + 1e-3:  # already at a normal exposure
+        return rgb
+    # Reinhard-extended with white point W = gain, on luminance:
+    # Y_out = Y*gain*(1 + Y/gain)/(1 + Y*gain) - lifts shadows/mids by ~gain,
+    # rolls off highlights, maps Y=1 -> 1.
+    y = lin @ _LUMA
+    yg = y * gain
+    y_out = yg * (1.0 + y / gain) / (1.0 + yg)
+    ratio = np.where(y > 1e-6, y_out / np.maximum(y, 1e-6), gain)
+    out = _linear_to_srgb(np.clip(lin * ratio[..., None], 0.0, 1.0))
+    return np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
 RAW_EXTENSIONS = {
     ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw",
@@ -20,6 +103,41 @@ PNG_EXTENSIONS = {".png"}
 # ask libjpeg to decode at the largest DCT scale (1/2, 1/4, 1/8) that still lands
 # at or above this size. draft() is a no-op for non-JPEG formats.
 _PREVIEW_DECODE_PX = 1600
+
+
+def _demosaic_rgb(raw: "rawpy.RawPy", half_size: bool):
+    """Demosaic a RAW to an 8-bit RGB array with a highlight-safe rendering.
+
+    `no_auto_bright=True` is the important bit: LibRaw's default auto-brightness
+    scales the whole image up until ~1% of the brightest pixels clip to pure
+    white (auto_bright_thr=0.01). On a shot with a bright subject - sunlit skin,
+    snow, a white shirt - that pushes those pixels to 255, blowing the highlights
+    *inside the decode*, before the editor ever sees them, so the Highlights /
+    Whites sliders have nothing left to recover. Disabling it renders the RAW at
+    its native (camera-white-balanced) exposure instead; a globally dark frame is
+    trivially lifted with the Exposure slider, but blown highlights are gone for
+    good.
+
+    `highlight_mode=Blend` additionally reconstructs highlights where one channel
+    clips but the others don't (common on saturated skin), blending them for a
+    smooth roll-off rather than a hard clipped edge.
+
+    `gamma=(2.4, 12.92)` encodes the 8-bit output with the true sRGB curve
+    instead of LibRaw's BT.709 default (2.222, 4.5) - _auto_expose linearises
+    with the sRGB EOTF, so the round trip is exact.
+
+    half_size only affects output resolution, not colour rendering - without it
+    LibRaw raises LibRawTooBigError on high-megapixel sensors.
+
+    Returns the *native* exposure - the caller auto-tones it (see _auto_expose)
+    unless native-decode mode is on."""
+    return raw.postprocess(
+        use_camera_wb=True,
+        half_size=half_size,
+        no_auto_bright=True,
+        highlight_mode=rawpy.HighlightMode.Blend,
+        gamma=(2.4, 12.92),
+    )
 
 
 def is_raw(path: Path) -> bool:
@@ -100,7 +218,9 @@ def extract_preview_with_size(path: Path) -> tuple[PILImage.Image, tuple[int, in
             original_size = _oriented_size(im)
             return _load_jpeg_preview(im), original_size
 
-        rgb = raw.postprocess(use_camera_wb=True, half_size=True)
+        rgb = _demosaic_rgb(raw, half_size=True)
+        if not _native_decode:
+            rgb = _auto_expose(rgb)
         preview = PILImage.fromarray(rgb)
         return preview, preview.size
 
@@ -123,11 +243,12 @@ def extract_full_preview(path: Path) -> PILImage.Image:
 
     try:
         with rawpy.imread(str(path)) as raw:
-            # half_size only affects output resolution, not color rendering -
-            # it's unrelated to the embedded-thumbnail issue above, but without
-            # it LibRaw raises LibRawTooBigError on high-megapixel sensors.
-            rgb = raw.postprocess(use_camera_wb=True, half_size=True)
-            return PILImage.fromarray(rgb)
+            rgb = _demosaic_rgb(raw, half_size=True)
+            if _native_decode:
+                # No processing: hand back the native-exposure demosaic as-is.
+                return PILImage.fromarray(rgb)
+            # Midtone-based auto tone (see _auto_expose).
+            return PILImage.fromarray(_auto_expose(rgb))
     except Exception:
         # A file whose sensor data is damaged (e.g. truncated/corrupt CFA
         # block) fails the demosaic, but its embedded JPEG is often still

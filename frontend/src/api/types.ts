@@ -65,6 +65,11 @@ export interface TrashSettings {
   retention_days: number;
 }
 
+export interface RawDecodeSettings {
+  // True = load RAWs with no brightness processing (native sensor exposure).
+  native_decode: boolean;
+}
+
 export interface AutoDevelopSettings {
   // Whether the editor shows the Auto develop button.
   enabled: boolean;

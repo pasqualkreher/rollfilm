@@ -558,7 +558,8 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     AgX tone map) in linear light -> highlights/shadows -> whites/blacks ->
     contrast -> colour mixer + global hue -> Fuji chrome -> saturation/vibrance.
     """
-    ev = float(adj.get("exposure", 0.0) or 0.0) + float(adj.get("brightness", 0.0) or 0.0)
+    ev = float(adj.get("exposure", 0.0) or 0.0)
+    br = adj.get("brightness", 0) / 100.0
     c = adj.get("contrast", 0) / 100.0
     hi = adj.get("highlights", 0) / 100.0
     sh = adj.get("shadows", 0) / 100.0
@@ -591,6 +592,21 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
             lin = develop_effects.agx_tonemap(np.clip(lin, 0.0, None))
         arr = _linear_to_srgb(np.clip(lin, 0.0, 1.0)).astype(np.float32)
     np.clip(arr, 0.0, 1.0, out=arr)
+
+    # Brightness: a midtone lift, distinct from Exposure. Exposure (above) is a
+    # linear stop multiply that scales the whole image and drives highlights
+    # toward clipping; Brightness adds a bell-weighted lift that peaks in the
+    # midtones and tapers to zero at pure black and pure white, so it brightens
+    # the mids without clipping highlights or crushing blacks. It's *linear in the
+    # slider* - the lift scales straight with `br`, so every tick changes the
+    # image by the same amount (the old gamma version was steep in the shadows and
+    # felt too strong in the first few ticks). Weighted by luma so all three
+    # channels lift together and the hue is preserved.
+    if br:
+        luma = arr @ _LUMA
+        bell = 4.0 * luma * (1.0 - luma)  # 0 at black/white, 1 at midtone
+        arr = arr + (br * 0.15 * bell)[..., None]
+        np.clip(arr, 0.0, 1.0, out=arr)
 
     # Fuji-style tone masks: shadows lift fades to zero at pure black (keeps the
     # film "toe" dense instead of washing blacks grey) and highlights fade to
@@ -696,12 +712,13 @@ def _apply_grain(arr: np.ndarray, amount: int, size: int = 0, roughness: int = 5
     size_f = size / 100.0
     long_edge = max(h, w)
 
-    # Particle sizes relative to resolution, sized so the grain stays *visible*
-    # after the editor/lightbox downscale the render to fit the screen: at 0.6px
-    # (the old floor) fine grain averaged away on screen and read as "grain does
-    # nothing". A ~1.4px floor keeps a clear fine-ISO texture; size grows it to
-    # chunky pushed-film clumps at the top.
-    p_fine = max(1.4, (long_edge / 1500.0) * (1.1 + 2.4 * size_f))
+    # Particle sizes relative to resolution. The smallest Grain Size lands on a
+    # crisp ~1px fine-ISO texture (the 1.0px floor, with the size-0 coefficient
+    # tuned so even the full-res settle render floors to 1px rather than drifting
+    # coarser). Size then grows the particles to chunky pushed-film clumps at the
+    # top; the coefficients keep the same maximum (0.55 + 2.95 = 3.5) as before,
+    # so only the fine end changes.
+    p_fine = max(1.0, (long_edge / 1500.0) * (0.55 + 2.95 * size_f))
     p_clump = p_fine * (2.0 + size_f * 2.6)
 
     fine = _grain_field(h, w, p_fine)
@@ -848,29 +865,44 @@ def apply_masks(arr: np.ndarray, adj: dict) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0)
 
 
-def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = True) -> PILImage.Image:
+def apply_adjustments(
+    image: PILImage.Image, adj: dict, include_grain: bool = True, fast: bool = False
+) -> PILImage.Image:
     """Return a new image with the slider edits baked in, or the input untouched
     when everything is neutral (the common case - avoids a needless numpy pass).
 
     `include_grain=False` skips the grain pass so the caller can add grain
     *after* downscaling to the output size (see generate_derivatives): grain
     baked at full resolution gets averaged away by the LANCZOS downscale to the
-    preview/thumbnail, so what you saw in the editor vanished after saving."""
+    preview/thumbnail, so what you saw in the editor vanished after saving.
+
+    `fast=True` is the interactive *scrub* pipeline used while a control is being
+    dragged: it keeps the cheap per-pixel tonal pass, masks and vignette but
+    skips the expensive convolution passes (denoise, clarity/structure/sharpen,
+    chromatic aberration, dehaze, and the diffusion finishing effects + grain).
+    The accurate render on pointer-up brings them all back, so the settled
+    preview - and the save - are unchanged; only the transient drag frames are
+    lighter."""
     if develop.is_neutral(adj):
         return image
     long_edge = max(image.size)
-    # Denoise first (spatial), split into Luminance + Colour like RapidRAW.
-    ln = adj.get("luma_noise_reduction", 0)
-    cn = adj.get("color_noise_reduction", 0)
-    if ln > 0 or cn > 0:
+    # Denoise first (spatial), split into Luminance + Colour like RapidRAW. The
+    # single "Denoise" slider is a master over both: it feeds luma 1:1 and chroma
+    # a bit harder (colour blotching is the ugly part of high-ISO noise and the
+    # eye barely resolves chroma detail, so it can take more without going soft).
+    # Per-channel sliders still win where they're set higher.
+    dn = adj.get("denoise", 0)
+    ln = max(adj.get("luma_noise_reduction", 0), dn)
+    cn = max(adj.get("color_noise_reduction", 0), min(100, int(round(dn * 1.3))))
+    if not fast and (ln > 0 or cn > 0):
         image = _denoise_image(image.convert("RGB"), ln, cn)
     rgb = image.convert("RGB")
     arr = np.asarray(rgb, dtype=np.float32) / 255.0
     # Detail (spatial), before the tonal pass: clarity = large-radius local
     # contrast, structure = medium-radius local contrast, sharpness = small-radius
-    # edge enhancement.
+    # edge enhancement. All skipped in the fast scrub pipeline.
     cl = adj.get("clarity", 0)
-    if cl:
+    if cl and not fast:
         arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
         if cl < 0:
             # Fuji's negative clarity doesn't just flatten - it diffuses like a
@@ -879,10 +911,10 @@ def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = Tr
             # band softening; strength follows the slider.
             arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False)
     st = adj.get("structure", 0)
-    if st:
+    if st and not fast:
         arr = develop_effects.apply_structure(arr, st)
     sp = adj.get("sharpness", 0)
-    if sp:
+    if sp and not fast:
         # +sharpen / -soften share the unsharp formula (negative amount blends
         # toward the blur). Radius is capped so sharpening stays a fine, tight
         # edge enhancement; Threshold gates it away from noise/smooth areas.
@@ -892,26 +924,27 @@ def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = Tr
         )
     ca_rc = adj.get("chromatic_aberration_red_cyan", 0)
     ca_by = adj.get("chromatic_aberration_blue_yellow", 0)
-    if ca_rc or ca_by:
+    if not fast and (ca_rc or ca_by):
         arr = develop_effects.apply_chromatic_aberration(arr, ca_rc, ca_by)
     # Dehaze is spatial too (transmission map from the dark channel), so it runs
     # here rather than in the per-pixel tonal pass.
     dh = adj.get("dehaze", 0)
-    if dh:
+    if dh and not fast:
         arr = _dehaze(arr, dh)
     arr = _adjust_array(arr, adj)
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
     arr = apply_masks(arr, adj)
     # Highlight-bloom / diffusion effects run on the *toned* image (like a filter
-    # in front of the lens), after the tonal pass.
-    if adj.get("mist", 0) > 0:
+    # in front of the lens), after the tonal pass. All are large-radius blurs, so
+    # the fast scrub pipeline skips them (restored on the pointer-up render).
+    if not fast and adj.get("mist", 0) > 0:
         arr = _mist(arr, adj["mist"])
-    if adj.get("glow_amount", 0) > 0:
+    if not fast and adj.get("glow_amount", 0) > 0:
         arr = develop_effects.apply_glow(arr, adj["glow_amount"])
-    if adj.get("halation_amount", 0) > 0:
+    if not fast and adj.get("halation_amount", 0) > 0:
         arr = develop_effects.apply_halation(arr, adj["halation_amount"])
-    if adj.get("flare_amount", 0) > 0:
+    if not fast and adj.get("flare_amount", 0) > 0:
         arr = develop_effects.apply_flare(arr, adj["flare_amount"])
     if adj.get("vignette_amount", 0):
         arr = develop_effects.apply_vignette(
@@ -921,7 +954,7 @@ def apply_adjustments(image: PILImage.Image, adj: dict, include_grain: bool = Tr
             adj.get("vignette_roundness", 0),
             adj.get("vignette_feather", 50),
         )
-    if include_grain and adj.get("grain_amount", 0) > 0:
+    if include_grain and not fast and adj.get("grain_amount", 0) > 0:
         arr = _apply_grain(arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50))
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     return PILImage.fromarray(out, "RGB")
@@ -1045,6 +1078,15 @@ def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
 # on-screen image, small enough that a full pipeline pass stays interactive.
 EDITOR_PREVIEW_PX = 1600
 
+# Working resolution for the *scrub* preview - the frames rendered continuously
+# while a slider/curve/wheel/mask handle is being dragged. Small on purpose: the
+# whole pipeline (and the JPEG encode) scales with pixel count, so ~750px is
+# roughly 4-5x fewer pixels than EDITOR_PREVIEW_PX and, together with the fast
+# pipeline that skips the convolution passes (see apply_adjustments(fast=True)),
+# keeps each drag frame at a few tens of ms. Replaced by the accurate 1600px
+# render the moment the pointer is released.
+SCRUB_PREVIEW_PX = 750
+
 # Resolution for the settled "refinement" render. NOT the image's true full
 # resolution: a live preview at 40-60MP turns every numpy pass in the pipeline
 # (each a float32 RGB array of the whole frame, several live at once through
@@ -1062,14 +1104,25 @@ FULL_EDITOR_PREVIEW_PX = 2600
 _full_render_lock = threading.Lock()
 
 
-@lru_cache(maxsize=6)
+@lru_cache(maxsize=9)
 def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int) -> PILImage.Image:
     """The decoded, downscaled base image the editor preview renders on top of.
     Cached so slider moves only re-run the edit pipeline, not the (expensive)
     RAW decode. Keyed by file mtime so an on-disk change invalidates. Treat the
-    returned image as immutable - every pipeline step copies. maxsize covers both
-    the interactive (EDITOR_PREVIEW_PX) and settled (FULL_EDITOR_PREVIEW_PX)
-    entry for a couple of images being browsed between in the editor."""
+    returned image as immutable - every pipeline step copies. maxsize covers the
+    three working sizes (SCRUB_PREVIEW_PX / EDITOR_PREVIEW_PX /
+    FULL_EDITOR_PREVIEW_PX) for a couple of images being browsed between in the
+    editor.
+
+    The scrub base is downscaled from the interactive base rather than decoded
+    afresh: extract_full_preview on a big RAW is the one genuinely slow step, so
+    when the 1600px entry is already warm we thumbnail *it* down to 750px (a
+    cheap LANCZOS pass) instead of paying the decode again for the smaller size."""
+    if max_px == SCRUB_PREVIEW_PX:
+        base = _cached_editor_base(image_id, path_str, mtime_ns, EDITOR_PREVIEW_PX)
+        src = base.copy()
+        src.thumbnail((max_px, max_px), PILImage.LANCZOS)
+        return src
     src = extract_full_preview(Path(path_str))
     src.thumbnail((max_px, max_px), PILImage.LANCZOS)
     return src.convert("RGB")
@@ -1083,6 +1136,7 @@ def render_editor_preview_bytes(
     distortion: int = 0,
     max_px: int = EDITOR_PREVIEW_PX,
     full_quality: bool = False,
+    scrub: bool = False,
     flip_h: bool = False,
     flip_v: bool = False,
     straighten: float = 0.0,
@@ -1094,26 +1148,35 @@ def render_editor_preview_bytes(
     preview-sized base. One pipeline = the preview IS the saved look - no
     JS mirror to drift out of sync.
 
-    `full_quality=True` renders on a larger (but still bounded, see
-    FULL_EDITOR_PREVIEW_PX) base instead - too slow for live slider drags, but
-    fetched by the editor once the sliders settle, so resolution-dependent passes
-    (denoise radius, sharpen radius, grain) are previewed at the size they'll
-    look like when saved."""
+    Three render tiers, all one pipeline:
+    - `scrub=True`: the frames drawn continuously while a control is dragged -
+      a small SCRUB_PREVIEW_PX base with the convolution passes skipped
+      (apply_adjustments(fast=True)). Cheap enough to keep the drag fluid.
+    - default: the accurate EDITOR_PREVIEW_PX render drawn the moment a drag
+      ends (full pipeline).
+    - `full_quality=True`: renders on a larger (but still bounded, see
+      FULL_EDITOR_PREVIEW_PX) base - too slow for live drags, but fetched once
+      the sliders settle so resolution-dependent passes (denoise radius, sharpen
+      radius, grain) are previewed at the size they'll look like when saved."""
     from app.services.filesystem import resolve_image_path
 
     path = resolve_image_path(image)
-    base_px = FULL_EDITOR_PREVIEW_PX if full_quality else max_px
     if full_quality:
         # Serialise + bound resolution so a burst of settle-renders can't stack
         # into many GB of concurrent full-frame numpy arrays.
         with _full_render_lock:
             return _render_editor_bytes(
-                image, path, base_px, rotation, crop, adjustments, distortion,
-                flip_h, flip_v, straighten, persp_h, persp_v, quality=95,
+                image, path, FULL_EDITOR_PREVIEW_PX, rotation, crop, adjustments, distortion,
+                flip_h, flip_v, straighten, persp_h, persp_v, quality=95, fast=False,
             )
+    if scrub:
+        return _render_editor_bytes(
+            image, path, SCRUB_PREVIEW_PX, rotation, crop, adjustments, distortion,
+            flip_h, flip_v, straighten, persp_h, persp_v, quality=82, fast=True,
+        )
     return _render_editor_bytes(
-        image, path, base_px, rotation, crop, adjustments, distortion,
-        flip_h, flip_v, straighten, persp_h, persp_v, quality=88,
+        image, path, max_px, rotation, crop, adjustments, distortion,
+        flip_h, flip_v, straighten, persp_h, persp_v, quality=88, fast=False,
     )
 
 
@@ -1131,12 +1194,13 @@ def _render_editor_bytes(
     persp_h: int,
     persp_v: int,
     quality: int,
+    fast: bool = False,
 ) -> bytes:
     img = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, base_px)
     if distortion:
         img = apply_distortion(img, distortion)
     img = apply_edits(img, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
-    img = apply_adjustments(img, adjustments)
+    img = apply_adjustments(img, adjustments, fast=fast)
     img = add_frame(img, adjustments)
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=quality)

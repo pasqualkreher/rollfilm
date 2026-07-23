@@ -194,6 +194,23 @@ export function Settings() {
     },
   });
 
+  // RAW decoding: whether RAWs load with no brightness processing (native
+  // sensor exposure) or are self-normalized to a consistent brightness.
+  const { data: rawDecode } = useQuery({
+    queryKey: ["raw-decode-settings"],
+    queryFn: () => api.settings.getRawDecode(),
+  });
+  const setRawDecode = useMutation({
+    mutationFn: (native: boolean) => api.settings.updateRawDecode(native),
+    onSuccess: (result) => {
+      queryClient.setQueryData(["raw-decode-settings"], result);
+      // On-disk thumbnails/previews were baked under the old mode - rebuild them
+      // so the whole library reflects the change (the editor's in-memory base is
+      // already dropped server-side).
+      rebuildThumbnails.mutate();
+    },
+  });
+
   const repairDates = useMutation({
     mutationFn: () => api.maintenance.repairDates(),
     onSuccess: (result) => {
@@ -502,6 +519,47 @@ export function Settings() {
             </ul>
           </div>
         )}
+      </Section>
+
+      <Section {...sectionProps("RAW files")}>
+        <p style={{ color: "var(--text-muted)" }}>
+          RAW files come off the sensor looking flat and often too dark, so they normally need a
+          starting correction before they look right on screen.
+        </p>
+        <p style={{ color: "var(--text-muted)" }}>
+          <strong>Off (default):</strong> every RAW gets that starting correction automatically —
+          dark shots are brightened to a normal level, and bright areas like sky, snow or sunlit skin
+          are held back so they don't turn into flat white patches. Photos that are already well
+          exposed stay as they are.
+          <br />
+          <strong>On:</strong> no correction at all. You see the RAW exactly as the camera recorded
+          it — usually darker and flatter — and set the look yourself in the editor.
+        </p>
+        <label
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "flex-start",
+            cursor: setRawDecode.isPending || rebuildThumbnails.isPending ? "wait" : "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={rawDecode?.native_decode ?? false}
+            disabled={rawDecode === undefined || setRawDecode.isPending || rebuildThumbnails.isPending}
+            onChange={(e) => setRawDecode.mutate(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            <strong>Load RAWs without processing (native exposure)</strong>
+            <br />
+            <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              {rebuildThumbnails.isPending
+                ? "Rebuilding thumbnails so the change applies to your library…"
+                : "Changing this rebuilds thumbnails/previews so it applies to already-imported photos."}
+            </span>
+          </span>
+        </label>
       </Section>
 
       <Section {...sectionProps("Auto develop")}>

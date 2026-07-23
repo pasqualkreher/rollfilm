@@ -28,8 +28,8 @@ COLOR_BANDS: tuple[str, ...] = ("red", "orange", "yellow", "green", "aqua", "blu
 # editor lists them within each section.
 SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     # Basic / tone
-    "exposure": (0.0, -5.0, 5.0, True),      # "EV Shift" - stops in linear light
-    "brightness": (0.0, -5.0, 5.0, True),    # "Exposure" - second stop-like lift
+    "exposure": (0.0, -5.0, 5.0, True),      # stops in linear light (whole-image lift)
+    "brightness": (0, -200, 200, False),     # midtone lift that pins black/white; wide range
     "contrast": (0, -100, 100, False),
     "highlights": (0, -100, 100, False),
     "shadows": (0, -100, 100, False),
@@ -47,6 +47,10 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     "clarity": (0, -100, 100, False),
     "dehaze": (0, -100, 100, False),
     "structure": (0, -100, 100, False),
+    # One-slider high-ISO noise reduction: a master that drives both NR channels
+    # below (see thumbnails.apply_adjustments). The per-channel sliders stay for
+    # fine control - the render takes the stronger of the two per channel.
+    "denoise": (0, 0, 100, False),
     "luma_noise_reduction": (0, 0, 100, False),
     "color_noise_reduction": (0, 0, 100, False),
     "chromatic_aberration_red_cyan": (0, -100, 100, False),

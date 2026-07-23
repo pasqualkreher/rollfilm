@@ -1230,7 +1230,8 @@ textarea:focus-visible {
   top: 6px;
   z-index: 4;
   width: fit-content;
-  margin: 0 0 12px;
+  /* Left inset so the floating pill doesn't sit flush on the grid's left edge. */
+  margin: 0 0 12px 10px;
   padding: 6px 14px;
   font-size: 15px;
   font-weight: 700;
@@ -1254,7 +1255,7 @@ textarea:focus-visible {
    included, not just the photo grid - ends before the fixed scrubber and can't
    sit underneath it. */
 .page-timeline {
-  padding-right: 58px;
+  padding-right: 54px;
 }
 
 /* Right-edge date scrubber, pinned to the viewport so it stays put while the
@@ -1262,11 +1263,11 @@ textarea:focus-visible {
    and mutes whatever scrolls behind it. */
 .timeline-scrubber {
   position: fixed;
-  /* top is set inline - it tracks the timeline's position so the rail begins at
-     the first date header and rises as the filter bar scrolls away. */
-  right: 4px;
-  bottom: 10px;
-  width: 48px;
+  /* top and bottom are set inline (see RAIL_TOP_INSET / RAIL_BOTTOM in
+     TimelineScrubber.tsx): the rail spans from just under the scroll area's
+     top edge to just above the window bottom. */
+  right: 6px;
+  width: 40px;
   z-index: 20;
   cursor: ns-resize;
   touch-action: none;
@@ -1285,15 +1286,18 @@ textarea:focus-visible {
   background: color-mix(in srgb, var(--bg) 88%, transparent);
 }
 
+/* Centered in the rail rather than right-aligned: right-aligning pushed the
+   year labels hard against the window edge, which read as clipped. */
 .scrubber-tick {
   position: absolute;
-  right: 8px;
+  left: 0;
+  right: 0;
   transform: translateY(-50%);
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   line-height: 1.05;
-  text-align: right;
+  text-align: center;
   pointer-events: none;
 }
 
@@ -1348,9 +1352,11 @@ textarea:focus-visible {
   opacity: 1;
 }
 
+/* Sits in the gutter just left of the rail, so it clears the photo grid
+   instead of floating on top of the last column. */
 .scrubber-bubble {
   position: absolute;
-  right: 56px;
+  right: 46px;
   transform: translateY(-50%);
   white-space: nowrap;
   padding: 5px 11px;
@@ -1386,9 +1392,19 @@ textarea:focus-visible {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
 }
 
-.thumb-card.selected {
-  outline: 3px solid var(--accent);
-  outline-offset: -3px;
+/* Draw the selection ring as an overlay border rather than an inset `outline`:
+   an inset outline doesn't follow the card's border-radius cleanly (its corners
+   render squared-off inside the rounded card), whereas a positioned ::after with
+   `border-radius: inherit` shares the card's exact 10px radius, so the ring's
+   corners stay concentric with the card's. Painted on top of the image (the img
+   fills the card, so an inset box-shadow would hide behind it). */
+.thumb-card.selected::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 3px solid var(--accent);
+  border-radius: inherit;
+  pointer-events: none;
 }
 
 .thumb-card img {
@@ -3490,6 +3506,15 @@ kbd {
   justify-content: space-between;
   gap: 8px;
   margin: 2px 0 8px;
+}
+
+/* Caption above the parametric-curve region sliders, clarifying they're the
+   curve's regions and distinct from the Basic Highlights/Shadows sliders. */
+.curve-param-hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
 }
 
 /* The point-curve graph: a square 0..255 plot. */

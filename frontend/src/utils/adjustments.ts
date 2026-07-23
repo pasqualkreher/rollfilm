@@ -23,7 +23,7 @@ export interface ScalarDef {
 export const SCALAR_SPEC = {
   // Basic / tone
   exposure: { def: 0, min: -5, max: 5, step: 0.01 },
-  brightness: { def: 0, min: -5, max: 5, step: 0.01 },
+  brightness: { def: 0, min: -200, max: 200 },
   contrast: { def: 0, min: -100, max: 100 },
   highlights: { def: 0, min: -100, max: 100 },
   shadows: { def: 0, min: -100, max: 100 },
@@ -41,6 +41,8 @@ export const SCALAR_SPEC = {
   clarity: { def: 0, min: -100, max: 100 },
   dehaze: { def: 0, min: -100, max: 100 },
   structure: { def: 0, min: -100, max: 100 },
+  // Master high-ISO noise reduction - drives both NR channels below.
+  denoise: { def: 0, min: 0, max: 100 },
   luma_noise_reduction: { def: 0, min: 0, max: 100 },
   color_noise_reduction: { def: 0, min: 0, max: 100 },
   chromatic_aberration_red_cyan: { def: 0, min: -100, max: 100 },
@@ -287,11 +289,11 @@ export const SECTIONS: Section[] = [
   {
     title: "Basic",
     fields: [
-      // RapidRAW ships two overlapping stop controls (EV Shift + Exposure); we
-      // expose a single Exposure. `brightness` stays in the model (always 0) but
-      // is no longer shown - the backend sums exposure + brightness, so hiding it
-      // changes nothing for existing edits.
+      // Exposure is a linear stop multiply (whole-image lift, in EV); Brightness
+      // is a midtone gamma lift that pins black/white, so the two are genuinely
+      // different tools rather than the duplicated stop sliders RapidRAW shipped.
       { key: "exposure", label: "Exposure", format: evFmt },
+      { key: "brightness", label: "Brightness" },
       { key: "contrast", label: "Contrast" },
       { key: "highlights", label: "Highlights" },
       { key: "shadows", label: "Shadows" },
@@ -318,6 +320,7 @@ export const SECTIONS: Section[] = [
       { key: "sharpness_threshold", label: "Threshold" },
       { key: "clarity", label: "Clarity" },
       { key: "dehaze", label: "Dehaze" },
+      { key: "denoise", label: "Denoise" },
       { key: "luma_noise_reduction", label: "Luminance NR" },
       { key: "color_noise_reduction", label: "Color NR" },
       { key: "chromatic_aberration_red_cyan", label: "Red–Cyan CA" },

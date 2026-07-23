@@ -1003,14 +1003,16 @@ def editor_preview(
     image_id: str,
     payload: schemas.ImageEdits,
     full: bool = False,
+    scrub: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Live editor preview, rendered server-side with the *same* pipeline that
     saves - so what you see while editing is exactly what you get. The decoded
     base image is cached, so only the edit pipeline re-runs per request.
-    `?full=1` renders on the full-resolution base - the editor requests that
-    once the sliders settle, replacing the fast downscaled render."""
+    `?scrub=1` renders the fast, small-base tier drawn while a control is being
+    dragged; the default renders the accurate tier on release; `?full=1` renders
+    on the larger settled base once the sliders come to rest."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
@@ -1026,6 +1028,7 @@ def editor_preview(
             _payload_adjustments(payload),
             distortion=_clamp100(payload.distortion),
             full_quality=full,
+            scrub=scrub,
             flip_h=bool(payload.flip_h),
             flip_v=bool(payload.flip_v),
             straighten=max(-45.0, min(45.0, float(payload.straighten))),

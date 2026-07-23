@@ -5,9 +5,6 @@ interface Props {
   // month section, resolved lazily since they mount after this component.
   getScroller: () => HTMLElement | null;
   getSectionEl: (label: string) => HTMLElement | null;
-  // The timeline root, used to align the rail's top with where the photo grid
-  // begins (below the filter bar) rather than the top of the viewport.
-  getAnchor: () => HTMLElement | null;
   sections: { label: string }[];
 }
 
@@ -30,14 +27,24 @@ function monthOf(label: string): string {
 // rail with this end padding, so the first/last labels aren't jammed against
 // the ends. It MUST be shared: if placement (posTop) and click→fraction
 // (fracFromEvent) disagree, dragging to a visible label lands on its neighbour.
-const RAIL_INSET = 14;
+const RAIL_INSET = 24;
+
+// The rail spans the scroll viewport with these fixed insets: top is measured
+// from the scroller's visible top, bottom from the window edge. Both live here
+// (not in CSS) so railHeight can be derived arithmetically.
+// The top inset is negative on purpose: the rail reaches up past the scroll
+// area into the filter bar's right end (empty space there), so it starts higher
+// and the first month label sits level with the first row of photos instead of
+// a good bit below it.
+const RAIL_TOP_INSET = -24;
+const RAIL_BOTTOM = 10;
 
 /**
  * Immich-style date scrubber pinned to the right edge of the library timeline:
  * year/month markers positioned by where each section sits in the scroll range,
  * draggable to jump to a date, with a bubble showing the current month.
  */
-export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, sections }: Props) {
+export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props) {
   const railRef = useRef<HTMLDivElement | null>(null);
   const [markers, setMarkers] = useState<Marker[]>([]);
   const [currentFrac, setCurrentFrac] = useState(0);
@@ -47,6 +54,10 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
   // grid, then fade back out - so scrolling shows where you are, like the drag.
   const [scrolling, setScrolling] = useState(false);
   const scrollHideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The scroll window the rail maps onto: [firstOffset, firstOffset + span].
+  // firstOffset is the topmost section's content offset (mapped to the rail's
+  // top, since the rail is anchored to the first photo, not to scrollTop 0).
+  const rangeRef = useRef({ firstOffset: 0, span: 1 });
   const [railTop, setRailTop] = useState(120);
   const [railHeight, setRailHeight] = useState(0);
 
@@ -57,29 +68,43 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
     const scrollerRect = scroller.getBoundingClientRect();
     const scrollerTop = scrollerRect.top;
 
-    // Start the rail where the grid starts (below the filter bar), but never
-    // above the top of the scroll area once that's scrolled off-screen.
-    const padTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
-    const minTop = scrollerTop + padTop;
-    const anchor = getAnchor();
-    const anchorTop = anchor ? anchor.getBoundingClientRect().top : minTop;
-    setRailTop(Math.max(minTop, anchorTop));
+    // Pin the rail to the scroll viewport: from just under the scroller's top
+    // edge down to just above the window's bottom, so its height matches the
+    // visible timeline area instead of hanging from wherever the first photo
+    // happens to sit.
+    const top = scrollerTop + RAIL_TOP_INSET;
+    setRailTop(top);
+    setRailHeight(Math.max(0, window.innerHeight - RAIL_BOTTOM - top));
 
-    const next: Marker[] = [];
-    let topmost: string | null = null;
+    // Each section's content offset, then map them onto the rail RELATIVE to
+    // the topmost section: its offset becomes frac 0 (the rail's top), so the
+    // first month's label lands at the first photo the rail is anchored to. Not
+    // doing this leaves the small gap above the first section as a fraction of
+    // the scroll range - invisible in a long library, but in one that barely
+    // scrolls it pushes the first label well down the rail.
+    const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+    const raw: { label: string; offset: number }[] = [];
     for (const { label } of sections) {
       const el = getSectionEl(label);
       if (!el) continue;
-      const offset = el.getBoundingClientRect().top - scrollerTop + scroller.scrollTop;
-      const frac = Math.min(1, Math.max(0, offset / maxScroll));
-      next.push({ label, year: yearOf(label), month: monthOf(label), frac });
-      if (offset <= scroller.scrollTop + 4) topmost = label;
+      raw.push({ label, offset: el.getBoundingClientRect().top - scrollerTop + scroller.scrollTop });
     }
+    const firstOffset = raw.length ? Math.min(...raw.map((r) => r.offset)) : 0;
+    const span = Math.max(1, maxScroll - firstOffset);
+    rangeRef.current = { firstOffset, span };
+
+    const next: Marker[] = raw.map(({ label, offset }) => ({
+      label,
+      year: yearOf(label),
+      month: monthOf(label),
+      frac: clamp01((offset - firstOffset) / span),
+    }));
+    // Deepest section still at/above the fold - the month you're currently in.
+    const topmost = raw.filter((r) => r.offset <= scroller.scrollTop + 4).pop()?.label ?? null;
     setMarkers(next);
-    setRailHeight(railRef.current?.getBoundingClientRect().height ?? 0);
-    setCurrentFrac(scroller.scrollTop / maxScroll);
+    setCurrentFrac(clamp01((scroller.scrollTop - firstOffset) / span));
     if (!dragging) setActiveLabel(topmost ?? next[0]?.label ?? null);
-  }, [getScroller, getSectionEl, getAnchor, sections, dragging]);
+  }, [getScroller, getSectionEl, sections, dragging]);
 
   useEffect(() => {
     const scroller = getScroller();
@@ -111,8 +136,10 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
       const rail = railRef.current;
       if (!scroller || !rail) return;
       const clamped = Math.min(1, Math.max(0, frac));
-      const maxScroll = scroller.scrollHeight - scroller.clientHeight;
-      scroller.scrollTop = clamped * maxScroll;
+      // Invert the recompute() mapping: frac 0 = the topmost section, frac 1 =
+      // the bottom of the scroll range.
+      const { firstOffset, span } = rangeRef.current;
+      scroller.scrollTop = firstOffset + clamped * span;
       // Move the indicator with the pointer right away, rather than waiting for
       // the scroll event to round-trip through recompute().
       setCurrentFrac(clamped);
@@ -152,7 +179,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
     };
   }, [dragging, scrollToFrac, fracFromEvent]);
 
-  if (sections.length < 2) return null;
+  if (sections.length < 1) return null;
 
   // Inset positions a little from the rail's top/bottom edges so the first and
   // last labels aren't jammed against the ends. Kept in lockstep with
@@ -212,7 +239,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, getAnchor, section
     <div
       ref={railRef}
       className={`timeline-scrubber${dragging ? " dragging" : ""}${scrolling ? " scrolling" : ""}`}
-      style={{ top: railTop }}
+      style={{ top: railTop, bottom: RAIL_BOTTOM }}
       onPointerDown={(e) => {
         setDragging(true);
         scrollToFrac(fracFromEvent(e.clientY));

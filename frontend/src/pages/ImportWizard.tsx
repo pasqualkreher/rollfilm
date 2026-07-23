@@ -347,16 +347,6 @@ export function ImportWizard() {
     queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
   }
 
-  async function applyFilterToSelection() {
-    const visibleIds = new Set(withPartners(visibleFiles).map((f) => f.id));
-    const targets = (files ?? []).filter((f) => !(visibleIds.has(f.id) && isExactDuplicate(f)));
-    const selectIds = targets.filter((f) => visibleIds.has(f.id)).map((f) => f.id);
-    const deselectIds = targets.filter((f) => !visibleIds.has(f.id)).map((f) => f.id);
-    if (selectIds.length) await api.import.bulkUpdateStagedFiles(sessionId!, selectIds, { selected: true });
-    if (deselectIds.length) await api.import.bulkUpdateStagedFiles(sessionId!, deselectIds, { selected: false });
-    queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
-  }
-
   async function handleCommitClick() {
     // Never commit a session whose background copying or analysis hasn't
     // finished - some photos aren't on disk / deduped yet. The button is
@@ -629,9 +619,10 @@ export function ImportWizard() {
         </button>
         {selectMode && (
           <>
-            <button className="btn" onClick={applyFilterToSelection}>
-              Select only filtered
-            </button>
+            {/* "Select all" is scoped to the filtered view (it acts on
+                visibleFiles), so with a filter active it selects exactly the
+                filtered photos - same as the library. No separate "only
+                filtered" button needed. */}
             <button className="btn" onClick={() => selectAll(true)}>
               Select all
             </button>

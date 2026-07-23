@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -303,6 +303,27 @@ export function PhotoEditor({ image, onClose }: Props) {
   const abortRef = useRef<AbortController | null>(null);
   const fullAbortRef = useRef<AbortController | null>(null);
   const renderSeq = useRef(0);
+  // Coalescing live-preview loop (see the pump effect below). `scrubbing` is true
+  // while any pointer is held down over the editor - a slider/curve/wheel/mask
+  // drag - so those frames render the cheap "scrub" tier and only snap to the
+  // accurate render on release. `previewEditsLatest` always holds the newest edit
+  // state; the two tokens let the pump skip past superseded states instead of
+  // rendering every one, so a fast drag never backs up a queue of stale renders.
+  const scrubbing = useRef(false);
+  // Hold-to-compare renders the original: it must show at the accurate/full tier,
+  // never the scrub tier - even though holding the button holds the pointer down
+  // (which would otherwise flip on scrub mode). Mirrors the `compare` state.
+  const compareRef = useRef(false);
+  // The dirty-token at the moment the pointer went down, so pointer-up can tell a
+  // real drag (edits changed → snap to the accurate render) from a plain click
+  // that happened to land in the editor (nothing changed → skip the re-render).
+  const dragBaseToken = useRef(0);
+  const previewEditsLatest = useRef<ImageEdits | null>(null);
+  const dirtyToken = useRef(0);
+  const renderedToken = useRef(-1);
+  const pumping = useRef(false);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pumpRef = useRef<() => void>(() => {});
 
   // The RGB histogram is drawn by the module-level <Histogram> component from the
   // bins computed after each preview render (see setHistBins below); it appears in
@@ -455,74 +476,142 @@ export function PhotoEditor({ image, onClose }: Props) {
         adjustments: overlayActive && adj.frame_width ? { ...adj, frame_width: 0 } : adj,
       };
   const previewKey = JSON.stringify(previewEdits);
+  // Always hand the pump the newest edit state (read from a ref so the pump and
+  // the pointer-up handler don't close over a stale value).
+  previewEditsLatest.current = previewEdits;
+  compareRef.current = compare;
 
-  // Server-rendered live preview: debounce edit changes, cancel the stale
-  // in-flight render, draw the returned JPEG onto the canvas. The very first
-  // render (and image switches) skip the debounce. Once the sliders settle, a
-  // second render on the *full-resolution* base replaces the fast one, so
-  // resolution-dependent passes (denoise, sharpen radius, grain) preview
-  // exactly as they will be saved.
-  useEffect(() => {
-    let cancelled = false;
-    let fullTimer: ReturnType<typeof setTimeout> | undefined;
-    const seq = ++renderSeq.current;
-    const draw = async (blob: Blob, withHistogram: boolean) => {
-      const bmp = await createImageBitmap(blob);
-      if (cancelled || seq !== renderSeq.current) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      canvas.width = bmp.width;
-      canvas.height = bmp.height;
-      fitCanvasToStage();
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(bmp, 0, 0);
-      if (withHistogram) setHistBins(computeHistBins(ctx.getImageData(0, 0, bmp.width, bmp.height)));
-    };
-    const timer = setTimeout(
-      async () => {
+  // Paint a rendered JPEG onto the canvas, sizing it to the bitmap and
+  // (optionally) refreshing the histogram. `seq` guards against a late or
+  // superseded render painting over a newer frame.
+  const drawBlob = useCallback(async (blob: Blob, seq: number, withHistogram: boolean) => {
+    const bmp = await createImageBitmap(blob);
+    if (seq !== renderSeq.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    fitCanvasToStage();
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bmp, 0, 0);
+    if (withHistogram) setHistBins(computeHistBins(ctx.getImageData(0, 0, bmp.width, bmp.height)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Once edits come to rest, refine on the larger full-quality base so the
+  // resolution-dependent passes (denoise/sharpen radii, grain) preview as they
+  // will be saved. Cancelled the instant a new drag starts.
+  const scheduleSettle = useCallback(() => {
+    clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(async () => {
+      // Hold-to-compare keeps the pointer down but still wants the full render.
+      if (scrubbing.current && !compareRef.current) return;
+      const seq = renderSeq.current;
+      fullAbortRef.current?.abort();
+      const fctrl = new AbortController();
+      fullAbortRef.current = fctrl;
+      try {
+        const blob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, "full");
+        if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
+        await drawBlob(blob, seq, false);
+      } catch {
+        // Non-fatal: the accurate preview is already on screen.
+      }
+    }, 350);
+  }, [image.id, drawBlob]);
+
+  // The live-preview pump. It renders the *latest* edit state, one request at a
+  // time - never a backlog of superseded renders on the (uninterruptible) numpy
+  // pipeline. While a control is being dragged it renders the cheap "scrub"
+  // tier; a discrete change renders the accurate tier and then the pump follows
+  // with the full-quality settle. There is no fixed debounce: the loop is
+  // self-throttling - it only starts the next render when the last one returns,
+  // so it runs as fast as the server can, which is what makes a drag feel live.
+  const pump = useCallback(async () => {
+    if (pumping.current) return;
+    pumping.current = true;
+    clearTimeout(settleTimer.current);
+    try {
+      while (renderedToken.current !== dirtyToken.current) {
+        const token = dirtyToken.current;
+        // Hold-to-compare shows the original at the accurate tier, so it renders
+        // fast/full even while the pointer is held down.
+        const scrub = scrubbing.current && !compareRef.current;
+        const edits = previewEditsLatest.current!;
+        const seq = ++renderSeq.current;
         abortRef.current?.abort();
         fullAbortRef.current?.abort();
         const ctrl = new AbortController();
         abortRef.current = ctrl;
         try {
-          const blob = await api.images.editorPreview(image.id, previewEdits, ctrl.signal);
-          if (cancelled || seq !== renderSeq.current) return;
-          await draw(blob, true);
+          const blob = await api.images.editorPreview(image.id, edits, ctrl.signal, scrub ? "scrub" : "fast");
+          await drawBlob(blob, seq, true);
           setError(null);
           setLoading(false);
           setReady(true);
         } catch (e) {
-          if ((e as Error).name === "AbortError") return;
-          if (!cancelled) {
+          if ((e as Error).name !== "AbortError") {
             setError(`Couldn't render the preview: ${(e as Error).message}`);
             setLoading(false);
           }
-          return;
         }
-        // Full-quality refinement after the sliders settle. The histogram
-        // keeps the fast pass's data (statistically identical, and
-        // getImageData over a full-res canvas is not free).
-        fullTimer = setTimeout(async () => {
-          const fctrl = new AbortController();
-          fullAbortRef.current = fctrl;
-          try {
-            const blob = await api.images.editorPreview(image.id, previewEdits, fctrl.signal, true);
-            if (cancelled || seq !== renderSeq.current) return;
-            await draw(blob, false);
-          } catch {
-            // Non-fatal: the fast preview is already on screen.
-          }
-        }, 400);
-      },
-      ready ? 140 : 0
-    );
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      if (fullTimer) clearTimeout(fullTimer);
-    };
+        renderedToken.current = token;
+      }
+    } finally {
+      pumping.current = false;
+    }
+    // Refine to full quality when settled - or while holding compare, so the
+    // original reaches the same full-resolution tier as the edited preview.
+    if (!scrubbing.current || compareRef.current) scheduleSettle();
+  }, [image.id, drawBlob, scheduleSettle]);
+  pumpRef.current = () => void pump();
+
+  // Kick the pump whenever the edit state changes (or the image switches).
+  useEffect(() => {
+    dirtyToken.current++;
+    void pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image.id, previewKey]);
+
+  // A pointer held down anywhere over the editor means a control is being
+  // dragged (slider/curve/wheel/crop/mask handle) - render the scrub tier until
+  // it's released, then snap to the accurate render + settle. Capture phase so it
+  // wins regardless of which element handles the gesture.
+  useEffect(() => {
+    const onDown = () => {
+      scrubbing.current = true;
+      dragBaseToken.current = dirtyToken.current;
+    };
+    const onUp = () => {
+      if (!scrubbing.current) return;
+      scrubbing.current = false;
+      // Only re-render if edits actually changed during the hold (a real drag).
+      // The frames drawn during the drag were cheap scrub frames, so re-render
+      // the released state accurately; the pump then schedules the full settle.
+      if (dirtyToken.current !== dragBaseToken.current) {
+        dirtyToken.current++;
+        pumpRef.current();
+      }
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+    };
+  }, []);
+
+  // Abort any in-flight render and drop the settle timer when the editor closes
+  // or switches images.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      fullAbortRef.current?.abort();
+      clearTimeout(settleTimer.current);
+    };
+  }, [image.id]);
 
   // The framed image changes size on geometry changes / crop mode, so drop back
   // to fit then to keep zoom/pan sane.
@@ -1658,23 +1747,30 @@ export function PhotoEditor({ image, onClose }: Props) {
               />
             ) : (
               <div className="editor-sliders">
+                {/* Caption to disambiguate these from the Basic panel's
+                    Highlights/Shadows sliders: these reshape the tone curve by
+                    region and stack on top of Basic, they don't replace it. */}
+                <p className="curve-param-hint">
+                  Reshape the tone curve by region. Separate from the Basic
+                  Highlights/Shadows — both apply.
+                </p>
                 <Slider
-                  label="Highlights"
+                  label="Highlights (curve)"
                   value={adj.parametric_curve[curveChannel].highlights}
                   onChange={(v) => setParamCurve(curveChannel, { highlights: v })}
                 />
                 <Slider
-                  label="Lights"
+                  label="Lights (curve)"
                   value={adj.parametric_curve[curveChannel].lights}
                   onChange={(v) => setParamCurve(curveChannel, { lights: v })}
                 />
                 <Slider
-                  label="Darks"
+                  label="Darks (curve)"
                   value={adj.parametric_curve[curveChannel].darks}
                   onChange={(v) => setParamCurve(curveChannel, { darks: v })}
                 />
                 <Slider
-                  label="Shadows"
+                  label="Shadows (curve)"
                   value={adj.parametric_curve[curveChannel].shadows}
                   onChange={(v) => setParamCurve(curveChannel, { shadows: v })}
                 />

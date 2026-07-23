@@ -12,7 +12,7 @@ from app.api.routes import (
     tags,
 )
 from app.config import settings as app_settings
-from app.db.session import engine, ensure_indexes
+from app.db.session import SessionLocal, engine, ensure_indexes
 from app.services.cloudfiles import rehydrate_dirs_in_background
 from app.services.embeddings import ensure_embeddings_table
 from app.services.geocode import warm_in_background as warm_geocoder
@@ -47,6 +47,13 @@ def on_startup() -> None:
     ensure_embeddings_table(engine)
     # Hot-path indexes for the library grid (idempotent, see ensure_indexes).
     ensure_indexes()
+    # Restore the persisted RAW-decode mode into the live flag the decoder reads
+    # (services/raw.py keeps it as a module global to avoid a DB hit per decode).
+    from app.services import raw as raw_service
+    from app.services.settings_store import get_raw_native_decode
+
+    with SessionLocal() as _db:
+        raw_service.set_native_decode(get_raw_native_decode(_db))
     # Pick up anything new under registered external source roots (NAS/folders)
     # since last run - runs in the background so startup isn't blocked, and is
     # incremental (only new files are indexed).

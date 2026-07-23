@@ -17,15 +17,19 @@ from app.services.settings_store import (
     IMMICH_MODES,
     IMMICH_SYNC_MODE,
     IMMICH_SYNC_PAUSED,
+    RAW_NATIVE_DECODE,
     TRASH_RETENTION_DAYS,
     get_auto_develop_enabled,
     get_auto_develop_groups,
     get_immich_sync_mode,
     get_immich_sync_paused,
+    get_raw_native_decode,
     get_setting,
     get_trash_retention_days,
     set_setting,
 )
+from app.services import raw as raw_service
+from app.services import thumbnails as thumbnails_service
 from app.services.immich_sync import run_immich_sync_soon
 from app.services.trash import run_purge_soon
 from app.workers.queue import immich_pending_uploads, immich_upload_history
@@ -133,6 +137,32 @@ def update_immich_settings(
         api_key_set=bool(api_key),
         sync_mode=get_immich_sync_mode(db),
     )
+
+
+@router.get("/raw", response_model=schemas.RawDecodeSettingsOut)
+def get_raw_settings(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    return schemas.RawDecodeSettingsOut(native_decode=get_raw_native_decode(db))
+
+
+@router.put("/raw", response_model=schemas.RawDecodeSettingsOut)
+def update_raw_settings(
+    payload: schemas.RawDecodeSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Toggle native (no-processing) RAW loading. Persists the setting, flips the
+    live decode flag, and drops the in-memory decoded-base cache so the editor
+    re-decodes immediately. On-disk thumbnails/previews are rebuilt separately
+    (the client kicks off a rebuild) since they're baked at import time."""
+    set_setting(db, RAW_NATIVE_DECODE, "1" if payload.native_decode else "0")
+    db.commit()
+    raw_service.set_native_decode(payload.native_decode)
+    # The cached bases were decoded under the old setting - drop them so the next
+    # editor preview re-decodes with the new mode.
+    thumbnails_service._cached_editor_base.cache_clear()
+    return schemas.RawDecodeSettingsOut(native_decode=payload.native_decode)
 
 
 @router.get("/trash", response_model=schemas.TrashSettingsOut)

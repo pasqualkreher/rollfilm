@@ -30,6 +30,12 @@ DEFAULT_IMMICH_SYNC_MODE = IMMICH_MODE_MANUAL
 TRASH_RETENTION_DAYS = "trash_retention_days"
 DEFAULT_TRASH_RETENTION_DAYS = 14
 
+# "1" to load RAWs with no brightness processing - the native (no auto-bright)
+# demosaic exactly as the sensor recorded it, instead of self-normalizing each
+# RAW to a consistent brightness. For users who want to do all tone work from
+# the true raw data themselves.
+RAW_NATIVE_DECODE = "raw_native_decode"
+
 # "1" when the Auto develop button is shown in the editor. Off by default: the
 # suggestion only becomes useful once the user has saved a few edits, so it's
 # an explicit opt-in from Settings (which explains how it learns).
@@ -76,6 +82,10 @@ def get_trash_retention_days(db: Session) -> int:
     except (TypeError, ValueError):
         return DEFAULT_TRASH_RETENTION_DAYS
     return max(0, days)
+
+
+def get_raw_native_decode(db: Session) -> bool:
+    return get_setting(db, RAW_NATIVE_DECODE) == "1"
 
 
 def get_auto_develop_enabled(db: Session) -> bool:
