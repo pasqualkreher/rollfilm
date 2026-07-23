@@ -741,37 +741,47 @@ ipcMain.handle("pm:remove-legacy-data", () => {
   return { removed, failed };
 });
 
-app.whenReady().then(async () => {
-  setDevDockIcon();
-  createSplash();
+// First-run setup: the onboarding wizard's library step calls this to pick the
+// library folder in-app, replacing the old native "choose your library" message
+// box. It writes the choice, then starts the backend for the first time (this
+// launch had none, since no LIBRARY_ROOT was known) and waits until it's
+// healthy. On success the renderer reloads into the full app and the wizard
+// carries on with the remaining steps.
+ipcMain.handle("pm:setup-library", async () => {
+  const picked = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose your photo library folder",
+    properties: ["openDirectory", "createDirectory"],
+    buttonLabel: "Use this folder",
+  });
+  if (picked.canceled || picked.filePaths.length === 0) return { ok: false, canceled: true };
 
-  // Block on the first-run library-location prompt before anything else - the
-  // backend needs LIBRARY_ROOT set when it starts.
-  const isFirstStart = !readConfig().libraryRoot;
-  firstRunThisSession = isFirstStart;
-  setSplashStatus(isFirstStart ? "Checking library folder…" : "Loading…");
-  libraryRoot = await ensureLibraryRoot();
-  if (!libraryRoot) {
-    closeSplash();
+  const chosen = picked.filePaths[0];
+  writeConfig({ ...readConfig(), libraryRoot: chosen });
+  libraryRoot = chosen;
+  // Bring an older userData-based database across so existing metadata isn't
+  // lost when an upgrader points at a folder used by a legacy build.
+  migrateLegacyLibraryData(chosen);
+
+  const healthy = await startBackendAndWait(true);
+  if (!healthy) {
     app.quit();
-    return;
+    return { ok: false };
   }
-  // The database, thumbnails and staging live inside the library folder's
-  // hidden ".photomanager" subfolder (see libraryDataDir). Bring an older
-  // userData-based database across on first run after the upgrade so existing
-  // metadata isn't lost.
-  migrateLegacyLibraryData(libraryRoot);
+  // The library exists now, so start watching for it disappearing (eject/sleep).
+  startLibraryWatchdog();
+  return { ok: true, path: chosen };
+});
 
-  apiPort = await getFreePort();
-  apiBaseUrl = `http://127.0.0.1:${apiPort}`;
-
+// Start the backend and wait until /health answers, surfacing the same
+// keep-waiting / crash dialogs the slow first launch needs. Returns true once
+// the backend is healthy, false when the user chose to quit (the caller then
+// quits). Shared by the normal boot path and the first-run library setup.
+async function startBackendAndWait(isFirstStart) {
   console.log(`[main] starting backend, expecting ${apiBaseUrl}`);
-  // The slow-first-launch hint only makes sense when no library was configured
-  // yet (true first run); on later launches a plain "Loading…" is enough.
   setSplashStatus(
     isFirstStart
       ? "Starting backend… the first launch can take a few minutes"
-      : "Loading…",
+      : "Loading…"
   );
   startBackend();
 
@@ -780,8 +790,8 @@ app.whenReady().then(async () => {
   // waiting instead of giving up — and point at the log file either way.
   let result = await waitForHealth();
   while (result !== "ok") {
+    closeSplash();
     if (result === "died") {
-      closeSplash();
       const choice = await dialog.showMessageBox({
         type: "error",
         title: "Backend did not start",
@@ -793,8 +803,7 @@ app.whenReady().then(async () => {
         noLink: true,
       });
       if (choice.response === 0) shell.showItemInFolder(backendLogPath());
-      app.quit();
-      return;
+      return false;
     }
     // timeout — backend is still running, just not ready yet
     const choice = await dialog.showMessageBox({
@@ -809,22 +818,14 @@ app.whenReady().then(async () => {
       cancelId: 1,
       noLink: true,
     });
-    if (choice.response !== 0) {
-      closeSplash();
-      app.quit();
-      return;
-    }
+    if (choice.response !== 0) return false;
     result = await waitForHealth(120000);
   }
-  console.log("[main] backend healthy — opening window");
-  setSplashStatus("Loading your library…");
+  console.log("[main] backend healthy");
+  return true;
+}
 
-  createWindow();
-  // From here on, watch for the library drive disappearing (sleep/eject) so a
-  // wake-up without the drive shows a clear waiting screen instead of a
-  // broken app whose database vanished mid-flight.
-  startLibraryWatchdog();
-
+function registerActivateHandler() {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -837,6 +838,61 @@ app.whenReady().then(async () => {
       mainWindow.focus();
     }
   });
+}
+
+app.whenReady().then(async () => {
+  setDevDockIcon();
+  createSplash();
+
+  const isFirstStart = !readConfig().libraryRoot;
+  firstRunThisSession = isFirstStart;
+
+  // The renderer reads the backend URL the moment it loads, so the port must be
+  // known before any window opens — including the first-run setup window, which
+  // comes up before the backend has even started.
+  apiPort = await getFreePort();
+  apiBaseUrl = `http://127.0.0.1:${apiPort}`;
+  registerActivateHandler();
+
+  if (isFirstStart) {
+    // First run: instead of a native "choose your library" message box, open the
+    // window right away and let the in-app onboarding wizard ask for the folder
+    // (pm:setup-library). The backend isn't started yet — it has no
+    // LIBRARY_ROOT — so the renderer shows the library-setup screen (which makes
+    // no API calls) until the user picks a folder, which then starts the backend.
+    setSplashStatus("Loading…");
+    createWindow();
+    return;
+  }
+
+  // Returning user: make sure the saved library is reachable (native reconnect
+  // prompt if the drive is unplugged), then boot the backend before the window.
+  setSplashStatus("Loading…");
+  libraryRoot = await ensureLibraryRoot();
+  if (!libraryRoot) {
+    closeSplash();
+    app.quit();
+    return;
+  }
+  // The database, thumbnails and staging live inside the library folder's hidden
+  // ".photomanager" subfolder (see libraryDataDir). Bring an older userData-based
+  // database across on first run after the upgrade so existing metadata isn't lost.
+  migrateLegacyLibraryData(libraryRoot);
+
+  const healthy = await startBackendAndWait(false);
+  if (!healthy) {
+    closeSplash();
+    app.quit();
+    return;
+  }
+  console.log("[main] backend healthy — opening window");
+  setSplashStatus("Loading your library…");
+
+  createWindow();
+  // From here on, watch for the library drive disappearing (sleep/eject) so a
+  // wake-up without the drive shows a clear waiting screen instead of a broken
+  // app whose database vanished mid-flight.
+  startLibraryWatchdog();
 });
 
 app.on("window-all-closed", () => {

@@ -38,6 +38,25 @@ export function OnboardingWizard() {
   });
   const [stepIndex, setStepIndex] = useState(0);
 
+  // Set by the first-run library setup right before it reloads into the app. The
+  // folder was just chosen (and the multi-library note shown) there, so the
+  // wizard skips its welcome/library steps and goes straight to Style. Cleared
+  // after mount so a later manual re-trigger shows the full flow again.
+  const [justSetup] = useState(() => {
+    try {
+      return sessionStorage.getItem("pm:just-setup") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem("pm:just-setup");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   // Desktop-only context, loaded once when the wizard opens.
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
   const [dataRoot, setDataRoot] = useState<string | null>(null);
@@ -55,12 +74,14 @@ export function OnboardingWizard() {
   // Which steps exist this run. The clean-up step only shows when there really
   // are leftovers to remove; the library step only in the desktop build.
   const steps = useMemo<StepId[]>(() => {
+    // Fresh setup already covered the welcome and library choice — pick up at Style.
+    if (justSetup) return ["style", "workflow"];
     const s: StepId[] = ["welcome"];
     if (desktop && legacy && legacy.length > 0) s.push("cleanup");
     if (desktop) s.push("library");
     s.push("style", "workflow");
     return s;
-  }, [desktop, legacy]);
+  }, [justSetup, desktop, legacy]);
 
   // The legacy scan can resolve after the user has already moved past where the
   // clean-up step would sit; clamp so the index can never point past the end.

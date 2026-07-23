@@ -9,8 +9,14 @@ declare global {
       apiBaseUrl: string | null;
       /** Opens the native folder dialog; resolves to an absolute path or null. */
       pickFolder: () => Promise<string | null>;
-      /** Current photo-library folder (chosen on first start). */
+      /** Current photo-library folder ("" until first-run setup picks one). */
       getLibraryRoot: () => Promise<string>;
+      /**
+       * First-run setup: opens the folder picker, saves the choice and starts
+       * the backend. Resolves { ok: true, path } once the backend is healthy,
+       * or { ok: false, canceled? } if the user dismissed the picker.
+       */
+      setupLibrary: () => Promise<{ ok: boolean; path?: string; canceled?: boolean }>;
       /**
        * Opens the folder dialog to pick a new library folder. If the user
        * confirms, the app restarts itself; otherwise resolves with changed: false.
