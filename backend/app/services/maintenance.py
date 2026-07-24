@@ -14,7 +14,17 @@ from typing import BinaryIO, Protocol
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Album, AlbumImage, ColorLabel, FileType, Image, ImportSession, ImportStagedFile
+from app.db.models import (
+    Album,
+    AlbumImage,
+    ColorLabel,
+    FileType,
+    Image,
+    ImageTag,
+    ImportSession,
+    ImportStagedFile,
+    Tag,
+)
 from app.services.exif import capture_date_from_filename, new_helper, read_exif
 from app.services.filesystem import resolve_image_path
 from app.services.raw import classify_file_type
@@ -272,6 +282,13 @@ def wipe_library(db: Session, owner_id: int) -> None:
         db.query(AlbumImage).filter(AlbumImage.album_id.in_(album_ids)).delete(synchronize_session=False)
         db.query(Album).filter(Album.owner_id == owner_id).delete(synchronize_session=False)
 
+    # Bulk query.delete() bypasses ORM cascades, so the tag links (and the tags
+    # themselves) must be cleared explicitly or they'd survive as orphans.
+    tag_ids = [t.id for t in db.query(Tag).filter(Tag.owner_id == owner_id).all()]
+    if tag_ids:
+        db.query(ImageTag).filter(ImageTag.tag_id.in_(tag_ids)).delete(synchronize_session=False)
+        db.query(Tag).filter(Tag.owner_id == owner_id).delete(synchronize_session=False)
+
     db.query(Image).filter(Image.owner_id == owner_id).delete(synchronize_session=False)
     db.commit()
 
@@ -300,7 +317,10 @@ def wipe_library(db: Session, owner_id: int) -> None:
         root.mkdir(parents=True, exist_ok=True)
 
 
-def _image_to_dict(image: Image) -> dict:
+def _image_to_dict(image: Image, tags: list[str]) -> dict:
+    # The legacy v1 edit_* slider columns are intentionally not exported: the
+    # render pipeline no longer reads them, so the manifest carries only the
+    # state that actually shapes pixels (geometry + edit_adjustments).
     return {
         "id": image.id,
         "file_path": image.file_path,
@@ -314,6 +334,7 @@ def _image_to_dict(image: Image) -> dict:
         "file_size": image.file_size,
         "taken_at": image.taken_at.isoformat() if image.taken_at else None,
         "imported_at": image.imported_at.isoformat(),
+        "deleted_at": image.deleted_at.isoformat() if image.deleted_at else None,
         "camera_make": image.camera_make,
         "camera_model": image.camera_model,
         "iso": image.iso,
@@ -336,6 +357,13 @@ def _image_to_dict(image: Image) -> dict:
         "edit_straighten": image.edit_straighten,
         "edit_persp_h": image.edit_persp_h,
         "edit_persp_v": image.edit_persp_v,
+        "edit_distortion": image.edit_distortion,
+        "edit_adjustments": image.edit_adjustments,
+        "edit_rev": image.edit_rev,
+        "applied_adjustments": image.applied_adjustments,
+        "immich_sync": image.immich_sync,
+        "immich_asset_id": image.immich_asset_id,
+        "tags": tags,
     }
 
 
@@ -362,16 +390,29 @@ def build_backup_zip(db: Session, owner_id: int) -> Path:
         .filter(Album.owner_id == owner_id, Image.source_root_id.is_(None))
         .all()
     )
+    # One query for all tag links instead of lazy-loading per image.
+    tags_by_image: dict[str, list[str]] = {}
+    tag_rows = (
+        db.query(ImageTag.image_id, Tag.name)
+        .join(Tag, Tag.id == ImageTag.tag_id)
+        .join(Image, Image.id == ImageTag.image_id)
+        .filter(Image.owner_id == owner_id, Image.source_root_id.is_(None))
+        .all()
+    )
+    for image_id, tag_name in tag_rows:
+        tags_by_image.setdefault(image_id, []).append(tag_name)
 
     manifest = {
+        "version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "images": [_image_to_dict(i) for i in images],
+        "images": [_image_to_dict(i, sorted(tags_by_image.get(i.id, []))) for i in images],
         "albums": [
             {
                 "id": a.id,
                 "name": a.name,
                 "description": a.description,
                 "created_at": a.created_at.isoformat(),
+                "immich_sync": a.immich_sync,
             }
             for a in albums
         ],
@@ -431,6 +472,11 @@ def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dic
                     file_size=image_data["file_size"],
                     taken_at=datetime.fromisoformat(image_data["taken_at"]) if image_data["taken_at"] else None,
                     imported_at=datetime.fromisoformat(image_data["imported_at"]),
+                    deleted_at=(
+                        datetime.fromisoformat(image_data["deleted_at"])
+                        if image_data.get("deleted_at")
+                        else None
+                    ),
                     camera_make=image_data["camera_make"],
                     camera_model=image_data["camera_model"],
                     iso=image_data["iso"],
@@ -452,8 +498,26 @@ def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dic
                     edit_straighten=image_data.get("edit_straighten", 0.0),
                     edit_persp_h=image_data.get("edit_persp_h", 0),
                     edit_persp_v=image_data.get("edit_persp_v", 0),
+                    edit_distortion=image_data.get("edit_distortion", 0),
+                    edit_adjustments=image_data.get("edit_adjustments"),
+                    edit_rev=image_data.get("edit_rev", 0),
+                    applied_adjustments=image_data.get("applied_adjustments"),
+                    immich_sync=image_data.get("immich_sync", False),
+                    immich_asset_id=image_data.get("immich_asset_id"),
                 )
             )
+        db.flush()
+
+        tag_by_name: dict[str, Tag] = {}
+        for image_data in manifest["images"]:
+            for tag_name in image_data.get("tags", []):
+                tag = tag_by_name.get(tag_name)
+                if tag is None:
+                    tag = Tag(owner_id=owner_id, name=tag_name)
+                    db.add(tag)
+                    db.flush()  # assigns the UUID id the link below needs
+                    tag_by_name[tag_name] = tag
+                db.add(ImageTag(image_id=image_data["id"], tag_id=tag.id))
         db.flush()
         for image_data in manifest["images"]:
             if image_data["paired_image_id"]:
@@ -467,6 +531,7 @@ def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dic
                     name=album_data["name"],
                     description=album_data["description"],
                     created_at=datetime.fromisoformat(album_data["created_at"]),
+                    immich_sync=album_data.get("immich_sync", False),
                 )
             )
         db.flush()
