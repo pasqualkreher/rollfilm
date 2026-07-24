@@ -3144,6 +3144,47 @@ input.editor-preset-select {
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6);
 }
 
+/* Exploded ("spiderfied") same-spot cluster: members fan out on a ring or
+   spiral around the pin, each popping in. */
+.map-pin-spider img {
+  animation: map-pin-pop 0.18s ease-out;
+}
+
+@keyframes map-pin-pop {
+  from {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* The cluster pin steps back while its members are fanned out. */
+.map-pin-dimmed {
+  opacity: 0.35;
+  transition: opacity 0.15s ease;
+}
+
+/* "+N" tile at the end of a large fan - stands in for the members that didn't
+   get their own thumbnail (they're still reachable in the lightbox). */
+.map-pin-overflow {
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: map-pin-pop 0.18s ease-out;
+}
+
 /* Small location preview in the photo detail panel - reads as one button. */
 .mini-map {
   position: relative;

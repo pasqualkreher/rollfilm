@@ -96,6 +96,94 @@ export function MapView() {
     type Pin = { id: string; members: string[]; latlng: L.LatLng; marker: L.Marker };
     let pins: Pin[] = [];
 
+    // At most this many thumbnails fan out when a cluster explodes; anything
+    // beyond collapses into a single "+N" tile (all members stay reachable in
+    // the lightbox via the arrow keys).
+    const MAX_SPIDER = 24;
+    type Spider = { pin: Pin; layers: L.Layer[] };
+    let spider: Spider | null = null;
+
+    const unspiderfy = () => {
+      if (!spider) return;
+      for (const l of spider.layers) layer.removeLayer(l);
+      spider.pin.marker.getElement()?.classList.remove("map-pin-dimmed");
+      spider = null;
+    };
+
+    // Pixel offsets for the exploded thumbnails: a ring while they fit on one,
+    // an expanding spiral beyond that (constant ~58px arc separation, each full
+    // turn moving ~56px further out so rings of 46px thumbnails don't overlap).
+    const spiderOffsets = (count: number): L.Point[] => {
+      const pts: L.Point[] = [];
+      if (count <= 9) {
+        const radius = Math.max(60, (count * 58) / (2 * Math.PI));
+        for (let i = 0; i < count; i++) {
+          const a = (2 * Math.PI * i) / count - Math.PI / 2;
+          pts.push(L.point(Math.round(radius * Math.cos(a)), Math.round(radius * Math.sin(a))));
+        }
+      } else {
+        let angle = 0;
+        let radius = 62;
+        for (let i = 0; i < count; i++) {
+          pts.push(L.point(Math.round(radius * Math.cos(angle)), Math.round(radius * Math.sin(angle))));
+          angle += 58 / radius;
+          radius += (56 * 58) / (2 * Math.PI * radius);
+        }
+      }
+      return pts;
+    };
+
+    // Explode a same-spot cluster: fan its photos out around the pin with legs
+    // back to the true location, so every shot becomes visible and clickable.
+    const spiderfy = (pin: Pin, members: GeoImage[]) => {
+      unspiderfy();
+      const center = map.latLngToLayerPoint(pin.latlng);
+      const shown = members.slice(0, MAX_SPIDER);
+      const overflow = members.length - shown.length;
+      const offsets = spiderOffsets(shown.length + (overflow > 0 ? 1 : 0));
+      const layers: L.Layer[] = [];
+
+      offsets.forEach((off, i) => {
+        const latlng = map.layerPointToLatLng(center.add(off));
+        layers.push(
+          L.polyline([pin.latlng, latlng], {
+            color: "#fff",
+            weight: 1.5,
+            opacity: 0.85,
+            interactive: false,
+          }).addTo(layer)
+        );
+        const isOverflow = i >= shown.length;
+        const html = isOverflow
+          ? `<div class="map-pin-overflow">+${overflow}</div>`
+          : `<div style="position:relative"><img src="${api.images.thumbnailUrl(shown[i].id)}" alt="" /></div>`;
+        const icon = L.divIcon({
+          className: "map-pin map-pin-spider",
+          html,
+          iconSize: [46, 46],
+          iconAnchor: [23, 23],
+        });
+        const marker = L.marker(latlng, {
+          icon,
+          title: isOverflow ? undefined : shown[i].original_filename,
+          riseOnHover: true,
+          zIndexOffset: 1000,
+        }).addTo(layer);
+        marker.on("mouseover", () => marker.getElement()?.classList.add("map-pin-active"));
+        marker.on("mouseout", () => marker.getElement()?.classList.remove("map-pin-active"));
+        // Opening from the fan hands the WHOLE cluster to the lightbox, so the
+        // arrow keys page through every photo taken at this spot.
+        const targetId = isOverflow ? members[shown.length].id : shown[i].id;
+        marker.on("click", () =>
+          navigate(`/image/${targetId}`, { state: { imageIds: pin.members } })
+        );
+        layers.push(marker);
+      });
+
+      pin.marker.getElement()?.classList.add("map-pin-dimmed");
+      spider = { pin, layers };
+    };
+
     // The deepest zoom a cluster click drives toward. Photos whose pixel
     // spread at THIS zoom still fits one grid cell can never be separated by
     // zooming - clicking such a cluster must open the photos instead.
@@ -110,7 +198,8 @@ export function MapView() {
         minX = Math.min(minX, pt.x); maxX = Math.max(maxX, pt.x);
         minY = Math.min(minY, pt.y); maxY = Math.max(maxY, pt.y);
       }
-      return maxX - minX >= CELL || maxY - minY >= CELL;
+      const cell = cellFor(MAX_PIN_ZOOM);
+      return maxX - minX >= cell || maxY - minY >= cell;
     };
 
     const addPin = (rep: GeoImage, members: GeoImage[], title?: string) => {
@@ -135,13 +224,16 @@ export function MapView() {
       marker.on("mouseover", () => marker.getElement()?.classList.add("map-pin-active"));
       marker.on("mouseout", () => marker.getElement()?.classList.remove("map-pin-active"));
       marker.on("click", () => {
-        // A splittable cluster zooms in toward its photos. A single pin - or a
-        // cluster of photos taken at (virtually) the same spot, which no zoom
-        // level can separate - opens the photo, with the rest of the cluster
-        // reachable via the arrow keys. Without the second case, same-spot
-        // clusters used to swallow every click once the zoom cap was reached.
+        // A splittable cluster zooms in toward its photos. A cluster of photos
+        // taken at (virtually) the same spot - which no zoom level can
+        // separate - explodes into a fan of individual thumbnails instead
+        // (clicking the pin again folds it back up). Only a true single pin
+        // opens the photo directly.
         if (pin.members.length > 1 && canSplit && map.getZoom() < MAX_PIN_ZOOM) {
           map.setView(pin.latlng, Math.min(map.getZoom() + 2, MAX_PIN_ZOOM));
+        } else if (pin.members.length > 1) {
+          if (spider?.pin === pin) unspiderfy();
+          else spiderfy(pin, members);
         } else {
           navigate(`/image/${pin.id}`, { state: { imageIds: pin.members } });
         }
@@ -149,13 +241,18 @@ export function MapView() {
       pins.push(pin);
     };
 
-    // One pin per ~72px screen cell at the current zoom; the newest photo of
-    // the cell fronts it (points arrive newest-first) with a count badge.
-    const CELL = 72;
+    // One pin per screen cell at the current zoom; the newest photo of the
+    // cell fronts it (points arrive newest-first) with a count badge. The cell
+    // shrinks at low zooms so a zoomed-out view packs in many more photos
+    // (pins may nearly touch - hover lifts and enlarges them).
+    const cellFor = (zoom: number) => (zoom <= 5 ? 48 : zoom <= 9 ? 58 : 72);
     const rebuild = () => {
       layer.clearLayers();
+      // clearLayers already removed the fan's markers and legs.
+      spider = null;
       pins = [];
       const zoom = map.getZoom();
+      const CELL = cellFor(zoom);
       const bounds = map.getBounds().pad(0.5);
       const cells = new Map<string, GeoImage[]>();
       for (const p of points) {
@@ -187,6 +284,9 @@ export function MapView() {
     };
 
     map.on("moveend zoomend", rebuild);
+    // Clicking empty map folds an exploded cluster back up (marker clicks
+    // don't bubble to the map, so the fan's own thumbnails are unaffected).
+    map.on("click", unspiderfy);
 
     // Arriving from a photo's mini-map: hold on that spot and pop it big.
     // Otherwise frame them all - but only when the photo set first arrives,
@@ -202,6 +302,7 @@ export function MapView() {
 
     return () => {
       map.off("moveend zoomend", rebuild);
+      map.off("click", unspiderfy);
     };
   }, [points, navigate, focus]);
 

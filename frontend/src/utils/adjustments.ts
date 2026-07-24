@@ -30,8 +30,8 @@ export const SCALAR_SPEC = {
   whites: { def: 0, min: -100, max: 100 },
   blacks: { def: 0, min: -100, max: 100 },
   // White balance / presence
-  temperature: { def: 0, min: -100, max: 100 },
-  tint: { def: 0, min: -100, max: 100 },
+  temperature: { def: 0, min: -250, max: 250 },
+  tint: { def: 0, min: -250, max: 250 },
   vibrance: { def: 0, min: -100, max: 100 },
   saturation: { def: 0, min: -100, max: 100 },
   hue: { def: 0, min: -180, max: 180 },

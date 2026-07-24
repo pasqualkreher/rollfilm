@@ -36,8 +36,8 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     "whites": (0, -100, 100, False),
     "blacks": (0, -100, 100, False),
     # White balance / presence
-    "temperature": (0, -100, 100, False),
-    "tint": (0, -100, 100, False),
+    "temperature": (0, -250, 250, False),
+    "tint": (0, -250, 250, False),
     "vibrance": (0, -100, 100, False),
     "saturation": (0, -100, 100, False),
     "hue": (0, -180, 180, False),            # global hue rotation (was color_tint)
