@@ -29,13 +29,14 @@ function monthOf(label: string): string {
 // (fracFromEvent) disagree, dragging to a visible label lands on its neighbour.
 const RAIL_INSET = 24;
 
-// The rail is anchored to the nav bar's bottom edge (not the scroll area's top)
-// so it spans the whole height under the nav, across the filter bar's empty
-// right end and down to the window bottom. RAIL_GAP is the SAME breathing room
-// at both ends - just under the nav and just above the window bottom - so the
-// gap above equals the gap below and the rail is as tall as it can be without
-// covering the nav.
-const RAIL_GAP = 8;
+// The rail runs from just under the filter bar down to just above the window
+// bottom, with the SAME gap at both ends. Keeping the top at the filter bar
+// (not poking up into it) means the first month label - which RAIL_INSET already
+// pushes down from the rail's top - sits just below the bar rather than jammed
+// against it or up inside it; RAIL_INSET insets the last label by the same
+// amount, so with equal end gaps the top and bottom labels get equal breathing
+// room automatically.
+const RAIL_GAP = 6;
 
 /**
  * Immich-style date scrubber pinned to the right edge of the library timeline:
@@ -66,12 +67,9 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
     const scrollerRect = scroller.getBoundingClientRect();
     const scrollerTop = scrollerRect.top;
 
-    // Anchor the rail just below the nav bar and give it the SAME gap at the
-    // bottom, so its top and bottom breathing room match and it's as tall as it
-    // can be without covering the nav. Falls back to the scroller top if the nav
-    // isn't found (the rail then just starts a little lower).
-    const navBottom = document.querySelector(".top-bar")?.getBoundingClientRect().bottom ?? scrollerTop;
-    const top = navBottom + RAIL_GAP;
+    // Anchor the rail just below the filter bar (the scroll area's top) and give
+    // it the SAME gap at the bottom, so its top and bottom breathing room match.
+    const top = scrollerTop + RAIL_GAP;
     setRailTop(top);
     setRailHeight(Math.max(0, window.innerHeight - RAIL_GAP - top));
 
@@ -121,10 +119,16 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
     const ro = new ResizeObserver(recompute);
     ro.observe(scroller);
     window.addEventListener("resize", recompute);
+    // The page-enter animation slides `.page` down a few px while this first
+    // measures, so re-measure once any enter animation settles (animationend
+    // bubbles to window) - otherwise the rail keeps that offset until the
+    // next scroll or resize.
+    window.addEventListener("animationend", recompute);
     return () => {
       scroller.removeEventListener("scroll", onScroll);
       ro.disconnect();
       window.removeEventListener("resize", recompute);
+      window.removeEventListener("animationend", recompute);
       clearTimeout(scrollHideTimer.current);
     };
   }, [getScroller, recompute]);

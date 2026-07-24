@@ -558,7 +558,13 @@ button {
      of it snapping into place. Opacity + a tiny rise; the scroller and timeline
      root translate together, so this never disturbs the virtual grid's
      measurements. */
-  animation: pm-page-in 0.28s ease both;
+  /* No fill-mode: with `both`, Chromium keeps applying the final keyframe's
+     transform as an identity MATRIX (not `none`) forever - and a transformed
+     ancestor becomes the containing block for position:fixed descendants, so
+     the timeline scrubber was anchored ~60px too low (to .page's top instead
+     of the viewport). Without fill, the transform stops applying once the
+     animation ends and fixed children anchor to the viewport again. */
+  animation: pm-page-in 0.28s ease;
 }
 
 /* Hide the native OS scrollbar on the app's scroll containers - the timeline
@@ -1440,27 +1446,35 @@ textarea:focus-visible {
   position: absolute;
   top: 6px;
   right: 6px;
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
+  /* JPG (the base badge): the scheme's ink on its page colour (--text on --bg),
+     i.e. the palette inverted. A strong, neutral chip that recolours with the
+     active skin — see badge-raw / badge-pair below for the other two kinds. */
+  background: var(--text);
+  color: var(--bg);
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 4px;
   letter-spacing: 0.02em;
 }
 
-/* RAW and merged RAW+JPG badges get their own color so the file kind is
-   readable at a glance — the tiny text alone doesn't separate them from JPG.
+/* The three file kinds are drawn straight from the active colour skin's palette
+   tokens, so they recolour with every scheme (Sepia, Vintage, Nord, …) instead
+   of a fixed guess, while staying tellable apart at a glance:
+     JPG      → --text on --bg          (inverted ink chip — see base rule above)
+     RAW      → the scheme's --accent   (its signature colour)
+     RAW+JPG  → --bg-elevated + --text  (a light surface chip, like the app's cards)
    Applies to both the thumbnail badge and the lightbox's inline badge. */
 .thumb-card .badge.badge-raw,
 .badge-inline.badge-raw {
-  background: rgba(176, 108, 22, 0.92);
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .thumb-card .badge.badge-pair,
 .badge-inline.badge-pair {
-  background: rgba(90, 74, 190, 0.92);
-  color: #fff;
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .thumb-card .duplicate-badge {
@@ -4064,6 +4078,87 @@ kbd {
   color: var(--text-muted);
 }
 
+/* Appearance summary row in Settings: current skin preview + name + a button
+   that opens the full picker in a modal, so the skin grid stays out of the
+   page. */
+.theme-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.theme-summary-preview {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  width: 66px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(128, 128, 128, 0.28);
+  overflow: hidden;
+}
+
+.theme-summary-preview.tp-split {
+  flex-direction: row;
+  padding: 0;
+  gap: 0;
+}
+
+.theme-summary-preview.tp-split .tp-half {
+  padding: 8px 7px;
+  gap: 5px;
+}
+
+.theme-summary-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.theme-summary-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.theme-summary-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* The picker modal: reuse .modal, just widen it for the grid and let the body
+   scroll so the footer's Done button stays pinned. */
+.theme-modal {
+  width: min(680px, 100%);
+}
+
+.theme-modal-body {
+  overflow-y: auto;
+  padding: 6px 18px 18px;
+}
+
+/* Inside the modal the first group starts right under the header, so drop the
+   picker's default top margin on the leading grid. */
+.theme-modal-body > div > .theme-picker:first-child {
+  margin-top: 4px;
+}
+
+.theme-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
 /* ---- Settings: flat sections, separated by a divider -------------------- */
 
 .settings-section {
@@ -4088,4 +4183,143 @@ kbd {
 
 .settings-section-body {
   padding: 0;
+}
+
+/* ---- Shared Settings primitives -----------------------------------------
+   One vocabulary for every section so they read as one page instead of each
+   block styling itself inline: descriptions, notes, option rows, fields and
+   sub-groups all share these. */
+
+/* Explanatory copy under a section header (and secondary paragraphs). */
+.settings-desc {
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+.settings-desc:last-child {
+  margin-bottom: 0;
+}
+
+/* Status / result line after an action; the error variant recolours only. */
+.settings-note {
+  color: var(--text-muted);
+  margin: 10px 0 0;
+}
+.settings-note--error {
+  color: var(--danger);
+}
+
+/* A read-only path (library folder, data folder). */
+.settings-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--text-muted);
+  word-break: break-all;
+  margin: 0 0 12px;
+}
+
+/* A minor heading inside a section (e.g. "Sync mode"). */
+.settings-subhead {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* A related cluster set off from the paragraph above it; --indent aligns a
+   dependent group under its parent checkbox. */
+.settings-subgroup {
+  margin-top: 18px;
+}
+.settings-subgroup--indent {
+  margin-top: 12px;
+  margin-left: 24px;
+}
+
+/* A toggle row: checkbox/radio + a title and optional description. Used for
+   every checkbox and radio in Settings so they line up identically. */
+.settings-option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.settings-option.busy {
+  cursor: wait;
+}
+.settings-option > input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.settings-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-option-body > strong {
+  font-weight: 600;
+  color: var(--text);
+}
+.settings-option-desc {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* A labelled text/password input that fills the reading column. */
+.settings-field {
+  display: block;
+  margin-bottom: 12px;
+}
+.settings-field-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.settings-field > input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* A thin progress bar (Immich sync). */
+.settings-progress {
+  height: 6px;
+  max-width: 420px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.settings-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.settings-progress-fill.paused {
+  background: var(--text-muted);
+}
+
+/* A compact list (recent Immich uploads). */
+.settings-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.settings-list li {
+  padding: 3px 0;
+}
+.settings-list .ok {
+  color: var(--text-muted);
+}
+.settings-list .fail {
+  color: var(--danger);
+}
+
+/* Successive standalone actions in one section (e.g. Library maintenance,
+   Backup & restore) get even vertical rhythm without per-element margins. */
+.settings-block + .settings-block {
+  margin-top: 22px;
 }

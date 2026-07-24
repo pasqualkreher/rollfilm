@@ -1,6 +1,6 @@
 {
   "name": "rollfilm-desktop",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Rollfilm — native desktop photo library & film-look editor",
   "main": "main.js",
   "author": "Pasqual Kreher",
@@ -57,7 +57,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
     },
     "linux": {
       "target": "AppImage",

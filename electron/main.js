@@ -12,7 +12,7 @@
 //      desktop: any host path is directly readable by the native backend).
 
 const { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const net = require("net");
 const http = require("http");
 const path = require("path");
@@ -28,6 +28,28 @@ let apiPort = 0;
 let apiBaseUrl = "";
 let mainWindow = null;
 let splashWindow = null;
+
+// A second instance would spawn a second backend against the same library
+// (database lock fights) and leave processes behind that block the Windows
+// updater from replacing the install dir. Hand the launch over to the
+// already-running instance instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      // Same as a dock/taskbar activate: if the window is hidden finishing
+      // background uploads, bring it back and cancel the pending auto-quit.
+      if (!mainWindow.isVisible()) {
+        cancelBackgroundWait();
+        forceClose = false;
+        mainWindow.show();
+      }
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
 // Absolute path to the user's photo library, chosen on first run (see
 // ensureLibraryRoot). The database, thumbnails and import staging live inside
 // this folder (see libraryDataDir); only the model cache and logs stay in
@@ -430,7 +452,19 @@ function startBackend() {
 
 function stopBackend() {
   if (backendProc && backendProc.exitCode === null) {
-    backendProc.kill("SIGTERM");
+    if (process.platform === "win32") {
+      // kill() is TerminateProcess on Windows: the backend's own children
+      // (exiftool -stay_open) survive it, keep holding files in the install
+      // dir, and the NSIS updater then fails to remove the old version
+      // ("error uninstalling, retry"). /T takes down the whole tree.
+      try {
+        spawnSync("taskkill", ["/pid", String(backendProc.pid), "/T", "/F"], { windowsHide: true });
+      } catch {
+        backendProc.kill();
+      }
+    } else {
+      backendProc.kill("SIGTERM");
+    }
     backendProc = null;
   }
 }
