@@ -29,18 +29,13 @@ function monthOf(label: string): string {
 // (fracFromEvent) disagree, dragging to a visible label lands on its neighbour.
 const RAIL_INSET = 24;
 
-// The rail spans the scroll viewport with these fixed insets: top is measured
-// from the scroller's visible top, bottom from the window edge. Both live here
-// (not in CSS) so railHeight can be derived arithmetically.
-// The top inset is negative on purpose: the rail reaches up past the scroll
-// area into the filter bar's right end (empty space there), so it starts higher
-// and the first month label sits level with the first row of photos instead of
-// a good bit below it.
-const RAIL_TOP_INSET = -24;
-// Matched to the top overlap so the rail has the same small breathing room to
-// the box below (window bottom) as it does to the bar above - and reaching a
-// bit further down gives it a touch more height.
-const RAIL_BOTTOM = 4;
+// The rail is anchored to the nav bar's bottom edge (not the scroll area's top)
+// so it spans the whole height under the nav, across the filter bar's empty
+// right end and down to the window bottom. RAIL_GAP is the SAME breathing room
+// at both ends - just under the nav and just above the window bottom - so the
+// gap above equals the gap below and the rail is as tall as it can be without
+// covering the nav.
+const RAIL_GAP = 8;
 
 /**
  * Immich-style date scrubber pinned to the right edge of the library timeline:
@@ -71,13 +66,14 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
     const scrollerRect = scroller.getBoundingClientRect();
     const scrollerTop = scrollerRect.top;
 
-    // Pin the rail to the scroll viewport: from just under the scroller's top
-    // edge down to just above the window's bottom, so its height matches the
-    // visible timeline area instead of hanging from wherever the first photo
-    // happens to sit.
-    const top = scrollerTop + RAIL_TOP_INSET;
+    // Anchor the rail just below the nav bar and give it the SAME gap at the
+    // bottom, so its top and bottom breathing room match and it's as tall as it
+    // can be without covering the nav. Falls back to the scroller top if the nav
+    // isn't found (the rail then just starts a little lower).
+    const navBottom = document.querySelector(".top-bar")?.getBoundingClientRect().bottom ?? scrollerTop;
+    const top = navBottom + RAIL_GAP;
     setRailTop(top);
-    setRailHeight(Math.max(0, window.innerHeight - RAIL_BOTTOM - top));
+    setRailHeight(Math.max(0, window.innerHeight - RAIL_GAP - top));
 
     // Each section's content offset, then map them onto the rail RELATIVE to
     // the topmost section: its offset becomes frac 0 (the rail's top), so the
@@ -242,7 +238,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
     <div
       ref={railRef}
       className={`timeline-scrubber${dragging ? " dragging" : ""}${scrolling ? " scrolling" : ""}`}
-      style={{ top: railTop, bottom: RAIL_BOTTOM }}
+      style={{ top: railTop, bottom: RAIL_GAP }}
       onPointerDown={(e) => {
         setDragging(true);
         scrollToFrac(fracFromEvent(e.clientY));
