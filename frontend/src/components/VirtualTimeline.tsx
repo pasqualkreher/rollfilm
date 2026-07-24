@@ -420,14 +420,22 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
             </h3>
             {/* Tiles are positioned against the section itself (row.top already
                 includes the header's space), not wrapped in a flow container -
-                the sticky header renders above them via its own z-index. */}
+                the sticky header renders above them via its own z-index.
+                flatMap (not nested map) so the visible tiles are ONE flat list
+                of key={image.id} children: React then reconciles every tile by
+                its stable id no matter which row it's in. A nested map yields an
+                array-per-row, which React matches positionally - so on a slow
+                scroll, when the top row drops out of the filter every row-array
+                shifts one slot, the keyed tiles land in a different slot than
+                last frame, and React remounts their <img>s (reload + re-run the
+                fade-in) instead of moving them. That remount was the flicker. */}
             {sectionVisible &&
               section.rows
                 .filter(
                   (row) =>
                     section.top + row.top < winBottom && section.top + row.top + row.height > winTop
                 )
-                .map((row) => row.tiles.map((tile) => renderTile(tile, row)))}
+                .flatMap((row) => row.tiles.map((tile) => renderTile(tile, row)))}
           </section>
         );
       })}

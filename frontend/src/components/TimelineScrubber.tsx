@@ -37,7 +37,10 @@ const RAIL_INSET = 24;
 // and the first month label sits level with the first row of photos instead of
 // a good bit below it.
 const RAIL_TOP_INSET = -24;
-const RAIL_BOTTOM = 10;
+// Matched to the top overlap so the rail has the same small breathing room to
+// the box below (window bottom) as it does to the bar above - and reaching a
+// bit further down gives it a touch more height.
+const RAIL_BOTTOM = 4;
 
 /**
  * Immich-style date scrubber pinned to the right edge of the library timeline:
