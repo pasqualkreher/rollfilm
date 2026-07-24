@@ -82,6 +82,11 @@ export function Help() {
           outside the app, drive unplugged), use <em>Settings → Sync database to library</em> to
           reconcile.
         </p>
+        <p>
+          <strong>New here?</strong> The Settings page has a guided tour — press{" "}
+          <em>"Show me around"</em> at the top of Settings and it walks you through every section,
+          from appearance to backups. You can skip out at any step and rerun it anytime.
+        </p>
 
         <H id="importing">Importing photos</H>
         <p>
@@ -180,8 +185,9 @@ export function Help() {
           </li>
           <li>
             <strong>Selects</strong> is your shortlist basket: add photos from anywhere, then on the
-            Selects page download them all as a zip, send them to Immich, or clear the list. The nav
-            shows a live count.
+            Selects page download the originals as a zip, <strong>export</strong> them as finished
+            JPEGs (edits baked in, quality and size of your choice), send them to Immich, or clear
+            the list. The nav shows a live count.
           </li>
         </ul>
 
@@ -220,8 +226,10 @@ export function Help() {
         <p>
           Click any photo to open it. Scroll or pinch to zoom toward the cursor, drag to pan,
           double-click to jump between fit and 100%. Below the photo: its EXIF details, tags, albums,
-          a <strong>"Similar photos"</strong> strip (found by visual similarity), and{" "}
-          <strong>"Download original"</strong>.
+          a <strong>"Similar photos"</strong> strip (found by visual similarity),{" "}
+          <strong>"Download original"</strong>, and <strong>"Export…"</strong> — a full-resolution
+          JPEG with your edits baked in, at a quality and size you choose (several photos at once
+          export from the Selects page).
         </p>
 
         <H id="editing">Editing photos</H>
@@ -240,6 +248,11 @@ export function Help() {
           <li>
             <strong>Light</strong> (with live histogram): exposure, contrast, highlights, shadows,
             whites, blacks, dehaze.
+          </li>
+          <li>
+            <strong>Film simulation:</strong> built-in Fuji-style looks (Provia, Velvia, Astia,
+            Classic Chrome, Classic Neg., Nostalgic Neg., Eterna, Acros and more) with a strength
+            slider — the look becomes the base your other adjustments build on.
           </li>
           <li>
             <strong>Color:</strong> temperature, tint, saturation, Fuji color chrome / chrome blue.
@@ -267,6 +280,12 @@ export function Help() {
             <strong>Save</strong> updates this photo's edit. <strong>Save copy</strong> creates a new
             photo (auto-tagged "edited") and leaves the original untouched. "Reset all" clears every
             adjustment.
+          </li>
+          <li>
+            <strong>Getting photos out:</strong> use <strong>Export…</strong> on the photo page (or
+            the Selects page for many at once) to render a JPEG with the edits baked in. For the best
+            quality, export the edited original — exporting a saved copy re-compresses an
+            already-compressed JPEG.
           </li>
         </ul>
 
@@ -519,6 +538,30 @@ export function Help() {
                 <kbd>Esc</kbd>
               </td>
               <td>Exit crop mode, or close the editor</td>
+            </tr>
+            <tr>
+              <td>Editor</td>
+              <td>
+                <kbd>1</kbd>–<kbd>8</kbd>
+              </td>
+              <td>
+                Open a control section: 1 Transform, 2 Tone, 3 Curves, 4 Color, 5 Details,
+                6 Effects, 7 Masks, 8 Presets
+              </td>
+            </tr>
+            <tr>
+              <td>Editor</td>
+              <td>
+                <kbd>↑</kbd> / <kbd>↓</kbd>
+              </td>
+              <td>Step through the sliders of the open section</td>
+            </tr>
+            <tr>
+              <td>Editor</td>
+              <td>
+                <kbd>←</kbd> / <kbd>→</kbd>
+              </td>
+              <td>Adjust the focused slider's value</td>
             </tr>
             <tr>
               <td>Import preview</td>

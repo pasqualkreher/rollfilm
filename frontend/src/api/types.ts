@@ -124,6 +124,36 @@ export interface AlbumOut {
   immich_sync: boolean;
 }
 
+// A virtual, auto-computed album (similarity cluster, place or time group).
+// The id is self-describing ("cluster:2", "year:2024", "month:2024-07",
+// "day:2024-07-12", "place:48.1374,11.5755") and is what
+// /smart-albums/{id}/images resolves.
+export interface SmartAlbumOut {
+  id: string;
+  kind: "cluster" | "year" | "month" | "day" | "place" | "country" | "country_year";
+  name: string;
+  image_count: number;
+  cover_image_id: string | null;
+}
+
+export interface SmartAlbumsOut {
+  // "building" while the first cluster pass runs - poll until "ready".
+  clusters_status: "building" | "ready";
+  clusters: SmartAlbumOut[];
+  places: SmartAlbumOut[];
+  countries: SmartAlbumOut[];
+  country_years: SmartAlbumOut[];
+  years: SmartAlbumOut[];
+  months: SmartAlbumOut[];
+  days: SmartAlbumOut[];
+}
+
+// Which smart-album sections the Albums page shows + the place radius.
+export interface SmartAlbumSettings {
+  sections: string[];
+  place_radius_km: number;
+}
+
 export interface ImportProgress {
   phase: "staging" | "commit" | "idle";
   // Staging: files whose background analysis finished, of `total` staged so

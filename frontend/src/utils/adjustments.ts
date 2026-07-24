@@ -159,10 +159,28 @@ export interface MaskDef {
   adjustments: Partial<Record<ScalarKey, number>>;
 }
 
-// The full develop object. Scalars + two enums + nested groups.
+// Built-in film simulation looks (rendered server-side in film_sims.py; the
+// value list mirrors develop.ENUM_SPEC["film_sim"]). `lut_intensity` is the
+// look's strength blend.
+export type FilmSim =
+  | "none"
+  | "provia"
+  | "velvia"
+  | "astia"
+  | "classic_chrome"
+  | "classic_neg"
+  | "nostalgic_neg"
+  | "eterna"
+  | "acros"
+  | "acros_ye"
+  | "acros_r"
+  | "monochrome";
+
+// The full develop object. Scalars + three enums + nested groups.
 export type Adjustments = { [K in ScalarKey]: number } & {
   tone_mapper: "basic" | "agx";
   curve_mode: "point" | "parametric";
+  film_sim: FilmSim;
   hsl: HslMix;
   point_curves: PointCurves;
   parametric_curve: ParametricCurve;
@@ -210,6 +228,7 @@ export function defaultAdjustments(): Adjustments {
     ...scalars,
     tone_mapper: "basic",
     curve_mode: "point",
+    film_sim: "none",
     hsl: neutralHsl(),
     point_curves: identityPointCurves(),
     parametric_curve: neutralParametricCurve(),
@@ -240,6 +259,7 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
   }
   if (raw.tone_mapper === "basic" || raw.tone_mapper === "agx") base.tone_mapper = raw.tone_mapper;
   if (raw.curve_mode === "point" || raw.curve_mode === "parametric") base.curve_mode = raw.curve_mode;
+  if (raw.film_sim && FILM_SIMS.some((f) => f.value === raw.film_sim)) base.film_sim = raw.film_sim;
   if (raw.hsl) {
     for (const b of COLOR_BANDS) {
       const v = raw.hsl[b];
@@ -348,6 +368,23 @@ export const SECTIONS: Section[] = [
 export const TONE_MAPPERS: { value: "basic" | "agx"; label: string }[] = [
   { value: "basic", label: "Basic" },
   { value: "agx", label: "AgX" },
+];
+
+// Film simulation picker entries, in panel display order. `swatch` is a small
+// CSS gradient hinting at each look's palette on the picker tile.
+export const FILM_SIMS: { value: FilmSim; label: string; swatch: string }[] = [
+  { value: "none", label: "None", swatch: "linear-gradient(135deg, #888, #bbb)" },
+  { value: "provia", label: "Provia · Standard", swatch: "linear-gradient(135deg, #4a7bc8, #d8a05a)" },
+  { value: "velvia", label: "Velvia · Vivid", swatch: "linear-gradient(135deg, #c8332e, #2e7d32)" },
+  { value: "astia", label: "Astia · Soft", swatch: "linear-gradient(135deg, #6f9bd1, #e8b98a)" },
+  { value: "classic_chrome", label: "Classic Chrome", swatch: "linear-gradient(135deg, #6b7d8a, #b09a7a)" },
+  { value: "classic_neg", label: "Classic Neg.", swatch: "linear-gradient(135deg, #4e8f86, #d2954f)" },
+  { value: "nostalgic_neg", label: "Nostalgic Neg.", swatch: "linear-gradient(135deg, #8a6f52, #e0b878)" },
+  { value: "eterna", label: "Eterna · Cinema", swatch: "linear-gradient(135deg, #5a6a72, #a5a08e)" },
+  { value: "acros", label: "Acros", swatch: "linear-gradient(135deg, #2b2b2b, #d6d6d6)" },
+  { value: "acros_ye", label: "Acros +Ye", swatch: "linear-gradient(135deg, #3a3628, #d9d3b8)" },
+  { value: "acros_r", label: "Acros +R", swatch: "linear-gradient(135deg, #402c2c, #dcc9c9)" },
+  { value: "monochrome", label: "Monochrome", swatch: "linear-gradient(135deg, #1f1f1f, #cfcfcf)" },
 ];
 
 // ---- The full non-destructive edit: geometry + the develop object.

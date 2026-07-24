@@ -5,13 +5,24 @@ import type { ImmichSyncMode, ImmichTestResult } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
 import { SKINS, useTheme } from "../state/theme";
 import { useTasks } from "../state/tasks";
+import { useAskDeletePartner, setAskDeletePartner } from "../state/viewPrefs";
+import { SettingsTour, SETTINGS_TOUR_KEY } from "../components/SettingsTour";
+import {
+  estimateText,
+  estimateSeconds,
+  progressText,
+  recordRate,
+  useElapsed,
+} from "../utils/rebuildEstimate";
 
 // A collapsible Settings section, driven as an accordion: opening one closes
 // the others (the parent tracks a single open title). Clicking the open one
 // closes it, so all sections can be shut. Nothing is open by default.
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="settings-section">
+    // data-settings-section lets the guided tour (SettingsTour) discover the
+    // rendered sections and scroll/highlight each one.
+    <section className="settings-section" data-settings-section={title}>
       <h3 className="settings-section-header">{title}</h3>
       <div className="settings-section-body">{children}</div>
     </section>
@@ -197,19 +208,53 @@ function AppearanceSetting() {
 const AUTO_DEVELOP_GROUPS: { key: string; label: string; desc: string }[] = [
   { key: "tone", label: "Tone", desc: "Exposure, contrast, highlights, shadows, whites, blacks" },
   { key: "white_balance", label: "White balance", desc: "Temperature, tint" },
-  { key: "color", label: "Color", desc: "Vibrance, saturation, hue, HSL mixer, color grading, calibration" },
+  { key: "color", label: "Color", desc: "Vibrance, saturation, hue, film simulation, HSL mixer, color grading, calibration" },
   { key: "details", label: "Details", desc: "Sharpness, clarity, dehaze, structure, noise reduction" },
   { key: "curves", label: "Curves", desc: "Point and parametric tone curves" },
   { key: "effects", label: "Effects", desc: "Grain, vignette, glow, halation, mist, LUT strength" },
 ];
 
+// The smart-album sections the Albums page can show. Keys mirror the backend's
+// SMART_ALBUM_SECTION_NAMES (services/settings_store.py).
+const SMART_ALBUM_SECTIONS: { key: string; label: string; desc: string }[] = [
+  { key: "moments", label: "Moments", desc: "Groups of visually similar photos, found and named automatically (beaches, portraits, food, …)." },
+  { key: "places", label: "Places", desc: "Photos taken close together, named after the nearest town. Uses the radius below." },
+  { key: "countries", label: "Countries", desc: "One album per country, from the photos' GPS position." },
+  { key: "country_years", label: "Countries by year", desc: "The country albums split by year — e.g. “Italy 2024”." },
+  { key: "days", label: "Big days", desc: "Single days with unusually many photos — a trip, a party, an event." },
+  { key: "years", label: "Years", desc: "One album per year." },
+  { key: "months", label: "Months", desc: "One album per month." },
+];
+
 export function Settings() {
   const queryClient = useQueryClient();
   const { setBusyLabel } = useTasks();
+  // Whether deleting a paired photo asks "only this file or the whole pair?".
+  // Client-side view preference (see viewPrefs), not a server setting.
+  const askDeletePartner = useAskDeletePartner();
 
   // Sections are always open (no accordion) - sectionProps just carries the
   // title so every call site stays unchanged.
   const sectionProps = (title: string) => ({ title });
+
+  // Guided section-by-section tour: auto-starts when the onboarding wizard
+  // sent the user here (sessionStorage flag), restartable anytime via the
+  // "Show me around" button, skippable at every step.
+  const [tourOpen, setTourOpen] = useState(() => {
+    try {
+      return sessionStorage.getItem(SETTINGS_TOUR_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(SETTINGS_TOUR_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
   const [repairDatesResult, setRepairDatesResult] = useState<string | null>(null);
@@ -314,6 +359,36 @@ export function Settings() {
     setAutoDevelop.mutate({ enabled: autoDevelop.enabled, enabled_groups: next });
   }
 
+  // Smart albums: which auto-computed sections the Albums page shows, and the
+  // km radius that defines a "place". Checkboxes save immediately; the radius
+  // has its own Save (typing shouldn't fire a request per keystroke).
+  const [placeRadius, setPlaceRadius] = useState<string>("");
+  const [radiusSaved, setRadiusSaved] = useState(false);
+  const { data: smartAlbumSettings } = useQuery({
+    queryKey: ["smart-album-settings"],
+    queryFn: () => api.settings.getSmartAlbums(),
+  });
+  useEffect(() => {
+    if (smartAlbumSettings) setPlaceRadius(String(smartAlbumSettings.place_radius_km));
+  }, [smartAlbumSettings]);
+  const saveSmartAlbums = useMutation({
+    mutationFn: (patch: { sections?: string[]; place_radius_km?: number }) =>
+      api.settings.updateSmartAlbums(patch),
+    onSuccess: (result) => {
+      setPlaceRadius(String(result.place_radius_km));
+      queryClient.invalidateQueries({ queryKey: ["smart-album-settings"] });
+      // The Albums page's smart sections are built from these settings.
+      queryClient.invalidateQueries({ queryKey: ["smart-albums"] });
+    },
+  });
+  function toggleSmartSection(key: string, on: boolean) {
+    if (!smartAlbumSettings) return;
+    const next = on
+      ? [...smartAlbumSettings.sections, key]
+      : smartAlbumSettings.sections.filter((s) => s !== key);
+    saveSmartAlbums.mutate({ sections: next });
+  }
+
   // Trash auto-cleanup: how many days deleted photos stay restorable before
   // the startup purge removes them for good (0 = keep forever).
   const [trashDays, setTrashDays] = useState<string>("");
@@ -334,9 +409,19 @@ export function Settings() {
     },
   });
 
+  // Total library photos, so the maintenance jobs can show a pre-flight time
+  // estimate ("≈ N photos · about Xm") before the user commits to a long run.
+  const { data: libraryCount } = useQuery({
+    queryKey: ["images", "count", "all"],
+    queryFn: () => api.images.count(),
+  });
+  const photoCount = libraryCount?.count;
+
   const sync = useMutation({
     mutationFn: () => api.maintenance.sync(),
-    onSuccess: (result) => {
+    onMutate: () => ({ startedAt: Date.now() }),
+    onSuccess: (result, _vars, ctx) => {
+      recordRate("pm.est.sync", (Date.now() - ctx.startedAt) / 1000, photoCount ?? 0);
       const parts = [
         `Removed ${result.removed_missing_files} entr${result.removed_missing_files === 1 ? "y" : "ies"} for files no longer on disk`,
         `cleaned up ${result.orphan_thumbnails_removed} orphaned thumbnail folder(s)`,
@@ -359,7 +444,9 @@ export function Settings() {
 
   const rebuildThumbnails = useMutation({
     mutationFn: () => api.maintenance.rebuildThumbnails(),
-    onSuccess: (result) => {
+    onMutate: () => ({ startedAt: Date.now() }),
+    onSuccess: (result, _vars, ctx) => {
+      recordRate("pm.est.rebuildThumbs", (Date.now() - ctx.startedAt) / 1000, result.rebuilt);
       setRebuildResult(`Rebuilt thumbnails/previews for ${result.rebuilt} photo(s).`);
       // Bump the cache-bust so the freshly rebuilt (e.g. higher-res) images
       // actually reload instead of being served from the browser cache.
@@ -367,6 +454,10 @@ export function Settings() {
       queryClient.invalidateQueries({ queryKey: ["images"] });
     },
   });
+
+  // Live elapsed timers for the two long jobs, shown next to their buttons.
+  const syncElapsed = useElapsed(sync.isPending);
+  const rebuildElapsed = useElapsed(rebuildThumbnails.isPending);
 
   // RAW decoding: whether RAWs load with no brightness processing (native
   // sensor exposure) or are self-normalized to a consistent brightness.
@@ -446,7 +537,17 @@ export function Settings() {
 
   return (
     <div className="page settings-page">
-      <h2 className="section-title">Settings</h2>
+      <h2 className="section-title">
+        Settings
+        <button
+          className="btn subtle"
+          style={{ marginLeft: 12, fontSize: 13 }}
+          onClick={() => setTourOpen(true)}
+          title="A quick guided walk through every settings section"
+        >
+          Show me around
+        </button>
+      </h2>
 
       <Section {...sectionProps("Appearance")}>
         <AppearanceSetting />
@@ -708,6 +809,65 @@ export function Settings() {
         {setAutoDevelop.isError && <Note error>{(setAutoDevelop.error as Error).message}</Note>}
       </Section>
 
+      <Section {...sectionProps("Smart albums")}>
+        <Desc>
+          The Albums page can show automatic collections above your own albums — visually similar
+          photos, places, countries and time groups. They're computed from your library and update
+          on their own; nothing is stored as a real album. Pick which sections you want:
+        </Desc>
+        {SMART_ALBUM_SECTIONS.map((s) => (
+          <OptionRow
+            key={s.key}
+            type="checkbox"
+            checked={smartAlbumSettings?.sections.includes(s.key) ?? false}
+            disabled={smartAlbumSettings === undefined || saveSmartAlbums.isPending}
+            busy={saveSmartAlbums.isPending}
+            onChange={(c) => toggleSmartSection(s.key, c)}
+            title={s.label}
+            desc={s.desc}
+          />
+        ))}
+        {smartAlbumSettings?.sections.length === 0 && (
+          <Note>All sections are off — the Albums page shows only your own albums.</Note>
+        )}
+        <div className="import-toolbar" style={{ alignItems: "center", marginTop: 10 }}>
+          <label className="filter-field">
+            <span style={{ marginRight: 6, color: "var(--text-muted)" }}>Place radius</span>
+            <input
+              type="number"
+              min={1}
+              max={500}
+              step={1}
+              value={placeRadius}
+              onChange={(e) => {
+                setPlaceRadius(e.target.value);
+                setRadiusSaved(false);
+              }}
+              style={{ width: 80 }}
+            />
+            <span style={{ marginLeft: 6, color: "var(--text-muted)" }}>km</span>
+          </label>
+          <button
+            className="btn primary"
+            onClick={() => {
+              saveSmartAlbums.mutate(
+                { place_radius_km: Math.max(1, parseFloat(placeRadius) || 5) },
+                { onSuccess: () => setRadiusSaved(true) }
+              );
+            }}
+            disabled={placeRadius === "" || saveSmartAlbums.isPending}
+          >
+            {saveSmartAlbums.isPending ? "Saving..." : "Save"}
+          </button>
+          {radiusSaved && <span style={{ color: "var(--text-muted)" }}>Saved.</span>}
+        </div>
+        <Note>
+          Photos within this distance of each other form one place — small values separate
+          neighboring towns, large values group whole regions.
+        </Note>
+        {saveSmartAlbums.isError && <Note error>{(saveSmartAlbums.error as Error).message}</Note>}
+      </Section>
+
       <Section {...sectionProps("Trash")}>
         <Desc>
           Deleted library photos stay in the Trash and can be restored. On every app start, photos
@@ -745,6 +905,13 @@ export function Settings() {
           )}
         </div>
         {saveTrash.isError && <Note error>{(saveTrash.error as Error).message}</Note>}
+        <OptionRow
+          type="checkbox"
+          checked={askDeletePartner}
+          onChange={setAskDeletePartner}
+          title="Ask what to delete for RAW + JPEG pairs"
+          desc="A RAW and its matching JPEG are normally deleted together. With this on, deleting one first asks whether to remove only that file or the whole pair."
+        />
       </Section>
 
       <Section {...sectionProps("Tags")}>
@@ -791,9 +958,20 @@ export function Settings() {
             files are no longer there (e.g. deleted outside the app), cleans up thumbnails that
             belong to no photo anymore, and regenerates missing thumbnails in the background.
           </Desc>
-          <button className="btn" onClick={() => sync.mutate()} disabled={sync.isPending}>
-            {sync.isPending ? "Syncing..." : "Sync database to library"}
-          </button>
+          <div className="maintenance-run">
+            <button className="btn" onClick={() => sync.mutate()} disabled={sync.isPending}>
+              {sync.isPending ? "Syncing..." : "Sync database to library"}
+            </button>
+            {sync.isPending ? (
+              <span className="maintenance-eta">
+                Syncing… {progressText(syncElapsed, estimateSeconds(photoCount, "pm.est.sync"))}
+              </span>
+            ) : (
+              estimateText(photoCount, "pm.est.sync") && (
+                <span className="maintenance-eta">{estimateText(photoCount, "pm.est.sync")}</span>
+              )
+            )}
+          </div>
           {syncResult && <Note>{syncResult}</Note>}
         </div>
 
@@ -804,9 +982,25 @@ export function Settings() {
             need - use this only if thumbnails still look wrong afterwards (e.g. after an image
             rendering fix).
           </Desc>
-          <button className="btn" onClick={() => rebuildThumbnails.mutate()} disabled={rebuildThumbnails.isPending}>
-            {rebuildThumbnails.isPending ? "Rebuilding..." : "Rebuild all thumbnails"}
-          </button>
+          <div className="maintenance-run">
+            <button
+              className="btn"
+              onClick={() => rebuildThumbnails.mutate()}
+              disabled={rebuildThumbnails.isPending}
+            >
+              {rebuildThumbnails.isPending ? "Rebuilding..." : "Rebuild all thumbnails"}
+            </button>
+            {rebuildThumbnails.isPending ? (
+              <span className="maintenance-eta">
+                Rebuilding…{" "}
+                {progressText(rebuildElapsed, estimateSeconds(photoCount, "pm.est.rebuildThumbs"))}
+              </span>
+            ) : (
+              estimateText(photoCount, "pm.est.rebuildThumbs") && (
+                <span className="maintenance-eta">{estimateText(photoCount, "pm.est.rebuildThumbs")}</span>
+              )
+            )}
+          </div>
           {rebuildResult && <Note>{rebuildResult}</Note>}
         </div>
 
@@ -869,6 +1063,8 @@ export function Settings() {
           {restore.isError && <Note error>{(restore.error as Error).message}</Note>}
         </div>
       </Section>
+
+      <SettingsTour open={tourOpen} onClose={() => setTourOpen(false)} />
     </div>
   );
 }

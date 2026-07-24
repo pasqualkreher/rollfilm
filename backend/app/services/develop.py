@@ -79,9 +79,15 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
 }
 
 # Enumerated (string) adjustments: key -> (default, allowed values).
+# Film-simulation looks live in services/film_sims.py; the value list here must
+# stay in sync with film_sims.SIM_NAMES (asserted there at import) and with the
+# frontend FILM_SIMS list. `lut_intensity` above is the look's strength blend.
 ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     "tone_mapper": ("basic", ("basic", "agx")),
     "curve_mode": ("point", ("point", "parametric")),
+    "film_sim": ("none", ("none", "provia", "velvia", "astia", "classic_chrome",
+                          "classic_neg", "nostalgic_neg", "eterna",
+                          "acros", "acros_ye", "acros_r", "monochrome")),
 }
 
 # Identity point curve: pass-through on the 0..255 grid.

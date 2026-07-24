@@ -88,6 +88,27 @@ def countries_for(coords: list[tuple[float, float]]) -> list[str | None]:
     return [_country_name(hit.get("cc")) for hit in hits]
 
 
+def place_labels_for(coords: list[tuple[float, float]]) -> list[str | None]:
+    """"City, Country" display label for each (lat, lon) - e.g.
+    "Munich, Germany" - from the nearest entry in the bundled cities database.
+    Batched into one k-d tree query; None where a point can't be resolved."""
+    if not coords:
+        return []
+    try:
+        import reverse_geocoder as rg
+
+        hits = rg.search(coords, mode=1)
+    except Exception:  # pragma: no cover - dataset/load failures shouldn't break callers
+        logger.exception("Reverse geocoding failed for %d point(s)", len(coords))
+        return [None] * len(coords)
+    labels: list[str | None] = []
+    for hit in hits:
+        city = hit.get("name")
+        country = _country_name(hit.get("cc"))
+        labels.append(", ".join(p for p in (city, country) if p) or None)
+    return labels
+
+
 def annotate_images(images) -> int:
     """Fill in `gps_country` for any of `images` that have a GPS fix but no
     region yet, batched into a single lookup. Duck-typed on the Image ORM object

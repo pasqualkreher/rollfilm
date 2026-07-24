@@ -13,9 +13,8 @@ import { PhotoFilters } from "../components/PhotoFilters";
 import { loadPresets } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
-import { groupPairsAdjacent } from "../utils/pairing";
-import { deleteConfirmMessage } from "../utils/deleteMessage";
-import { collapsePairs, useMergePairs } from "../state/viewPrefs";
+import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
+import { collapsePairs } from "../state/viewPrefs";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 
 export function AlbumDetail() {
@@ -32,7 +31,11 @@ export function AlbumDetail() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const selects = useSelects();
-  const mergePairs = useMergePairs();
+  // The album always collapses each RAW+JPEG pair to one card (see
+  // orderedImages), so in the combined view the pair-aware bulk/remove helpers
+  // below must treat the shown JPEG as standing for its hidden RAW partner.
+  const mergePairs = viewMode === "combined";
+  const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const q = (searchParams.get("q") ?? "").trim();
 
@@ -88,14 +91,10 @@ export function AlbumDetail() {
     enabled: !!id,
   });
 
-  // In combined view, either merge each RAW+JPEG pair into one JPEG card, or
-  // just keep the two partners adjacent. Other view modes show a flat list.
-  const orderedImages =
-    viewMode === "combined"
-      ? mergePairs
-        ? collapsePairs(images ?? [])
-        : groupPairsAdjacent(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
-      : images ?? [];
+  // Default view shows one card per shot: the JPEG of each RAW+JPEG pair, and a
+  // lone RAW only when it has no JPEG sibling. The JPEG/RAW view-mode buttons
+  // still give a flat, type-filtered list when the user wants just one kind.
+  const orderedImages = viewMode === "combined" ? collapsePairs(images ?? []) : images ?? [];
 
   const sharedMeta = selectionSharedMeta(images ?? [], selected);
 
@@ -161,13 +160,21 @@ export function AlbumDetail() {
 
   async function deleteSelected() {
     if (selected.size === 0) return;
-    // Merged view hides the RAW behind its JPEG - delete both halves of the shot.
-    const ids = withPairedIds(Array.from(selected));
+    // Merged view hides the RAW behind its JPEG, so both halves of the shot go
+    // together by default. The "ask what to delete" setting lets the user keep
+    // the partners.
+    const baseIds = Array.from(selected);
+    const partnerIds = withPairedIds(baseIds).filter((x) => !selected.has(x));
     const byId = new Map((images ?? []).map((im) => [im.id, im]));
-    const items = ids.map((x) => byId.get(x)).filter((im): im is ImageOut => Boolean(im));
-    if (!window.confirm(deleteConfirmMessage(items, ids.length - selected.size))) {
-      return;
-    }
+    const toItems = (list: string[]) =>
+      list.map((x) => byId.get(x)).filter((im): im is ImageOut => Boolean(im));
+    const ids = await confirmDelete({
+      baseIds,
+      baseItems: toItems(baseIds),
+      partnerIds,
+      partnerItems: toItems(partnerIds),
+    });
+    if (!ids) return;
     await api.images.bulkDelete(ids);
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -289,6 +296,7 @@ export function AlbumDetail() {
 
   return (
     <div className="page page-timeline">
+      {pairDeleteDialog}
       <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {album?.name ?? "Album"}
         {album && <span className="count-pill">{album.image_count} photos</span>}
@@ -331,6 +339,7 @@ export function AlbumDetail() {
       <PhotoFilters
         viewMode={viewMode}
         onViewMode={setViewMode}
+        showMerge={false}
         ratingMin={ratingMin}
         onRatingMin={setRatingMin}
         colorLabel={colorLabel}

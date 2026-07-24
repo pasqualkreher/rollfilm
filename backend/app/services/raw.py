@@ -16,13 +16,15 @@ _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 # Auto tone: lift a native-exposure demosaic to a normal brightness *without
 # burning the highlights*. The exposure gain is measured from the MIDTONES (the
 # median), not the brightest point - so a sunlit subject (skin, snow) isn't
-# chased up into clipping the way "expose to the right" does. A Reinhard shoulder
-# on the LUMINANCE then rolls the highlights off smoothly toward white, so
-# nothing hard-clips. _TARGET_MED_LIN is the median target in *linear* light
-# (~sRGB 0.36); _MAX_GAIN caps the lift so a very dark frame isn't amplified
-# into noise. The cap can be generous because the shoulder protects the top end
-# - and it has to be: DR-mode Fuji RAFs demosaic 2-3 stops dark, so a tight cap
-# left every such frame underexposed.
+# chased up into clipping the way "expose to the right" does. The gain is NOT
+# baked into the pixels: it travels alongside the linear array as `base_gain`
+# and is applied as the first step of the develop pipeline, where a Reinhard
+# shoulder with white point = gain rolls the highlights off smoothly (see
+# thumbnails._linear_tone_block / default_tone_to_srgb). _TARGET_MED_LIN is the
+# median target in *linear* light (~sRGB 0.36); _MAX_GAIN caps the lift so a
+# very dark frame isn't amplified into noise. The cap can be generous because
+# the shoulder protects the top end - and it has to be: DR-mode Fuji RAFs
+# demosaic 2-3 stops dark, so a tight cap left every such frame underexposed.
 _TARGET_MED_LIN = 0.10
 _MAX_GAIN = 8.0
 
@@ -51,43 +53,44 @@ def native_decode_enabled() -> bool:
     return _native_decode
 
 
-def _auto_expose(rgb: np.ndarray) -> np.ndarray:
-    """Auto-tone a native-exposure demosaic to a normal brightness that can't
-    burn the highlights.
-
-    Two steps, both in linear light:
-    1. Exposure from the *midtones*: measure the median luma and pick a gain that
-       brings it to _TARGET_MED_LIN. Basing it on the median (not the brightest
-       point) means a sunlit subject isn't dragged up into clipping.
-    2. A Reinhard shoulder with the white point set to that same gain, which lifts
-       shadows/midtones by the gain, rolls the highlights off smoothly, and pins
-       pure white to pure white - so nothing hard-clips. A well-exposed frame
-       (gain ~1) passes through essentially unchanged.
-
-    The shoulder is applied to the LUMINANCE and the RGB channels are scaled by
-    one shared ratio. Running the curve per channel instead compresses the
-    brightest channel of a colour hardest, so bright saturated subjects (sunlit
-    skin above all - red is its top channel) converge toward grey and come out
-    chalky-white even though nothing clips - the actual cause of "the skin is
-    burning out". One ratio per pixel preserves hue and saturation through the
-    lift; the rare pixel a bright channel pushes past 1.0 just clips."""
-    x = rgb.astype(np.float32) / 255.0
-    lin = _srgb_to_linear(x)
+def compute_base_gain(lin: np.ndarray) -> float:
+    """The auto-exposure gain for a linear-light array: lift the median luma to
+    _TARGET_MED_LIN, capped at _MAX_GAIN. Basing it on the median (not the
+    brightest point) means a sunlit subject isn't dragged up into clipping.
+    Returns 1.0 in native-decode mode (the "no processing" setting) and for
+    frames that are already at a normal exposure or essentially black."""
+    if _native_decode:
+        return 1.0
     # Median midtone level (strided sample so a full-frame demosaic is cheap).
-    s = max(1, int(math.sqrt(rgb.shape[0] * rgb.shape[1] / 90_000)))
+    s = max(1, int(math.sqrt(lin.shape[0] * lin.shape[1] / 90_000)))
     med = float(np.median(lin[::s, ::s] @ _LUMA))
     if med <= 1e-4:  # essentially black - nothing to lift
-        return rgb
-    gain = min(_MAX_GAIN, max(1.0, _TARGET_MED_LIN / med))
-    if gain <= 1.0 + 1e-3:  # already at a normal exposure
-        return rgb
-    # Reinhard-extended with white point W = gain, on luminance:
-    # Y_out = Y*gain*(1 + Y/gain)/(1 + Y*gain) - lifts shadows/mids by ~gain,
-    # rolls off highlights, maps Y=1 -> 1.
-    y = lin @ _LUMA
-    yg = y * gain
-    y_out = yg * (1.0 + y / gain) / (1.0 + yg)
-    ratio = np.where(y > 1e-6, y_out / np.maximum(y, 1e-6), gain)
+        return 1.0
+    return float(min(_MAX_GAIN, max(1.0, _TARGET_MED_LIN / med)))
+
+
+def reinhard_ratio(y: np.ndarray, white: float) -> np.ndarray:
+    """Per-pixel luminance ratio of the Reinhard-extended shoulder with white
+    point `white`: Y_out = Y*(1 + Y/W^2)/(1 + Y), evaluated as a shared RGB
+    ratio so hue/saturation survive the roll-off (a per-channel curve would
+    compress the brightest channel of a colour hardest and turn sunlit skin
+    chalky). Maps 0 -> 0 and W -> 1 monotonically; identity-like for Y << 1
+    when W = 1, so JPEG sources pass through essentially unchanged."""
+    w2 = max(float(white), 1.0) ** 2
+    y_out = y * (1.0 + y / w2) / (1.0 + y)
+    return np.where(y > 1e-6, y_out / np.maximum(y, 1e-6), 1.0).astype(np.float32)
+
+
+def default_tone_to_srgb(lin: np.ndarray, gain: float) -> np.ndarray:
+    """The neutral (no-edits) rendering of a linear base: apply the base gain,
+    roll the highlights off with a Reinhard shoulder whose white point is that
+    same gain, and encode to 8-bit sRGB. Algebraically identical to the old
+    baked _auto_expose (shoulder yg*(1+y/g)/(1+yg) == Reinhard-extended at
+    L=y*g, W=g), so unedited RAWs render exactly as before the linear-pipeline
+    refactor. With gain 1.0 (native decode / JPEG) the shoulder is a no-op for
+    in-range values."""
+    y = (lin @ _LUMA) * gain
+    ratio = gain * reinhard_ratio(y, gain)
     out = _linear_to_srgb(np.clip(lin * ratio[..., None], 0.0, 1.0))
     return np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
@@ -105,39 +108,76 @@ PNG_EXTENSIONS = {".png"}
 _PREVIEW_DECODE_PX = 1600
 
 
-def _demosaic_rgb(raw: "rawpy.RawPy", half_size: bool):
-    """Demosaic a RAW to an 8-bit RGB array with a highlight-safe rendering.
+def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool) -> np.ndarray:
+    """Demosaic a RAW to a linear-light float32 RGB array (0..~1, sRGB primaries).
 
     `no_auto_bright=True` is the important bit: LibRaw's default auto-brightness
     scales the whole image up until ~1% of the brightest pixels clip to pure
     white (auto_bright_thr=0.01). On a shot with a bright subject - sunlit skin,
-    snow, a white shirt - that pushes those pixels to 255, blowing the highlights
-    *inside the decode*, before the editor ever sees them, so the Highlights /
-    Whites sliders have nothing left to recover. Disabling it renders the RAW at
-    its native (camera-white-balanced) exposure instead; a globally dark frame is
-    trivially lifted with the Exposure slider, but blown highlights are gone for
-    good.
+    snow, a white shirt - that pushes those pixels to the ceiling, blowing the
+    highlights *inside the decode*, before the editor ever sees them, so the
+    Highlights / Whites sliders have nothing left to recover. Disabling it
+    renders the RAW at its native (camera-white-balanced) exposure instead; the
+    develop pipeline lifts it with `base_gain` where the real image data above
+    the display white point stays recoverable.
 
     `highlight_mode=Blend` additionally reconstructs highlights where one channel
     clips but the others don't (common on saturated skin), blending them for a
     smooth roll-off rather than a hard clipped edge.
 
-    `gamma=(2.4, 12.92)` encodes the 8-bit output with the true sRGB curve
-    instead of LibRaw's BT.709 default (2.222, 4.5) - _auto_expose linearises
-    with the sRGB EOTF, so the round trip is exact.
+    `gamma=(1, 1)` + `output_bps=16` keep the output linear at 16-bit depth -
+    the develop pipeline works scene-referred in linear light and only encodes
+    to sRGB at the very end, so a 14-bit sensor isn't crushed to 256 levels
+    before editing.
 
-    half_size only affects output resolution, not colour rendering - without it
-    LibRaw raises LibRawTooBigError on high-megapixel sensors.
-
-    Returns the *native* exposure - the caller auto-tones it (see _auto_expose)
-    unless native-decode mode is on."""
-    return raw.postprocess(
+    half_size only affects output resolution, not colour rendering; the editor
+    bases are capped well below even the half-size resolution, so they pass
+    half_size=True and only the final full-resolution renders pay for a full
+    demosaic."""
+    rgb16 = raw.postprocess(
         use_camera_wb=True,
         half_size=half_size,
         no_auto_bright=True,
         highlight_mode=rawpy.HighlightMode.Blend,
-        gamma=(2.4, 12.92),
+        gamma=(1, 1),
+        output_bps=16,
     )
+    return np.asarray(rgb16, dtype=np.float32) / 65535.0
+
+
+def load_linear_base(path: Path, half_size: bool = True) -> tuple[np.ndarray, float]:
+    """The develop pipeline's source of truth: a linear-light float32 RGB array
+    plus its auto-exposure `base_gain` (1.0 in native-decode mode).
+
+    RAW files are demosaiced linearly (see _demosaic_linear); a damaged file
+    whose demosaic fails falls back to its embedded JPEG, linearised, with gain
+    1.0 (the camera already exposed the JPEG). JPEG/PNG sources are decoded,
+    EXIF-oriented and linearised with the sRGB EOTF, gain 1.0."""
+    if not is_raw(path):
+        im = ImageOps.exif_transpose(PILImage.open(path)).convert("RGB")
+        arr = np.asarray(im, dtype=np.float32) / 255.0
+        return _srgb_to_linear(arr).astype(np.float32), 1.0
+
+    try:
+        with rawpy.imread(str(path)) as raw:
+            lin = _demosaic_linear(raw, half_size=half_size)
+            return lin, compute_base_gain(lin)
+    except Exception:
+        # A file whose sensor data is damaged (e.g. truncated/corrupt CFA
+        # block) fails the demosaic, but its embedded JPEG is often still
+        # intact - serve that instead of leaving the photo with no image at
+        # all. The file must be reopened: a failed postprocess() leaves the
+        # LibRaw handle unusable (extract_thumb() then raises OutOfOrderCall).
+        embedded = _embedded_jpeg(path)
+        if embedded is None:
+            raise
+        logger.warning(
+            "RAW demosaic failed for %s - falling back to the embedded JPEG preview",
+            path,
+            exc_info=True,
+        )
+        arr = np.asarray(embedded, dtype=np.float32) / 255.0
+        return _srgb_to_linear(arr).astype(np.float32), 1.0
 
 
 def is_raw(path: Path) -> bool:
@@ -218,10 +258,8 @@ def extract_preview_with_size(path: Path) -> tuple[PILImage.Image, tuple[int, in
             original_size = _oriented_size(im)
             return _load_jpeg_preview(im), original_size
 
-        rgb = _demosaic_rgb(raw, half_size=True)
-        if not _native_decode:
-            rgb = _auto_expose(rgb)
-        preview = PILImage.fromarray(rgb)
+        lin = _demosaic_linear(raw, half_size=True)
+        preview = PILImage.fromarray(default_tone_to_srgb(lin, compute_base_gain(lin)))
         return preview, preview.size
 
 
@@ -241,29 +279,9 @@ def extract_full_preview(path: Path) -> PILImage.Image:
     if not is_raw(path):
         return ImageOps.exif_transpose(PILImage.open(path)).convert("RGB")
 
-    try:
-        with rawpy.imread(str(path)) as raw:
-            rgb = _demosaic_rgb(raw, half_size=True)
-            if _native_decode:
-                # No processing: hand back the native-exposure demosaic as-is.
-                return PILImage.fromarray(rgb)
-            # Midtone-based auto tone (see _auto_expose).
-            return PILImage.fromarray(_auto_expose(rgb))
-    except Exception:
-        # A file whose sensor data is damaged (e.g. truncated/corrupt CFA
-        # block) fails the demosaic, but its embedded JPEG is often still
-        # intact - serve that instead of leaving the photo with no image at
-        # all. The file must be reopened: a failed postprocess() leaves the
-        # LibRaw handle unusable (extract_thumb() then raises OutOfOrderCall).
-        embedded = _embedded_jpeg(path)
-        if embedded is None:
-            raise
-        logger.warning(
-            "RAW demosaic failed for %s - falling back to the embedded JPEG preview",
-            path,
-            exc_info=True,
-        )
-        return embedded
+    # load_linear_base handles the damaged-file embedded-JPEG fallback.
+    lin, gain = load_linear_base(path, half_size=True)
+    return PILImage.fromarray(default_tone_to_srgb(lin, gain))
 
 
 def _embedded_jpeg(path: Path) -> PILImage.Image | None:

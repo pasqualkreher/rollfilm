@@ -69,6 +69,19 @@ def encode_text(query: str) -> np.ndarray:
     return features.squeeze(0).numpy().astype(np.float32)
 
 
+def encode_texts(queries: list[str]) -> np.ndarray:
+    """Batch variant of encode_text - one forward pass for a whole label
+    vocabulary (smart-album naming) instead of a model call per phrase."""
+    import torch
+
+    model, _, tokenizer = _get_model()
+    with torch.no_grad():
+        tokens = tokenizer(queries)
+        features = model.encode_text(tokens)
+        features /= features.norm(dim=-1, keepdim=True)
+    return features.numpy().astype(np.float32)
+
+
 def ensure_embeddings_table(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(

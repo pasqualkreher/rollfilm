@@ -15,30 +15,25 @@ module loads instantly on the API worker.
 """
 
 import numpy as np
-from PIL import Image as PILImage, ImageFilter
 
 # Rec. 709 luma weights (identical to thumbnails.py), used for every tonal mask.
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 
 
 def _gaussian(arr: np.ndarray, radius: float) -> np.ndarray:
-    """Gaussian-blur a float 0..1 RGB array and return a float 0..1 array.
+    """Gaussian-blur a float 0..1 array (RGB or single-channel) in float32 -
+    no 8-bit round-trip, so blurred gradients don't pick up quantisation
+    banding. cv2 is imported lazily to keep this module's import instant (the
+    same reason thumbnails.py wraps it in _LazyCV2); PIL's GaussianBlur radius
+    is the standard deviation, which maps 1:1 onto cv2's sigma."""
+    import cv2
 
-    Mirrors the `_mist` blur pattern in thumbnails.py: round-trip through a
-    uint8 PIL image so the blur runs on PIL's fast native filter rather than a
-    hand-rolled separable convolution."""
-    pil = PILImage.fromarray((np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8), "RGB")
-    blur = pil.filter(ImageFilter.GaussianBlur(radius))
-    return np.asarray(blur, dtype=np.float32) / 255.0
+    return cv2.GaussianBlur(np.clip(arr, 0.0, 1.0).astype(np.float32), (0, 0), radius)
 
 
 def _gaussian_gray(mask: np.ndarray, radius: float) -> np.ndarray:
-    """Blur a single-channel 0..1 mask by reusing `_gaussian` (replicate to 3
-    channels, blur, take one back). Blurring the full-range mask *before* it is
-    tinted keeps the precision that a tint's small channels (e.g. blue ~0.12)
-    would otherwise lose in `_gaussian`'s uint8 round-trip."""
-    m3 = np.repeat(np.clip(mask, 0.0, 1.0)[..., None], 3, axis=2)
-    return _gaussian(m3, radius)[..., 0]
+    """Blur a single-channel 0..1 mask in float32."""
+    return _gaussian(mask, radius)
 
 
 def apply_structure(arr: np.ndarray, amount: int) -> np.ndarray:

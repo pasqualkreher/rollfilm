@@ -22,6 +22,8 @@ import type {
   LibraryIndexImage,
   ScanStatus,
   SearchResultOut,
+  SmartAlbumsOut,
+  SmartAlbumSettings,
   SourceRoot,
   StagedFileOut,
   StagedFileUpdatePatch,
@@ -201,8 +203,8 @@ export const api = {
     facets(): Promise<LibraryFacets> {
       return request(`/images/facets`);
     },
-    // Total photos the filter set matches.
-    count(filters: LibraryFilters): Promise<{ count: number }> {
+    // Total photos the filter set matches (no filters = the whole library).
+    count(filters: Partial<LibraryFilters> = {}): Promise<{ count: number }> {
       return request(`/images/count?${filtersToParams(filters).toString()}`);
     },
     // The whole filtered library as one slim ordered list - drives the
@@ -272,6 +274,35 @@ export const api = {
       a.remove();
       URL.revokeObjectURL(url);
     },
+    // Server-side JPEG export with the saved edits baked in - one photo comes
+    // back as a plain .jpg, several as a zip. Saved via a temporary object URL
+    // like downloadZip, with the filename taken from the response headers.
+    async exportImages(
+      image_ids: string[],
+      opts: { quality: number; max_size?: number | null }
+    ): Promise<void> {
+      const res = await fetch(`${BASE_URL}/images/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_ids, quality: opts.quality, max_size: opts.max_size ?? null }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`export failed: ${res.status} ${body}`);
+      }
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const filename =
+        /filename="([^"]+)"/.exec(disposition)?.[1] ?? (image_ids.length === 1 ? "export.jpg" : "export.zip");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
     bulkAddTags(image_ids: string[], tag_names: string[]): Promise<ImageOut[]> {
       return request(`/images/bulk-tags`, { method: "POST", body: JSON.stringify({ image_ids, tag_names }) });
     },
@@ -332,14 +363,16 @@ export const api = {
     // returns a JPEG blob. Abortable so a newer slider state cancels stale renders.
     // `full` renders on the full-resolution base (slow - fetched after settle).
     // mode: "scrub" = fast small-base frame drawn while dragging a control,
-    // "fast" = accurate render on release, "full" = settled full-quality pass.
+    // "fast" = accurate render on release, "full" = settled full-quality pass,
+    // "native" = TRUE full-resolution render for 100% zoom (slowest, background).
     async editorPreview(
       id: string,
       edits: ImageEdits,
       signal?: AbortSignal,
-      mode: "scrub" | "fast" | "full" = "fast"
+      mode: "scrub" | "fast" | "full" | "native" = "fast"
     ): Promise<Blob> {
-      const q = mode === "full" ? "?full=1" : mode === "scrub" ? "?scrub=1" : "";
+      const q =
+        mode === "native" ? "?native=1" : mode === "full" ? "?full=1" : mode === "scrub" ? "?scrub=1" : "";
       const res = await fetch(`${BASE_URL}/images/${id}/editor-preview${q}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -409,6 +442,14 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ enabled }),
       });
+    },
+  },
+  smartAlbums: {
+    list(): Promise<SmartAlbumsOut> {
+      return request(`/smart-albums`);
+    },
+    images(id: string, limit = 500, offset = 0): Promise<ImageOut[]> {
+      return request(`/smart-albums/${encodeURIComponent(id)}/images?limit=${limit}&offset=${offset}`);
     },
   },
   import: {
@@ -641,6 +682,16 @@ export const api = {
     // enabled_groups omitted/undefined leaves the stored group selection as is.
     updateAutoDevelop(patch: { enabled: boolean; enabled_groups?: string[] }): Promise<AutoDevelopSettings> {
       return request(`/settings/auto-develop`, { method: "PUT", body: JSON.stringify(patch) });
+    },
+    getSmartAlbums(): Promise<SmartAlbumSettings> {
+      return request(`/settings/smart-albums`);
+    },
+    // Omitted fields stay unchanged.
+    updateSmartAlbums(patch: {
+      sections?: string[];
+      place_radius_km?: number;
+    }): Promise<SmartAlbumSettings> {
+      return request(`/settings/smart-albums`, { method: "PUT", body: JSON.stringify(patch) });
     },
     getTrash(): Promise<TrashSettings> {
       return request(`/settings/trash`);

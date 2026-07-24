@@ -8,6 +8,7 @@ from app.api.routes import (
     maintenance,
     search,
     settings,
+    smart_albums,
     sources,
     tags,
 )
@@ -32,6 +33,7 @@ app.add_middleware(
 
 app.include_router(images.router)
 app.include_router(albums.router)
+app.include_router(smart_albums.router)
 app.include_router(import_.router)
 app.include_router(search.router)
 app.include_router(maintenance.router)

@@ -22,7 +22,7 @@ import { loadPresets } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
-import { deleteConfirmMessage } from "../utils/deleteMessage";
+import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { useMergePairs } from "../state/viewPrefs";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 
@@ -46,6 +46,7 @@ export function Library() {
   const queryClient = useQueryClient();
   const selects = useSelects();
   const mergePairs = useMergePairs();
+  const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const q = (searchParams.get("q") ?? "").trim();
 
@@ -183,14 +184,21 @@ export function Library() {
 
   async function deleteSelected() {
     if (selected.size === 0) return;
-    // In merged view only the JPEG is shown, so a delete must take the hidden
-    // RAW partner with it - a RAW+JPEG pair is one shot.
-    const ids = withPairedIds(Array.from(selected));
+    // In merged view only the JPEG is shown, so a delete takes the hidden RAW
+    // partner with it by default - a pair is one shot. The "ask what to delete"
+    // setting lets the user keep the partners.
+    const baseIds = Array.from(selected);
+    const partnerIds = withPairedIds(baseIds).filter((x) => !selected.has(x));
     const byId = new Map((images ?? []).map((im) => [im.id, im]));
-    const items = ids.map((x) => byId.get(x)).filter((im): im is ImageOut => Boolean(im));
-    if (!window.confirm(deleteConfirmMessage(items, ids.length - selected.size))) {
-      return;
-    }
+    const toItems = (list: string[]) =>
+      list.map((x) => byId.get(x)).filter((im): im is ImageOut => Boolean(im));
+    const ids = await confirmDelete({
+      baseIds,
+      baseItems: toItems(baseIds),
+      partnerIds,
+      partnerItems: toItems(partnerIds),
+    });
+    if (!ids) return;
     await api.images.bulkDelete(ids);
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -327,6 +335,7 @@ export function Library() {
 
   return (
     <div className="page page-timeline">
+      {pairDeleteDialog}
       <PhotoFilters
         viewMode={viewMode}
         onViewMode={setViewMode}

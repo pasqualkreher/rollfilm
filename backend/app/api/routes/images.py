@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import re
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -589,6 +590,72 @@ def download_zip(
     )
 
 
+@router.post("/export")
+def export_images(
+    payload: schemas.ExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export photos as flattened JPEGs with their saved edits baked in, at a
+    caller-chosen quality and optional long-edge size. One photo streams back as
+    a plain JPEG, several as a zip. Every photo goes through the same TRUE
+    full-resolution render as save-copy (serialised by _full_render_lock), so a
+    large RAW selection takes a while - the client shows a busy state."""
+    if not payload.image_ids:
+        raise HTTPException(status_code=400, detail="No images to export")
+    quality = max(1, min(100, payload.quality))
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+
+    def render_jpeg(image: Image) -> bytes:
+        rendered = thumbnails.render_full_from_stored_edits(image, max_size=payload.max_size)
+        buf = io.BytesIO()
+        rendered.save(buf, "JPEG", quality=quality)
+        return buf.getvalue()
+
+    if len(images) == 1:
+        try:
+            data = render_jpeg(images[0])
+        except Exception:
+            logger.exception("Export render failed for %s", images[0].id)
+            raise HTTPException(status_code=500, detail="Could not render the export")
+        filename = f"{Path(images[0].original_filename).stem}.jpg"
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # Multi-photo export: spool the zip to a disk-backed temp file - dozens of
+    # full-resolution JPEGs would otherwise pile up in memory. ZIP_STORED, same
+    # as download-zip: the JPEGs are already compressed.
+    tmp = tempfile.TemporaryFile()
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as archive:
+        used_names: dict[str, int] = {}
+        for image in images:
+            try:
+                data = render_jpeg(image)
+            except Exception:
+                # One broken photo shouldn't sink the whole export - skip it.
+                logger.exception("Export render failed for %s - skipping", image.id)
+                continue
+            # Exports are always .jpg, so a RAW+JPEG pair (DSCF0001.RAF /
+            # DSCF0001.JPG) collides on its stem - suffix later collisions.
+            name = f"{Path(image.original_filename).stem}.jpg"
+            if name in used_names:
+                used_names[name] += 1
+                name = f"{Path(name).stem}_{used_names[name]}.jpg"
+            else:
+                used_names[name] = 0
+            archive.writestr(name, data)
+
+    tmp.seek(0)
+    return StreamingResponse(
+        tmp,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="export.zip"'},
+    )
+
+
 @router.post("/immich", response_model=schemas.ImmichPushResult)
 def push_images_to_immich(
     payload: schemas.ImmichPushRequest,
@@ -1004,6 +1071,7 @@ def editor_preview(
     payload: schemas.ImageEdits,
     full: bool = False,
     scrub: bool = False,
+    native: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1012,7 +1080,8 @@ def editor_preview(
     base image is cached, so only the edit pipeline re-runs per request.
     `?scrub=1` renders the fast, small-base tier drawn while a control is being
     dragged; the default renders the accurate tier on release; `?full=1` renders
-    on the larger settled base once the sliders come to rest."""
+    on the larger settled base once the sliders come to rest; `?native=1`
+    renders at TRUE full resolution - fetched in the background for 100% zoom."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
@@ -1029,6 +1098,7 @@ def editor_preview(
             distortion=_clamp100(payload.distortion),
             full_quality=full,
             scrub=scrub,
+            native=native,
             flip_h=bool(payload.flip_h),
             flip_v=bool(payload.flip_v),
             straighten=max(-45.0, min(45.0, float(payload.straighten))),

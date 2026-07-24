@@ -18,6 +18,9 @@ from app.services.settings_store import (
     IMMICH_SYNC_MODE,
     IMMICH_SYNC_PAUSED,
     RAW_NATIVE_DECODE,
+    SMART_ALBUM_PLACE_RADIUS_KM,
+    SMART_ALBUM_SECTION_NAMES,
+    SMART_ALBUM_SECTIONS,
     TRASH_RETENTION_DAYS,
     get_auto_develop_enabled,
     get_auto_develop_groups,
@@ -25,6 +28,7 @@ from app.services.settings_store import (
     get_immich_sync_paused,
     get_raw_native_decode,
     get_setting,
+    get_smart_album_config,
     get_trash_retention_days,
     set_setting,
 )
@@ -161,8 +165,41 @@ def update_raw_settings(
     raw_service.set_native_decode(payload.native_decode)
     # The cached bases were decoded under the old setting - drop them so the next
     # editor preview re-decodes with the new mode.
-    thumbnails_service._cached_editor_base.cache_clear()
+    thumbnails_service.clear_editor_base_caches()
     return schemas.RawDecodeSettingsOut(native_decode=payload.native_decode)
+
+
+@router.get("/smart-albums", response_model=schemas.SmartAlbumSettingsOut)
+def get_smart_album_settings(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    cfg = get_smart_album_config(db)
+    return schemas.SmartAlbumSettingsOut(
+        sections=list(cfg.sections), place_radius_km=cfg.place_radius_km
+    )
+
+
+@router.put("/smart-albums", response_model=schemas.SmartAlbumSettingsOut)
+def update_smart_album_settings(
+    payload: schemas.SmartAlbumSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Which smart-album sections the Albums page shows, and the place radius.
+    Either field may be omitted to leave it unchanged. Unknown section names
+    are dropped rather than rejected (a stale client after an update just
+    loses the sections it doesn't know)."""
+    if payload.sections is not None:
+        wanted = [s for s in payload.sections if s in SMART_ALBUM_SECTION_NAMES]
+        set_setting(db, SMART_ALBUM_SECTIONS, ",".join(wanted))
+    if payload.place_radius_km is not None:
+        radius = max(1.0, min(500.0, payload.place_radius_km))
+        set_setting(db, SMART_ALBUM_PLACE_RADIUS_KM, str(radius))
+    db.commit()
+    cfg = get_smart_album_config(db)
+    return schemas.SmartAlbumSettingsOut(
+        sections=list(cfg.sections), place_radius_km=cfg.place_radius_km
+    )
 
 
 @router.get("/trash", response_model=schemas.TrashSettingsOut)

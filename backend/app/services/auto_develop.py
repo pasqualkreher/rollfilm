@@ -58,7 +58,7 @@ GROUP_FIELDS: dict[str, tuple[str, ...]] = {
     "tone": ("exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks", "tone_mapper"),
     "white_balance": ("temperature", "tint"),
     "color": ("vibrance", "saturation", "hue", "chrome_effect", "chrome_blue",
-              "hsl", "color_grading", "color_calibration"),
+              "film_sim", "hsl", "color_grading", "color_calibration"),
     "details": ("sharpness", "sharpness_threshold", "clarity", "dehaze", "structure",
                 "denoise", "luma_noise_reduction", "color_noise_reduction",
                 "chromatic_aberration_red_cyan", "chromatic_aberration_blue_yellow"),

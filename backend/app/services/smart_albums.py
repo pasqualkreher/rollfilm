@@ -1,0 +1,661 @@
+"""Smart albums: automatic, virtual collections shown above the manual albums.
+
+Two kinds, neither ever stored as an Album row - they are recomputed from the
+library itself, so they track imports and deletions on their own:
+
+* Similarity clusters ("Moments"): the CLIP image embeddings that already
+  power semantic search are grouped by cosine similarity, and each cluster is
+  named by comparing its centroid against a small English label vocabulary
+  encoded with the same CLIP model (zero-shot, no extra model needed).
+* Time albums: one album per year and per month, plus "big days" - single
+  days with unusually many photos (a trip, a party), found by comparing each
+  day's count against the library's median shooting day.
+* Places: GPS fixes clustered by distance, each named offline via the bundled
+  reverse-geocoding cities database ("Munich, Germany").
+* Countries: one album per gps_country, optionally also split by year
+  ("Italy 2024").
+
+Which sections are computed at all, and the place radius, are user settings -
+see settings_store.get_smart_album_config().
+
+Clustering touches every embedding and may need to load the CLIP model, so it
+runs on a background thread and its result is cached in memory; the API serves
+the previous result (or "building" on first run) while a refresh runs. The
+result is also persisted to a small JSON file in the data dir together with
+the library signature it was computed from, so a restart serves the previous
+moments immediately - and skips the rebuild entirely when the library has not
+changed since.
+"""
+
+import calendar
+import json
+import logging
+import threading
+from dataclasses import dataclass, field
+
+import numpy as np
+from sqlalchemy import func, text
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.db.models import FileType, Image
+from app.db.session import SessionLocal, engine
+from app.services import embeddings, geocode
+from app.services import sources as sources_service
+
+# Cosine similarity two photos need to land in the same cluster. ViT-B-32
+# image/image similarities run roughly: near-duplicates 0.9+, same subject or
+# scene 0.75-0.85, loosely related 0.6-0.7. 0.72 groups by theme without
+# lumping everything together.
+SIMILARITY_THRESHOLD = 0.72
+# Below this a "cluster" is just a handful of stragglers, not an album.
+MIN_CLUSTER_SIZE = 8
+MAX_CLUSTERS = 15
+# Minimum centroid/label cosine similarity to trust a name. CLIP image/text
+# similarities are much lower than image/image ones; a good match is ~0.2-0.3.
+LABEL_MIN_SIMILARITY = 0.17
+
+# A day must have at least this many photos to count as a "big day", and also
+# beat 3x the library's median shooting day (so a casual-snapshot library and
+# a burst-happy one both get sensible picks).
+BIG_DAY_MIN_PHOTOS = 10
+BIG_DAY_MEDIAN_FACTOR = 3.0
+MAX_BIG_DAYS = 30
+MIN_MONTH_PHOTOS = 5
+
+# The place radius (km) is user-configurable - see
+# settings_store.get_smart_album_config(); callers pass it in.
+MIN_PLACE_PHOTOS = 5
+MAX_PLACES = 30
+# A country/year combo with fewer photos is noise, not an album.
+MIN_COUNTRY_YEAR_PHOTOS = 3
+MAX_COUNTRY_YEARS = 60
+
+# English album titles and the CLIP prompt each one is scored with. The prompt
+# is a full phrase ("a photo of ...") because CLIP was trained on captions -
+# bare nouns match noticeably worse.
+_LABELS: list[tuple[str, str]] = [
+    ("Portraits", "a portrait photo of a person"),
+    ("Group Photos", "a group photo of several people posing together"),
+    ("Kids", "a photo of children playing"),
+    ("Babies", "a photo of a baby"),
+    ("Weddings", "a photo of a wedding"),
+    ("Beach & Sea", "a photo of a beach and the sea"),
+    ("Mountains", "a photo of mountains"),
+    ("Hiking", "a photo of people hiking on a trail"),
+    ("Forests", "a photo of a forest"),
+    ("Lakes & Rivers", "a photo of a lake or a river"),
+    ("Waterfalls", "a photo of a waterfall"),
+    ("Sunsets", "a photo of a sunset sky"),
+    ("Night Sky", "a photo of the night sky with stars"),
+    ("Snow & Winter", "a photo of a snowy winter landscape"),
+    ("Autumn Colors", "a photo of colorful autumn foliage"),
+    ("Flowers", "a close-up photo of flowers"),
+    ("Gardens & Parks", "a photo of a garden or a park"),
+    ("Cityscapes", "a photo of a city skyline"),
+    ("Street Life", "a street photography shot of people in a city"),
+    ("Architecture", "a photo of a building facade"),
+    ("Churches & Temples", "a photo of a church or a temple"),
+    ("Bridges", "a photo of a bridge"),
+    ("Interiors", "a photo of a room interior"),
+    ("Food", "a photo of a plate of food"),
+    ("Cafés & Drinks", "a photo of drinks in a café or a bar"),
+    ("Parties", "a photo of a party celebration"),
+    ("Concerts", "a photo of a concert with stage lights"),
+    ("Fireworks", "a photo of fireworks in the sky"),
+    ("Christmas", "a photo of christmas decorations"),
+    ("Sports", "a photo of people doing sports"),
+    ("Cycling", "a photo of bicycles or people cycling"),
+    ("Skiing", "a photo of skiing on a snowy slope"),
+    ("Pools & Swimming", "a photo of a swimming pool"),
+    ("Boats & Sailing", "a photo of boats on the water"),
+    ("Cars", "a photo of a car"),
+    ("Motorcycles", "a photo of a motorcycle"),
+    ("Trains", "a photo of a train or a railway station"),
+    ("Airplanes", "a photo of an airplane"),
+    ("Dogs", "a photo of a dog"),
+    ("Cats", "a photo of a cat"),
+    ("Birds", "a photo of a bird"),
+    ("Wildlife", "a photo of wild animals in nature"),
+    ("Horses", "a photo of horses"),
+    ("Macro", "a macro close-up photo of a small object or insect"),
+    ("Camping", "a photo of a campsite with tents"),
+    ("Museums & Art", "a photo of artwork in a museum"),
+    ("Markets", "a photo of a street market with stalls"),
+    ("Screenshots", "a screenshot of a computer or phone screen"),
+    ("Documents", "a photo of a document or a receipt"),
+]
+
+
+@dataclass
+class SmartCluster:
+    name: str
+    image_ids: list[str]
+    cover_image_id: str
+
+
+@dataclass
+class _ClusterState:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    computing: bool = False
+    # Whether the on-disk cache has been consulted yet (once per process).
+    loaded: bool = False
+    # Library fingerprint the cached clusters were computed from; None until
+    # the first build finishes.
+    signature: tuple | None = None
+    clusters: list[SmartCluster] = field(default_factory=list)
+
+
+_state = _ClusterState()
+_CACHE_PATH = settings.pm_data_dir / "smart_albums_cache.json"
+_label_matrix: np.ndarray | None = None
+_label_lock = threading.Lock()
+
+
+def _library_signature(db: Session) -> tuple:
+    """Cheap fingerprint of everything the clusters depend on: set of photos
+    (imports/trash) and how many of them have an embedding yet (the embed
+    workers trickle in after an import)."""
+    emb_count = db.execute(text("SELECT count(*) FROM image_embeddings")).scalar() or 0
+    img_count = (
+        db.query(func.count(Image.id)).filter(Image.deleted_at.is_(None)).scalar() or 0
+    )
+    last_import = db.query(func.max(Image.imported_at)).scalar()
+    return (emb_count, img_count, str(last_import))
+
+
+def get_clusters(db: Session) -> tuple[str, list[SmartCluster]]:
+    """Serve the cached clusters, kicking off a background rebuild when the
+    library changed. Returns (status, clusters); status is "building" only
+    while the very first build has nothing to serve yet."""
+    sig = _library_signature(db)
+    with _state.lock:
+        if not _state.loaded:
+            _state.loaded = True
+            _load_cache_locked(db)
+        stale = sig != _state.signature
+        status = "building" if _state.signature is None else "ready"
+        if stale and not _state.computing:
+            _state.computing = True
+            threading.Thread(
+                target=_compute_clusters, args=(sig,), daemon=True, name="smart-albums"
+            ).start()
+        return status, list(_state.clusters)
+
+
+def _load_cache_locked(db: Session) -> None:
+    """Seed the in-memory state from the on-disk cache (called once, under the
+    state lock). Image ids that have since left the library are dropped so a
+    stale cache never surfaces deleted photos; any such change also shows up in
+    the signature, which makes get_clusters schedule a rebuild right after."""
+    try:
+        data = json.loads(_CACHE_PATH.read_text())
+    except FileNotFoundError:
+        return
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "ignoring unreadable smart album cache at %s", _CACHE_PATH
+        )
+        return
+    try:
+        signature = tuple(data["signature"])
+        live_ids = {
+            row[0]
+            for row in db.query(Image.id).filter(Image.deleted_at.is_(None)).all()
+        }
+        clusters: list[SmartCluster] = []
+        for entry in data["clusters"]:
+            image_ids = [i for i in entry["image_ids"] if i in live_ids]
+            if len(image_ids) < MIN_CLUSTER_SIZE:
+                continue
+            cover = entry["cover_image_id"]
+            if cover not in live_ids:
+                cover = image_ids[0]
+            clusters.append(
+                SmartCluster(
+                    name=entry["name"], image_ids=image_ids, cover_image_id=cover
+                )
+            )
+    except (KeyError, TypeError):
+        logging.getLogger(__name__).warning(
+            "ignoring malformed smart album cache at %s", _CACHE_PATH
+        )
+        return
+    _state.signature = signature
+    _state.clusters = clusters
+
+
+def _save_cache(sig: tuple, clusters: list[SmartCluster]) -> None:
+    """Write signature + clusters atomically; a failed write only costs the
+    next process start a rebuild, so it is logged and swallowed."""
+    try:
+        payload = json.dumps(
+            {
+                "signature": list(sig),
+                "clusters": [
+                    {
+                        "name": c.name,
+                        "image_ids": c.image_ids,
+                        "cover_image_id": c.cover_image_id,
+                    }
+                    for c in clusters
+                ],
+            }
+        )
+        tmp = _CACHE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(payload)
+        tmp.replace(_CACHE_PATH)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "could not persist smart album cache to %s", _CACHE_PATH, exc_info=True
+        )
+
+
+def _get_label_matrix() -> np.ndarray:
+    global _label_matrix
+    if _label_matrix is None:
+        with _label_lock:
+            if _label_matrix is None:
+                _label_matrix = embeddings.encode_texts([phrase for _, phrase in _LABELS])
+    return _label_matrix
+
+
+def _compute_clusters(sig: tuple) -> None:
+    try:
+        db = SessionLocal()
+        try:
+            live_ids = {
+                row[0]
+                for row in db.query(Image.id).filter(Image.deleted_at.is_(None)).all()
+            }
+            # A RAW+JPEG pair carries two near-identical embeddings. Cluster on
+            # the JPEG alone (what we display) and drop the RAW half, so a moment
+            # never shows the same shot twice - or, worse, renders the dark RAW
+            # when only the RAW landed in the cluster. Lone RAWs (no JPEG
+            # sibling) keep their embedding and still cluster.
+            paired_raw_ids = {
+                row[0]
+                for row in db.query(Image.id).filter(
+                    Image.deleted_at.is_(None),
+                    Image.file_type == FileType.raw,
+                    Image.paired_image_id.isnot(None),
+                )
+            }
+        finally:
+            db.close()
+
+        ids: list[str] = []
+        vecs: list[np.ndarray] = []
+        with engine.connect() as conn:
+            for image_id, blob in conn.execute(
+                text("SELECT id, embedding FROM image_embeddings")
+            ):
+                if image_id in live_ids and image_id not in paired_raw_ids:
+                    ids.append(image_id)
+                    vecs.append(np.frombuffer(blob, dtype=np.float32))
+
+        clusters: list[SmartCluster] = []
+        if len(ids) >= MIN_CLUSTER_SIZE:
+            clusters = _build_clusters(ids, np.stack(vecs))
+
+        with _state.lock:
+            _state.clusters = clusters
+            _state.signature = sig
+        _save_cache(sig, clusters)
+    except Exception:
+        # A failed build (e.g. model download offline) must not wedge the
+        # endpoint in "building" forever; the next request retries.
+        logging.getLogger(__name__).exception("smart album clustering failed")
+    finally:
+        with _state.lock:
+            _state.computing = False
+
+
+def _build_clusters(ids: list[str], vecs: np.ndarray) -> list[SmartCluster]:
+    # Vectors come out of encode_image normalized, but renormalize defensively:
+    # cosine math below assumes unit length.
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    vecs = vecs / norms
+
+    # Pass 1: greedy leader clustering. Each photo joins the nearest existing
+    # centroid above the threshold or founds a new one. Order-dependent, but
+    # pass 2 below reassigns everything against the final centroids, which
+    # smooths most of that out.
+    sums: list[np.ndarray] = []
+    counts: list[int] = []
+    means: list[np.ndarray] = []
+    for v in vecs:
+        if means:
+            m = np.stack(means)
+            sims = m @ v
+            j = int(np.argmax(sims))
+            if sims[j] >= SIMILARITY_THRESHOLD:
+                sums[j] += v
+                counts[j] += 1
+                mean = sums[j] / counts[j]
+                means[j] = mean / (np.linalg.norm(mean) or 1.0)
+                continue
+        sums.append(v.copy())
+        counts.append(1)
+        means.append(v.copy())
+
+    centroids = np.stack(means)
+
+    # Pass 2: final assignment of every photo to its best centroid.
+    sims = vecs @ centroids.T
+    best = np.argmax(sims, axis=1)
+    best_sim = sims[np.arange(len(ids)), best]
+    members: dict[int, list[int]] = {}
+    for i, (c, s) in enumerate(zip(best, best_sim)):
+        if s >= SIMILARITY_THRESHOLD:
+            members.setdefault(int(c), []).append(i)
+
+    # Largest first here so the biggest clusters claim the plain label names
+    # (smaller same-label ones get numbered); the final list is sorted by name.
+    kept = sorted(
+        (m for m in members.values() if len(m) >= MIN_CLUSTER_SIZE),
+        key=len,
+        reverse=True,
+    )[:MAX_CLUSTERS]
+    if not kept:
+        return []
+
+    # Name each cluster zero-shot: its (renormalized) centroid against the
+    # label prompts, encoded with the same CLIP model as the images.
+    label_matrix = _get_label_matrix()
+    titles = [title for title, _ in _LABELS]
+    clusters: list[SmartCluster] = []
+    used_names: dict[str, int] = {}
+    for member_idx in kept:
+        cvecs = vecs[member_idx]
+        centroid = cvecs.mean(axis=0)
+        centroid = centroid / (np.linalg.norm(centroid) or 1.0)
+
+        label_sims = label_matrix @ centroid
+        best_label = int(np.argmax(label_sims))
+        if label_sims[best_label] >= LABEL_MIN_SIMILARITY:
+            name = titles[best_label]
+        else:
+            name = "Moments"
+        # Two clusters can score the same label (e.g. two distinct trips both
+        # reading as "Mountains") - keep both, numbered.
+        used_names[name] = used_names.get(name, 0) + 1
+        if used_names[name] > 1:
+            name = f"{name} {_roman(used_names[name])}"
+
+        # Cover: the most central photo, i.e. the best single example.
+        cover = member_idx[int(np.argmax(cvecs @ centroid))]
+        clusters.append(
+            SmartCluster(
+                name=name,
+                image_ids=[ids[i] for i in member_idx],
+                cover_image_id=ids[cover],
+            )
+        )
+    clusters.sort(key=lambda c: c.name.lower())
+    return clusters
+
+
+def _roman(n: int) -> str:
+    numerals = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+    return numerals[n] if n < len(numerals) else str(n)
+
+
+# ---------------------------------------------------------------------------
+# Time albums
+
+
+@dataclass
+class GroupAlbum:
+    id: str
+    name: str
+    image_count: int
+    cover_image_id: str
+
+
+def get_time_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]]:
+    """Years, months and "big days", grouped in Python rather than with SQL
+    strftime: taken_at strings mix timezone formats (EXIF vs UTC), which
+    SQLite's date parsing handles less predictably than the ORM's datetimes."""
+    unavailable = sources_service.unavailable_source_ids(db, owner_id)
+    query = db.query(Image.id, Image.taken_at).filter(
+        Image.owner_id == owner_id,
+        Image.deleted_at.is_(None),
+        Image.taken_at.isnot(None),
+    )
+    query = sources_service.exclude_unavailable(query, unavailable)
+    rows = query.all()
+
+    # group key -> (count, newest taken_at, its image id); newest photo is the
+    # cover. Comparisons strip tzinfo: EXIF dates are naive, UTC-written ones
+    # aware, and Python refuses to compare the two directly.
+    def collect(rows, key_fn):
+        groups: dict = {}
+        for image_id, taken_at in rows:
+            key = key_fn(taken_at)
+            wall = taken_at.replace(tzinfo=None)
+            entry = groups.get(key)
+            if entry is None:
+                groups[key] = (1, wall, image_id)
+            elif wall > entry[1]:
+                groups[key] = (entry[0] + 1, wall, image_id)
+            else:
+                groups[key] = (entry[0] + 1, entry[1], entry[2])
+        return groups
+
+    years = collect(rows, lambda t: t.year)
+    months = collect(rows, lambda t: (t.year, t.month))
+    days = collect(rows, lambda t: (t.year, t.month, t.day))
+
+    year_albums = [
+        GroupAlbum(id=f"year:{y}", name=str(y), image_count=c, cover_image_id=cover)
+        for y, (c, _, cover) in sorted(years.items(), reverse=True)
+    ]
+    month_albums = [
+        GroupAlbum(
+            id=f"month:{y:04d}-{m:02d}",
+            name=f"{calendar.month_name[m]} {y}",
+            image_count=c,
+            cover_image_id=cover,
+        )
+        for (y, m), (c, _, cover) in sorted(months.items(), reverse=True)
+        if c >= MIN_MONTH_PHOTOS
+    ]
+
+    day_counts = [c for c, _, _ in days.values()]
+    big_day_albums: list[GroupAlbum] = []
+    if day_counts:
+        median = float(np.median(day_counts))
+        threshold = max(BIG_DAY_MIN_PHOTOS, BIG_DAY_MEDIAN_FACTOR * median)
+        big_days = sorted(
+            ((k, v) for k, v in days.items() if v[0] >= threshold), reverse=True
+        )[:MAX_BIG_DAYS]
+        big_day_albums = [
+            GroupAlbum(
+                id=f"day:{y:04d}-{m:02d}-{d:02d}",
+                name=f"{calendar.month_name[m]} {d}, {y}",
+                image_count=c,
+                cover_image_id=cover,
+            )
+            for (y, m, d), (c, _, cover) in big_days
+        ]
+
+    return {"years": year_albums, "months": month_albums, "days": big_day_albums}
+
+
+# ---------------------------------------------------------------------------
+# Place albums
+
+
+def get_place_albums(db: Session, owner_id: int, radius_km: float) -> list[GroupAlbum]:
+    """Spatial clusters of the geotagged photos, named via the offline
+    reverse-geocoding cities database. Greedy leader clustering on distance
+    finds the centers; final membership is simply "within radius_km of
+    the center" - the same rule the images endpoint applies to the center
+    encoded in the album id, so the count always matches what opening the
+    album shows (a photo between two nearby centers may appear in both)."""
+    unavailable = sources_service.unavailable_source_ids(db, owner_id)
+    query = db.query(Image.id, Image.taken_at, Image.gps_lat, Image.gps_lon).filter(
+        Image.owner_id == owner_id,
+        Image.deleted_at.is_(None),
+        Image.gps_lat.isnot(None),
+        Image.gps_lon.isnot(None),
+    )
+    rows = sources_service.exclude_unavailable(query, unavailable).all()
+    if len(rows) < MIN_PLACE_PHOTOS:
+        return []
+
+    lats = np.array([r[2] for r in rows], dtype=np.float64)
+    lons = np.array([r[3] for r in rows], dtype=np.float64)
+
+    # Greedy leader pass: join the nearest existing center within the radius
+    # (tracked as a running mean) or found a new one. The distance to every
+    # center is vectorized, so this stays cheap even for big travel libraries.
+    center_lats: list[float] = []
+    center_lons: list[float] = []
+    sums: list[tuple[float, float, int]] = []
+    for lat, lon in zip(lats, lons):
+        if center_lats:
+            dists = _haversine_km_vec(
+                np.array(center_lats), np.array(center_lons), lat, lon
+            )
+            i = int(np.argmin(dists))
+            if dists[i] <= radius_km:
+                s_lat, s_lon, n = sums[i]
+                sums[i] = (s_lat + lat, s_lon + lon, n + 1)
+                center_lats[i] = sums[i][0] / (n + 1)
+                center_lons[i] = sums[i][1] / (n + 1)
+                continue
+        center_lats.append(float(lat))
+        center_lons.append(float(lon))
+        sums.append((float(lat), float(lon), 1))
+
+    # Final membership by radius around the settled centers.
+    places: list[tuple[tuple[float, float], int, str]] = []  # (center, count, cover id)
+    for c_lat, c_lon in zip(center_lats, center_lons):
+        member_idx = np.nonzero(
+            _haversine_km_vec(lats, lons, c_lat, c_lon) <= radius_km
+        )[0]
+        if len(member_idx) < MIN_PLACE_PHOTOS:
+            continue
+        cover_id, cover_taken = None, None
+        for i in member_idx:
+            image_id, taken_at = rows[i][0], rows[i][1]
+            wall = taken_at.replace(tzinfo=None) if taken_at else None
+            if cover_id is None or (
+                wall is not None and (cover_taken is None or wall > cover_taken)
+            ):
+                cover_id, cover_taken = image_id, wall
+        places.append(((c_lat, c_lon), len(member_idx), cover_id))
+
+    places.sort(key=lambda p: p[1], reverse=True)
+    places = places[:MAX_PLACES]
+    if not places:
+        return []
+
+    labels = geocode.place_labels_for([center for center, _, _ in places])
+    albums: list[GroupAlbum] = []
+    used_names: dict[str, int] = {}
+    for (center, count, cover_id), label in zip(places, labels):
+        name = label or f"{center[0]:.3f}, {center[1]:.3f}"
+        used_names[name] = used_names.get(name, 0) + 1
+        if used_names[name] > 1:
+            name = f"{name} {_roman(used_names[name])}"
+        albums.append(
+            GroupAlbum(
+                id=f"place:{center[0]:.4f},{center[1]:.4f}",
+                name=name,
+                image_count=count,
+                cover_image_id=cover_id,
+            )
+        )
+    return albums
+
+
+def get_country_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]]:
+    """One album per country (from the gps_country annotated at import), plus
+    the country x year split ("Italy 2024"). Returned together - both come out
+    of the same single-pass grouping."""
+    unavailable = sources_service.unavailable_source_ids(db, owner_id)
+    query = db.query(Image.id, Image.taken_at, Image.gps_country).filter(
+        Image.owner_id == owner_id,
+        Image.deleted_at.is_(None),
+        Image.gps_country.isnot(None),
+    )
+    rows = sources_service.exclude_unavailable(query, unavailable).all()
+
+    # key -> (count, newest wall-clock taken_at, its image id)
+    countries: dict[str, tuple] = {}
+    country_years: dict[tuple[str, int], tuple] = {}
+
+    def bump(groups: dict, key, image_id, wall) -> None:
+        entry = groups.get(key)
+        if entry is None:
+            groups[key] = (1, wall, image_id)
+        elif wall is not None and (entry[1] is None or wall > entry[1]):
+            groups[key] = (entry[0] + 1, wall, image_id)
+        else:
+            groups[key] = (entry[0] + 1, entry[1], entry[2])
+
+    for image_id, taken_at, country in rows:
+        wall = taken_at.replace(tzinfo=None) if taken_at else None
+        bump(countries, country, image_id, wall)
+        if taken_at is not None:
+            bump(country_years, (country, taken_at.year), image_id, wall)
+
+    country_albums = [
+        GroupAlbum(id=f"country:{name}", name=name, image_count=c, cover_image_id=cover)
+        for name, (c, _, cover) in sorted(
+            countries.items(), key=lambda kv: kv[1][0], reverse=True
+        )
+    ]
+    year_split = sorted(
+        (kv for kv in country_years.items() if kv[1][0] >= MIN_COUNTRY_YEAR_PHOTOS),
+        # Newest year first, biggest first within a year.
+        key=lambda kv: (kv[0][1], kv[1][0]),
+        reverse=True,
+    )[:MAX_COUNTRY_YEARS]
+    country_year_albums = [
+        GroupAlbum(
+            id=f"country-year:{name}:{year}",
+            name=f"{name} {year}",
+            image_count=c,
+            cover_image_id=cover,
+        )
+        for (name, year), (c, _, cover) in year_split
+    ]
+    return {"countries": country_albums, "country_years": country_year_albums}
+
+
+def place_image_ids(
+    db: Session, owner_id: int, lat: float, lon: float, radius_km: float, unavailable: list[str]
+) -> list[str]:
+    """Ids of the photos belonging to the place centered at (lat, lon) - the
+    membership rule shared by the list above and the images endpoint."""
+    query = db.query(Image.id, Image.gps_lat, Image.gps_lon).filter(
+        Image.owner_id == owner_id,
+        Image.deleted_at.is_(None),
+        Image.gps_lat.isnot(None),
+        Image.gps_lon.isnot(None),
+    )
+    rows = sources_service.exclude_unavailable(query, unavailable).all()
+    if not rows:
+        return []
+    r_lats = np.array([r[1] for r in rows], dtype=np.float64)
+    r_lons = np.array([r[2] for r in rows], dtype=np.float64)
+    inside = _haversine_km_vec(r_lats, r_lons, lat, lon) <= radius_km
+    return [rows[i][0] for i in np.nonzero(inside)[0]]
+
+
+def _haversine_km_vec(
+    lats: np.ndarray, lons: np.ndarray, lat: float, lon: float
+) -> np.ndarray:
+    """Great-circle distance (km) from one point to arrays of points."""
+    lat1, lon1 = np.radians(lats), np.radians(lons)
+    lat2, lon2 = np.radians(lat), np.radians(lon)
+    a = (
+        np.sin((lat2 - lat1) / 2) ** 2
+        + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    )
+    return 6371.0 * 2 * np.arcsin(np.sqrt(a))

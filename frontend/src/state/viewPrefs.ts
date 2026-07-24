@@ -19,6 +19,10 @@ export type ThumbSizeKey = (typeof THUMB_SIZES)[number]["key"];
 
 const THUMB_KEY = "pm.thumbSize";
 const MERGE_KEY = "pm.mergePairs";
+// When on, deleting a photo that has a RAW/JPEG partner first asks whether to
+// remove only the shown file or the whole pair. Off (default) keeps the old
+// behaviour: a pair is one shot, so both halves go together, no prompt.
+const ASK_DELETE_KEY = "pm.askDeletePartner";
 const DEFAULT_THUMB: ThumbSizeKey = "m";
 
 // Minimal external store so a preference change re-renders every subscribed grid
@@ -39,6 +43,10 @@ function readThumb(): ThumbSizeKey {
 
 function readMerge(): boolean {
   return localStorage.getItem(MERGE_KEY) === "1";
+}
+
+function readAskDeletePartner(): boolean {
+  return localStorage.getItem(ASK_DELETE_KEY) === "1";
 }
 
 export function thumbPx(key: ThumbSizeKey): number {
@@ -67,12 +75,21 @@ export function setMergePairs(on: boolean) {
   emit();
 }
 
+export function setAskDeletePartner(on: boolean) {
+  localStorage.setItem(ASK_DELETE_KEY, on ? "1" : "0");
+  emit();
+}
+
 export function useThumbSize(): ThumbSizeKey {
   return useSyncExternalStore(subscribe, readThumb, () => DEFAULT_THUMB);
 }
 
 export function useMergePairs(): boolean {
   return useSyncExternalStore(subscribe, readMerge, () => false);
+}
+
+export function useAskDeletePartner(): boolean {
+  return useSyncExternalStore(subscribe, readAskDeletePartner, () => false);
 }
 
 // Collapse each RAW+JPEG pair down to a single representative card (the JPEG,

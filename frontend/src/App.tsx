@@ -6,6 +6,7 @@ import { Library } from "./pages/Library";
 import { ImportWizard } from "./pages/ImportWizard";
 import { Albums } from "./pages/Albums";
 import { AlbumDetail } from "./pages/AlbumDetail";
+import { SmartAlbumDetail } from "./pages/SmartAlbumDetail";
 import { ImageDetail } from "./pages/ImageDetail";
 import { Settings } from "./pages/Settings";
 import { Selects } from "./pages/Selects";
@@ -268,6 +269,7 @@ export default function App() {
             <Route path="/import" element={<ImportWizard />} />
             <Route path="/albums" element={<Albums />} />
             <Route path="/albums/:id" element={<AlbumDetail />} />
+            <Route path="/smart-albums/:id" element={<SmartAlbumDetail />} />
             <Route path="/image/:id" element={<ImageDetail />} />
             <Route path="/map" element={<MapView />} />
             <Route path="/selects" element={<Selects />} />

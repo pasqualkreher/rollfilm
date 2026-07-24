@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ThemePicker } from "./ThemePicker";
+import { SETTINGS_TOUR_KEY } from "./SettingsTour";
 
 // First-start onboarding: a short multi-step wizard shown once (completion is
 // remembered in localStorage). It walks a new user through the things that
@@ -15,7 +16,7 @@ import { ThemePicker } from "./ThemePicker";
 const DONE_KEY = "pm:onboarding-done";
 
 type LegacyDir = { path: string; sizeBytes: number };
-type StepId = "welcome" | "cleanup" | "library" | "style" | "workflow";
+type StepId = "welcome" | "cleanup" | "library" | "style" | "workflow" | "settings";
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 MB";
@@ -75,11 +76,11 @@ export function OnboardingWizard() {
   // are leftovers to remove; the library step only in the desktop build.
   const steps = useMemo<StepId[]>(() => {
     // Fresh setup already covered the welcome and library choice — pick up at Style.
-    if (justSetup) return ["style", "workflow"];
+    if (justSetup) return ["style", "workflow", "settings"];
     const s: StepId[] = ["welcome"];
     if (desktop && legacy && legacy.length > 0) s.push("cleanup");
     if (desktop) s.push("library");
-    s.push("style", "workflow");
+    s.push("style", "workflow", "settings");
     return s;
   }, [justSetup, desktop, legacy]);
 
@@ -156,6 +157,7 @@ export function OnboardingWizard() {
                 <li>Choose where your library and its database live.</li>
                 <li>Pick a colour style.</li>
                 <li>See the workflow, from import to Immich.</li>
+                <li>Take a quick tour of the Settings.</li>
               </ul>
             </div>
           )}
@@ -269,6 +271,36 @@ export function OnboardingWizard() {
                   this library only.
                 </li>
               </ol>
+            </div>
+          )}
+
+          {step === "settings" && (
+            <div>
+              <h3 className="onboarding-step-title">Make it yours in Settings</h3>
+              <p className="onboarding-lead">
+                Everything you just saw — and a lot more — is adjustable in <strong>Settings</strong>:
+                how RAW files look while browsing, auto develop, smart albums, Immich, Trash
+                retention, backups. Worth a look once you're settled in.
+              </p>
+              <p className="onboarding-lead">
+                Want a quick guided walk through each section now? It takes under a minute, and you
+                can skip out at any step. You can rerun it anytime with{" "}
+                <em>"Show me around"</em> at the top of the Settings page.
+              </p>
+              <button
+                className="btn primary"
+                onClick={() => {
+                  try {
+                    sessionStorage.setItem(SETTINGS_TOUR_KEY, "1");
+                  } catch {
+                    /* ignore */
+                  }
+                  finish();
+                  navigate("/settings");
+                }}
+              >
+                Walk me through the settings
+              </button>
             </div>
           )}
         </div>

@@ -47,6 +47,24 @@ AUTO_DEVELOP_ENABLED = "auto_develop_enabled"
 AUTO_DEVELOP_GROUPS = "auto_develop_groups"
 AUTO_DEVELOP_GROUP_NAMES = ("tone", "white_balance", "color", "details", "curves", "effects")
 
+# Which smart-album sections the Albums page shows, as a comma-separated
+# subset of SMART_ALBUM_SECTION_NAMES. Unset = the defaults below; an empty
+# string means the user switched every section off.
+SMART_ALBUM_SECTIONS = "smart_album_sections"
+SMART_ALBUM_SECTION_NAMES = (
+    "moments",       # CLIP similarity clusters
+    "places",        # GPS clusters within the radius below
+    "countries",     # one album per country
+    "country_years", # one album per country and year ("Italy 2024")
+    "days",          # "big days" with unusually many photos
+    "years",
+    "months",
+)
+DEFAULT_SMART_ALBUM_SECTIONS = ("moments", "places", "countries", "days", "years", "months")
+# How far (km) a photo may sit from a place's center and still belong to it.
+SMART_ALBUM_PLACE_RADIUS_KM = "smart_album_place_radius_km"
+DEFAULT_SMART_ALBUM_PLACE_RADIUS_KM = 5.0
+
 
 @dataclass(frozen=True)
 class ImmichConfig:
@@ -58,6 +76,27 @@ class ImmichConfig:
     def album_sync(self) -> bool:
         """Both selective and full modes mirror app albums into Immich albums."""
         return self.sync_mode in (IMMICH_MODE_SELECTIVE, IMMICH_MODE_FULL)
+
+
+@dataclass(frozen=True)
+class SmartAlbumConfig:
+    sections: tuple[str, ...]
+    place_radius_km: float
+
+
+def get_smart_album_config(db: Session) -> SmartAlbumConfig:
+    raw = get_setting(db, SMART_ALBUM_SECTIONS)
+    if raw is None:
+        sections = DEFAULT_SMART_ALBUM_SECTIONS
+    else:
+        sections = tuple(s for s in raw.split(",") if s in SMART_ALBUM_SECTION_NAMES)
+    raw_radius = get_setting(db, SMART_ALBUM_PLACE_RADIUS_KM)
+    try:
+        radius = float(raw_radius) if raw_radius else DEFAULT_SMART_ALBUM_PLACE_RADIUS_KM
+    except ValueError:
+        radius = DEFAULT_SMART_ALBUM_PLACE_RADIUS_KM
+    # Clamped so a typo can't make every photo one giant "place" (or none).
+    return SmartAlbumConfig(sections=sections, place_radius_km=max(1.0, min(500.0, radius)))
 
 
 def get_setting(db: Session, key: str) -> str | None:

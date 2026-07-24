@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -177,6 +177,14 @@ class BulkDownloadRequest(BaseModel):
     image_ids: list[str]
 
 
+class ExportRequest(BaseModel):
+    image_ids: list[str]
+    # JPEG quality 1-100 and an optional long-edge pixel cap (None = original
+    # size). Shared by the single-photo and selection export dialogs.
+    quality: int = 90
+    max_size: int | None = None
+
+
 class ImmichPushRequest(BaseModel):
     image_ids: list[str]
 
@@ -214,6 +222,41 @@ class AlbumOut(BaseModel):
     image_count: int = 0
     # Mirror this album to Immich (selective sync).
     immich_sync: bool = False
+
+
+class SmartAlbumOut(BaseModel):
+    # "cluster:<index>" / "year:2024" / "month:2024-07" / "day:2024-07-12" /
+    # "place:48.1374,11.5755" / "country:Italy" / "country-year:Italy:2024" -
+    # virtual, so the id encodes what the album *is* instead of naming a row.
+    id: str
+    kind: Literal["cluster", "year", "month", "day", "place", "country", "country_year"]
+    name: str
+    image_count: int
+    cover_image_id: str | None = None
+
+
+class SmartAlbumsOut(BaseModel):
+    # "building" only while the very first cluster pass runs; the frontend
+    # polls until it flips to "ready".
+    clusters_status: Literal["building", "ready"]
+    clusters: list[SmartAlbumOut]
+    places: list[SmartAlbumOut]
+    countries: list[SmartAlbumOut]
+    country_years: list[SmartAlbumOut]
+    years: list[SmartAlbumOut]
+    months: list[SmartAlbumOut]
+    days: list[SmartAlbumOut]
+
+
+class SmartAlbumSettingsOut(BaseModel):
+    # Enabled section keys (subset of settings_store.SMART_ALBUM_SECTION_NAMES).
+    sections: list[str]
+    place_radius_km: float
+
+
+class SmartAlbumSettingsUpdate(BaseModel):
+    sections: list[str] | None = None
+    place_radius_km: float | None = None
 
 
 class AlbumAddImages(BaseModel):

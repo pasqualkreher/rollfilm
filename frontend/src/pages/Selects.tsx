@@ -7,11 +7,13 @@ import { useTasks } from "../state/tasks";
 import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 import { groupPairsAdjacent } from "../utils/pairing";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
+import { ExportDialog } from "../components/ExportDialog";
 
 export function Selects() {
   const { ids, count, remove, clear } = useSelects();
   const mergePairs = useMergePairs();
   const [downloading, setDownloading] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [immichBusy, setImmichBusy] = useState(false);
   const [immichMsg, setImmichMsg] = useState<string | null>(null);
@@ -172,6 +174,14 @@ export function Selects() {
                     ? `Generate zip (${selected.size} selected)`
                     : `Generate zip (all ${count})`}
               </button>
+              <button
+                className="btn"
+                onClick={() => setExportOpen(true)}
+                disabled={actionIds.length === 0}
+                title="Export JPEGs with the saved edits baked in, at a quality and size of your choice"
+              >
+                {hasSelection ? `Export ${selected.size}…` : "Export…"}
+              </button>
               {/* Hidden in full sync mode - everything uploads automatically there. */}
               {immichConfigured && immich?.sync_mode !== "full" && (
                 <button
@@ -248,6 +258,7 @@ export function Selects() {
           />
         </>
       )}
+      {exportOpen && <ExportDialog imageIds={actionIds} onClose={() => setExportOpen(false)} />}
     </div>
   );
 }

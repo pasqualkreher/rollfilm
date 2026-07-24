@@ -10,6 +10,7 @@ import {
   defaultAdjustments,
   editsAreNeutral,
   editsFromImage,
+  FILM_SIMS,
   MASK_ADJUST_FIELDS,
   MASK_TYPES,
   neutralEdits,
@@ -68,6 +69,10 @@ const MIX_CHANNELS: [number, string][] = [
   [1, "Saturation"],
   [2, "Luminance"],
 ];
+
+// Accordion groups in panel render order; keys 1..9 jump straight to them.
+const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "presets"];
+const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String(i + 1));
 
 // Curves: the four channels share the same key set across point + parametric
 // curves. Each carries a display colour for its graph line / dot.
@@ -190,6 +195,20 @@ function GridLines({ type }: { type: GridOverlay }) {
   );
 }
 
+// Move keyboard focus between the currently rendered sliders (only the open
+// accordion group's sliders exist in the DOM). `from` = null enters the list
+// from outside: ArrowDown lands on the first slider, ArrowUp on the last.
+// Returns the newly focused input, or null when there was nowhere to go.
+function focusAdjacentSlider(from: HTMLInputElement | null, dir: 1 | -1): HTMLInputElement | null {
+  const all = Array.from(document.querySelectorAll<HTMLInputElement>('.editor-panel .editor-slider input[type="range"]'));
+  if (all.length === 0) return null;
+  const next = from ? all[all.indexOf(from) + dir] : dir === 1 ? all[0] : all[all.length - 1];
+  if (!next) return null;
+  next.focus();
+  next.scrollIntoView({ block: "nearest" });
+  return next;
+}
+
 function Slider({
   label,
   value,
@@ -226,6 +245,13 @@ function Slider({
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         onDoubleClick={() => onChange(resetValue)}
+        onKeyDown={(e) => {
+          // Up/down walk the slider list; left/right keep the native "nudge
+          // the value" behaviour of a focused range input.
+          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+          e.preventDefault();
+          focusAdjacentSlider(e.currentTarget, e.key === "ArrowDown" ? 1 : -1);
+        }}
         title="Double-click to reset"
       />
     </label>
@@ -314,6 +340,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   // never the scrub tier - even though holding the button holds the pointer down
   // (which would otherwise flip on scrub mode). Mirrors the `compare` state.
   const compareRef = useRef(false);
+  // Whether the canvas is zoomed in (scale > 1) - read by the settle pass to
+  // decide if it should chase the full tier with a true-resolution render.
+  const zoomedRef = useRef(false);
   // The dirty-token at the moment the pointer went down, so pointer-up can tell a
   // real drag (edits changed → snap to the accurate render) from a plain click
   // that happened to land in the editor (nothing changed → skip the re-render).
@@ -480,6 +509,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   // the pointer-up handler don't close over a stale value).
   previewEditsLatest.current = previewEdits;
   compareRef.current = compare;
+  zoomedRef.current = zoomed;
 
   // Paint a rendered JPEG onto the canvas, sizing it to the bitmap and
   // (optionally) refreshing the histogram. `seq` guards against a late or
@@ -514,6 +544,15 @@ export function PhotoEditor({ image, onClose }: Props) {
         const blob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, "full");
         if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
         await drawBlob(blob, seq, false);
+        // Zoomed in, the bounded settle base still shows upscaled - chase it
+        // with the TRUE full-resolution render (like the lightbox's full.jpg).
+        // Same abort controller: any new edit/drag cancels it; the seq guard
+        // drops it if a newer frame was painted while it rendered.
+        if (zoomedRef.current) {
+          const nblob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, "native");
+          if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
+          await drawBlob(nblob, seq, false);
+        }
       } catch {
         // Non-fatal: the accurate preview is already on screen.
       }
@@ -572,6 +611,13 @@ export function PhotoEditor({ image, onClose }: Props) {
     void pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image.id, previewKey]);
+
+  // Zooming in while edits are at rest doesn't touch the pump (no edit change),
+  // so kick the settle pass directly - it chases the bounded settle render with
+  // the true-resolution one now that the canvas is zoomed.
+  useEffect(() => {
+    if (zoomed) scheduleSettle();
+  }, [zoomed, scheduleSettle]);
 
   // A pointer held down anywhere over the editor means a control is being
   // dragged (slider/curve/wheel/crop/mask handle) - render the scrub tier until
@@ -733,12 +779,43 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
-      // Peel back the active on-canvas mode first, then close the editor.
-      if (colorPickMode) setColorPickMode(false);
-      else if (maskDrawMode) setMaskDrawMode(false);
-      else if (cropMode) setCropMode(false);
-      else if (!busy) onClose();
+      if (e.key === "Escape") {
+        // Peel back the active on-canvas mode first, then close the editor.
+        if (colorPickMode) setColorPickMode(false);
+        else if (maskDrawMode) setMaskDrawMode(false);
+        else if (cropMode) setCropMode(false);
+        else if (!busy) onClose();
+        return;
+      }
+
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+
+      // Up/down from outside any control jumps into the visible slider list
+      // (a focused slider handles these itself and walks the list; text
+      // fields/selects keep their native arrow behaviour).
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (focusAdjacentSlider(null, e.key === "ArrowDown" ? 1 : -1)) e.preventDefault();
+        return;
+      }
+
+      // 1..9 open the matching control section (same order as the panel).
+      // Skipped while a text-entry control has focus so typing a preset name
+      // or a slider value never switches sections.
+      const idx = SECTION_KEY_ORDER.indexOf(e.key);
+      if (idx === -1) return;
+      if (tag === "TEXTAREA" || tag === "SELECT") return;
+      if (tag === "INPUT" && !["range", "checkbox"].includes((target as HTMLInputElement).type)) return;
+      const groupId = GROUP_ORDER[idx];
+      setOpenGroup(groupId);
+      // Scroll after the body has rendered so the opened section is in view.
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`.editor-accordion-header[data-group="${groupId}"]`)
+          ?.scrollIntoView({ block: "start", behavior: "smooth" });
+      });
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1324,6 +1401,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     return (
       <div
         className={`editor-accordion-header${open ? " open" : ""}`}
+        data-group={id}
         role="button"
         tabIndex={0}
         aria-expanded={open}
@@ -1676,6 +1754,40 @@ export function PhotoEditor({ image, onClose }: Props) {
           />
         </div>
 
+          </div>
+        )}
+
+        {/* Film simulation: built-in Fuji-style looks rendered server-side as
+            the base "stock" under curves/mixer/grading, plus a strength blend. */}
+        {accordionHeader("filmsim", "Film Simulation")}
+        {openGroup === "filmsim" && (
+          <div className="editor-accordion-body">
+            <div className="film-sim-grid">
+              {FILM_SIMS.map((f) => (
+                <button
+                  key={f.value}
+                  className={`film-sim-tile${adj.film_sim === f.value ? " active" : ""}`}
+                  onClick={() => setAdj((a) => ({ ...a, film_sim: f.value }))}
+                  title={f.label}
+                >
+                  <span className="film-sim-swatch" style={{ background: f.swatch }} />
+                  <span className="film-sim-label">{f.label}</span>
+                </button>
+              ))}
+            </div>
+            {adj.film_sim !== "none" && (
+              <div className="editor-sliders">
+                <Slider
+                  label="Strength"
+                  value={adj.lut_intensity}
+                  min={SCALAR_SPEC.lut_intensity.min}
+                  max={SCALAR_SPEC.lut_intensity.max}
+                  resetValue={SCALAR_SPEC.lut_intensity.def}
+                  format={(v) => `${v}%`}
+                  onChange={(v) => setAdj((a) => ({ ...a, lut_intensity: v }))}
+                />
+              </div>
+            )}
           </div>
         )}
 

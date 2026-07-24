@@ -222,6 +222,51 @@
   color-scheme: light;
 }
 
+/* Sky — cool pale blue with an azure accent. */
+:root[data-theme="sky"] {
+  --bg: #eaf2fa;
+  --bg-elevated: #f4f9fd;
+  --hover: #dce9f4;
+  --border: #c6dbec;
+  --text: #1d3247;
+  --text-muted: #5e7b93;
+  --accent: #2b7fd4;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(43, 127, 212, 0.14);
+  --danger: #cc4136;
+  color-scheme: light;
+}
+
+/* Peach — warm apricot with a soft-orange accent. */
+:root[data-theme="peach"] {
+  --bg: #fdf1e7;
+  --bg-elevated: #fef7f0;
+  --hover: #f7e4d2;
+  --border: #eed3ba;
+  --text: #463122;
+  --text-muted: #8d7360;
+  --accent: #e0763a;
+  --accent-contrast: #fff8f1;
+  --accent-soft: rgba(224, 118, 58, 0.15);
+  --danger: #c94a2e;
+  color-scheme: light;
+}
+
+/* Gruvbox Light — retro yellowed paper with a burnt-orange accent. */
+:root[data-theme="gruvbox-light"] {
+  --bg: #fbf1c7;
+  --bg-elevated: #f2e5bc;
+  --hover: #ebdbb2;
+  --border: #d5c4a1;
+  --text: #3c3836;
+  --text-muted: #7c6f64;
+  --accent: #d65d0e;
+  --accent-contrast: #fbf1c7;
+  --accent-soft: rgba(214, 93, 14, 0.14);
+  --danger: #cc241d;
+  color-scheme: light;
+}
+
 /* Dracula — dark blue-grey with a vivid purple accent. */
 :root[data-theme="dracula"] {
   --bg: #282a36;
@@ -285,6 +330,74 @@
   --accent-contrast: #1c141f;
   --accent-soft: rgba(209, 107, 165, 0.2);
   --danger: #e0685b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Ocean — deep teal-blue with a cyan accent. */
+:root[data-theme="ocean"] {
+  --bg: #0f1e26;
+  --bg-elevated: #172b34;
+  --hover: #1f3843;
+  --border: #2a4855;
+  --text: #e2edf1;
+  --text-muted: #86a4b0;
+  --accent: #33b3c8;
+  --accent-contrast: #0a161c;
+  --accent-soft: rgba(51, 179, 200, 0.2);
+  --danger: #e0685b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Monokai — the classic olive-charcoal editor look with a magenta accent. */
+:root[data-theme="monokai"] {
+  --bg: #272822;
+  --bg-elevated: #32332b;
+  --hover: #3b3c33;
+  --border: #48493e;
+  --text: #f8f8f2;
+  --text-muted: #a6a795;
+  --accent: #f92672;
+  --accent-contrast: #1e1f1a;
+  --accent-soft: rgba(249, 38, 114, 0.18);
+  --danger: #e64b3c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Rosé Pine — muted violet night with a dusty-rose accent. */
+:root[data-theme="rose-pine"] {
+  --bg: #191724;
+  --bg-elevated: #1f1d2e;
+  --hover: #26233a;
+  --border: #3a3654;
+  --text: #e0def4;
+  --text-muted: #908caa;
+  --accent: #ea9a97;
+  --accent-contrast: #191724;
+  --accent-soft: rgba(234, 154, 151, 0.18);
+  --danger: #eb6f92;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+/* Gruvbox Dark — warm retro charcoal with a golden-yellow accent. */
+:root[data-theme="gruvbox-dark"] {
+  --bg: #282828;
+  --bg-elevated: #32302f;
+  --hover: #3c3836;
+  --border: #504945;
+  --text: #ebdbb2;
+  --text-muted: #a89984;
+  --accent: #fabd2f;
+  --accent-contrast: #211f1e;
+  --accent-soft: rgba(250, 189, 47, 0.18);
+  --danger: #fb4934;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
@@ -969,6 +1082,58 @@ textarea:focus-visible {
 
 .modal-close:hover {
   color: var(--text);
+}
+
+/* "Delete only this file or the whole RAW+JPEG pair?" chooser. */
+.pair-delete-modal {
+  width: min(420px, 100%);
+}
+
+.pair-delete-body {
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pair-delete-body h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+/* deleteConfirmMessage carries its own blank-line breaks between the question
+   and the "what happens" paragraphs - keep them. */
+.pair-delete-message {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-line;
+}
+
+.pair-delete-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.pair-delete-actions .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+/* The recommended (take-both) choice reads as a solid destructive action; the
+   "only this file" choice keeps the quieter outlined danger look. */
+.btn.danger.danger-filled {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn.danger.danger-filled:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+  border-color: color-mix(in srgb, var(--danger) 85%, #000);
 }
 
 .dir-picker-header {
@@ -1906,6 +2071,52 @@ input.editor-preset-select {
   border: 1.5px solid var(--bg);
 }
 
+/* Film simulation picker: a two-column grid of look tiles, each a palette
+   swatch + name, with the same active treatment as the mixer bands. */
+.film-sim-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.film-sim-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+
+.film-sim-tile:hover {
+  border-color: var(--text-muted);
+}
+
+.film-sim-tile.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.film-sim-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.film-sim-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .editor-hint {
   color: #9a9aa0;
   font-size: 14px;
@@ -1966,6 +2177,17 @@ input.editor-preset-select {
   width: 100%;
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+/* Keyboard focus: mark the slider the arrow keys are on (up/down walk the
+   list, left/right nudge the value). */
+.editor-slider input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.editor-slider:has(input[type="range"]:focus-visible) .editor-slider-head > span:first-child {
+  color: var(--accent);
 }
 
 /* Footer pinned to the bottom of the (scrolling) panel: a secondary row
@@ -4226,6 +4448,64 @@ kbd {
   padding: 0;
 }
 
+/* ---- Guided settings tour (SettingsTour) --------------------------------
+   The current stop gets an accent ring; the floating card at the bottom
+   carries the explanation and the Back/Next/Skip controls. */
+
+.settings-section.tour-highlight {
+  outline: 2px solid var(--accent);
+  outline-offset: 10px;
+  border-radius: 10px;
+}
+
+.settings-tour-card {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: min(440px, calc(100vw - 32px));
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-tour-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 15px;
+}
+
+.settings-tour-progress {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.settings-tour-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.settings-tour-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.settings-tour-actions-right {
+  display: flex;
+  gap: 8px;
+}
+
 /* ---- Shared Settings primitives -----------------------------------------
    One vocabulary for every section so they read as one page instead of each
    block styling itself inline: descriptions, notes, option rows, fields and
@@ -4363,4 +4643,131 @@ kbd {
    Backup & restore) get even vertical rhythm without per-element margins. */
 .settings-block + .settings-block {
   margin-top: 22px;
+}
+
+/* A maintenance action button with its time estimate / live elapsed timer
+   sitting to its right (wrapping under on narrow widths). */
+.maintenance-run {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.maintenance-eta {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* ---- Smart albums (Albums page) ------------------------------------------
+   Auto-computed collections shown above the manual albums: horizontally
+   scrollable rows of cover cards, one row per kind (Moments / Big days /
+   Years / Months). */
+.smart-section {
+  margin-bottom: 18px;
+}
+
+.smart-row-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.smart-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px; /* keep the scrollbar off the cards */
+  scrollbar-width: thin;
+}
+
+.smart-card {
+  position: relative;
+  flex: 0 0 auto;
+  width: 168px;
+  height: 118px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.smart-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-pop);
+}
+
+.smart-card img,
+.smart-card .smart-card-blank {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Caption readability over any cover photo. */
+.smart-card-caption {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 18px 10px 8px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+}
+
+.smart-card-name {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.smart-card-count {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+}
+
+/* Loading state for the smart-album rows: shimmering placeholder cards where
+   the real ones will appear, so sections fade in instead of popping. */
+@keyframes pm-skeleton {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.smart-card--skeleton,
+.smart-title--skeleton {
+  background: linear-gradient(90deg, var(--bg-elevated) 30%, var(--hover) 50%, var(--bg-elevated) 70%);
+  background-size: 200% 100%;
+  animation: pm-skeleton 1.4s ease-in-out infinite;
+}
+
+.smart-title--skeleton {
+  width: 90px;
+  height: 15px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+/* Muted inline hint next to a smart row's title ("Analyzing your photos…"). */
+.smart-row-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Covers fade in once decoded instead of popping. The caption gradient sits on
+   the card itself, so it's visible from the start and nothing jumps. */
+.smart-card img {
+  opacity: 0;
+  transition: opacity 240ms ease;
+}
+
+.smart-card img.loaded {
+  opacity: 1;
 }

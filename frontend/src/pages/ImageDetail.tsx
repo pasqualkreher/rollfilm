@@ -10,7 +10,8 @@ import { AlbumPicker } from "../components/AlbumPicker";
 import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
 import { useMergePairs } from "../state/viewPrefs";
-import { deleteConfirmMessage } from "../utils/deleteMessage";
+import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
+import { ExportDialog } from "../components/ExportDialog";
 import { preloadImage } from "../utils/preload";
 import { rememberLastViewedImage } from "../utils/lastViewed";
 import type { ColorLabel, ImageOut } from "../api/types";
@@ -32,8 +33,10 @@ export function ImageDetail() {
   const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState(id!);
   const [adjustOpen, setAdjustOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [bgMode, setBgMode] = useState<"light" | "dark">("light");
   const mergePairs = useMergePairs();
+  const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
   // Scroll / trackpad-pinch to zoom (toward the cursor), drag to pan. scale 1 =
   // fit; pan is a pixel translation applied before the scale.
   const [scale, setScale] = useState(1);
@@ -165,6 +168,21 @@ export function ImageDetail() {
     queryFn: () => api.images.get(activeId),
     enabled: !!activeId,
   });
+
+  // A saved edit regenerates the preview in place but deletes full.jpg, whose
+  // full-resolution re-render happens lazily on request and can take a minute
+  // for a RAW. If the lightbox had upgraded to the full render (hiRes latches
+  // once the user zooms), keeping it would point the <img> at that
+  // still-rendering file and leave the PRE-edit pixels on screen until it
+  // finishes - looking like the save didn't take. Drop back to fit + the fresh
+  // preview instead; zooming in again re-upgrades on demand.
+  const editRev = image?.edit_rev;
+  useEffect(() => {
+    resetZoom();
+    setHiRes(false);
+    setFullFailed(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editRev]);
 
   const { data: paired } = useQuery({
     queryKey: ["image", image?.paired_image_id],
@@ -397,13 +415,15 @@ export function ImageDetail() {
 
   async function deletePhoto() {
     if (!image) return;
-    // A RAW+JPEG pair is one shot - delete both halves so we never leave an
-    // orphaned RAW (or JPEG) behind.
-    const ids = paired ? [image.id, paired.id] : [image.id];
-    const items = paired ? [image, paired] : [image];
-    if (!window.confirm(deleteConfirmMessage(items))) {
-      return;
-    }
+    // A RAW+JPEG pair is one shot, so both halves go together by default. With
+    // the "ask what to delete" setting on, the user can keep the partner.
+    const ids = await confirmDelete({
+      baseIds: [image.id],
+      baseItems: [image],
+      partnerIds: paired ? [paired.id] : [],
+      partnerItems: paired ? [paired] : [],
+    });
+    if (!ids) return;
     await api.images.bulkDelete(ids);
     ids.forEach((delId) => selects.has(delId) && selects.remove(delId));
     queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -426,6 +446,7 @@ export function ImageDetail() {
 
   return (
     <div className="page detail-page">
+      {pairDeleteDialog}
       <button className="icon-btn back-btn" onClick={goBack} title="Back (Esc)" aria-label="Back">
         ←
       </button>
@@ -668,6 +689,14 @@ export function ImageDetail() {
             >
               Download original
             </a>
+            <button
+              className="btn"
+              style={{ display: "block", width: "100%", marginTop: 8, textAlign: "center" }}
+              onClick={() => setExportOpen(true)}
+              title="Export a JPEG with your edits baked in, at a quality and size of your choice"
+            >
+              Export…
+            </button>
           </div>
 
           {image.gps_lat != null && image.gps_lon != null && (
@@ -717,6 +746,7 @@ export function ImageDetail() {
       </div>
 
       {adjustOpen && <PhotoEditor image={image} onClose={() => setAdjustOpen(false)} />}
+      {exportOpen && <ExportDialog imageIds={[image.id]} onClose={() => setExportOpen(false)} />}
     </div>
   );
 }
