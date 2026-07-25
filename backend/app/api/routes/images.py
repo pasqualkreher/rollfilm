@@ -1222,6 +1222,13 @@ def save_copy(
     return new_image
 
 
+# How long a thumbnail/preview request waits for a render slot before giving up
+# with 503 + Retry-After. Long enough that on an otherwise idle library the
+# on-demand generation just happens (the self-heal path this fallback exists
+# for), short enough that a saturated one frees the server thread quickly.
+_ON_DEMAND_RENDER_WAIT_S = 3.0
+
+
 def _serve_derivative(image: Image, name: str, not_ready_detail: str) -> FileResponse:
     """Serve a cached derivative (thumbnail.jpg / preview.jpg), generating it
     on the spot if it isn't there yet. Derivatives are normally produced by the
@@ -1235,7 +1242,16 @@ def _serve_derivative(image: Image, name: str, not_ready_detail: str) -> FileRes
             # ensure_derivatives (not regenerate) so a request arriving while
             # the post-import worker is already generating this image waits for
             # that result instead of decoding the same photo again in parallel.
-            thumbnails.ensure_derivatives(image)
+            thumbnails.ensure_derivatives(image, slot_timeout=_ON_DEMAND_RENDER_WAIT_S)
+        except thumbnails.RenderBusy:
+            # Renders are already saturated (typically right after an import, when
+            # a whole grid of not-yet-generated photos scrolls into view). Shed
+            # this one rather than hold a server thread in the queue and stall
+            # every other request: the post-import worker is producing the same
+            # file, so tell the client to come back shortly.
+            raise HTTPException(
+                status_code=503, detail=not_ready_detail, headers={"Retry-After": "2"}
+            )
         except Exception:
             logger.exception("On-demand %s generation failed for image %s", name, image.id)
             raise HTTPException(status_code=404, detail=not_ready_detail)

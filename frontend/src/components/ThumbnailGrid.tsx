@@ -55,6 +55,14 @@ export function tileStyle(width: number | null | undefined, height: number | nul
 // within this window and never hits the network at all.
 const LOAD_STABILIZE_MS = 150;
 
+// A thumbnail can legitimately not exist yet: right after an import the backend
+// generates derivatives in the background and sheds on-demand renders it can't
+// start promptly (503 + Retry-After, see images._serve_derivative) so a whole
+// grid scrolling into view can't stall the API. Retry on a backoff instead of
+// leaving the tile shimmering forever. The last delay is the give-up point -
+// scrolling away and back still starts over.
+const RETRY_DELAYS_MS = [1200, 2500, 5000, 10000];
+
 // Grid thumbnail that starts loading shortly after it comes within the
 // preload margin of the viewport (see utils/preload.ts) - well before it's
 // visible. Replaces native loading="lazy", whose preload distance is
@@ -73,6 +81,12 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
   // have actually arrived - never a broken-image glyph or alt text flash
   // while pending/aborted.
   const [visible, setVisible] = useState(false);
+  // Waiting out a backoff between retries. Keeps the shimmer up (src is cleared
+  // during the gap) so a tile whose derivative is still being generated reads as
+  // loading rather than as an empty card.
+  const [retrying, setRetrying] = useState(false);
+  const retryCount = useRef(0);
+  const retryTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -98,6 +112,14 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
           window.clearTimeout(timer);
           timer = null;
         }
+        // Scrolled away mid-backoff: drop the pending retry and start the budget
+        // over, so coming back later gets a fresh set of attempts.
+        if (retryTimer.current !== null) {
+          window.clearTimeout(retryTimer.current);
+          retryTimer.current = null;
+        }
+        retryCount.current = 0;
+        setRetrying(false);
         // Far away again with the request still in flight: removing src makes
         // the browser abort it. No-op when the image already finished.
         if (!doneRef.current) setShownSrc(undefined);
@@ -105,6 +127,10 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
     });
     return () => {
       if (timer !== null) window.clearTimeout(timer);
+      if (retryTimer.current !== null) {
+        window.clearTimeout(retryTimer.current);
+        retryTimer.current = null;
+      }
       unwatch();
       // Unmounting mid-flight (a long jump in the virtualized grid): abort
       // the request imperatively - React only discards the node, the browser
@@ -121,8 +147,8 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
           cards use - so freshly imported/loading photos animate instead of
           sitting as flat grey blocks. Only shown for tiles actually loading
           (src set, not yet loaded), never for far-off tiles that haven't
-          started. */}
-      {shownSrc && !visible && <div className="thumb-skeleton" aria-hidden />}
+          started. Also kept up across a retry backoff, when src is cleared. */}
+      {(shownSrc || retrying) && !visible && <div className="thumb-skeleton" aria-hidden />}
       <img
         ref={ref}
         src={shownSrc}
@@ -134,7 +160,25 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
         className={visible ? "is-loaded" : undefined}
         onLoad={() => {
           doneRef.current = true;
+          setRetrying(false);
           setVisible(true);
+        }}
+        onError={() => {
+          // Clearing src is what makes the browser re-issue the request: simply
+          // re-assigning an unchanged URL is a no-op for the DOM.
+          if (doneRef.current || retryTimer.current !== null) return;
+          const delay = RETRY_DELAYS_MS[retryCount.current];
+          if (delay === undefined) {
+            setRetrying(false);
+            return; // out of attempts - leave the tile blank
+          }
+          retryCount.current += 1;
+          setRetrying(true);
+          setShownSrc(undefined);
+          retryTimer.current = window.setTimeout(() => {
+            retryTimer.current = null;
+            setShownSrc(src);
+          }, delay);
         }}
       />
     </>

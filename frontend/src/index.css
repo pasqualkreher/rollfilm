@@ -981,6 +981,12 @@ button {
   color: var(--text-muted);
 }
 
+/* A failed action in that row must not read like the muted confirmations
+   sitting next to it. */
+.action-bar-message--error {
+  color: var(--danger);
+}
+
 /* Let the tag input give up width on narrow windows instead of forcing its
    whole group onto the next line prematurely. */
 .action-bar--bottom input[type="text"] {

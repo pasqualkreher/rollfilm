@@ -16,7 +16,7 @@ import { useTasks } from "../state/tasks";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { collapsePairs } from "../state/viewPrefs";
 import { selectionSharedMeta } from "../utils/selectionMeta";
-import { useTransientMessage } from "../utils/transientMessage";
+import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
@@ -56,6 +56,11 @@ export function AlbumDetail() {
   const [immichMsg, setImmichMsg] = useTransientMessage();
   const [developBusy, setDevelopBusy] = useState(false);
   const [developMsg, setDevelopMsg] = useTransientMessage();
+  // Adding to another album is otherwise invisible (the dropdown just snaps back
+  // to its placeholder), so confirm it in the action bar's message row - same
+  // place the tag note appears. Carries its own error flag since a failed add
+  // must not read like a success.
+  const [albumMsg, setAlbumMsg] = useTransientValue<{ text: string; error: boolean }>();
   const presetNames = Object.keys(loadPresets());
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
@@ -206,6 +211,17 @@ export function AlbumDetail() {
     await api.albums.addImages(targetAlbumId, withPairedIds(Array.from(selected)));
     queryClient.invalidateQueries({ queryKey: ["albums"] });
     queryClient.invalidateQueries({ queryKey: ["album", targetAlbumId] });
+  }
+
+  // Counts the selection, not the ids actually sent: merged view silently adds
+  // each shot's RAW partner too, and reporting that larger number would look
+  // like a bug to someone who selected 3 photos. Mirrors the tag note's phrasing.
+  function reportAlbumAdd({ name, ok }: { name: string; ok: boolean }) {
+    setAlbumMsg(
+      ok
+        ? { text: `Added ${selected.size} photo(s) to “${name}”.`, error: false }
+        : { text: `Could not add to “${name}”.`, error: true }
+    );
   }
 
   async function resetSelected(opts: BulkResetOptions) {
@@ -398,7 +414,7 @@ export function AlbumDetail() {
           </div>
           <div className="control-group">
             <BulkTagInput onAdd={addTagToSelected} />
-            <AlbumPicker onAdd={addSelectedToAlbum} />
+            <AlbumPicker onAdd={addSelectedToAlbum} onResult={reportAlbumAdd} />
           </div>
           <div className="control-group">
             <button className="btn" onClick={() => selects.add(Array.from(selected))}>
@@ -456,10 +472,15 @@ export function AlbumDetail() {
           >
             Delete
           </button>
-          {(immichMsg || developMsg) && (
+          {(immichMsg || developMsg || albumMsg) && (
             <div className="action-bar-messages">
               {immichMsg && <span>{immichMsg}</span>}
               {developMsg && <span>{developMsg}</span>}
+              {albumMsg && (
+                <span className={albumMsg.error ? "action-bar-message--error" : undefined}>
+                  {albumMsg.text}
+                </span>
+              )}
             </div>
           )}
         </div>

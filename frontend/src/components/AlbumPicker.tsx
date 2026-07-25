@@ -7,12 +7,19 @@ interface Props {
   onAdd: (albumId: string) => void | Promise<unknown>;
   currentAlbumIds?: string[];
   onRemove?: (albumId: string) => void;
+  // Where the caller has a better place for the outcome than under this
+  // dropdown, it takes it over: the bulk action bars pass this so "added to
+  // album" lands in their shared message row next to the tag and Immich notes,
+  // instead of a second note stacking inside the bar. The album name comes
+  // along because only the picker knows which option was chosen; the caller
+  // adds the context it owns (how many photos were selected).
+  onResult?: (result: { albumId: string; name: string; ok: boolean }) => void;
 }
 
 // Pure "add to an existing album" picker. Creating albums deliberately lives
 // only on the Albums page, so this stays a compact dropdown that fits in the
 // detail sidebar and the bulk action bar.
-export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
+export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult }: Props) {
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
 
   // Adding is otherwise invisible (the dropdown just snaps back to its
@@ -29,12 +36,14 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
     setBusy(true);
     try {
       await onAdd(albumId);
+      if (onResult) onResult({ albumId, name, ok: true });
       // Where the picker shows the membership chips (photo view sidebar), the
       // new chip is confirmation enough - only the chip-less bulk bar needs
       // the flash text.
-      if (!currentAlbumIds) showFlash(`Added to “${name}” ✓`);
+      else if (!currentAlbumIds) showFlash(`Added to “${name}” ✓`);
     } catch {
-      showFlash(`Could not add to “${name}”`, true);
+      if (onResult) onResult({ albumId, name, ok: false });
+      else showFlash(`Could not add to “${name}”`, true);
     } finally {
       setBusy(false);
     }

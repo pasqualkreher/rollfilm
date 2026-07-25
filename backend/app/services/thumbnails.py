@@ -4,6 +4,7 @@ import math
 import os
 import threading
 import uuid
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -143,10 +144,42 @@ def _render_slot_count() -> int:
     return slots
 
 
-# Acquired around the heavy section of a render (`with _render_slots:`): a burst
-# of callers queues instead of all allocating at once.
 RENDER_SLOTS = _render_slot_count()
 _render_slots = threading.BoundedSemaphore(RENDER_SLOTS)
+
+
+class RenderBusy(Exception):
+    """No render slot came free within the caller's patience. Raised only for
+    callers that passed a `slot_timeout` - i.e. request handlers, which would
+    rather shed the work than hold a server thread. Background workers pass no
+    timeout and simply queue."""
+
+
+@contextmanager
+def _locked(lock, timeout: float | None):
+    """Acquire `lock`, giving up with RenderBusy after `timeout` seconds.
+    None waits indefinitely."""
+    if not (lock.acquire() if timeout is None else lock.acquire(timeout=timeout)):
+        raise RenderBusy
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+@contextmanager
+def _render_admission(timeout: float | None):
+    """Hold one of the RENDER_SLOTS admission tickets for the duration.
+
+    Bounding the *wait* matters as much as bounding the renders: with only a
+    couple of slots, a grid full of not-yet-generated photos could otherwise
+    park every thread of uvicorn's pool in this queue and stall the whole API -
+    trading the RAM exhaustion for thread-pool exhaustion. Request handlers pass
+    a short timeout and get RenderBusy instead, which they turn into a "retry
+    shortly" response; the post-import worker is producing the same derivative
+    anyway."""
+    with _locked(_render_slots, timeout):
+        yield
 
 
 def _distortion_indices(h: int, w: int, amount: int) -> tuple[np.ndarray, np.ndarray]:
@@ -1307,10 +1340,16 @@ def generate_derivatives(
     straighten: float = 0.0,
     persp_h: int = 0,
     persp_v: int = 0,
+    slot_timeout: float | None = None,
 ) -> PILImage.Image:
     """Writes thumbnail.jpg (grid) and preview.jpg (lightbox) for an image, and
     returns the decoded full-resolution base image (before edits) so a caller
     can reuse it (e.g. for the CLIP embedding) instead of decoding the RAW again.
+
+    `slot_timeout` bounds the wait for a render slot and for another thread
+    already generating this same image; raises RenderBusy when it runs out (see
+    _render_admission). None - the default, used by the background workers -
+    waits as long as it takes.
 
     Browsers can't render RAW files directly, so for RAW sources preview.jpg
     is the only viewable representation - it's a true demosaic (not the
@@ -1318,7 +1357,7 @@ def generate_derivatives(
     color rendering - see extract_full_preview()), then the user's manual
     rotation/crop (if any) is layered on top before resizing.
     """
-    with _gen_lock(image_id), _render_slots:
+    with _locked(_gen_lock(image_id), slot_timeout), _render_admission(slot_timeout):
         out_dir = derivative_dir(image_id)
         # Both outputs are capped (PREVIEW_RENDER_MAX_PX / THUMBNAIL_MAX_PX), yet
         # a 26MP camera JPEG used to be decoded and pushed through the whole
@@ -1385,15 +1424,19 @@ def has_derivatives(image_id: str) -> bool:
     return (out_dir / "thumbnail.jpg").exists() and (out_dir / "preview.jpg").exists()
 
 
-def ensure_derivatives(image: "Image") -> None:
+def ensure_derivatives(image: "Image", slot_timeout: float | None = None) -> None:
     """Generate thumbnail/preview only if they're missing. Used by the serve
     path: if the post-import worker is generating this image right now, this
     blocks until it's done and then skips the (now redundant) regeneration
-    instead of decoding the same photo a second time."""
-    with _gen_lock(image.id):
+    instead of decoding the same photo a second time.
+
+    `slot_timeout` is passed straight through to generate_derivatives, so a
+    request handler can bound its wait and get RenderBusy rather than occupying
+    a server thread through someone else's render."""
+    with _locked(_gen_lock(image.id), slot_timeout):
         if has_derivatives(image.id):
             return
-        regenerate_for_image(image)
+        regenerate_for_image(image, slot_timeout=slot_timeout)
 
 
 def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
@@ -1707,7 +1750,7 @@ def adjustments_from_image(image: "Image") -> dict:
     return develop.loads(getattr(image, "edit_adjustments", None))
 
 
-def regenerate_for_image(image: "Image") -> None:
+def regenerate_for_image(image: "Image", slot_timeout: float | None = None) -> None:
     from app.services.filesystem import resolve_image_path
 
     crop = None
@@ -1726,4 +1769,5 @@ def regenerate_for_image(image: "Image") -> None:
         straighten=float(getattr(image, "edit_straighten", 0.0) or 0.0),
         persp_h=int(getattr(image, "edit_persp_h", 0) or 0),
         persp_v=int(getattr(image, "edit_persp_v", 0) or 0),
+        slot_timeout=slot_timeout,
     )
