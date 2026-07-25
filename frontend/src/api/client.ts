@@ -2,6 +2,8 @@ import type {
   AlbumOut,
   AutoAdjustResult,
   AutoDevelopSettings,
+  BorgSettings,
+  BorgTestResult,
   BulkAutoDevelopResult,
   BulkResetOptions,
   CropBox,
@@ -98,6 +100,59 @@ export function bumpThumbnailCacheBust(): void {
   } catch {
     /* ignore */
   }
+}
+
+// Save a download by asking the user where to put it FIRST (via the File
+// System Access API our Electron/Chromium runtime provides), then running the
+// potentially slow server build and streaming the result into the chosen file.
+// This way the save dialog appears up front rather than after the whole zip is
+// built. Where the picker is unavailable we fall back to a plain anchor
+// download, which prompts at the end. Returns without saving if the user
+// cancels the picker.
+async function saveDownload(
+  suggestedName: string,
+  accept: Record<string, string[]>,
+  fetchBlob: () => Promise<Blob>
+): Promise<void> {
+  const picker = (
+    window as unknown as {
+      showSaveFilePicker?: (opts: {
+        suggestedName?: string;
+        types?: { description?: string; accept: Record<string, string[]> }[];
+      }) => Promise<{
+        createWritable: () => Promise<{
+          write: (data: Blob) => Promise<void>;
+          close: () => Promise<void>;
+        }>;
+      }>;
+    }
+  ).showSaveFilePicker;
+
+  if (picker) {
+    let handle;
+    try {
+      handle = await picker({ suggestedName, types: [{ accept }] });
+    } catch (e) {
+      // User dismissed the location picker - nothing to save, not an error.
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      throw e;
+    }
+    const blob = await fetchBlob();
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return;
+  }
+
+  const blob = await fetchBlob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = suggestedName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function derivativeUrl(path: string, version?: string): string {
@@ -255,20 +310,36 @@ export const api = {
     // Fetches a server-built zip of the originals and saves it via a temporary
     // object URL - keeps the potentially large binary out of React state.
     async downloadZip(image_ids: string[]): Promise<void> {
-      const res = await fetch(`${BASE_URL}/images/download-zip`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_ids }),
+      await saveDownload("photos.zip", { "application/zip": [".zip"] }, async () => {
+        const res = await fetch(`${BASE_URL}/images/download-zip`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image_ids }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`download-zip failed: ${res.status} ${body}`);
+        }
+        return res.blob();
       });
+    },
+    // Downloads the library files exactly as stored (RAW stays RAW, all EXIF
+    // and metadata untouched) - a single photo as the original file itself,
+    // several via the zip endpoint above.
+    async downloadOriginals(image_ids: string[]): Promise<void> {
+      if (image_ids.length !== 1) return api.images.downloadZip(image_ids);
+      const res = await fetch(`${BASE_URL}/images/${image_ids[0]}/original`);
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        throw new Error(`download-zip failed: ${res.status} ${body}`);
+        throw new Error(`download failed: ${res.status} ${body}`);
       }
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "photo";
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "photos.zip";
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -281,27 +352,23 @@ export const api = {
       image_ids: string[],
       opts: { quality: number; max_size?: number | null }
     ): Promise<void> {
-      const res = await fetch(`${BASE_URL}/images/export`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_ids, quality: opts.quality, max_size: opts.max_size ?? null }),
+      const single = image_ids.length === 1;
+      const suggestedName = single ? "export.jpg" : "export.zip";
+      const accept: Record<string, string[]> = single
+        ? { "image/jpeg": [".jpg", ".jpeg"] }
+        : { "application/zip": [".zip"] };
+      await saveDownload(suggestedName, accept, async () => {
+        const res = await fetch(`${BASE_URL}/images/export`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image_ids, quality: opts.quality, max_size: opts.max_size ?? null }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`export failed: ${res.status} ${body}`);
+        }
+        return res.blob();
       });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(`export failed: ${res.status} ${body}`);
-      }
-      const disposition = res.headers.get("Content-Disposition") ?? "";
-      const filename =
-        /filename="([^"]+)"/.exec(disposition)?.[1] ?? (image_ids.length === 1 ? "export.jpg" : "export.zip");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
     },
     bulkAddTags(image_ids: string[], tag_names: string[]): Promise<ImageOut[]> {
       return request(`/images/bulk-tags`, { method: "POST", body: JSON.stringify({ image_ids, tag_names }) });
@@ -611,6 +678,9 @@ export const api = {
     query(q: string, filters?: Partial<LibraryFilters>): Promise<SearchResultOut[]> {
       const params = filtersToParams(filters ?? {});
       params.set("q", q);
+      // Show a lot more matches than the default handful - people search to
+      // pull up everything about a place/tag/camera, not just the top 40.
+      params.set("limit", "1000");
       // The UI language, so country/city queries work in it ("italien",
       // "münchen") as well as in English.
       params.set("lang", navigator.language || "en");
@@ -628,6 +698,10 @@ export const api = {
     },
     rebuildThumbnails(): Promise<{ rebuilt: number }> {
       return request(`/maintenance/rebuild-thumbnails`, { method: "POST" });
+    },
+    // Live "N of M photos" progress of a running rebuild, polled by Settings.
+    rebuildProgress(): Promise<{ active: boolean; total: number; done: number }> {
+      return request(`/maintenance/rebuild-progress`);
     },
     // Re-read every photo's EXIF capture date and fix wrongly stored ones
     // (photos imported before the reader understood CreateDate/XMP fallbacks
@@ -732,6 +806,25 @@ export const api = {
     },
     immichUploads(): Promise<ImmichUploadResult[]> {
       return request(`/settings/immich/uploads`);
+    },
+    // Automatic incremental Borg backups. getBorg doubles as the status poll
+    // (running / last-run outcome), so the Settings panel refreshes off it.
+    getBorg(): Promise<BorgSettings> {
+      return request(`/settings/borg`);
+    },
+    updateBorg(patch: {
+      enabled: boolean;
+      repo: string;
+      // Omit / send null to keep the stored passphrase; "" clears it.
+      passphrase?: string | null;
+    }): Promise<BorgSettings> {
+      return request(`/settings/borg`, { method: "PUT", body: JSON.stringify(patch) });
+    },
+    backupBorgNow(): Promise<BorgSettings> {
+      return request(`/settings/borg/backup`, { method: "POST" });
+    },
+    testBorg(): Promise<BorgTestResult> {
+      return request(`/settings/borg/test`, { method: "POST" });
     },
   },
   sources: {

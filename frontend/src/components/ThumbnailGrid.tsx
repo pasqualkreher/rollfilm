@@ -115,20 +115,29 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
   }, [src]);
 
   return (
-    <img
-      ref={ref}
-      src={shownSrc}
-      decoding="async"
-      alt={alt}
-      // Fades in via opacity once the pixels arrive (see .thumb-card img in
-      // index.css) instead of snapping to visible - a soft appearance rather
-      // than a hard pop-in. Stays blank (opacity 0) while pending/aborted.
-      className={visible ? "is-loaded" : undefined}
-      onLoad={() => {
-        doneRef.current = true;
-        setVisible(true);
-      }}
-    />
+    <>
+      {/* While a tile has requested its thumbnail but the pixels haven't
+          arrived yet, fill the card with the same shimmer the Albums skeleton
+          cards use - so freshly imported/loading photos animate instead of
+          sitting as flat grey blocks. Only shown for tiles actually loading
+          (src set, not yet loaded), never for far-off tiles that haven't
+          started. */}
+      {shownSrc && !visible && <div className="thumb-skeleton" aria-hidden />}
+      <img
+        ref={ref}
+        src={shownSrc}
+        decoding="async"
+        alt={alt}
+        // Fades in via opacity once the pixels arrive (see .thumb-card img in
+        // index.css) instead of snapping to visible - a soft appearance rather
+        // than a hard pop-in. Stays blank (opacity 0) while pending/aborted.
+        className={visible ? "is-loaded" : undefined}
+        onLoad={() => {
+          doneRef.current = true;
+          setVisible(true);
+        }}
+      />
+    </>
   );
 }
 

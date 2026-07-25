@@ -121,6 +121,8 @@ export interface AlbumOut {
   description: string | null;
   created_at: string;
   image_count: number;
+  // Up to 4 member ids (album order) for the card's mini mosaic preview.
+  cover_image_ids: string[];
   immich_sync: boolean;
 }
 
@@ -130,10 +132,12 @@ export interface AlbumOut {
 // /smart-albums/{id}/images resolves.
 export interface SmartAlbumOut {
   id: string;
-  kind: "cluster" | "year" | "month" | "day" | "place" | "country" | "country_year";
+  kind: "cluster" | "year" | "month" | "day" | "place" | "country" | "country_year" | "edits";
   name: string;
   image_count: number;
   cover_image_id: string | null;
+  // Up to 4 member ids (newest first) for the card's mini mosaic preview.
+  cover_image_ids: string[];
 }
 
 export interface SmartAlbumsOut {
@@ -146,6 +150,7 @@ export interface SmartAlbumsOut {
   years: SmartAlbumOut[];
   months: SmartAlbumOut[];
   days: SmartAlbumOut[];
+  edits: SmartAlbumOut[];
 }
 
 // Which smart-album sections the Albums page shows + the place radius.
@@ -244,6 +249,25 @@ export interface ImmichActivity {
   synced: number;
   total: number;
   paused: boolean;
+}
+
+export interface BorgSettings {
+  enabled: boolean;
+  repo: string | null;
+  passphrase_set: boolean;
+  // Whether the `borg` binary is installed on this machine.
+  available: boolean;
+  // Live status of the background/manual backup runner.
+  running: boolean;
+  last_ok: boolean | null;
+  last_message: string;
+  last_archive: string | null;
+  last_finished_at: string | null;
+}
+
+export interface BorgTestResult {
+  ok: boolean;
+  message: string;
 }
 
 export interface ImmichUploadResult {

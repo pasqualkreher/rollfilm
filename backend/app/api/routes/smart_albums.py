@@ -2,8 +2,8 @@
 the list endpoint assembles similarity clusters + time groups on the fly (see
 services/smart_albums.py) and the images endpoint resolves one smart album's
 members. Smart ids are self-describing strings - "cluster:2", "year:2024",
-"month:2024-07", "day:2024-07-12", "place:48.1374,11.5755" - so no id
-survives a rebuild by accident.
+"month:2024-07", "day:2024-07-12", "place:48.1374,11.5755", "edits:all" - so
+no id survives a rebuild by accident.
 """
 
 from datetime import datetime
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import schemas
 from app.auth import get_current_user
-from app.db.models import Image, User
+from app.db.models import FileType, Image, User
 from app.db.session import get_db
 from app.services import smart_albums as smart_service
 from app.services import sources as sources_service
@@ -22,13 +22,31 @@ from app.services.settings_store import get_smart_album_config
 router = APIRouter(prefix="/smart-albums", tags=["smart-albums"])
 
 
-def _cluster_out(index: int, cluster: smart_service.SmartCluster) -> schemas.SmartAlbumOut:
+def _cluster_out(
+    db: Session, index: int, cluster: smart_service.SmartCluster
+) -> schemas.SmartAlbumOut:
+    # Mosaic covers: newest JPEG members only; RAWs (dark render, usually
+    # doubling a JPEG of the same shot) only when the cluster has no JPEG.
+    covers = [
+        row[0]
+        for row in db.query(Image.id)
+        .filter(Image.id.in_(cluster.image_ids), Image.file_type == FileType.jpeg)
+        .order_by(Image.taken_at.desc(), Image.id.asc())
+        .limit(smart_service.COVER_COUNT)
+        .all()
+    ]
+    if not covers:
+        covers = [cluster.cover_image_id] + [
+            i for i in cluster.image_ids if i != cluster.cover_image_id
+        ]
+        covers = covers[: smart_service.COVER_COUNT]
     return schemas.SmartAlbumOut(
         id=f"cluster:{index}",
         kind="cluster",
         name=cluster.name,
         image_count=len(cluster.image_ids),
-        cover_image_id=cluster.cover_image_id,
+        cover_image_id=covers[0],
+        cover_image_ids=covers,
     )
 
 
@@ -39,6 +57,7 @@ def _time_out(kind: str, album: smart_service.GroupAlbum) -> schemas.SmartAlbumO
         name=album.name,
         image_count=album.image_count,
         cover_image_id=album.cover_image_id,
+        cover_image_ids=album.cover_image_ids,
     )
 
 
@@ -72,19 +91,25 @@ def list_smart_albums(
         if enabled & {"countries", "country_years"}
         else {"countries": [], "country_years": []}
     )
+    edits = (
+        smart_service.get_edits_album(db, current_user.id)
+        if "edits" in enabled
+        else []
+    )
 
     def section(key: str, albums, kind: str):
         return [_time_out(kind, a) for a in albums] if key in enabled else []
 
     return schemas.SmartAlbumsOut(
         clusters_status=status,
-        clusters=[_cluster_out(i, c) for i, c in enumerate(clusters)],
+        clusters=[_cluster_out(db, i, c) for i, c in enumerate(clusters)],
         places=[_time_out("place", a) for a in places],
         countries=section("countries", country_albums["countries"], "country"),
         country_years=section("country_years", country_albums["country_years"], "country_year"),
         years=section("years", time_albums["years"], "year"),
         months=section("months", time_albums["months"], "month"),
         days=section("days", time_albums["days"], "day"),
+        edits=[_time_out("edits", a) for a in edits],
     )
 
 
@@ -150,6 +175,8 @@ def smart_album_images(
             Image.taken_at >= datetime(year, 1, 1),
             Image.taken_at < datetime(year + 1, 1, 1),
         )
+    elif kind == "edits":
+        query = query.filter(smart_service.edited_filter())
     elif kind in ("year", "month", "day"):
         try:
             start, end = _time_bounds(kind, key)

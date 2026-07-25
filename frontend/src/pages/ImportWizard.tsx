@@ -14,6 +14,7 @@ import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
 import { useTasks } from "../state/tasks";
 import { useMergePairs } from "../state/viewPrefs";
+import { useTransientMessage } from "../utils/transientMessage";
 
 // Human-readable "time remaining" for the import ETA (e.g. "45s", "2m 10s").
 function formatEta(seconds: number): string {
@@ -108,7 +109,8 @@ export function ImportWizard() {
   const [viewMode, setViewMode] = useState<ViewMode>("combined");
   const [ratingMin, setRatingMin] = useState(0);
   const [colorFilter, setColorFilter] = useState<ColorLabel>("none");
-  const [pickError, setPickError] = useState<string | null>(null);
+  // Flash message - auto-dismisses after a moment.
+  const [pickError, setPickError] = useTransientMessage(8000);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const [selectMode, setSelectMode] = useState(false);
@@ -547,7 +549,7 @@ export function ImportWizard() {
                   : "Photos are being received — the review screen opens as soon as they're copied, while analysis continues in the background."}
               </p>
             )}
-            {pickError && <p className="import-panel-desc" style={{ color: "var(--danger)" }}>{pickError}</p>}
+            {pickError && <p className="status-note status-note--error">{pickError}</p>}
             {uploadError && (
               <p className="import-panel-desc" style={{ color: "var(--danger)" }}>Upload failed: {uploadError}</p>
             )}
@@ -749,10 +751,9 @@ export function ImportWizard() {
                 ) : (
                   // Copied but not yet analyzed - no thumbnail exists yet. The
                   // 1s files refetch swaps this for the real Thumb when the
-                  // background analysis finishes this file.
-                  <div className="thumb-analyzing" title="Analyzing…">
-                    <span className="spinner" aria-hidden="true" />
-                  </div>
+                  // background analysis finishes this file. Shimmers like the
+                  // album skeleton cards instead of showing a spinner.
+                  <div className="thumb-analyzing" title="Analyzing…" />
                 )}
                 {selectMode && (
                   <input

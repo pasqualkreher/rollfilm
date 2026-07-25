@@ -22,13 +22,15 @@ export interface ScalarDef {
 
 export const SCALAR_SPEC = {
   // Basic / tone
-  exposure: { def: 0, min: -5, max: 5, step: 0.01 },
+  // Exposure and the four region sliders reach past the classic +-5 EV /
+  // +-100 - the backend keeps the tone curve monotone in the extended zone.
+  exposure: { def: 0, min: -8, max: 8, step: 0.01 },
   brightness: { def: 0, min: -200, max: 200 },
   contrast: { def: 0, min: -100, max: 100 },
-  highlights: { def: 0, min: -100, max: 100 },
-  shadows: { def: 0, min: -100, max: 100 },
-  whites: { def: 0, min: -100, max: 100 },
-  blacks: { def: 0, min: -100, max: 100 },
+  highlights: { def: 0, min: -200, max: 200 },
+  shadows: { def: 0, min: -200, max: 200 },
+  whites: { def: 0, min: -200, max: 200 },
+  blacks: { def: 0, min: -200, max: 200 },
   // White balance / presence
   temperature: { def: 0, min: -250, max: 250 },
   tint: { def: 0, min: -250, max: 250 },

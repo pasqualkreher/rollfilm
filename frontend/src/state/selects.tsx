@@ -16,7 +16,7 @@ const SelectsContext = createContext<SelectsState | null>(null);
 
 function load(): string[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = sessionStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
   } catch {
@@ -26,15 +26,17 @@ function load(): string[] {
 
 /**
  * "Selects" - a working set of image ids the user is gathering to act on (edit,
- * export, etc). Persisted to localStorage so a half-built set survives a page
- * reload, and lifted above <Routes> so it stays put while navigating between
- * Library, albums, and image detail.
+ * export, etc). Kept in sessionStorage (not localStorage) so a half-built set
+ * survives a page reload but is cleared when the app closes - and, since
+ * switching library folders relaunches the app, it never carries stale ids from
+ * a previous library into a new one. Lifted above <Routes> so it stays put
+ * while navigating between Library, albums, and image detail.
  */
 export function SelectsProvider({ children }: { children: ReactNode }) {
   const [ids, setIds] = useState<string[]>(load);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
   }, [ids]);
 
   const add = useCallback((incoming: string | string[]) => {

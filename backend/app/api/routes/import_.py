@@ -26,6 +26,7 @@ from app.services.import_pipeline import (
     get_import_progress,
     stage_uploaded_files,
 )
+from app.services.borg_backup import run_backup_soon
 from app.services.raw import classify_file_type, extract_full_preview
 from app.services.thumbnails import THUMBNAIL_MAX_PX
 
@@ -500,13 +501,17 @@ def commit_session(
             status_code=409,
             detail=f"{unprocessed} photo(s) are still being analyzed - wait a moment and try again.",
         )
-    return commit_import_session(
+    result = commit_import_session(
         db,
         session,
         current_user.id,
         payload.upload_to_immich,
         sync_all_to_immich=payload.sync_all_to_immich,
     )
+    # New photos landed in the library - schedule an incremental Borg backup
+    # (debounced; a no-op unless the user configured one in Settings).
+    run_backup_soon()
+    return result
 
 
 @router.get("/sessions/{session_id}/progress", response_model=schemas.ImportProgressOut)

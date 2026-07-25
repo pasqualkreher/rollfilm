@@ -8,15 +8,16 @@ import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 import { groupPairsAdjacent } from "../utils/pairing";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { ExportDialog } from "../components/ExportDialog";
+import { useTransientMessage } from "../utils/transientMessage";
 
 export function Selects() {
-  const { ids, count, remove, clear } = useSelects();
+  const { ids, count, remove } = useSelects();
   const mergePairs = useMergePairs();
-  const [downloading, setDownloading] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Both flash messages auto-dismiss after a moment.
+  const [error, setError] = useTransientMessage();
   const [immichBusy, setImmichBusy] = useState(false);
-  const [immichMsg, setImmichMsg] = useState<string | null>(null);
+  const [immichMsg, setImmichMsg] = useTransientMessage();
   // Same select mode as the Library / Album / Import grids, but ON by default
   // here with everything pre-selected: the set is already curated, so the
   // common move is unticking a few photos and downloading the rest. No
@@ -123,19 +124,6 @@ export function Selects() {
     clearSelection();
   }
 
-  async function downloadZip(imageIds: string[]) {
-    if (imageIds.length === 0) return;
-    setDownloading(true);
-    setError(null);
-    try {
-      await api.images.downloadZip(imageIds);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setDownloading(false);
-    }
-  }
-
   async function addToImmich(imageIds: string[]) {
     if (imageIds.length === 0) return;
     setImmichBusy(true);
@@ -161,26 +149,21 @@ export function Selects() {
       {count === 0 ? (
         <div className="empty-state">
           No selects yet. Gather photos from the library, an album, or a photo's page to collect the shots you want to
-          generate a zip of.
+          export or download.
         </div>
       ) : (
         <>
           <div className="filter-bar">
             <div className="control-group">
-              <button className="btn primary" onClick={() => downloadZip(actionIds)} disabled={downloading}>
-                {downloading
-                  ? "Generating zip..."
-                  : hasSelection
-                    ? `Generate zip (${selected.size} selected)`
-                    : `Generate zip (all ${count})`}
-              </button>
               <button
-                className="btn"
+                className="btn primary"
                 onClick={() => setExportOpen(true)}
                 disabled={actionIds.length === 0}
-                title="Export JPEGs with the saved edits baked in, at a quality and size of your choice"
+                title="Export as JPEGs with the saved edits baked in, or download the original files 1:1 with all meta tags"
               >
-                {hasSelection ? `Export ${selected.size}…` : "Export…"}
+                {hasSelection
+                  ? `Export ${selected.size} photo${selected.size === 1 ? "" : "s"}`
+                  : `Export all ${count} photos`}
               </button>
               {/* Hidden in full sync mode - everything uploads automatically there. */}
               {immichConfigured && immich?.sync_mode !== "full" && (
@@ -201,9 +184,6 @@ export function Selects() {
                       : "Add to Immich"}
                 </button>
               )}
-              <button className="btn ghost" onClick={clear}>
-                Clear selects
-              </button>
             </div>
             <div className="control-group control-group--actions">
               <button
@@ -234,13 +214,13 @@ export function Selects() {
                 </button>
               )}
             </div>
-            {immichMsg && <span style={{ color: "var(--text-muted)" }}>{immichMsg}</span>}
-            {error && <span style={{ color: "var(--danger)" }}>{error}</span>}
+            {immichMsg && <span className="status-note">{immichMsg}</span>}
+            {error && <span className="status-note status-note--error">{error}</span>}
           </div>
 
           {selectMode && (
             <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
-              Click photos to select them - shift-click to select a range. Generate zip/Immich act on
+              Click photos to select them - shift-click to select a range. Export/Immich act on
               your selection while one exists.
             </p>
           )}

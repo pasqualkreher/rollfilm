@@ -1,19 +1,25 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
-import type { ImmichSyncMode, ImmichTestResult } from "../api/types";
+import type { BorgTestResult, ImmichSyncMode, ImmichTestResult } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
 import { SKINS, useTheme } from "../state/theme";
 import { useTasks } from "../state/tasks";
 import { useAskDeletePartner, setAskDeletePartner } from "../state/viewPrefs";
 import { SettingsTour, SETTINGS_TOUR_KEY } from "../components/SettingsTour";
+import { useTransientFlag, useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import {
   estimateText,
   estimateSeconds,
+  formatDuration,
   progressText,
   recordRate,
   useElapsed,
 } from "../utils/rebuildEstimate";
+
+// localStorage key for the self-calibrating rebuild rate. ".v2" = the
+// parallelised rebuild; the old sequential key's rate would overestimate ~3x.
+const REBUILD_EST_KEY = "pm.est.rebuildThumbs.v2";
 
 // A collapsible Settings section, driven as an accordion: opening one closes
 // the others (the parent tracks a single open title). Clicking the open one
@@ -224,6 +230,7 @@ const SMART_ALBUM_SECTIONS: { key: string; label: string; desc: string }[] = [
   { key: "days", label: "Big days", desc: "Single days with unusually many photos — a trip, a party, an event." },
   { key: "years", label: "Years", desc: "One album per year." },
   { key: "months", label: "Months", desc: "One album per month." },
+  { key: "edits", label: "Edited", desc: "Every photo you edited, plus the saved edit copies." },
 ];
 
 export function Settings() {
@@ -255,12 +262,14 @@ export function Settings() {
     }
   }, []);
 
-  const [syncResult, setSyncResult] = useState<string | null>(null);
-  const [rebuildResult, setRebuildResult] = useState<string | null>(null);
-  const [repairDatesResult, setRepairDatesResult] = useState<string | null>(null);
+  // Result summaries auto-dismiss after a moment (a bit longer than the plain
+  // "Saved." flags - there is more to read).
+  const [syncResult, setSyncResult] = useTransientMessage(8000);
+  const [rebuildResult, setRebuildResult] = useTransientMessage(8000);
+  const [repairDatesResult, setRepairDatesResult] = useTransientMessage(8000);
   const [restoreConfirmation, setRestoreConfirmation] = useState("");
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
-  const [restoreResult, setRestoreResult] = useState<string | null>(null);
+  const [restoreResult, setRestoreResult] = useTransientMessage(8000);
   const restoreFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Library folder: only available in the desktop app (Electron bridge).
@@ -274,8 +283,8 @@ export function Settings() {
 
   const [immichUrl, setImmichUrl] = useState("");
   const [immichKey, setImmichKey] = useState("");
-  const [immichSaved, setImmichSaved] = useState(false);
-  const [immichTest, setImmichTest] = useState<ImmichTestResult | null>(null);
+  const [immichSaved, setImmichSaved] = useTransientFlag();
+  const [immichTest, setImmichTest] = useTransientValue<ImmichTestResult>(8000);
 
   const { data: immich } = useQuery({
     queryKey: ["immich-settings"],
@@ -340,6 +349,56 @@ export function Settings() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["immich-settings"] }),
   });
 
+  // Borg backup: an automatic, incremental backup to a repository "address".
+  const [borgRepo, setBorgRepo] = useState("");
+  const [borgPass, setBorgPass] = useState("");
+  const [borgSaved, setBorgSaved] = useTransientFlag();
+  const [borgTest, setBorgTest] = useTransientValue<BorgTestResult>(8000);
+
+  // Poll while the page is open so a running backup and its outcome (this same
+  // endpoint carries the live status) show up without a manual refresh.
+  const { data: borg } = useQuery({
+    queryKey: ["borg-settings"],
+    queryFn: () => api.settings.getBorg(),
+    refetchInterval: 5_000,
+  });
+
+  // Seed the repo field once from the server without clobbering an edit in
+  // progress; the passphrase is never sent back down, so its field stays blank.
+  useEffect(() => {
+    if (borg) setBorgRepo(borg.repo ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [borg?.repo]);
+
+  const saveBorg = useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.settings.updateBorg({
+        enabled,
+        repo: borgRepo.trim(),
+        // Blank = keep the existing passphrase rather than wiping it.
+        passphrase: borgPass ? borgPass : undefined,
+      }),
+    onSuccess: (data) => {
+      setBorgSaved(true);
+      setBorgPass("");
+      setBorgTest(null);
+      queryClient.setQueryData(["borg-settings"], data);
+    },
+  });
+
+  const testBorg = useMutation({
+    mutationFn: () => api.settings.testBorg(),
+    onSuccess: (result) => {
+      setBorgTest(result);
+      queryClient.invalidateQueries({ queryKey: ["borg-settings"] });
+    },
+  });
+
+  const backupBorgNow = useMutation({
+    mutationFn: () => api.settings.backupBorgNow(),
+    onSuccess: (data) => queryClient.setQueryData(["borg-settings"], data),
+  });
+
   // Auto develop: opt-in for the editor's Auto button, which suggests develop
   // settings learned from the user's own saved edits.
   const { data: autoDevelop } = useQuery({
@@ -363,7 +422,7 @@ export function Settings() {
   // km radius that defines a "place". Checkboxes save immediately; the radius
   // has its own Save (typing shouldn't fire a request per keystroke).
   const [placeRadius, setPlaceRadius] = useState<string>("");
-  const [radiusSaved, setRadiusSaved] = useState(false);
+  const [radiusSaved, setRadiusSaved] = useTransientFlag();
   const { data: smartAlbumSettings } = useQuery({
     queryKey: ["smart-album-settings"],
     queryFn: () => api.settings.getSmartAlbums(),
@@ -392,7 +451,7 @@ export function Settings() {
   // Trash auto-cleanup: how many days deleted photos stay restorable before
   // the startup purge removes them for good (0 = keep forever).
   const [trashDays, setTrashDays] = useState<string>("");
-  const [trashSaved, setTrashSaved] = useState(false);
+  const [trashSaved, setTrashSaved] = useTransientFlag();
   const { data: trashSettings } = useQuery({
     queryKey: ["trash-settings"],
     queryFn: () => api.settings.getTrash(),
@@ -446,7 +505,7 @@ export function Settings() {
     mutationFn: () => api.maintenance.rebuildThumbnails(),
     onMutate: () => ({ startedAt: Date.now() }),
     onSuccess: (result, _vars, ctx) => {
-      recordRate("pm.est.rebuildThumbs", (Date.now() - ctx.startedAt) / 1000, result.rebuilt);
+      recordRate(REBUILD_EST_KEY, (Date.now() - ctx.startedAt) / 1000, result.rebuilt);
       setRebuildResult(`Rebuilt thumbnails/previews for ${result.rebuilt} photo(s).`);
       // Bump the cache-bust so the freshly rebuilt (e.g. higher-res) images
       // actually reload instead of being served from the browser cache.
@@ -458,6 +517,24 @@ export function Settings() {
   // Live elapsed timers for the two long jobs, shown next to their buttons.
   const syncElapsed = useElapsed(sync.isPending);
   const rebuildElapsed = useElapsed(rebuildThumbnails.isPending);
+
+  // Real progress of the running rebuild ("N of M photos"), polled from the
+  // server while the job runs. The remaining time comes from the measured
+  // live rate (elapsed / photos done), which beats the pre-flight estimate.
+  const { data: rebuildProg } = useQuery({
+    queryKey: ["rebuild-progress"],
+    queryFn: () => api.maintenance.rebuildProgress(),
+    refetchInterval: 1000,
+    enabled: rebuildThumbnails.isPending,
+  });
+  function rebuildProgressLine(): string {
+    const p = rebuildProg;
+    if (rebuildThumbnails.isPending && p?.active && p.total > 0 && p.done > 0) {
+      const remainSec = ((rebuildElapsed / 1000) * (p.total - p.done)) / p.done;
+      return `${p.done.toLocaleString()} of ${p.total.toLocaleString()} photos · ~${formatDuration(remainSec)} left`;
+    }
+    return progressText(rebuildElapsed, estimateSeconds(photoCount, REBUILD_EST_KEY));
+  }
 
   // RAW decoding: whether RAWs load with no brightness processing (native
   // sensor exposure) or are self-normalized to a consistent brightness.
@@ -755,8 +832,12 @@ export function Settings() {
           title="Load RAWs without processing (native exposure)"
           desc={
             rebuildThumbnails.isPending
-              ? "Rebuilding thumbnails so the change applies to your library…"
-              : "Changing this rebuilds thumbnails/previews so it applies to already-imported photos."
+              ? `Rebuilding thumbnails so the change applies to your library… ${rebuildProgressLine()}`
+              : `Changing this rebuilds thumbnails/previews so it applies to already-imported photos.${
+                  estimateText(photoCount, REBUILD_EST_KEY)
+                    ? ` ${estimateText(photoCount, REBUILD_EST_KEY)}`
+                    : ""
+                }`
           }
         />
       </Section>
@@ -816,55 +897,62 @@ export function Settings() {
           on their own; nothing is stored as a real album. Pick which sections you want:
         </Desc>
         {SMART_ALBUM_SECTIONS.map((s) => (
-          <OptionRow
-            key={s.key}
-            type="checkbox"
-            checked={smartAlbumSettings?.sections.includes(s.key) ?? false}
-            disabled={smartAlbumSettings === undefined || saveSmartAlbums.isPending}
-            busy={saveSmartAlbums.isPending}
-            onChange={(c) => toggleSmartSection(s.key, c)}
-            title={s.label}
-            desc={s.desc}
-          />
+          <div key={s.key}>
+            <OptionRow
+              type="checkbox"
+              checked={smartAlbumSettings?.sections.includes(s.key) ?? false}
+              disabled={smartAlbumSettings === undefined || saveSmartAlbums.isPending}
+              busy={saveSmartAlbums.isPending}
+              onChange={(c) => toggleSmartSection(s.key, c)}
+              title={s.label}
+              desc={s.desc}
+            />
+            {/* The place radius belongs to Places, so it sits right under it
+                (and only when Places is on). */}
+            {s.key === "places" && smartAlbumSettings?.sections.includes("places") && (
+              <div className="settings-subcontrol">
+                <div className="import-toolbar" style={{ alignItems: "center" }}>
+                  <label className="filter-field">
+                    <span style={{ marginRight: 6, color: "var(--text-muted)" }}>Place radius</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      step={1}
+                      value={placeRadius}
+                      onChange={(e) => {
+                        setPlaceRadius(e.target.value);
+                        setRadiusSaved(false);
+                      }}
+                      style={{ width: 80 }}
+                    />
+                    <span style={{ marginLeft: 6, color: "var(--text-muted)" }}>km</span>
+                  </label>
+                  <button
+                    className="btn primary"
+                    onClick={() => {
+                      saveSmartAlbums.mutate(
+                        { place_radius_km: Math.max(1, parseFloat(placeRadius) || 5) },
+                        { onSuccess: () => setRadiusSaved(true) }
+                      );
+                    }}
+                    disabled={placeRadius === "" || saveSmartAlbums.isPending}
+                  >
+                    {saveSmartAlbums.isPending ? "Saving..." : "Save"}
+                  </button>
+                  {radiusSaved && <span className="status-note">Saved.</span>}
+                </div>
+                <Note>
+                  Photos within this distance of each other form one place — small values separate
+                  neighboring towns, large values group whole regions.
+                </Note>
+              </div>
+            )}
+          </div>
         ))}
         {smartAlbumSettings?.sections.length === 0 && (
           <Note>All sections are off — the Albums page shows only your own albums.</Note>
         )}
-        <div className="import-toolbar" style={{ alignItems: "center", marginTop: 10 }}>
-          <label className="filter-field">
-            <span style={{ marginRight: 6, color: "var(--text-muted)" }}>Place radius</span>
-            <input
-              type="number"
-              min={1}
-              max={500}
-              step={1}
-              value={placeRadius}
-              onChange={(e) => {
-                setPlaceRadius(e.target.value);
-                setRadiusSaved(false);
-              }}
-              style={{ width: 80 }}
-            />
-            <span style={{ marginLeft: 6, color: "var(--text-muted)" }}>km</span>
-          </label>
-          <button
-            className="btn primary"
-            onClick={() => {
-              saveSmartAlbums.mutate(
-                { place_radius_km: Math.max(1, parseFloat(placeRadius) || 5) },
-                { onSuccess: () => setRadiusSaved(true) }
-              );
-            }}
-            disabled={placeRadius === "" || saveSmartAlbums.isPending}
-          >
-            {saveSmartAlbums.isPending ? "Saving..." : "Save"}
-          </button>
-          {radiusSaved && <span style={{ color: "var(--text-muted)" }}>Saved.</span>}
-        </div>
-        <Note>
-          Photos within this distance of each other form one place — small values separate
-          neighboring towns, large values group whole regions.
-        </Note>
         {saveSmartAlbums.isError && <Note error>{(saveSmartAlbums.error as Error).message}</Note>}
       </Section>
 
@@ -899,7 +987,7 @@ export function Settings() {
             {saveTrash.isPending ? "Saving..." : "Save"}
           </button>
           {trashSaved && (
-            <span style={{ color: "var(--text-muted)" }}>
+            <span className="status-note">
               Saved{parseInt(trashDays, 10) === 0 ? " — photos are kept forever." : "."}
             </span>
           )}
@@ -991,13 +1079,10 @@ export function Settings() {
               {rebuildThumbnails.isPending ? "Rebuilding..." : "Rebuild all thumbnails"}
             </button>
             {rebuildThumbnails.isPending ? (
-              <span className="maintenance-eta">
-                Rebuilding…{" "}
-                {progressText(rebuildElapsed, estimateSeconds(photoCount, "pm.est.rebuildThumbs"))}
-              </span>
+              <span className="maintenance-eta">Rebuilding… {rebuildProgressLine()}</span>
             ) : (
-              estimateText(photoCount, "pm.est.rebuildThumbs") && (
-                <span className="maintenance-eta">{estimateText(photoCount, "pm.est.rebuildThumbs")}</span>
+              estimateText(photoCount, REBUILD_EST_KEY) && (
+                <span className="maintenance-eta">{estimateText(photoCount, REBUILD_EST_KEY)}</span>
               )
             )}
           </div>
@@ -1029,6 +1114,123 @@ export function Settings() {
           <a className="btn primary" href={api.maintenance.backupUrl()} style={{ display: "inline-block" }}>
             Download backup
           </a>
+        </div>
+
+        <div className="settings-block">
+          <div className="settings-subgroup">
+            <h4 className="settings-subhead">Automatic backup (Borg)</h4>
+            <Desc>
+              Keep a continuously updated backup in a{" "}
+              <a href="https://www.borgbackup.org" target="_blank" rel="noreferrer">
+                Borg
+              </a>{" "}
+              repository. Borg is deduplicating, so each run stores only what changed since the last
+              one, and the backup updates automatically after imports and edits (and at least once a
+              day). The <em>repository address</em> can be a local folder, a mounted NAS path, or a
+              remote <code>user@host:/path</code> reached over SSH. Only your managed library and its
+              database are backed up — photos from external sources stay on their own storage.
+            </Desc>
+
+            {borg && !borg.available && (
+              <Note error>
+                Borg isn't installed on this machine. Install it, then reload — on macOS:{" "}
+                <code>brew install borgbackup</code>. Backups stay off until Borg is available.
+              </Note>
+            )}
+
+            <Field
+              label="Repository address"
+              placeholder="/Volumes/Backup/rollfilm  or  user@host:/backups/rollfilm"
+              value={borgRepo}
+              onChange={(v) => {
+                setBorgRepo(v);
+                setBorgSaved(false);
+              }}
+            />
+            <Field
+              type="password"
+              autoComplete="new-password"
+              label={
+                <>
+                  Passphrase{" "}
+                  {borg?.passphrase_set ? (
+                    <em>(a passphrase is saved — leave blank to keep it)</em>
+                  ) : (
+                    <em>(encrypts the repository; leave blank for an unencrypted repo)</em>
+                  )}
+                </>
+              }
+              placeholder={borg?.passphrase_set ? "••••••••  (unchanged)" : "Choose a passphrase"}
+              value={borgPass}
+              onChange={(v) => {
+                setBorgPass(v);
+                setBorgSaved(false);
+              }}
+            />
+            <div className="import-toolbar">
+              <button
+                className="btn primary"
+                onClick={() => saveBorg.mutate(borg?.enabled ?? false)}
+                disabled={!borgRepo.trim() || saveBorg.isPending}
+              >
+                {saveBorg.isPending ? "Saving..." : "Save backup settings"}
+              </button>
+              <button
+                className="btn"
+                onClick={() => testBorg.mutate()}
+                disabled={!borg?.available || !borgRepo.trim() || testBorg.isPending}
+                title={!borg?.available ? "Install Borg first" : undefined}
+              >
+                {testBorg.isPending ? "Testing..." : "Test repository"}
+              </button>
+              <button
+                className="btn"
+                onClick={() => backupBorgNow.mutate()}
+                disabled={
+                  !borg?.available || !borg?.repo || borg?.running || backupBorgNow.isPending
+                }
+                title={
+                  !borg?.repo ? "Save a repository address first" : undefined
+                }
+              >
+                {borg?.running ? "Backing up..." : "Back up now"}
+              </button>
+            </div>
+            {borgSaved && <Note>Backup settings saved.</Note>}
+            {saveBorg.isError && <Note error>{(saveBorg.error as Error).message}</Note>}
+            {borgTest && (
+              <Note error={!borgTest.ok}>
+                {borgTest.ok ? "✓ " : "✗ "}
+                {borgTest.message}
+              </Note>
+            )}
+
+            {borg?.repo && (
+              <OptionRow
+                type="checkbox"
+                checked={borg.enabled}
+                disabled={!borg.available || saveBorg.isPending}
+                busy={saveBorg.isPending}
+                onChange={(checked) => saveBorg.mutate(checked)}
+                title="Back up automatically"
+                desc="Runs after imports and edits (debounced), and at least once a day, while the app is open."
+              />
+            )}
+
+            {borg && (borg.running || borg.last_ok !== null) && (
+              <Note error={borg.last_ok === false && !borg.running}>
+                {borg.running
+                  ? "Backup in progress…"
+                  : borg.last_ok
+                    ? `✓ Last backup ${
+                        borg.last_finished_at
+                          ? new Date(borg.last_finished_at).toLocaleString()
+                          : "complete"
+                      }`
+                    : `✗ ${borg.last_message}`}
+              </Note>
+            )}
+          </div>
         </div>
 
         <div className="settings-block">

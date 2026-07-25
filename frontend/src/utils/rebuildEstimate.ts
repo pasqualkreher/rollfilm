@@ -12,8 +12,11 @@ import { useEffect, useRef, useState } from "react";
 // Seconds per photo used before we've measured a real run. Thumbnail rebuilds
 // re-decode every original (RAWs are slow); a library sync is mostly a disk +
 // DB scan, so it's much cheaper per photo.
+// The rebuild key is versioned: ".v2" started when the rebuild went parallel -
+// rates calibrated on the old sequential runs would overestimate ~3x, so the
+// old key's stored value is deliberately abandoned.
 const DEFAULT_SEC_PER_PHOTO: Record<string, number> = {
-  "pm.est.rebuildThumbs": 0.45,
+  "pm.est.rebuildThumbs.v2": 0.35,
   "pm.est.sync": 0.03,
 };
 

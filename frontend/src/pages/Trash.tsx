@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import type { ImageOut } from "../api/types";
+import { useTransientMessage } from "../utils/transientMessage";
 
 // The in-app Trash: managed (imported) photos land here when deleted and can
 // be restored; only deleting them from here removes the original files from
@@ -40,8 +41,8 @@ export function Trash() {
 
   // Feedback when a restore/delete request fails - without it a failed call
   // used to abort silently before any refresh, leaving a stale grid until the
-  // next tab change.
-  const [actionError, setActionError] = useState<string | null>(null);
+  // next tab change. Auto-dismisses after a moment.
+  const [actionError, setActionError] = useTransientMessage();
 
   function refreshAfterChange() {
     setSelected(new Set());
@@ -131,7 +132,7 @@ export function Trash() {
       </div>
       <div className="page-scroll">
         {actionError && (
-          <p style={{ color: "var(--danger)", marginBottom: 16 }}>{actionError}</p>
+          <p className="status-note status-note--error" style={{ marginBottom: 16 }}>{actionError}</p>
         )}
         {selected.size > 0 && (
           <p style={{ color: "var(--text-muted)", marginBottom: 16 }}>{selected.size} selected</p>

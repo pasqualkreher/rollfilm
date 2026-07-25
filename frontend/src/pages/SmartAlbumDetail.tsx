@@ -31,6 +31,7 @@ export function SmartAlbumDetail() {
           ...smart.years,
           ...smart.months,
           ...smart.days,
+          ...smart.edits,
         ].find(
           (a) => a.id === id
         )

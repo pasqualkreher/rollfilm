@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import threading
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Protocol
@@ -174,24 +174,88 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
     }
 
 
+# Live progress of the (single, blocking) rebuild-all run, polled by the
+# Settings page so the user sees "N of M photos" instead of a blind spinner.
+_rebuild_progress_lock = threading.Lock()
+_rebuild_progress = {"active": False, "total": 0, "done": 0}
+
+
+def get_rebuild_progress() -> dict:
+    with _rebuild_progress_lock:
+        return dict(_rebuild_progress)
+
+
+def _set_rebuild_progress(**fields) -> None:
+    with _rebuild_progress_lock:
+        _rebuild_progress.update(fields)
+
+
 def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
     """Regenerates every cached thumbnail/preview from the original library
     files - e.g. after a rendering fix that only affects newly-generated
-    derivatives (existing cached ones need to be rebuilt to pick it up)."""
+    derivatives (existing cached ones need to be rebuilt to pick it up).
+
+    Parallelised on a small thread pool: the heavy work (LibRaw demosaic,
+    cv2/numpy passes, JPEG encode) releases the GIL, so a handful of workers
+    scales nearly linearly. The pool stays deliberately small - each in-flight
+    RAW holds a half-size linear float frame plus pipeline copies (several
+    hundred MB at the peak), so more workers would trade speed for memory
+    pressure. EXIF reads reuse a pool of exiftool helpers (same pattern as
+    repair_capture_dates) instead of spawning one process per photo. A photo
+    whose file is damaged is logged and skipped rather than aborting the whole
+    run; DB writes and the commit stay on the calling thread."""
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
-    rebuilt = 0
-    for image in images:
-        full_path = resolve_image_path(image)
-        if full_path.exists():
-            regenerate_for_image(image)
+    tasks = [(img, resolve_image_path(img)) for img in images]
+    tasks = [(img, path) for img, path in tasks if path.exists()]
+
+    workers = max(2, min(4, (os.cpu_count() or 4) - 2))
+    helpers = [new_helper() for _ in range(workers)]
+    helper_pool: queue.Queue = queue.Queue()
+    for h in helpers:
+        helper_pool.put(h)
+
+    def build(task: tuple[Image, Path]):
+        img, path = task
+        try:
+            regenerate_for_image(img)
+        except Exception:
+            logger.exception("rebuild-thumbnails: regeneration failed for %s", path)
+            return img, None, False
+        helper = helper_pool.get()
+        try:
             # Backfill orientation-correct dimensions for photos imported before
             # width/height accounted for the EXIF orientation tag, so the grid
             # can show each one at its true portrait/landscape shape.
-            exif = read_exif(full_path)
-            if exif.width and exif.height:
-                image.width = exif.width
-                image.height = exif.height
-            rebuilt += 1
+            exif = read_exif(path, helper=helper)
+        except Exception:
+            exif = None
+        finally:
+            helper_pool.put(helper)
+        return img, exif, True
+
+    rebuilt = 0
+    _set_rebuild_progress(active=True, total=len(tasks), done=0)
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(build, t) for t in tasks]
+            done = 0
+            for future in as_completed(futures):
+                img, exif, ok = future.result()
+                done += 1
+                _set_rebuild_progress(done=done)
+                if not ok:
+                    continue
+                if exif is not None and exif.width and exif.height:
+                    img.width = exif.width
+                    img.height = exif.height
+                rebuilt += 1
+    finally:
+        _set_rebuild_progress(active=False)
+        for h in helpers:
+            try:
+                h.terminate()
+            except Exception:
+                pass
     db.commit()
     return {"rebuilt": rebuilt}
 

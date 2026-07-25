@@ -30,6 +30,15 @@ DEFAULT_IMMICH_SYNC_MODE = IMMICH_MODE_MANUAL
 TRASH_RETENTION_DAYS = "trash_retention_days"
 DEFAULT_TRASH_RETENTION_DAYS = 14
 
+# Automatic incremental backups to a Borg repository (services/borg_backup.py).
+# BORG_ENABLED is "1"/"0"; BORG_REPO is the repository "address" (a local path,
+# a mounted NAS path, or a remote user@host:/path over SSH); BORG_PASSPHRASE is
+# the repokey passphrase, stored so unattended backups can run (plaintext in the
+# local app DB - an empty passphrase means an unencrypted repo).
+BORG_ENABLED = "borg_enabled"
+BORG_REPO = "borg_repo"
+BORG_PASSPHRASE = "borg_passphrase"
+
 # "1" to load RAWs with no brightness processing - the native (no auto-bright)
 # demosaic exactly as the sensor recorded it, instead of self-normalizing each
 # RAW to a consistent brightness. For users who want to do all tone work from
@@ -59,8 +68,11 @@ SMART_ALBUM_SECTION_NAMES = (
     "days",          # "big days" with unusually many photos
     "years",
     "months",
+    "edits",         # everything edited in place plus saved edit copies
 )
-DEFAULT_SMART_ALBUM_SECTIONS = ("moments", "places", "countries", "days", "years", "months")
+DEFAULT_SMART_ALBUM_SECTIONS = (
+    "moments", "places", "countries", "days", "years", "months", "edits"
+)
 # How far (km) a photo may sit from a place's center and still belong to it.
 SMART_ALBUM_PLACE_RADIUS_KM = "smart_album_place_radius_km"
 DEFAULT_SMART_ALBUM_PLACE_RADIUS_KM = 5.0

@@ -19,6 +19,20 @@ function SmartCover({ imageId }: { imageId: string }) {
   );
 }
 
+// Mini mosaic of up to 4 member photos filling an album card - a quick peek
+// inside the album instead of a single cover. Fewer photos get bigger cells
+// (see .cover-mosaic--N in CSS); a single photo just fills the card.
+export function CoverMosaic({ imageIds }: { imageIds: string[] }) {
+  const ids = imageIds.slice(0, 4);
+  return (
+    <div className={`cover-mosaic cover-mosaic--${ids.length}`}>
+      {ids.map((id) => (
+        <SmartCover key={id} imageId={id} />
+      ))}
+    </div>
+  );
+}
+
 // Shimmering placeholder row shown while the smart albums are still being
 // fetched/computed - keeps the layout stable so nothing pops in.
 function SmartRowSkeleton({ title, hint }: { title?: string; hint?: string }) {
@@ -55,7 +69,9 @@ function SmartRow({ title, items }: { title: string; items: SmartAlbumOut[] }) {
             state={{ smart: album }}
             className="smart-card"
           >
-            {album.cover_image_id ? (
+            {album.cover_image_ids?.length ? (
+              <CoverMosaic imageIds={album.cover_image_ids} />
+            ) : album.cover_image_id ? (
               <SmartCover imageId={album.cover_image_id} />
             ) : (
               <div className="smart-card-blank" />
@@ -111,6 +127,7 @@ export function Albums() {
       smart.country_years.length > 0 ||
       smart.years.length > 0 ||
       smart.days.length > 0 ||
+      smart.edits.length > 0 ||
       smart.clusters_status === "building");
 
   return (
@@ -134,6 +151,7 @@ export function Albums() {
           <SmartRow title="Countries" items={smart.countries} />
           <SmartRow title="Countries by year" items={smart.country_years} />
           <SmartRow title="Big days" items={smart.days} />
+          <SmartRow title="Edited" items={smart.edits} />
           <SmartRow title="Years" items={smart.years} />
           <SmartRow title="Months" items={smart.months} />
         </>
@@ -163,10 +181,23 @@ export function Albums() {
             className="thumb-card has-remove"
             style={{ display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}
           >
-            <div style={{ textAlign: "center", color: "var(--text)" }}>
-              <div style={{ fontWeight: 600 }}>{album.name}</div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{album.image_count} photos</div>
-            </div>
+            {/* A peek inside the album: mini mosaic of its first photos with
+                the name overlaid, like the smart cards. Empty albums keep the
+                plain centered text. */}
+            {album.cover_image_ids.length > 0 ? (
+              <>
+                <CoverMosaic imageIds={album.cover_image_ids} />
+                <div className="smart-card-caption">
+                  <div className="smart-card-name">{album.name}</div>
+                  <div className="smart-card-count">{album.image_count} photos</div>
+                </div>
+              </>
+            ) : (
+              <div style={{ textAlign: "center", color: "var(--text)" }}>
+                <div style={{ fontWeight: 600 }}>{album.name}</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{album.image_count} photos</div>
+              </div>
+            )}
             <button
               className="card-remove"
               title="Delete album (photos stay in the library)"

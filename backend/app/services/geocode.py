@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import threading
+import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -132,6 +133,16 @@ def annotate_images(images) -> int:
 
 # --- Query-language helpers -------------------------------------------------
 
+
+def _norm(s: str) -> str:
+    """Normalise a name for matching: lowercase, strip diacritics, and read
+    punctuation as word breaks - so "Zürich"/"zurich" meet on one key, and
+    "Halle (Saale)" / "halle saale" or "Corsanico-Bargecchia" /
+    "corsanico bargecchia" do too."""
+    folded = unicodedata.normalize("NFKD", (s or "").lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return " ".join("".join(c if c.isalnum() else " " for c in folded).split())
+
 # pycountry ships gettext translations for country names (ISO 3166-1); build a
 # reverse lookup "translated name -> alpha-2" per UI language, so a German
 # user's "Italien" finds the photos stored under gps_country "Italy".
@@ -141,19 +152,20 @@ def _country_translations(lang: str) -> dict[str, str]:
         tr = gettext.translation("iso3166-1", pycountry.LOCALES_DIR, languages=[lang])
     except (FileNotFoundError, OSError):
         return {}
-    return {tr.gettext(c.name).casefold(): c.alpha_2 for c in pycountry.countries}
+    return {_norm(tr.gettext(c.name)): c.alpha_2 for c in pycountry.countries}
 
 
 def country_from_query(query: str, lang: str | None = None) -> str | None:
     """The stored gps_country display name for a query that names a country -
-    in English ("italy") or the caller's UI language ("italien"). None when
-    the query isn't a country name."""
-    qn = (query or "").strip().casefold()
+    in English ("italy") or the caller's UI language ("italien"). Diacritics
+    are optional ("osterreich" finds Österreich). None when the query isn't a
+    country name."""
+    qn = _norm(query or "")
     if not qn:
         return None
     for c in pycountry.countries:
         names = {c.name, getattr(c, "common_name", None), getattr(c, "official_name", None)}
-        if qn in {n.casefold() for n in names if n}:
+        if qn in {_norm(n) for n in names if n}:
             return _country_name(c.alpha_2)
     if lang:
         cc = _country_translations(lang.split("-")[0].lower()).get(qn)
@@ -180,14 +192,28 @@ _CITY_EXONYMS_DE = {
 }
 
 
+@lru_cache(maxsize=1)
+def _city_exonyms_de_normalised() -> dict[str, str]:
+    # Keyed by _norm so "münchen", "munchen" and (via the ue->u variant tried
+    # by the caller) "muenchen" all reach the same entry.
+    return {_norm(k): v for k, v in _CITY_EXONYMS_DE.items()}
+
+
 def _localized_city_names(name: str, lang: str | None) -> list[str]:
     """The dataset lookup keys to try for a city name typed in the UI
-    language: the name itself, plus its English exonym when known."""
+    language: the name itself, plus its English exonym when known. For German
+    also the umlaut-digraph reading, both against the dataset ("luebeck" ->
+    "Lübeck") and the exonym map ("muenchen" -> "münchen" -> "munich")."""
     names = [name]
     if lang and lang.split("-")[0].lower() == "de":
-        exonym = _CITY_EXONYMS_DE.get(name)
-        if exonym:
-            names.append(exonym)
+        digraph = name.replace("ae", "ä").replace("oe", "ö").replace("ue", "ü")
+        if digraph != name:
+            names.append(digraph)
+        exonyms = _city_exonyms_de_normalised()
+        for key in (_norm(name), _norm(digraph)):
+            exonym = exonyms.get(key)
+            if exonym and exonym not in names:
+                names.append(exonym)
     return names
 
 
@@ -206,8 +232,9 @@ class Place:
         return f"{self.name}, {self.country}" if self.country else self.name
 
 
-# Lowercased city name -> list of candidate rows. Built once from the same
-# cities file reverse_geocoder ships (columns: lat, lon, name, admin1, admin2, cc).
+# Normalised city name (see _norm) -> list of candidate rows. Built once from
+# the same cities file reverse_geocoder ships (columns: lat, lon, name,
+# admin1, admin2, cc).
 _city_index: dict[str, list[dict]] | None = None
 
 
@@ -226,7 +253,7 @@ def _load_city_index() -> dict[str, list[dict]]:
                     lat, lon = float(row["lat"]), float(row["lon"])
                 except (TypeError, ValueError, KeyError):
                     continue
-                index.setdefault(row["name"].strip().lower(), []).append(
+                index.setdefault(_norm(row["name"]), []).append(
                     {"name": row["name"], "lat": lat, "lon": lon, "admin1": row["admin1"], "cc": row["cc"]}
                 )
     except Exception:  # pragma: no cover - a missing/broken dataset just disables place search
@@ -247,41 +274,94 @@ def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
     return 2 * r * math.asin(math.sqrt(h))
 
 
+# Cap for the whole-word-prefix fallback below, so a very generic start of a
+# name ("saint") can't flood the candidate list.
+_MAX_PREFIX_ROWS = 20
+
+
+def _rows_for_name(name: str, lang: str | None) -> list[dict] | None:
+    """Dataset rows for a city name: exact (normalised) matches plus
+    whole-word-prefix matches, via the UI language's exonyms where known. The
+    prefix rows ride along even when an exact name exists - "halle" must offer
+    "Halle (Saale)" and "Halle Neustadt" next to Belgium's "Halle", so the
+    caller's proximity ranking can pick the one near the user's photos.
+    Partial words never match ("florenc" won't hit "Florence"), keeping
+    ordinary text searches out of location mode."""
+    index = _load_city_index()
+    keys = [_norm(n) for n in _localized_city_names(name, lang)]
+    rows: list[dict] = []
+    for key in keys:
+        rows.extend(index.get(key, []))
+    for key in keys:
+        if len(key) < 4:
+            continue
+        prefix = key + " "
+        extra = [r for k, rs in index.items() if k.startswith(prefix) for r in rs]
+        rows.extend(extra[:_MAX_PREFIX_ROWS])
+    # The same row can arrive via several keys (exonym + digraph variant).
+    seen: set[tuple] = set()
+    unique = []
+    for r in rows:
+        marker = (r["name"], r["lat"], r["lon"])
+        if marker not in seen:
+            seen.add(marker)
+            unique.append(r)
+    return unique or None
+
+
+def _qualifier_matches(row: dict, qualifier_norm: str, lang: str | None) -> bool:
+    """Whether "italy" / "it" / "latium" / the UI language's country name
+    ("italien") describes this dataset row."""
+    country = _country_name(row["cc"])
+    if qualifier_norm in {_norm(row["cc"]), _norm(country or ""), _norm(row["admin1"] or "")}:
+        return True
+    if lang:
+        cc = _country_translations(lang.split("-")[0].lower()).get(qualifier_norm)
+        if cc and cc.lower() == row["cc"].lower():
+            return True
+    return False
+
+
 def place_candidates(query: str, lang: str | None = None) -> list[Place]:
-    """Cities whose name matches `query`. Accepts a bare name ("rome") or a
-    qualified one ("rome, italy" / "rome, it" / "rome, latium"); the qualifier,
-    when present, narrows by country code, country name, or admin region. Cheap:
-    a dict lookup, so callers can gate the (heavier) proximity work on a match.
-    `lang` additionally resolves the UI language's exonyms ("münchen" finds the
-    dataset's "Munich")."""
-    q = (query or "").strip().lower()
+    """Cities whose name matches `query`. Accepts a bare name ("rome"), a
+    comma-qualified one ("rome, italy" / "rome, it" / "rome, latium"), or the
+    qualifier just appended ("rome italy") - the qualifier narrows by country
+    code, country name (English or UI language), or admin region. Diacritics
+    are optional on both sides, and a whole-word prefix still matches ("new
+    york" finds "New York City"). Cheap dict work, so callers can gate the
+    (heavier) proximity ranking on a match. (A photo-less noun that happens to
+    be a city name will switch to location mode - the accepted trade-off of
+    auto-detect.)"""
+    q = (query or "").strip()
     if not q:
         return []
     parts = [p.strip() for p in q.split(",")]
-    # Exact name match only: predictable, and it still disambiguates same-named
-    # places by proximity below. (A photo-less noun that happens to be a city
-    # name will switch to location mode - the accepted trade-off of auto-detect.
-    # A city stored under a longer official name, e.g. "New York City", needs to
-    # be typed in full; a partial like "new york" falls through to text search.)
-    rows = None
-    for name in _localized_city_names(parts[0], lang):
-        rows = _load_city_index().get(name)
-        if rows:
-            break
+    name = parts[0].lower()
+    qualifier = _norm(parts[1]) if len(parts) > 1 and parts[1] else None
+
+    rows = _rows_for_name(name, lang)
+    if rows and qualifier:
+        rows = [r for r in rows if _qualifier_matches(r, qualifier, lang)]
+    if not rows and qualifier is None:
+        # "florence italy" typed without the comma: peel trailing words off as
+        # a qualifier - only accepted when they really name the row's country
+        # or region, so multi-word city names themselves stay unaffected.
+        tokens = name.split()
+        for i in range(len(tokens) - 1, 0, -1):
+            base_rows = _rows_for_name(" ".join(tokens[:i]), lang)
+            if not base_rows:
+                continue
+            qual = _norm(" ".join(tokens[i:]))
+            matching = [r for r in base_rows if _qualifier_matches(r, qual, lang)]
+            if matching:
+                rows = matching
+                break
     if not rows:
         return []
-    qualifier = parts[1] if len(parts) > 1 and parts[1] else None
-    out: list[Place] = []
-    for r in rows:
-        country = _country_name(r["cc"])
-        if qualifier and qualifier not in {
-            r["cc"].lower(),
-            (country or "").lower(),
-            r["admin1"].lower(),
-        }:
-            continue
-        out.append(Place(name=r["name"], lat=r["lat"], lon=r["lon"], country=country))
-    return out
+    return [
+        Place(name=r["name"], lat=r["lat"], lon=r["lon"], country=_country_name(r["cc"]))
+        for r in rows
+    ]
 
 
 def resolve_place(

@@ -25,6 +25,7 @@ import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { useMergePairs } from "../state/viewPrefs";
 import { selectionSharedMeta } from "../utils/selectionMeta";
+import { useTransientMessage } from "../utils/transientMessage";
 
 // Browse mode works on slim index entries (the whole library in one query),
 // search mode on full rows - the shared selection/bulk handlers only touch
@@ -60,15 +61,10 @@ export function Library() {
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
   const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
   const [immichBusy, setImmichBusy] = useState(false);
-  const [immichMsg, setImmichMsg] = useState<string | null>(null);
+  // Both flash messages auto-dismiss after a moment.
+  const [immichMsg, setImmichMsg] = useTransientMessage();
   const [developBusy, setDevelopBusy] = useState(false);
-  const [developMsg, setDevelopMsg] = useState<string | null>(null);
-  // Auto-dismiss the develop status after a moment, like the other flash messages.
-  useEffect(() => {
-    if (!developMsg) return;
-    const t = window.setTimeout(() => setDevelopMsg(null), 4000);
-    return () => window.clearTimeout(t);
-  }, [developMsg]);
+  const [developMsg, setDevelopMsg] = useTransientMessage();
   // Read once per render so the preset dropdown reflects saves made in the editor.
   const presetNames = Object.keys(loadPresets());
 
@@ -467,7 +463,14 @@ export function Library() {
                 ))}
               </select>
             )}
-            <button className="btn" onClick={() => selects.add(Array.from(selected))}>
+            <button
+              className="btn"
+              onClick={() => {
+                const count = selected.size;
+                selects.add(Array.from(selected));
+                setDevelopMsg(`Added ${count} photo(s) to selects.`);
+              }}
+            >
               Add to selects
             </button>
             <ResetMenu count={selected.size} onReset={resetSelected} />

@@ -32,9 +32,10 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import numpy as np
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -412,6 +413,26 @@ class GroupAlbum:
     name: str
     image_count: int
     cover_image_id: str
+    # Up to COVER_COUNT member ids (newest first) for the card's mini mosaic.
+    cover_image_ids: list[str] = field(default_factory=list)
+
+
+# How many covers each album card carries for its mosaic preview.
+COVER_COUNT = 4
+
+
+def _push_cover(tops: list, wall, image_id: str) -> None:
+    """Keep the newest COVER_COUNT (wall_time, id) pairs, newest first.
+    Undated photos sort last, so they only fill in when nothing dated can."""
+    tops.append((wall, image_id))
+    tops.sort(key=lambda t: (t[0] is not None, t[0] or datetime.min), reverse=True)
+    del tops[COVER_COUNT:]
+
+
+def _cover_ids(jpeg_tops: list, other_tops: list) -> list[str]:
+    """Covers for a card's mosaic: JPEGs only - RAWs (which render dark and
+    often double a JPEG of the same shot) only when the group has no JPEG."""
+    return [i for _, i in (jpeg_tops or other_tops)]
 
 
 def get_time_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]]:
@@ -419,7 +440,7 @@ def get_time_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]]:
     strftime: taken_at strings mix timezone formats (EXIF vs UTC), which
     SQLite's date parsing handles less predictably than the ORM's datetimes."""
     unavailable = sources_service.unavailable_source_ids(db, owner_id)
-    query = db.query(Image.id, Image.taken_at).filter(
+    query = db.query(Image.id, Image.taken_at, Image.file_type).filter(
         Image.owner_id == owner_id,
         Image.deleted_at.is_(None),
         Image.taken_at.isnot(None),
@@ -427,39 +448,43 @@ def get_time_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]]:
     query = sources_service.exclude_unavailable(query, unavailable)
     rows = query.all()
 
-    # group key -> (count, newest taken_at, its image id); newest photo is the
-    # cover. Comparisons strip tzinfo: EXIF dates are naive, UTC-written ones
-    # aware, and Python refuses to compare the two directly.
+    # group key -> [count, jpeg covers, non-jpeg covers], each a newest-first
+    # (wall, id) list; the mosaic uses JPEGs and falls back to RAWs only when
+    # a group has none (_cover_ids). Comparisons strip tzinfo: EXIF dates are
+    # naive, UTC-written ones aware, and Python refuses to compare the two.
     def collect(rows, key_fn):
         groups: dict = {}
-        for image_id, taken_at in rows:
+        for image_id, taken_at, file_type in rows:
             key = key_fn(taken_at)
             wall = taken_at.replace(tzinfo=None)
             entry = groups.get(key)
             if entry is None:
-                groups[key] = (1, wall, image_id)
-            elif wall > entry[1]:
-                groups[key] = (entry[0] + 1, wall, image_id)
-            else:
-                groups[key] = (entry[0] + 1, entry[1], entry[2])
+                entry = groups[key] = [0, [], []]
+            entry[0] += 1
+            _push_cover(entry[1] if file_type == FileType.jpeg else entry[2], wall, image_id)
         return groups
+
+    def group_album(id: str, name: str, count: int, jpegs: list, others: list) -> GroupAlbum:
+        covers = _cover_ids(jpegs, others)
+        return GroupAlbum(
+            id=id,
+            name=name,
+            image_count=count,
+            cover_image_id=covers[0],
+            cover_image_ids=covers,
+        )
 
     years = collect(rows, lambda t: t.year)
     months = collect(rows, lambda t: (t.year, t.month))
     days = collect(rows, lambda t: (t.year, t.month, t.day))
 
     year_albums = [
-        GroupAlbum(id=f"year:{y}", name=str(y), image_count=c, cover_image_id=cover)
-        for y, (c, _, cover) in sorted(years.items(), reverse=True)
+        group_album(f"year:{y}", str(y), c, jpegs, others)
+        for y, (c, jpegs, others) in sorted(years.items(), reverse=True)
     ]
     month_albums = [
-        GroupAlbum(
-            id=f"month:{y:04d}-{m:02d}",
-            name=f"{calendar.month_name[m]} {y}",
-            image_count=c,
-            cover_image_id=cover,
-        )
-        for (y, m), (c, _, cover) in sorted(months.items(), reverse=True)
+        group_album(f"month:{y:04d}-{m:02d}", f"{calendar.month_name[m]} {y}", c, jpegs, others)
+        for (y, m), (c, jpegs, others) in sorted(months.items(), reverse=True)
         if c >= MIN_MONTH_PHOTOS
     ]
 
@@ -469,16 +494,15 @@ def get_time_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]]:
         median = float(np.median(day_counts))
         threshold = max(BIG_DAY_MIN_PHOTOS, BIG_DAY_MEDIAN_FACTOR * median)
         big_days = sorted(
-            ((k, v) for k, v in days.items() if v[0] >= threshold), reverse=True
+            ((k, v) for k, v in days.items() if v[0] >= threshold),
+            key=lambda kv: kv[0],
+            reverse=True,
         )[:MAX_BIG_DAYS]
         big_day_albums = [
-            GroupAlbum(
-                id=f"day:{y:04d}-{m:02d}-{d:02d}",
-                name=f"{calendar.month_name[m]} {d}, {y}",
-                image_count=c,
-                cover_image_id=cover,
+            group_album(
+                f"day:{y:04d}-{m:02d}-{d:02d}", f"{calendar.month_name[m]} {d}, {y}", c, jpegs, others
             )
-            for (y, m, d), (c, _, cover) in big_days
+            for (y, m, d), (c, jpegs, others) in big_days
         ]
 
     return {"years": year_albums, "months": month_albums, "days": big_day_albums}
@@ -496,7 +520,9 @@ def get_place_albums(db: Session, owner_id: int, radius_km: float) -> list[Group
     encoded in the album id, so the count always matches what opening the
     album shows (a photo between two nearby centers may appear in both)."""
     unavailable = sources_service.unavailable_source_ids(db, owner_id)
-    query = db.query(Image.id, Image.taken_at, Image.gps_lat, Image.gps_lon).filter(
+    query = db.query(
+        Image.id, Image.taken_at, Image.gps_lat, Image.gps_lon, Image.file_type
+    ).filter(
         Image.owner_id == owner_id,
         Image.deleted_at.is_(None),
         Image.gps_lat.isnot(None),
@@ -532,22 +558,20 @@ def get_place_albums(db: Session, owner_id: int, radius_km: float) -> list[Group
         sums.append((float(lat), float(lon), 1))
 
     # Final membership by radius around the settled centers.
-    places: list[tuple[tuple[float, float], int, str]] = []  # (center, count, cover id)
+    places: list[tuple[tuple[float, float], int, list]] = []  # (center, count, covers)
     for c_lat, c_lon in zip(center_lats, center_lons):
         member_idx = np.nonzero(
             _haversine_km_vec(lats, lons, c_lat, c_lon) <= radius_km
         )[0]
         if len(member_idx) < MIN_PLACE_PHOTOS:
             continue
-        cover_id, cover_taken = None, None
+        jpeg_tops: list = []
+        other_tops: list = []
         for i in member_idx:
-            image_id, taken_at = rows[i][0], rows[i][1]
+            image_id, taken_at, file_type = rows[i][0], rows[i][1], rows[i][4]
             wall = taken_at.replace(tzinfo=None) if taken_at else None
-            if cover_id is None or (
-                wall is not None and (cover_taken is None or wall > cover_taken)
-            ):
-                cover_id, cover_taken = image_id, wall
-        places.append(((c_lat, c_lon), len(member_idx), cover_id))
+            _push_cover(jpeg_tops if file_type == FileType.jpeg else other_tops, wall, image_id)
+        places.append(((c_lat, c_lon), len(member_idx), _cover_ids(jpeg_tops, other_tops)))
 
     places.sort(key=lambda p: p[1], reverse=True)
     places = places[:MAX_PLACES]
@@ -557,7 +581,7 @@ def get_place_albums(db: Session, owner_id: int, radius_km: float) -> list[Group
     labels = geocode.place_labels_for([center for center, _, _ in places])
     albums: list[GroupAlbum] = []
     used_names: dict[str, int] = {}
-    for (center, count, cover_id), label in zip(places, labels):
+    for (center, count, covers), label in zip(places, labels):
         name = label or f"{center[0]:.3f}, {center[1]:.3f}"
         used_names[name] = used_names.get(name, 0) + 1
         if used_names[name] > 1:
@@ -567,7 +591,8 @@ def get_place_albums(db: Session, owner_id: int, radius_km: float) -> list[Group
                 id=f"place:{center[0]:.4f},{center[1]:.4f}",
                 name=name,
                 image_count=count,
-                cover_image_id=cover_id,
+                cover_image_id=covers[0],
+                cover_image_ids=covers,
             )
         )
     return albums
@@ -578,35 +603,43 @@ def get_country_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]
     the country x year split ("Italy 2024"). Returned together - both come out
     of the same single-pass grouping."""
     unavailable = sources_service.unavailable_source_ids(db, owner_id)
-    query = db.query(Image.id, Image.taken_at, Image.gps_country).filter(
+    query = db.query(Image.id, Image.taken_at, Image.gps_country, Image.file_type).filter(
         Image.owner_id == owner_id,
         Image.deleted_at.is_(None),
         Image.gps_country.isnot(None),
     )
     rows = sources_service.exclude_unavailable(query, unavailable).all()
 
-    # key -> (count, newest wall-clock taken_at, its image id)
-    countries: dict[str, tuple] = {}
-    country_years: dict[tuple[str, int], tuple] = {}
+    # key -> [count, jpeg covers, non-jpeg covers] (newest-first (wall, id))
+    countries: dict[str, list] = {}
+    country_years: dict[tuple[str, int], list] = {}
 
-    def bump(groups: dict, key, image_id, wall) -> None:
+    def bump(groups: dict, key, image_id, wall, file_type) -> None:
         entry = groups.get(key)
         if entry is None:
-            groups[key] = (1, wall, image_id)
-        elif wall is not None and (entry[1] is None or wall > entry[1]):
-            groups[key] = (entry[0] + 1, wall, image_id)
-        else:
-            groups[key] = (entry[0] + 1, entry[1], entry[2])
+            entry = groups[key] = [0, [], []]
+        entry[0] += 1
+        _push_cover(entry[1] if file_type == FileType.jpeg else entry[2], wall, image_id)
 
-    for image_id, taken_at, country in rows:
+    for image_id, taken_at, country, file_type in rows:
         wall = taken_at.replace(tzinfo=None) if taken_at else None
-        bump(countries, country, image_id, wall)
+        bump(countries, country, image_id, wall, file_type)
         if taken_at is not None:
-            bump(country_years, (country, taken_at.year), image_id, wall)
+            bump(country_years, (country, taken_at.year), image_id, wall, file_type)
+
+    def country_album(id: str, name: str, count: int, jpegs: list, others: list) -> GroupAlbum:
+        covers = _cover_ids(jpegs, others)
+        return GroupAlbum(
+            id=id,
+            name=name,
+            image_count=count,
+            cover_image_id=covers[0],
+            cover_image_ids=covers,
+        )
 
     country_albums = [
-        GroupAlbum(id=f"country:{name}", name=name, image_count=c, cover_image_id=cover)
-        for name, (c, _, cover) in sorted(
+        country_album(f"country:{name}", name, c, jpegs, others)
+        for name, (c, jpegs, others) in sorted(
             countries.items(), key=lambda kv: kv[1][0], reverse=True
         )
     ]
@@ -617,15 +650,49 @@ def get_country_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]
         reverse=True,
     )[:MAX_COUNTRY_YEARS]
     country_year_albums = [
-        GroupAlbum(
-            id=f"country-year:{name}:{year}",
-            name=f"{name} {year}",
-            image_count=c,
-            cover_image_id=cover,
-        )
-        for (name, year), (c, _, cover) in year_split
+        country_album(f"country-year:{name}:{year}", f"{name} {year}", c, jpegs, others)
+        for (name, year), (c, jpegs, others) in year_split
     ]
     return {"countries": country_albums, "country_years": country_year_albums}
+
+
+def edited_filter():
+    """The membership rule for the "Edited" smart album: photos edited in
+    place (edit_rev bumps on every develop save) plus saved edit copies
+    (applied_adjustments records the look that was baked into the copy)."""
+    return or_(Image.edit_rev > 0, Image.applied_adjustments.isnot(None))
+
+
+def get_edits_album(db: Session, owner_id: int) -> list[GroupAlbum]:
+    """A single virtual album collecting every edited photo and edit copy.
+    Empty list when nothing has been edited yet, so the row hides itself."""
+    unavailable = sources_service.unavailable_source_ids(db, owner_id)
+    query = db.query(Image.id).filter(
+        Image.owner_id == owner_id,
+        Image.deleted_at.is_(None),
+        edited_filter(),
+    )
+    query = sources_service.exclude_unavailable(query, unavailable)
+    count = query.count()
+    if not count:
+        return []
+    ordered = query.order_by(
+        Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc()
+    )
+    # JPEGs only in the mosaic; RAWs only when no edited JPEG exists.
+    covers = ordered.filter(Image.file_type == FileType.jpeg).limit(COVER_COUNT).all()
+    if not covers:
+        covers = ordered.limit(COVER_COUNT).all()
+    cover_ids = [row[0] for row in covers]
+    return [
+        GroupAlbum(
+            id="edits:all",
+            name="Edited photos",
+            image_count=count,
+            cover_image_id=cover_ids[0],
+            cover_image_ids=cover_ids,
+        )
+    ]
 
 
 def place_image_ids(

@@ -124,11 +124,33 @@ def search_images(
     results: list[schemas.SearchResultOut] = []
     seen_ids: set[str] = set()
 
-    def add(image: Image, distance: float) -> None:
+    def _append(image: Image, distance: float) -> None:
         if image.id in seen_ids:
             return
         seen_ids.add(image.id)
         results.append(schemas.SearchResultOut(image=image, distance=distance))
+
+    def add(image: Image, distance: float) -> None:
+        # RAW+JPEG pairs are the same shot. Whichever half a search matched,
+        # return *both* halves in the combined view - exactly like the library
+        # index does - so the grid can honour the user's merge toggle: merged,
+        # the client collapses the pair onto its JPEG; unmerged, it shows the RAW
+        # right next to the JPEG. Neither is possible when the ranked, limit-
+        # capped result set carries only one half, so we complete the pair here.
+        # Added JPEG-first and adjacently, so the pair stays together and the
+        # JPEG is its representative.
+        if view_mode == "combined" and image.paired_image_id:
+            partner = db.get(Image, image.paired_image_id)
+            if partner and partner.owner_id == current_user.id and partner.deleted_at is None:
+                jpeg, raw = (
+                    (partner, image)
+                    if image.file_type == FileType.raw
+                    else (image, partner)
+                )
+                _append(jpeg, distance)
+                _append(raw, distance)
+                return
+        _append(image, distance)
 
     # Same rule as the library grid: photos from a disconnected external source
     # aren't searchable while their drive/NAS is offline.
@@ -221,7 +243,13 @@ def search_images(
                 continue
             image = db.get(Image, image_id)
             if image:
-                seen_ids.add(image.id)
-                results.append(schemas.SearchResultOut(image=image, distance=distance))
+                add(image, distance)
 
+    # Pairs are appended adjacently, so the hard cut can split at most the one
+    # pair straddling the boundary - keep both its halves rather than orphaning
+    # a RAW/JPEG from its partner.
+    if len(results) > limit >= 1:
+        last, nxt = results[limit - 1].image, results[limit].image
+        if last.paired_image_id == nxt.id:
+            return results[: limit + 1]
     return results[:limit]

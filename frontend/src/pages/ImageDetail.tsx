@@ -14,6 +14,7 @@ import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
 import { preloadImage } from "../utils/preload";
 import { rememberLastViewedImage } from "../utils/lastViewed";
+import { useTransientMessage } from "../utils/transientMessage";
 import type { ColorLabel, ImageOut } from "../api/types";
 
 // exiftool delivers the exposure time as a plain decimal ("0.003571428571");
@@ -239,7 +240,8 @@ export function ImageDetail() {
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
   const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
   const [immichBusy, setImmichBusy] = useState(false);
-  const [immichMsg, setImmichMsg] = useState<string | null>(null);
+  // Flash message - auto-dismisses after a moment.
+  const [immichMsg, setImmichMsg] = useTransientMessage();
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -598,7 +600,7 @@ export function ImageDetail() {
             </button>
           </div>
           {immichMsg && (
-            <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>{immichMsg}</p>
+            <p className="status-note" style={{ marginTop: -8, marginBottom: 16 }}>{immichMsg}</p>
           )}
 
           {paired && (

@@ -27,14 +27,16 @@ COLOR_BANDS: tuple[str, ...] = ("red", "orange", "yellow", "green", "aqua", "blu
 # Scalar adjustments: key -> (default, min, max, is_float). Order is the order the
 # editor lists them within each section.
 SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
-    # Basic / tone
-    "exposure": (0.0, -5.0, 5.0, True),      # stops in linear light (whole-image lift)
+    # Basic / tone. Exposure and the four region sliders reach beyond the
+    # classic RapidRAW ranges (+-5 EV / +-100); past +-100 the tone curve is
+    # kept monotone by the guard in thumbnails._tone_ratio.
+    "exposure": (0.0, -8.0, 8.0, True),      # stops in linear light (whole-image lift)
     "brightness": (0, -200, 200, False),     # midtone lift that pins black/white; wide range
     "contrast": (0, -100, 100, False),
-    "highlights": (0, -100, 100, False),
-    "shadows": (0, -100, 100, False),
-    "whites": (0, -100, 100, False),
-    "blacks": (0, -100, 100, False),
+    "highlights": (0, -200, 200, False),
+    "shadows": (0, -200, 200, False),
+    "whites": (0, -200, 200, False),
+    "blacks": (0, -200, 200, False),
     # White balance / presence
     "temperature": (0, -250, 250, False),
     "tint": (0, -250, 250, False),

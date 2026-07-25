@@ -132,10 +132,15 @@ def get_embeddings(engine: Engine, image_ids: list[str]) -> dict[str, np.ndarray
     return out
 
 
+# sqlite-vec caps a knn `k` at 4096; asking for more raises OperationalError.
+_MAX_KNN_K = 4096
+
+
 def query_similar(engine: Engine, vector: np.ndarray, k: int, exclude_id: str | None = None) -> list[tuple[str, float]]:
     # Over-fetch slightly so we can drop exclude_id (e.g. the query image
     # itself) without going back for another page.
     fetch_k = k + 1 if exclude_id else k
+    fetch_k = min(fetch_k, _MAX_KNN_K)
     with engine.connect() as conn:
         rows = conn.execute(
             text(

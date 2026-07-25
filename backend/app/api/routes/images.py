@@ -41,6 +41,7 @@ from app.services import (
 from app.services.filesystem import library_relative_path, resolve_image_path
 from app.services.hashing import perceptual_hash
 from app.services.immich_sync import immich_album_names as _immich_album_names
+from app.services.borg_backup import run_backup_soon
 from app.services.immich_sync import run_immich_sync_soon
 from app.services.settings_store import get_auto_develop_groups, get_immich_config
 from app.workers.queue import (
@@ -140,6 +141,9 @@ def _sync_edit_state(db: Session, owner_id: int, image: Image) -> None:
     else:
         image.edit_rev = 0
         _remove_tag_from_image(db, owner_id, image, "edit")
+    # The library changed - schedule an incremental Borg backup (debounced; a
+    # no-op unless the user has configured one). Covers all bulk develop paths.
+    run_backup_soon()
 
 
 def _filtered_images_query(
@@ -1056,6 +1060,7 @@ def save_edits(
     db.commit()
     db.refresh(image)
     _try_regenerate_derivatives(image)
+    run_backup_soon()
     return image
 
 
@@ -1213,6 +1218,7 @@ def save_copy(
     except Exception:
         logger.exception("Derivative generation failed for edited copy %s", new_image.id)
     enqueue_embedding(new_image.id, settings.library_root / rel_path)
+    run_backup_soon()
     return new_image
 
 

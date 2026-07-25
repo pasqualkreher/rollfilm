@@ -10,6 +10,7 @@ const SECTIONS: { id: string; title: string }[] = [
   { id: "browsing", title: "Browsing the library" },
   { id: "search", title: "Search" },
   { id: "culling", title: "Culling: stars, colors, tags and Selects" },
+  { id: "selects", title: "Selects: your shortlist" },
   { id: "trash", title: "Deleting & the Trash" },
   { id: "photo-view", title: "The photo view" },
   { id: "editing", title: "Editing photos" },
@@ -184,10 +185,39 @@ export function Help() {
             detail view or to a whole selection at once.
           </li>
           <li>
-            <strong>Selects</strong> is your shortlist basket: add photos from anywhere, then on the
-            Selects page download the originals as a zip, <strong>export</strong> them as finished
-            JPEGs (edits baked in, quality and size of your choice), send them to Immich, or clear
-            the list. The nav shows a live count.
+            <strong>Selects</strong> is your shortlist basket — add photos from anywhere and hand
+            them out in one go. See the next section.
+          </li>
+        </ul>
+
+        <H id="selects">Selects: your shortlist</H>
+        <p>
+          The <strong>Selects</strong> tab is a temporary shortlist: while you browse, add the shots
+          you want to hand out — from the Library's bulk bar ("Add to Selects"), inside an album, or
+          on a photo's page. The nav shows a live count. It's not an album and nothing about the
+          photos changes; it's the tray where a picking session ends before the photos leave the
+          app.
+        </p>
+        <ul>
+          <li>
+            <strong>Review the set:</strong> everything is pre-selected — untick the ones you're
+            dropping (shift-click for a range), or remove them from the list entirely. The actions
+            always apply to your current selection, or to the whole list when nothing is ticked.
+          </li>
+          <li>
+            <strong>Export…</strong> gets the photos out, in one of two ways: as finished{" "}
+            <strong>JPEGs with your edits baked in</strong> (quality and size of your choice), or as
+            the <strong>original files, 1:1</strong> — exactly as they are in your library, RAW
+            stays RAW, every meta tag kept. Several photos download as a zip.
+          </li>
+          <li>
+            <strong>Add to Immich</strong> uploads the JPEGs of the set to your Immich server (shown
+            only when the integration is configured; RAW files are skipped).
+          </li>
+          <li>
+            <strong>Remove from selects</strong> takes the selected photos out of the tray when
+            you're done (with everything selected it empties it) — the photos themselves stay
+            untouched in your library.
           </li>
         </ul>
 

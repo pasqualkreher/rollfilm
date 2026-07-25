@@ -37,6 +37,7 @@ import {
   type SubMaskParams,
   type SubMaskType,
 } from "../utils/adjustments";
+import { parametricToPoints, pointsToParametric } from "../utils/curveConvert";
 import { loadPresets, savePreset, deletePreset, type EditPreset } from "../utils/presets";
 import { CurveEditor } from "./CurveEditor";
 import { ColorWheel } from "./ColorWheel";
@@ -766,6 +767,16 @@ export function PhotoEditor({ image, onClose }: Props) {
     const t = setTimeout(() => autoAdjust.reset(), 5000);
     return () => clearTimeout(t);
   }, [autoAdjust.isError, autoAdjust.reset]);
+
+  // Same for a failed save/copy - the footer error clears itself.
+  useEffect(() => {
+    if (!saveEdits.isError && !saveCopy.isError) return;
+    const t = setTimeout(() => {
+      saveEdits.reset();
+      saveCopy.reset();
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [saveEdits.isError, saveCopy.isError]);
 
   function autoErrorText(err: unknown): string {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1834,15 +1845,30 @@ export function PhotoEditor({ image, onClose }: Props) {
             </div>
             <div className="curve-toolbar">
               <span className="segmented">
+                {/* Switching modes converts the current curve into the other
+                    representation (sampled points / least-squares fitted
+                    sliders), so the look carries over instead of resetting. */}
                 <button
                   className={adj.curve_mode === "point" ? "active" : ""}
-                  onClick={() => setAdj((a) => ({ ...a, curve_mode: "point" }))}
+                  onClick={() =>
+                    setAdj((a) =>
+                      a.curve_mode === "point"
+                        ? a
+                        : { ...a, curve_mode: "point", point_curves: parametricToPoints(a.parametric_curve) }
+                    )
+                  }
                 >
                   Point
                 </button>
                 <button
                   className={adj.curve_mode === "parametric" ? "active" : ""}
-                  onClick={() => setAdj((a) => ({ ...a, curve_mode: "parametric" }))}
+                  onClick={() =>
+                    setAdj((a) =>
+                      a.curve_mode === "parametric"
+                        ? a
+                        : { ...a, curve_mode: "parametric", parametric_curve: pointsToParametric(a.point_curves) }
+                    )
+                  }
                 >
                   Parametric
                 </button>

@@ -14,6 +14,7 @@ from app.api.routes import (
 )
 from app.config import settings as app_settings
 from app.db.session import SessionLocal, engine, ensure_indexes
+from app.services.borg_backup import start_background_backup
 from app.services.cloudfiles import rehydrate_dirs_in_background
 from app.services.embeddings import ensure_embeddings_table
 from app.services.geocode import warm_in_background as warm_geocoder
@@ -73,6 +74,10 @@ def on_startup() -> None:
     # from Immich (see services/immich_sync.py). No-op in manual mode or while
     # Immich isn't configured.
     start_background_immich_sync()
+    # Automatic incremental Borg backups (services/borg_backup.py): a daily pass
+    # plus a debounced pass after the library changes. No-op until the user
+    # configures a repository in Settings. Backgrounded like the loops above.
+    start_background_backup()
     # Parse the reverse-geocoding dataset now instead of inside the first
     # import commit (the desktop app restarts the backend on every launch, so
     # that first-commit stall was paid every session).

@@ -16,6 +16,7 @@ import { useTasks } from "../state/tasks";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { collapsePairs } from "../state/viewPrefs";
 import { selectionSharedMeta } from "../utils/selectionMeta";
+import { useTransientMessage } from "../utils/transientMessage";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
@@ -51,15 +52,10 @@ export function AlbumDetail() {
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
   const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
   const [immichBusy, setImmichBusy] = useState(false);
-  const [immichMsg, setImmichMsg] = useState<string | null>(null);
+  // Both flash messages auto-dismiss after a moment.
+  const [immichMsg, setImmichMsg] = useTransientMessage();
   const [developBusy, setDevelopBusy] = useState(false);
-  const [developMsg, setDevelopMsg] = useState<string | null>(null);
-  // Auto-dismiss the develop status after a moment, like the other flash messages.
-  useEffect(() => {
-    if (!developMsg) return;
-    const t = window.setTimeout(() => setDevelopMsg(null), 4000);
-    return () => window.clearTimeout(t);
-  }, [developMsg]);
+  const [developMsg, setDevelopMsg] = useTransientMessage();
   const presetNames = Object.keys(loadPresets());
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as

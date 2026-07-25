@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { useTransientValue } from "../utils/transientMessage";
 
 interface Props {
   onAdd: (albumId: string) => void | Promise<unknown>;
@@ -16,15 +17,11 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
 
   // Adding is otherwise invisible (the dropdown just snaps back to its
   // placeholder), so confirm briefly that it actually happened.
-  const [flash, setFlash] = useState<{ text: string; error: boolean } | null>(null);
+  const [flash, setFlash] = useTransientValue<{ text: string; error: boolean }>();
   const [busy, setBusy] = useState(false);
-  const flashTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
 
   function showFlash(text: string, error = false) {
     setFlash({ text, error });
-    window.clearTimeout(flashTimer.current);
-    flashTimer.current = window.setTimeout(() => setFlash(null), 2500);
   }
 
   async function handleAdd(albumId: string) {
@@ -32,7 +29,10 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
     setBusy(true);
     try {
       await onAdd(albumId);
-      showFlash(`Added to “${name}” ✓`);
+      // Where the picker shows the membership chips (photo view sidebar), the
+      // new chip is confirmation enough - only the chip-less bulk bar needs
+      // the flash text.
+      if (!currentAlbumIds) showFlash(`Added to “${name}” ✓`);
     } catch {
       showFlash(`Could not add to “${name}”`, true);
     } finally {
@@ -76,15 +76,14 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove }: Props) {
         ))}
       </select>
       {flash && (
-        <span
-          style={{
-            marginLeft: 8,
-            fontSize: 13,
-            color: flash.error ? "var(--danger, #d33)" : "var(--text-muted)",
-          }}
+        // Own line below the dropdown - inline it would wrap awkwardly next
+        // to the select in the narrow sidebar.
+        <p
+          className={`status-note${flash.error ? " status-note--error" : ""}`}
+          style={{ margin: "6px 0 0" }}
         >
           {flash.text}
-        </span>
+        </p>
       )}
       {(albums ?? []).length === 0 && (
         <p className="album-picker-hint" style={{ color: "var(--text-muted)", fontSize: 12, margin: "6px 0 0" }}>

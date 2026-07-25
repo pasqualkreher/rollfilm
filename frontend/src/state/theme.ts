@@ -10,6 +10,12 @@ export type Theme =
   // Light family
   | "light"
   | "soft-grey"
+  | "graphite"
+  | "greige"
+  | "oat"
+  | "stone"
+  | "fog"
+  | "sand"
   | "sepia"
   | "rose"
   | "solarized-light"
@@ -21,6 +27,9 @@ export type Theme =
   // Dark family
   | "dim"
   | "dark"
+  | "graphite-dark"
+  | "taupe"
+  | "slate"
   | "vintage"
   | "nord"
   | "forest"
@@ -50,6 +59,12 @@ export const SKINS: SkinInfo[] = [
   // — Light —
   { value: "light", label: "Light", group: "light", bg: "#ffffff", elevated: "#f6f6f7", text: "#1a1a1a", accent: "#3a6df0" },
   { value: "soft-grey", label: "Soft Grey", group: "light", bg: "#e8e8ea", elevated: "#f2f2f4", text: "#26262a", accent: "#3a6df0" },
+  { value: "graphite", label: "Graphite", group: "light", bg: "#f3f3f4", elevated: "#fafafb", text: "#2b2b2f", accent: "#55555c" },
+  { value: "greige", label: "Greige", group: "light", bg: "#e9e6e0", elevated: "#f2efe9", text: "#3a362f", accent: "#8a7f6d" },
+  { value: "oat", label: "Oat", group: "light", bg: "#eeeae1", elevated: "#f6f2ea", text: "#403a2f", accent: "#a9926b" },
+  { value: "stone", label: "Stone", group: "light", bg: "#e7e6e3", elevated: "#f1f0ed", text: "#37352f", accent: "#7d7a70" },
+  { value: "fog", label: "Fog", group: "light", bg: "#e8e9eb", elevated: "#f1f2f4", text: "#363840", accent: "#7c828e" },
+  { value: "sand", label: "Sand", group: "light", bg: "#f0e9dc", elevated: "#f7f1e7", text: "#443b2b", accent: "#b09168" },
   { value: "sepia", label: "Sepia", group: "light", bg: "#f4ecdd", elevated: "#ece2cf", text: "#3d3226", accent: "#b5651d" },
   { value: "rose", label: "Rosé", group: "light", bg: "#f7edea", elevated: "#fbf3f1", text: "#43322f", accent: "#c25d6e" },
   { value: "solarized-light", label: "Solarized Light", group: "light", bg: "#fdf6e3", elevated: "#eee8d5", text: "#586e75", accent: "#268bd2" },
@@ -61,6 +76,9 @@ export const SKINS: SkinInfo[] = [
   // — Dark —
   { value: "dim", label: "Dim", group: "dark", bg: "#2c2f36", elevated: "#363a43", text: "#e6e8ec", accent: "#7aa2f7" },
   { value: "dark", label: "Dark", group: "dark", bg: "#17181a", elevated: "#212226", text: "#f1f1f2", accent: "#6d93ff" },
+  { value: "graphite-dark", label: "Graphite Dark", group: "dark", bg: "#2b2b2f", elevated: "#34343a", text: "#f3f3f4", accent: "#b4b4bc" },
+  { value: "taupe", label: "Taupe", group: "dark", bg: "#302c28", elevated: "#3a3531", text: "#ece6dd", accent: "#b3a48d" },
+  { value: "slate", label: "Slate", group: "dark", bg: "#2d2f33", elevated: "#363940", text: "#e6e8ea", accent: "#a4abb5" },
   { value: "vintage", label: "Vintage", group: "dark", bg: "#24211d", elevated: "#2e2a24", text: "#ece4d6", accent: "#e08a3c" },
   { value: "nord", label: "Nord", group: "dark", bg: "#2e3440", elevated: "#3b4252", text: "#eceff4", accent: "#88c0d0" },
   { value: "forest", label: "Forest", group: "dark", bg: "#1a2620", elevated: "#223029", text: "#e4ede6", accent: "#6fbf8b" },

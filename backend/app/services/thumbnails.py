@@ -102,6 +102,53 @@ def _gen_lock(image_id: str) -> threading.RLock:
         return lock
 
 
+# --- Render admission control -------------------------------------------------
+# Derivative generation is the one genuinely heavy thing this process does: a
+# frame's worth of linear float32 pixels plus the pipeline's full-frame temporaries.
+# The callers are independently sized pools that know nothing about each other -
+# the post-import workers, the maintenance rebuild pool, and (worst of all) the
+# on-demand thumbnail endpoint, which runs on uvicorn's 40-thread pool and so
+# could start 40 concurrent decodes the moment a grid full of fresh imports
+# scrolled into view. Nothing bounded their *sum*, which is how an import filled
+# RAM and took the whole machine into swap.
+#
+# One process-wide semaphore fixes that: however many pools ask, only this many
+# renders run at once. Sized to deliberately leave headroom so the machine stays
+# usable while a big import churns - both cores (the UI, the browser and the
+# rest of the system need some) and RAM (never budget the whole machine; the OS,
+# the CLIP model and the page cache all want their share).
+#
+# Measured on a 26MP source (Fuji RAF and its JPEG sibling): ~1GB peak RSS for
+# one generate_derivatives call, dominated by apply_adjustments_linear's
+# full-frame float32 temporaries. Bigger sensors cost proportionally more, so
+# this is a floor rather than a guarantee - which is why the RAM budget below
+# only spends a third of the machine.
+_PEAK_BYTES_PER_RENDER = 1024**3
+
+
+def _physical_ram_bytes() -> int | None:
+    try:
+        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def _render_slot_count() -> int:
+    # Leave two cores for everything that isn't photo processing.
+    slots = max(1, (os.cpu_count() or 4) - 2)
+    ram = _physical_ram_bytes()
+    if ram:
+        # Budget a third of RAM for concurrent renders; the rest is headroom.
+        slots = min(slots, max(1, int(ram // 3 // _PEAK_BYTES_PER_RENDER)))
+    return slots
+
+
+# Acquired around the heavy section of a render (`with _render_slots:`): a burst
+# of callers queues instead of all allocating at once.
+RENDER_SLOTS = _render_slot_count()
+_render_slots = threading.BoundedSemaphore(RENDER_SLOTS)
+
+
 def _distortion_indices(h: int, w: int, amount: int) -> tuple[np.ndarray, np.ndarray]:
     """The (sy, sx) source-index maps of the radial lens-distortion correction,
     shared by the PIL and float-array variants."""
@@ -627,6 +674,19 @@ _MIDDLE_GREY = 0.18
 # curve to remain monotone (see test_develop_pipeline).
 _SH_RANGE = (-1.5, 4.5)
 _HI_RANGE = (-1.5, 4.5)
+# Shadows travel beyond +-100: the tuned ramp above concentrates on the deep
+# end, so the extended travel would only push near-black pixels further while
+# the visible mid-shadows barely move ("the slider stops biting"). The extra
+# amount past +-100 therefore rides an earlier, steeper-rated ramp that
+# reaches decisively into the mids - with a different reach per direction:
+# lifting keeps the tight ramp (the isotonic guard in _tone_ratio turns its
+# steepness into the slammed-up plateau look), while darkening - monotone by
+# construction, it only steepens the curve - uses a wider ramp so the visible
+# upper shadows keep stepping down through the whole travel instead of only
+# the near-black end moving.
+_SH_EXTRA_POS_RANGE = (-0.5, 2.5)
+_SH_EXTRA_NEG_RANGE = (-1.5, 3.0)
+_SH_EXTRA_STOPS = 3.0
 _BL_RANGE = (2.5, 6.0)   # blacks > 0: late region lift on top of the endpoint
 _WH_RANGE = (2.0, 5.0)   # whites > 0: late region shift on top of the endpoint
 _WH_NEG_RANGE = (2.75, 6.0)  # whites < 0: late shift on top of the white point
@@ -655,22 +715,12 @@ def _smoothstep(x: np.ndarray) -> np.ndarray:
     return t * t * (3.0 - 2.0 * t)
 
 
-def _tone_ratio(y: np.ndarray, adj: dict) -> np.ndarray | None:
-    """Per-pixel multiplier on linear luminance implementing the tone sliders
-    (highlights/shadows/whites/blacks/contrast/brightness), or None when all are
-    neutral. Pure math on luminance so tests can drive it with 1-D ramps; the
-    caller applies it as one shared RGB ratio, which preserves hue/saturation
-    (the old additive per-channel lifts washed colours toward grey)."""
-    hi = adj.get("highlights", 0) / 100.0
-    sh = adj.get("shadows", 0) / 100.0
-    wh = adj.get("whites", 0) / 100.0
-    bl = adj.get("blacks", 0) / 100.0
-    c = adj.get("contrast", 0) / 100.0
-    br = adj.get("brightness", 0) / 100.0  # slider is +/-200 -> br in +/-2
-    if not (hi or sh or wh or bl or c or br):
-        return None
-
-    y0 = np.maximum(y, 1e-6).astype(np.float32)
+def _tone_curve_y(
+    y0: np.ndarray, hi: float, sh: float, wh: float, bl: float, c: float, br: float
+) -> np.ndarray:
+    """The tone sliders as a pure elementwise mapping of linear luminance -
+    the curve itself, reusable on real pixels and on the reference grid the
+    monotone guard below evaluates."""
     l = np.log2(y0 / _MIDDLE_GREY)  # stops from middle grey
 
     # Region-weighted shifts in stops. Shadows/blacks look below middle grey
@@ -679,10 +729,17 @@ def _tone_ratio(y: np.ndarray, adj: dict) -> np.ndarray | None:
     # negative highlights pull genuine sensor data back under the white point.
     # The endpoint halves of whites/blacks (wh<0 white point, bl<0 black point)
     # are applied in _linear_tone_block - see the constants block above.
+    # Shadows: the classic +-100 amount rides the tuned deep-end ramp; the
+    # extended travel past it rides the mid-reaching ramp (see _SH_EXTRA_RANGE).
+    sh_base = max(-1.0, min(1.0, sh))
+    sh_extra = sh - sh_base
+
     y1 = y0
     shift = None
     for amount, stops, (r0, r1), sign in (
-        (sh, _SH_STOPS, _SH_RANGE, -1.0),
+        (sh_base, _SH_STOPS, _SH_RANGE, -1.0),
+        (max(sh_extra, 0.0), _SH_EXTRA_STOPS, _SH_EXTRA_POS_RANGE, -1.0),
+        (min(sh_extra, 0.0), _SH_EXTRA_STOPS, _SH_EXTRA_NEG_RANGE, -1.0),
         (hi, _HI_STOPS, _HI_RANGE, 1.0),
         (max(bl, 0.0), _BL_STOPS, _BL_RANGE, -1.0),
         (max(wh, 0.0), _WH_STOPS, _WH_RANGE, 1.0),
@@ -713,6 +770,50 @@ def _tone_ratio(y: np.ndarray, adj: dict) -> np.ndarray | None:
         l1 = np.log2(np.maximum(y1, 1e-6) / _MIDDLE_GREY)
         bell = np.exp2(0.5 * br * np.exp(-(l1 * l1) / (2.0 * 2.2 * 2.2)))
         y1 = y1 * bell
+
+    return y1
+
+
+# Reference grid for the monotone guard: -20..+10 stops from middle grey at
+# ~0.007-stop resolution, comfortably covering every luminance the pipeline
+# can produce.
+_TONE_GUARD_L = np.linspace(-20.0, 10.0, 4096, dtype=np.float32)
+
+
+def _tone_ratio(y: np.ndarray, adj: dict) -> np.ndarray | None:
+    """Per-pixel multiplier on linear luminance implementing the tone sliders
+    (highlights/shadows/whites/blacks/contrast/brightness), or None when all are
+    neutral. Pure math on luminance so tests can drive it with 1-D ramps; the
+    caller applies it as one shared RGB ratio, which preserves hue/saturation
+    (the old additive per-channel lifts washed colours toward grey)."""
+    hi = adj.get("highlights", 0) / 100.0
+    sh = adj.get("shadows", 0) / 100.0
+    wh = adj.get("whites", 0) / 100.0
+    bl = adj.get("blacks", 0) / 100.0
+    c = adj.get("contrast", 0) / 100.0
+    br = adj.get("brightness", 0) / 100.0  # slider is +/-200 -> br in +/-2
+    if not (hi or sh or wh or bl or c or br):
+        return None
+
+    y0 = np.maximum(y, 1e-6).astype(np.float32)
+    y1 = _tone_curve_y(y0, hi, sh, wh, bl, c, br)
+
+    # Monotone guard for the extended slider travel: the region constants are
+    # hand-tuned so every combination within +-100 stays monotone, but the
+    # sliders now reach +-150 where steep opposing shifts can reverse the
+    # curve (solarisation). Only in that extended zone: evaluate the same
+    # curve on the reference grid and, if it reverses anywhere, replace the
+    # mapping with its isotonic projection (the curve plateaus instead of
+    # folding back), interpolated in log space. Within +-100 this never runs,
+    # so existing edits render exactly as before.
+    if max(abs(hi), abs(sh), abs(wh), abs(bl)) > 1.0 + 1e-6:
+        gy0 = (_MIDDLE_GREY * np.exp2(_TONE_GUARD_L)).astype(np.float32)
+        gy1 = _tone_curve_y(gy0, hi, sh, wh, bl, c, br)
+        gl1 = np.log2(np.maximum(gy1, 1e-9) / _MIDDLE_GREY)
+        if np.any(np.diff(gl1) < 0.0):
+            gl1 = np.maximum.accumulate(gl1)
+            l0 = np.log2(y0 / _MIDDLE_GREY)
+            y1 = _MIDDLE_GREY * np.exp2(np.interp(l0, _TONE_GUARD_L, gl1))
 
     return (y1 / y0).astype(np.float32)
 
@@ -1217,9 +1318,26 @@ def generate_derivatives(
     color rendering - see extract_full_preview()), then the user's manual
     rotation/crop (if any) is layered on top before resizing.
     """
-    with _gen_lock(image_id):
+    with _gen_lock(image_id), _render_slots:
         out_dir = derivative_dir(image_id)
-        lin, gain = raw_service.load_linear_base(source_path, half_size=True)
+        # Both outputs are capped (PREVIEW_RENDER_MAX_PX / THUMBNAIL_MAX_PX), yet
+        # a 26MP camera JPEG used to be decoded and pushed through the whole
+        # float32 pipeline at full size just to be thrown away by the resizes
+        # below - ~4x the pixels of the RAW path for the same result, and the
+        # biggest single memory cost of an import. Ask for only what the outputs
+        # need. A crop divides the budget, so cropped photos keep their
+        # resolution; RAW is unaffected (its half_size demosaic already is the
+        # budget) and so renders byte-identically to before.
+        crop_span = min(crop[2], crop[3]) if crop else 1.0
+        decode_px = math.ceil(PREVIEW_RENDER_MAX_PX / max(crop_span, 0.02))
+        lin, gain = raw_service.load_linear_base(
+            source_path, half_size=True, max_px=decode_px
+        )
+        # thumbnail.jpg is a fraction of the decoded frame, so a reduced decode
+        # would silently shrink it - scale the fraction back up by the reduction
+        # that actually happened, keeping the grid thumbnail the size it has
+        # always been.
+        thumb_scale = THUMBNAIL_SCALE * raw_service.decode_reduction(source_path, lin.shape)
         # The un-edited display rendering, built before geometry: returned to the
         # caller so the post-import worker can feed CLIP without a second decode.
         base = PILImage.fromarray(raw_service.default_tone_to_srgb(lin, gain))
@@ -1248,8 +1366,8 @@ def generate_derivatives(
         # Grid thumbnail at a quarter of the original's dimensions (a lot cheaper to
         # generate than a large fixed size, so a full-library rebuild stays quick),
         # capped so huge originals don't still produce oversized thumbnails.
-        tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * THUMBNAIL_SCALE)))
-        th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * THUMBNAIL_SCALE)))
+        tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * thumb_scale)))
+        th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * thumb_scale)))
         thumb.thumbnail((tw, th), PILImage.LANCZOS)
         if adjustments:
             thumb = _grain_pil(thumb, adjustments)
@@ -1357,7 +1475,11 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
         small = _downscale_linear(base.astype(np.float32), max_px).astype(np.float16)
         small.flags.writeable = False
         return small, gain
-    lin, gain = raw_service.load_linear_base(Path(path_str), half_size=True)
+    # max_px is also the decode budget (see load_linear_base): the base is about
+    # to be downscaled to it anyway, so decoding a 26MP JPEG at full size first
+    # only cost memory. Keeps this base consistent with the one
+    # generate_derivatives / render_base_preview_bytes build.
+    lin, gain = raw_service.load_linear_base(Path(path_str), half_size=True, max_px=max_px)
     out = _downscale_linear(lin, max_px).astype(np.float16)
     out.flags.writeable = False
     return out, gain
@@ -1501,7 +1623,9 @@ def render_base_preview_bytes(image: "Image", max_px: int = PREVIEW_MAX_PX) -> b
     twice and the whole edit stays a preview until the user saves."""
     from app.services.filesystem import resolve_image_path
 
-    lin, gain = raw_service.load_linear_base(resolve_image_path(image), half_size=True)
+    lin, gain = raw_service.load_linear_base(
+        resolve_image_path(image), half_size=True, max_px=max_px
+    )
     source = PILImage.fromarray(raw_service.default_tone_to_srgb(lin, gain))
     source.thumbnail((max_px, max_px))
     buf = io.BytesIO()

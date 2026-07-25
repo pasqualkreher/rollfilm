@@ -24,6 +24,27 @@ function geotagged(images: GeoImage[]): GeoImage[] {
 // fitting the whole set, and single out its pin.
 type Focus = { id: string; lat: number; lon: number };
 
+// Last centre/zoom the user was looking at. Module-level so it survives the
+// unmount that `navigate(-1)` triggers when returning from a photo - the map
+// then reopens exactly where it was left instead of re-fitting the whole world.
+let lastMapView: { center: [number, number]; zoom: number } | null = null;
+
+// Great-circle distance in km, used to gather the photos "near" a clicked one
+// so the lightbox arrow keys page through the neighbourhood, not just the pin.
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// How far "nearby" reaches when paging through neighbours in the lightbox.
+const NEARBY_KM = 50;
+
 export function MapView() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -52,9 +73,16 @@ export function MapView() {
   useEffect(() => {
     const el = containerRef.current;
     if (mapRef.current || !el) return;
+    // Opening view: a mini-map focus wins; otherwise resume the remembered view
+    // (returning from a photo) and skip the fit-all so it isn't reframed; only a
+    // genuinely fresh visit falls back to the whole-world default + fit.
+    const initial = focus
+      ? { center: [focus.lat, focus.lon] as [number, number], zoom: 15 }
+      : lastMapView ?? { center: [20, 0] as [number, number], zoom: 2 };
+    if (!focus && lastMapView) fittedRef.current = true;
     const map = L.map(el, {
-      center: focus ? [focus.lat, focus.lon] : [20, 0],
-      zoom: focus ? 15 : 2,
+      center: initial.center,
+      zoom: initial.zoom,
       worldCopyJump: true,
     });
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -102,6 +130,12 @@ export function MapView() {
     const MAX_SPIDER = 24;
     type Spider = { pin: Pin; layers: L.Layer[] };
     let spider: Spider | null = null;
+
+    // The set the lightbox arrow keys page through: every located photo within
+    // ~50km of the one being opened, kept newest-first (points arrive that way).
+    // Lets you flip through the surrounding shots, not just what shared the pin.
+    const nearbyIds = (lat: number, lon: number): string[] =>
+      points.filter((p) => haversineKm(lat, lon, p.lat, p.lon) <= NEARBY_KM).map((p) => p.id);
 
     const unspiderfy = () => {
       if (!spider) return;
@@ -171,11 +205,14 @@ export function MapView() {
         }).addTo(layer);
         marker.on("mouseover", () => marker.getElement()?.classList.add("map-pin-active"));
         marker.on("mouseout", () => marker.getElement()?.classList.remove("map-pin-active"));
-        // Opening from the fan hands the WHOLE cluster to the lightbox, so the
-        // arrow keys page through every photo taken at this spot.
+        // Opening from the fan hands the lightbox every photo within ~50km, so
+        // the arrow keys page through the whole neighbourhood (which includes
+        // all the shots stacked here on this spot).
         const targetId = isOverflow ? members[shown.length].id : shown[i].id;
         marker.on("click", () =>
-          navigate(`/image/${targetId}`, { state: { imageIds: pin.members } })
+          navigate(`/image/${targetId}`, {
+            state: { imageIds: nearbyIds(pin.latlng.lat, pin.latlng.lng) },
+          })
         );
         layers.push(marker);
       });
@@ -235,7 +272,9 @@ export function MapView() {
           if (spider?.pin === pin) unspiderfy();
           else spiderfy(pin, members);
         } else {
-          navigate(`/image/${pin.id}`, { state: { imageIds: pin.members } });
+          navigate(`/image/${pin.id}`, {
+            state: { imageIds: nearbyIds(pin.latlng.lat, pin.latlng.lng) },
+          });
         }
       });
       pins.push(pin);
@@ -247,6 +286,9 @@ export function MapView() {
     // (pins may nearly touch - hover lifts and enlarges them).
     const cellFor = (zoom: number) => (zoom <= 5 ? 48 : zoom <= 9 ? 58 : 72);
     const rebuild = () => {
+      // Remember wherever the user is now, so returning from a photo lands here.
+      const c = map.getCenter();
+      lastMapView = { center: [c.lat, c.lng], zoom: map.getZoom() };
       layer.clearLayers();
       // clearLayers already removed the fan's markers and legs.
       spider = null;

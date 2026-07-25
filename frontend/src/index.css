@@ -79,6 +79,99 @@
   color-scheme: light;
 }
 
+/* Graphite — a very soft monochrome light skin: light-grey surfaces with a
+   muted "light black" graphite accent (buttons, active states, focus rings)
+   instead of a saturated colour, so everything reads gentle and understated. */
+:root[data-theme="graphite"] {
+  --bg: #f3f3f4;
+  --bg-elevated: #fafafb;
+  --hover: #e8e8ea;
+  --border: #dedee1;
+  --text: #2b2b2f;
+  --text-muted: #78787e;
+  --accent: #55555c;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(85, 85, 92, 0.12);
+  --danger: #bf4a3e;
+  color-scheme: light;
+}
+
+/* Greige — warm grey-beige, low contrast: soft taupe surfaces with a muted
+   taupe accent, everything gentle and close in tone. */
+:root[data-theme="greige"] {
+  --bg: #e9e6e0;
+  --bg-elevated: #f2efe9;
+  --hover: #ded9d0;
+  --border: #cec8bd;
+  --text: #3a362f;
+  --text-muted: #837c70;
+  --accent: #8a7f6d;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(138, 127, 109, 0.15);
+  --danger: #b5544a;
+  color-scheme: light;
+}
+
+/* Oat — soft oatmeal beige with a warm tan accent, calm and low contrast. */
+:root[data-theme="oat"] {
+  --bg: #eeeae1;
+  --bg-elevated: #f6f2ea;
+  --hover: #e4decd;
+  --border: #d6cfbd;
+  --text: #403a2f;
+  --text-muted: #8a8170;
+  --accent: #a9926b;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(169, 146, 107, 0.15);
+  --danger: #b5544a;
+  color-scheme: light;
+}
+
+/* Stone — neutral warm-grey stone, very low contrast with a soft stone accent. */
+:root[data-theme="stone"] {
+  --bg: #e7e6e3;
+  --bg-elevated: #f1f0ed;
+  --hover: #dcdad5;
+  --border: #ccc9c2;
+  --text: #37352f;
+  --text-muted: #7e7b73;
+  --accent: #7d7a70;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(125, 122, 112, 0.14);
+  --danger: #b5544a;
+  color-scheme: light;
+}
+
+/* Fog — cool light grey, very low contrast with a soft slate accent. */
+:root[data-theme="fog"] {
+  --bg: #e8e9eb;
+  --bg-elevated: #f1f2f4;
+  --hover: #dddfe2;
+  --border: #ccced2;
+  --text: #363840;
+  --text-muted: #787b83;
+  --accent: #7c828e;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(124, 130, 142, 0.14);
+  --danger: #bf4a3e;
+  color-scheme: light;
+}
+
+/* Sand — pale warm sand with a muted golden-tan accent, soft and low contrast. */
+:root[data-theme="sand"] {
+  --bg: #f0e9dc;
+  --bg-elevated: #f7f1e7;
+  --hover: #e7ddca;
+  --border: #dccdb2;
+  --text: #443b2b;
+  --text-muted: #8c8069;
+  --accent: #b09168;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(176, 145, 104, 0.15);
+  --danger: #b5544a;
+  color-scheme: light;
+}
+
 /* Sepia — warm cream paper with dark-brown ink and a terracotta accent. */
 :root[data-theme="sepia"] {
   --bg: #f4ecdd;
@@ -120,6 +213,60 @@
   --accent: #7aa2f7;
   --accent-contrast: #1a1c20;
   --accent-soft: rgba(122, 162, 247, 0.18);
+  --danger: #e0685b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+/* Graphite Dark — the inverse of Graphite: soft "light black" charcoal surfaces
+   with a muted light-grey accent (buttons, active states, focus rings) instead
+   of a saturated colour, so it stays gentle and understated in the dark. */
+:root[data-theme="graphite-dark"] {
+  --bg: #2b2b2f;
+  --bg-elevated: #34343a;
+  --hover: #3d3d44;
+  --border: #45454c;
+  --text: #f3f3f4;
+  --text-muted: #9a9aa0;
+  --accent: #b4b4bc;
+  --accent-contrast: #26262a;
+  --accent-soft: rgba(180, 180, 188, 0.16);
+  --danger: #e0685b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Taupe — warm dark taupe, low contrast: soft brown-grey surfaces with a muted
+   grey-beige accent, gentle and close in tone. */
+:root[data-theme="taupe"] {
+  --bg: #302c28;
+  --bg-elevated: #3a3531;
+  --hover: #443e39;
+  --border: #4d463f;
+  --text: #ece6dd;
+  --text-muted: #a39a8c;
+  --accent: #b3a48d;
+  --accent-contrast: #2a2621;
+  --accent-soft: rgba(179, 164, 141, 0.16);
+  --danger: #d9705d;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Slate — cool dark grey, low contrast with a soft cool-grey accent. */
+:root[data-theme="slate"] {
+  --bg: #2d2f33;
+  --bg-elevated: #363940;
+  --hover: #40434a;
+  --border: #494d55;
+  --text: #e6e8ea;
+  --text-muted: #9a9ea6;
+  --accent: #a4abb5;
+  --accent-contrast: #26282c;
+  --accent-soft: rgba(164, 171, 181, 0.16);
   --danger: #e0685b;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
@@ -490,6 +637,20 @@ button {
   height: 14px;
   border: 2px solid var(--border);
   border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: pm-spin 0.7s linear infinite;
+}
+
+/* Spinner sized to sit inline with button text, tinted to the button's own
+   text colour so it reads on the accent-filled primary button. */
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
   border-radius: 50%;
   animation: pm-spin 0.7s linear infinite;
 }
@@ -1593,6 +1754,19 @@ textarea:focus-visible {
   opacity: 1;
 }
 
+/* Loading shimmer behind a tile whose thumbnail is still on its way (freshly
+   imported photos, or thumbnails just coming into view). Same animation as the
+   Albums skeleton cards and the import "analyzing" placeholder (pm-skeleton).
+   Sits under the img (which fades in on top) and under the type badge. */
+.thumb-card .thumb-skeleton {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--bg-elevated) 30%, var(--hover) 50%, var(--bg-elevated) 70%);
+  background-size: 200% 100%;
+  animation: pm-skeleton 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
 /* Users who prefer reduced motion get everything immediately, no fades or
    entrance animations. */
 @media (prefers-reduced-motion: reduce) {
@@ -1600,6 +1774,7 @@ textarea:focus-visible {
   .detail-photo {
     transition: none;
   }
+  .thumb-card .thumb-skeleton,
   .page,
   .editor-overlay,
   .detail-photo {
@@ -2224,7 +2399,7 @@ input.editor-preset-select {
 
 .editor-footer-error {
   color: var(--danger);
-  font-size: 13px;
+  font-size: 12px;
   margin: 0;
 }
 
@@ -3159,14 +3334,17 @@ input.editor-preset-select {
 }
 
 /* A staged photo that's copied but not yet analyzed - fills the card where
-   the thumbnail will appear once the background analysis reaches it. */
+   the thumbnail will appear once the background analysis reaches it. Same
+   shimmer as the Albums page skeleton cards (pm-skeleton). */
 .thumb-analyzing {
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-elevated);
+  background: linear-gradient(90deg, var(--bg-elevated) 30%, var(--hover) 50%, var(--bg-elevated) 70%);
+  background-size: 200% 100%;
+  animation: pm-skeleton 1.4s ease-in-out infinite;
 }
 
 /* On the review page the sticky filter bar zeroes the page padding (see
@@ -3657,6 +3835,7 @@ input.editor-preset-select {
 
 .setup-error {
   margin: 14px 0 0;
+  font-size: 12px;
   color: var(--danger);
 }
 
@@ -4523,6 +4702,7 @@ kbd {
 
 /* Status / result line after an action; the error variant recolours only. */
 .settings-note {
+  font-size: 12px;
   color: var(--text-muted);
   margin: 10px 0 0;
 }
@@ -4586,6 +4766,12 @@ kbd {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* A control that belongs to the checkbox above it (e.g. Places -> radius):
+   indented to line up under the option's label, not its checkbox. */
+.settings-subcontrol {
+  margin: 4px 0 8px 24px;
 }
 
 /* A labelled text/password input that fills the reading column. */
@@ -4709,6 +4895,46 @@ kbd {
   display: block;
 }
 
+/* Mini mosaic of member photos filling an album card (smart cards and the
+   "My albums" cards). 4 photos = 2x2; fewer get bigger cells. */
+.cover-mosaic {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 2px;
+  background: var(--bg-elevated);
+}
+
+.cover-mosaic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 240ms ease;
+}
+
+.cover-mosaic img.loaded {
+  opacity: 1;
+}
+
+/* A single photo fills the card; two split it side by side; with three the
+   first (newest) photo takes the whole left half. */
+.cover-mosaic--1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.cover-mosaic--2 {
+  grid-template-rows: 1fr;
+}
+
+.cover-mosaic--3 img:first-child {
+  grid-row: span 2;
+}
+
 /* Caption readability over any cover photo. */
 .smart-card-caption {
   position: absolute;
@@ -4734,6 +4960,19 @@ kbd {
 
 /* Loading state for the smart-album rows: shimmering placeholder cards where
    the real ones will appear, so sections fade in instead of popping. */
+/* Transient status text shown after pressing a button ("Saved.", upload
+   results, errors). One shared look everywhere: small and muted, with an
+   --error variant for failures. The auto-dismiss lives in
+   utils/transientMessage.ts. */
+.status-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.status-note--error {
+  color: var(--danger);
+}
+
 @keyframes pm-skeleton {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }

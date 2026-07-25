@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTransientMessage } from "../utils/transientMessage";
 import { ThemePicker } from "./ThemePicker";
 import { SETTINGS_TOUR_KEY } from "./SettingsTour";
 
@@ -63,7 +64,8 @@ export function OnboardingWizard() {
   const [dataRoot, setDataRoot] = useState<string | null>(null);
   const [legacy, setLegacy] = useState<LegacyDir[] | null>(null); // null = not scanned yet
   const [removing, setRemoving] = useState(false);
-  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+  // Flash message - auto-dismisses after a moment.
+  const [cleanupResult, setCleanupResult] = useTransientMessage(8000);
 
   useEffect(() => {
     if (!open || !desktop) return;
@@ -187,12 +189,9 @@ export function OnboardingWizard() {
                   </button>
                 </>
               ) : (
-                <p style={{ color: "var(--text-muted)" }}>
+                <p className="status-note">
                   {cleanupResult ?? "Nothing left to clean up."}
                 </p>
-              )}
-              {cleanupResult && legacy && legacy.length === 0 && (
-                <p style={{ color: "var(--text-muted)" }}>{cleanupResult}</p>
               )}
             </div>
           )}

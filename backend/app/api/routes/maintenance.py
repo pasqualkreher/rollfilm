@@ -9,6 +9,7 @@ from app.db.models import User
 from app.db.session import get_db
 from app.services.maintenance import (
     build_backup_zip,
+    get_rebuild_progress,
     rebuild_all_thumbnails,
     repair_capture_dates,
     restore_from_backup,
@@ -37,6 +38,13 @@ def sync_library(db: Session = Depends(get_db), current_user: User = Depends(get
 @router.post("/rebuild-thumbnails", response_model=schemas.RebuildThumbnailsResult)
 def rebuild_thumbnails(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return rebuild_all_thumbnails(db, current_user.id)
+
+
+@router.get("/rebuild-progress", response_model=schemas.RebuildProgressOut)
+def rebuild_progress(current_user: User = Depends(get_current_user)):
+    """Live progress of a running rebuild-all-thumbnails job, polled by the
+    Settings page ("N of M photos"). Idle state has active=False."""
+    return get_rebuild_progress()
 
 
 @router.post("/repair-dates", response_model=schemas.RepairDatesResult)

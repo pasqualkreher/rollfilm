@@ -119,7 +119,7 @@ export function ExternalSources() {
         </button>
       </div>
       {addSource.isError && (
-        <p style={{ color: "var(--danger)" }}>{(addSource.error as Error).message}</p>
+        <p className="status-note status-note--error">{(addSource.error as Error).message}</p>
       )}
 
       {picking && (

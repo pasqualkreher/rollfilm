@@ -182,6 +182,54 @@ def test_tone_ratio_neutral_is_none():
     assert thumbnails._tone_ratio(np.array([0.5], dtype=np.float32), develop.defaults()) is None
 
 
+@pytest.mark.parametrize(
+    "sliders",
+    [
+        {"whites": -200},
+        {"blacks": -200},
+        {"whites": -200, "highlights": -200, "blacks": -200, "shadows": 200, "contrast": 100},
+        {"whites": 200, "highlights": 200, "blacks": 200, "shadows": -200, "contrast": -100},
+        {"shadows": -200, "blacks": 200, "highlights": 200, "whites": -200,
+         "contrast": -100, "brightness": 200},
+        {"shadows": 200, "blacks": -200, "highlights": -200, "whites": 200,
+         "contrast": 100, "brightness": -200},
+        {"exposure": 8.0, "whites": 200, "highlights": 200},
+        {"exposure": -8.0, "shadows": 200, "blacks": -200},
+    ],
+)
+def test_extended_slider_travel_stays_monotone(sliders):
+    """Beyond +-100 the hand-tuned region constants alone no longer guarantee
+    monotonicity - the isotonic guard in _tone_ratio must keep the curve from
+    folding back (it may plateau). Tolerance is float32 interpolation noise
+    (single-ULP), far below anything the 8-bit encode can show."""
+    adj = develop.defaults()
+    adj.update(sliders)
+    y = np.logspace(-5, 3, 4000, base=2.0).astype(np.float32)
+    ratio = thumbnails._tone_ratio(y, adj)
+    assert ratio is not None
+    assert not np.isnan(ratio).any()
+    y_out = y * ratio
+    assert np.all(np.diff(y_out) >= -1e-6)
+
+    ramp = np.repeat(np.logspace(-6, 3, 512, base=2.0).astype(np.float32)[None, :, None], 3, axis=2)
+    out = thumbnails._linear_tone_block(ramp, adj, base_gain=4.0)
+    assert not np.isnan(out).any()
+    assert np.all(np.diff(out[0, :, 0]) >= -1e-6)
+
+
+def test_guard_does_not_touch_classic_range():
+    """Within the classic +-100 travel the guard must never engage - existing
+    edits have to render bit-identically to the ungated curve."""
+    adj = develop.defaults()
+    adj.update({"whites": -100, "highlights": -100, "blacks": -100, "shadows": 100,
+                "contrast": 100, "brightness": 200})
+    y = np.logspace(-5, 3, 4000, base=2.0).astype(np.float32)
+    ratio = thumbnails._tone_ratio(y, adj)
+    y0 = np.maximum(y, 1e-6).astype(np.float32)
+    direct = thumbnails._tone_curve_y(y0, -1.0, 1.0, -1.0, -1.0, 1.0, 2.0)
+    assert np.array_equal(ratio, (direct / y0).astype(np.float32))
+
+
 # --- tonemap ------------------------------------------------------------------
 
 def test_reinhard_endpoints_and_monotonicity():

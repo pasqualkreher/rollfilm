@@ -36,12 +36,25 @@ def _to_album_out(db: Session, album: Album) -> schemas.AlbumOut:
         .filter(AlbumImage.album_id == album.id, Image.deleted_at.is_(None))
         .scalar()
     )
+    # The first few photos (in album order) feed the card's mosaic preview.
+    # JPEGs only - RAWs (dark render, usually doubling a JPEG of the same
+    # shot) only when the album holds no JPEG at all.
+    covers_base = (
+        db.query(AlbumImage.image_id)
+        .join(Image, Image.id == AlbumImage.image_id)
+        .filter(AlbumImage.album_id == album.id, Image.deleted_at.is_(None))
+        .order_by(AlbumImage.position.asc())
+    )
+    covers = covers_base.filter(Image.file_type == FileType.jpeg).limit(4).all()
+    if not covers:
+        covers = covers_base.limit(4).all()
     return schemas.AlbumOut(
         id=album.id,
         name=album.name,
         description=album.description,
         created_at=album.created_at,
         image_count=count,
+        cover_image_ids=[row[0] for row in covers],
         immich_sync=album.immich_sync,
     )
 

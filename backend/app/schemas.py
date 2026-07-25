@@ -220,6 +220,8 @@ class AlbumOut(BaseModel):
     description: str | None
     created_at: datetime
     image_count: int = 0
+    # Up to 4 member ids (album order) for the card's mini mosaic preview.
+    cover_image_ids: list[str] = []
     # Mirror this album to Immich (selective sync).
     immich_sync: bool = False
 
@@ -229,10 +231,12 @@ class SmartAlbumOut(BaseModel):
     # "place:48.1374,11.5755" / "country:Italy" / "country-year:Italy:2024" -
     # virtual, so the id encodes what the album *is* instead of naming a row.
     id: str
-    kind: Literal["cluster", "year", "month", "day", "place", "country", "country_year"]
+    kind: Literal["cluster", "year", "month", "day", "place", "country", "country_year", "edits"]
     name: str
     image_count: int
     cover_image_id: str | None = None
+    # Up to 4 member ids (newest first) for the card's mini mosaic preview.
+    cover_image_ids: list[str] = []
 
 
 class SmartAlbumsOut(BaseModel):
@@ -246,6 +250,7 @@ class SmartAlbumsOut(BaseModel):
     years: list[SmartAlbumOut]
     months: list[SmartAlbumOut]
     days: list[SmartAlbumOut]
+    edits: list[SmartAlbumOut]
 
 
 class SmartAlbumSettingsOut(BaseModel):
@@ -428,6 +433,35 @@ class AutoDevelopSettingsUpdate(BaseModel):
     enabled_groups: list[str] | None = None
 
 
+class BorgSettingsOut(BaseModel):
+    enabled: bool
+    repo: str | None
+    # The stored passphrase itself is never returned - only whether one is set.
+    passphrase_set: bool
+    # Whether the `borg` binary is installed on this machine; when false the UI
+    # shows install instructions and backups are disabled.
+    available: bool
+    # Live status of the background/manual backup runner.
+    running: bool
+    last_ok: bool | None
+    last_message: str
+    last_archive: str | None
+    last_finished_at: str | None
+
+
+class BorgSettingsUpdate(BaseModel):
+    enabled: bool
+    repo: str
+    # Omit / send null to keep the existing passphrase when only changing other
+    # fields; an empty string clears it (unencrypted repo).
+    passphrase: str | None = None
+
+
+class BorgTestResult(BaseModel):
+    ok: bool
+    message: str
+
+
 class ImmichTestResult(BaseModel):
     ok: bool
     message: str
@@ -518,6 +552,13 @@ class SyncResult(BaseModel):
 
 class RebuildThumbnailsResult(BaseModel):
     rebuilt: int
+
+
+class RebuildProgressOut(BaseModel):
+    # Live state of the (single) rebuild-all run: photos finished of total.
+    active: bool
+    total: int
+    done: int
 
 
 class ImmichActivityOut(BaseModel):

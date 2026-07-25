@@ -145,18 +145,44 @@ def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool) -> np.ndarray:
     return np.asarray(rgb16, dtype=np.float32) / 65535.0
 
 
-def load_linear_base(path: Path, half_size: bool = True) -> tuple[np.ndarray, float]:
+def _linearise_pil(im: PILImage.Image) -> np.ndarray:
+    """EXIF-orient an opened PIL image and linearise it with the sRGB EOTF.
+    Scales in place and skips the redundant astype so a full-frame JPEG needs
+    one float32 buffer plus the block temporaries, not three."""
+    im = ImageOps.exif_transpose(im).convert("RGB")
+    arr = np.asarray(im, dtype=np.float32)
+    arr /= 255.0
+    return _srgb_to_linear(arr)
+
+
+def load_linear_base(
+    path: Path, half_size: bool = True, max_px: int | None = None
+) -> tuple[np.ndarray, float]:
     """The develop pipeline's source of truth: a linear-light float32 RGB array
     plus its auto-exposure `base_gain` (1.0 in native-decode mode).
 
     RAW files are demosaiced linearly (see _demosaic_linear); a damaged file
     whose demosaic fails falls back to its embedded JPEG, linearised, with gain
     1.0 (the camera already exposed the JPEG). JPEG/PNG sources are decoded,
-    EXIF-oriented and linearised with the sRGB EOTF, gain 1.0."""
+    EXIF-oriented and linearised with the sRGB EOTF, gain 1.0.
+
+    `max_px` is the long edge the caller actually needs. It's the JPEG/PNG
+    counterpart of `half_size`: without it a 26MP camera JPEG was decoded at
+    full resolution to render a 2600px derivative, costing ~4x the pixels (and
+    ~2GB peak) of the RAW path for the same output. libjpeg decodes at the
+    smallest DCT scale (1/2, 1/4, 1/8) still at or above the target, so the
+    result is never smaller than requested - the caller's own LANCZOS/INTER_AREA
+    downscale does the rest, exactly as before. None = decode full size."""
     if not is_raw(path):
-        im = ImageOps.exif_transpose(PILImage.open(path)).convert("RGB")
-        arr = np.asarray(im, dtype=np.float32) / 255.0
-        return _srgb_to_linear(arr).astype(np.float32), 1.0
+        im = PILImage.open(path)
+        if max_px:
+            w, h = im.size
+            long_edge = max(w, h)
+            if long_edge > max_px:
+                scale = max_px / long_edge
+                # draft() is a no-op for non-JPEG formats (PNG has no DCT).
+                im.draft("RGB", (max(1, round(w * scale)), max(1, round(h * scale))))
+        return _linearise_pil(im), 1.0
 
     try:
         with rawpy.imread(str(path)) as raw:
@@ -176,12 +202,29 @@ def load_linear_base(path: Path, half_size: bool = True) -> tuple[np.ndarray, fl
             path,
             exc_info=True,
         )
-        arr = np.asarray(embedded, dtype=np.float32) / 255.0
-        return _srgb_to_linear(arr).astype(np.float32), 1.0
+        # Already EXIF-transposed by _embedded_jpeg; exif_transpose strips the
+        # orientation tag it honours, so running it again is a no-op.
+        return _linearise_pil(embedded), 1.0
 
 
 def is_raw(path: Path) -> bool:
     return path.suffix.lower() in RAW_EXTENSIONS
+
+
+def decode_reduction(path: Path, decoded_shape: tuple[int, ...]) -> float:
+    """How much smaller a `max_px`-budgeted decode came out than the unbudgeted
+    one (>= 1.0). Lets a caller that sizes its output as a *fraction of the
+    frame* keep that output identical while decoding less: multiply the fraction
+    by this. Always 1.0 for RAW, where max_px has no effect."""
+    if is_raw(path):
+        return 1.0
+    try:
+        with PILImage.open(path) as im:
+            original = max(_oriented_size(im))
+    except Exception:
+        return 1.0
+    decoded = max(decoded_shape[0], decoded_shape[1])
+    return original / decoded if decoded and original else 1.0
 
 
 def classify_file_type(path: Path) -> str | None:
