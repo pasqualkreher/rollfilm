@@ -101,6 +101,11 @@ const GRADE_RANGES: { key: GradeRange; label: string }[] = [
 const MASK_MIN_R = 0.02;
 const MASK_HANDLE_PX = 13;
 const MASK_ROT_OFF = 0.07;
+// Flags on a brush stroke sample ([x, y, size, flags]); must match
+// masks._PEN_DOWN / masks._ERASE on the backend, which uses them to recover
+// stroke boundaries and erase strokes from the flat sample list.
+const BRUSH_PEN_DOWN = 1;
+const BRUSH_ERASE = 2;
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 // Colour calibration: seven -100..100 sliders.
@@ -423,8 +428,14 @@ export function PhotoEditor({ image, onClose }: Props) {
     mode: string;
     start: { x: number; y: number };
     orig: Record<string, number>;
+    // Brush only: this stroke removes instead of paints, so every sample of it
+    // carries the erase flag (the mode is fixed at pointer-down, so releasing
+    // Alt mid-stroke doesn't switch it half way).
+    erase?: boolean;
   } | null>(null);
   const brushLast = useRef<{ x: number; y: number } | null>(null);
+  // Eraser latch for the brush; Alt inverts it for one stroke.
+  const [brushErase, setBrushErase] = useState(false);
   const [cropCursor, setCropCursor] = useState("crosshair");
   // Crop aspect-ratio lock (key into ASPECT_OPTIONS; "free" = unconstrained).
   const [aspectKey, setAspectKey] = useState("free");
@@ -840,6 +851,14 @@ export function PhotoEditor({ image, onClose }: Props) {
     };
   }
 
+  // Displayed image aspect (width/height). Needed wherever an x-fraction has to
+  // be compared with a y-fraction - they are fractions of different edges, so
+  // mixing them without this is not a distance (see the brush step).
+  function canvasAspect(): number {
+    const cv = canvasRef.current;
+    return cv && cv.height ? cv.width / cv.height : 1;
+  }
+
   // Current aspect lock as a fraction-space ratio (fw/fh), or null when free.
   // In crop mode the canvas holds the full framed image, so its pixels give the
   // image aspect A; a target ratio R becomes k = R / A in fraction space.
@@ -1023,9 +1042,12 @@ export function PhotoEditor({ image, onClose }: Props) {
       masks: a.masks.map((m) => (m.id === id ? { ...m, adjustments: { ...m.adjustments, [key]: v } } : m)),
     }));
   }
-  // Append one brush point [x, y, size] to the index-0 sub-mask's strokes.
-  function appendStroke(id: string, x: number, y: number, size: number) {
-    appendStrokes(id, [[x, y, size]]);
+  // Append one brush point to the index-0 sub-mask's strokes. `flags` marks the
+  // pointer-down sample and whether this is an erase stroke - the renderer needs
+  // the stroke boundaries to sweep each one as a continuous segment run (and to
+  // avoid drawing a line from where one stroke ended to where the next began).
+  function appendStroke(id: string, x: number, y: number, size: number, flags: number) {
+    appendStrokes(id, [[x, y, size, flags]]);
   }
   // Append several stroke points at once (a fast drag interpolates a run of
   // evenly-spaced points) in a single immutable update.
@@ -1258,7 +1280,8 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   // Pointer-down: hit-test the existing shape and begin the matching gesture
   // (move / resize / rotate / translate / paint), or a fresh draw when outside.
-  function maskPointerDown(clientX: number, clientY: number) {
+  // Stroke sample flags, mirroring masks._PEN_DOWN / masks._ERASE.
+  function maskPointerDown(clientX: number, clientY: number, altKey = false) {
     const mask = adj.masks.find((m) => m.id === selectedMaskId);
     const sub = mask?.sub_masks[0];
     if (!mask || !sub || !isSpatial(sub.type)) return;
@@ -1280,10 +1303,12 @@ export function PhotoEditor({ image, onClose }: Props) {
         updateSubMaskParams(mask.id, { start_x: p.x, start_y: p.y, end_x: p.x, end_y: p.y });
       }
     } else {
-      maskGesture.current = { type: "brush", maskId: mask.id, mode: "paint", start: p, orig: {} };
+      // Alt is the standard momentary eraser, on top of the panel's toggle.
+      const erasing = brushErase !== altKey;
+      maskGesture.current = { type: "brush", maskId: mask.id, mode: "paint", start: p, orig: {}, erase: erasing };
       brushLast.current = p;
       setMaskCursorPos(p);
-      appendStroke(mask.id, p.x, p.y, subNum(sub, "size", 0.06));
+      appendStroke(mask.id, p.x, p.y, subNum(sub, "size", 0.06), BRUSH_PEN_DOWN | (erasing ? BRUSH_ERASE : 0));
     }
   }
   function maskPointerMove(clientX: number, clientY: number) {
@@ -1349,20 +1374,31 @@ export function PhotoEditor({ image, onClose }: Props) {
         updateSubMaskParams(g.maskId, { start_x: g.start.x, start_y: g.start.y, end_x: p.x, end_y: p.y });
       }
     } else {
-      // Brush: interpolate evenly-spaced points along the segment since the last
-      // stamp so a fast drag paints a continuous, gap-free stroke.
+      // Brush: sample evenly along the segment since the last stamp. The
+      // renderer sweeps the samples as capsules, so this only has to be dense
+      // enough to follow the curve of the gesture, not dense enough to hide gaps.
       const sub = adj.masks.find((m) => m.id === g.maskId)?.sub_masks[0];
       const size = sub ? subNum(sub, "size", 0.06) : 0.06;
       setMaskCursorPos(p);
-      const step = Math.max(0.003, size * 0.5);
+      // x and y are fractions of *different* edges, so hypot() on them is not a
+      // distance - on a 3:2 photo a vertical drag measured 1.5x short and sampled
+      // that much coarser. Convert to fractions of the long edge (the unit `size`
+      // is in) before comparing against the step.
+      const a = canvasAspect();
+      const xToLong = a >= 1 ? 1 : a;
+      const yToLong = a >= 1 ? 1 / a : 1;
+      const step = Math.max(0.002, size * 0.5);
       const last = brushLast.current ?? p;
-      const dist = Math.hypot(p.x - last.x, p.y - last.y);
+      const dxl = (p.x - last.x) * xToLong;
+      const dyl = (p.y - last.y) * yToLong;
+      const dist = Math.hypot(dxl, dyl);
       if (dist >= step) {
         const n = Math.floor(dist / step);
+        const flags = g.erase ? BRUSH_ERASE : 0;
         const pts: number[][] = [];
         for (let i = 1; i <= n; i++) {
           const t = (i * step) / dist;
-          pts.push([last.x + (p.x - last.x) * t, last.y + (p.y - last.y) * t, size]);
+          pts.push([last.x + (p.x - last.x) * t, last.y + (p.y - last.y) * t, size, flags]);
         }
         appendStrokes(g.maskId, pts);
         const lastPt = pts[pts.length - 1];
@@ -1489,7 +1525,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                 return;
               }
               if (maskDrawMode) {
-                maskPointerDown(e.clientX, e.clientY);
+                maskPointerDown(e.clientX, e.clientY, e.altKey);
                 return;
               }
               if (cropMode) {
@@ -2099,6 +2135,33 @@ export function PhotoEditor({ image, onClose }: Props) {
                 resetValue={50}
                 onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
               />
+            )}
+            {selSub.type === "brush" && (
+              <>
+                <Slider
+                  label="Flow"
+                  value={subNum(selSub, "flow", 100)}
+                  min={1}
+                  max={100}
+                  resetValue={100}
+                  onChange={(v) => updateSubMaskParams(selectedMask.id, { flow: v })}
+                />
+                <Slider
+                  label="Density"
+                  value={subNum(selSub, "density", 100)}
+                  min={0}
+                  max={100}
+                  resetValue={100}
+                  onChange={(v) => updateSubMaskParams(selectedMask.id, { density: v })}
+                />
+                <button
+                  className={`btn btn-sm${brushErase ? " primary" : " ghost"}`}
+                  onClick={() => setBrushErase((v) => !v)}
+                  title="Paint to remove from this mask instead of adding — hold Alt for a single erase stroke"
+                >
+                  {brushErase ? "Erasing" : "Erase"}
+                </button>
+              </>
             )}
             {/* Linear has no Feather: the band width (start->end distance) IS the
                 softness, so the edge lines set it directly on the image. */}

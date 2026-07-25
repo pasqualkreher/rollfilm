@@ -4136,6 +4136,15 @@ kbd {
   fill: var(--accent-soft);
 }
 
+/* Painted brush dabs. The radial gradient in MaskOverlay carries the falloff and
+   paints in currentColor, so this only sets the hue and a guide-level opacity.
+   Overlapping dabs do accumulate a little - acceptable in a guide, and it reads
+   much like the flow build-up the render actually performs. */
+.mask-overlay-brush-dab {
+  color: var(--accent);
+  opacity: 0.42;
+}
+
 .mask-overlay-hint {
   opacity: 0.6;
   stroke-dasharray: 3 3;

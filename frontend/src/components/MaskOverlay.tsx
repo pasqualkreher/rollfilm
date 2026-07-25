@@ -22,6 +22,22 @@ const HANDLE_R = 1.0; // handle radius in viewBox-x units (grab tolerance is lar
 // PhotoEditor's MASK_ROT_OFF (0.07 fraction) so render + hit-test agree.
 const ROT_OFF_VB = 7;
 
+// Gradient stops tracing the brush dab's own falloff, so the guide softens
+// exactly where the render does. `offset` is a fraction of the dab radius:
+// opaque out to (1 - feather), then the same smoothstep the field uses, sampled
+// at four points because SVG interpolates linearly between stops.
+function brushFadeStops(feather: number): [number, number][] {
+  const core = 1 - feather;
+  const stops: [number, number][] = [[0, 1]];
+  if (feather <= 0) return [...stops, [1, 1]];
+  stops.push([core, 1]);
+  for (let k = 1; k <= 4; k++) {
+    const t = 1 - k / 4; // 0.75, 0.5, 0.25, 0
+    stops.push([core + (k / 4) * feather, t * t * (3 - 2 * t)]);
+  }
+  return stops;
+}
+
 export function MaskOverlay({
   sub,
   style,
@@ -144,23 +160,44 @@ export function MaskOverlay({
     );
   } else if (sub.type === "brush") {
     const strokes = Array.isArray(p.strokes) ? (p.strokes as number[][]) : [];
+    const feather = Math.min(1, Math.max(0, num("feather", 50) / 100));
+    // A dab is a circle of `size` * the image's LONG edge in pixels (matching
+    // masks._brush_field). The viewBox is stretched non-uniformly onto the image,
+    // so that circle is an ellipse here - and the two radii differ by the aspect.
+    // The old code drew r = size * 50 for both, which on a 3:2 photo was half the
+    // real width and a third of the real height: what you painted was not what
+    // got rendered.
+    const rx = (s: number) => Math.max(0.3, s * 100 * (aspect >= 1 ? 1 : 1 / aspect));
+    const ry = (s: number) => Math.max(0.3, s * 100 * (aspect >= 1 ? aspect : 1));
     shapes = (
       <>
+        <defs>
+          {/* Mirrors the render's falloff: solid out to (1 - feather) of the
+              radius, then smoothstep to nothing at the edge. Without this the
+              guide was a hard-edged disc and the Feather slider looked dead. */}
+          <radialGradient id="mask-brush-fade">
+            {brushFadeStops(feather).map(([offset, opacity], i) => (
+              <stop key={i} offset={`${offset * 100}%`} stopColor="currentColor" stopOpacity={opacity} />
+            ))}
+          </radialGradient>
+        </defs>
         {strokes.map((s, i) => (
-          <circle
+          <ellipse
             key={i}
             cx={(s[0] ?? 0) * 100}
             cy={(s[1] ?? 0) * 100}
-            r={Math.max(0.5, (s[2] ?? 0.06) * 50)}
-            className="mask-overlay-shape mask-overlay-fill"
-            vectorEffect="non-scaling-stroke"
+            rx={rx(s[2] ?? 0.06)}
+            ry={ry(s[2] ?? 0.06)}
+            className="mask-overlay-brush-dab"
+            fill="url(#mask-brush-fade)"
           />
         ))}
         {cursor && (
-          <circle
+          <ellipse
             cx={cursor.x * 100}
             cy={cursor.y * 100}
-            r={Math.max(0.5, cursor.size * 50)}
+            rx={rx(cursor.size)}
+            ry={ry(cursor.size)}
             className="mask-brush-ring"
             vectorEffect="non-scaling-stroke"
           />

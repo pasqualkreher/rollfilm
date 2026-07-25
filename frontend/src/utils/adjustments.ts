@@ -482,7 +482,10 @@ const _MASK_LABEL: Record<SubMaskType, string> = {
 const _DEFAULT_SUBMASK_PARAMS: Record<SubMaskType, SubMaskParams> = {
   radial: { center_x: 0.5, center_y: 0.5, radius_x: 0.25, radius_y: 0.25, rotation: 0, feather: 50 },
   linear: { start_x: 0.5, start_y: 0.2, end_x: 0.5, end_y: 0.8, feather: 50 },
-  brush: { strokes: [] as number[][], feather: 50, size: 0.06 },
+  // flow = how much one stroke lays down, density = the ceiling repeated strokes
+  // build toward. Both default to 100, i.e. a single stroke is fully opaque -
+  // the behaviour before they existed.
+  brush: { strokes: [] as number[][], feather: 50, size: 0.06, flow: 100, density: 100 },
   luminance: { range_min: 0, range_max: 50, feather: 35 },
   color: { target_r: 0.5, target_g: 0.5, target_b: 0.5, tolerance: 20, feather: 35 },
 };

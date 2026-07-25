@@ -59,54 +59,207 @@ def _linear_field(h: int, w: int, p: dict) -> np.ndarray:
     return _smoothstep(t).astype(np.float32)
 
 
-def _brush_field(h: int, w: int, p: dict) -> np.ndarray:
-    strokes = p.get("strokes") or []
-    feather = np.clip(float(p.get("feather", 50)) / 100.0, 1e-3, 1.0)
-    long_edge = max(h, w)
-    field = np.zeros((h, w), dtype=np.float32)
+def _stamp_capsule(
+    field: np.ndarray, ax: float, ay: float, bx: float, by: float, r: float, feather: float
+) -> None:
+    """Max-blend one round-capped segment (a "capsule") from A to B into `field`.
+
+    A stroke is swept as capsules rather than stamped as a dab per sample point:
+    dabs leave a scalloped edge whose depth depends on how fast the pointer moved
+    (a quick drag samples sparsely), so the same gesture produced a different
+    edge every time. The distance to a segment is exact, so the stroke's edge is
+    uniform along its whole length at any drawing speed."""
+    h, w = field.shape
+    x0 = max(0, int(np.floor(min(ax, bx) - r)))
+    x1 = min(w, int(np.ceil(max(ax, bx) + r)) + 1)
+    y0 = max(0, int(np.floor(min(ay, by) - r)))
+    y1 = min(h, int(np.ceil(max(ay, by) + r)) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return
+    px = np.arange(x0, x1, dtype=np.float32)[None, :] - ax
+    py = np.arange(y0, y1, dtype=np.float32)[:, None] - ay
+    abx = bx - ax
+    aby = by - ay
+    ab2 = abx * abx + aby * aby
+    if ab2 > 1e-6:
+        # Project each pixel onto the segment, clamped to its ends (round caps).
+        t = np.clip((px * abx + py * aby) / ab2, 0.0, 1.0)
+        dx = px - t * abx
+        dy = py - t * aby
+    else:
+        dx, dy = px + np.zeros_like(py), py + np.zeros_like(px)
+    d = np.sqrt(dx * dx + dy * dy) / r
+    dab = _smoothstep((1.0 - d) / feather)
+    np.maximum(field[y0:y1, x0:x1], dab, out=field[y0:y1, x0:x1])
+
+
+# Point flags in a stroke sample: [x, y, size, flags]. bit0 marks the first
+# sample of a stroke (pointer-down), bit1 marks an erase stroke. Samples saved
+# before these existed carry no flags - see _group_strokes.
+_PEN_DOWN = 1
+_ERASE = 2
+
+# Legacy fallback: without a pointer-down flag, treat a jump longer than this
+# many brush radii as the start of a new stroke. Painting samples at most half a
+# radius apart (see the editor's step), so real gaps are far larger than this.
+_LEGACY_BREAK_RADII = 2.5
+
+
+def _group_strokes(strokes: list, long_edge: int, w: int, h: int) -> list[tuple[bool, list]]:
+    """Split a flat sample list into (is_erase, [(x_px, y_px, r_px), ...]) strokes.
+
+    The samples of every stroke are stored in one flat array, so the boundaries
+    have to be recovered before the segments can be swept - joining the end of
+    one stroke to the start of the next would draw a line the user never
+    painted. New samples carry an explicit pointer-down flag; older ones are
+    split on a distance jump instead."""
+    out: list[tuple[bool, list]] = []
+    current: list[tuple[float, float, float]] = []
+    current_erase = False
     for pt in strokes:
         try:
-            px = float(pt[0]) * w
-            py = float(pt[1]) * h
-            r = max(float(pt[2]) * long_edge, 1.0) if len(pt) > 2 else 0.05 * long_edge
+            x = float(pt[0]) * w
+            y = float(pt[1]) * h
+            r = max(float(pt[2]) * long_edge, 0.5) if len(pt) > 2 else 0.05 * long_edge
+            flags = int(pt[3]) if len(pt) > 3 else -1
         except (TypeError, ValueError, IndexError):
             continue
-        # Stamp within the dab's bounding box only (cheap even for long strokes).
-        x0 = max(0, int(px - r))
-        x1 = min(w, int(px + r) + 1)
-        y0 = max(0, int(py - r))
-        y1 = min(h, int(py + r) + 1)
+        if flags >= 0:
+            starts = bool(flags & _PEN_DOWN)
+            erase = bool(flags & _ERASE)
+        else:
+            erase = current_erase
+            starts = bool(current) and (
+                np.hypot(x - current[-1][0], y - current[-1][1]) > _LEGACY_BREAK_RADII * r
+            )
+        if not current:
+            current_erase = erase
+        elif starts or erase != current_erase:
+            out.append((current_erase, current))
+            current = []
+            current_erase = erase
+        current.append((x, y, r))
+    if current:
+        out.append((current_erase, current))
+    return out
+
+
+def _brush_field(h: int, w: int, p: dict) -> np.ndarray:
+    """Painted mask with the flow/density build-up of a real brush.
+
+    Within one stroke the capsules are max-blended, so dragging back over your
+    own wet stroke doesn't darken it. Releasing and painting again composites a
+    *new* stroke at `flow`, easing toward `density` - the standard model, and the
+    reason a low flow lets you build an effect up gradually instead of it being
+    all-or-nothing."""
+    feather = np.clip(float(p.get("feather", 50)) / 100.0, 1e-3, 1.0)
+    flow = np.clip(float(p.get("flow", 100)) / 100.0, 1e-3, 1.0)
+    density = np.clip(float(p.get("density", 100)) / 100.0, 0.0, 1.0)
+    long_edge = max(h, w)
+    field = np.zeros((h, w), dtype=np.float32)
+    # One scratch buffer for the stroke currently being swept, reused across
+    # strokes. Only each stroke's own bounding box is ever touched - clearing and
+    # compositing the whole frame per stroke made the cost image-area x
+    # stroke-count, which on an editor-sized preview reached ~1.2s for 150
+    # strokes and would have stalled the live preview.
+    stroke_buf = np.empty((h, w), dtype=np.float32)
+    for is_erase, pts in _group_strokes(p.get("strokes") or [], long_edge, w, h):
+        rmax = max(r for _, _, r in pts)
+        x0 = max(0, int(np.floor(min(x for x, _, _ in pts) - rmax)))
+        x1 = min(w, int(np.ceil(max(x for x, _, _ in pts) + rmax)) + 1)
+        y0 = max(0, int(np.floor(min(y for _, y, _ in pts) - rmax)))
+        y1 = min(h, int(np.ceil(max(y for _, y, _ in pts) + rmax)) + 1)
         if x1 <= x0 or y1 <= y0:
             continue
-        lx = np.arange(x0, x1, dtype=np.float32) - px
-        ly = np.arange(y0, y1, dtype=np.float32) - py
-        d = np.sqrt(ly[:, None] ** 2 + lx[None, :] ** 2) / r
-        dab = _smoothstep((1.0 - d) / feather)
-        np.maximum(field[y0:y1, x0:x1], dab, out=field[y0:y1, x0:x1])
-    return field
+        # Views into the scratch buffer and the accumulator, in stroke-local
+        # coordinates - _stamp_capsule clips against the shape it is handed.
+        buf = stroke_buf[y0:y1, x0:x1]
+        buf.fill(0.0)
+        if len(pts) == 1:
+            x, y, r = pts[0]
+            _stamp_capsule(buf, x - x0, y - y0, x - x0, y - y0, r, feather)
+        else:
+            for (ax, ay, ar), (bx, by, br) in zip(pts, pts[1:]):
+                _stamp_capsule(buf, ax - x0, ay - y0, bx - x0, by - y0, max(ar, br), feather)
+        target = field[y0:y1, x0:x1]
+        if is_erase:
+            # Erasing scales what is already there toward 0, so a low flow wipes
+            # gradually the same way painting builds gradually.
+            target *= 1.0 - flow * buf
+        else:
+            target += flow * buf * np.maximum(density - target, 0.0)
+    return np.clip(field, 0.0, 1.0)
 
 
 def _luminance_field(arr: np.ndarray, p: dict) -> np.ndarray:
+    """Select a luminance window, with the falloff *centred* on each edge: at
+    exactly range_min / range_max the mask is at 0.5, so the numbers on the
+    sliders are the selection's real boundary and raising Feather softens the
+    transition without also widening the reach.
+
+    An edge parked at the extreme (0 or 100) gets no falloff at all - selecting
+    "shadows up to 50" must include pure black fully rather than fading it out."""
     lo = np.clip(float(p.get("range_min", 0)) / 100.0, 0.0, 1.0)
     hi = np.clip(float(p.get("range_max", 100)) / 100.0, 0.0, 1.0)
     if hi < lo:
         lo, hi = hi, lo
-    feather = np.clip(float(p.get("feather", 35)) / 100.0, 1e-3, 1.0) * 0.5
+    # Feather 100 spreads each edge over half the tonal range; +eps keeps feather
+    # 0 a hard threshold instead of a divide-by-zero.
+    fw = np.clip(float(p.get("feather", 35)) / 100.0, 0.0, 1.0) * 0.5 + 1e-4
     luma = np.clip(arr @ _LUMA, 0.0, 1.0)
-    lower = (luma - (lo - feather)) / feather
-    upper = ((hi + feather) - luma) / feather
+    big = np.float32(1e3)
+    lower = big if lo <= 0.0 else (luma - lo) / fw + 0.5
+    upper = big if hi >= 1.0 else (hi - luma) / fw + 0.5
     return _smoothstep(np.minimum(lower, upper)).astype(np.float32)
 
 
+# How much a brightness difference counts next to a hue/saturation one in the
+# colour mask. Low on purpose: the point of a colour mask is to catch one
+# material across the light falling on it, so a shadowed red shirt and a sunlit
+# one stay the same selection. Not zero, or black and white (both colourless, so
+# identical in chromaticity) would be indistinguishable.
+_COLOR_LUMA_WEIGHT = 0.35
+# Chromaticities live on the r+g+b=1 plane, where the farthest two points (pure
+# primaries) are sqrt(2) apart - normalising by that puts `dist` on 0..1.
+_CHROMA_NORM = float(np.sqrt(2.0))
+
+
+# Below this sum of channels a pixel carries no usable hue - the division would
+# amplify sensor noise (or, at exactly 0, produce nothing at all) into a wild
+# chromaticity. Such pixels are treated as neutral so they compare on the
+# brightness term instead of on noise.
+_CHROMA_FLOOR = 0.03
+
+
+def _chromaticity(rgb: np.ndarray) -> np.ndarray:
+    """Brightness-normalised colour (r,g,b)/(r+g+b). Dividing out intensity is
+    what makes the selection survive shading: on a matte surface, light only
+    scales all three channels, which leaves this unchanged."""
+    total = rgb.sum(axis=-1, keepdims=True)
+    neutral = np.float32(1.0 / 3.0)
+    return np.where(total > _CHROMA_FLOOR, rgb / np.maximum(total, 1e-6), neutral)
+
+
 def _color_field(arr: np.ndarray, p: dict) -> np.ndarray:
+    """Select pixels near a target colour. Distance is measured in chromaticity
+    (plus a weak brightness term, see _COLOR_LUMA_WEIGHT) rather than straight
+    RGB: in RGB the same material in sun and in shade is far apart, so a plain
+    RGB radius could never select an object - only a narrow band of one exposure
+    of it.
+
+    Like the luminance mask, `tolerance` is the 0.5 crossing and Feather only
+    controls how soft that crossing is."""
     target = np.array(
         [float(p.get("target_r", 0.5)), float(p.get("target_g", 0.5)), float(p.get("target_b", 0.5))],
         dtype=np.float32,
     )
     tol = np.clip(float(p.get("tolerance", 20)) / 100.0, 1e-3, 1.0)
     feather = np.clip(float(p.get("feather", 35)) / 100.0, 0.0, 1.0)
-    dist = np.sqrt(((arr - target) ** 2).sum(axis=-1)) / np.sqrt(3.0)  # 0..1
-    return _smoothstep((tol - dist) / (tol * feather + 1e-3) + 1.0).astype(np.float32)
+    chroma_d = np.sqrt(((_chromaticity(arr) - _chromaticity(target)) ** 2).sum(axis=-1)) / _CHROMA_NORM
+    luma_d = np.abs(np.clip(arr @ _LUMA, 0.0, 1.0) - float(np.clip(target @ _LUMA, 0.0, 1.0)))
+    dist = np.sqrt(chroma_d * chroma_d + (_COLOR_LUMA_WEIGHT * luma_d) ** 2)
+    fw = tol * feather + 1e-4
+    return _smoothstep((tol - dist) / fw + 0.5).astype(np.float32)
 
 
 def _submask_field(sm: dict, h: int, w: int, arr: np.ndarray) -> np.ndarray:
