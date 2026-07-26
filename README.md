@@ -1,11 +1,40 @@
+<div align="center">
+
+<img src="https://rollfilm.org/logo.svg" alt="Rollfilm logo" width="90">
+
 # Rollfilm
 
-A privacy-first **desktop app** for managing your photo library, with semantic search, map & timeline browsing, RAW support — and first-class [Immich](https://immich.app) integration. Installers are available for macOS, Windows, and Linux — no server, no Docker, no setup.
+**Import, organize and manage your photos. All on your own computer.**
 
-Your photos stay on your own machine. The app imports them into a managed library, makes them searchable with natural language, and can optionally mirror your library to an existing Immich server.
+A privacy-first desktop photo manager with local AI search, map & timeline browsing,
+RAW support — and first-class [Immich](https://immich.app) integration.
+No account, no cloud, no Docker, no setup.
+
+[![Latest release](https://img.shields.io/github/v/release/pasqualkreher/Rollfilm?label=release&color=4c8dae)](https://github.com/pasqualkreher/Rollfilm/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/pasqualkreher/Rollfilm/total?color=4c8dae)](https://github.com/pasqualkreher/Rollfilm/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Windows%20·%20Linux-lightgrey)](#download--installation)
+
+**[rollfilm.org](https://rollfilm.org)** · [Download](#download--installation) · [Screenshots](#screenshots) · [Features](#features) · [FAQ](https://rollfilm.org/#faq)
+
+<a href="https://rollfilm.org"><img src="https://rollfilm.org/assets/library.jpg" alt="Rollfilm library view" width="850"></a>
+
+</div>
+
+Your photos stay on your own machine. Rollfilm imports them into a managed library, makes them searchable with natural language, and can optionally mirror your library to an existing Immich server.
 
 > **Project status: work in progress.**
 > This is an early but already very usable release that I wanted to share. The core — import pipeline, library organization, semantic search, and especially the Immich integration — works well. The built-in photo editor is experimental and should be seen as a fun extra rather than a finished feature (see [Photo editor](#photo-editor-experimental)).
+
+## Screenshots
+
+More on [rollfilm.org](https://rollfilm.org/#screenshots).
+
+| | |
+| :---: | :---: |
+| <img src="https://rollfilm.org/assets/search.jpg" alt="Semantic search" width="420"><br>**Semantic search** — describe what you remember | <img src="https://rollfilm.org/assets/map.jpg" alt="Map view" width="420"><br>**Map view** — every geotagged photo |
+| <img src="https://rollfilm.org/assets/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="https://rollfilm.org/assets/immich.jpg" alt="Immich integration" width="420"><br>**Immich sync** — your library, mirrored |
+| <img src="https://rollfilm.org/assets/edit-film.jpg" alt="Photo editor with film simulations" width="420"><br>**Editor** — non-destructive, with film sims | <img src="https://rollfilm.org/assets/themes.jpg" alt="Color themes" width="420"><br>**20+ themes** — light, dark and in between |
 
 ## Features
 
@@ -14,7 +43,7 @@ Your photos stay on your own machine. The app imports them into a managed librar
 - **RAW support** (via rawpy) with automatic RAW+JPEG pairing
 - **EXIF extraction** (ExifTool) and reverse geocoding of GPS coordinates to country/place
 - **Near-duplicate detection** during import using perceptual hashes
-- Albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
+- Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
 - **Trash** with configurable retention and automatic background purge
 
 ### Search & browsing
@@ -22,7 +51,7 @@ Your photos stay on your own machine. The app imports them into a managed librar
 - Image-to-image similarity search
 - **Map view** (Leaflet) of all geotagged photos
 - Timeline scrubber, thumbnail grid, lightbox
-- Multiple light & dark **color themes** (skins) — from a clean Light/Dark to Sepia, Nord, Forest and more
+- **20+ light & dark color themes** — from a clean Light/Dark to Sepia, Nord, Forest and more
 
 ### Immich integration ⭐
 This is one of the highlights of the project: keep your library mirrored to an existing [Immich](https://immich.app) server without giving up local-first management.
@@ -45,12 +74,12 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 
 - All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
 - Edits are stored as values in the database; originals are never touched
-- Exposure/contrast/highlights/shadows, white balance, HSL color mixer, tone curves, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
+- Exposure/contrast/highlights/shadows, white balance, HSL color mixer, tone curves, color grading wheels, crop/rotate/perspective, masks, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
 - **Auto develop** — an optional "Auto" button that suggests develop settings *learned from your own edits*: a local CLIP k-nearest-neighbor recommender finds the photos you've already edited that look most like the one you're working on and blends their settings. No training step, no cloud — every edit you save immediately makes the next suggestion better. Works on a single photo or a whole selection at once
 
 ## Download & installation
 
-Prebuilt installers for macOS, Windows, and Linux are available on the [Releases page](https://github.com/pasqualkreher/Rollfilm/releases/latest).
+Prebuilt installers for macOS, Windows, and Linux are on the [Releases page](https://github.com/pasqualkreher/Rollfilm/releases/latest) and on [rollfilm.org](https://rollfilm.org/#download).
 
 | Platform | File | Notes |
 | --- | --- | --- |
@@ -136,9 +165,12 @@ Notable design decisions:
 - The photo editor is experimental (see above)
 - No test suite yet (pytest is set up, tests are WIP)
 - Single-user only — no accounts or sharing
-- No screenshots in this README yet 🙂
 
 Issues and pull requests are welcome, but please keep in mind this is a hobby project — response times may vary.
+
+## Support
+
+Rollfilm is free and open source, built in my spare time. If it's useful to you, a star on GitHub or a mention to a friend already helps. More on [rollfilm.org](https://rollfilm.org/#about).
 
 ## License
 
