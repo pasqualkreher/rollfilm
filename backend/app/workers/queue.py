@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -23,16 +22,19 @@ from app.services.immich import (
     upload_asset,
 )
 from app.services.raw import extract_preview
-from app.services.thumbnails import generate_derivatives, has_derivatives
+from app.services.thumbnails import RENDER_SLOTS, generate_derivatives, has_derivatives
 
 logger = logging.getLogger(__name__)
 
 # A personal photo library doesn't need a broker - a single background
 # thread pool inside the same process is enough to keep import requests
 # fast while thumbnails/embeddings generate asynchronously. The per-image work
-# (full RAW demosaic + CLIP encode) is the import bottleneck, so scale the pool
-# with the CPU (capped so a big import doesn't peg every core / exhaust RAM).
-_POST_IMPORT_WORKERS = min(4, max(2, os.cpu_count() or 2))
+# (full RAW demosaic + CLIP encode) is the import bottleneck. RAM safety lives
+# in the render semaphore (RENDER_SLOTS), not here - so size the pool to keep
+# every render slot busy plus a couple of workers overlapping the non-render
+# work (CLIP encode, JPEG writes, DB) instead of a flat cap of 4 that left
+# render slots idle on bigger machines.
+_POST_IMPORT_WORKERS = min(8, max(2, RENDER_SLOTS + 2))
 _executor = ThreadPoolExecutor(
     max_workers=_POST_IMPORT_WORKERS, thread_name_prefix="post-import"
 )

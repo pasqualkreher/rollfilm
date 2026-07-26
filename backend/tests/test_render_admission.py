@@ -56,9 +56,15 @@ def _slots_for_ram(monkeypatch, ram_bytes: int) -> int:
 
 def test_render_slots_bounded_by_ram(monkeypatch):
     """On a RAM-poor machine the budget, not the core count, has to be what
-    limits the fleet - a third of RAM at ~1GB per render."""
-    slots = _slots_for_ram(monkeypatch, 8 * 1024**3)
-    assert slots <= 8 * 1024**3 // 3 // thumbnails._PEAK_BYTES_PER_RENDER
+    limits the fleet - whatever RAM exceeds the fixed OS/app floor (or a third
+    of RAM, whichever is larger) at ~1GB per render."""
+    ram = 8 * 1024**3
+    slots = _slots_for_ram(monkeypatch, ram)
+    budget = max(ram // 3, ram - thumbnails._RAM_FLOOR_BYTES)
+    assert slots <= budget // thumbnails._PEAK_BYTES_PER_RENDER
+    # The budget must still bind on 8GB - fewer slots than the core rule alone.
+    if (os.cpu_count() or 4) > 5:
+        assert slots < (os.cpu_count() or 4) - 2
 
 
 def test_a_tiny_machine_still_gets_one_slot(monkeypatch):

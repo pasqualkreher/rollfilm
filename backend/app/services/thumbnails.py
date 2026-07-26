@@ -134,13 +134,25 @@ def _physical_ram_bytes() -> int | None:
         return None
 
 
+# What the rest of the machine needs regardless of how much RAM it has: the
+# OS, the Electron shell, the backend itself and the CLIP model together sit
+# around 4-5GB. That cost is fixed, not proportional - which is why the budget
+# below is "everything above this floor" rather than only a fraction of RAM:
+# a plain one-third rule starved an 8GB machine down to 2 slots while six
+# cores idled through an import.
+_RAM_FLOOR_BYTES = 5 * 1024**3
+
+
 def _render_slot_count() -> int:
     # Leave two cores for everything that isn't photo processing.
     slots = max(1, (os.cpu_count() or 4) - 2)
     ram = _physical_ram_bytes()
     if ram:
-        # Budget a third of RAM for concurrent renders; the rest is headroom.
-        slots = min(slots, max(1, int(ram // 3 // _PEAK_BYTES_PER_RENDER)))
+        # Whichever is larger: a third of RAM (small machines) or what's left
+        # above the fixed floor (everything else). Still a hard cap - the
+        # unbounded version of this took the machine into swap.
+        budget = max(ram // 3, ram - _RAM_FLOOR_BYTES)
+        slots = min(slots, max(1, int(budget // _PEAK_BYTES_PER_RENDER)))
     return slots
 
 
