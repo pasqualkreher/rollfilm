@@ -12,6 +12,7 @@
 //      desktop: any host path is directly readable by the native backend).
 
 const { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } = require("electron");
+const { initAutoUpdate } = require("./updater");
 const { spawn, spawnSync } = require("child_process");
 const net = require("net");
 const http = require("http");
@@ -887,6 +888,17 @@ app.whenReady().then(async () => {
   apiPort = await getFreePort();
   apiBaseUrl = `http://127.0.0.1:${apiPort}`;
   registerActivateHandler();
+
+  // Update checks run detached from startup (first one after a delay, see
+  // updater.js) - they must never delay the splash/window flow here.
+  initAutoUpdate({
+    getMainWindow: () => mainWindow,
+    // quitAndInstall must not be intercepted by the "uploads still running"
+    // close dialog - the user already chose to restart.
+    allowQuit: () => {
+      forceClose = true;
+    },
+  });
 
   if (isFirstStart) {
     // First run: instead of a native "choose your library" message box, open the

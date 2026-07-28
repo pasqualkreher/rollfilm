@@ -79,7 +79,10 @@ if (isWin) {
 }
 
 const targetFlag = isMac ? "--mac" : isWin ? "--win" : "--linux";
-run(`Package installer (electron-builder ${targetFlag})`, "npx", ["electron-builder", targetFlag], {
+// --publish never: the "publish" config in electron/package.json exists so the
+// packaged app knows where to look for updates (app-update.yml); actually
+// uploading release assets is the CI workflow's job, never the build's.
+run(`Package installer (electron-builder ${targetFlag})`, "npx", ["electron-builder", targetFlag, "--publish", "never"], {
   cwd: electronDir,
 });
 

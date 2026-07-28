@@ -256,9 +256,9 @@ export function Help() {
         <p>
           Click any photo to open it. Scroll or pinch to zoom toward the cursor, drag to pan,
           double-click to jump between fit and 100%. Below the photo: its EXIF details, tags, albums,
-          a <strong>"Similar photos"</strong> strip (found by visual similarity),{" "}
-          <strong>"Download original"</strong>, and <strong>"Export…"</strong> — a full-resolution
-          JPEG with your edits baked in, at a quality and size you choose (several photos at once
+          a <strong>"Similar photos"</strong> strip (found by visual similarity), and{" "}
+          <strong>"Export…"</strong> — a full-resolution JPEG with your edits baked in at a quality
+          and size you choose, or the original file 1:1 with all meta tags (several photos at once
           export from the Selects page).
         </p>
 

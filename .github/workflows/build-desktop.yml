@@ -126,7 +126,10 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          files=(electron/dist-app/*.dmg electron/dist-app/*.exe electron/dist-app/*.AppImage)
+          # latest*.yml + blockmaps are what the in-app auto-updater
+          # (electron-updater) reads to discover and delta-download a release.
+          files=(electron/dist-app/*.dmg electron/dist-app/*.exe electron/dist-app/*.AppImage
+                 electron/dist-app/latest*.yml electron/dist-app/*.blockmap)
           if [ ${#files[@]} -eq 0 ]; then
             echo "::error::No installer found in electron/dist-app/"
             exit 1

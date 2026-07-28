@@ -1,6 +1,6 @@
 {
   "name": "rollfilm-desktop",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Rollfilm — native desktop photo library & film-look editor",
   "main": "main.js",
   "author": "Pasqual Kreher",
@@ -29,9 +29,17 @@
   "build": {
     "appId": "com.pasqualkreher.rollfilm",
     "productName": "Rollfilm",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "pasqualkreher",
+        "repo": "rollfilm"
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",
+      "updater.js",
       "splash.html",
       "renderer/**/*"
     ],
@@ -65,5 +73,8 @@
       "category": "Graphics",
       "icon": "build/icon.png"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

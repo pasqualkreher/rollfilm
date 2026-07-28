@@ -684,18 +684,11 @@ export function ImageDetail() {
             </tbody>
           </table>
 
-            <a
-              className="btn"
-              href={api.images.originalUrl(image.id)}
-              style={{ display: "block", marginTop: 14, textAlign: "center" }}
-            >
-              Download original
-            </a>
             <button
               className="btn"
-              style={{ display: "block", width: "100%", marginTop: 8, textAlign: "center" }}
+              style={{ display: "block", width: "100%", marginTop: 14, textAlign: "center" }}
               onClick={() => setExportOpen(true)}
-              title="Export a JPEG with your edits baked in, at a quality and size of your choice"
+              title="Export a JPEG with your edits baked in, or download the original file 1:1 with all meta tags"
             >
               Export…
             </button>

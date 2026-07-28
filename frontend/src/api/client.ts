@@ -476,9 +476,6 @@ export const api = {
     basePreviewUrl(id: string, version?: string): string {
       return derivativeUrl(`/images/${id}/base-preview`, version);
     },
-    originalUrl(id: string): string {
-      return assetUrl(`/images/${id}/original`);
-    },
   },
   albums: {
     list(): Promise<AlbumOut[]> {

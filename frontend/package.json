@@ -2,7 +2,7 @@
   "name": "rollfilm-frontend",
   "private": true,
   "license": "MIT",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
