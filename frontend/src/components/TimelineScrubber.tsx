@@ -1,26 +1,60 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+// The rail draws two tick levels: a bold "primary" line where `tickGroup`
+// changes (the library's years) and a small "secondary" line for the sections
+// between (the library's months). Callers may set these per section to rescale
+// the hierarchy - the import review scrubs month→day instead of year→month.
+// When omitted, the defaults below split "July 2026"-style labels.
+export interface ScrubberSection {
+  label: string; // unique key, bubble text, and getSectionEl lookup key
+  tickGroup?: string;
+  tickPrimary?: string;
+  tickSecondary?: string;
+}
+
 interface Props {
   // Returns the scrolling ancestor (the `.page`) and the DOM node for a given
-  // month section, resolved lazily since they mount after this component.
+  // section, resolved lazily since they mount after this component.
   getScroller: () => HTMLElement | null;
   getSectionEl: (label: string) => HTMLElement | null;
-  sections: { label: string }[];
+  sections: ScrubberSection[];
+  // Extra space to keep clear at the rail's bottom end, e.g. the import
+  // review's fixed bottom action bar (which would otherwise cover the rail's
+  // lower markers). Read during recompute, so it may measure a live element.
+  getBottomInset?: () => number;
 }
 
 interface Marker {
   label: string;
-  year: string;
-  month: string;
+  group: string; // primary ticks appear where this changes
+  primary: string;
+  secondary: string;
   frac: number; // 0..1 position along the rail
 }
 
+// "July 2026" splits into a year and a month line; a label without a trailing
+// year (the "Unknown date" bucket of photos whose EXIF hasn't been read yet)
+// renders as a single line instead of a nonsense "date / Unk" split.
+function hasYear(label: string): boolean {
+  return /^\d{4}$/.test(label.split(" ").pop() ?? "");
+}
+
 function yearOf(label: string): string {
-  return label.split(" ").pop() ?? label;
+  return hasYear(label) ? label.split(" ").pop()! : label;
 }
 
 function monthOf(label: string): string {
-  return (label.split(" ")[0] ?? label).slice(0, 3);
+  return hasYear(label) ? (label.split(" ")[0] ?? label).slice(0, 3) : label.slice(0, 3);
+}
+
+function toMarkerFields(s: ScrubberSection): Omit<Marker, "frac"> {
+  const primary = s.tickPrimary ?? yearOf(s.label);
+  return {
+    label: s.label,
+    group: s.tickGroup ?? primary,
+    primary,
+    secondary: s.tickSecondary ?? monthOf(s.label),
+  };
 }
 
 // Markers, the handle and the drag hit-testing all map a 0..1 fraction onto the
@@ -43,7 +77,7 @@ const RAIL_GAP = 6;
  * year/month markers positioned by where each section sits in the scroll range,
  * draggable to jump to a date, with a bubble showing the current month.
  */
-export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props) {
+export function TimelineScrubber({ getScroller, getSectionEl, sections, getBottomInset }: Props) {
   const railRef = useRef<HTMLDivElement | null>(null);
   const [markers, setMarkers] = useState<Marker[]>([]);
   const [currentFrac, setCurrentFrac] = useState(0);
@@ -58,6 +92,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
   // top, since the rail is anchored to the first photo, not to scrollTop 0).
   const rangeRef = useRef({ firstOffset: 0, span: 1 });
   const [railTop, setRailTop] = useState(120);
+  const [railBottom, setRailBottom] = useState(RAIL_GAP);
   const [railHeight, setRailHeight] = useState(0);
 
   const recompute = useCallback(() => {
@@ -69,9 +104,13 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
 
     // Anchor the rail just below the filter bar (the scroll area's top) and give
     // it the SAME gap at the bottom, so its top and bottom breathing room match.
+    // A caller with a fixed bottom bar (the import review) grows the bottom gap
+    // so the rail ends above the bar instead of running underneath it.
     const top = scrollerTop + RAIL_GAP;
+    const bottom = RAIL_GAP + (getBottomInset?.() ?? 0);
     setRailTop(top);
-    setRailHeight(Math.max(0, window.innerHeight - RAIL_GAP - top));
+    setRailBottom(bottom);
+    setRailHeight(Math.max(0, window.innerHeight - bottom - top));
 
     // Each section's content offset, then map them onto the rail RELATIVE to
     // the topmost section: its offset becomes frac 0 (the rail's top), so the
@@ -80,28 +119,26 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
     // the scroll range - invisible in a long library, but in one that barely
     // scrolls it pushes the first label well down the rail.
     const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
-    const raw: { label: string; offset: number }[] = [];
-    for (const { label } of sections) {
-      const el = getSectionEl(label);
+    const raw: { section: ScrubberSection; offset: number }[] = [];
+    for (const section of sections) {
+      const el = getSectionEl(section.label);
       if (!el) continue;
-      raw.push({ label, offset: el.getBoundingClientRect().top - scrollerTop + scroller.scrollTop });
+      raw.push({ section, offset: el.getBoundingClientRect().top - scrollerTop + scroller.scrollTop });
     }
     const firstOffset = raw.length ? Math.min(...raw.map((r) => r.offset)) : 0;
     const span = Math.max(1, maxScroll - firstOffset);
     rangeRef.current = { firstOffset, span };
 
-    const next: Marker[] = raw.map(({ label, offset }) => ({
-      label,
-      year: yearOf(label),
-      month: monthOf(label),
+    const next: Marker[] = raw.map(({ section, offset }) => ({
+      ...toMarkerFields(section),
       frac: clamp01((offset - firstOffset) / span),
     }));
-    // Deepest section still at/above the fold - the month you're currently in.
-    const topmost = raw.filter((r) => r.offset <= scroller.scrollTop + 4).pop()?.label ?? null;
+    // Deepest section still at/above the fold - the one you're currently in.
+    const topmost = raw.filter((r) => r.offset <= scroller.scrollTop + 4).pop()?.section.label ?? null;
     setMarkers(next);
     setCurrentFrac(clamp01((scroller.scrollTop - firstOffset) / span));
     if (!dragging) setActiveLabel(topmost ?? next[0]?.label ?? null);
-  }, [getScroller, getSectionEl, sections, dragging]);
+  }, [getScroller, getSectionEl, sections, dragging, getBottomInset]);
 
   useEffect(() => {
     const scroller = getScroller();
@@ -148,8 +185,9 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
       setCurrentFrac(clamped);
       // Show the section that's actually at the top after this scroll - the
       // last marker at or above the drag position - so the bubble matches the
-      // grid (nearest-marker would flip to the next month a bit too early).
-      // markers are in document order (newest first) => ascending frac.
+      // grid (nearest-marker would flip to the next section a bit too early).
+      // Markers are in document order => ascending frac, regardless of whether
+      // the timeline runs newest-first (library) or oldest-first (import).
       let topmost = markers[0]?.label ?? null;
       for (const m of markers) {
         if (m.frac <= clamped + 1e-4) topmost = m.label;
@@ -189,75 +227,82 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections }: Props)
   // fracFromEvent via RAIL_INSET so clicks land on the label they point at.
   const posTop = (frac: number) => `calc(${frac} * (100% - ${RAIL_INSET * 2}px) + ${RAIL_INSET}px)`;
 
-  // Declutter: with many months (or a short rail) the raw markers overlap into
-  // an unreadable stack. Ticks are centered on their position (translateY -50%);
-  // a year tick is two lines (~22px), a month tick one (~10px). Years are
-  // placed first and always win their space; a month label only renders when
-  // it clears the previously placed tick AND the next year tick below it -
-  // without that look-ahead, months sat right on top of the next year's label.
-  // Dropped months are only labels: dragging still scrolls through them.
-  const YEAR_SPACING = 30;
-  const MONTH_TO_MONTH = 16;
-  const MONTH_TO_YEAR = 22;
+  // Declutter: with many sections (or a short rail) the raw markers overlap
+  // into an unreadable stack. Ticks are centered on their position (translateY
+  // -50%); a primary tick (year, or month in the import's month→day scale) is
+  // two lines (~22px), a secondary tick one (~10px). Primaries are placed
+  // first and always win their space; a secondary label only renders when it
+  // clears the previously placed tick AND the next primary tick below it -
+  // without that look-ahead, secondaries sat right on top of the next
+  // primary's label. Dropped ticks are only labels: dragging still scrolls
+  // through them.
+  const PRIMARY_SPACING = 30;
+  const SECONDARY_TO_SECONDARY = 16;
+  const SECONDARY_TO_PRIMARY = 22;
   const usable = Math.max(0, railHeight - RAIL_INSET * 2);
-  const seenYears = new Set<string>();
+  const seenGroups = new Set<string>();
   const annotated = markers.map((m) => {
-    const isYearStart = !seenYears.has(m.year);
-    if (isYearStart) seenYears.add(m.year);
-    return { m, y: m.frac * usable, isYearStart };
+    const isGroupStart = !seenGroups.has(m.group);
+    if (isGroupStart) seenGroups.add(m.group);
+    return { m, y: m.frac * usable, isGroupStart };
   });
-  const yearTicks: typeof annotated = [];
-  let lastYearY = -Infinity;
+  const primaryTicks: typeof annotated = [];
+  let lastPrimaryY = -Infinity;
   for (const a of annotated) {
-    if (a.isYearStart && a.y - lastYearY >= YEAR_SPACING) {
-      yearTicks.push(a);
-      lastYearY = a.y;
+    if (a.isGroupStart && a.y - lastPrimaryY >= PRIMARY_SPACING) {
+      primaryTicks.push(a);
+      lastPrimaryY = a.y;
     }
   }
-  const yearTickSet = new Set(yearTicks);
-  const shown: { marker: Marker; showYear: boolean }[] = [];
-  let nextYearIdx = 0;
+  const primaryTickSet = new Set(primaryTicks);
+  const shown: { marker: Marker; showPrimary: boolean }[] = [];
+  let nextPrimaryIdx = 0;
   let prevY = -Infinity;
-  let prevWasYear = false;
+  let prevWasPrimary = false;
   for (const a of annotated) {
-    if (yearTickSet.has(a)) {
-      shown.push({ marker: a.m, showYear: true });
+    if (primaryTickSet.has(a)) {
+      shown.push({ marker: a.m, showPrimary: true });
       prevY = a.y;
-      prevWasYear = true;
-      nextYearIdx++;
+      prevWasPrimary = true;
+      nextPrimaryIdx++;
       continue;
     }
-    // A year-start whose year label was dropped (years too dense): showing it
-    // as a bare month would just re-crowd the space the drop freed up.
-    if (a.isYearStart) continue;
-    if (a.y - prevY < (prevWasYear ? MONTH_TO_YEAR : MONTH_TO_MONTH)) continue;
-    const nextYear = yearTicks[nextYearIdx];
-    if (nextYear && nextYear.y - a.y < MONTH_TO_YEAR) continue;
-    shown.push({ marker: a.m, showYear: false });
+    // A group-start whose primary label was dropped (primaries too dense):
+    // showing it as a bare secondary would just re-crowd the freed-up space.
+    if (a.isGroupStart) continue;
+    if (a.y - prevY < (prevWasPrimary ? SECONDARY_TO_PRIMARY : SECONDARY_TO_SECONDARY)) continue;
+    const nextPrimary = primaryTicks[nextPrimaryIdx];
+    if (nextPrimary && nextPrimary.y - a.y < SECONDARY_TO_PRIMARY) continue;
+    shown.push({ marker: a.m, showPrimary: false });
     prevY = a.y;
-    prevWasYear = false;
+    prevWasPrimary = false;
   }
 
   return (
     <div
       ref={railRef}
       className={`timeline-scrubber${dragging ? " dragging" : ""}${scrolling ? " scrolling" : ""}`}
-      style={{ top: railTop, bottom: RAIL_GAP }}
+      style={{ top: railTop, bottom: railBottom }}
       onPointerDown={(e) => {
         setDragging(true);
         scrollToFrac(fracFromEvent(e.clientY));
       }}
     >
-      {shown.map(({ marker: m, showYear }) => {
+      {shown.map(({ marker: m, showPrimary }) => {
         const isActive = m.label === activeLabel;
         return (
           <div
             key={m.label}
-            className={`scrubber-tick${showYear ? " year-start" : ""}${isActive ? " active" : ""}`}
+            className={`scrubber-tick${showPrimary ? " year-start" : ""}${isActive ? " active" : ""}`}
             style={{ top: posTop(m.frac) }}
           >
-            {showYear && <span className="scrubber-year">{m.year}</span>}
-            <span className="scrubber-month">{m.month}</span>
+            {showPrimary && <span className="scrubber-year">{m.primary}</span>}
+            {/* When the primary line already shows the whole label (a no-year
+                label like "Unknown date"), a second truncated line under it
+                would just repeat its first letters. */}
+            {(!showPrimary || m.primary !== m.label) && (
+              <span className="scrubber-month">{m.secondary}</span>
+            )}
           </div>
         );
       })}

@@ -795,6 +795,7 @@ export const api = {
       base_url: string;
       api_key?: string | null;
       sync_mode?: ImmichSyncMode;
+      enabled?: boolean;
     }): Promise<ImmichSettings> {
       return request(`/settings/immich`, { method: "PUT", body: JSON.stringify(patch) });
     },

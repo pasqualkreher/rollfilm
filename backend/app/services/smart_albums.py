@@ -167,20 +167,29 @@ def _library_signature(db: Session) -> tuple:
 
 def get_clusters(db: Session) -> tuple[str, list[SmartCluster]]:
     """Serve the cached clusters, kicking off a background rebuild when the
-    library changed. Returns (status, clusters); status is "building" only
-    while the very first build has nothing to serve yet."""
+    library changed. Returns (status, clusters): "building" while the very
+    first build has nothing to serve yet, "refreshing" while served clusters
+    are stale and a rebuild is running (the search embeddings trickle in AFTER
+    an import now, so the first build after one can legitimately see few or no
+    vectors - without this state the UI stopped polling at "ready" and the
+    rebuilt clusters never appeared until some later visit), "ready" otherwise."""
     sig = _library_signature(db)
     with _state.lock:
         if not _state.loaded:
             _state.loaded = True
             _load_cache_locked(db)
         stale = sig != _state.signature
-        status = "building" if _state.signature is None else "ready"
         if stale and not _state.computing:
             _state.computing = True
             threading.Thread(
                 target=_compute_clusters, args=(sig,), daemon=True, name="smart-albums"
             ).start()
+        if _state.signature is None:
+            status = "building"
+        elif stale or _state.computing:
+            status = "refreshing"
+        else:
+            status = "ready"
         return status, list(_state.clusters)
 
 

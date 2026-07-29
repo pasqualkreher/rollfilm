@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
+import { useAppDialogs } from "../components/AppDialogs";
 import type { SmartAlbumOut } from "../api/types";
 
 // Cover thumbnail that fades in once decoded (see .smart-card img in CSS)
@@ -90,17 +91,22 @@ function SmartRow({ title, items }: { title: string; items: SmartAlbumOut[] }) {
 export function Albums() {
   const [name, setName] = useState("");
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
 
   // Auto-computed albums (similarity clusters + years/months/big days). The
-  // very first cluster pass runs in the background on the server - keep
-  // polling until it reports ready.
+  // cluster pass runs in the background on the server - keep polling while
+  // the very first build ("building") OR a stale rebuild ("refreshing", e.g.
+  // embeddings still backfilling after an import) is running, so freshly
+  // computed Moments appear without leaving the page.
   const { data: smart, isPending: smartLoading } = useQuery({
     queryKey: ["smart-albums"],
     queryFn: () => api.smartAlbums.list(),
-    refetchInterval: (query) =>
-      query.state.data?.clusters_status === "building" ? 2500 : false,
+    refetchInterval: (query) => {
+      const status = query.state.data?.clusters_status;
+      return status === "building" || status === "refreshing" ? 2500 : false;
+    },
   });
 
   const createAlbum = useMutation({
@@ -114,11 +120,22 @@ export function Albums() {
   // Deleting an album only removes the album itself (and its photo links) -
   // the photos stay in the library untouched.
   async function deleteAlbum(id: string, albumName: string, count: number) {
-    if (!window.confirm(`Delete album “${albumName}”? Its ${count} photo(s) stay in your library.`)) return;
+    if (
+      !(await dialogs.confirm({
+        title: `Delete album “${albumName}”?`,
+        message: `Its ${count} photo(s) stay in your library.`,
+        confirmLabel: "Delete album",
+        danger: true,
+      }))
+    )
+      return;
     await api.albums.remove(id);
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
+  const clustersPending = smart
+    ? smart.clusters_status !== "ready" && smart.clusters.length === 0
+    : false;
   const hasSmart =
     !!smart &&
     (smart.clusters.length > 0 ||
@@ -128,7 +145,7 @@ export function Albums() {
       smart.years.length > 0 ||
       smart.days.length > 0 ||
       smart.edits.length > 0 ||
-      smart.clusters_status === "building");
+      clustersPending);
 
   return (
     <div className="page">
@@ -143,7 +160,7 @@ export function Albums() {
 
       {hasSmart && (
         <>
-          {smart.clusters_status === "building" && smart.clusters.length === 0 && (
+          {clustersPending && (
             <SmartRowSkeleton title="Moments" hint="Analyzing your photos…" />
           )}
           <SmartRow title="Moments" items={smart.clusters} />

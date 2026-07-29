@@ -15,6 +15,7 @@ import { MapView } from "./pages/MapView";
 import { Help } from "./pages/Help";
 import { SearchBar } from "./components/SearchBar";
 import { OnboardingWizard } from "./components/OnboardingWizard";
+import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
@@ -226,6 +227,9 @@ function TopBar() {
       )}
       <ImmichSyncIndicator />
       <SearchBar />
+      <span className="app-version" title={`Rollfilm ${__APP_VERSION__}`}>
+        v{__APP_VERSION__}
+      </span>
     </div>
   );
 }
@@ -259,6 +263,7 @@ export default function App() {
     <TasksProvider>
       <SelectsProvider>
         <ImportSessionProvider>
+          <DialogProvider>
           <div className="app-shell">
             <SourceScanWatcher />
             <EmptyLibraryRedirect />
@@ -280,6 +285,7 @@ export default function App() {
 
             <OnboardingWizard />
           </div>
+          </DialogProvider>
         </ImportSessionProvider>
       </SelectsProvider>
     </TasksProvider>

@@ -142,7 +142,9 @@ export interface SmartAlbumOut {
 
 export interface SmartAlbumsOut {
   // "building" while the first cluster pass runs - poll until "ready".
-  clusters_status: "building" | "ready";
+  // "building" = very first cluster pass; "refreshing" = served clusters are
+  // stale and a rebuild runs (e.g. embeddings backfilling after an import).
+  clusters_status: "building" | "refreshing" | "ready";
   clusters: SmartAlbumOut[];
   places: SmartAlbumOut[];
   countries: SmartAlbumOut[];
@@ -234,6 +236,9 @@ export interface ImmichSettings {
   base_url: string | null;
   api_key_set: boolean;
   sync_mode: ImmichSyncMode;
+  // Master switch: false turns the whole integration off (uploads, sync loop,
+  // import checkboxes) while the stored server/key/mode are kept.
+  enabled: boolean;
 }
 
 export interface ImmichTestResult {

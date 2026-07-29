@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { DirectoryPicker } from "./DirectoryPicker";
+import { useAppDialogs } from "./AppDialogs";
 
 function formatScanned(iso: string | null): string {
   if (!iso) return "never scanned";
@@ -11,6 +12,7 @@ function formatScanned(iso: string | null): string {
 
 export function ExternalSources() {
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [picking, setPicking] = useState(false);
@@ -167,12 +169,16 @@ export function ExternalSources() {
                 </button>
                 <button
                   className="btn danger"
-                  onClick={() => {
+                  onClick={async () => {
                     if (
-                      window.confirm(
-                        `Remove "${s.name}"? This removes its ${s.image_count} indexed photo(s) from the ` +
-                          `library. The original files on the source are NOT deleted.`
-                      )
+                      await dialogs.confirm({
+                        title: `Remove "${s.name}"?`,
+                        message:
+                          `This removes its ${s.image_count} indexed photo(s) from the library. ` +
+                          `The original files on the source are NOT deleted.`,
+                        confirmLabel: "Remove",
+                        danger: true,
+                      })
                     ) {
                       remove.mutate(s.id);
                     }

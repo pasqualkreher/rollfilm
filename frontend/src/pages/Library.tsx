@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { useAppDialogs } from "../components/AppDialogs";
 import type {
   BulkResetOptions,
   ColorLabel,
@@ -45,6 +46,7 @@ export function Library() {
   const [selectMode, setSelectMode] = useState(false);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
   const selects = useSelects();
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
@@ -59,7 +61,7 @@ export function Library() {
 
   // "Add to Immich" only appears when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
-  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
+  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set && immich.enabled);
   const [immichBusy, setImmichBusy] = useState(false);
   // Both flash messages auto-dismiss after a moment.
   const [immichMsg, setImmichMsg] = useTransientMessage();
@@ -251,9 +253,11 @@ export function Library() {
     ).length;
     if (
       editedCount > 0 &&
-      !window.confirm(
-        `Auto-develop ${selected.size} photo(s)? This overwrites the develop settings of ${editedCount} already-edited photo(s).`
-      )
+      !(await dialogs.confirm({
+        title: `Auto-develop ${selected.size} photo(s)?`,
+        message: `This overwrites the develop settings of ${editedCount} already-edited photo(s).`,
+        confirmLabel: "Auto-develop",
+      }))
     )
       return;
     setDevelopBusy(true);
@@ -283,9 +287,11 @@ export function Library() {
     ).length;
     if (
       editedCount > 0 &&
-      !window.confirm(
-        `Apply preset “${name}” to ${selected.size} photo(s)? This overwrites the develop settings of ${editedCount} already-edited photo(s).`
-      )
+      !(await dialogs.confirm({
+        title: `Apply preset “${name}” to ${selected.size} photo(s)?`,
+        message: `This overwrites the develop settings of ${editedCount} already-edited photo(s).`,
+        confirmLabel: "Apply preset",
+      }))
     )
       return;
     setDevelopBusy(true);

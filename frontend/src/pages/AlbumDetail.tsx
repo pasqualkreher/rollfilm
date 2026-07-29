@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { useAppDialogs } from "../components/AppDialogs";
 import type { BulkResetOptions, ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { RatingStars } from "../components/RatingStars";
@@ -30,6 +31,7 @@ export function AlbumDetail() {
   const [selectMode, setSelectMode] = useState(false);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
   const navigate = useNavigate();
   const selects = useSelects();
   // The album always collapses each RAW+JPEG pair to one card (see
@@ -50,7 +52,7 @@ export function AlbumDetail() {
 
   // "Add to Immich" only appears when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
-  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
+  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set && immich.enabled);
   const [immichBusy, setImmichBusy] = useState(false);
   // Both flash messages auto-dismiss after a moment.
   const [immichMsg, setImmichMsg] = useTransientMessage();
@@ -238,9 +240,11 @@ export function AlbumDetail() {
     const editedCount = (images ?? []).filter((im) => selected.has(im.id) && im.edit_rev).length;
     if (
       editedCount > 0 &&
-      !window.confirm(
-        `Auto-develop ${selected.size} photo(s)? This overwrites the develop settings of ${editedCount} already-edited photo(s).`
-      )
+      !(await dialogs.confirm({
+        title: `Auto-develop ${selected.size} photo(s)?`,
+        message: `This overwrites the develop settings of ${editedCount} already-edited photo(s).`,
+        confirmLabel: "Auto-develop",
+      }))
     )
       return;
     setDevelopBusy(true);
@@ -267,9 +271,11 @@ export function AlbumDetail() {
     const editedCount = (images ?? []).filter((im) => selected.has(im.id) && im.edit_rev).length;
     if (
       editedCount > 0 &&
-      !window.confirm(
-        `Apply preset “${name}” to ${selected.size} photo(s)? This overwrites the develop settings of ${editedCount} already-edited photo(s).`
-      )
+      !(await dialogs.confirm({
+        title: `Apply preset “${name}” to ${selected.size} photo(s)?`,
+        message: `This overwrites the develop settings of ${editedCount} already-edited photo(s).`,
+        confirmLabel: "Apply preset",
+      }))
     )
       return;
     setDevelopBusy(true);
@@ -333,9 +339,12 @@ export function AlbumDetail() {
             title="Delete this album - its photos stay in the library"
             onClick={async () => {
               if (
-                !window.confirm(
-                  `Delete album “${album.name}”? Its ${album.image_count} photo(s) stay in your library.`
-                )
+                !(await dialogs.confirm({
+                  title: `Delete album “${album.name}”?`,
+                  message: `Its ${album.image_count} photo(s) stay in your library.`,
+                  confirmLabel: "Delete album",
+                  danger: true,
+                }))
               ) {
                 return;
               }

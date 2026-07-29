@@ -32,7 +32,7 @@ export function Selects() {
     queryKey: ["immich-settings"],
     queryFn: () => api.settings.getImmich(),
   });
-  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
+  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set && immich.enabled);
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Library and Album pages.

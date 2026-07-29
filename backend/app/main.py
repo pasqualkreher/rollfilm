@@ -22,6 +22,7 @@ from app.services.immich_sync import start_background_immich_sync
 from app.services.maintenance import start_background_sync
 from app.services.sources import scan_all_sources
 from app.services.trash import start_background_purge
+from app.workers.queue import schedule_embedding_backfill
 
 app = FastAPI(title="Rollfilm API")
 
@@ -92,6 +93,13 @@ def on_startup() -> None:
         app_settings.import_staging_root,
         app_settings.db_path.parent,
     )
+    # Catch up on photos that have no search embedding yet. Imports no longer
+    # generate embeddings inline (see workers/queue.py) - a background worker
+    # backfills them from the rendered previews whenever the import machinery
+    # is idle. Kicking it here also heals photos whose embedding never landed
+    # (the pre-backfill queue forgot its backlog on every restart). A no-op
+    # beyond one cheap query when nothing is missing.
+    schedule_embedding_backfill()
 
 
 @app.get("/health")

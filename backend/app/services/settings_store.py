@@ -14,6 +14,11 @@ IMMICH_SYNC_MODE = "immich_sync_mode"
 # connection): the background sync loop and the fire-and-forget upload queue
 # stand down until resumed. Explicit manual "Add to Immich" pushes still work.
 IMMICH_SYNC_PAUSED = "immich_sync_paused"
+# "0" switches the whole Immich integration off without losing the stored
+# server/key/mode: get_immich_config() then reports "not configured", which is
+# the single gate every upload/sync/mirror path already checks. Unset counts
+# as enabled so existing configured installations keep behaving as before.
+IMMICH_ENABLED = "immich_enabled"
 
 # How photos reach Immich:
 #   manual    - the current workflow: a per-import "upload to Immich" checkbox
@@ -161,9 +166,19 @@ def get_immich_sync_mode(db: Session) -> str:
     return mode if mode in IMMICH_MODES else DEFAULT_IMMICH_SYNC_MODE
 
 
+def get_immich_enabled(db: Session) -> bool:
+    """The master switch of the Immich integration (Settings). Defaults to
+    enabled so installations configured before the switch existed keep
+    syncing."""
+    return get_setting(db, IMMICH_ENABLED) != "0"
+
+
 def get_immich_config(db: Session) -> ImmichConfig | None:
     """Both a URL and a key must be present for uploads to be attempted -
-    a half-configured integration is treated as "not configured"."""
+    a half-configured integration is treated as "not configured", and so is a
+    deliberately disabled one (the master switch above)."""
+    if not get_immich_enabled(db):
+        return None
     base_url = (get_setting(db, IMMICH_BASE_URL) or "").strip()
     api_key = (get_setting(db, IMMICH_API_KEY) or "").strip()
     if not base_url or not api_key:

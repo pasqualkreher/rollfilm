@@ -1,17 +1,22 @@
 import logging
+import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
+from typing import Callable
 
 from PIL import Image as PILImage
+from sqlalchemy import text
 
+from app.config import settings
 from app.db.models import Image
 from app.db.session import SessionLocal, engine
+from app.services.filesystem import resolve_image_path
 from app.services.settings_store import get_immich_sync_paused
-from app.services.embeddings import encode_image, ensure_embeddings_table, upsert_embedding
+from app.services.embeddings import encode_image, upsert_embedding
 from app.services.immich import (
     add_assets_to_album,
     delete_album,
@@ -28,16 +33,26 @@ logger = logging.getLogger(__name__)
 
 # A personal photo library doesn't need a broker - a single background
 # thread pool inside the same process is enough to keep import requests
-# fast while thumbnails/embeddings generate asynchronously. The per-image work
-# (full RAW demosaic + CLIP encode) is the import bottleneck. RAM safety lives
-# in the render semaphore (RENDER_SLOTS), not here - so size the pool to keep
-# every render slot busy plus a couple of workers overlapping the non-render
-# work (CLIP encode, JPEG writes, DB) instead of a flat cap of 4 that left
-# render slots idle on bigger machines.
+# fast while thumbnails generate asynchronously. The per-image work (full RAW
+# demosaic) is the import bottleneck. RAM safety lives in the render semaphore
+# (RENDER_SLOTS), not here - so size the pool to keep every render slot busy
+# plus a couple of workers overlapping the non-render work (JPEG writes, disk)
+# instead of a flat cap of 4 that left render slots idle on bigger machines.
 _POST_IMPORT_WORKERS = min(8, max(2, RENDER_SLOTS + 2))
 _executor = ThreadPoolExecutor(
     max_workers=_POST_IMPORT_WORKERS, thread_name_prefix="post-import"
 )
+
+# Post-import derivative jobs queued or running. The embedding backfill below
+# waits for this to drain, so CLIP work never overlaps the import's own
+# rendering phase.
+_pending_derivatives = 0
+_pending_derivatives_lock = Lock()
+
+
+def derivatives_pending() -> int:
+    with _pending_derivatives_lock:
+        return _pending_derivatives
 
 # Immich uploads get their own (network-bound) pool: they can take seconds to
 # minutes each (slow server, retries with sleeps, 120s timeout), and on the
@@ -59,14 +74,15 @@ def immich_pending_uploads() -> int:
 
 
 def enqueue_post_import(image_id: str, source_path: Path) -> None:
-    _executor.submit(_process, image_id, source_path)
-
-
-def enqueue_embedding(image_id: str, source_path: Path) -> None:
-    """Just the search embedding, for callers that already generated the
-    derivatives synchronously (e.g. Save copy, so the new photo is viewable the
-    instant the user lands on it)."""
-    _executor.submit(_embed, image_id, source_path)
+    global _pending_derivatives
+    with _pending_derivatives_lock:
+        _pending_derivatives += 1
+    try:
+        _executor.submit(_process, image_id, source_path)
+    except Exception:
+        with _pending_derivatives_lock:
+            _pending_derivatives -= 1
+        raise
 
 
 def _sync_paused() -> bool:
@@ -316,31 +332,184 @@ def _upload_to_immich(
 
 
 def _process(image_id: str, source_path: Path) -> None:
-    # The grid's on-demand thumbnail endpoint may have generated this image's
-    # derivatives already (a request raced ahead of this worker); skip straight
-    # to the embedding then - the embedder's own preview decode is far cheaper
-    # than a redundant full decode + derivative write.
-    if has_derivatives(image_id):
-        _embed(image_id, source_path)
-        return
-    # generate_derivatives already decodes the (RAW) source to a full-res image;
-    # hand that decoded image straight to the embedder so the CLIP pass doesn't
-    # demosaic the same RAW a second time (the single biggest per-image cost).
-    decoded: PILImage.Image | None = None
+    """One post-import job: make the photo *viewable* (thumbnail + preview).
+    Nothing else - the CLIP search embedding is a library feature, not an
+    import step, and is backfilled below once the import machinery is idle."""
     try:
-        decoded = generate_derivatives(image_id, source_path)
+        # The grid's on-demand thumbnail endpoint may have generated this
+        # image's derivatives already (a request raced ahead of this worker).
+        if not has_derivatives(image_id):
+            generate_derivatives(image_id, source_path)
     except Exception:
         logger.exception("Thumbnail/preview generation failed for image %s", image_id)
-    _embed(image_id, source_path, decoded)
+    finally:
+        global _pending_derivatives
+        with _pending_derivatives_lock:
+            _pending_derivatives -= 1
+            drained = _pending_derivatives <= 0
+        if drained:
+            # The import's render queue just went quiet - good moment to catch
+            # up on search embeddings for whatever was imported.
+            schedule_embedding_backfill()
 
 
-def _embed(
-    image_id: str, source_path: Path, image: PILImage.Image | None = None
-) -> None:
+# --- Deferred search embeddings ----------------------------------------------
+# CLIP embeddings power semantic search, similar-photos and smart albums -
+# library features, none of which an import needs. They used to be generated
+# inline per photo right after its derivatives, which made every import pay
+# the CLIP encode (plus a write transaction per photo) while thumbnails were
+# still rendering and the next batch was already staging. Now a single
+# low-priority worker backfills them when the import machinery is idle,
+# reading the already-rendered preview.jpg instead of re-decoding originals.
+#
+# Scan-based on purpose: "whatever has no embedding yet" is re-derived from the
+# database each pass, so photos whose embedding was lost (the old in-memory
+# queue forgot its backlog on every backend restart) are picked up on the next
+# pass instead of staying unsearchable forever.
+
+_BACKFILL_IDLE_POLL_S = 5.0
+_BACKFILL_CHUNK = 100
+
+_backfill_lock = Lock()
+_backfill_thread: threading.Thread | None = None
+_backfill_rerun = False
+
+# Images whose embedding failed (unreadable/corrupt source): skipped for the
+# rest of this process run instead of being retried on every pass.
+_embed_failed_ids: set[str] = set()
+
+_import_activity_probes: list[Callable[[], bool]] = []
+
+
+def register_import_activity_probe(probe: Callable[[], bool]) -> None:
+    """Register a callable reporting whether import work (staging analysis, a
+    running commit) is active - the embedding backfill yields to it. A registry
+    rather than a direct import keeps the module dependency one-way: the import
+    pipeline imports this queue, never the other way around."""
+    _import_activity_probes.append(probe)
+
+
+def _import_work_active() -> bool:
+    if derivatives_pending() > 0:
+        return True
+    for probe in list(_import_activity_probes):
+        try:
+            if probe():
+                return True
+        except Exception:
+            logger.exception("Import activity probe failed; treating it as idle")
+    return False
+
+
+def schedule_embedding_backfill() -> None:
+    """Kick the embedding backfill (debounced - at most one worker ever runs).
+    Called at startup for the catch-up pass and whenever the post-import render
+    queue drains; safe to call at any time. The worker is a daemon thread with
+    short per-photo transactions, so it never delays shutdown."""
+    global _backfill_thread, _backfill_rerun
+    with _backfill_lock:
+        if _backfill_thread is not None and _backfill_thread.is_alive():
+            _backfill_rerun = True
+            return
+        _backfill_rerun = False
+        _backfill_thread = threading.Thread(
+            target=_backfill_embeddings, name="embedding-backfill", daemon=True
+        )
+        _backfill_thread.start()
+
+
+def _images_missing_embeddings(limit: int) -> list[tuple[str, Path]]:
+    """Up to `limit` images without a stored embedding, newest imports first
+    (so fresh photos become searchable soonest), each with its original's
+    path. Diffed in Python: the stored-id set easily exceeds SQLite's bound-
+    parameter limit, so a NOT IN over it is not an option."""
+    db = SessionLocal()
     try:
-        preview = image if image is not None else extract_preview(source_path)
-        vector = encode_image(preview)
-        ensure_embeddings_table(engine)
-        upsert_embedding(engine, image_id, vector)
+        with engine.connect() as conn:
+            have = {row[0] for row in conn.execute(text("SELECT id FROM image_embeddings"))}
+        ids = [
+            row.id
+            for row in db.query(Image.id)
+            .filter(Image.deleted_at.is_(None))
+            .order_by(Image.imported_at.desc())
+            if row.id not in have and row.id not in _embed_failed_ids
+        ][:limit]
+        if not ids:
+            return []
+        images = db.query(Image).filter(Image.id.in_(ids)).all()
+        return [(img.id, resolve_image_path(img)) for img in images]
+    finally:
+        db.close()
+
+
+def _embed_one(image_id: str, source_path: Path) -> bool:
+    """Encode and store one image's embedding. Prefers the already-rendered
+    preview.jpg - a clean RGB JPEG that decodes in milliseconds and can't trip
+    on a RAW quirk; the original is only read when no derivative exists yet."""
+    try:
+        preview_path = settings.thumbnail_cache_root / image_id / "preview.jpg"
+        if preview_path.exists():
+            source = PILImage.open(preview_path).convert("RGB")
+        else:
+            source = extract_preview(source_path)
+        upsert_embedding(engine, image_id, encode_image(source))
+        return True
     except Exception:
-        logger.exception("Embedding generation failed for image %s", image_id)
+        logger.exception("Embedding backfill failed for image %s", image_id)
+        _embed_failed_ids.add(image_id)
+        return False
+
+
+def _backfill_embeddings() -> None:
+    global _backfill_thread, _backfill_rerun
+    done = 0
+    try:
+        while True:
+            # Never compete with a running import: wait out staging analysis,
+            # commits and the derivative renders that follow them. (Checked
+            # again between photos, so a new import preempts within one encode.)
+            while _import_work_active():
+                time.sleep(_BACKFILL_IDLE_POLL_S)
+            batch = _images_missing_embeddings(_BACKFILL_CHUNK)
+            if not batch:
+                with _backfill_lock:
+                    if _backfill_rerun:
+                        _backfill_rerun = False
+                        continue
+                    _backfill_thread = None
+                break
+            for image_id, source_path in batch:
+                if _import_work_active():
+                    break  # yield now; the outer loop waits and resumes
+                if _embed_one(image_id, source_path):
+                    done += 1
+    except Exception:
+        logger.exception("Embedding backfill crashed")
+        with _backfill_lock:
+            _backfill_thread = None
+    if done:
+        logger.info("Embedding backfill: %d photo(s) embedded", done)
+        # Fresh embeddings change what the "Moments" smart albums would find -
+        # poke that rebuild now, so the clusters are (re)computed in the
+        # background instead of only when the Albums page next asks.
+        _refresh_moments_clusters()
+
+
+def _refresh_moments_clusters() -> None:
+    """Schedule a smart-album cluster rebuild if Moments is enabled. Imported
+    lazily: at module level this import would be circular (smart_albums →
+    sources → this queue)."""
+    try:
+        from app.services.settings_store import get_smart_album_config
+        from app.services import smart_albums
+
+        db = SessionLocal()
+        try:
+            if "moments" in get_smart_album_config(db).sections:
+                # get_clusters compares the library signature and starts the
+                # background rebuild itself when it is stale.
+                smart_albums.get_clusters(db)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Could not schedule the smart-album cluster refresh")

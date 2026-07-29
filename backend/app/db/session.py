@@ -10,6 +10,17 @@ engine = create_engine(
     # `timeout` is the sqlite3 driver's lock wait (seconds) - together with
     # busy_timeout below it makes writers queue instead of erroring.
     connect_args={"check_same_thread": False, "timeout": 15},
+    # A SQLite connection is a local file handle, so the pool exists for reuse,
+    # not to ration a scarce resource - but the default QueuePool cap
+    # (5 + 10 overflow) rationed anyway, with a hard failure mode: during an
+    # import, uvicorn's request threads (grid thumbnails, review polling), the
+    # staging-analysis workers and the post-import workers together can hold
+    # more than 15 connections, and every further checkout died 30s later with
+    # "QueuePool limit reached, connection timed out". Unlimited overflow makes
+    # checkout always succeed (extra connections are simply closed on return);
+    # WAL + busy_timeout already serialize the actual writes.
+    pool_size=10,
+    max_overflow=-1,
 )
 
 

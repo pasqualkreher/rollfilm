@@ -16,6 +16,7 @@ from app.services.settings_store import (
     BORG_REPO,
     IMMICH_API_KEY,
     IMMICH_BASE_URL,
+    IMMICH_ENABLED,
     IMMICH_MODE_SELECTIVE,
     IMMICH_MODES,
     IMMICH_SYNC_MODE,
@@ -27,6 +28,7 @@ from app.services.settings_store import (
     TRASH_RETENTION_DAYS,
     get_auto_develop_enabled,
     get_auto_develop_groups,
+    get_immich_enabled,
     get_immich_sync_mode,
     get_immich_sync_paused,
     get_raw_native_decode,
@@ -117,7 +119,10 @@ def get_immich_settings(
     base_url = get_setting(db, IMMICH_BASE_URL)
     api_key = get_setting(db, IMMICH_API_KEY)
     return schemas.ImmichSettingsOut(
-        base_url=base_url, api_key_set=bool(api_key), sync_mode=get_immich_sync_mode(db)
+        base_url=base_url,
+        api_key_set=bool(api_key),
+        sync_mode=get_immich_sync_mode(db),
+        enabled=get_immich_enabled(db),
     )
 
 
@@ -134,9 +139,12 @@ def update_immich_settings(
         set_setting(db, IMMICH_API_KEY, payload.api_key.strip())
     if payload.sync_mode is not None and payload.sync_mode in IMMICH_MODES:
         set_setting(db, IMMICH_SYNC_MODE, payload.sync_mode)
+    if payload.enabled is not None:
+        set_setting(db, IMMICH_ENABLED, "1" if payload.enabled else "0")
     db.commit()
-    # A mode/server change may make photos newly syncable (or removable) -
-    # reconcile now instead of on the next timed pass.
+    # A mode/server/switch change may make photos newly syncable (or removable)
+    # - reconcile now instead of on the next timed pass. (With the integration
+    # disabled the sync pass sees "not configured" and stands down.)
     run_immich_sync_soon()
 
     api_key = get_setting(db, IMMICH_API_KEY)
@@ -144,6 +152,7 @@ def update_immich_settings(
         base_url=payload.base_url.strip(),
         api_key_set=bool(api_key),
         sync_mode=get_immich_sync_mode(db),
+        enabled=get_immich_enabled(db),
     )
 
 

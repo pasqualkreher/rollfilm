@@ -42,6 +42,7 @@ import { loadPresets, savePreset, deletePreset, type EditPreset } from "../utils
 import { CurveEditor } from "./CurveEditor";
 import { ColorWheel } from "./ColorWheel";
 import { MaskOverlay } from "./MaskOverlay";
+import { useAppDialogs } from "./AppDialogs";
 
 interface Props {
   image: ImageOut;
@@ -321,6 +322,7 @@ function Histogram({ bins }: { bins: Uint32Array[] | null }) {
 
 export function PhotoEditor({ image, onClose }: Props) {
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -721,9 +723,17 @@ export function PhotoEditor({ image, onClose }: Props) {
     setPresetName("");
   }
 
-  function handleDeletePreset() {
+  async function handleDeletePreset() {
     if (!selectedPreset || !presets[selectedPreset]) return;
-    if (!window.confirm(`Delete preset “${selectedPreset}”?`)) return;
+    if (
+      !(await dialogs.confirm({
+        title: `Delete preset “${selectedPreset}”?`,
+        message: "The preset is removed from this machine. Photos it was applied to keep their edits.",
+        confirmLabel: "Delete preset",
+        danger: true,
+      }))
+    )
+      return;
     deletePreset(selectedPreset);
     setPresets(loadPresets());
     setSelectedPreset("");

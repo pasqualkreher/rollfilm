@@ -78,11 +78,30 @@ def rehydrate_database() -> None:
             materialize(p)
 
 
+def raise_open_files_limit() -> None:
+    """Raise the soft open-files limit toward the hard cap. macOS starts
+    GUI-spawned processes (the Electron shell and thus this child) with a soft
+    limit of 256 - but a single import upload batch alone spools hundreds of
+    multipart temp files at once, on top of staged files, SQLite handles and
+    sockets, so big imports could die mid-batch with EMFILE 'Too many open
+    files'. Best effort: Windows has no resource module (nor the low limit)."""
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = 65536 if hard == resource.RLIM_INFINITY else min(hard, 65536)
+        if soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except Exception:
+        pass
+
+
 def main() -> None:
     # Make the backend package importable when frozen or launched from elsewhere.
     if str(BASE_DIR) not in sys.path:
         sys.path.insert(0, str(BASE_DIR))
 
+    raise_open_files_limit()
     rehydrate_database()
     run_migrations_with_retry()
 

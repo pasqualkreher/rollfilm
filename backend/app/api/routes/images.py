@@ -45,9 +45,9 @@ from app.services.borg_backup import run_backup_soon
 from app.services.immich_sync import run_immich_sync_soon
 from app.services.settings_store import get_auto_develop_groups, get_immich_config
 from app.workers.queue import (
-    enqueue_embedding,
     enqueue_immich_upload,
     enqueue_post_import,
+    schedule_embedding_backfill,
     store_immich_asset_id,
 )
 
@@ -1217,7 +1217,9 @@ def save_copy(
         thumbnails.regenerate_for_image(new_image)
     except Exception:
         logger.exception("Derivative generation failed for edited copy %s", new_image.id)
-    enqueue_embedding(new_image.id, settings.library_root / rel_path)
+    # The search embedding isn't needed to display the photo - the backfill
+    # worker picks the copy up (its preview.jpg was just rendered above).
+    schedule_embedding_backfill()
     run_backup_soon()
     return new_image
 

@@ -4,6 +4,7 @@ import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { BorgTestResult, ImmichSyncMode, ImmichTestResult } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
 import { SKINS, useTheme } from "../state/theme";
+import { useCorners } from "../state/corners";
 import { useTasks } from "../state/tasks";
 import { useAskDeletePartner, setAskDeletePartner } from "../state/viewPrefs";
 import { SettingsTour, SETTINGS_TOUR_KEY } from "../components/SettingsTour";
@@ -146,6 +147,7 @@ function ThemeSummaryPreview({ theme }: { theme: string }) {
 
 function AppearanceSetting() {
   const [theme] = useTheme();
+  const [corners, setCorners] = useCorners();
   const [open, setOpen] = useState(false);
 
   const label =
@@ -174,6 +176,31 @@ function AppearanceSetting() {
         <button className="btn" onClick={() => setOpen(true)}>
           Change appearance…
         </button>
+      </div>
+
+      <div className="settings-corners">
+        <span className="settings-option-body">
+          <strong>Corners</strong>
+          <span className="settings-option-desc">
+            Rounded or sharp, angular corners on cards, buttons and thumbnails.
+          </span>
+        </span>
+        <span className="segmented">
+          <button
+            className={corners === "rounded" ? "active" : ""}
+            aria-pressed={corners === "rounded"}
+            onClick={() => setCorners("rounded")}
+          >
+            Rounded
+          </button>
+          <button
+            className={corners === "square" ? "active" : ""}
+            aria-pressed={corners === "square"}
+            onClick={() => setCorners("square")}
+          >
+            Square
+          </button>
+        </span>
       </div>
 
       {open && (
@@ -347,6 +374,20 @@ export function Settings() {
         sync_mode: mode,
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["immich-settings"] }),
+  });
+
+  // Master switch. Server/key/mode stay stored while off, so switching back
+  // on restores the integration exactly as it was.
+  const setImmichEnabled = useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.settings.updateImmich({
+        base_url: (immich?.base_url ?? immichUrl).trim(),
+        enabled,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["immich-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["immich-activity"] });
+    },
   });
 
   // Borg backup: an automatic, incremental backup to a repository "address".
@@ -665,6 +706,20 @@ export function Settings() {
           stay in this library only. Create an API key in Immich under{" "}
           <strong>Account Settings → API Keys</strong>.
         </Desc>
+        <OptionRow
+          type="checkbox"
+          checked={immich?.enabled ?? true}
+          disabled={immich === undefined || setImmichEnabled.isPending}
+          busy={setImmichEnabled.isPending}
+          onChange={(c) => setImmichEnabled.mutate(c)}
+          title="Enable Immich integration"
+          desc="Off = nothing is uploaded or synced and the Immich options disappear from import and albums. Your server, API key and sync mode stay saved."
+        />
+        {setImmichEnabled.isError && (
+          <Note error>{(setImmichEnabled.error as Error).message}</Note>
+        )}
+        {(immich?.enabled ?? true) && (
+        <>
         <Field
           label="Immich host"
           placeholder="http://your-immich:2283"
@@ -806,6 +861,8 @@ export function Settings() {
               ))}
             </ul>
           </div>
+        )}
+        </>
         )}
       </Section>
 

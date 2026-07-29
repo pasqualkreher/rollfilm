@@ -240,9 +240,10 @@ class SmartAlbumOut(BaseModel):
 
 
 class SmartAlbumsOut(BaseModel):
-    # "building" only while the very first cluster pass runs; the frontend
-    # polls until it flips to "ready".
-    clusters_status: Literal["building", "ready"]
+    # "building" while the very first cluster pass runs, "refreshing" while
+    # served clusters are stale and a rebuild runs (e.g. embeddings still
+    # backfilling after an import); the frontend polls until "ready".
+    clusters_status: Literal["building", "refreshing", "ready"]
     clusters: list[SmartAlbumOut]
     places: list[SmartAlbumOut]
     countries: list[SmartAlbumOut]
@@ -387,6 +388,9 @@ class ImmichSettingsOut(BaseModel):
     api_key_set: bool
     # "manual" | "selective" | "full" - see settings_store.IMMICH_MODES.
     sync_mode: str
+    # Master switch: False turns the whole integration off (uploads, sync loop,
+    # album mirroring, the import checkboxes) while keeping the config stored.
+    enabled: bool
 
 
 class ImmichSettingsUpdate(BaseModel):
@@ -394,6 +398,8 @@ class ImmichSettingsUpdate(BaseModel):
     # Omit / send null to keep the existing key when only changing the URL.
     api_key: str | None = None
     sync_mode: str | None = None
+    # Omit / send null to leave the master switch unchanged.
+    enabled: bool | None = None
 
 
 class RawDecodeSettingsOut(BaseModel):

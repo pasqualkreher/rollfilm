@@ -8,9 +8,11 @@ import App from "./App";
 import { LibrarySetup } from "./components/LibrarySetup";
 import "./index.css";
 import { initTheme } from "./state/theme";
+import { initCorners } from "./state/corners";
 
-// Apply the saved light/dark preference before the first paint.
+// Apply the saved light/dark preference and corner style before the first paint.
 initTheme();
+initCorners();
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },

@@ -11,8 +11,13 @@
   /* Translucent accent for soft-selected states (active nav, active segment). */
   --accent-soft: rgba(58, 109, 240, 0.12);
   --danger: #d0392b;
-  --radius: 10px;
-  --radius-sm: 7px;
+  /* Corner style (Settings → Appearance): every radius in this file is a
+     multiple of --corner-scale, so data-corners="square" (state/corners.ts)
+     squares the whole UI by zeroing the scale. True circles (border-radius:
+     50% — spinners, dots, the colour wheel) deliberately stay round. */
+  --corner-scale: 1;
+  --radius: calc(10px * var(--corner-scale));
+  --radius-sm: calc(7px * var(--corner-scale));
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.18);
   color-scheme: light;
@@ -56,6 +61,13 @@
 
 /* User forced light: the :root defaults already are light, so nothing more is
    needed - setting data-theme="light" simply disables the OS-dark rule above. */
+
+/* Square corner style (Settings → Appearance): zeroing the scale collapses
+   every calc(<px> * var(--corner-scale)) radius in this file to 0. */
+:root[data-corners="square"] {
+  --corner-scale: 0;
+}
+
 
 /* ---- Colour skins (Settings → Appearance) ------------------------------------
    Each block is a full palette keyed off data-theme, driven by state/theme.ts
@@ -631,6 +643,15 @@ button {
   white-space: nowrap;
 }
 
+/* Small version tag pinned to the far right of the top bar. */
+.app-version {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
 .spinner {
   display: inline-block;
   width: 14px;
@@ -697,7 +718,7 @@ button {
 
 .nav-links a {
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
@@ -736,7 +757,7 @@ button {
   height: 34px;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   background: var(--bg);
   color: var(--text);
   font-size: 16px;
@@ -779,13 +800,13 @@ button {
   padding: 6px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: calc(12px * var(--corner-scale));
   box-shadow: var(--shadow-pop);
 }
 
 .nav-menu a {
   padding: 9px 14px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
@@ -811,7 +832,7 @@ button {
 .search-bar input {
   width: 100%;
   padding: 8px 30px 8px 12px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text);
@@ -1078,7 +1099,7 @@ button {
 .count-pill {
   margin-left: 10px;
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: calc(999px * var(--corner-scale));
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   font-size: 12px;
@@ -1208,7 +1229,7 @@ textarea:focus-visible {
   padding: 10px 16px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: calc(12px * var(--corner-scale));
   font-size: 14px;
   color: var(--text);
 }
@@ -1228,7 +1249,7 @@ textarea:focus-visible {
 .modal {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: calc(14px * var(--corner-scale));
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
   width: min(560px, 100%);
   max-height: 80vh;
@@ -1249,6 +1270,39 @@ textarea:focus-visible {
 
 .modal-close:hover {
   color: var(--text);
+}
+
+/* App-skinned confirm/alert dialogs (components/AppDialogs.tsx) - replace the
+   native window.confirm/window.alert popups, which ignore the app's theme. */
+.confirm-modal {
+  width: min(440px, 100%);
+}
+
+.confirm-modal-body {
+  padding: 20px 22px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.confirm-modal-body h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.confirm-modal-body p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.45;
+  /* Messages migrated from window.confirm carry \n\n paragraph breaks. */
+  white-space: pre-line;
+}
+
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 22px 20px;
 }
 
 /* "Delete only this file or the whole RAW+JPEG pair?" chooser. */
@@ -1336,7 +1390,7 @@ textarea:focus-visible {
   background: transparent;
   color: var(--text);
   padding: 9px 12px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   font-size: 14px;
   cursor: pointer;
 }
@@ -1374,7 +1428,7 @@ textarea:focus-visible {
   padding: 10px 14px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: calc(10px * var(--corner-scale));
 }
 
 .source-row-main {
@@ -1405,7 +1459,7 @@ textarea:focus-visible {
   letter-spacing: 0.03em;
   color: var(--danger);
   border: 1px solid var(--danger);
-  border-radius: 999px;
+  border-radius: calc(999px * var(--corner-scale));
   padding: 1px 8px;
 }
 
@@ -1574,7 +1628,7 @@ textarea:focus-visible {
   font-size: 15px;
   font-weight: 700;
   color: var(--text);
-  border-radius: 16px;
+  border-radius: calc(16px * var(--corner-scale));
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   backdrop-filter: blur(6px);
@@ -1609,7 +1663,7 @@ textarea:focus-visible {
   z-index: 20;
   cursor: ns-resize;
   touch-action: none;
-  border-radius: 16px;
+  border-radius: calc(16px * var(--corner-scale));
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   backdrop-filter: blur(6px);
@@ -1662,7 +1716,7 @@ textarea:focus-visible {
   left: 4px;
   right: 4px;
   height: 3px;
-  border-radius: 3px;
+  border-radius: calc(3px * var(--corner-scale));
   background: var(--accent);
   transform: translateY(-50%);
   pointer-events: none;
@@ -1698,7 +1752,7 @@ textarea:focus-visible {
   transform: translateY(-50%);
   white-space: nowrap;
   padding: 5px 11px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   background: var(--accent);
   color: var(--accent-contrast);
   font-size: 12px;
@@ -1716,7 +1770,7 @@ textarea:focus-visible {
 
 .thumb-card {
   position: relative;
-  border-radius: 10px;
+  border-radius: calc(10px * var(--corner-scale));
   overflow: hidden;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -1799,7 +1853,7 @@ textarea:focus-visible {
   color: var(--bg);
   font-size: 10px;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--corner-scale));
   letter-spacing: 0.02em;
 }
 
@@ -1831,7 +1885,7 @@ textarea:focus-visible {
   color: #fff;
   font-size: 10px;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--corner-scale));
 }
 
 .thumb-card .select-checkbox {
@@ -1855,7 +1909,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-size: 18px;
@@ -1885,7 +1939,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   background: rgba(0, 0, 0, 0.6);
   color: #fff;
   font-size: 18px;
@@ -1948,7 +2002,7 @@ textarea:focus-visible {
 .import-card {
   display: flex;
   flex-direction: column;
-  border-radius: 10px;
+  border-radius: calc(10px * var(--corner-scale));
   overflow: hidden;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -2103,7 +2157,7 @@ textarea:focus-visible {
 }
 
 .editor-stage-dark .editor-canvas {
-  border-radius: 3px;
+  border-radius: calc(3px * var(--corner-scale));
   box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
 }
 
@@ -2132,7 +2186,7 @@ textarea:focus-visible {
   height: 72px;
   margin: 8px 0 2px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: calc(6px * var(--corner-scale));
   background: #141416;
 }
 
@@ -2174,7 +2228,7 @@ input.editor-preset-select {
   height: 12px;
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.35);
-  border-radius: 2px;
+  border-radius: calc(2px * var(--corner-scale));
   pointer-events: none;
 }
 
@@ -2266,7 +2320,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text);
@@ -2365,7 +2419,7 @@ input.editor-preset-select {
 .editor-slider input[type="range"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--corner-scale));
 }
 .editor-slider:has(input[type="range"]:focus-visible) .editor-slider-head > span:first-child {
   color: var(--accent);
@@ -2463,7 +2517,7 @@ input.editor-preset-select {
   min-height: 0;
   max-width: 100%;
   object-fit: contain;
-  border-radius: 6px;
+  border-radius: calc(6px * var(--corner-scale));
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 
@@ -2480,7 +2534,7 @@ input.editor-preset-select {
   padding: 12px 18px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
+  border-radius: calc(12px * var(--corner-scale));
   backdrop-filter: blur(8px);
 }
 
@@ -2523,7 +2577,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 6px;
   padding: 5px 12px;
-  border-radius: 999px;
+  border-radius: calc(999px * var(--corner-scale));
   background: rgba(255, 255, 255, 0.1);
   cursor: pointer;
   white-space: nowrap;
@@ -2537,7 +2591,7 @@ input.editor-preset-select {
 .badge-inline {
   background: rgba(255, 255, 255, 0.15);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--corner-scale));
   font-size: 11px;
 }
 
@@ -2549,7 +2603,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   color: var(--text);
   padding: 3px 6px 3px 10px;
-  border-radius: 999px;
+  border-radius: calc(999px * var(--corner-scale));
   font-size: 12px;
 }
 
@@ -2864,7 +2918,7 @@ input.editor-preset-select {
   width: 36px;
   height: 36px;
   padding: 0;
-  border-radius: 999px;
+  border-radius: calc(999px * var(--corner-scale));
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -3008,7 +3062,7 @@ input.editor-preset-select {
   align-items: center;
   justify-content: center;
   background: var(--bg-elevated);
-  border-radius: 12px;
+  border-radius: calc(12px * var(--corner-scale));
   /* Clips the zoomed-in photo to the frame (the loupe effect). */
   overflow: hidden;
   min-height: 0;
@@ -3025,7 +3079,7 @@ input.editor-preset-select {
 /* On a black background, lift the photo with a soft shadow and a hairline edge
    instead of a heavy white mat - cleaner and more modern. */
 .detail-image img.framed {
-  border-radius: 3px;
+  border-radius: calc(3px * var(--corner-scale));
   box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
 }
 
@@ -3328,7 +3382,7 @@ input.editor-preset-select {
   gap: 8px;
   margin: 8px 0 0;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   background: var(--accent-soft, rgba(80, 120, 255, 0.12));
   color: var(--text);
   font-size: 13px;
@@ -3420,7 +3474,7 @@ input.editor-preset-select {
   z-index: 30;
   min-width: 220px;
   padding: 6px;
-  border-radius: 10px;
+  border-radius: calc(10px * var(--corner-scale));
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
@@ -3435,7 +3489,7 @@ input.editor-preset-select {
   text-align: left;
   padding: 9px 12px;
   border: none;
-  border-radius: 7px;
+  border-radius: calc(7px * var(--corner-scale));
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -3449,7 +3503,7 @@ input.editor-preset-select {
 .import-toolbar input[type="text"] {
   flex: 1;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text);
@@ -3478,7 +3532,7 @@ input.editor-preset-select {
 .map-container {
   width: 100%;
   height: 100%;
-  border-radius: 12px;
+  border-radius: calc(12px * var(--corner-scale));
   overflow: hidden;
   border: 1px solid var(--border);
 }
@@ -3490,7 +3544,7 @@ input.editor-preset-select {
   transform: translateX(-50%);
   z-index: 500;
   padding: 10px 16px;
-  border-radius: 999px;
+  border-radius: calc(999px * var(--corner-scale));
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-muted);
@@ -3512,7 +3566,7 @@ input.editor-preset-select {
   width: 46px;
   height: 46px;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   border: 2px solid #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   transform-origin: center center;
@@ -3531,7 +3585,7 @@ input.editor-preset-select {
   min-width: 18px;
   height: 18px;
   padding: 0 4px;
-  border-radius: 9px;
+  border-radius: calc(9px * var(--corner-scale));
   background: var(--accent, #3b82f6);
   color: #fff;
   font-size: 11px;
@@ -3578,7 +3632,7 @@ input.editor-preset-select {
 .map-pin-overflow {
   width: 46px;
   height: 46px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   border: 2px solid #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   background: var(--accent, #3b82f6);
@@ -3596,7 +3650,7 @@ input.editor-preset-select {
   position: relative;
   width: 100%;
   height: 150px;
-  border-radius: 10px;
+  border-radius: calc(10px * var(--corner-scale));
   overflow: hidden;
   border: 1px solid var(--border);
   cursor: pointer;
@@ -3669,7 +3723,7 @@ input.editor-preset-select {
 .onboarding-dot {
   width: 22px;
   height: 4px;
-  border-radius: 2px;
+  border-radius: calc(2px * var(--corner-scale));
   background: var(--border);
   transition: background 0.2s ease;
 }
@@ -3802,7 +3856,7 @@ input.editor-preset-select {
 .setup-card {
   width: min(520px, 100%);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: calc(14px * var(--corner-scale));
   background: var(--bg-elevated);
   box-shadow: var(--shadow-pop);
   padding: 32px 30px;
@@ -3910,7 +3964,7 @@ kbd {
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: 6px;
+  border-radius: calc(6px * var(--corner-scale));
   background: var(--bg-elevated);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
@@ -3994,7 +4048,7 @@ kbd {
   width: 100%;
   height: 100%;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   background: var(--bg-elevated);
   touch-action: none;
   cursor: crosshair;
@@ -4315,7 +4369,7 @@ kbd {
   flex-shrink: 0;
   width: 26px;
   height: 26px;
-  border-radius: 6px;
+  border-radius: calc(6px * var(--corner-scale));
   border: 1px solid var(--border);
 }
 
@@ -4455,7 +4509,7 @@ kbd {
   gap: 6px;
   height: 74px;
   padding: 8px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--corner-scale));
   border: 1px solid rgba(128, 128, 128, 0.28);
   overflow: hidden;
 }
@@ -4470,14 +4524,14 @@ kbd {
 .tp-line {
   height: 6px;
   width: 42%;
-  border-radius: 3px;
+  border-radius: calc(3px * var(--corner-scale));
   opacity: 0.9;
 }
 
 .tp-pill {
   height: 12px;
   width: 24px;
-  border-radius: 6px;
+  border-radius: calc(6px * var(--corner-scale));
   flex-shrink: 0;
 }
 
@@ -4490,7 +4544,7 @@ kbd {
 
 .tp-swatch {
   flex: 1;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--corner-scale));
 }
 
 /* "System" tile: a light half beside a dark half so it reads as "follows OS". */
@@ -4558,7 +4612,7 @@ kbd {
   height: 44px;
   flex-shrink: 0;
   padding: 8px;
-  border-radius: 7px;
+  border-radius: calc(7px * var(--corner-scale));
   border: 1px solid rgba(128, 128, 128, 0.28);
   overflow: hidden;
 }
@@ -4649,7 +4703,7 @@ kbd {
 .settings-section.tour-highlight {
   outline: 2px solid var(--accent);
   outline-offset: 10px;
-  border-radius: 10px;
+  border-radius: calc(10px * var(--corner-scale));
 }
 
 .settings-tour-card {
@@ -4661,7 +4715,7 @@ kbd {
   width: min(440px, calc(100vw - 32px));
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: calc(14px * var(--corner-scale));
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
   padding: 16px 18px;
   display: flex;
@@ -4761,6 +4815,17 @@ kbd {
   padding: 4px 0;
   cursor: pointer;
 }
+
+/* Corner-style row in Appearance: title + description on the left, the
+   Rounded/Square segmented switch on the right. */
+.settings-corners {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  margin-top: 10px;
+}
 .settings-option.busy {
   cursor: wait;
 }
@@ -4809,7 +4874,7 @@ kbd {
 .settings-progress {
   height: 6px;
   max-width: 420px;
-  border-radius: 3px;
+  border-radius: calc(3px * var(--corner-scale));
   background: var(--border);
   overflow: hidden;
   margin-top: 4px;
@@ -5003,7 +5068,7 @@ kbd {
 .smart-title--skeleton {
   width: 90px;
   height: 15px;
-  border-radius: 4px;
+  border-radius: calc(4px * var(--corner-scale));
   margin-bottom: 8px;
 }
 

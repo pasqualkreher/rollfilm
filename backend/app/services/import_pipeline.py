@@ -45,7 +45,11 @@ from app.services.settings_store import (
     get_immich_config,
 )
 from app.services.thumbnails import THUMBNAIL_MAX_PX, THUMBNAIL_SCALE
-from app.workers.queue import enqueue_immich_upload, enqueue_post_import
+from app.workers.queue import (
+    enqueue_immich_upload,
+    enqueue_post_import,
+    register_import_activity_probe,
+)
 
 from PIL import Image as PILImage
 
@@ -531,6 +535,29 @@ def _progress_done(session_id: str) -> None:
         if p is not None:
             p["phase"] = "idle"
             p["processed"] = p["total"]
+
+
+def has_active_import_work() -> bool:
+    """Whether any import currently has staging/analysis/commit work
+    outstanding. The embedding backfill (workers/queue.py) yields to this, so
+    CLIP encoding never steals CPU or the SQLite write lock from a running
+    import. A session merely sitting open in review - everything copied and
+    analyzed, the user still picking photos - does not count as active."""
+    with _inflight_lock:
+        if _inflight:
+            return True
+    with _progress_lock:
+        for p in _progress.values():
+            if p["phase"] == "staging" and (
+                p["copied"] < p["total"] or p["processed"] < p["total"]
+            ):
+                return True
+            if p["phase"] == "commit" and p["processed"] < p["total"]:
+                return True
+    return False
+
+
+register_import_activity_probe(has_active_import_work)
 
 
 def get_import_progress(session_id: str) -> dict | None:

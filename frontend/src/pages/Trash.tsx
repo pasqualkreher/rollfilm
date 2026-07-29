@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { useAppDialogs } from "../components/AppDialogs";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import type { ImageOut } from "../api/types";
 import { useTransientMessage } from "../utils/transientMessage";
@@ -13,6 +14,7 @@ export function Trash() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
 
   const { data: images, isLoading } = useQuery({
     queryKey: ["trash"],
@@ -82,9 +84,12 @@ export function Trash() {
   async function deleteSelectedForever() {
     if (selected.size === 0) return;
     if (
-      !window.confirm(
-        `Permanently delete ${selected.size} photo(s)? This removes the original files from your library - it cannot be undone.`
-      )
+      !(await dialogs.confirm({
+        title: `Permanently delete ${selected.size} photo(s)?`,
+        message: "This removes the original files from your library - it cannot be undone.",
+        confirmLabel: "Delete forever",
+        danger: true,
+      }))
     ) {
       return;
     }

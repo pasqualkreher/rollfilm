@@ -238,7 +238,7 @@ export function ImageDetail() {
 
   // "Add to Immich" only shows when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
-  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set);
+  const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set && immich.enabled);
   const [immichBusy, setImmichBusy] = useState(false);
   // Flash message - auto-dismisses after a moment.
   const [immichMsg, setImmichMsg] = useTransientMessage();
