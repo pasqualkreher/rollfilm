@@ -2,7 +2,8 @@
 the list endpoint assembles similarity clusters + time groups on the fly (see
 services/smart_albums.py) and the images endpoint resolves one smart album's
 members. Smart ids are self-describing strings - "cluster:2", "year:2024",
-"month:2024-07", "day:2024-07-12", "place:48.1374,11.5755", "edits:all" - so
+"month:2024-07", "day:2024-07-12", "place:48.1374,11.5755", "edits:all",
+"cluster-group:Mountains" (every moment sharing that base label at once) - so
 no id survives a rebuild by accident.
 """
 
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import schemas
 from app.auth import get_current_user
-from app.db.models import FileType, Image, User
+from app.db.models import FileType, Image, ImageTag, Tag, User
 from app.db.session import get_db
 from app.services import smart_albums as smart_service
 from app.services import sources as sources_service
@@ -47,6 +48,7 @@ def _cluster_out(
         image_count=len(cluster.image_ids),
         cover_image_id=covers[0],
         cover_image_ids=covers,
+        group=cluster.group or cluster.name,
     )
 
 
@@ -74,6 +76,10 @@ def list_smart_albums(
     status, clusters = ("ready", [])
     if "moments" in enabled:
         status, clusters = smart_service.get_clusters(db)
+
+    tag_albums = (
+        smart_service.get_tag_albums(db, current_user.id) if "tags" in enabled else []
+    )
 
     empty_times = {"years": [], "months": [], "days": []}
     time_albums = (
@@ -103,6 +109,7 @@ def list_smart_albums(
     return schemas.SmartAlbumsOut(
         clusters_status=status,
         clusters=[_cluster_out(db, i, c) for i, c in enumerate(clusters)],
+        tags=[_time_out("tag", a) for a in tag_albums],
         places=[_time_out("place", a) for a in places],
         countries=section("countries", country_albums["countries"], "country"),
         country_years=section("country_years", country_albums["country_years"], "country_year"),
@@ -153,6 +160,25 @@ def smart_album_images(
             # Rebuilds shuffle cluster indices; a stale link just comes up empty.
             raise HTTPException(status_code=404, detail="Smart album no longer exists")
         query = query.filter(Image.id.in_(cluster.image_ids))
+    elif kind == "cluster-group":
+        # All moments sharing one base label ("Mountains") merged into one view.
+        _, clusters = smart_service.get_clusters(db)
+        ids = [
+            image_id
+            for cluster in clusters
+            if (cluster.group or cluster.name) == key
+            for image_id in cluster.image_ids
+        ]
+        if not ids:
+            raise HTTPException(status_code=404, detail="Smart album no longer exists")
+        query = query.filter(Image.id.in_(ids))
+    elif kind == "tag":
+        tagged = (
+            db.query(ImageTag.image_id)
+            .join(Tag, Tag.id == ImageTag.tag_id)
+            .filter(Tag.owner_id == current_user.id, Tag.name == key)
+        )
+        query = query.filter(Image.id.in_(tagged))
     elif kind == "place":
         try:
             lat_s, lon_s = key.split(",")

@@ -484,8 +484,17 @@ export const api = {
     get(id: string): Promise<AlbumOut> {
       return request(`/albums/${id}`);
     },
-    create(name: string, description?: string): Promise<AlbumOut> {
-      return request(`/albums`, { method: "POST", body: JSON.stringify({ name, description }) });
+    create(name: string, description?: string, tagFilter?: string[]): Promise<AlbumOut> {
+      return request(`/albums`, {
+        method: "POST",
+        body: JSON.stringify({ name, description, tag_filter: tagFilter ?? [] }),
+      });
+    },
+    update(
+      id: string,
+      patch: { name?: string; description?: string; tag_filter?: string[] }
+    ): Promise<AlbumOut> {
+      return request(`/albums/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
     },
     remove(id: string): Promise<void> {
       return request(`/albums/${id}`, { method: "DELETE" });

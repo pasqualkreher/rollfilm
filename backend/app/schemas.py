@@ -205,11 +205,15 @@ class ImmichPushResult(BaseModel):
 class AlbumCreate(BaseModel):
     name: str
     description: str | None = None
+    # Tag rule: photos carrying ANY of these tags are members automatically.
+    tag_filter: list[str] = []
 
 
 class AlbumUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    # None = leave unchanged; [] = clear the rule (back to a manual album).
+    tag_filter: list[str] | None = None
 
 
 class AlbumOut(BaseModel):
@@ -224,6 +228,8 @@ class AlbumOut(BaseModel):
     cover_image_ids: list[str] = []
     # Mirror this album to Immich (selective sync).
     immich_sync: bool = False
+    # Tag rule: photos with any of these tags are members automatically.
+    tag_filter: list[str] = []
 
 
 class SmartAlbumOut(BaseModel):
@@ -231,12 +237,16 @@ class SmartAlbumOut(BaseModel):
     # "place:48.1374,11.5755" / "country:Italy" / "country-year:Italy:2024" -
     # virtual, so the id encodes what the album *is* instead of naming a row.
     id: str
-    kind: Literal["cluster", "year", "month", "day", "place", "country", "country_year", "edits"]
+    kind: Literal["cluster", "tag", "year", "month", "day", "place", "country", "country_year", "edits"]
     name: str
     image_count: int
     cover_image_id: str | None = None
     # Up to 4 member ids (newest first) for the card's mini mosaic preview.
     cover_image_ids: list[str] = []
+    # Clusters only: the base label ("Mountains") shared by sibling moments
+    # ("Mountains · Alpine", "Mountains · Mediterranean") so the UI can stack
+    # them under one expandable group card.
+    group: str | None = None
 
 
 class SmartAlbumsOut(BaseModel):
@@ -245,6 +255,8 @@ class SmartAlbumsOut(BaseModel):
     # backfilling after an import); the frontend polls until "ready".
     clusters_status: Literal["building", "refreshing", "ready"]
     clusters: list[SmartAlbumOut]
+    # One album per tag ("albums by tag") - the "tags" section.
+    tags: list[SmartAlbumOut] = []
     places: list[SmartAlbumOut]
     countries: list[SmartAlbumOut]
     country_years: list[SmartAlbumOut]

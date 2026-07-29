@@ -251,6 +251,7 @@ const AUTO_DEVELOP_GROUPS: { key: string; label: string; desc: string }[] = [
 // SMART_ALBUM_SECTION_NAMES (services/settings_store.py).
 const SMART_ALBUM_SECTIONS: { key: string; label: string; desc: string }[] = [
   { key: "moments", label: "Moments", desc: "Groups of visually similar photos, found and named automatically (beaches, portraits, food, …)." },
+  { key: "tags", label: "Tags", desc: "One album per tag you've given your photos — albums by tag." },
   { key: "places", label: "Places", desc: "Photos taken close together, named after the nearest town. Uses the radius below." },
   { key: "countries", label: "Countries", desc: "One album per country, from the photos' GPS position." },
   { key: "country_years", label: "Countries by year", desc: "The country albums split by year — e.g. “Italy 2024”." },

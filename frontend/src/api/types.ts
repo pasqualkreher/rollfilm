@@ -124,6 +124,9 @@ export interface AlbumOut {
   // Up to 4 member ids (album order) for the card's mini mosaic preview.
   cover_image_ids: string[];
   immich_sync: boolean;
+  // Tag rule: photos carrying ANY of these tags are members automatically,
+  // on top of the manually added ones. Empty = plain manual album.
+  tag_filter: string[];
 }
 
 // A virtual, auto-computed album (similarity cluster, place or time group).
@@ -132,12 +135,16 @@ export interface AlbumOut {
 // /smart-albums/{id}/images resolves.
 export interface SmartAlbumOut {
   id: string;
-  kind: "cluster" | "year" | "month" | "day" | "place" | "country" | "country_year" | "edits";
+  kind: "cluster" | "tag" | "year" | "month" | "day" | "place" | "country" | "country_year" | "edits";
   name: string;
   image_count: number;
   cover_image_id: string | null;
   // Up to 4 member ids (newest first) for the card's mini mosaic preview.
   cover_image_ids: string[];
+  // Clusters only: base label shared by sibling moments ("Mountains" for
+  // "Mountains · Alpine" / "Mountains · Mediterranean") - the Moments row
+  // stacks a group under one expandable card.
+  group?: string | null;
 }
 
 export interface SmartAlbumsOut {
@@ -146,6 +153,8 @@ export interface SmartAlbumsOut {
   // stale and a rebuild runs (e.g. embeddings backfilling after an import).
   clusters_status: "building" | "refreshing" | "ready";
   clusters: SmartAlbumOut[];
+  // One album per tag ("albums by tag") - the "tags" section.
+  tags: SmartAlbumOut[];
   places: SmartAlbumOut[];
   countries: SmartAlbumOut[];
   country_years: SmartAlbumOut[];

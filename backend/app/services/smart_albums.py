@@ -31,6 +31,7 @@ import calendar
 import json
 import logging
 import threading
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -39,16 +40,18 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import FileType, Image
+from app.db.models import FileType, Image, ImageTag, Tag
 from app.db.session import SessionLocal, engine
 from app.services import embeddings, geocode
 from app.services import sources as sources_service
 
 # Cosine similarity two photos need to land in the same cluster. ViT-B-32
 # image/image similarities run roughly: near-duplicates 0.9+, same subject or
-# scene 0.75-0.85, loosely related 0.6-0.7. 0.72 groups by theme without
-# lumping everything together.
-SIMILARITY_THRESHOLD = 0.72
+# scene 0.75-0.85, loosely related 0.6-0.7. 0.76 sits in the "same subject or
+# scene" band: moments hold photos that really belong together (one trip, one
+# kind of scene) instead of a loose theme - 0.72 pulled in merely related
+# shots and made mixed-bag moments.
+SIMILARITY_THRESHOLD = 0.76
 # Below this a "cluster" is just a handful of stragglers, not an album.
 MIN_CLUSTER_SIZE = 8
 MAX_CLUSTERS = 15
@@ -127,12 +130,50 @@ _LABELS: list[tuple[str, str]] = [
     ("Documents", "a photo of a document or a receipt"),
 ]
 
+# Qualifiers used to tell same-label clusters apart ("Mountains · Sunny" vs
+# "Mountains · Snow") instead of numbering them. Scored zero-shot against the
+# cluster centroid exactly like the base labels. Deliberately generic visual
+# attributes - weather, light, season, terrain, composition - so any of them
+# reads naturally behind any base label; region/style words ("Alpine",
+# "Mediterranean") sounded off on the wrong subject.
+_QUALIFIERS: list[tuple[str, str]] = [
+    ("Sunny", "a photo taken on a bright sunny day"),
+    ("Rainy", "a photo taken in rainy weather"),
+    ("Cloudy", "a photo under an overcast cloudy sky"),
+    ("Foggy", "a photo in fog or mist"),
+    ("Snow", "a photo with snow"),
+    ("Winter", "a photo of a cold winter scene"),
+    ("Autumn", "a photo with colorful autumn foliage"),
+    ("Spring", "a photo with fresh spring blossoms"),
+    ("Summer", "a photo of a warm summer day"),
+    ("Sunset", "a photo of a sunset"),
+    ("Golden light", "a photo in warm golden evening light"),
+    ("Night", "a photo taken at night"),
+    ("Cliffs", "a photo of steep cliffs and rock faces"),
+    ("Rocky", "a photo of rocky rugged terrain"),
+    ("Green", "a photo of lush green scenery"),
+    ("By the water", "a photo taken next to the water"),
+    ("Forest", "a photo among the trees of a forest"),
+    ("Wide views", "a wide panoramic view photo"),
+    ("Close-ups", "a close-up photo of a subject"),
+    ("Colorful", "a very colorful vibrant photo"),
+    ("People", "a photo with people in it"),
+    ("Indoors", "a photo taken indoors"),
+]
+# Same idea as LABEL_MIN_SIMILARITY: below this a qualifier is a guess, not a
+# description - fall through to country/year instead.
+QUALIFIER_MIN_SIMILARITY = 0.17
+
 
 @dataclass
 class SmartCluster:
     name: str
     image_ids: list[str]
     cover_image_id: str
+    # Base label shared by sibling clusters ("Mountains" for "Mountains ·
+    # Alpine" and "Mountains · Mediterranean") - the UI stacks a group's
+    # moments under one expandable card. Equal to name for lone clusters.
+    group: str = ""
 
 
 @dataclass
@@ -150,7 +191,14 @@ class _ClusterState:
 _state = _ClusterState()
 _CACHE_PATH = settings.pm_data_dir / "smart_albums_cache.json"
 _label_matrix: np.ndarray | None = None
+_qualifier_matrix: np.ndarray | None = None
 _label_lock = threading.Lock()
+
+
+# Part of the cache signature: bumping it makes every stored cache stale, so
+# an algorithm/naming change reaches users on their next visit instead of
+# waiting for the library to change.
+_ALGO_VERSION = 4
 
 
 def _library_signature(db: Session) -> tuple:
@@ -162,7 +210,7 @@ def _library_signature(db: Session) -> tuple:
         db.query(func.count(Image.id)).filter(Image.deleted_at.is_(None)).scalar() or 0
     )
     last_import = db.query(func.max(Image.imported_at)).scalar()
-    return (emb_count, img_count, str(last_import))
+    return (_ALGO_VERSION, emb_count, img_count, str(last_import))
 
 
 def get_clusters(db: Session) -> tuple[str, list[SmartCluster]]:
@@ -223,7 +271,10 @@ def _load_cache_locked(db: Session) -> None:
                 cover = image_ids[0]
             clusters.append(
                 SmartCluster(
-                    name=entry["name"], image_ids=image_ids, cover_image_id=cover
+                    name=entry["name"],
+                    image_ids=image_ids,
+                    cover_image_id=cover,
+                    group=entry.get("group") or entry["name"],
                 )
             )
     except (KeyError, TypeError):
@@ -245,6 +296,7 @@ def _save_cache(sig: tuple, clusters: list[SmartCluster]) -> None:
                 "clusters": [
                     {
                         "name": c.name,
+                        "group": c.group,
                         "image_ids": c.image_ids,
                         "cover_image_id": c.cover_image_id,
                     }
@@ -270,6 +322,17 @@ def _get_label_matrix() -> np.ndarray:
     return _label_matrix
 
 
+def _get_qualifier_matrix() -> np.ndarray:
+    global _qualifier_matrix
+    if _qualifier_matrix is None:
+        with _label_lock:
+            if _qualifier_matrix is None:
+                _qualifier_matrix = embeddings.encode_texts(
+                    [phrase for _, phrase in _QUALIFIERS]
+                )
+    return _qualifier_matrix
+
+
 def _compute_clusters(sig: tuple) -> None:
     try:
         db = SessionLocal()
@@ -291,6 +354,14 @@ def _compute_clusters(sig: tuple) -> None:
                     Image.paired_image_id.isnot(None),
                 )
             }
+            # Capture year + country per photo: fallback qualifiers when two
+            # same-label clusters can't be told apart by scene alone.
+            meta = {
+                row[0]: (row[1].year if row[1] else None, row[2])
+                for row in db.query(
+                    Image.id, Image.taken_at, Image.gps_country
+                ).filter(Image.deleted_at.is_(None))
+            }
         finally:
             db.close()
 
@@ -306,7 +377,7 @@ def _compute_clusters(sig: tuple) -> None:
 
         clusters: list[SmartCluster] = []
         if len(ids) >= MIN_CLUSTER_SIZE:
-            clusters = _build_clusters(ids, np.stack(vecs))
+            clusters = _build_clusters(ids, np.stack(vecs), meta)
 
         with _state.lock:
             _state.clusters = clusters
@@ -321,7 +392,11 @@ def _compute_clusters(sig: tuple) -> None:
             _state.computing = False
 
 
-def _build_clusters(ids: list[str], vecs: np.ndarray) -> list[SmartCluster]:
+def _build_clusters(
+    ids: list[str],
+    vecs: np.ndarray,
+    meta: dict[str, tuple[int | None, str | None]] | None = None,
+) -> list[SmartCluster]:
     # Vectors come out of encode_image normalized, but renormalize defensively:
     # cosine math below assumes unit length.
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
@@ -375,8 +450,7 @@ def _build_clusters(ids: list[str], vecs: np.ndarray) -> list[SmartCluster]:
     # label prompts, encoded with the same CLIP model as the images.
     label_matrix = _get_label_matrix()
     titles = [title for title, _ in _LABELS]
-    clusters: list[SmartCluster] = []
-    used_names: dict[str, int] = {}
+    named: list[dict] = []  # per kept cluster, still in size order
     for member_idx in kept:
         cvecs = vecs[member_idx]
         centroid = cvecs.mean(axis=0)
@@ -385,26 +459,97 @@ def _build_clusters(ids: list[str], vecs: np.ndarray) -> list[SmartCluster]:
         label_sims = label_matrix @ centroid
         best_label = int(np.argmax(label_sims))
         if label_sims[best_label] >= LABEL_MIN_SIMILARITY:
-            name = titles[best_label]
+            base = titles[best_label]
         else:
-            name = "Moments"
-        # Two clusters can score the same label (e.g. two distinct trips both
-        # reading as "Mountains") - keep both, numbered.
-        used_names[name] = used_names.get(name, 0) + 1
-        if used_names[name] > 1:
-            name = f"{name} {_roman(used_names[name])}"
-
+            base = "Moments"
         # Cover: the most central photo, i.e. the best single example.
         cover = member_idx[int(np.argmax(cvecs @ centroid))]
-        clusters.append(
-            SmartCluster(
-                name=name,
-                image_ids=[ids[i] for i in member_idx],
-                cover_image_id=ids[cover],
-            )
+        named.append(
+            {"members": member_idx, "centroid": centroid, "base": base, "cover": cover}
         )
-    clusters.sort(key=lambda c: c.name.lower())
+
+    # Two clusters can score the same label (e.g. two distinct trips both
+    # reading as "Mountains"). They stay one family: every sibling shares the
+    # base label as its group and gets a distinguishing qualifier instead of
+    # the old "Mountains II" numbering - scene flavor via CLIP ("Alpine",
+    # "Mediterranean"), else country, else year, numerals only as last resort.
+    by_base: dict[str, list[int]] = {}
+    for i, info in enumerate(named):
+        by_base.setdefault(info["base"], []).append(i)
+    for base, idxs in by_base.items():
+        if len(idxs) == 1:
+            named[idxs[0]]["name"] = base
+            continue
+        for i, sibling_name in zip(
+            idxs, _sibling_names(base, [named[i] for i in idxs], ids, meta or {})
+        ):
+            named[i]["name"] = sibling_name
+
+    clusters = [
+        SmartCluster(
+            name=info["name"],
+            image_ids=[ids[i] for i in info["members"]],
+            cover_image_id=ids[info["cover"]],
+            group=info["base"],
+        )
+        for info in named
+    ]
+    clusters.sort(key=lambda c: (c.group.lower(), c.name.lower()))
     return clusters
+
+
+def _majority(values: list) -> object | None:
+    """Most common non-None value, or None when there is none."""
+    counts = Counter(v for v in values if v is not None)
+    return counts.most_common(1)[0][0] if counts else None
+
+
+def _sibling_names(
+    base: str,
+    group: list[dict],
+    ids: list[str],
+    meta: dict[str, tuple[int | None, str | None]],
+) -> list[str]:
+    """Distinct display names for same-label clusters, biggest first. Each
+    sibling tries, in order: its best free CLIP scene qualifier ("Mountains ·
+    Alpine"), its majority country ("Mountains · Austria"), its majority year
+    ("Mountains · 2023"), and finally the old numbering ("Mountains II")."""
+    names: list[str | None] = [None] * len(group)
+    used: set[str] = set()
+
+    qualifier_matrix = _get_qualifier_matrix()
+    qualifier_titles = [title for title, _ in _QUALIFIERS]
+    for k, info in enumerate(group):
+        sims = qualifier_matrix @ info["centroid"]
+        for j in np.argsort(-sims):
+            if sims[int(j)] < QUALIFIER_MIN_SIMILARITY:
+                break
+            title = qualifier_titles[int(j)]
+            if title not in used:
+                used.add(title)
+                names[k] = f"{base} · {title}"
+                break
+
+    for k, info in enumerate(group):
+        if names[k] is not None:
+            continue
+        member_meta = [meta.get(ids[i]) for i in info["members"]]
+        country = _majority([m[1] for m in member_meta if m])
+        if country and country not in used:
+            used.add(country)
+            names[k] = f"{base} · {country}"
+            continue
+        year = _majority([m[0] for m in member_meta if m])
+        if year is not None and str(year) not in used:
+            used.add(str(year))
+            names[k] = f"{base} · {year}"
+
+    counter = 0
+    for k in range(len(group)):
+        if names[k] is None:
+            counter += 1
+            names[k] = base if counter == 1 else f"{base} {_roman(counter)}"
+    return [name for name in names if name is not None]
 
 
 def _roman(n: int) -> str:
@@ -663,6 +808,49 @@ def get_country_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]
         for (name, year), (c, jpegs, others) in year_split
     ]
     return {"countries": country_albums, "country_years": country_year_albums}
+
+
+def get_tag_albums(db: Session, owner_id: int) -> list[GroupAlbum]:
+    """One virtual album per tag ("albums by tag"): every live photo carrying
+    the tag, biggest tags first. Same cover rules as the other sections."""
+    unavailable = sources_service.unavailable_source_ids(db, owner_id)
+    query = (
+        db.query(Image.id, Image.taken_at, Tag.name, Image.file_type)
+        .join(ImageTag, ImageTag.image_id == Image.id)
+        .join(Tag, Tag.id == ImageTag.tag_id)
+        .filter(
+            Image.owner_id == owner_id,
+            Image.deleted_at.is_(None),
+            Tag.owner_id == owner_id,
+        )
+    )
+    rows = sources_service.exclude_unavailable(query, unavailable).all()
+
+    # tag -> [count, jpeg covers, non-jpeg covers] (newest-first (wall, id))
+    groups: dict[str, list] = {}
+    for image_id, taken_at, tag_name, file_type in rows:
+        wall = taken_at.replace(tzinfo=None) if taken_at else None
+        entry = groups.get(tag_name)
+        if entry is None:
+            entry = groups[tag_name] = [0, [], []]
+        entry[0] += 1
+        _push_cover(entry[1] if file_type == FileType.jpeg else entry[2], wall, image_id)
+
+    albums = []
+    for name, (count, jpegs, others) in sorted(
+        groups.items(), key=lambda kv: (-kv[1][0], kv[0].lower())
+    ):
+        covers = _cover_ids(jpegs, others)
+        albums.append(
+            GroupAlbum(
+                id=f"tag:{name}",
+                name=name,
+                image_count=count,
+                cover_image_id=covers[0],
+                cover_image_ids=covers,
+            )
+        )
+    return albums
 
 
 def edited_filter():

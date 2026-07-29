@@ -5038,6 +5038,38 @@ kbd {
   font-size: 11px;
 }
 
+/* Moments tree: same-label moments ("Mountains · Alpine", "Mountains ·
+   Mediterranean") stack under one group card that expands into an indented
+   sub-row. The stack card is a <button>, so reset its native chrome. */
+button.smart-card {
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Offset card edges peeking out bottom-right read as "there's more in here"
+   (overflow:hidden clips pseudo-elements, so the deck is drawn with shadows). */
+.smart-card--stack {
+  box-shadow:
+    var(--shadow-sm),
+    3px 3px 0 -1px var(--bg-elevated),
+    3px 3px 0 0 var(--border),
+    6px 6px 0 -3px var(--bg-elevated),
+    6px 6px 0 -2px var(--border);
+}
+
+.smart-card--stack.open {
+  border-color: var(--accent);
+}
+
+/* The expanded group's moments, indented under a connector line - the tree. */
+.smart-row--sub {
+  margin: 10px 0 0 18px;
+  padding-left: 14px;
+  border-left: 2px solid var(--accent-soft, var(--border));
+}
+
 /* Loading state for the smart-album rows: shimmering placeholder cards where
    the real ones will appear, so sections fade in instead of popping. */
 /* Transient status text shown after pressing a button ("Saved.", upload

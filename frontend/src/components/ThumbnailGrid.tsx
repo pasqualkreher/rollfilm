@@ -185,22 +185,47 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
   );
 }
 
-function monthLabel(iso: string | null): string {
-  if (!iso) return "Unknown date";
+function sectionDate(iso: string | null): Date | null {
+  if (!iso) return null;
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "Unknown date";
-  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
-// Group consecutive images sharing a month into sections, carrying each image's
-// global index so range-select and arrow-key nav still address the flat list.
-function buildSections(images: ImageOut[]): { label: string; items: { image: ImageOut; index: number }[] }[] {
-  const sections: { label: string; items: { image: ImageOut; index: number }[] }[] = [];
+// Whether every dated photo falls inside one calendar month. Such a grid (an
+// album of a single trip or event) gets day sections - month granularity would
+// collapse it into a single section and the scrubber into one useless marker,
+// the same reasoning as the import review's day grouping. Anything wider keeps
+// the classic "Month Year" sections.
+function spansSingleMonth(images: ImageOut[]): boolean {
+  let monthKey: string | null = null;
+  for (const image of images) {
+    const d = sectionDate(image.taken_at);
+    if (!d) continue;
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (monthKey === null) monthKey = key;
+    else if (monthKey !== key) return false;
+  }
+  return monthKey !== null;
+}
+
+// Group consecutive images sharing a month (or day) into sections, carrying
+// each image's global index so range-select and arrow-key nav still address
+// the flat list.
+function buildSections(
+  images: ImageOut[],
+  granularity: "month" | "day"
+): { label: string; date: Date | null; items: { image: ImageOut; index: number }[] }[] {
+  const sections: { label: string; date: Date | null; items: { image: ImageOut; index: number }[] }[] = [];
   images.forEach((image, index) => {
-    const label = monthLabel(image.taken_at);
+    const d = sectionDate(image.taken_at);
+    const label = !d
+      ? "Unknown date"
+      : granularity === "day"
+        ? d.toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric", year: "numeric" })
+        : d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
     const last = sections[sections.length - 1];
     if (last && last.label === label) last.items.push({ image, index });
-    else sections.push({ label, items: [{ image, index }] });
+    else sections.push({ label, date: d, items: [{ image, index }] });
   });
   return sections;
 }
@@ -319,7 +344,8 @@ export function ThumbnailGrid({
     );
   }
 
-  const sections = buildSections(images);
+  const granularity = spansSingleMonth(images) ? "day" : "month";
+  const sections = buildSections(images, granularity);
 
   return (
     <div className="timeline has-scrubber" ref={rootRef}>
@@ -348,7 +374,20 @@ export function ThumbnailGrid({
           (rootRef.current?.closest(".page-scroll") ?? rootRef.current?.closest(".page")) as HTMLElement | null
         }
         getSectionEl={(label) => sectionEls.current.get(label) ?? null}
-        sections={sections.map((s) => ({ label: s.label }))}
+        // Day mode rescales the rail like the import review: month as the big
+        // tick (with year - it's the only year indicator on the rail), day
+        // numbers as the small ones. Month mode keeps the year/month split the
+        // scrubber derives from "July 2026" labels by itself.
+        sections={sections.map((s) =>
+          granularity === "day" && s.date
+            ? {
+                label: s.label,
+                tickGroup: `${s.date.getFullYear()}-${s.date.getMonth()}`,
+                tickPrimary: s.date.toLocaleDateString(undefined, { month: "short", year: "numeric" }),
+                tickSecondary: String(s.date.getDate()),
+              }
+            : { label: s.label }
+        )}
       />
     </div>
   );

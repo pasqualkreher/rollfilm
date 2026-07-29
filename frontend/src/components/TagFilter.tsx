@@ -6,11 +6,15 @@ interface Props {
   // Currently-selected tags (AND semantics - a photo must have all of them).
   value: string[];
   onChange: (tags: string[]) => void;
+  // Button text while nothing is selected ("Any" reads right for filtering;
+  // pickers reusing this component pass their own, e.g. "Pick tags…").
+  emptyLabel?: string;
+  title?: string;
 }
 
 // Multi-select tag filter: a compact button that opens a checkbox popover.
 // Selecting several tags narrows the grid to photos carrying all of them.
-export function TagFilter({ options, value, onChange }: Props) {
+export function TagFilter({ options, value, onChange, emptyLabel = "Any", title = "Filter by tags" }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -41,7 +45,7 @@ export function TagFilter({ options, value, onChange }: Props) {
     : options;
 
   const label =
-    value.length === 0 ? "Any" : value.length === 1 ? value[0] : `${value.length} tags`;
+    value.length === 0 ? emptyLabel : value.length === 1 ? value[0] : `${value.length} tags`;
 
   return (
     <div className="tag-filter" ref={wrapRef}>
@@ -49,7 +53,7 @@ export function TagFilter({ options, value, onChange }: Props) {
         type="button"
         className={`tag-filter-btn${value.length ? " active" : ""}`}
         onClick={() => setOpen((o) => !o)}
-        title="Filter by tags"
+        title={title}
         disabled={options.length === 0}
       >
         <span className="tag-filter-btn-label">{options.length === 0 ? "No tags" : label}</span>

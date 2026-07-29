@@ -67,6 +67,7 @@ AUTO_DEVELOP_GROUP_NAMES = ("tone", "white_balance", "color", "details", "curves
 SMART_ALBUM_SECTIONS = "smart_album_sections"
 SMART_ALBUM_SECTION_NAMES = (
     "moments",       # CLIP similarity clusters
+    "tags",          # one album per tag the user gave their photos
     "places",        # GPS clusters within the radius below
     "countries",     # one album per country
     "country_years", # one album per country and year ("Italy 2024")
@@ -76,7 +77,7 @@ SMART_ALBUM_SECTION_NAMES = (
     "edits",         # everything edited in place plus saved edit copies
 )
 DEFAULT_SMART_ALBUM_SECTIONS = (
-    "moments", "places", "countries", "days", "years", "months", "edits"
+    "moments", "tags", "places", "countries", "days", "years", "months", "edits"
 )
 # How far (km) a photo may sit from a place's center and still belong to it.
 SMART_ALBUM_PLACE_RADIUS_KM = "smart_album_place_radius_km"

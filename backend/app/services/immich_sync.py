@@ -32,9 +32,10 @@ import logging
 import threading
 import time
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.db.models import Album, AlbumImage, FileType, Image, ImmichPendingDeletion
+from app.db.models import Album, AlbumImage, FileType, Image, ImageTag, ImmichPendingDeletion, Tag
 from app.db.session import SessionLocal
 from app.services.filesystem import resolve_image_path
 from app.services.hashing import sha1_file
@@ -91,16 +92,24 @@ def _clear_failure(image_id: str) -> None:
 def immich_album_names(db: Session, image: Image, config: ImmichConfig) -> tuple[str, ...]:
     """Immich album names an image should be mirrored into, given the sync mode.
     Full mode mirrors every album the photo is in; selective mode only albums
-    the user flagged (immich_sync); manual mode mirrors nothing."""
+    the user flagged (immich_sync); manual mode mirrors nothing. Membership
+    counts manual adds and a matching album tag rule alike."""
     if not config.album_sync:
         return ()
-    album_ids = [link.album_id for link in image.albums]
-    if not album_ids:
-        return ()
-    query = db.query(Album).filter(Album.id.in_(album_ids))
+    manual_ids = {link.album_id for link in image.albums}
+    query = db.query(Album).filter(
+        or_(Album.id.in_(manual_ids), Album.tag_filter.isnot(None))
+        if manual_ids
+        else Album.tag_filter.isnot(None)
+    )
     if config.sync_mode != IMMICH_MODE_FULL:
         query = query.filter(Album.immich_sync.is_(True))
-    return tuple(a.name for a in query.all())
+    image_tags = set(image.tags)
+    return tuple(
+        a.name
+        for a in query.all()
+        if a.id in manual_ids or (image_tags and image_tags & set(a.tag_filter_list))
+    )
 
 
 def _delete_asset_tolerant(config: ImmichConfig, asset_id: str, filename: str) -> None:
@@ -197,7 +206,25 @@ def _upload_missing(db: Session, config: ImmichConfig) -> None:
         Image.immich_asset_id.is_(None),
     )
     if config.sync_mode == IMMICH_MODE_SELECTIVE:
-        query = query.filter(Image.immich_sync.is_(True))
+        # Flagged photos, plus photos matching a flagged album's tag rule -
+        # tagging a photo later must land it on Immich just like adding it to
+        # the flagged album by hand does (that path uploads event-driven).
+        rule_tags: set[str] = set()
+        for album in db.query(Album).filter(
+            Album.immich_sync.is_(True), Album.tag_filter.isnot(None)
+        ):
+            rule_tags.update(album.tag_filter_list)
+        if rule_tags:
+            tagged = (
+                db.query(ImageTag.image_id)
+                .join(Tag, Tag.id == ImageTag.tag_id)
+                .filter(Tag.name.in_(rule_tags))
+            )
+            query = query.filter(
+                or_(Image.immich_sync.is_(True), Image.id.in_(tagged))
+            )
+        else:
+            query = query.filter(Image.immich_sync.is_(True))
     for image in query.all():
         if not _should_attempt(image.id):
             continue
@@ -265,9 +292,33 @@ def _sync_album_membership(db: Session, config: ImmichConfig) -> None:
     # per-image flag only decides which loose photos get uploaded.
     if config.sync_mode == IMMICH_MODE_SELECTIVE:
         query = query.filter(Album.immich_sync.is_(True))
+    pairs: set[tuple[str, str]] = {(name, asset_id) for name, asset_id in query.all()}
+
+    # Tag-rule membership: photos carrying a tag of a mirrored album's rule
+    # belong in that Immich album exactly like manually added ones.
+    rule_albums = db.query(Album).filter(Album.tag_filter.isnot(None))
+    if config.sync_mode == IMMICH_MODE_SELECTIVE:
+        rule_albums = rule_albums.filter(Album.immich_sync.is_(True))
+    for album in rule_albums.all():
+        rule_tags = album.tag_filter_list
+        if not rule_tags:
+            continue
+        tagged = (
+            db.query(Image.immich_asset_id)
+            .join(ImageTag, ImageTag.image_id == Image.id)
+            .join(Tag, Tag.id == ImageTag.tag_id)
+            .filter(
+                Tag.owner_id == album.owner_id,
+                Tag.name.in_(rule_tags),
+                Image.deleted_at.is_(None),
+                Image.immich_asset_id.isnot(None),
+            )
+            .distinct()
+        )
+        pairs.update((album.name, asset_id) for (asset_id,) in tagged.all())
 
     to_push: dict[str, list[str]] = {}
-    for name, asset_id in query.all():
+    for name, asset_id in pairs:
         if (name, asset_id) not in _album_pairs_synced:
             to_push.setdefault(name, []).append(asset_id)
 

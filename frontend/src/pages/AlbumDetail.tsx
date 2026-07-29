@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
 import type { BulkResetOptions, ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
+import { TagFilter } from "../components/TagFilter";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { AlbumPicker } from "../components/AlbumPicker";
@@ -89,7 +90,9 @@ export function AlbumDetail() {
     // so it only ranks photos that are actually in the album.
     queryFn: async () => {
       if (q) return (await api.search.query(q, filters)).map((r) => r.image);
-      return api.images.list(filters);
+      // Explicit big limit: the backend default is 100, which silently
+      // truncated larger albums (and would cripple the scrubber).
+      return api.images.list(filters, { limit: 5000, offset: 0 });
     },
     enabled: !!id,
   });
@@ -298,6 +301,16 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
+  // The album's tag rule: photos carrying any of these tags are members
+  // automatically. Saving refreshes the grid, the header count and the cards.
+  async function saveTagFilter(tags: string[]) {
+    if (!id) return;
+    await api.albums.update(id, { tag_filter: tags });
+    queryClient.invalidateQueries({ queryKey: ["album", id] });
+    queryClient.invalidateQueries({ queryKey: ["albums"] });
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+  }
+
   async function addSelectedToImmich() {
     if (selected.size === 0) return;
     setImmichBusy(true);
@@ -318,6 +331,24 @@ export function AlbumDetail() {
       <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {album?.name ?? "Album"}
         {album && <span className="count-pill">{album.image_count} photos</span>}
+        {album && (
+          /* Always visible - with no tags in the library yet the picker just
+             renders disabled ("No tags"), so the feature stays discoverable. */
+          <span
+            className="filter-field filter-field-inline"
+            style={{ fontSize: 13, fontWeight: 400, display: "inline-flex", alignItems: "center", gap: 6 }}
+            title="Photos carrying any of these tags belong to this album automatically"
+          >
+            Auto-include
+            <TagFilter
+              options={allTags ?? []}
+              value={album.tag_filter ?? []}
+              onChange={saveTagFilter}
+              emptyLabel="No tags"
+              title="Build this album from tags: photos with any selected tag are included automatically"
+            />
+          </span>
+        )}
         {album && immichConfigured && immich?.sync_mode === "selective" && (
           <label
             className="filter-field filter-field-inline"

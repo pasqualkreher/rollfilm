@@ -19,6 +19,7 @@ from app.api.deps import get_owned_image
 from app.auth import get_current_user
 from app.config import settings
 from app.db.models import (
+    Album,
     AlbumImage,
     ColorLabel,
     FileType,
@@ -167,9 +168,23 @@ def _filtered_images_query(
     )
 
     if album_id:
-        query = query.join(AlbumImage, AlbumImage.image_id == Image.id).filter(
-            AlbumImage.album_id == album_id
-        )
+        # Manually added photos, plus - when the album carries a tag rule -
+        # every photo with any of those tags (same membership the album card's
+        # count is computed from, see routes/albums._membership).
+        manual_ids = db.query(AlbumImage.image_id).filter(AlbumImage.album_id == album_id)
+        album = db.get(Album, album_id)
+        rule_tags = album.tag_filter_list if album is not None else []
+        if rule_tags:
+            tagged_ids = (
+                db.query(ImageTag.image_id)
+                .join(Tag, Tag.id == ImageTag.tag_id)
+                .filter(Tag.owner_id == current_user.id, Tag.name.in_(rule_tags))
+            )
+            query = query.filter(
+                or_(Image.id.in_(manual_ids), Image.id.in_(tagged_ids))
+            )
+        else:
+            query = query.filter(Image.id.in_(manual_ids))
     if rating_min is not None:
         query = query.filter(Image.rating >= rating_min)
     if color_label is not None:

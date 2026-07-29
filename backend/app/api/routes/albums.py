@@ -1,11 +1,13 @@
+import json
+
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import schemas
 from app.api.deps import get_owned_album, get_owned_image
 from app.auth import get_current_user
-from app.db.models import Album, AlbumImage, FileType, Image, User
+from app.db.models import Album, AlbumImage, FileType, Image, ImageTag, Tag, User
 from app.db.session import get_db
 from app.services.filesystem import resolve_image_path
 from app.services.settings_store import IMMICH_MODE_FULL, ImmichConfig, get_immich_config
@@ -27,35 +29,107 @@ def _mirrored(immich: ImmichConfig | None, album: Album) -> bool:
     )
 
 
+def _clean_tag_filter(tags: list[str]) -> list[str]:
+    """Normalize a tag rule: strip, drop empties, dedupe (order preserved)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for tag in tags:
+        t = tag.strip()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _tagged_image_ids(db: Session, owner_id: int, tag_names: list[str]):
+    """Subquery of image ids carrying ANY of the given tags."""
+    return (
+        db.query(ImageTag.image_id)
+        .join(Tag, Tag.id == ImageTag.tag_id)
+        .filter(Tag.owner_id == owner_id, Tag.name.in_(tag_names))
+    )
+
+
+def _membership(db: Session, album: Album):
+    """Filter criterion for an album's effective members: the manually added
+    photos, plus - when the album carries a tag rule - every photo with any
+    of those tags."""
+    manual = db.query(AlbumImage.image_id).filter(AlbumImage.album_id == album.id)
+    tags = album.tag_filter_list
+    if tags:
+        return or_(
+            Image.id.in_(manual), Image.id.in_(_tagged_image_ids(db, album.owner_id, tags))
+        )
+    return Image.id.in_(manual)
+
+
+def _member_images_query(db: Session, album: Album):
+    """All live member photos of an album (manual + tag rule)."""
+    return db.query(Image).filter(
+        Image.owner_id == album.owner_id,
+        Image.deleted_at.is_(None),
+        _membership(db, album),
+    )
+
+
+def _enqueue_member_uploads(db: Session, immich: ImmichConfig, album: Album) -> None:
+    """Queue an Immich upload of every JPEG member (manual + tag rule), each
+    added to the same-named Immich album."""
+    for image in _member_images_query(db, album).filter(Image.file_type == FileType.jpeg):
+        path = resolve_image_path(image)
+        if path.exists():
+            enqueue_immich_upload(
+                immich.base_url,
+                immich.api_key,
+                path,
+                image.taken_at,
+                (album.name,),
+                image_id=image.id,
+            )
+
+
 def _to_album_out(db: Session, album: Album) -> schemas.AlbumOut:
     # Photos sitting in the Trash keep their album membership (so restoring
-    # puts them back), but they shouldn't inflate the visible count.
-    count = (
-        db.query(func.count(AlbumImage.id))
-        .join(Image, Image.id == AlbumImage.image_id)
-        .filter(AlbumImage.album_id == album.id, Image.deleted_at.is_(None))
-        .scalar()
-    )
+    # puts them back), but they shouldn't inflate the visible count. Members
+    # via the tag rule count too, so the card number matches opening the album.
+    count = _member_images_query(db, album).count()
     # The first few photos (in album order) feed the card's mosaic preview.
     # JPEGs only - RAWs (dark render, usually doubling a JPEG of the same
-    # shot) only when the album holds no JPEG at all.
+    # shot) only when the album holds no JPEG at all. Manually placed photos
+    # keep their curated order; tag-rule members fill any remaining slots
+    # newest first.
     covers_base = (
         db.query(AlbumImage.image_id)
         .join(Image, Image.id == AlbumImage.image_id)
         .filter(AlbumImage.album_id == album.id, Image.deleted_at.is_(None))
         .order_by(AlbumImage.position.asc())
     )
-    covers = covers_base.filter(Image.file_type == FileType.jpeg).limit(4).all()
+
+    def fill(file_filter) -> list[str]:
+        ids = [row[0] for row in covers_base.filter(file_filter).limit(4)]
+        if len(ids) < 4 and album.tag_filter_list:
+            extra = (
+                _member_images_query(db, album)
+                .filter(file_filter, Image.id.notin_(ids))
+                .order_by(Image.taken_at.desc(), Image.id.asc())
+                .limit(4 - len(ids))
+                .all()
+            )
+            ids += [image.id for image in extra]
+        return ids
+
+    covers = fill(Image.file_type == FileType.jpeg)
     if not covers:
-        covers = covers_base.limit(4).all()
+        covers = fill(Image.file_type != FileType.jpeg)
     return schemas.AlbumOut(
         id=album.id,
         name=album.name,
         description=album.description,
         created_at=album.created_at,
         image_count=count,
-        cover_image_ids=[row[0] for row in covers],
+        cover_image_ids=covers,
         immich_sync=album.immich_sync,
+        tag_filter=album.tag_filter_list,
     )
 
 
@@ -71,7 +145,13 @@ def create_album(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    album = Album(owner_id=current_user.id, name=payload.name, description=payload.description)
+    tags = _clean_tag_filter(payload.tag_filter)
+    album = Album(
+        owner_id=current_user.id,
+        name=payload.name,
+        description=payload.description,
+        tag_filter=json.dumps(tags) if tags else None,
+    )
     db.add(album)
     db.commit()
     db.refresh(album)
@@ -93,10 +173,14 @@ def update_album(
 ):
     album = get_owned_album(db, current_user.id, album_id)
     old_name = album.name
+    old_tags = album.tag_filter_list
     if payload.name is not None:
         album.name = payload.name
     if payload.description is not None:
         album.description = payload.description
+    if payload.tag_filter is not None:
+        tags = _clean_tag_filter(payload.tag_filter)
+        album.tag_filter = json.dumps(tags) if tags else None
     db.commit()
     db.refresh(album)
     # Renaming a mirrored album must follow through to Immich, or the by-name
@@ -105,6 +189,10 @@ def update_album(
     immich = get_immich_config(db)
     if album.name != old_name and _mirrored(immich, album):
         enqueue_immich_album_rename(immich.base_url, immich.api_key, old_name, album.name)
+    # A widened tag rule pulls new photos into a mirrored album - push them the
+    # same way flagging the album for sync does (re-uploads dedupe over there).
+    if album.tag_filter_list != old_tags and _mirrored(immich, album):
+        _enqueue_member_uploads(db, immich, album)
     return _to_album_out(db, album)
 
 
@@ -184,27 +272,7 @@ def set_album_immich_sync(
 
     immich = get_immich_config(db)
     if payload.enabled and immich is not None:
-        images = (
-            db.query(Image)
-            .join(AlbumImage, AlbumImage.image_id == Image.id)
-            .filter(
-                AlbumImage.album_id == album.id,
-                Image.deleted_at.is_(None),
-                Image.file_type == FileType.jpeg,
-            )
-            .all()
-        )
-        for image in images:
-            path = resolve_image_path(image)
-            if path.exists():
-                enqueue_immich_upload(
-                    immich.base_url,
-                    immich.api_key,
-                    path,
-                    image.taken_at,
-                    (album.name,),
-                    image_id=image.id,
-                )
+        _enqueue_member_uploads(db, immich, album)
     db.refresh(album)
     return _to_album_out(db, album)
 

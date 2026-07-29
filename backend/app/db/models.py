@@ -1,4 +1,5 @@
 import enum
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -274,8 +275,21 @@ class Album(Base):
     # Selective Immich sync: when set, this album is mirrored to an Immich album
     # of the same name and its JPEG photos are uploaded and added to it.
     immich_sync: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Optional tag rule (JSON list of tag names): photos carrying ANY of these
+    # tags belong to the album automatically, on top of the manually added ones.
+    tag_filter: Mapped[str | None] = mapped_column(String, nullable=True)
 
     images: Mapped[list["AlbumImage"]] = relationship(back_populates="album", cascade="all, delete-orphan")
+
+    @property
+    def tag_filter_list(self) -> list[str]:
+        if not self.tag_filter:
+            return []
+        try:
+            value = json.loads(self.tag_filter)
+        except ValueError:
+            return []
+        return [str(t) for t in value] if isinstance(value, list) else []
 
 
 class AlbumImage(Base):

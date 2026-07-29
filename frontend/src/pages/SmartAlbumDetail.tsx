@@ -25,6 +25,7 @@ export function SmartAlbumDetail() {
     (smart
       ? [
           ...smart.clusters,
+          ...smart.tags,
           ...smart.places,
           ...smart.countries,
           ...smart.country_years,
@@ -47,6 +48,10 @@ export function SmartAlbumDetail() {
   // always collapse each RAW+JPEG pair to its JPEG - one card per shot, showing
   // the JPEG everyone actually looks at (same as the merged library/import view).
   const orderedImages = collapsePairs(images ?? []);
+  // Date sections + the right-edge scrubber, like an opened manual album. The
+  // grid picks the granularity itself: a single-month album (a month card, a
+  // one-trip moment) gets day sections, anything wider months - so a "July
+  // 2026" album scrubs by day instead of being one giant section.
 
   return (
     <div className="page page-timeline">
@@ -72,7 +77,7 @@ export function SmartAlbumDetail() {
           </div>
         )}
         {images && images.length === 0 && <div className="empty-state">No photos here right now.</div>}
-        {images && images.length > 0 && <ThumbnailGrid images={orderedImages} groupByDate={false} />}
+        {images && images.length > 0 && <ThumbnailGrid images={orderedImages} groupByDate />}
       </div>
     </div>
   );
