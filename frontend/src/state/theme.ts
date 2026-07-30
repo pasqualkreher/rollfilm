@@ -24,6 +24,7 @@ export type Theme =
   | "sky"
   | "peach"
   | "gruvbox-light"
+  | "ember-light"
   // Dark family
   | "dim"
   | "dark"
@@ -40,7 +41,8 @@ export type Theme =
   | "ocean"
   | "monokai"
   | "rose-pine"
-  | "gruvbox-dark";
+  | "gruvbox-dark"
+  | "ember";
 
 // Metadata the Settings picker renders. `bg`/`elevated`/`text`/`accent` mirror
 // the four most telling variables of each skin (see index.css) so the little
@@ -73,6 +75,7 @@ export const SKINS: SkinInfo[] = [
   { value: "sky", label: "Sky", group: "light", bg: "#eaf2fa", elevated: "#f4f9fd", text: "#1d3247", accent: "#2b7fd4" },
   { value: "peach", label: "Peach", group: "light", bg: "#fdf1e7", elevated: "#fef7f0", text: "#463122", accent: "#e0763a" },
   { value: "gruvbox-light", label: "Gruvbox Light", group: "light", bg: "#fbf1c7", elevated: "#f2e5bc", text: "#3c3836", accent: "#d65d0e" },
+  { value: "ember-light", label: "Ember Light", group: "light", bg: "#f6f5f4", elevated: "#ffffff", text: "#232324", accent: "#ff7a1a" },
   // — Dark —
   { value: "dim", label: "Dim", group: "dark", bg: "#2c2f36", elevated: "#363a43", text: "#e6e8ec", accent: "#7aa2f7" },
   { value: "dark", label: "Dark", group: "dark", bg: "#17181a", elevated: "#212226", text: "#f1f1f2", accent: "#6d93ff" },
@@ -90,15 +93,18 @@ export const SKINS: SkinInfo[] = [
   { value: "monokai", label: "Monokai", group: "dark", bg: "#272822", elevated: "#32332b", text: "#f8f8f2", accent: "#f92672" },
   { value: "rose-pine", label: "Rosé Pine", group: "dark", bg: "#191724", elevated: "#1f1d2e", text: "#e0def4", accent: "#ea9a97" },
   { value: "gruvbox-dark", label: "Gruvbox Dark", group: "dark", bg: "#282828", elevated: "#32302f", text: "#ebdbb2", accent: "#fabd2f" },
+  { value: "ember", label: "Ember", group: "dark", bg: "#1c1c1e", elevated: "#262629", text: "#f2f1ef", accent: "#ff7a1a" },
 ];
 
 const KEY = "pm.theme";
 
 const VALID: Theme[] = ["system", ...SKINS.map((s) => s.value)];
 
+// Ember is the default skin for fresh installs (no stored preference); picking
+// "System" in Settings still stores that choice and follows the OS from then on.
 export function getStoredTheme(): Theme {
   const v = localStorage.getItem(KEY);
-  return (VALID as string[]).includes(v ?? "") ? (v as Theme) : "system";
+  return (VALID as string[]).includes(v ?? "") ? (v as Theme) : "ember";
 }
 
 // Apply a theme to the document. "system" removes the override so the OS

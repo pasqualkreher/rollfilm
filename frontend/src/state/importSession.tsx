@@ -42,6 +42,9 @@ interface ImportSessionState {
   // Desktop-only: import a folder by absolute path - the backend reads the
   // files itself (no browser upload). Same progress/cancel plumbing.
   startFolderImport: (folderPath: string) => void;
+  // Desktop-only: import individually picked files by absolute path, through
+  // the same incremental staging pipeline as a folder import.
+  startFilesImport: (files: { path: string; size: number }[], label: string) => void;
   cancelUpload: () => void;
   reset: () => void;
 }
@@ -109,6 +112,27 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   }
 
   function startFolderImport(folderPath: string) {
+    const label = folderPath.split("/").filter(Boolean).pop() || folderPath;
+    runPathsImport(label, async (signal) => {
+      const scan = await api.import.scanFolder(folderPath, signal);
+      if (scan.files.length === 0) {
+        throw new Error("No importable photos found in this folder");
+      }
+      return scan.files;
+    });
+  }
+
+  // Desktop-only: import individually picked files by absolute path - the exact
+  // same incremental staging pipeline as a folder import (review opens after
+  // the first batch, live per-photo progress), just without the folder scan.
+  function startFilesImport(files: { path: string; size: number }[], label: string) {
+    runPathsImport(label, async () => files);
+  }
+
+  function runPathsImport(
+    label: string,
+    getFiles: (signal: AbortSignal) => Promise<{ path: string; size: number }[]>
+  ) {
     const controller = new AbortController();
     abortRef.current = controller;
     uploadSessionRef.current = null;
@@ -121,7 +145,6 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setStagingError(null);
     setUploadProgress(0);
 
-    const label = folderPath.split("/").filter(Boolean).pop() || folderPath;
     const BATCH_PATHS = 100;
     // The first batch is deliberately tiny: its response carries the staging
     // session id, and the wizard/nav percent can't poll live progress until it
@@ -132,21 +155,18 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     const PRIME_PATHS = 8;
 
     (async () => {
-      const scan = await api.import.scanFolder(folderPath, controller.signal);
-      if (scan.files.length === 0) {
-        throw new Error("No importable photos found in this folder");
-      }
-      setTotalFileCount(scan.files.length);
-      const totalBytes = scan.total_bytes || 1;
+      const files = await getFiles(controller.signal);
+      setTotalFileCount(files.length);
+      const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1;
       let stagedBytes = 0;
       let stagedFiles = 0;
       let session: Awaited<ReturnType<typeof api.import.stagePaths>> | null = null;
       let reviewOpened = false;
       let i = 0;
-      while (i < scan.files.length) {
+      while (i < files.length) {
         if (controller.signal.aborted) throw new DOMException("Upload cancelled", "AbortError");
         const size = i === 0 ? PRIME_PATHS : BATCH_PATHS;
-        const batch = scan.files.slice(i, i + size);
+        const batch = files.slice(i, i + size);
         i += size;
         session = await api.import.stagePaths(
           batch.map((f) => f.path),
@@ -279,6 +299,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         analysisTotal,
         startUpload,
         startFolderImport,
+        startFilesImport,
         cancelUpload,
         reset,
       }}

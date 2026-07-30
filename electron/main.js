@@ -702,6 +702,36 @@ ipcMain.handle("pm:pick-folder", async () => {
   return result.filePaths[0];
 });
 
+// Native multi-file picker for "Choose files…". Returns [{ path, size }] so
+// the renderer can stage the picked files through the same incremental
+// path-import pipeline as a folder import (no browser upload) - sizes feed the
+// byte-based progress the staging loop reports. Null when dismissed.
+ipcMain.handle("pm:pick-files", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose photos",
+    properties: ["openFile", "multiSelections"],
+    filters: [
+      {
+        name: "Photos",
+        extensions: [
+          "jpg", "jpeg", "png",
+          "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw",
+        ],
+      },
+    ],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths.map((p) => {
+    let size = 0;
+    try {
+      size = fs.statSync(p).size;
+    } catch {
+      // Unreadable file: stage anyway; the backend reports the real error.
+    }
+    return { path: p, size };
+  });
+});
+
 // Settings page: current library location, read-only.
 ipcMain.handle("pm:get-library-root", () => libraryRoot);
 

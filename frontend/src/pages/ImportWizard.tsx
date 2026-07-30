@@ -98,6 +98,7 @@ export function ImportWizard() {
     analysisTotal,
     startUpload,
     startFolderImport,
+    startFilesImport,
     cancelUpload,
     reset,
   } = useImportSession();
@@ -613,8 +614,27 @@ export function ImportWizard() {
                   <button
                     className="import-menu-item"
                     role="menuitem"
-                    onClick={() => {
+                    onClick={async () => {
                       setImportMenuOpen(false);
+                      // Desktop app: native file dialog + backend reads the
+                      // files straight from disk - the same incremental
+                      // staging as a folder import (review opens right away,
+                      // grid fills as photos land) instead of a browser
+                      // upload that only shows the grid once everything is
+                      // through. Browser build falls back to the file input.
+                      const pickFiles = window.photoManager?.pickFiles;
+                      if (pickFiles) {
+                        const picked = await pickFiles();
+                        if (picked && picked.length > 0) {
+                          setPickError(null);
+                          const label =
+                            picked.length === 1
+                              ? picked[0].path.split("/").filter(Boolean).pop() || picked[0].path
+                              : `${picked.length} selected files`;
+                          startFilesImport(picked, label);
+                        }
+                        return;
+                      }
                       filesInputRef.current?.click();
                     }}
                   >

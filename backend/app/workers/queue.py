@@ -12,11 +12,16 @@ from PIL import Image as PILImage
 from sqlalchemy import text
 
 from app.config import settings
-from app.db.models import Image
+from app.db.models import FileType, Image
 from app.db.session import SessionLocal, engine
 from app.services.filesystem import resolve_image_path
 from app.services.settings_store import get_immich_sync_paused
-from app.services.embeddings import encode_image, upsert_embedding
+from app.services.embeddings import (
+    encode_image,
+    encode_images,
+    open_for_encoding,
+    upsert_embedding,
+)
 from app.services.immich import (
     add_assets_to_album,
     delete_album,
@@ -422,17 +427,31 @@ def _images_missing_embeddings(limit: int) -> list[tuple[str, Path]]:
     """Up to `limit` images without a stored embedding, newest imports first
     (so fresh photos become searchable soonest), each with its original's
     path. Diffed in Python: the stored-id set easily exceeds SQLite's bound-
-    parameter limit, so a NOT IN over it is not an option."""
+    parameter limit, so a NOT IN over it is not an option.
+
+    A RAW whose JPEG sibling is alive is skipped entirely: the pair is one
+    shot, so the JPEG's vector covers it - search completes the pair from
+    either half, Moments drops paired-RAW vectors anyway, and every point
+    lookup falls back to the partner's embedding. Halving the encode work for
+    RAW+JPEG shooters. The RAW is embedded normally once it stands alone
+    (JPEG trashed or never existed)."""
     db = SessionLocal()
     try:
         with engine.connect() as conn:
             have = {row[0] for row in conn.execute(text("SELECT id FROM image_embeddings"))}
-        ids = [
-            row.id
-            for row in db.query(Image.id)
+        rows = (
+            db.query(Image.id, Image.file_type, Image.paired_image_id)
             .filter(Image.deleted_at.is_(None))
             .order_by(Image.imported_at.desc())
-            if row.id not in have and row.id not in _embed_failed_ids
+            .all()
+        )
+        live = {row.id for row in rows}
+        ids = [
+            row.id
+            for row in rows
+            if row.id not in have
+            and row.id not in _embed_failed_ids
+            and not (row.file_type == FileType.raw and row.paired_image_id in live)
         ][:limit]
         if not ids:
             return []
@@ -442,22 +461,56 @@ def _images_missing_embeddings(limit: int) -> list[tuple[str, Path]]:
         db.close()
 
 
-def _embed_one(image_id: str, source_path: Path) -> bool:
-    """Encode and store one image's embedding. Prefers the already-rendered
-    preview.jpg - a clean RGB JPEG that decodes in milliseconds and can't trip
-    on a RAW quirk; the original is only read when no derivative exists yet."""
+# Photos per model forward pass and threads decoding JPEGs ahead of it. A
+# batch of 16 encodes at ~half the per-image cost of single calls; four decode
+# threads (PIL releases the GIL in libjpeg) keep the batch fed at a fraction
+# of sequential decode time. Beyond either value the returns flatten out while
+# an import-preemption pause gets coarser.
+_EMBED_BATCH = 16
+_EMBED_DECODE_WORKERS = 4
+
+
+def _decode_for_embedding(image_id: str, source_path: Path) -> PILImage.Image | None:
+    """Load one photo for encoding. Prefers the already-rendered preview.jpg -
+    a clean RGB JPEG that decodes in milliseconds and can't trip on a RAW
+    quirk; the original is only read when no derivative exists yet. None (and
+    the id blacklisted) when the photo can't be decoded at all."""
     try:
         preview_path = settings.thumbnail_cache_root / image_id / "preview.jpg"
         if preview_path.exists():
-            source = PILImage.open(preview_path).convert("RGB")
-        else:
-            source = extract_preview(source_path)
-        upsert_embedding(engine, image_id, encode_image(source))
-        return True
+            return open_for_encoding(preview_path)
+        return extract_preview(source_path)
     except Exception:
-        logger.exception("Embedding backfill failed for image %s", image_id)
+        logger.exception("Embedding decode failed for image %s", image_id)
         _embed_failed_ids.add(image_id)
-        return False
+        return None
+
+
+def _embed_batch(items: list[tuple[str, Path]]) -> int:
+    """Decode a mini-batch in parallel, encode it in one forward pass, store
+    each vector. Returns how many photos got an embedding."""
+    with ThreadPoolExecutor(max_workers=_EMBED_DECODE_WORKERS) as pool:
+        decoded = list(pool.map(lambda item: _decode_for_embedding(*item), items))
+    pairs = [(image_id, im) for (image_id, _), im in zip(items, decoded) if im is not None]
+    if not pairs:
+        return 0
+    try:
+        vectors = encode_images([im for _, im in pairs])
+    except Exception:
+        # One poisoned image shouldn't sink its whole batch: retry one by one
+        # so the rest still land and only the culprit gets blacklisted.
+        done = 0
+        for image_id, im in pairs:
+            try:
+                upsert_embedding(engine, image_id, encode_image(im))
+                done += 1
+            except Exception:
+                logger.exception("Embedding backfill failed for image %s", image_id)
+                _embed_failed_ids.add(image_id)
+        return done
+    for (image_id, _), vector in zip(pairs, vectors):
+        upsert_embedding(engine, image_id, vector)
+    return len(pairs)
 
 
 def _backfill_embeddings() -> None:
@@ -478,11 +531,10 @@ def _backfill_embeddings() -> None:
                         continue
                     _backfill_thread = None
                 break
-            for image_id, source_path in batch:
+            for start in range(0, len(batch), _EMBED_BATCH):
                 if _import_work_active():
                     break  # yield now; the outer loop waits and resumes
-                if _embed_one(image_id, source_path):
-                    done += 1
+                done += _embed_batch(batch[start : start + _EMBED_BATCH])
     except Exception:
         logger.exception("Embedding backfill crashed")
         with _backfill_lock:

@@ -19,6 +19,29 @@ from app.config import settings
 
 EMBEDDING_DIM = 512
 
+# Long-edge target when decoding a derivative JPEG for encoding. CLIP's input
+# is 224px, so decoding the up-to-2600px preview.jpg at full resolution only
+# to resize it away dominated embedding time; 2x the model input leaves the
+# preprocess downsample enough headroom to stay sharp.
+_ENCODE_DECODE_PX = 448
+
+
+def open_for_encoding(path: Path) -> PILImage.Image:
+    """Open a rendered derivative JPEG at a reduced DCT scale for encode_image.
+
+    draft() makes libjpeg decode at 1/2, 1/4 or 1/8 scale directly - a fraction
+    of a full decode. The draft box is scaled to the image's aspect ratio so
+    the *long* edge lands near _ENCODE_DECODE_PX (a square box would gate on
+    the short edge and barely reduce a wide photo). Derivatives are rendered
+    with orientation baked in, so no exif_transpose is needed here."""
+    im = PILImage.open(path)
+    w, h = im.size
+    long_edge = max(w, h)
+    if long_edge > _ENCODE_DECODE_PX:
+        scale = _ENCODE_DECODE_PX / long_edge
+        im.draft("RGB", (max(1, round(w * scale)), max(1, round(h * scale))))
+    return im.convert("RGB")
+
 _model = None
 _preprocess = None
 _tokenizer = None
@@ -56,6 +79,20 @@ def encode_image(image: PILImage.Image) -> np.ndarray:
         features = model.encode_image(tensor)
         features /= features.norm(dim=-1, keepdim=True)
     return features.squeeze(0).numpy().astype(np.float32)
+
+
+def encode_images(images: list[PILImage.Image]) -> np.ndarray:
+    """Batch variant of encode_image - one forward pass for several photos.
+    Amortizes per-call torch overhead: on CPU a batch of 16 encodes at roughly
+    half the per-image cost of single calls (backfill's main win)."""
+    import torch
+
+    model, preprocess, _ = _get_model()
+    with torch.no_grad():
+        batch = torch.stack([preprocess(image) for image in images])
+        features = model.encode_image(batch)
+        features /= features.norm(dim=-1, keepdim=True)
+    return features.numpy().astype(np.float32)
 
 
 def encode_text(query: str) -> np.ndarray:

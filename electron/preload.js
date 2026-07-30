@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld("photoManager", {
   apiBaseUrl: readApiBase(),
   // Opens the native OS folder dialog; resolves to an absolute host path or null.
   pickFolder: () => ipcRenderer.invoke("pm:pick-folder"),
+  // Native multi-file dialog; resolves to [{ path, size }] or null when dismissed.
+  pickFiles: () => ipcRenderer.invoke("pm:pick-files"),
   // Current photo-library folder (empty string until first-run setup picks one).
   getLibraryRoot: () => ipcRenderer.invoke("pm:get-library-root"),
   // First-run setup: pick the library folder and start the backend. Resolves

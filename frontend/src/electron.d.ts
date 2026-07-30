@@ -9,6 +9,8 @@ declare global {
       apiBaseUrl: string | null;
       /** Opens the native folder dialog; resolves to an absolute path or null. */
       pickFolder: () => Promise<string | null>;
+      /** Native multi-file dialog; resolves to picked files (absolute path + size) or null. */
+      pickFiles?: () => Promise<{ path: string; size: number }[] | null>;
       /** Current photo-library folder ("" until first-run setup picks one). */
       getLibraryRoot: () => Promise<string>;
       /**

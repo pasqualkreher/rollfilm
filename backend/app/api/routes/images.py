@@ -1334,13 +1334,11 @@ def _embedding_for_image(image: Image):
         vector = embeddings.get_embedding(engine, image.paired_image_id)
     if vector is None:
         try:
-            from PIL import Image as PILImage
-
             from app.services.raw import extract_preview
 
             preview_path = thumbnails.derivative_dir(image.id) / "preview.jpg"
             src_img = (
-                PILImage.open(preview_path).convert("RGB")
+                embeddings.open_for_encoding(preview_path)
                 if preview_path.exists()
                 else extract_preview(resolve_image_path(image))
             )
