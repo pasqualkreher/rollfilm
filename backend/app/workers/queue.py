@@ -12,7 +12,7 @@ from PIL import Image as PILImage
 from sqlalchemy import text
 
 from app.config import settings
-from app.db.models import FileType, Image
+from app.db.models import Image
 from app.db.session import SessionLocal, engine
 from app.services.filesystem import resolve_image_path
 from app.services.settings_store import get_immich_sync_paused
@@ -429,29 +429,20 @@ def _images_missing_embeddings(limit: int) -> list[tuple[str, Path]]:
     path. Diffed in Python: the stored-id set easily exceeds SQLite's bound-
     parameter limit, so a NOT IN over it is not an option.
 
-    A RAW whose JPEG sibling is alive is skipped entirely: the pair is one
-    shot, so the JPEG's vector covers it - search completes the pair from
-    either half, Moments drops paired-RAW vectors anyway, and every point
-    lookup falls back to the partner's embedding. Halving the encode work for
-    RAW+JPEG shooters. The RAW is embedded normally once it stands alone
-    (JPEG trashed or never existed)."""
+    Every live image gets its own vector, including RAWs whose JPEG sibling
+    is alive: auto-develop matches edited examples by their embeddings, and a
+    RAW render can drift from its JPEG's look, so the pair's halves each keep
+    an exact vector."""
     db = SessionLocal()
     try:
         with engine.connect() as conn:
             have = {row[0] for row in conn.execute(text("SELECT id FROM image_embeddings"))}
-        rows = (
-            db.query(Image.id, Image.file_type, Image.paired_image_id)
-            .filter(Image.deleted_at.is_(None))
-            .order_by(Image.imported_at.desc())
-            .all()
-        )
-        live = {row.id for row in rows}
         ids = [
             row.id
-            for row in rows
-            if row.id not in have
-            and row.id not in _embed_failed_ids
-            and not (row.file_type == FileType.raw and row.paired_image_id in live)
+            for row in db.query(Image.id)
+            .filter(Image.deleted_at.is_(None))
+            .order_by(Image.imported_at.desc())
+            if row.id not in have and row.id not in _embed_failed_ids
         ][:limit]
         if not ids:
             return []

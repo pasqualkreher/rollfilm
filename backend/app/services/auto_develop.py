@@ -249,9 +249,11 @@ def suggest_adjustments(
     # exhaustively (one dot product per example) is cheap and exact - no need to
     # detour through the ANN index and re-filter its results.
     vecs = embeddings.get_embeddings(engine, [ex.id for ex in pool])
-    # Paired RAWs no longer get their own vector (the backfill embeds only the
-    # JPEG half of a pair), so an edited RAW example scores via its partner's
-    # embedding - same shot, near-identical vector.
+    # Every image gets its own vector, but a RAW's may not have landed yet
+    # (the backfill runs behind imports, and libraries from builds that only
+    # embedded the JPEG half of a pair still have gaps). Until it does, an
+    # edited RAW example scores via its partner's embedding - same shot,
+    # near-identical vector.
     missing = [ex for ex in pool if ex.id not in vecs and ex.paired_image_id]
     if missing:
         partner_vecs = embeddings.get_embeddings(
