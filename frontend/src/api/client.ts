@@ -482,6 +482,11 @@ export const api = {
         body: JSON.stringify(apiEdits(edits)),
         signal,
       });
+      // 409 = the server dropped this render because a newer preview request
+      // for the image superseded it. We aborted the fetch client-side too in
+      // that case - treat any straggler exactly like our own abort, never as
+      // a user-visible render error.
+      if (res.status === 409) throw new DOMException("preview superseded", "AbortError");
       if (!res.ok) throw new Error(`preview render failed: ${res.status}`);
       return res.blob();
     },

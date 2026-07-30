@@ -135,6 +135,11 @@ interface Props {
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string, index: number, shiftKey: boolean) => void;
   selectMode?: boolean;
+  // When this key changes (the Library's filters), the view jumps to the top
+  // of the new result set instead of re-anchoring to the photo that happened
+  // to be on screen - a filtered library is a different list, and the old
+  // position pointed somewhere arbitrary in it.
+  resetKey?: string;
 }
 
 // Virtualized library timeline: the layout of the ENTIRE (filtered) library is
@@ -143,7 +148,7 @@ interface Props {
 // directly on real, correctly-sized tiles - while only the tiles near the
 // viewport are actually mounted, keeping the DOM and thumbnail traffic small
 // no matter how big the library is.
-export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMode }: Props) {
+export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMode, resetKey }: Props) {
   const navigate = useNavigate();
   const mergePairs = useMergePairs();
   const rowH = thumbPx(useThumbSize());
@@ -205,6 +210,19 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
     };
   }, [isEmpty]);
 
+  // A filter change means a NEW result set: jump to its top right away (the
+  // old grid is still shown until the new index arrives), and remember to skip
+  // the re-anchoring below once the new layout lands - it would otherwise
+  // chase the previously-visible photo to wherever it sits in the filtered set.
+  const pendingResetRef = useRef(false);
+  const prevResetKeyRef = useRef(resetKey);
+  useEffect(() => {
+    if (prevResetKeyRef.current === resetKey) return;
+    prevResetKeyRef.current = resetKey;
+    pendingResetRef.current = true;
+    if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
+  }, [resetKey]);
+
   // Re-anchor across layout changes: when the tile size (S/M/L), the window
   // width or the image set changes, every position shifts - raw scrollTop
   // would land on completely different photos and read as a jump. Instead,
@@ -217,6 +235,12 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
     const scroller = scrollerRef.current;
     const root = rootRef.current;
     if (!prev || !layout || prev === layout || !scroller || !root) return;
+
+    if (pendingResetRef.current) {
+      pendingResetRef.current = false;
+      scroller.scrollTop = 0;
+      return;
+    }
 
     const top = lastScrollRef.current;
     let anchorId: string | null = null;

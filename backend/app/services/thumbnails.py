@@ -4,6 +4,8 @@ import math
 import os
 import threading
 import uuid
+from collections import OrderedDict
+from collections.abc import Callable
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -1011,6 +1013,37 @@ def _grain_field(h: int, w: int, particle_px: float) -> np.ndarray:
     return cv2.GaussianBlur(field, (0, 0), max(0.35, particle_px * 0.4))
 
 
+# Preview-size grain fields, cached by size: generating + blurring two full-frame
+# noise fields cost ~1s of every accurate/settle render with grain active. The
+# field depends only on (h, w, particle size), so the editor's repeated renders
+# of the same image reuse it - which also stops the grain pattern re-rolling on
+# every slider tick. Native/full-resolution renders (saves, exports) stay above
+# the pixel cap and keep their fresh stochastic field per render.
+_GRAIN_CACHE: "OrderedDict[tuple[int, int, float], np.ndarray]" = OrderedDict()
+_GRAIN_CACHE_MAX = 8
+_GRAIN_CACHE_MAX_PX = 8_000_000
+_grain_cache_lock = threading.Lock()
+
+
+def _cached_grain_field(h: int, w: int, particle_px: float) -> np.ndarray:
+    if h * w > _GRAIN_CACHE_MAX_PX:
+        return _grain_field(h, w, particle_px)
+    key = (h, w, round(particle_px, 4))
+    with _grain_cache_lock:
+        hit = _GRAIN_CACHE.get(key)
+        if hit is not None:
+            _GRAIN_CACHE.move_to_end(key)
+            return hit
+    f = _grain_field(h, w, particle_px)
+    f.flags.writeable = False  # shared across renders
+    with _grain_cache_lock:
+        _GRAIN_CACHE[key] = f
+        _GRAIN_CACHE.move_to_end(key)
+        while len(_GRAIN_CACHE) > _GRAIN_CACHE_MAX:
+            _GRAIN_CACHE.popitem(last=False)
+    return f
+
+
 def _apply_grain(arr: np.ndarray, amount: int, size: int = 0, roughness: int = 50) -> np.ndarray:
     """Fuji-style analog film grain.
 
@@ -1039,8 +1072,8 @@ def _apply_grain(arr: np.ndarray, amount: int, size: int = 0, roughness: int = 5
     p_fine = max(1.0, (long_edge / 1500.0) * (0.55 + 2.95 * size_f))
     p_clump = p_fine * (2.0 + size_f * 2.6)
 
-    fine = _grain_field(h, w, p_fine)
-    clump = _grain_field(h, w, p_clump)
+    fine = _cached_grain_field(h, w, p_fine)
+    clump = _cached_grain_field(h, w, p_clump)
 
     # Barely any clump layer at the fine end - its blobs read as "big grain"
     # even when the fine layer is tiny.
@@ -1500,6 +1533,13 @@ FULL_EDITOR_PREVIEW_PX = 2600
 _full_render_lock = threading.RLock()
 
 
+class PreviewSuperseded(Exception):
+    """A newer editor-preview request for the same image arrived while this one
+    was waiting (typically queued on _full_render_lock). The client has already
+    aborted its fetch, so rendering would only burn CPU - the caller turns this
+    into an empty 409."""
+
+
 def _downscale_linear(arr: np.ndarray, max_px: int) -> np.ndarray:
     """Downscale a linear float array so its long edge is <= max_px. INTER_AREA
     in linear light is the physically correct average (LANCZOS on sRGB values
@@ -1589,6 +1629,7 @@ def render_editor_preview_bytes(
     straighten: float = 0.0,
     persp_h: int = 0,
     persp_v: int = 0,
+    is_stale: Callable[[], bool] | None = None,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
     (same code path as generate_derivatives/render_edited_image) on a cached,
@@ -1613,9 +1654,21 @@ def render_editor_preview_bytes(
       first zoomed render of an image pays the demosaic."""
     from app.services.filesystem import resolve_image_path
 
+    # Drop superseded renders instead of running them: the client aborts its
+    # fetch the moment a newer edit state exists, but an aborted request's
+    # thread still runs to completion here. The check matters most right after
+    # acquiring _full_render_lock - that's where seconds-long full/native
+    # renders queued up during a busy editing session and kept the CPU pinned
+    # long after anyone wanted their result.
+    def _bail_if_stale() -> None:
+        if is_stale is not None and is_stale():
+            raise PreviewSuperseded()
+
+    _bail_if_stale()
     path = resolve_image_path(image)
     if native:
         with _full_render_lock:
+            _bail_if_stale()
             return _render_editor_bytes(
                 image, path, 0, rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=90, fast=False, native=True,
@@ -1624,6 +1677,7 @@ def render_editor_preview_bytes(
         # Serialise + bound resolution so a burst of settle-renders can't stack
         # into many GB of concurrent full-frame numpy arrays.
         with _full_render_lock:
+            _bail_if_stale()
             return _render_editor_bytes(
                 image, path, FULL_EDITOR_PREVIEW_PX, rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=95, fast=False,
@@ -1917,17 +1971,33 @@ def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None)
         return data
 
 
-def generate_full(image: "Image") -> Path:
+def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) -> Path:
     """Render + cache the full-resolution edited JPEG (for true 100% zoom in the
     lightbox), returning its path. Cheap to serve once cached; cleared whenever
     the edit changes (see generate_derivatives). Holding the render lock across
     an existence recheck dedupes concurrent callers (warmer, /full endpoint,
     export): the second one waits, then serves the first one's file instead of
-    rendering the same pixels again."""
+    rendering the same pixels again.
+
+    `is_stale` is the same superseded mechanism as render_editor_preview_bytes:
+    interactive /full requests pass it so a zoom the user has long zapped past
+    bails (PreviewSuperseded) instead of burning ~14s of the serialized render
+    lock per abandoned photo - that queue was what made the whole app crawl
+    after a stretch of zoom-and-page browsing. An already-cached file is served
+    regardless of staleness; background callers (warmer, export) pass nothing
+    and always render."""
     out = derivative_dir(image.id) / "full.jpg"
+
+    def _bail_if_stale() -> None:
+        if is_stale is not None and is_stale():
+            raise PreviewSuperseded()
+
+    if not out.exists():
+        _bail_if_stale()
     with _full_render_lock:
         if out.exists():
             return out
+        _bail_if_stale()
         rendered = render_full_from_stored_edits(image)
         _save_atomic(rendered, out, quality=90)
     return out

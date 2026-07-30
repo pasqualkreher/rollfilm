@@ -2969,6 +2969,15 @@ input.editor-preset-select {
   transform: scale(0.94);
 }
 
+/* Without this a disabled icon button (e.g. the editor's back arrow while a
+   save is running) looked identical to an enabled one - clicks silently did
+   nothing and it read as "the app ignored me" rather than "locked until the
+   save finishes". Same treatment as .btn:disabled. */
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Nudge the glyph up a hair so the arrow reads optically centred. */
 .back-btn {
   align-self: flex-start;
@@ -4487,7 +4496,7 @@ kbd {
   justify-content: center;
 }
 
-.editor-back-float:hover {
+.editor-back-float:hover:not(:disabled) {
   background: var(--bg-elevated);
 }
 

@@ -1,5 +1,6 @@
 import hashlib
 import io
+import itertools
 import json
 import logging
 import os
@@ -1282,6 +1283,18 @@ def _payload_adjustments(payload: schemas.ImageEdits) -> dict:
     return develop.normalize(payload.adjustments)
 
 
+# Newest-preview-wins bookkeeping: the editor only ever wants the LATEST render
+# of an image, and it aborts stale fetches - but an aborted request's thread
+# still runs its render to completion (numpy can't be interrupted, and the
+# full/native tiers additionally queue on a lock for seconds each). So each
+# incoming preview request marks itself the newest for its image; older ones
+# still pending see that and bail (PreviewSuperseded -> 409) instead of
+# rendering frames nobody will ever look at.
+_editor_preview_seq = itertools.count(1)
+_editor_preview_latest: dict[str, int] = {}
+_editor_preview_state_lock = threading.Lock()
+
+
 @router.post("/{image_id}/editor-preview")
 def editor_preview(
     image_id: str,
@@ -1306,6 +1319,16 @@ def editor_preview(
     crop = None
     if payload.crop is not None:
         crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
+    # Claim "newest render of this image"; anything older that's still pending
+    # (queued behind the full/native lock, or not yet started) becomes stale.
+    seq = next(_editor_preview_seq)
+    with _editor_preview_state_lock:
+        _editor_preview_latest[image_id] = seq
+
+    def _is_stale() -> bool:
+        with _editor_preview_state_lock:
+            return _editor_preview_latest.get(image_id) != seq
+
     try:
         data = thumbnails.render_editor_preview_bytes(
             image,
@@ -1321,10 +1344,21 @@ def editor_preview(
             straighten=max(-45.0, min(45.0, float(payload.straighten))),
             persp_h=_clamp100(payload.persp_h),
             persp_v=_clamp100(payload.persp_v),
+            is_stale=_is_stale,
         )
+    except thumbnails.PreviewSuperseded:
+        # The client has already aborted this fetch; the status only matters to
+        # anything that still happens to be listening.
+        raise HTTPException(status_code=409, detail="Superseded by a newer preview request")
     except Exception:
         logger.exception("Failed to render editor preview for %s", image.id)
         raise HTTPException(status_code=500, detail="Could not render the preview")
+    finally:
+        # Drop the bookkeeping entry once the newest render finishes, so the
+        # map only ever holds images with a render actually in flight.
+        with _editor_preview_state_lock:
+            if _editor_preview_latest.get(image_id) == seq:
+                del _editor_preview_latest[image_id]
     return Response(content=data, media_type="image/jpeg")
 
 
@@ -1493,19 +1527,53 @@ def get_preview(image_id: str, db: Session = Depends(get_db), current_user: User
     return _serve_derivative(image, "preview.jpg", "Preview not ready yet")
 
 
+# Newest-wins for the lightbox's 100%-zoom render, same idea as the editor
+# previews above but GLOBAL rather than per-image: the lightbox shows exactly
+# one photo, so only the latest /full request can still be on screen - during
+# zoom-and-page browsing the stale queued renders are precisely OTHER images'.
+# Each uncached /full request marks itself newest; older ones still waiting on
+# the render lock bail (409) instead of each burning ~14s of serialized
+# full-resolution render for a photo the user zapped past. The warmer and
+# export paths call generate_full without a staleness probe and always render.
+_full_zoom_seq = itertools.count(1)
+_full_zoom_latest = 0
+_full_zoom_lock = threading.Lock()
+
+
 @router.get("/{image_id}/full")
 def get_full(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Full-resolution edited JPEG for true 100% zoom in the lightbox. Generated
     on first request and cached (cleared automatically when edits change)."""
+    global _full_zoom_latest
     image = get_owned_image(db, current_user.id, image_id)
+    # Claim "newest zoom" even when this request is a cheap cached serve: the
+    # user has zoomed a different photo, so a stale render still queued for the
+    # previous one should die either way.
+    with _full_zoom_lock:
+        seq = next(_full_zoom_seq)
+        _full_zoom_latest = seq
     path = thumbnails.derivative_dir(image.id) / "full.jpg"
     if not path.exists():
+
+        def _is_stale() -> bool:
+            with _full_zoom_lock:
+                return _full_zoom_latest != seq
+
         try:
-            thumbnails.generate_full(image)
+            thumbnails.generate_full(image, is_stale=_is_stale)
+        except thumbnails.PreviewSuperseded:
+            # The client aborted this fetch when the user moved on; the status
+            # only matters to anything that still happens to be listening.
+            raise HTTPException(status_code=409, detail="Superseded by a newer full-resolution request")
         except Exception:
             logger.exception("Full render failed for image %s", image.id)
             raise HTTPException(status_code=404, detail="Full-resolution image not available")
-    return FileResponse(path)
+    # Same contract as the other derivatives: the URL is version-stamped
+    # (?v= edit revision), so a given URL's bytes never change - without this
+    # header every re-zoom re-downloaded the multi-MB full.jpg.
+    return FileResponse(
+        path, headers={"Cache-Control": "private, max-age=31536000, immutable"}
+    )
 
 
 @router.get("/{image_id}/original")

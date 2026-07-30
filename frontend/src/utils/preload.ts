@@ -4,15 +4,34 @@
 // each photo's neighbors while the current one is on screen - flipping with
 // the arrow keys then swaps instantly instead of waiting on a request.
 
-// URLs already requested once. A repeat new Image() for the same URL would be
-// pure overhead - the browser's HTTP cache already holds the bytes.
-const preloadedUrls = new Set<string>();
+// URLs requested RECENTLY - a repeat new Image() for one of these would be
+// pure overhead, the browser's cache still holds the bytes. Deliberately a
+// bounded LRU, not a grows-forever set: over a long session the browser
+// evicts images from its caches, and a permanent "already preloaded" marker
+// made every preload one-shot - revisited areas then paged cold and never
+// re-warmed, which read as the app getting slower the longer it ran.
+const preloadedUrls = new Map<string, true>();
+const PRELOADED_URLS_MAX = 500;
 
 export function preloadImage(url: string | null | undefined): void {
-  if (!url || preloadedUrls.has(url)) return;
-  preloadedUrls.add(url);
+  if (!url) return;
+  if (preloadedUrls.has(url)) {
+    // Refresh recency, so the URLs of the area being browsed right now are
+    // the last to age out of the marker.
+    preloadedUrls.delete(url);
+    preloadedUrls.set(url, true);
+    return;
+  }
+  preloadedUrls.set(url, true);
+  if (preloadedUrls.size > PRELOADED_URLS_MAX) {
+    preloadedUrls.delete(preloadedUrls.keys().next().value!);
+  }
   const img = new Image();
   img.decoding = "async";
+  // Cache-warming must never compete with what's on screen: over HTTP/1.1 the
+  // browser holds only ~6 connections per origin, and a burst of prefetches at
+  // default priority delays the photo the user is actually waiting on.
+  (img as HTMLImageElement & { fetchPriority?: string }).fetchPriority = "low";
   img.src = url;
 }
 

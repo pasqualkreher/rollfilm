@@ -283,16 +283,33 @@ export function ImageDetail() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [imageIds, id, navigate, adjustOpen, image, paired, activeId, zoomed]);
 
-  // While the current photo is on screen, pull its neighbors (the previous and
-  // next photo of the browsed set) into memory: their metadata into the query
-  // cache and their preview pixels into the browser cache. Arrow-key zapping
-  // then swaps instantly instead of showing an empty frame per photo. The
-  // preview URL is version-stamped for edited photos, so the metadata has to
-  // arrive first - a bare previewUrl(id) would miss the edited render.
+  // The photo the user has actually SETTLED on: follows activeId only after a
+  // short pause without further navigation. Holding an arrow key changes
+  // activeId many times a second, and firing the per-photo side requests
+  // (similar-search, neighbor prefetches) for every intermediate photo flooded
+  // the backend with work for positions long since zapped past - requests that,
+  // once started, all ran to completion. Keying that work to restedId means an
+  // intermediate photo fires nothing but its own main preview load (which the
+  // browser cancels natively when the src moves on).
+  const [restedId, setRestedId] = useState(activeId);
+  useEffect(() => {
+    if (restedId === activeId) return;
+    const t = setTimeout(() => setRestedId(activeId), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
+
+  // Once the user rests on a photo, pull its neighbors (the previous and next
+  // photo of the browsed set) into memory: their metadata into the query cache
+  // and their preview pixels into the browser cache. Arrow-key zapping then
+  // swaps instantly instead of showing an empty frame per photo. The preview
+  // URL is version-stamped for edited photos, so the metadata has to arrive
+  // first - a bare previewUrl(id) would miss the edited render.
   useEffect(() => {
     if (!imageIds || imageIds.length === 0) return;
-    const currentIndex = imageIds.indexOf(id!);
+    const currentIndex = imageIds.indexOf(restedId);
     if (currentIndex === -1) return;
+    let stale = false;
     for (const neighborId of [imageIds[currentIndex + 1], imageIds[currentIndex - 1]]) {
       if (!neighborId) continue;
       queryClient
@@ -301,16 +318,65 @@ export function ImageDetail() {
           queryFn: () => api.images.get(neighborId),
         })
         .then(() => {
+          // The user moved on while the metadata was in flight - don't also
+          // pull pixels for a position that's no longer next to anything.
+          if (stale) return;
           const neighbor = queryClient.getQueryData<ImageOut>(["image", neighborId]);
           if (neighbor) preloadImage(api.images.previewUrl(neighbor.id, editVersion(neighbor)));
         });
     }
+    return () => {
+      stale = true;
+    };
+  }, [imageIds, restedId, queryClient]);
+
+  // Direction-aware look-ahead for FAST paging: while the arrow key is going,
+  // activeId never rests, so the rested-neighbor warmup above never fires and
+  // every photo past the first pair was a cold load. Each navigation step
+  // therefore immediately warms the next TWO photos in the direction of
+  // travel - the +1 is usually already warm from the previous step (preload
+  // dedups), so each step costs one metadata fetch and one low-priority
+  // preview fetch for work the very next keypress needs anyway. The heavy
+  // rest-keyed requests (similar-search, both neighbors, the RAW/JPEG
+  // partner) stay rest-keyed.
+  const prevIndexRef = useRef(-1);
+  useEffect(() => {
+    if (!imageIds || imageIds.length === 0) return;
+    const index = imageIds.indexOf(id!);
+    const prev = prevIndexRef.current;
+    prevIndexRef.current = index;
+    if (index === -1 || prev === -1 || prev === index) return;
+    const dir = index > prev ? 1 : -1;
+    for (const aheadId of [imageIds[index + dir], imageIds[index + 2 * dir]]) {
+      if (!aheadId) continue;
+      queryClient
+        .prefetchQuery({
+          queryKey: ["image", aheadId],
+          queryFn: () => api.images.get(aheadId),
+        })
+        .then(() => {
+          const ahead = queryClient.getQueryData<ImageOut>(["image", aheadId]);
+          if (ahead) preloadImage(api.images.previewUrl(ahead.id, editVersion(ahead)));
+        });
+    }
   }, [imageIds, id, queryClient]);
 
+  // Warm the RAW/JPEG partner's preview once the user rests on a photo, so the
+  // ArrowUp/Down switch swaps instantly instead of downloading the partner's
+  // preview on first use (a low-priority fetch, behind the visible photo).
+  useEffect(() => {
+    if (!paired || restedId !== activeId) return;
+    preloadImage(api.images.previewUrl(paired.id, editVersion(paired)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paired, restedId]);
+
+  // Similar-photos strip: a CLIP search per photo is the most expensive
+  // per-view request the lightbox makes - only run it for the rested photo,
+  // never for photos zapped past.
   const { data: similar } = useQuery({
-    queryKey: ["similar", activeId],
-    queryFn: () => api.images.similar(activeId, 50),
-    enabled: !!activeId,
+    queryKey: ["similar", restedId],
+    queryFn: () => api.images.similar(restedId, 50),
+    enabled: !!restedId,
   });
 
   // A RAW+JPEG pair is the same shot, so the raw search hits both halves - and
@@ -474,6 +540,9 @@ export function ImageDetail() {
             <img
               key={retryNonce}
               ref={imgRef}
+              // The photo the user is looking at must always win the connection
+              // pool over similar-strip thumbs and neighbor prefetches.
+              {...({ fetchpriority: "high" } as Record<string, string>)}
               className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}${zoomAnim ? " zoom-anim" : ""}`}
               style={{
                 ...(fit ? { width: fit.w, height: fit.h } : null),
@@ -727,6 +796,16 @@ export function ImageDetail() {
                     <img
                       src={api.images.thumbnailUrl(r.image.id, editVersion(r.image))}
                       alt={r.image.original_filename}
+                      // Lazy + low priority: the strip fires up to 50 thumbnail
+                      // requests, and over HTTP/1.1 (6 connections per origin)
+                      // they queued AHEAD of the photo/neighbor loads the user
+                      // is actually waiting on - opening the lightbox in a
+                      // fresh area hung until the strip finished. Lazy fetches
+                      // only what's scrolled into view, low priority keeps the
+                      // rest behind the photos being paged through.
+                      loading="lazy"
+                      decoding="async"
+                      {...({ fetchpriority: "low" } as Record<string, string>)}
                       // Plain <img> (not the Thumb component), so add the
                       // fade-in class ourselves on load - otherwise the shared
                       // `.thumb-card img { opacity: 0 }` keeps it invisible.

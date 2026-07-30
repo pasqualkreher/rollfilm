@@ -13,9 +13,44 @@ match the frontend mask model (utils/adjustments.ts MaskDef / sub-masks).
 
 from __future__ import annotations
 
+import json
+import threading
+from collections import OrderedDict
+
 import numpy as np
 
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+# Cache for the purely geometric sub-mask fields (radial / linear / brush -
+# NOT luminance/color, which depend on the image pixels). The editor re-renders
+# the whole pipeline on every slider tick, and re-rasterising an unchanged
+# brush mask (thousands of capsule stamps) per frame dominated those renders.
+# Keyed by the sub-mask's parameter JSON + the field size; a small LRU because
+# a 2600px float32 field is ~18MB. Fields at native resolution (tens of MP) are
+# deliberately never cached - one entry would dwarf the whole budget.
+_FIELD_CACHE: OrderedDict[tuple[str, str, int, int], np.ndarray] = OrderedDict()
+_FIELD_CACHE_MAX = 8
+_FIELD_CACHE_MAX_PX = 8_000_000
+_field_cache_lock = threading.Lock()
+
+
+def _cached_spatial_field(t: str, p: dict, h: int, w: int, compute) -> np.ndarray:
+    if h * w > _FIELD_CACHE_MAX_PX:
+        return compute()
+    key = (t, json.dumps(p, sort_keys=True, separators=(",", ":")), h, w)
+    with _field_cache_lock:
+        hit = _FIELD_CACHE.get(key)
+        if hit is not None:
+            _FIELD_CACHE.move_to_end(key)
+            return hit
+    f = compute()
+    f.flags.writeable = False  # shared across renders - nobody may scribble on it
+    with _field_cache_lock:
+        _FIELD_CACHE[key] = f
+        _FIELD_CACHE.move_to_end(key)
+        while len(_FIELD_CACHE) > _FIELD_CACHE_MAX:
+            _FIELD_CACHE.popitem(last=False)
+    return f
 
 
 def _smoothstep(t: np.ndarray) -> np.ndarray:
@@ -266,11 +301,11 @@ def _submask_field(sm: dict, h: int, w: int, arr: np.ndarray) -> np.ndarray:
     t = sm.get("type")
     p = sm.get("parameters") or {}
     if t == "radial":
-        f = _radial_field(h, w, p)
+        f = _cached_spatial_field(t, p, h, w, lambda: _radial_field(h, w, p))
     elif t == "linear":
-        f = _linear_field(h, w, p)
+        f = _cached_spatial_field(t, p, h, w, lambda: _linear_field(h, w, p))
     elif t == "brush":
-        f = _brush_field(h, w, p)
+        f = _cached_spatial_field(t, p, h, w, lambda: _brush_field(h, w, p))
     elif t == "luminance":
         f = _luminance_field(arr, p)
     elif t == "color":

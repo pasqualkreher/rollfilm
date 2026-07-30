@@ -540,6 +540,20 @@ export function Library() {
           selectedIds={selected}
           onToggleSelect={toggleSelect}
           selectMode={selectMode}
+          // Changing a FILTER jumps to the top of the (new) result set - the
+          // old scroll position pointed into a different library and landed
+          // somewhere arbitrary. view_mode is deliberately not part of the key:
+          // switching combined/RAW/JPEG shows the same photos and keeps its
+          // position via the timeline's re-anchoring.
+          resetKey={JSON.stringify([
+            ratingMin,
+            colorLabel,
+            albumId,
+            selectedTags,
+            camera,
+            dateFrom,
+            dateTo,
+          ])}
         />
       )}
       </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -368,6 +368,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   const pumping = useRef(false);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pumpRef = useRef<() => void>(() => {});
+  // Whether the last accurate render took long (heavy passes like denoise/
+  // dehaze/clarity active). When true, discrete changes paint a cheap scrub
+  // frame FIRST so there's visual feedback within ~150ms instead of the editor
+  // looking stuck until the accurate frame lands seconds later.
+  const slowAccurate = useRef(false);
 
   // The RGB histogram is drawn by the module-level <Histogram> component from the
   // bins computed after each preview render (see setHistBins below); it appears in
@@ -390,13 +395,28 @@ export function PhotoEditor({ image, onClose }: Props) {
     canvas.style.height = `${Math.round(canvas.height * s)}px`;
   }
 
+  // Refit whenever the stage box itself changes size - not just on window
+  // resize. The stage shrinks after load (the background/compare row appears)
+  // and, in narrow stacked layouts, whenever the panel's accordion grows; with
+  // only the window listener the canvas kept its stale size and overflowed
+  // over the controls.
   useEffect(() => {
+    const box = stageMainRef.current;
+    if (!box) return;
+    const ro = new ResizeObserver(() => fitCanvasToStage());
+    ro.observe(box);
     window.addEventListener("resize", fitCanvasToStage);
-    return () => window.removeEventListener("resize", fitCanvasToStage);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", fitCanvasToStage);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const saved = editsFromImage(image);
+  // Memoised: editsFromImage JSON-parses the stored adjustments - doing that on
+  // every render (every hover/cursor state change) was a steady per-frame cost.
+  const saved = useMemo(() => editsFromImage(image), [image]);
+  const savedKey = useMemo(() => JSON.stringify(saved), [saved]);
   const [adj, setAdj] = useState<Adjustments>(() => adjustmentsFromImage(image));
   const [rotation, setRotation] = useState(saved.rotation);
   const [crop, setCrop] = useState<CropBox | null>(saved.crop);
@@ -508,7 +528,14 @@ export function PhotoEditor({ image, onClose }: Props) {
     return { x: Math.max(-maxX, Math.min(maxX, p.x)), y: Math.max(-maxY, Math.min(maxY, p.y)) };
   }
 
-  const edits: ImageEdits = { rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion, adjustments: adj };
+  // Memoised so the object identity only changes when an edit actually changes -
+  // hover/cursor/zoom re-renders reuse the same object and skip every JSON walk
+  // below. With brush masks the strokes array grows into the thousands of
+  // points, so stringifying it on each render made the whole editor drag.
+  const edits: ImageEdits = useMemo(
+    () => ({ rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion, adjustments: adj }),
+    [rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion, adj]
+  );
 
   // What the preview should actually show right now: in crop mode the full
   // (uncropped) frame, in compare mode the untouched original with only the
@@ -518,14 +545,18 @@ export function PhotoEditor({ image, onClose }: Props) {
   // while a spatial overlay is live, render the preview without the frame - it
   // still shows (and always saves) whenever no overlay needs pixel alignment.
   const overlayActive = cropMode || openGroup === "masks";
-  const previewEdits: ImageEdits = compare
-    ? neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion)
-    : {
-        ...edits,
-        crop: cropMode ? null : crop,
-        adjustments: overlayActive && adj.frame_width ? { ...adj, frame_width: 0 } : adj,
-      };
-  const previewKey = JSON.stringify(previewEdits);
+  const previewEdits: ImageEdits = useMemo(
+    () =>
+      compare
+        ? neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion)
+        : {
+            ...edits,
+            crop: cropMode ? null : crop,
+            adjustments: overlayActive && adj.frame_width ? { ...adj, frame_width: 0 } : adj,
+          },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [edits, compare, cropMode, overlayActive]
+  );
   // Always hand the pump the newest edit state (read from a ref so the pump and
   // the pointer-up handler don't close over a stale value).
   previewEditsLatest.current = previewEdits;
@@ -537,15 +568,21 @@ export function PhotoEditor({ image, onClose }: Props) {
   // superseded render painting over a newer frame.
   const drawBlob = useCallback(async (blob: Blob, seq: number, withHistogram: boolean) => {
     const bmp = await createImageBitmap(blob);
-    if (seq !== renderSeq.current) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = bmp.width;
-    canvas.height = bmp.height;
-    fitCanvasToStage();
-    const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(bmp, 0, 0);
-    if (withHistogram) setHistBins(computeHistBins(ctx.getImageData(0, 0, bmp.width, bmp.height)));
+    try {
+      if (seq !== renderSeq.current) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      canvas.width = bmp.width;
+      canvas.height = bmp.height;
+      fitCanvasToStage();
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(bmp, 0, 0);
+      if (withHistogram) setHistBins(computeHistBins(ctx.getImageData(0, 0, bmp.width, bmp.height)));
+    } finally {
+      // Release the decoded bitmap immediately - relying on GC leaked dozens of
+      // full frames per editing session (every scrub tick decodes a new one).
+      bmp.close();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -566,14 +603,15 @@ export function PhotoEditor({ image, onClose }: Props) {
         if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
         await drawBlob(blob, seq, false);
         // Chase the bounded settle base with the TRUE full-resolution render
-        // (like the lightbox's full.jpg): always for RAWs - their 2600px settle
-        // base comes from a half-size demosaic, so only the native render shows
-        // the real sensor detail - and for other formats when zoomed in, where
-        // the bounded base would show upscaled. Cheap to repeat per photo: the
-        // backend caches the native linear base for the image being edited.
+        // (like the lightbox's full.jpg) - but ONLY when zoomed in, where the
+        // bounded base would show upscaled pixels. At fit view the 2600px
+        // settle base already exceeds the displayed size, and chasing the
+        // native render anyway (a full demosaic + full pipeline at 24-40MP,
+        // seconds of pinned CPU) after EVERY slider pause on a RAW was what
+        // made the rest of the app crawl while editing.
         // Same abort controller: any new edit/drag cancels it; the seq guard
         // drops it if a newer frame was painted while it rendered.
-        if (zoomedRef.current || image.file_type === "raw") {
+        if (zoomedRef.current) {
           const nblob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, "native");
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
           await drawBlob(nblob, seq, false);
@@ -582,7 +620,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         // Non-fatal: the accurate preview is already on screen.
       }
     }, 350);
-  }, [image.id, image.file_type, drawBlob]);
+  }, [image.id, drawBlob]);
 
   // The live-preview pump. It renders the *latest* edit state, one request at a
   // time - never a backlog of superseded renders on the (uninterruptible) numpy
@@ -608,8 +646,23 @@ export function PhotoEditor({ image, onClose }: Props) {
         const ctrl = new AbortController();
         abortRef.current = ctrl;
         try {
+          // Progressive feedback: when the accurate tier has been slow, show a
+          // scrub frame of this edit state right away, then let the accurate
+          // render replace it. Costs one cheap extra render; turns "the editor
+          // is stuck" into "instant preview, sharpens a moment later".
+          if (!scrub && slowAccurate.current) {
+            const quick = await api.images.editorPreview(image.id, edits, ctrl.signal, "scrub");
+            await drawBlob(quick, seq, false);
+            setLoading(false);
+            setReady(true);
+          }
+          // Skip the histogram on scrub frames: getImageData is a synchronous
+          // full-canvas readback, and paying it on every frame of a drag is a
+          // large part of drag jank. The accurate render on release updates it.
+          const t0 = performance.now();
           const blob = await api.images.editorPreview(image.id, edits, ctrl.signal, scrub ? "scrub" : "fast");
-          await drawBlob(blob, seq, true);
+          if (!scrub) slowAccurate.current = performance.now() - t0 > 300;
+          await drawBlob(blob, seq, !scrub);
           setError(null);
           setLoading(false);
           setReady(true);
@@ -631,11 +684,13 @@ export function PhotoEditor({ image, onClose }: Props) {
   pumpRef.current = () => void pump();
 
   // Kick the pump whenever the edit state changes (or the image switches).
+  // previewEdits is memoised, so its identity IS the change signal - no
+  // stringify of the whole edit state per render just to build a key.
   useEffect(() => {
     dirtyToken.current++;
     void pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image.id, previewKey]);
+  }, [image.id, previewEdits]);
 
   // Zooming in while edits are at rest doesn't touch the pump (no edit change),
   // so kick the settle pass directly - it chases the bounded settle render with
@@ -1492,8 +1547,11 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   const drawn = drag ? normalizeRect(drag) : null;
   const hasDrawnCrop = drawn && drawn.width > 0.02 && drawn.height > 0.02;
-  const dirty = JSON.stringify(edits) !== JSON.stringify(saved);
-  const allNeutral = editsAreNeutral(edits);
+  // One stringify per actual edit change (not per render), compared against the
+  // pre-computed saved-state key.
+  const editsKey = useMemo(() => JSON.stringify(edits), [edits]);
+  const dirty = editsKey !== savedKey;
+  const allNeutral = useMemo(() => editsAreNeutral(edits), [edits]);
 
   // The selected mask (if any), its index-0 sub-mask, and - when that sub-mask
   // is a drawable type - the sub used for the on-canvas overlay.
@@ -1510,7 +1568,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         className="icon-btn back-btn editor-back-float"
         onClick={onClose}
         disabled={busy}
-        title="Back (Esc)"
+        title={busy ? "Saving…" : "Back (Esc)"}
         aria-label="Back"
       >
         ←
