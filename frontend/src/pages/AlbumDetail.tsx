@@ -15,6 +15,7 @@ import { PhotoFilters } from "../components/PhotoFilters";
 import { loadPresets } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
+import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { collapsePairs } from "../state/viewPrefs";
 import { selectionSharedMeta } from "../utils/selectionMeta";
@@ -33,6 +34,7 @@ export function AlbumDetail() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
+  const { withWait } = useWait();
   const navigate = useNavigate();
   const selects = useSelects();
   // The album always collapses each RAW+JPEG pair to one card (see
@@ -160,7 +162,9 @@ export function AlbumDetail() {
     if (selected.size === 0) return;
     // With merged pairs only the JPEG is visible, so mirror the change to each
     // hidden RAW partner too.
-    await api.images.bulkUpdate(Array.from(selected), { ...patch, apply_to_pair: mergePairs });
+    await withWait(`Updating ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
+      api.images.bulkUpdate(Array.from(selected), { ...patch, apply_to_pair: mergePairs })
+    );
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
@@ -181,7 +185,9 @@ export function AlbumDetail() {
       partnerItems: toItems(partnerIds),
     });
     if (!ids) return;
-    await api.images.bulkDelete(ids);
+    await withWait(`Moving ${ids.length} photo${ids.length === 1 ? "" : "s"} to trash…`, () =>
+      api.images.bulkDelete(ids)
+    );
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["album", id] });
@@ -193,7 +199,9 @@ export function AlbumDetail() {
     if (!id || selected.size === 0) return;
     // Merged view hides the RAW behind its JPEG - remove both halves.
     const ids = withPairedIds(Array.from(selected));
-    await Promise.all(ids.map((imageId) => api.albums.removeImage(id, imageId)));
+    await withWait(`Removing ${selected.size} photo${selected.size === 1 ? "" : "s"} from album…`, () =>
+      Promise.all(ids.map((imageId) => api.albums.removeImage(id, imageId)))
+    );
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["album", id] });
@@ -203,7 +211,9 @@ export function AlbumDetail() {
   async function addTagToSelected(name: string) {
     if (selected.size === 0 || !name.trim()) return;
     const tag = name.trim();
-    await api.images.bulkAddTags(Array.from(selected), [tag]);
+    await withWait(`Tagging ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
+      api.images.bulkAddTags(Array.from(selected), [tag])
+    );
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });
     setDevelopMsg(`Added tag “${tag}” to ${selected.size} photo(s).`);
@@ -213,7 +223,9 @@ export function AlbumDetail() {
     if (selected.size === 0) return;
     // In merged view the RAW partner is hidden behind the JPEG card - add it
     // too, so the target album holds the whole shot.
-    await api.albums.addImages(targetAlbumId, withPairedIds(Array.from(selected)));
+    await withWait(`Adding ${selected.size} photo${selected.size === 1 ? "" : "s"} to album…`, () =>
+      api.albums.addImages(targetAlbumId, withPairedIds(Array.from(selected)))
+    );
     queryClient.invalidateQueries({ queryKey: ["albums"] });
     queryClient.invalidateQueries({ queryKey: ["album", targetAlbumId] });
   }
@@ -253,7 +265,10 @@ export function AlbumDetail() {
     setDevelopBusy(true);
     setDevelopMsg(null);
     try {
-      const result = await api.images.bulkAutoDevelop(Array.from(selected));
+      const result = await withWait(
+        `Auto-developing ${selected.size} photo${selected.size === 1 ? "" : "s"}…`,
+        () => api.images.bulkAutoDevelop(Array.from(selected))
+      );
       setDevelopMsg(
         result.skipped > 0
           ? `Auto-developed ${result.applied} photo(s); skipped ${result.skipped} (no similar edits to learn from yet).`
@@ -284,7 +299,9 @@ export function AlbumDetail() {
     setDevelopBusy(true);
     setDevelopMsg(null);
     try {
-      await api.images.bulkDevelop(Array.from(selected), preset.adjustments as Record<string, unknown>);
+      await withWait(`Applying preset to ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
+        api.images.bulkDevelop(Array.from(selected), preset.adjustments as Record<string, unknown>)
+      );
       setDevelopMsg(`Applied preset “${name}” to ${selected.size} photo(s).`);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["album", id] });

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { BulkResetOptions } from "../api/types";
+import { useWait } from "../state/wait";
 
 interface Props {
   // How many photos are selected - shown on the apply button.
@@ -23,6 +24,7 @@ const ASPECTS: { key: keyof BulkResetOptions; label: string }[] = [
 // (stars/colors/tags) is pre-checked as the common case; edits/albums are opt-in
 // because they re-render or unfile photos.
 export function ResetMenu({ count, onReset }: Props) {
+  const { withWait } = useWait();
   const [open, setOpen] = useState(false);
   // Nothing is pre-checked - the user opts into exactly which aspects to reset.
   const [checked, setChecked] = useState<Set<keyof BulkResetOptions>>(
@@ -70,7 +72,12 @@ export function ResetMenu({ count, onReset }: Props) {
     for (const { key } of ASPECTS) opts[key] = checked.has(key);
     setBusy(true);
     try {
-      await onReset(opts);
+      // The app-wide wait popup blocks everything while the server resets and
+      // (for develop/geometry) re-renders the selected photos.
+      await withWait(
+        `Resetting ${count} photo${count === 1 ? "" : "s"}…`,
+        () => Promise.resolve(onReset(opts))
+      );
       setOpen(false);
     } finally {
       setBusy(false);

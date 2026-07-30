@@ -43,6 +43,7 @@ import { CurveEditor } from "./CurveEditor";
 import { ColorWheel } from "./ColorWheel";
 import { MaskOverlay } from "./MaskOverlay";
 import { useAppDialogs } from "./AppDialogs";
+import { useWait } from "../state/wait";
 
 interface Props {
   image: ImageOut;
@@ -330,6 +331,7 @@ function Histogram({ bins }: { bins: Uint32Array[] | null }) {
 export function PhotoEditor({ image, onClose }: Props) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
+  const { withWait } = useWait();
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -806,7 +808,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   }
 
   const saveEdits = useMutation({
-    mutationFn: () => api.images.saveEdits(image.id, edits),
+    mutationFn: () => withWait("Saving edits…", () => api.images.saveEdits(image.id, edits)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["image", image.id] });
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -815,7 +817,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   });
 
   const saveCopy = useMutation({
-    mutationFn: () => api.images.saveCopy(image.id, edits),
+    mutationFn: () => withWait("Saving copy…", () => api.images.saveCopy(image.id, edits)),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
@@ -836,7 +838,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     queryFn: () => api.settings.getAutoDevelop(),
   });
   const autoAdjust = useMutation({
-    mutationFn: () => api.images.autoAdjust(image.id),
+    mutationFn: () => withWait("Auto-developing…", () => api.images.autoAdjust(image.id)),
     onSuccess: (res) => {
       // The response is *partial* - only the groups enabled in Settings.
       // Spreading it over the current state leaves every unchecked group's

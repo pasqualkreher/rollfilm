@@ -19,6 +19,7 @@ import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
+import { WaitProvider } from "./state/wait";
 
 // Source-root scans run in the background (started from Settings or the
 // automatic startup scan) and commit their new photos when they finish. This
@@ -261,6 +262,7 @@ function ImmichSyncIndicator() {
 export default function App() {
   return (
     <TasksProvider>
+      <WaitProvider>
       <SelectsProvider>
         <ImportSessionProvider>
           <DialogProvider>
@@ -288,6 +290,7 @@ export default function App() {
           </DialogProvider>
         </ImportSessionProvider>
       </SelectsProvider>
+      </WaitProvider>
     </TasksProvider>
   );
 }

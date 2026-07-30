@@ -22,6 +22,7 @@ import { PhotoFilters } from "../components/PhotoFilters";
 import { loadPresets } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
+import { useWait } from "../state/wait";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { useMergePairs } from "../state/viewPrefs";
@@ -47,6 +48,7 @@ export function Library() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
+  const { withWait } = useWait();
   const selects = useSelects();
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
@@ -181,7 +183,9 @@ export function Library() {
     if (selected.size === 0) return;
     // When pairs are merged the grid only shows the JPEG, so fan the change out
     // to each hidden RAW partner too.
-    await api.images.bulkUpdate(Array.from(selected), { ...patch, apply_to_pair: mergePairs });
+    await withWait(`Updating ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
+      api.images.bulkUpdate(Array.from(selected), { ...patch, apply_to_pair: mergePairs })
+    );
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
@@ -202,7 +206,9 @@ export function Library() {
       partnerItems: toItems(partnerIds),
     });
     if (!ids) return;
-    await api.images.bulkDelete(ids);
+    await withWait(`Moving ${ids.length} photo${ids.length === 1 ? "" : "s"} to trash…`, () =>
+      api.images.bulkDelete(ids)
+    );
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["trash"] });
@@ -211,7 +217,9 @@ export function Library() {
   async function addTagToSelected(name: string) {
     if (selected.size === 0 || !name.trim()) return;
     const tag = name.trim();
-    await api.images.bulkAddTags(Array.from(selected), [tag]);
+    await withWait(`Tagging ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
+      api.images.bulkAddTags(Array.from(selected), [tag])
+    );
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });
     setDevelopMsg(`Added tag “${tag}” to ${selected.size} photo(s).`);
@@ -221,7 +229,9 @@ export function Library() {
     if (selected.size === 0) return;
     // In merged view the RAW partner is hidden behind the JPEG card - add it
     // too, so the album holds the whole shot and its own merge toggle works.
-    await api.albums.addImages(albumId, withPairedIds(Array.from(selected)));
+    await withWait(`Adding ${selected.size} photo${selected.size === 1 ? "" : "s"} to album…`, () =>
+      api.albums.addImages(albumId, withPairedIds(Array.from(selected)))
+    );
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
@@ -263,7 +273,10 @@ export function Library() {
     setDevelopBusy(true);
     setDevelopMsg(null);
     try {
-      const result = await api.images.bulkAutoDevelop(Array.from(selected));
+      const result = await withWait(
+        `Auto-developing ${selected.size} photo${selected.size === 1 ? "" : "s"}…`,
+        () => api.images.bulkAutoDevelop(Array.from(selected))
+      );
       setDevelopMsg(
         result.skipped > 0
           ? `Auto-developed ${result.applied} photo(s); skipped ${result.skipped} (no similar edits to learn from yet).`
@@ -297,7 +310,9 @@ export function Library() {
     setDevelopBusy(true);
     setDevelopMsg(null);
     try {
-      await api.images.bulkDevelop(Array.from(selected), preset.adjustments as Record<string, unknown>);
+      await withWait(`Applying preset to ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
+        api.images.bulkDevelop(Array.from(selected), preset.adjustments as Record<string, unknown>)
+      );
       setDevelopMsg(`Applied preset “${name}” to ${selected.size} photo(s).`);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });

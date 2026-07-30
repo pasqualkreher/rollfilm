@@ -5,6 +5,7 @@ import { useAppDialogs } from "../components/AppDialogs";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import type { ImageOut } from "../api/types";
 import { useTransientMessage } from "../utils/transientMessage";
+import { useWait } from "../state/wait";
 
 // The in-app Trash: managed (imported) photos land here when deleted and can
 // be restored; only deleting them from here removes the original files from
@@ -15,6 +16,7 @@ export function Trash() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
+  const { withWait } = useWait();
 
   const { data: images, isLoading } = useQuery({
     queryKey: ["trash"],
@@ -69,7 +71,9 @@ export function Trash() {
     const ids = Array.from(selected);
     setActionError(null);
     try {
-      await api.images.restoreFromTrash(ids);
+      await withWait(`Restoring ${ids.length} photo${ids.length === 1 ? "" : "s"}…`, () =>
+        api.images.restoreFromTrash(ids)
+      );
       removeFromCachedList(ids);
     } catch (e) {
       setActionError(`Restore failed: ${(e as Error).message}`);
@@ -96,7 +100,9 @@ export function Trash() {
     const ids = Array.from(selected);
     setActionError(null);
     try {
-      await api.images.deleteFromTrash(ids);
+      await withWait(`Deleting ${ids.length} photo${ids.length === 1 ? "" : "s"}…`, () =>
+        api.images.deleteFromTrash(ids)
+      );
       removeFromCachedList(ids);
     } catch (e) {
       setActionError(`Delete failed: ${(e as Error).message}`);

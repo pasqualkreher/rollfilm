@@ -10,6 +10,7 @@ import { AlbumPicker } from "../components/AlbumPicker";
 import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
 import { useMergePairs } from "../state/viewPrefs";
+import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
 import { preloadImage } from "../utils/preload";
@@ -32,6 +33,7 @@ export function ImageDetail() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { withWait } = useWait();
   const [activeId, setActiveId] = useState(id!);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -492,7 +494,9 @@ export function ImageDetail() {
       partnerItems: paired ? [paired] : [],
     });
     if (!ids) return;
-    await api.images.bulkDelete(ids);
+    await withWait(`Moving ${ids.length === 1 ? "photo" : "photos"} to trash…`, () =>
+      api.images.bulkDelete(ids)
+    );
     ids.forEach((delId) => selects.has(delId) && selects.remove(delId));
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["trash"] });

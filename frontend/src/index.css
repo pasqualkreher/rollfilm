@@ -1305,6 +1305,53 @@ textarea:focus-visible {
   color: var(--text);
 }
 
+/* Full-screen blocking wait popup (state/wait.tsx) - dims and locks the whole
+   app while a must-wait action runs (save, bulk reset, delete...). The div
+   mounts instantly so clicks are blocked from the first moment, but it only
+   fades in after a short delay - quick operations never flash a popup. Sits
+   above every modal, since waits are triggered from inside dialogs too. */
+.wait-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+  cursor: wait;
+  opacity: 0;
+  animation: pm-wait-in 0.2s ease-out 0.25s forwards;
+}
+
+.wait-overlay-box {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 26px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: calc(14px * var(--corner-scale));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  font-size: 14px;
+}
+
+.wait-overlay-spinner {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: pm-spin 0.7s linear infinite;
+}
+
+@keyframes pm-wait-in {
+  to {
+    opacity: 1;
+  }
+}
+
 /* App-skinned confirm/alert dialogs (components/AppDialogs.tsx) - replace the
    native window.confirm/window.alert popups, which ignore the app's theme. */
 .confirm-modal {
