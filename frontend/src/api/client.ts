@@ -7,6 +7,7 @@ import type {
   BulkAutoDevelopResult,
   BulkResetOptions,
   CropBox,
+  ExportJobProgress,
   ImageOut,
   DirListing,
   ImmichActivity,
@@ -109,7 +110,9 @@ export function bumpThumbnailCacheBust(): void {
 // built. Where the picker is unavailable we fall back to a plain anchor
 // download, which prompts at the end. Returns without saving if the user
 // cancels the picker.
-async function saveDownload(
+// Exported for the progress-export dialog: its `fetchBlob` runs the whole
+// job (start + poll + result) so the location question still comes first.
+export async function saveDownload(
   suggestedName: string,
   accept: Record<string, string[]>,
   fetchBlob: () => Promise<Blob>
@@ -369,6 +372,39 @@ export const api = {
         }
         return res.blob();
       });
+    },
+    // Progress-reporting export: start a server-side job (renders in a worker
+    // thread), poll its per-photo progress, then download the finished file.
+    // Powers the export dialog's progress bar for both formats.
+    exportStart(
+      image_ids: string[],
+      opts: { quality: number; max_size?: number | null; format: "jpeg" | "original" }
+    ): Promise<{ job_id: string; total: number }> {
+      return request(`/images/export/start`, {
+        method: "POST",
+        body: JSON.stringify({
+          image_ids,
+          quality: opts.quality,
+          max_size: opts.max_size ?? null,
+          format: opts.format,
+        }),
+      });
+    },
+    exportProgress(job_id: string): Promise<ExportJobProgress> {
+      return request(`/images/export/${job_id}/progress`);
+    },
+    exportCancel(job_id: string): Promise<void> {
+      return request(`/images/export/${job_id}`, { method: "DELETE" });
+    },
+    // Fetch the finished job's file as a blob (the dialog writes it into the
+    // save target it picked before starting the job).
+    async exportResultBlob(job_id: string): Promise<Blob> {
+      const res = await fetch(`${BASE_URL}/images/export/${job_id}/result`);
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`export download failed: ${res.status} ${body}`);
+      }
+      return res.blob();
     },
     bulkAddTags(image_ids: string[], tag_names: string[]): Promise<ImageOut[]> {
       return request(`/images/bulk-tags`, { method: "POST", body: JSON.stringify({ image_ids, tag_names }) });

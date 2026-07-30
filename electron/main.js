@@ -285,7 +285,9 @@ function movePath(src, dest) {
 function createSplash() {
   splashWindow = new BrowserWindow({
     width: 380,
-    height: 200,
+    // Tall enough for logo + spinner + title + version + status incl. the
+    // bottom padding - a smaller box makes the flex column squash the spinner.
+    height: 232,
     frame: false,
     resizable: false,
     fullscreenable: false,
@@ -293,7 +295,11 @@ function createSplash() {
     icon: windowIconPath(),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splashWindow.loadFile(path.join(__dirname, "splash.html"));
+  // The splash shows the app version next to the logo; loadFile's query is the
+  // one channel available before the page has loaded.
+  splashWindow.loadFile(path.join(__dirname, "splash.html"), {
+    query: { v: app.getVersion() },
+  });
   splashWindow.on("closed", () => {
     splashWindow = null;
   });

@@ -37,6 +37,9 @@
         gap: 14px;
       }
       .spinner {
+        /* Never let the flex column squash the circle when the content is
+           taller than the window - it would render as an oval. */
+        flex: none;
         width: 28px;
         height: 28px;
         border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
@@ -54,8 +57,14 @@
         font-size: 16px;
         font-weight: 600;
       }
+      #version {
+        margin: -10px 0 0;
+        font-size: 11px;
+        color: var(--muted);
+      }
       #status {
         margin: 0;
+        padding-bottom: 14px;
         font-size: 12px;
         color: var(--muted);
         text-align: center;
@@ -66,7 +75,7 @@
     <div class="wrap">
       <!-- Inline copy of frontend/public/rollfilm.svg (X-Pro1-style camera) —
            keep in sync when the logo changes. -->
-      <svg width="84" height="84" viewBox="0 0 512 512" aria-hidden="true">
+      <svg width="84" height="84" viewBox="0 0 512 512" aria-hidden="true" style="flex: none">
         <rect width="512" height="512" rx="116" fill="#f8f8f9"/>
         <rect x="368" y="128" width="56" height="34" rx="11" fill="#1e1e23"/>
         <circle cx="334" cy="148" r="13" fill="#4a4a55"/>
@@ -80,7 +89,13 @@
       </svg>
       <div class="spinner"></div>
       <h1>Rollfilm</h1>
+      <p id="version"></p>
       <p id="status">Loading…</p>
     </div>
+    <script>
+      // Version passed by main.js via loadFile's query (no preload needed).
+      const v = new URLSearchParams(location.search).get("v");
+      if (v) document.getElementById("version").textContent = "Version " + v;
+    </script>
   </body>
 </html>

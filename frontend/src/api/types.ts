@@ -170,6 +170,16 @@ export interface SmartAlbumSettings {
   place_radius_km: number;
 }
 
+// Poll payload of a progress-reporting export job (mirrors ExportJobProgress
+// in backend schemas.py). `filename` arrives with state "ready".
+export interface ExportJobProgress {
+  done: number;
+  total: number;
+  state: "running" | "ready" | "error" | "cancelled";
+  filename: string | null;
+  error: string | null;
+}
+
 export interface ImportProgress {
   phase: "staging" | "commit" | "idle";
   // Staging: files whose background analysis finished, of `total` staged so

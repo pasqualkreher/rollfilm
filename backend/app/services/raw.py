@@ -145,6 +145,30 @@ def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool) -> np.ndarray:
     return np.asarray(rgb16, dtype=np.float32) / 65535.0
 
 
+def raw_dimensions(path: Path) -> tuple[int, int] | None:
+    """Displayed pixel dimensions of a RAW's rendered output, from the file
+    header alone (no demosaic - a cheap metadata read).
+
+    The EXIF ImageWidth/Height fields of many RAW formats (Fuji RAF in
+    particular) describe the *embedded preview JPEG*, not the sensor output -
+    e.g. 4416x2944 for a 7728x5152 camera - so metadata built from them
+    undersells the RAW everywhere the recorded size is shown or used.
+    LibRaw's sizes.width/height is the active sensor area, exactly what
+    postprocess() renders; sizes.flip mirrors the orientation tag, so
+    quarter-turned shots swap to displayed orientation like exif.read_exif
+    does for JPEGs."""
+    try:
+        with rawpy.imread(str(path)) as raw:
+            s = raw.sizes
+            w, h = int(s.width), int(s.height)
+            if s.flip in (5, 6):  # LibRaw flip: 0=none, 3=180deg, 5/6=quarter turns
+                w, h = h, w
+            return (w, h) if w > 0 and h > 0 else None
+    except Exception:
+        logger.exception("Could not read RAW dimensions from %s", path)
+        return None
+
+
 def _linearise_pil(im: PILImage.Image) -> np.ndarray:
     """EXIF-orient an opened PIL image and linearise it with the sRGB EOTF.
     Scales in place and skips the redundant astype so a full-frame JPEG needs

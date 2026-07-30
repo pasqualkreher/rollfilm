@@ -2,15 +2,21 @@ import hashlib
 import io
 import json
 import logging
+import os
 import re
+import shutil
 import tempfile
+import threading
+import time
 import zipfile
+from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
@@ -28,7 +34,7 @@ from app.db.models import (
     Tag,
     User,
 )
-from app.db.session import engine, get_db
+from app.db.session import SessionLocal, engine, get_db
 from app.services import (
     auto_develop,
     develop,
@@ -64,6 +70,10 @@ def _try_regenerate_derivatives(image: Image) -> None:
     thumbnails" action), not a reason to fail the edit the user just made."""
     try:
         thumbnails.regenerate_for_image(image)
+        # Pre-render the 100%-zoom/export full.jpg in the background so the
+        # common "edit, then export" flow doesn't pay the full RAW render at
+        # export time.
+        thumbnails.warm_full_cache(image.id)
     except Exception:
         logger.exception("Failed to regenerate thumbnails for image %s after edit", image.id)
 
@@ -626,10 +636,7 @@ def export_images(
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
 
     def render_jpeg(image: Image) -> bytes:
-        rendered = thumbnails.render_full_from_stored_edits(image, max_size=payload.max_size)
-        buf = io.BytesIO()
-        rendered.save(buf, "JPEG", quality=quality)
-        return buf.getvalue()
+        return thumbnails.export_jpeg_bytes(image, quality, payload.max_size)
 
     if len(images) == 1:
         try:
@@ -673,6 +680,196 @@ def export_images(
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="export.zip"'},
     )
+
+
+# ---- Progress-reporting export jobs ------------------------------------------
+# The synchronous /export endpoint above can only offer a spinner: the response
+# starts after every photo has rendered. These job endpoints let the export
+# dialog show a real per-photo progress bar: /export/start spawns a worker
+# thread that renders into a temp file while bumping a counter, the client
+# polls /export/{id}/progress, fetches /export/{id}/result once ready, and can
+# abort between photos via DELETE. Jobs are in-memory (single-process app);
+# abandoned ones (crashed client) are pruned after a TTL.
+
+_EXPORT_JOB_TTL_S = 30 * 60
+_export_jobs: dict[str, dict] = {}
+_export_jobs_lock = threading.Lock()
+
+
+def _drop_export_job(job_id: str) -> None:
+    with _export_jobs_lock:
+        job = _export_jobs.pop(job_id, None)
+    if job and job.get("path"):
+        Path(job["path"]).unlink(missing_ok=True)
+
+
+def _prune_export_jobs() -> None:
+    now = time.monotonic()
+    with _export_jobs_lock:
+        stale = [jid for jid, job in _export_jobs.items() if now - job["created"] > _EXPORT_JOB_TTL_S]
+    for jid in stale:
+        _drop_export_job(jid)
+
+
+def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequest) -> None:
+    job = _export_jobs[job_id]
+
+    def cancelled() -> bool:
+        return job["state"] == "cancelled"
+
+    db = SessionLocal()
+    fd, tmp_path = tempfile.mkstemp(prefix="pm-export-")
+    os.close(fd)
+    try:
+        images = (
+            db.query(Image)
+            .filter(Image.owner_id == owner_id, Image.id.in_(payload.image_ids))
+            .all()
+        )
+        # Preserve the caller's ordering (query order is unspecified).
+        by_id = {img.id: img for img in images}
+        images = [by_id[i] for i in payload.image_ids if i in by_id]
+        quality = max(1, min(100, payload.quality))
+
+        def render_jpeg(image: Image) -> bytes:
+            return thumbnails.export_jpeg_bytes(image, quality, payload.max_size)
+
+        if len(images) == 1:
+            image = images[0]
+            if payload.format == "original":
+                shutil.copyfile(resolve_image_path(image), tmp_path)
+                filename = image.original_filename
+                media = "image/jpeg" if image.file_type == FileType.jpeg else "application/octet-stream"
+            else:
+                Path(tmp_path).write_bytes(render_jpeg(image))
+                filename = f"{Path(image.original_filename).stem}.jpg"
+                media = "image/jpeg"
+            job["done"] = 1
+        else:
+            # ZIP_STORED like the synchronous endpoints: JPEGs (and compressed
+            # RAWs) don't shrink further, they'd only cost CPU.
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as archive:
+                used_names: dict[str, int] = {}
+                for image in images:
+                    if cancelled():
+                        return
+                    try:
+                        if payload.format == "original":
+                            data = None
+                            src = resolve_image_path(image)
+                            name = image.original_filename
+                        else:
+                            data = render_jpeg(image)
+                            name = f"{Path(image.original_filename).stem}.jpg"
+                    except Exception:
+                        # One broken photo shouldn't sink the whole export.
+                        logger.exception("Export job render failed for %s - skipping", image.id)
+                        job["done"] += 1
+                        continue
+                    # Suffix filename collisions (RAW+JPEG pairs share a stem).
+                    if name in used_names:
+                        used_names[name] += 1
+                        stem = Path(name)
+                        name = f"{stem.stem}_{used_names[name]}{stem.suffix}"
+                    else:
+                        used_names[name] = 0
+                    if data is None:
+                        archive.write(src, arcname=name)
+                    else:
+                        archive.writestr(name, data)
+                    job["done"] += 1
+            filename = "export.zip" if payload.format == "jpeg" else "photos.zip"
+            media = "application/zip"
+        if cancelled():
+            return
+        job.update(path=tmp_path, filename=filename, media=media, state="ready")
+    except Exception as e:
+        logger.exception("Export job %s failed", job_id)
+        job.update(state="error", error=str(e) or "Export failed")
+    finally:
+        db.close()
+        if job["state"] != "ready":
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+@router.post("/export/start", response_model=schemas.ExportStartResponse)
+def export_start(
+    payload: schemas.ExportStartRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not payload.image_ids:
+        raise HTTPException(status_code=400, detail="No images to export")
+    _prune_export_jobs()
+    # Validate ownership up front so the worker can assume clean input.
+    for image_id in payload.image_ids:
+        get_owned_image(db, current_user.id, image_id)
+    job_id = uuid4().hex
+    job = {
+        "done": 0,
+        "total": len(payload.image_ids),
+        "state": "running",
+        "path": None,
+        "filename": None,
+        "media": None,
+        "error": None,
+        "created": time.monotonic(),
+    }
+    with _export_jobs_lock:
+        _export_jobs[job_id] = job
+    threading.Thread(
+        target=_run_export_job,
+        args=(job_id, current_user.id, payload),
+        name=f"export-{job_id[:8]}",
+        daemon=True,
+    ).start()
+    return schemas.ExportStartResponse(job_id=job_id, total=job["total"])
+
+
+def _get_export_job(job_id: str) -> dict:
+    job = _export_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown export job")
+    return job
+
+
+@router.get("/export/{job_id}/progress", response_model=schemas.ExportJobProgress)
+def export_progress(job_id: str, current_user: User = Depends(get_current_user)):
+    job = _get_export_job(job_id)
+    return schemas.ExportJobProgress(
+        done=job["done"],
+        total=job["total"],
+        state=job["state"],
+        filename=job["filename"],
+        error=job["error"],
+    )
+
+
+@router.get("/export/{job_id}/result")
+def export_result(job_id: str, current_user: User = Depends(get_current_user)):
+    job = _get_export_job(job_id)
+    if job["state"] != "ready":
+        raise HTTPException(status_code=409, detail="Export not finished")
+    # The temp file is deleted (and the job dropped) after the response has
+    # streamed - the result is a one-shot download.
+    return FileResponse(
+        job["path"],
+        media_type=job["media"],
+        filename=job["filename"],
+        background=BackgroundTask(_drop_export_job, job_id),
+    )
+
+
+@router.delete("/export/{job_id}")
+def export_cancel(job_id: str, current_user: User = Depends(get_current_user)):
+    job = _get_export_job(job_id)
+    if job["state"] == "running":
+        # The worker checks between photos, cleans up its temp file and skips
+        # the "ready" transition; the job row itself falls to the TTL prune.
+        job["state"] = "cancelled"
+    else:
+        _drop_export_job(job_id)
+    return Response(status_code=204)
 
 
 @router.post("/immich", response_model=schemas.ImmichPushResult)

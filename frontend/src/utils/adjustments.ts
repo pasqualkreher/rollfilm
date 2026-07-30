@@ -18,6 +18,10 @@ export interface ScalarDef {
   min: number;
   max: number;
   step?: number;
+  // Display divisor: the slider UI shows value/uiScale (so a +-200 internal
+  // range reads as the classic +-100) while the stored/rendered value keeps
+  // the full range. Purely cosmetic - backend and saved edits are untouched.
+  uiScale?: number;
 }
 
 export const SCALAR_SPEC = {
@@ -25,17 +29,19 @@ export const SCALAR_SPEC = {
   // Exposure and the four region sliders reach past the classic +-5 EV /
   // +-100 - the backend keeps the tone curve monotone in the extended zone.
   exposure: { def: 0, min: -8, max: 8, step: 0.01 },
-  brightness: { def: 0, min: -200, max: 200 },
+  brightness: { def: 0, min: -200, max: 200, uiScale: 2 },
   contrast: { def: 0, min: -100, max: 100 },
-  highlights: { def: 0, min: -200, max: 200 },
-  shadows: { def: 0, min: -200, max: 200 },
-  whites: { def: 0, min: -200, max: 200 },
-  blacks: { def: 0, min: -200, max: 200 },
+  highlights: { def: 0, min: -200, max: 200, uiScale: 2 },
+  shadows: { def: 0, min: -200, max: 200, uiScale: 2 },
+  whites: { def: 0, min: -200, max: 200, uiScale: 2 },
+  blacks: { def: 0, min: -200, max: 200, uiScale: 2 },
   // White balance / presence
   temperature: { def: 0, min: -250, max: 250 },
   tint: { def: 0, min: -250, max: 250 },
-  vibrance: { def: 0, min: -100, max: 100 },
-  saturation: { def: 0, min: -100, max: 100 },
+  // Extended past the classic +-100: the backend clamps the chroma scale at
+  // zero, so past -100 both settle at grayscale instead of inverting colours.
+  vibrance: { def: 0, min: -200, max: 200, uiScale: 2 },
+  saturation: { def: 0, min: -200, max: 200, uiScale: 2 },
   hue: { def: 0, min: -180, max: 180 },
   // Details
   sharpness: { def: 0, min: -100, max: 100 },

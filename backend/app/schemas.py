@@ -185,6 +185,27 @@ class ExportRequest(BaseModel):
     max_size: int | None = None
 
 
+class ExportStartRequest(ExportRequest):
+    # "jpeg" renders the saved edits into fresh JPEGs; "original" hands out the
+    # library files byte-for-byte (RAW stays RAW, metadata untouched).
+    format: Literal["jpeg", "original"] = "jpeg"
+
+
+class ExportStartResponse(BaseModel):
+    job_id: str
+    total: int
+
+
+class ExportJobProgress(BaseModel):
+    done: int
+    total: int
+    state: Literal["running", "ready", "error", "cancelled"]
+    # Set once ready: the download filename (drives the save dialog's
+    # suggestion before the result request is made).
+    filename: str | None = None
+    error: str | None = None
+
+
 class ImmichPushRequest(BaseModel):
     image_ids: list[str]
 

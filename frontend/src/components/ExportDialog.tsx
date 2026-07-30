@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { api } from "../api/client";
+import { useEffect, useRef, useState } from "react";
+import { api, saveDownload } from "../api/client";
 import { useTransientMessage } from "../utils/transientMessage";
 
 // Long-edge presets for the size dropdown; null = keep the original size.
@@ -13,29 +13,118 @@ const SIZE_OPTIONS: { label: string; value: number | null }[] = [
 // One export dialog for both entry points: the photo page passes a single id,
 // the Selects toolbar the whole selection. Same options either way - the
 // server answers with a plain .jpg for one photo and a zip for several.
-export function ExportDialog({ imageIds, onClose }: { imageIds: string[]; onClose: () => void }) {
+export function ExportDialog({
+  imageIds,
+  singleFilename,
+  onClose,
+}: {
+  imageIds: string[];
+  // Original filename of the one photo (single-photo entry point) - drives the
+  // save dialog's suggested name; omitted for multi-selections (always a zip).
+  singleFilename?: string;
+  onClose: () => void;
+}) {
   const [quality, setQuality] = useState(90);
   const [maxSize, setMaxSize] = useState<number | null>(null);
   // "jpeg" renders the edits into fresh JPEGs; "original" hands out the
   // library files byte-for-byte (RAW stays RAW, EXIF/metadata untouched).
   const [format, setFormat] = useState<"jpeg" | "original">("jpeg");
   const [busy, setBusy] = useState(false);
+  // Per-photo progress of the running export job, for the bar.
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   // Flash message - auto-dismisses after a moment.
   const [error, setError] = useTransientMessage();
+  const jobRef = useRef<string | null>(null);
+  const closedRef = useRef(false);
+  useEffect(() => {
+    // StrictMode's throwaway mount/unmount cycle runs the cleanup below once
+    // before the real mount - undo its mark here, or every export silently
+    // aborts itself right before the first progress poll and the dialog hangs
+    // at "Exporting…" forever.
+    closedRef.current = false;
+    return () => {
+      // Dialog unmounted mid-export (navigation): stop the server-side job
+      // too, its result has no one left to download it.
+      closedRef.current = true;
+      if (jobRef.current) void api.images.exportCancel(jobRef.current).catch(() => {});
+    };
+  }, []);
 
+  // Job-based export (both formats). The save-location question comes FIRST
+  // (saveDownload opens the picker before running its blob callback), then the
+  // server renders/zips in a worker thread while this polls the per-photo
+  // counter for the progress bar, and the finished file streams into the
+  // chosen target.
   async function doExport() {
     setBusy(true);
     setError(null);
+    const single = imageIds.length === 1;
+    const stem = singleFilename?.replace(/\.[^.]+$/, "");
+    const suggestedName = !single
+      ? format === "original"
+        ? "photos.zip"
+        : "export.zip"
+      : format === "original"
+        ? (singleFilename ?? "photo")
+        : `${stem ?? "export"}.jpg`;
+    const ext = suggestedName.includes(".") ? `.${suggestedName.split(".").pop()!.toLowerCase()}` : "";
+    const accept: Record<string, string[]> =
+      ext === ".zip"
+        ? { "application/zip": [".zip"] }
+        : ext === ".jpg" || ext === ".jpeg"
+          ? { "image/jpeg": [".jpg", ".jpeg"] }
+          : { "application/octet-stream": ext ? [ext] : [] };
+    let started = false;
     try {
-      if (format === "original") {
-        await api.images.downloadOriginals(imageIds);
-      } else {
-        await api.images.exportImages(imageIds, { quality, max_size: maxSize });
+      await saveDownload(suggestedName, accept, async () => {
+        started = true;
+        const { job_id, total } = await api.images.exportStart(imageIds, {
+          quality,
+          max_size: maxSize,
+          format,
+        });
+        jobRef.current = job_id;
+        setProgress({ done: 0, total });
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 400));
+          if (closedRef.current) throw new Error("cancelled");
+          const p = await api.images.exportProgress(job_id);
+          if (p.state === "cancelled") throw new Error("cancelled");
+          if (p.state === "error") throw new Error(p.error ?? "Export failed");
+          setProgress({ done: p.done, total: p.total });
+          if (p.state === "ready") {
+            jobRef.current = null;
+            return api.images.exportResultBlob(job_id);
+          }
+        }
+      });
+      if (!started) {
+        // User dismissed the location picker - back to the options, no error.
+        setBusy(false);
+        setProgress(null);
+        return;
       }
       onClose();
     } catch (e) {
-      setError((e as Error).message);
+      if (closedRef.current) return; // dialog is gone, nothing to update
+      // Still mounted: always drop the busy state, whatever went wrong -
+      // a swallowed error must never leave the dialog stuck at "Exporting…".
       setBusy(false);
+      setProgress(null);
+      jobRef.current = null;
+      if ((e as Error).message !== "cancelled") setError((e as Error).message);
+    }
+  }
+
+  // Cancel while a job runs aborts it server-side; otherwise just close.
+  function onCancel() {
+    if (busy) {
+      if (jobRef.current) void api.images.exportCancel(jobRef.current).catch(() => {});
+      jobRef.current = null;
+      setBusy(false);
+      setProgress(null);
+    } else {
+      onClose();
     }
   }
 
@@ -104,12 +193,22 @@ export function ExportDialog({ imageIds, onClose }: { imageIds: string[]; onClos
             </>
           )}
           {error && <span className="status-note status-note--error">{error}</span>}
-          {busy && (
-            <span className="status-note" role="status" aria-live="polite">
-              Preparing {imageIds.length === 1 ? "your photo" : `${imageIds.length} photos`}
-              {imageIds.length === 1 ? "" : " and zipping"} — this can take a moment, please
-              keep this window open.
-            </span>
+          {busy && progress && (
+            <div role="status" aria-live="polite">
+              <div className="settings-progress">
+                <div
+                  className="settings-progress-fill"
+                  style={{ width: `${Math.round((progress.done / Math.max(1, progress.total)) * 100)}%` }}
+                />
+              </div>
+              <span className="status-note">
+                {format === "original" ? "Preparing" : "Rendering"}{" "}
+                {progress.total === 1
+                  ? "your photo"
+                  : `photo ${Math.min(progress.done + 1, progress.total)} of ${progress.total}`}
+                … please keep this window open.
+              </span>
+            </div>
           )}
           <div className="pair-delete-actions">
             <button className="btn primary" onClick={doExport} disabled={busy}>
@@ -122,7 +221,7 @@ export function ExportDialog({ imageIds, onClose }: { imageIds: string[]; onClos
                 "Export"
               )}
             </button>
-            <button className="btn ghost" onClick={onClose} disabled={busy}>
+            <button className="btn ghost" onClick={onCancel}>
               Cancel
             </button>
           </div>

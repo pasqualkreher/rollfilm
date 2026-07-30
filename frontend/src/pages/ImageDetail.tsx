@@ -741,7 +741,13 @@ export function ImageDetail() {
       </div>
 
       {adjustOpen && <PhotoEditor image={image} onClose={() => setAdjustOpen(false)} />}
-      {exportOpen && <ExportDialog imageIds={[image.id]} onClose={() => setExportOpen(false)} />}
+      {exportOpen && (
+        <ExportDialog
+          imageIds={[image.id]}
+          singleFilename={image.original_filename}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
     </div>
   );
 }

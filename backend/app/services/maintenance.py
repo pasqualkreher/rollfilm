@@ -27,7 +27,7 @@ from app.db.models import (
 )
 from app.services.exif import capture_date_from_filename, new_helper, read_exif
 from app.services.filesystem import resolve_image_path
-from app.services.raw import classify_file_type
+from app.services.raw import classify_file_type, raw_dimensions
 from app.services.thumbnails import derivative_dir, regenerate_for_image
 from app.services.trash import hard_delete_images
 from app.workers.queue import enqueue_post_import
@@ -73,12 +73,59 @@ def start_background_sync() -> None:
             if paired:
                 db.commit()
                 logger.info("Startup re-pair: linked %d RAW+JPEG pair(s)", paired)
+            # One-shot fix for RAW rows whose width/height were recorded from
+            # the embedded preview JPEG's EXIF (see exif.read_exif) - re-read
+            # the true sensor-output size from each RAW header. Guarded by a
+            # settings flag so the per-file header reads don't repeat forever.
+            from app.services.settings_store import get_setting, set_setting
+
+            if get_setting(db, "raw_dimensions_repaired_v1") != "1":
+                fixed, skipped = repair_raw_dimensions(db, LOCAL_USER_ID)
+                # Unreachable files (unmounted source root) keep the repair
+                # pending, so they get their turn on a later start.
+                if skipped == 0:
+                    set_setting(db, "raw_dimensions_repaired_v1", "1")
+                logger.info(
+                    "Startup RAW dimension repair: %d corrected, %d unreachable", fixed, skipped
+                )
         except Exception:
             logger.exception("Startup library sync failed")
         finally:
             db.close()
 
     threading.Thread(target=_run, name="startup-library-sync", daemon=True).start()
+
+
+def repair_raw_dimensions(db: Session, owner_id: int) -> tuple[int, int]:
+    """Correct the stored width/height of every RAW photo from its file header
+    (LibRaw active area - what a native render actually outputs). Historic
+    imports recorded the embedded preview JPEG's EXIF size instead, which
+    undersells the RAW everywhere the dimensions are shown or used. Returns
+    (corrected, unreachable) counts; unreachable files (e.g. an unmounted
+    source root) are left for a later run."""
+    fixed = 0
+    skipped = 0
+    raws = (
+        db.query(Image)
+        .filter(Image.owner_id == owner_id, Image.file_type == FileType.raw)
+        .all()
+    )
+    for image in raws:
+        path = resolve_image_path(image)
+        if not path.exists():
+            skipped += 1
+            continue
+        dims = raw_dimensions(path)
+        if dims is None:
+            # Unreadable header (corrupt file): counts as done - a retry on
+            # the next start would fail the same way.
+            continue
+        if (image.width, image.height) != dims:
+            image.width, image.height = dims
+            fixed += 1
+    if fixed:
+        db.commit()
+    return fixed, skipped
 
 
 def sync_db_with_library(db: Session, owner_id: int) -> dict:

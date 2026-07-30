@@ -40,8 +40,11 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     # White balance / presence
     "temperature": (0, -250, 250, False),
     "tint": (0, -250, 250, False),
-    "vibrance": (0, -100, 100, False),
-    "saturation": (0, -100, 100, False),
+    # Extended past +-100 like the tone sliders; the chroma scale in
+    # thumbnails._display_color_block is clamped at zero, so past -100 both
+    # settle at grayscale instead of inverting colours.
+    "vibrance": (0, -200, 200, False),
+    "saturation": (0, -200, 200, False),
     "hue": (0, -180, 180, False),            # global hue rotation (was color_tint)
     # Details
     "sharpness": (0, -100, 100, False),

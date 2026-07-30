@@ -175,6 +175,18 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
     if width and height and _is_quarter_rotated(metadata.get("EXIF:Orientation")):
         width, height = height, width
 
+    # RAW files: the EXIF width/height fields above often describe the
+    # *embedded preview JPEG*, not the sensor output (Fuji RAF reports e.g.
+    # 4416x2944 for a 7728x5152 camera) - read the true rendered dimensions
+    # from the RAW header instead. Imported lazily: raw.py pulls in numpy/rawpy,
+    # which this module otherwise doesn't need.
+    from app.services.raw import is_raw, raw_dimensions
+
+    if is_raw(path):
+        dims = raw_dimensions(path)
+        if dims:
+            width, height = dims
+
     shutter = metadata.get("EXIF:ExposureTime")
     return ExifData(
         width=width,

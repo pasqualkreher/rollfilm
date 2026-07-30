@@ -225,6 +225,7 @@ function Slider({
   step,
   format,
   resetValue = 0,
+  uiScale = 1,
 }: {
   label: string;
   value: number;
@@ -237,20 +238,26 @@ function Slider({
   // Value a double-click resets to - the field's real default, which isn't
   // always 0 (grain size, vignette midpoint/feather, sharpness threshold).
   resetValue?: number;
+  // Display divisor (ScalarDef.uiScale): the slider shows value/uiScale while
+  // onChange/value stay in the stored full-range units.
+  uiScale?: number;
 }) {
+  const uiValue = value / uiScale;
+  // Saved edits can hold odd internal values (uiValue x.5) - display rounded.
+  const uiShown = Math.round(uiValue);
   return (
     <label className="editor-slider">
       <span className="editor-slider-head">
         <span>{label}</span>
-        <span className="editor-slider-val">{format ? format(value) : value > 0 ? `+${value}` : value}</span>
+        <span className="editor-slider-val">{format ? format(uiValue) : uiShown > 0 ? `+${uiShown}` : uiShown}</span>
       </span>
       <input
         type="range"
-        min={min}
-        max={max}
+        min={min / uiScale}
+        max={max / uiScale}
         step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        value={uiValue}
+        onChange={(e) => onChange(Number(e.target.value) * uiScale)}
         onDoubleClick={() => onChange(resetValue)}
         onKeyDown={(e) => {
           // Up/down walk the slider list; left/right keep the native "nudge
@@ -558,11 +565,15 @@ export function PhotoEditor({ image, onClose }: Props) {
         const blob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, "full");
         if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
         await drawBlob(blob, seq, false);
-        // Zoomed in, the bounded settle base still shows upscaled - chase it
-        // with the TRUE full-resolution render (like the lightbox's full.jpg).
+        // Chase the bounded settle base with the TRUE full-resolution render
+        // (like the lightbox's full.jpg): always for RAWs - their 2600px settle
+        // base comes from a half-size demosaic, so only the native render shows
+        // the real sensor detail - and for other formats when zoomed in, where
+        // the bounded base would show upscaled. Cheap to repeat per photo: the
+        // backend caches the native linear base for the image being edited.
         // Same abort controller: any new edit/drag cancels it; the seq guard
         // drops it if a newer frame was painted while it rendered.
-        if (zoomedRef.current) {
+        if (zoomedRef.current || image.file_type === "raw") {
           const nblob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, "native");
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
           await drawBlob(nblob, seq, false);
@@ -571,7 +582,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         // Non-fatal: the accurate preview is already on screen.
       }
     }, 350);
-  }, [image.id, drawBlob]);
+  }, [image.id, image.file_type, drawBlob]);
 
   // The live-preview pump. It renders the *latest* edit state, one request at a
   // time - never a backlog of superseded renders on the (uninterruptible) numpy
@@ -1442,6 +1453,7 @@ export function PhotoEditor({ image, onClose }: Props) {
               max={spec.max}
               step={spec.step}
               resetValue={spec.def}
+              uiScale={spec.uiScale}
               format={field.format}
               onChange={(v) => setAdj((a) => ({ ...a, [field.key]: v }))}
             />
@@ -2267,6 +2279,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                     max={spec.max}
                     step={spec.step}
                     resetValue={spec.def}
+                    uiScale={spec.uiScale}
                     format={field.format}
                     onChange={(v) => updateMaskAdjust(selectedMask.id, field.key, v)}
                   />

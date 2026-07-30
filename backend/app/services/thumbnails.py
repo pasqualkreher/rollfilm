@@ -965,16 +965,18 @@ def _display_color_block(arr: np.ndarray, adj: dict) -> np.ndarray:
     # Saturation is a plain linear chroma scale; Vibrance protects already-vivid
     # colours (and skin tones) by weighting the boost toward muted pixels -
     # RapidRAW keeps the two as separate controls.
+    # Both scale factors are floored at zero: the sliders reach -200, and past
+    # -100 the image should settle at grayscale, not invert its chroma.
     if s:
         luma = (arr @ _LUMA)[..., None]
-        arr = luma + (arr - luma) * (1.0 + s)
+        arr = luma + (arr - luma) * max(1.0 + s, 0.0)
     if vib:
         luma = (arr @ _LUMA)[..., None]
         # Chroma (distance from the grey axis) estimates how saturated a pixel
         # already is; muted pixels get most of the push.
         chroma = np.abs(arr - luma).max(axis=-1, keepdims=True)
         weight = 1.0 - np.clip(chroma * 1.4, 0.0, 1.0) * 0.6
-        arr = luma + (arr - luma) * (1.0 + vib * weight)
+        arr = luma + (arr - luma) * np.maximum(1.0 + vib * weight, 0.0)
 
     return np.clip(arr, 0.0, 1.0)
 
@@ -1492,7 +1494,10 @@ FULL_EDITOR_PREVIEW_PX = 2600
 # serialising it keeps peak RAM to a single pipeline's worth even when a flurry
 # of slider settles each kick one off (the stale ones are aborted client-side,
 # but a numpy pass already running can't be interrupted).
-_full_render_lock = threading.Lock()
+# Reentrant so generate_full/export_jpeg_bytes can hold it across their
+# "did a concurrent render already land full.jpg?" recheck while the render
+# they then call (render_edited_image) re-acquires it.
+_full_render_lock = threading.RLock()
 
 
 def _downscale_linear(arr: np.ndarray, max_px: int) -> np.ndarray:
@@ -1699,16 +1704,49 @@ def render_edited_image(
     straighten: float = 0.0,
     persp_h: int = 0,
     persp_v: int = 0,
+    max_px: int | None = None,
 ) -> PILImage.Image:
     """TRUE full-resolution RGB render with the given lens/geometry and tonal
     edits baked in - the only path that demosaics a RAW at full sensor size
     (half_size=False). Used for the flattened edited *copy* and the 100%-zoom
     full.jpg. Serialised by _full_render_lock: a 40MP linear float32 frame is
-    ~460MB, so exactly one of these may be in flight at a time."""
+    ~460MB, so exactly one of these may be in flight at a time.
+
+    `max_px` is a decode-economy hint for bounded renders (export with a size
+    cap): decoding the full sensor only to throw most of it away dominated
+    sized-export time. The decode target is padded for the crop (the cap
+    applies to the *cropped* frame) plus a margin for the straighten/
+    perspective trims, so the output never comes out softer than an
+    unbounded render downscaled to the same cap. A RAW drops to the 4x
+    cheaper half-size demosaic only when that still covers the target;
+    JPEG/PNG decode at the smallest sufficient DCT scale."""
     from app.services.filesystem import resolve_image_path
 
+    path = resolve_image_path(image)
+    decode_px = None
+    if max_px:
+        pad = 1.0
+        if crop:
+            pad = 1.0 / max(0.05, min(float(crop[2]), float(crop[3])))
+        decode_px = int(max_px * pad * 1.3)
+
     with _full_render_lock:
-        lin, gain = raw_service.load_linear_base(resolve_image_path(image), half_size=False)
+        if decode_px is None:
+            # Unbounded render: reuse (and fill) the editor's native-base cache
+            # - the full-resolution linear decode kept for 100% zoom. "Save
+            # copy" after working zoomed in, and the full.jpg warmer right
+            # after a save, then skip the ~14s demosaic entirely; a cold first
+            # render pays it once and leaves the base for the next one. It's
+            # the same float16 base the editor's 100% preview renders from, so
+            # the saved pixels match what the user saw there exactly.
+            lin16, gain = _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
+            lin = lin16.astype(np.float32)
+        else:
+            half_size = False
+            if raw_service.is_raw(path):
+                dims = raw_service.raw_dimensions(path)
+                half_size = bool(dims and max(dims) // 2 >= decode_px)
+            lin, gain = raw_service.load_linear_base(path, half_size=half_size, max_px=decode_px)
         if distortion:
             lin = apply_distortion_array(lin, distortion)
         lin = apply_edits_array(lin, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
@@ -1739,19 +1777,159 @@ def render_full_from_stored_edits(image: "Image", max_size: int | None = None) -
         straighten=float(getattr(image, "edit_straighten", 0.0) or 0.0),
         persp_h=int(getattr(image, "edit_persp_h", 0) or 0),
         persp_v=int(getattr(image, "edit_persp_v", 0) or 0),
+        max_px=max_size,
     )
     if max_size and max(rendered.size) > max_size:
         rendered.thumbnail((max_size, max_size), PILImage.LANCZOS)
     return rendered
 
 
+# Background warmer for the full.jpg cache: after an edit save, pre-render the
+# 100%-zoom/export JPEG so the user's next export (or 100% zoom) of that photo
+# is near-instant instead of paying the ~14s full RAW render. One daemon
+# worker, latest-state-wins per image, and a small delay so a burst of rapid
+# saves coalesces into one render. The render itself serialises on
+# _full_render_lock like every other native-resolution render.
+_FULL_WARM_DELAY_S = 4.0
+_full_warm_lock = threading.Lock()
+_full_warm_pending: set[str] = set()
+_full_warm_thread: "threading.Thread | None" = None
+
+
+def warm_full_cache(image_id: str) -> None:
+    global _full_warm_thread
+    with _full_warm_lock:
+        _full_warm_pending.add(image_id)
+        if _full_warm_thread is None or not _full_warm_thread.is_alive():
+            _full_warm_thread = threading.Thread(target=_full_warm_run, name="full-warm", daemon=True)
+            _full_warm_thread.start()
+
+
+def _full_warm_run() -> None:
+    import time as _time
+
+    from app.db.session import SessionLocal
+
+    while True:
+        _time.sleep(_FULL_WARM_DELAY_S)
+        with _full_warm_lock:
+            if not _full_warm_pending:
+                return
+            image_id = _full_warm_pending.pop()
+        try:
+            # A newer save invalidates full.jpg (generate_derivatives unlinks
+            # it), so an existing file is always current - nothing to do.
+            if (derivative_dir(image_id) / "full.jpg").exists():
+                continue
+            db = SessionLocal()
+            try:
+                from app.db.models import Image as ImageRow
+
+                image = db.get(ImageRow, image_id)
+                if image is not None and image.deleted_at is None:
+                    generate_full(image)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("full.jpg warm-up failed for %s", image_id)
+
+
+def _encode_jpeg_file(path: Path, quality: int, max_size: int | None) -> bytes:
+    """Decode an already-finished JPEG/PNG and re-encode it at the export
+    quality/size - the cheap tail shared by every export fast path. draft()
+    must run before any pixel access (it picks the DCT decode scale), and its
+    target is orientation-agnostic (long edge), so calling it on the
+    pre-transpose size is fine."""
+    im = PILImage.open(path)
+    if max_size:
+        w, h = im.size
+        long_edge = max(w, h)
+        if long_edge > max_size:
+            scale = max_size / long_edge
+            im.draft("RGB", (max(1, round(w * scale)), max(1, round(h * scale))))
+    # full.jpg carries no orientation tag (a no-op); an untouched original
+    # does, and the render pipeline honours it - so must the fast path.
+    im = ImageOps.exif_transpose(im).convert("RGB")
+    if max_size and max(im.size) > max_size:
+        im.thumbnail((max_size, max_size), PILImage.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _is_untouched(image: "Image") -> bool:
+    """No geometry edits and a neutral develop object. For a gain-1.0 source
+    (JPEG/PNG) the whole render pipeline is then an exact identity - the tone
+    block's own comment: "neutral JPEGs (g=1) pass through untouched"."""
+    return (
+        not image.edit_rotation
+        and image.edit_crop_x is None
+        and not (getattr(image, "edit_distortion", 0) or 0)
+        and not bool(getattr(image, "edit_flip_h", False))
+        and not bool(getattr(image, "edit_flip_v", False))
+        and not float(getattr(image, "edit_straighten", 0.0) or 0.0)
+        and not int(getattr(image, "edit_persp_h", 0) or 0)
+        and not int(getattr(image, "edit_persp_v", 0) or 0)
+        and develop.is_neutral(adjustments_from_image(image))
+    )
+
+
+def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None) -> bytes:
+    """Export-optimised JPEG bytes of a photo with its saved edits baked in.
+
+    Prefers the cached 100%-zoom full.jpg - the exact full-resolution pixels
+    the lightbox shows, invalidated whenever the edit changes - because
+    decoding + re-encoding a finished JPEG takes ~1-2s where the true render
+    takes ~14s per 40MP RAW (single-threaded X-Trans demosaic). An untouched
+    JPEG/PNG skips the render outright: the neutral pipeline reproduces the
+    original pixels exactly, so re-encoding the original is the same output
+    at a tenth of the cost. When no fast path applies the true render runs
+    once and *fills* the cache, so every following export (and the lightbox's
+    100% zoom) of that photo is fast."""
+    from app.services.filesystem import resolve_image_path
+
+    full_path = derivative_dir(image.id) / "full.jpg"
+    if full_path.exists():
+        return _encode_jpeg_file(full_path, quality, max_size)
+
+    source_path = resolve_image_path(image)
+    if not raw_service.is_raw(source_path) and _is_untouched(image):
+        return _encode_jpeg_file(source_path, quality, max_size)
+
+    with _full_render_lock:
+        # A concurrent native render (the post-save warmer, the lightbox /full
+        # endpoint, a sibling export) may have landed full.jpg while this
+        # thread waited on the lock. Without the recheck the "edit, export
+        # right away" flow rendered the same 14s frame twice back to back.
+        if full_path.exists():
+            return _encode_jpeg_file(full_path, quality, max_size)
+        rendered = render_full_from_stored_edits(image, max_size=max_size)
+        buf = io.BytesIO()
+        rendered.save(buf, "JPEG", quality=quality)
+        data = buf.getvalue()
+        # Only a full-resolution render is a valid 100%-zoom cache; a sized
+        # export was decoded economically (possibly the half-size demosaic).
+        if not max_size:
+            try:
+                _save_atomic(rendered, full_path, quality=90)
+            except Exception:
+                logger.exception("Could not fill the full.jpg cache for %s", image.id)
+        return data
+
+
 def generate_full(image: "Image") -> Path:
     """Render + cache the full-resolution edited JPEG (for true 100% zoom in the
     lightbox), returning its path. Cheap to serve once cached; cleared whenever
-    the edit changes (see generate_derivatives)."""
+    the edit changes (see generate_derivatives). Holding the render lock across
+    an existence recheck dedupes concurrent callers (warmer, /full endpoint,
+    export): the second one waits, then serves the first one's file instead of
+    rendering the same pixels again."""
     out = derivative_dir(image.id) / "full.jpg"
-    rendered = render_full_from_stored_edits(image)
-    _save_atomic(rendered, out, quality=90)
+    with _full_render_lock:
+        if out.exists():
+            return out
+        rendered = render_full_from_stored_edits(image)
+        _save_atomic(rendered, out, quality=90)
     return out
 
 
