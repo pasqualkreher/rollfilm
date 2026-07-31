@@ -30,6 +30,11 @@
       }
       .wrap {
         height: 100%;
+        box-sizing: border-box;
+        /* Real breathing room above the logo and below the status - without
+           it, content taller than the window makes the centred flex column
+           overflow both edges and the logo sits glued to the top. */
+        padding: 22px 18px;
         display: flex;
         flex-direction: column;
         align-items: center;

@@ -1737,6 +1737,9 @@ export function PhotoEditor({ image, onClose }: Props) {
                 height: `${drawn!.height * 100}%`,
               }}
             >
+              {/* The composition grid lives INSIDE the crop box while cropping -
+                  it guides the frame being composed, not the discarded area. */}
+              <GridLines type={gridOverlay} />
               {/* Visual handles only - hit-testing happens on the canvas so the
                   handles stay pointer-transparent and the drag never breaks. */}
               <span className="crop-handle nw" />
@@ -1753,7 +1756,9 @@ export function PhotoEditor({ image, onClose }: Props) {
               )}
             </div>
           )}
-          {!zoomed && <GridLines type={gridOverlay} />}
+          {/* While a crop is being drawn the grid renders inside the crop box
+              instead (see above) - never both at once. */}
+          {!zoomed && !(cropMode && hasDrawnCrop) && <GridLines type={gridOverlay} />}
           {/* Selected-mask guide + editable handles, transformed to track the
               canvas under zoom/pan. aspect keeps the round handles round on
               non-square images; cursor draws the brush-size ring. */}

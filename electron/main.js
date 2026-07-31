@@ -285,9 +285,10 @@ function movePath(src, dest) {
 function createSplash() {
   splashWindow = new BrowserWindow({
     width: 380,
-    // Tall enough for logo + spinner + title + version + status incl. the
-    // bottom padding - a smaller box makes the flex column squash the spinner.
-    height: 232,
+    // Tall enough for logo + spinner + title + version + a two-line status
+    // plus the wrap's 22px top/bottom padding - a smaller box makes the flex
+    // column overflow and glues the logo to the top edge.
+    height: 288,
     frame: false,
     resizable: false,
     fullscreenable: false,
