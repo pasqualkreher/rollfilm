@@ -41,7 +41,7 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 ### Library & import
 - **Staged import wizard** — uploads are staged asynchronously, nothing blocks while you keep selecting photos
 - **RAW support** (via rawpy) with automatic RAW+JPEG pairing
-- **EXIF extraction** (ExifTool) and reverse geocoding of GPS coordinates to country/place
+- **EXIF extraction** (ExifTool) — capture date, camera, **lens**, exposure data — and reverse geocoding of GPS coordinates to country/place
 - **Near-duplicate detection** during import using perceptual hashes
 - Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
 - **Trash** with configurable retention and automatic background purge
@@ -49,6 +49,7 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 ### Search & browsing
 - **Semantic search** — describe what you're looking for in natural language ("sunset at the beach", "dog in the snow"). Powered by CLIP embeddings stored in SQLite via `sqlite-vec`, fully local, no cloud API
 - Image-to-image similarity search
+- **Gear-aware filters** — narrow the library by camera, lens or a focal-length range slider; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot)
 - **Map view** (Leaflet) of all geotagged photos
 - Timeline scrubber, thumbnail grid, lightbox
 - **20+ light & dark color themes** — from a clean Light/Dark to Sepia, Nord, Forest and more

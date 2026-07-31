@@ -136,7 +136,10 @@ export function Help() {
         <ul>
           <li>
             <strong>Filters:</strong> album, minimum star rating, color label, tags (a photo must
-            carry <em>all</em> selected tags) and a capture-date range. "Clear" resets everything.
+            carry <em>all</em> selected tags), camera, lens, a focal-length range slider and a
+            capture-date range. The options <strong>cross-filter</strong> each other: pick a camera
+            and the lens and focal-length choices narrow to what that camera actually shot. "Clear"
+            resets everything.
           </li>
           <li>
             <strong>View mode:</strong> show RAW + JPEG, only JPEGs, or only RAWs. With{" "}
@@ -255,11 +258,13 @@ export function Help() {
         <H id="photo-view">The photo view</H>
         <p>
           Click any photo to open it. Scroll or pinch to zoom toward the cursor, drag to pan,
-          double-click to jump between fit and 100%. Below the photo: its EXIF details, tags, albums,
-          a <strong>"Similar photos"</strong> strip (found by visual similarity), and{" "}
-          <strong>"Export…"</strong> — a full-resolution JPEG with your edits baked in at a quality
-          and size you choose, or the original file 1:1 with all meta tags (several photos at once
-          export from the Selects page).
+          double-click to jump between fit and 100%. The panel beside the photo holds its EXIF
+          details (capture date, camera, <strong>lens</strong>, ISO, aperture, shutter, focal
+          length), tags, albums, a <strong>"Similar photos"</strong> strip (found by visual
+          similarity), and <strong>"Export…"</strong> — a full-resolution JPEG with your edits baked
+          in at a quality and size you choose, or the original file 1:1 with all meta tags (several
+          photos at once export from the Selects page). The <strong>trash can</strong> next to the
+          file name deletes the photo (see "Deleting &amp; the Trash").
         </p>
 
         <H id="editing">Editing photos</H>
