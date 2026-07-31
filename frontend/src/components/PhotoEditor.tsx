@@ -287,6 +287,25 @@ function computeHistBins(img: ImageData): Uint32Array[] {
   return bins;
 }
 
+// Histogram readback goes through a small scratch canvas: the preview is
+// downscaled to ~120k pixels first, so getImageData is a fixed small copy
+// instead of a synchronous multi-megapixel readback of the display canvas.
+// That readback cost was why the histogram used to be skipped during drags;
+// at this size it can run on every scrub frame.
+let histScratch: HTMLCanvasElement | null = null;
+function computeHistBinsFromBitmap(bmp: ImageBitmap): Uint32Array[] | null {
+  const scale = Math.min(1, Math.sqrt(120000 / (bmp.width * bmp.height)));
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  histScratch ??= document.createElement("canvas");
+  histScratch.width = w;
+  histScratch.height = h;
+  const ctx = histScratch.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(bmp, 0, 0, w, h);
+  return computeHistBins(ctx.getImageData(0, 0, w, h));
+}
+
 // A live RGB histogram (Lightroom/RapidRAW-style): screen-blended channel fills,
 // sqrt scaling so shadow/highlight detail stays readable next to midtone peaks.
 // Driven by `bins` from state so it survives being unmounted/remounted as
@@ -579,7 +598,10 @@ export function PhotoEditor({ image, onClose }: Props) {
       fitCanvasToStage();
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
-      if (withHistogram) setHistBins(computeHistBins(ctx.getImageData(0, 0, bmp.width, bmp.height)));
+      if (withHistogram) {
+        const bins = computeHistBinsFromBitmap(bmp);
+        if (bins) setHistBins(bins);
+      }
     } finally {
       // Release the decoded bitmap immediately - relying on GC leaked dozens of
       // full frames per editing session (every scrub tick decodes a new one).
@@ -654,17 +676,17 @@ export function PhotoEditor({ image, onClose }: Props) {
           // is stuck" into "instant preview, sharpens a moment later".
           if (!scrub && slowAccurate.current) {
             const quick = await api.images.editorPreview(image.id, edits, ctrl.signal, "scrub");
-            await drawBlob(quick, seq, false);
+            await drawBlob(quick, seq, true);
             setLoading(false);
             setReady(true);
           }
-          // Skip the histogram on scrub frames: getImageData is a synchronous
-          // full-canvas readback, and paying it on every frame of a drag is a
-          // large part of drag jank. The accurate render on release updates it.
+          // The histogram updates on every frame, scrub frames included, so it
+          // tracks the sliders live - cheap now that it reads a downscaled
+          // scratch canvas instead of the full preview canvas.
           const t0 = performance.now();
           const blob = await api.images.editorPreview(image.id, edits, ctrl.signal, scrub ? "scrub" : "fast");
           if (!scrub) slowAccurate.current = performance.now() - t0 > 300;
-          await drawBlob(blob, seq, !scrub);
+          await drawBlob(blob, seq, true);
           setError(null);
           setLoading(false);
           setReady(true);
