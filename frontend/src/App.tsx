@@ -85,8 +85,9 @@ function ImportNavLink({ onNavigate }: { onNavigate?: () => void }) {
   // While uploading show live progress - the same number as the wizard's
   // progress bar (see effectiveUploadPct), so the two can never disagree.
   // A staged-but-unreviewed batch gets a dot so it's obvious from anywhere
-  // that photos are waiting for review.
-  const suffix = isUploading ? ` (${effectiveUploadPct ?? 0}%)` : sessionId ? " •" : "";
+  // that photos are waiting for review. Non-breaking spaces keep the suffix
+  // glued to the label - a narrow tab row must not wrap it onto its own line.
+  const suffix = isUploading ? `\u00A0(${effectiveUploadPct ?? 0}%)` : sessionId ? "\u00A0•" : "";
   return (
     <NavLink
       to="/import"
@@ -106,7 +107,8 @@ function SelectsNavLink({ onNavigate }: { onNavigate?: () => void }) {
   const { count } = useSelects();
   return (
     <NavLink to="/selects" onClick={onNavigate}>
-      Selects{count > 0 ? ` (${count})` : ""}
+      {/* Non-breaking space: the count must never wrap onto its own line. */}
+      Selects{count > 0 ? `\u00A0(${count})` : ""}
     </NavLink>
   );
 }
