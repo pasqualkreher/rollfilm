@@ -166,6 +166,9 @@ def _filtered_images_query(
     rating_min: int | None,
     color_label: ColorLabel | None,
     camera_model: str | None,
+    lens_model: str | None,
+    focal_min: float | None,
+    focal_max: float | None,
     country: str | None,
     date_from: datetime | None,
     date_to: datetime | None,
@@ -202,6 +205,15 @@ def _filtered_images_query(
         query = query.filter(Image.color_label == color_label)
     if camera_model:
         query = query.filter(Image.camera_model == camera_model)
+    if lens_model:
+        query = query.filter(Image.lens_model == lens_model)
+    # Focal range from the filter slider. The bounds the client sends back are
+    # the facet values, which are rounded to 0.1mm - widen by half that so a
+    # stored 8.83 still matches its displayed "8.8" endpoint.
+    if focal_min is not None:
+        query = query.filter(Image.focal_length >= focal_min - 0.05)
+    if focal_max is not None:
+        query = query.filter(Image.focal_length <= focal_max + 0.05)
     if country == geocode.NO_LOCATION:
         query = query.filter(Image.gps_lat.is_(None))
     elif country:
@@ -248,6 +260,9 @@ def list_images(
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
+    lens_model: str | None = None,
+    focal_min: float | None = None,
+    focal_max: float | None = None,
     country: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
@@ -259,7 +274,7 @@ def list_images(
 ):
     query = _filtered_images_query(
         db, current_user, view_mode, album_id, rating_min, color_label,
-        camera_model, country, date_from, date_to, tags,
+        camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
     )
     # Newest capture first. The extra keys make the order total: burst shots
     # share the same capture second and photos without any capture date all
@@ -285,6 +300,9 @@ def library_index(
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
+    lens_model: str | None = None,
+    focal_min: float | None = None,
+    focal_max: float | None = None,
     country: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
@@ -304,7 +322,7 @@ def library_index(
     majority) - the client substitutes its own default-version constant."""
     query = _filtered_images_query(
         db, current_user, view_mode, album_id, rating_min, color_label,
-        camera_model, country, date_from, date_to, tags,
+        camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
     )
     rows = (
         query.with_entities(
@@ -349,7 +367,7 @@ def geo_index(
     clusters these client-side per zoom level, so it needs the full set, not a
     page. Hand-serialized for the same reason as /images/index."""
     query = _filtered_images_query(
-        db, current_user, "combined", None, None, None, None, None, None, None, None
+        db, current_user, "combined", None, None, None, None, None, None, None, None, None, None, None
     )
     rows = (
         query.with_entities(
@@ -382,6 +400,9 @@ def count_images(
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
+    lens_model: str | None = None,
+    focal_min: float | None = None,
+    focal_max: float | None = None,
     country: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
@@ -394,50 +415,118 @@ def count_images(
     (filtered) library, not just the pages fetched so far."""
     query = _filtered_images_query(
         db, current_user, view_mode, album_id, rating_min, color_label,
-        camera_model, country, date_from, date_to, tags,
+        camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
     )
     return schemas.ImageCountOut(count=query.count())
 
 
 @router.get("/facets", response_model=schemas.LibraryFacets)
-def list_facets(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Distinct values for the filter dropdowns: cameras and regions present in
-    the caller's library, each with a photo count. Regions are reverse-geocoded
-    lazily here for any geotagged photo not yet resolved, so they populate
-    without a separate maintenance pass."""
+def list_facets(
+    view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
+    album_id: str | None = None,
+    rating_min: int | None = None,
+    color_label: ColorLabel | None = None,
+    camera_model: str | None = None,
+    lens_model: str | None = None,
+    focal_min: float | None = None,
+    focal_max: float | None = None,
+    country: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    tags: list[str] | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Distinct values for the filter dropdowns, each with a photo count.
+    Cross-filtered: every facet is computed under all the *other* active
+    filters but never its own - picking a camera immediately narrows the lens
+    and focal-length options to what that camera actually shot, while the
+    camera list itself keeps its alternatives selectable. Regions are
+    reverse-geocoded lazily here for any geotagged photo not yet resolved, so
+    they populate without a separate maintenance pass."""
     base = db.query(Image).filter(Image.owner_id == current_user.id, Image.deleted_at.is_(None))
     base = sources_service.exclude_unavailable(
         base, sources_service.unavailable_source_ids(db, current_user.id)
     )
 
     # Backfill any geotagged photos missing a country (e.g. imported before this
-    # feature, or restored from a backup), then commit before counting.
+    # feature, or restored from a backup), then commit before counting. Runs on
+    # the unfiltered library so a filtered view can't leave stragglers.
     missing = base.filter(Image.gps_lat.isnot(None), Image.gps_country.is_(None)).all()
     if missing and geocode.annotate_images(missing):
         db.commit()
 
+    def scoped(*, without: str) -> "Query":
+        """The current filter set with one dimension (the facet's own) lifted."""
+        return _filtered_images_query(
+            db, current_user, view_mode, album_id, rating_min, color_label,
+            None if without == "camera" else camera_model,
+            None if without == "lens" else lens_model,
+            None if without == "focal" else focal_min,
+            None if without == "focal" else focal_max,
+            None if without == "country" else country,
+            date_from, date_to, tags,
+        )
+
     cameras = [
         schemas.Facet(value=value, count=count)
         for value, count in (
-            base.with_entities(Image.camera_model, func.count(Image.id))
+            scoped(without="camera")
+            .with_entities(Image.camera_model, func.count(Image.id))
             .filter(Image.camera_model.isnot(None), Image.camera_model != "")
             .group_by(Image.camera_model)
             .order_by(func.count(Image.id).desc())
             .all()
         )
     ]
+    lenses = [
+        schemas.Facet(value=value, count=count)
+        for value, count in (
+            scoped(without="lens")
+            .with_entities(Image.lens_model, func.count(Image.id))
+            .filter(Image.lens_model.isnot(None), Image.lens_model != "")
+            .group_by(Image.lens_model)
+            .order_by(func.count(Image.id).desc())
+            .all()
+        )
+    ]
+    # Focal lengths grouped to 0.1mm (matches the filter's tolerance) and sorted
+    # numerically - the slider's stops; values formatted for display ("23", not
+    # "23.0").
+    focal_expr = func.round(Image.focal_length, 1)
+    focal_lengths = [
+        schemas.Facet(
+            value=str(int(value)) if float(value).is_integer() else str(value),
+            count=count,
+        )
+        for value, count in (
+            scoped(without="focal")
+            .with_entities(focal_expr, func.count(Image.id))
+            .filter(Image.focal_length.isnot(None), Image.focal_length > 0)
+            .group_by(focal_expr)
+            .order_by(focal_expr.asc())
+            .all()
+        )
+    ]
+    region_base = scoped(without="country")
     regions = [
         schemas.Facet(value=value, count=count)
         for value, count in (
-            base.with_entities(Image.gps_country, func.count(Image.id))
+            region_base.with_entities(Image.gps_country, func.count(Image.id))
             .filter(Image.gps_country.isnot(None))
             .group_by(Image.gps_country)
             .order_by(func.count(Image.id).desc())
             .all()
         )
     ]
-    no_location = base.filter(Image.gps_lat.is_(None)).count()
-    return schemas.LibraryFacets(cameras=cameras, regions=regions, no_location_count=no_location)
+    no_location = region_base.filter(Image.gps_lat.is_(None)).count()
+    return schemas.LibraryFacets(
+        cameras=cameras,
+        lenses=lenses,
+        focal_lengths=focal_lengths,
+        regions=regions,
+        no_location_count=no_location,
+    )
 
 
 @router.get("/trash", response_model=list[schemas.ImageOut])

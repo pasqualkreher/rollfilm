@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { BorgTestResult, ImmichSyncMode, ImmichTestResult } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
+import { IconX } from "../components/Icons";
 import { SKINS, useTheme } from "../state/theme";
 import { useCorners } from "../state/corners";
 import { useTasks } from "../state/tasks";
@@ -217,7 +218,7 @@ function AppearanceSetting() {
                 Appearance
               </h3>
               <button className="modal-close" onClick={() => setOpen(false)} aria-label="Close">
-                ✕
+                <IconX size={14} />
               </button>
             </div>
             <div className="theme-modal-body">

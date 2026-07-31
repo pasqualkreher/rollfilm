@@ -17,6 +17,7 @@ import { useAppDialogs } from "../components/AppDialogs";
 import { useTasks } from "../state/tasks";
 import { useMergePairs } from "../state/viewPrefs";
 import { useTransientMessage } from "../utils/transientMessage";
+import { IconChevronDown } from "../components/Icons";
 
 // Human-readable "time remaining" for the import ETA (e.g. "45s", "2m 10s").
 function formatEta(seconds: number): string {
@@ -567,7 +568,7 @@ export function ImportWizard() {
                 aria-expanded={importMenuOpen}
               >
                 {!isUploading
-                  ? "Import photos ▾"
+                  ? <>Import photos <IconChevronDown size={12} /></>
                   : folderImportActive
                     ? totalFileCount
                       ? `Importing... ${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}`

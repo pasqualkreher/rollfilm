@@ -4,6 +4,100 @@ import { ViewModeToggle } from "./ViewModeToggle";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { ViewPrefsControls } from "./ViewPrefsControls";
 import { TagFilter } from "./TagFilter";
+import { FilterChip } from "./FilterChip";
+import { Dropdown } from "./Dropdown";
+import { IconFilter } from "./Icons";
+
+// Dual-thumb slider over the focal lengths actually present in the library
+// (the facet's sorted, formatted mm values are its stops). Dragging both
+// thumbs to the outer ends means "any" and clears the filter.
+function FocalRangeSlider({
+  options,
+  min,
+  max,
+  onChange,
+}: {
+  options: Facet[];
+  min: string;
+  max: string;
+  onChange: (min: string, max: string) => void;
+}) {
+  const values = options.map((o) => parseFloat(o.value));
+  const last = values.length - 1;
+
+  // Selected bounds as slider positions. The stops shift under cross-filtering
+  // (picking a camera narrows them), so snap a stored bound to the nearest
+  // remaining stop rather than requiring an exact match.
+  const toIndex = (bound: string, fallback: number) => {
+    if (!bound) return fallback;
+    const num = parseFloat(bound);
+    let best = fallback;
+    let bestDist = Infinity;
+    values.forEach((v, i) => {
+      const d = Math.abs(v - num);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    });
+    return best;
+  };
+  const lo = toIndex(min, 0);
+  const hi = toIndex(max, last);
+
+  const commit = (nextLo: number, nextHi: number) => {
+    if (nextLo <= 0 && nextHi >= last) onChange("", "");
+    else onChange(options[nextLo].value, options[nextHi].value);
+  };
+
+  if (values.length === 0) return null;
+  if (values.length === 1) {
+    return <span className="focal-range-value">{options[0].value}mm</span>;
+  }
+
+  const active = Boolean(min || max);
+  return (
+    <div className="focal-range">
+      <span className={`focal-range-value${active ? " active" : ""}`}>
+        {active ? `${options[lo].value}mm – ${options[hi].value}mm` : "Any"}
+      </span>
+      <div className="dual-range">
+        <div className="dual-range-track" />
+        <div
+          className="dual-range-fill"
+          style={{
+            left: `${(lo / last) * 100}%`,
+            width: `${((hi - lo) / last) * 100}%`,
+          }}
+        />
+        <input
+          type="range"
+          min={0}
+          max={last}
+          step={1}
+          value={lo}
+          aria-label="Minimum focal length"
+          onChange={(e) => {
+            const v = Math.min(Number(e.target.value), hi);
+            commit(v, hi);
+          }}
+        />
+        <input
+          type="range"
+          min={0}
+          max={last}
+          step={1}
+          value={hi}
+          aria-label="Maximum focal length"
+          onChange={(e) => {
+            const v = Math.max(Number(e.target.value), lo);
+            commit(lo, v);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   viewMode: ViewMode;
@@ -30,6 +124,18 @@ interface Props {
   cameras?: Facet[];
   camera?: string;
   onCamera?: (model: string) => void;
+  // When provided, a "Lens" dropdown of the lens names present in the library
+  // is shown. `lens` is the selected name ("" = any).
+  lenses?: Facet[];
+  lens?: string;
+  onLens?: (lens: string) => void;
+  // When provided, a "Focal length" range slider over the focal lengths
+  // present in the library is shown. Bounds are the facet's formatted mm
+  // numbers ("23", "8.8"); "" = unbounded on that side.
+  focalLengths?: Facet[];
+  focalMin?: string;
+  focalMax?: string;
+  onFocalRange?: (min: string, max: string) => void;
   // When provided, a "From date – To date" range is shown that filters by
   // capture date (taken_at) with month/day precision via native date pickers.
   // Both handlers must be given to enable it. Values are ISO dates ("YYYY-MM-DD").
@@ -68,6 +174,13 @@ export function PhotoFilters({
   cameras,
   camera,
   onCamera,
+  lenses,
+  lens,
+  onLens,
+  focalLengths,
+  focalMin,
+  focalMax,
+  onFocalRange,
   dateFrom,
   dateTo,
   onDateFrom,
@@ -78,14 +191,20 @@ export function PhotoFilters({
 }: Props) {
   const showDates = Boolean(onDateFrom && onDateTo);
   const showCamera = Boolean(cameras && onCamera);
-  const isFiltering =
-    ratingMin > 0 ||
-    colorLabel !== "none" ||
-    (albumId ?? "") !== "" ||
-    (selectedTags?.length ?? 0) > 0 ||
-    (camera ?? "") !== "" ||
-    Boolean(dateFrom) ||
-    Boolean(dateTo);
+  const showLens = Boolean(lenses && onLens);
+  const showFocal = Boolean(focalLengths && onFocalRange);
+  // How many filters are engaged - shown on the closed Filter chip so the
+  // state stays visible while the menu is shut.
+  const activeCount =
+    (ratingMin > 0 ? 1 : 0) +
+    (colorLabel !== "none" ? 1 : 0) +
+    ((albumId ?? "") !== "" ? 1 : 0) +
+    ((selectedTags?.length ?? 0) > 0 ? 1 : 0) +
+    ((camera ?? "") !== "" ? 1 : 0) +
+    ((lens ?? "") !== "" ? 1 : 0) +
+    (focalMin || focalMax ? 1 : 0) +
+    (dateFrom || dateTo ? 1 : 0);
+  const isFiltering = activeCount > 0;
 
   function clearAll() {
     onRatingMin(0);
@@ -93,102 +212,159 @@ export function PhotoFilters({
     onAlbumId?.("");
     onTags?.([]);
     onCamera?.("");
+    onLens?.("");
+    onFocalRange?.("", "");
     onDateFrom?.(null);
     onDateTo?.(null);
   }
 
   return (
     <div className="filter-bar filter-bar--sticky">
-      {/* Filters: narrow down *which* photos are shown. */}
+      {/* View: how the same photos are displayed (type, size, pairing). */}
+      <div className="control-group control-group--view">
+        <ViewModeToggle value={viewMode} onChange={onViewMode} />
+        <ViewPrefsControls showMerge={showMerge} />
+        {viewExtras}
+      </div>
+
+      {/* All filters live behind one quiet "Filter" chip (funnel + count),
+          like a pro app's filter popover - the bar itself stays one calm row.
+          Inside the menu every filter gets a labelled row and full-width
+          control, where that verbosity belongs. Sits between the view
+          controls and the page actions. */}
       <div className="control-group">
-        {albums && onAlbumId && (
-          <label className="filter-field">
-            Album
-            <select value={albumId ?? ""} onChange={(e) => onAlbumId(e.target.value)}>
-              <option value="">All photos</option>
-              {albums.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+        <FilterChip
+          title="Filter photos"
+          active={isFiltering}
+          label={
+            <>
+              <IconFilter size={12} /> Filter
+              {activeCount > 0 ? ` · ${activeCount}` : ""}
+            </>
+          }
+        >
+          <div className="filter-menu">
+            {albums && onAlbumId && (
+              <div className="filter-menu-row">
+                <span className="filter-menu-label">Album</span>
+                <Dropdown
+                  ariaLabel="Album"
+                  value={albumId ?? ""}
+                  onChange={onAlbumId}
+                  options={[
+                    { value: "", label: "All photos" },
+                    ...albums.map((a) => ({ value: a.id, label: a.name })),
+                  ]}
+                />
+              </div>
+            )}
 
-        <label className="filter-field">
-          Rating
-          <select value={ratingMin} onChange={(e) => onRatingMin(Number(e.target.value))}>
-            {[0, 1, 2, 3, 4, 5].map((n) => (
-              <option key={n} value={n}>
-                {n === 0 ? "Any" : `${"★".repeat(n)}+`}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="filter-field">
-          Color
-          <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
-        </label>
-
-        {allTags && onTags && (
-          <label className="filter-field">
-            Tags
-            <TagFilter options={allTags} value={selectedTags ?? []} onChange={onTags} />
-          </label>
-        )}
-
-        {showCamera && (
-          <label className="filter-field">
-            Camera
-            <select value={camera ?? ""} onChange={(e) => onCamera?.(e.target.value)}>
-              <option value="">All cameras</option>
-              {cameras!.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.value} ({c.count})
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-
-        {showDates && (
-          <label className="filter-field">
-            Date
-            <span className="date-range">
-              <input
-                type="date"
-                value={dateFrom ?? ""}
-                max={dateTo ?? undefined}
-                onChange={(e) => onDateFrom?.(e.target.value || null)}
-                aria-label="From date"
+            <div className="filter-menu-row">
+              <span className="filter-menu-label">Rating</span>
+              <Dropdown
+                ariaLabel="Rating"
+                value={String(ratingMin)}
+                onChange={(v) => onRatingMin(Number(v))}
+                options={[0, 1, 2, 3, 4, 5].map((n) => ({
+                  value: String(n),
+                  label: n === 0 ? "Any" : `${"★".repeat(n)}+`,
+                }))}
               />
-              <span className="date-range-sep">–</span>
-              <input
-                type="date"
-                value={dateTo ?? ""}
-                min={dateFrom ?? undefined}
-                onChange={(e) => onDateTo?.(e.target.value || null)}
-                aria-label="To date"
-              />
-            </span>
-          </label>
-        )}
+            </div>
+
+            <div className="filter-menu-row">
+              <span className="filter-menu-label">Color</span>
+              <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
+            </div>
+
+            {allTags && onTags && (
+              <div className="filter-menu-row">
+                <span className="filter-menu-label">Tags</span>
+                <TagFilter options={allTags} value={selectedTags ?? []} onChange={onTags} />
+              </div>
+            )}
+
+            {showCamera && (
+              <div className="filter-menu-row">
+                <span className="filter-menu-label">Camera</span>
+                <Dropdown
+                  ariaLabel="Camera"
+                  value={camera ?? ""}
+                  onChange={(v) => onCamera?.(v)}
+                  // The selected value can drop out of the cross-filtered
+                  // options (facets refetching); keep it listed so the button
+                  // never shows a stale blank.
+                  options={[
+                    { value: "", label: "All cameras" },
+                    ...cameras!.map((c) => ({ value: c.value, label: `${c.value} (${c.count})` })),
+                    ...(camera && !cameras!.some((c) => c.value === camera)
+                      ? [{ value: camera, label: camera }]
+                      : []),
+                  ]}
+                />
+              </div>
+            )}
+
+            {showLens && (
+              <div className="filter-menu-row">
+                <span className="filter-menu-label">Lens</span>
+                <Dropdown
+                  ariaLabel="Lens"
+                  value={lens ?? ""}
+                  onChange={(v) => onLens?.(v)}
+                  options={[
+                    { value: "", label: "All lenses" },
+                    ...lenses!.map((l) => ({ value: l.value, label: `${l.value} (${l.count})` })),
+                    ...(lens && !lenses!.some((l) => l.value === lens)
+                      ? [{ value: lens, label: lens }]
+                      : []),
+                  ]}
+                />
+              </div>
+            )}
+
+            {showFocal && focalLengths!.length > 0 && (
+              <div className="filter-menu-row">
+                <span className="filter-menu-label">Focal length</span>
+                <FocalRangeSlider
+                  options={focalLengths!}
+                  min={focalMin ?? ""}
+                  max={focalMax ?? ""}
+                  onChange={(min, max) => onFocalRange?.(min, max)}
+                />
+              </div>
+            )}
+
+            {showDates && (
+              <div className="filter-menu-row">
+                <span className="filter-menu-label">Date</span>
+                <span className="date-range">
+                  <input
+                    type="date"
+                    value={dateFrom ?? ""}
+                    max={dateTo ?? undefined}
+                    onChange={(e) => onDateFrom?.(e.target.value || null)}
+                    aria-label="From date"
+                  />
+                  <span className="date-range-sep">–</span>
+                  <input
+                    type="date"
+                    value={dateTo ?? ""}
+                    min={dateFrom ?? undefined}
+                    onChange={(e) => onDateTo?.(e.target.value || null)}
+                    aria-label="To date"
+                  />
+                </span>
+              </div>
+            )}
+          </div>
+        </FilterChip>
 
         {isFiltering && (
           <button className="btn ghost btn-sm" onClick={clearAll}>
             Clear
           </button>
         )}
-      </div>
-
-      {/* View: how the same photos are displayed (type, size, pairing). Pushed
-          to the right and divided off so it reads as a distinct concern from the
-          filters above. */}
-      <div className="control-group control-group--view">
-        <ViewModeToggle value={viewMode} onChange={onViewMode} />
-        <ViewPrefsControls showMerge={showMerge} />
-        {viewExtras}
       </div>
 
       {/* Page-specific actions (Select, Select all, ...). */}

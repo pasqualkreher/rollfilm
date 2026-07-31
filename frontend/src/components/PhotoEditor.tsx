@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
+import { IconArrowLeft, IconRotate } from "./Icons";
+import { Dropdown } from "./Dropdown";
 import {
   adjustmentsFromImage,
   BAND_SWATCH,
@@ -409,9 +411,15 @@ export function PhotoEditor({ image, onClose }: Props) {
     const canvas = canvasRef.current;
     const box = stageMainRef.current;
     if (!canvas || !box || !canvas.width || !canvas.height) return;
+    // Fit into the box's CONTENT area: getBoundingClientRect includes the
+    // box's padding, so fitting against it pressed the photo flush against
+    // the frame's edges instead of leaving the padding visible.
     const rect = box.getBoundingClientRect();
-    if (rect.width < 2 || rect.height < 2) return;
-    const s = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+    const cs = getComputedStyle(box);
+    const width = rect.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const height = rect.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    if (width < 2 || height < 2) return;
+    const s = Math.min(width / canvas.width, height / canvas.height);
     canvas.style.width = `${Math.round(canvas.width * s)}px`;
     canvas.style.height = `${Math.round(canvas.height * s)}px`;
   }
@@ -1586,18 +1594,18 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   return (
     <div className="editor-overlay">
-      {/* Floating back button in the top-left corner - no header bar, so the
-          stage gets the full height. */}
-      <button
-        className="icon-btn back-btn editor-back-float"
-        onClick={onClose}
-        disabled={busy}
-        title={busy ? "Saving…" : "Back (Esc)"}
-        aria-label="Back"
-      >
-        ←
-      </button>
       <div className="editor-body">
+        {/* Back button in its own slim column left of the stage, top aligned -
+            same placement as the detail lightbox's back arrow. */}
+        <button
+          className="icon-btn editor-back-btn"
+          onClick={onClose}
+          disabled={busy}
+          title={busy ? "Saving…" : "Back (Esc)"}
+          aria-label="Back"
+        >
+          <IconArrowLeft size={16} />
+        </button>
         <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
         <div className="editor-stage-main" ref={stageMainRef}>
         {loading && <div className="editor-hint">Loading…</div>}
@@ -1794,27 +1802,23 @@ export function PhotoEditor({ image, onClose }: Props) {
           <div className="editor-accordion-body">
         {/* Composition grid overlay - its own row above rotate/crop. */}
         <div className="editor-geometry">
-          <select
+          <Dropdown
             className="editor-grid-select"
             value={gridOverlay}
-            onChange={(e) => setGridOverlay(e.target.value as GridOverlay)}
+            onChange={(v) => setGridOverlay(v as GridOverlay)}
             title="Overlay grid"
-          >
-            {GRID_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            ariaLabel="Overlay grid"
+            options={GRID_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          />
         </div>
 
         {/* Geometry */}
         <div className="editor-geometry">
           <button className="btn btn-sm" onClick={() => setRotation((r) => (r + 270) % 360)} disabled={busy} title="Rotate left 90°">
-            ⟲
+            <IconRotate size={13} className="flip-h" />
           </button>
           <button className="btn btn-sm" onClick={() => setRotation((r) => (r + 90) % 360)} disabled={busy} title="Rotate right 90°">
-            ⟳
+            <IconRotate size={13} />
           </button>
           <button
             className={`btn btn-sm${flipH ? " primary" : ""}`}
@@ -1854,18 +1858,14 @@ export function PhotoEditor({ image, onClose }: Props) {
           </button>
           {cropMode && (
             <>
-              <select
+              <Dropdown
                 className="editor-grid-select"
                 value={aspectKey}
-                onChange={(e) => pickAspect(e.target.value)}
+                onChange={pickAspect}
                 title="Crop aspect ratio"
-              >
-                {ASPECT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="Crop aspect ratio"
+                options={ASPECT_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              />
               <button className="btn btn-sm primary" disabled={!hasDrawnCrop} onClick={() => { setCrop(normalizeRect(drag!)); setCropMode(false); }}>
                 Apply
               </button>
@@ -1947,18 +1947,14 @@ export function PhotoEditor({ image, onClose }: Props) {
         {openGroup === "basic" && (
           <div className="editor-accordion-body">
             {/* Base transfer curve the tonal sliders ride on. */}
-            <select
+            <Dropdown
               className="editor-grid-select"
               value={adj.tone_mapper}
-              onChange={(e) => setAdj((a) => ({ ...a, tone_mapper: e.target.value as Adjustments["tone_mapper"] }))}
+              onChange={(v) => setAdj((a) => ({ ...a, tone_mapper: v as Adjustments["tone_mapper"] }))}
               title="Tone mapper"
-            >
-              {TONE_MAPPERS.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
+              ariaLabel="Tone mapper"
+              options={TONE_MAPPERS.map((t) => ({ value: t.value, label: t.label }))}
+            />
             {/* Live RGB histogram of the current preview, with the tonal controls. */}
             <Histogram bins={histBins} />
             {scalarSliders(sectionFields("Basic"))}
@@ -2413,25 +2409,25 @@ export function PhotoEditor({ image, onClose }: Props) {
           </div>
         ) : (
           <div className="editor-preset-row">
-            <select
+            <Dropdown
               className="editor-preset-select"
               value={selectedPreset}
-              onChange={(e) => {
-                const name = e.target.value;
+              ariaLabel="Apply preset"
+              onChange={(name) => {
                 setSelectedPreset(name);
                 const p = presets[name];
                 if (p) applyPreset(p);
               }}
-            >
-              <option value="">{Object.keys(presets).length ? "Apply a preset…" : "No presets yet"}</option>
-              {Object.keys(presets)
-                .sort()
-                .map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-            </select>
+              options={[
+                {
+                  value: "",
+                  label: Object.keys(presets).length ? "Apply a preset…" : "No presets yet",
+                },
+                ...Object.keys(presets)
+                  .sort()
+                  .map((name) => ({ value: name, label: name })),
+              ]}
+            />
             <button
               className="btn btn-sm"
               onClick={() => {

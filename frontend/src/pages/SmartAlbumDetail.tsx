@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { SmartAlbumOut } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
+import { IconArrowLeft } from "../components/Icons";
 import { collapsePairs } from "../state/viewPrefs";
 
 // Read-only view of one smart album's photos. Smart albums are virtual (no
@@ -57,7 +58,7 @@ export function SmartAlbumDetail() {
     <div className="page page-timeline">
       <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Link to="/albums" className="btn ghost">
-          ← Albums
+          <IconArrowLeft size={13} /> Albums
         </Link>
         {meta?.name ?? "Smart album"}
         {meta && <span className="count-pill">{meta.image_count} photos</span>}

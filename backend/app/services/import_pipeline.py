@@ -966,6 +966,7 @@ def commit_import_session(
                 taken_at=taken_at,
                 camera_make=exif_dict.get("camera_make"),
                 camera_model=exif_dict.get("camera_model"),
+                lens_model=exif_dict.get("lens_model"),
                 iso=to_int(exif_dict.get("iso")),
                 aperture=to_float(exif_dict.get("aperture")),
                 shutter_speed=exif_dict.get("shutter_speed"),

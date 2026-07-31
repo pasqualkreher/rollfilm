@@ -88,6 +88,16 @@ def start_background_sync() -> None:
                 logger.info(
                     "Startup RAW dimension repair: %d corrected, %d unreachable", fixed, skipped
                 )
+            # One-shot backfill of the lens name for photos imported before the
+            # lens was read from EXIF at all - same flag pattern as above so the
+            # per-file exiftool reads don't repeat on every start.
+            if get_setting(db, "lens_model_backfilled_v1") != "1":
+                filled, skipped = backfill_lens_metadata(db, LOCAL_USER_ID)
+                if skipped == 0:
+                    set_setting(db, "lens_model_backfilled_v1", "1")
+                logger.info(
+                    "Startup lens backfill: %d filled, %d unreachable", filled, skipped
+                )
         except Exception:
             logger.exception("Startup library sync failed")
         finally:
@@ -126,6 +136,57 @@ def repair_raw_dimensions(db: Session, owner_id: int) -> tuple[int, int]:
     if fixed:
         db.commit()
     return fixed, skipped
+
+
+def backfill_lens_metadata(db: Session, owner_id: int) -> tuple[int, int]:
+    """Read the lens name from EXIF for every photo that doesn't have one yet
+    (imported before the lens_model column existed). Returns (filled,
+    unreachable); unreachable files (e.g. an unmounted source root) leave the
+    backfill pending so they get their turn on a later start. EXIF reads run on
+    a small exiftool-helper pool, the same pattern as repair_capture_dates."""
+    images = (
+        db.query(Image)
+        .filter(Image.owner_id == owner_id, Image.lens_model.is_(None))
+        .all()
+    )
+    tasks = [(img, resolve_image_path(img)) for img in images]
+    reachable = [(img, path) for img, path in tasks if path.exists()]
+    skipped = len(tasks) - len(reachable)
+    if not reachable:
+        return 0, skipped
+
+    workers = min(8, max(2, (os.cpu_count() or 4)))
+    helpers = [new_helper() for _ in range(workers)]
+    helper_pool: queue.Queue = queue.Queue()
+    for h in helpers:
+        helper_pool.put(h)
+
+    def read_lens(task: tuple[Image, Path]) -> tuple[Image, str | None]:
+        img, path = task
+        helper = helper_pool.get()
+        try:
+            return img, read_exif(path, helper=helper).lens_model
+        except Exception:
+            logger.exception("lens-backfill: EXIF read failed for %s", path)
+            return img, None
+        finally:
+            helper_pool.put(helper)
+
+    filled = 0
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for img, lens in executor.map(read_lens, reachable):
+                if lens:
+                    img.lens_model = lens
+                    filled += 1
+    finally:
+        for h in helpers:
+            try:
+                h.terminate()
+            except Exception:
+                pass
+    db.commit()
+    return filled, skipped
 
 
 def sync_db_with_library(db: Session, owner_id: int) -> dict:
@@ -448,6 +509,7 @@ def _image_to_dict(image: Image, tags: list[str]) -> dict:
         "deleted_at": image.deleted_at.isoformat() if image.deleted_at else None,
         "camera_make": image.camera_make,
         "camera_model": image.camera_model,
+        "lens_model": image.lens_model,
         "iso": image.iso,
         "aperture": image.aperture,
         "shutter_speed": image.shutter_speed,
@@ -590,6 +652,8 @@ def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dic
                     ),
                     camera_make=image_data["camera_make"],
                     camera_model=image_data["camera_model"],
+                    # .get(): manifests from before the lens column carry no key.
+                    lens_model=image_data.get("lens_model"),
                     iso=image_data["iso"],
                     aperture=image_data["aperture"],
                     shutter_speed=image_data["shutter_speed"],

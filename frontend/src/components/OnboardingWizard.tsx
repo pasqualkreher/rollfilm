@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTransientMessage } from "../utils/transientMessage";
 import { ThemePicker } from "./ThemePicker";
 import { SETTINGS_TOUR_KEY } from "./SettingsTour";
+import { IconX } from "./Icons";
 
 // First-start onboarding: a short multi-step wizard shown once (completion is
 // remembered in localStorage). It walks a new user through the things that
@@ -136,7 +137,7 @@ export function OnboardingWizard() {
             </span>
           </div>
           <button className="modal-close" onClick={finish} aria-label="Skip setup">
-            ✕
+            <IconX size={14} />
           </button>
         </div>
 

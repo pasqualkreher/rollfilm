@@ -120,6 +120,7 @@ class Image(Base):
 
     camera_make: Mapped[str | None] = mapped_column(String, nullable=True)
     camera_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    lens_model: Mapped[str | None] = mapped_column(String, nullable=True)
     iso: Mapped[int | None] = mapped_column(Integer, nullable=True)
     aperture: Mapped[float | None] = mapped_column(Float, nullable=True)
     shutter_speed: Mapped[str | None] = mapped_column(String, nullable=True)

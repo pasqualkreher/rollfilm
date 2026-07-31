@@ -14,6 +14,7 @@ import { Trash } from "./pages/Trash";
 import { MapView } from "./pages/MapView";
 import { Help } from "./pages/Help";
 import { SearchBar } from "./components/SearchBar";
+import { IconGear, IconHelp } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
@@ -110,9 +111,11 @@ function SelectsNavLink({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-// One list of links used by both navs: the full row of tabs on wide windows
-// and the burger-menu dropdown on narrow ones.
-function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+// The core photo modules shown as the wide-window tab row. Settings and Help
+// are deliberately not tabs: they're utility pages, shown as small icon
+// buttons on the far right of the bar (like every pro imaging app), so the
+// module switcher stays about the photos.
+function ModuleLinks({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
       <NavLink to="/" end onClick={onNavigate}>
@@ -123,6 +126,16 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
       <ImportNavLink onNavigate={onNavigate} />
       <SelectsNavLink onNavigate={onNavigate} />
       <NavLink to="/trash" onClick={onNavigate}>Trash</NavLink>
+    </>
+  );
+}
+
+// Full list for the burger-menu dropdown on narrow windows, where the icon
+// buttons may be the only other way to Settings/Help and text reads better.
+function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <>
+      <ModuleLinks onNavigate={onNavigate} />
       <NavLink to="/settings" onClick={onNavigate}>Settings</NavLink>
       <NavLink to="/help" onClick={onNavigate}>Help</NavLink>
     </>
@@ -182,10 +195,15 @@ function TopBar() {
 
   return (
     <div className="top-bar">
+      {/* Three zones: left (brand/nav/status) and right (version/icons) carry
+          equal flex weight, so the search field between them sits exactly on
+          the bar's midpoint - and shrinks instead of overlapping when a zone
+          needs the room. */}
+      <div className="top-bar-side top-bar-side--left">
       <span className="brand">
         {/* BASE_URL ("./" in builds) keeps the path working under file:// in Electron,
     where an absolute "/rollfilm.svg" would point at the filesystem root. */}
-        <img src={`${import.meta.env.BASE_URL}rollfilm.svg`} alt="" style={{ height: 20, width: 20, verticalAlign: "-4px", marginRight: 8 }} />
+        <img src={`${import.meta.env.BASE_URL}rollfilm.svg`} alt="" style={{ height: 18, width: 18, marginRight: 7 }} />
         Rollfilm
       </span>
       <nav
@@ -193,7 +211,7 @@ function TopBar() {
         aria-disabled={locked}
         title={locked ? "Please wait until the current task finishes" : undefined}
       >
-        <NavLinks />
+        <ModuleLinks />
       </nav>
       <div
         className={`nav-burger-wrap${locked ? " nav-links--locked" : ""}`}
@@ -208,7 +226,11 @@ function TopBar() {
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((v) => !v)}
         >
-          ☰
+          {/* Crisp SVG hamburger instead of the ☰ glyph, whose weight varies by
+              platform font and looked out of place in the slimmed-down bar. */}
+          <svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">
+            <path d="M0 1h14M0 6h14M0 11h14" stroke="currentColor" strokeWidth="1.5" />
+          </svg>
           {/* Activity dot: an upload/staged batch is easy to miss while its
               nav link is hidden inside the collapsed menu. */}
           {(isUploading || sessionId) && <span className="nav-burger-dot" aria-hidden />}
@@ -227,10 +249,34 @@ function TopBar() {
         </span>
       )}
       <ImmichSyncIndicator />
+      </div>
       <SearchBar />
+      <div className="top-bar-side top-bar-side--right">
       <span className="app-version" title={`Rollfilm ${__APP_VERSION__}`}>
         v{__APP_VERSION__}
       </span>
+      <nav
+        className={`top-icon-links${locked ? " nav-links--locked" : ""}`}
+        aria-label="Settings and help"
+      >
+        <NavLink
+          to="/settings"
+          className={({ isActive }) => `top-icon-link${isActive ? " active" : ""}`}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <IconGear size={16} />
+        </NavLink>
+        <NavLink
+          to="/help"
+          className={({ isActive }) => `top-icon-link${isActive ? " active" : ""}`}
+          title="Help"
+          aria-label="Help"
+        >
+          <IconHelp size={16} />
+        </NavLink>
+      </nav>
+      </div>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
 import { preloadImage } from "../utils/preload";
+import { IconX } from "./Icons";
 
 interface Props {
   sessionId: string;
@@ -86,7 +87,7 @@ export function ImportLightbox({
   return (
     <div className="lightbox-overlay" onClick={onClose}>
       <button className="lightbox-close" onClick={onClose} aria-label="Close">
-        ✕
+        <IconX size={16} />
       </button>
 
       <button

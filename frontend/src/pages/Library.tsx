@@ -19,6 +19,7 @@ import { AlbumPicker } from "../components/AlbumPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { PhotoFilters } from "../components/PhotoFilters";
+import { Dropdown } from "../components/Dropdown";
 import { loadPresets } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
@@ -41,6 +42,9 @@ export function Library() {
   const [albumId, setAlbumId] = useState<string>("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [camera, setCamera] = useState<string>("");
+  const [lens, setLens] = useState<string>("");
+  const [focalMin, setFocalMin] = useState<string>("");
+  const [focalMax, setFocalMax] = useState<string>("");
   const [dateFrom, setDateFrom] = useState<string | null>(null);
   const [dateTo, setDateTo] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -57,9 +61,6 @@ export function Library() {
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
   const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
-  // Camera + region dropdown options, refreshed with the library so new imports
-  // (and their reverse-geocoded regions) show up.
-  const { data: facets } = useQuery({ queryKey: ["facets"], queryFn: () => api.images.facets() });
 
   // "Add to Immich" only appears when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
@@ -92,11 +93,26 @@ export function Library() {
     album_id: albumId || undefined,
     tags: selectedTags.length ? selectedTags : undefined,
     camera_model: camera || undefined,
+    lens_model: lens || undefined,
+    focal_min: focalMin || undefined,
+    focal_max: focalMax || undefined,
     // Capture-date range from the date pickers: include the whole "from" day
     // through the end of the "to" day.
     date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
     date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
   };
+
+  // Camera/lens/focal/region dropdown options, cross-filtered against the
+  // active filter set (each facet reflects what the other filters leave over)
+  // and refreshed with the library so new imports show up. Key starts with
+  // "facets" so invalidateQueries(["facets"]) still catches every variant.
+  const { data: facets } = useQuery({
+    queryKey: ["facets", filters],
+    queryFn: () => api.images.facets(filters),
+    // Keep the previous options while the cross-filtered refetch runs so the
+    // open filter menu doesn't blank/jump.
+    placeholderData: (prev) => prev,
+  });
 
   // Browse mode loads the library INDEX: one slim row per photo (id, aspect
   // ratio, date, badges) for the whole filtered library. The virtual grid
@@ -385,6 +401,16 @@ export function Library() {
         cameras={facets?.cameras}
         camera={camera}
         onCamera={setCamera}
+        lenses={facets?.lenses}
+        lens={lens}
+        onLens={setLens}
+        focalLengths={facets?.focal_lengths}
+        focalMin={focalMin}
+        focalMax={focalMax}
+        onFocalRange={(min, max) => {
+          setFocalMin(min);
+          setFocalMax(max);
+        }}
         dateFrom={dateFrom}
         dateTo={dateTo}
         onDateFrom={setDateFrom}
@@ -483,22 +509,17 @@ export function Library() {
               {developBusy ? "Working…" : "Auto develop"}
             </button>
             {presetNames.length > 0 && (
-              <select
-                className="preset-select"
+              <Dropdown
                 value=""
+                placeholder="Apply preset…"
                 disabled={developBusy}
-                onChange={(e) => {
-                  if (e.target.value) applyPresetToSelected(e.target.value);
-                }}
                 title="Apply a saved editor preset to the whole selection"
-              >
-                <option value="">Apply preset…</option>
-                {presetNames.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="Apply preset"
+                onChange={(v) => {
+                  if (v) applyPresetToSelected(v);
+                }}
+                options={presetNames.map((name) => ({ value: name, label: name }))}
+              />
             )}
             <button
               className="btn"
@@ -566,6 +587,9 @@ export function Library() {
             albumId,
             selectedTags,
             camera,
+            lens,
+            focalMin,
+            focalMax,
             dateFrom,
             dateTo,
           ])}

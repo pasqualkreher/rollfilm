@@ -12,6 +12,7 @@ import { AlbumPicker } from "../components/AlbumPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { PhotoFilters } from "../components/PhotoFilters";
+import { Dropdown } from "../components/Dropdown";
 import { loadPresets } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
@@ -499,22 +500,17 @@ export function AlbumDetail() {
               {developBusy ? "Working…" : "Auto develop"}
             </button>
             {presetNames.length > 0 && (
-              <select
-                className="preset-select"
+              <Dropdown
                 value=""
+                placeholder="Apply preset…"
                 disabled={developBusy}
-                onChange={(e) => {
-                  if (e.target.value) applyPresetToSelected(e.target.value);
-                }}
                 title="Apply a saved editor preset to the whole selection"
-              >
-                <option value="">Apply preset…</option>
-                {presetNames.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="Apply preset"
+                onChange={(v) => {
+                  if (v) applyPresetToSelected(v);
+                }}
+                options={presetNames.map((name) => ({ value: name, label: name }))}
+              />
             )}
             <ResetMenu count={selected.size} onReset={resetSelected} />
             <button className="btn" onClick={removeSelectedFromAlbum}>

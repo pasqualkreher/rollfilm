@@ -1,3 +1,5 @@
+import { IconStar } from "./Icons";
+
 interface Props {
   rating: number;
   onChange?: (rating: number) => void;
@@ -17,7 +19,7 @@ export function RatingStars({ rating, onChange }: Props) {
           }}
           aria-label={`${n} star`}
         >
-          {n <= rating ? "★" : "☆"}
+          <IconStar size={15} filled={n <= rating} />
         </button>
       ))}
     </span>

@@ -27,6 +27,7 @@ class ExifData:
     taken_at: datetime | None = None
     camera_make: str | None = None
     camera_model: str | None = None
+    lens_model: str | None = None
     iso: int | None = None
     aperture: float | None = None
     shutter_speed: str | None = None
@@ -115,6 +116,50 @@ def capture_date_from_filename(name: str) -> datetime | None:
     return None
 
 
+def _fmt_mm(value: float) -> str:
+    return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
+def _clean_lens(value) -> str | None:
+    """A displayable lens name, or None. exiftool reports missing lens tags as
+    'undef', adapted/manual lenses without electronic contacts as placeholders
+    like '0.0 mm f/0.0' or 'Unknown (0 0)' - none of which name a lens.
+
+    The helper runs with -n (no print conversion), so spec-style tags like
+    LensInfo/LensSpec arrive as bare numbers ('8.8 25.7 1.8 2.8', Sony pads
+    with extra fields) - those are formatted into '8.8-25.7mm f/1.8-2.8' here.
+    A value that is numeric but not such a spec (e.g. a raw LensType code) is
+    no name at all and is dropped."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in ("undef", "none", "unknown", "n/a"):
+        return None
+    if text.startswith("Unknown (") or text.startswith("0.0 mm"):
+        return None
+
+    try:
+        numbers = [float(t) for t in text.split()]
+    except ValueError:
+        # Contains non-numeric parts: an actual lens name.
+        return text
+    # Spec layout is min-focal, max-focal, max-aperture-wide, max-aperture-tele;
+    # Sony's LensSpec pads that with a leading/trailing byte - strip zeros from
+    # the ends until the 4-number core remains.
+    while len(numbers) > 4 and numbers[0] == 0:
+        numbers.pop(0)
+    while len(numbers) > 4 and numbers[-1] == 0:
+        numbers.pop()
+    if len(numbers) != 4 or numbers[0] <= 0:
+        return None
+    wide, tele, f_wide, f_tele = numbers
+    focal = _fmt_mm(wide) if wide == tele else f"{_fmt_mm(wide)}-{_fmt_mm(tele)}"
+    if f_wide <= 0:
+        return f"{focal}mm"
+    aperture = _fmt_mm(f_wide) if f_wide == f_tele else f"{_fmt_mm(f_wide)}-{_fmt_mm(f_tele)}"
+    return f"{focal}mm f/{aperture}"
+
+
 def _is_quarter_rotated(orientation) -> bool:
     """True when the EXIF orientation is a 90°/270° turn, meaning the stored
     pixel width/height are swapped relative to how the photo is displayed.
@@ -155,6 +200,11 @@ _EXIF_TAGS = [
     "EXIF:ModifyDate",
     "EXIF:Make",
     "EXIF:Model",
+    "EXIF:LensModel",
+    "XMP:Lens",
+    "Composite:LensID",
+    "MakerNotes:LensSpec",
+    "EXIF:LensInfo",
     "EXIF:ISO",
     "EXIF:FNumber",
     "EXIF:FocalLength",
@@ -207,6 +257,25 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
         ),
         camera_make=metadata.get("EXIF:Make"),
         camera_model=metadata.get("EXIF:Model"),
+        # First tag with a usable name wins: LensModel is the standard EXIF tag,
+        # XMP:Lens covers edited exports, Composite:LensID is exiftool's decoded
+        # maker-note lookup for RAWs that write nothing else. Fixed-lens compacts
+        # (e.g. Sony RX100) write none of those - their lens range sits in
+        # LensSpec/LensInfo ("24-70mm F1.8-2.8"), which still names the glass.
+        lens_model=next(
+            (
+                v
+                for v in (
+                    _clean_lens(metadata.get("EXIF:LensModel")),
+                    _clean_lens(metadata.get("XMP:Lens")),
+                    _clean_lens(metadata.get("Composite:LensID")),
+                    _clean_lens(metadata.get("MakerNotes:LensSpec")),
+                    _clean_lens(metadata.get("EXIF:LensInfo")),
+                )
+                if v
+            ),
+            None,
+        ),
         iso=to_int(metadata.get("EXIF:ISO")),
         aperture=to_float(metadata.get("EXIF:FNumber")),
         shutter_speed=str(shutter) if shutter not in (None, "", "undef") else None,

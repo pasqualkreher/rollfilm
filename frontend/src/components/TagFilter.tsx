@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { IconChevronDown } from "./Icons";
 
 interface Props {
   // All tag names the user can filter by.
@@ -57,7 +58,7 @@ export function TagFilter({ options, value, onChange, emptyLabel = "Any", title 
         disabled={options.length === 0}
       >
         <span className="tag-filter-btn-label">{options.length === 0 ? "No tags" : label}</span>
-        <span className="tag-filter-caret">▾</span>
+        <span className="tag-filter-caret"><IconChevronDown size={11} /></span>
       </button>
 
       {open && options.length > 0 && (

@@ -13,6 +13,7 @@ import { useMergePairs } from "../state/viewPrefs";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
+import { IconArrowLeft, IconTrash } from "../components/Icons";
 import { preloadImage } from "../utils/preload";
 import { rememberLastViewedImage } from "../utils/lastViewed";
 import { useTransientMessage } from "../utils/transientMessage";
@@ -519,10 +520,16 @@ export function ImageDetail() {
   return (
     <div className="page detail-page">
       {pairDeleteDialog}
-      <button className="icon-btn back-btn" onClick={goBack} title="Back (Esc)" aria-label="Back">
-        ←
-      </button>
       <div className="detail-layout" style={{ marginTop: 16 }}>
+        {/* Back/exit arrow in its own slim column left of the image area. */}
+        <button
+          className="icon-btn detail-back-btn"
+          onClick={goBack}
+          title="Back (Esc)"
+          aria-label="Back"
+        >
+          <IconArrowLeft size={16} />
+        </button>
         <div className="detail-main">
           <div className={`detail-image${bgMode === "dark" ? " detail-image-dark" : ""}`} ref={imageBoxRef}>
             {previewFailed ? (
@@ -627,9 +634,19 @@ export function ImageDetail() {
           </div>
         </div>
         <div className="detail-panel">
-          <h3 className="section-title">{image.original_filename}</h3>
+          <div className="detail-title-row">
+            <h3 className="section-title">{image.original_filename}</h3>
+            <button
+              className="detail-trash-btn"
+              onClick={deletePhoto}
+              title="Delete this photo (and its RAW/JPEG partner) - library photos move to the Trash, external photos are only removed from the catalog"
+              aria-label="Delete photo"
+            >
+              <IconTrash size={15} />
+            </button>
+          </div>
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+          <div className="detail-action-row">
             <button className="btn primary" onClick={() => setAdjustOpen(true)}>
               Edit
             </button>
@@ -664,13 +681,6 @@ export function ImageDetail() {
                 {immichBusy ? "Uploading..." : "Add to Immich"}
               </button>
             )}
-            <button
-              className="btn danger"
-              onClick={deletePhoto}
-              title="Delete this photo (and its RAW/JPEG partner) - library photos move to the Trash, external photos are only removed from the catalog"
-            >
-              Delete
-            </button>
           </div>
           {immichMsg && (
             <p className="status-note" style={{ marginTop: -8, marginBottom: 16 }}>{immichMsg}</p>
@@ -731,6 +741,10 @@ export function ImageDetail() {
                 <td>
                   {image.camera_make} {image.camera_model}
                 </td>
+              </tr>
+              <tr>
+                <td>Lens</td>
+                <td>{image.lens_model ?? "—"}</td>
               </tr>
               <tr>
                 <td>Dimensions</td>

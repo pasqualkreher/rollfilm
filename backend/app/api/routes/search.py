@@ -23,6 +23,9 @@ def _apply_scope(
     rating_min: int | None,
     color_label: ColorLabel | None,
     camera_model: str | None,
+    lens_model: str | None,
+    focal_min: float | None,
+    focal_max: float | None,
     country: str | None,
     date_from: datetime | None,
     date_to: datetime | None,
@@ -44,6 +47,14 @@ def _apply_scope(
         query = query.filter(Image.color_label == color_label)
     if camera_model:
         query = query.filter(Image.camera_model == camera_model)
+    if lens_model:
+        query = query.filter(Image.lens_model == lens_model)
+    # Focal range with the same 0.05mm tolerance as the library filter (the
+    # slider's endpoint values are rounded to 0.1mm; see routes/images).
+    if focal_min is not None:
+        query = query.filter(Image.focal_length >= focal_min - 0.05)
+    if focal_max is not None:
+        query = query.filter(Image.focal_length <= focal_max + 0.05)
     if country == geocode.NO_LOCATION:
         query = query.filter(Image.gps_lat.is_(None))
     elif country:
@@ -87,6 +98,9 @@ def search_images(
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
+    lens_model: str | None = None,
+    focal_min: float | None = None,
+    focal_max: float | None = None,
     country: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
@@ -113,6 +127,9 @@ def search_images(
         rating_min=rating_min,
         color_label=color_label,
         camera_model=camera_model,
+        lens_model=lens_model,
+        focal_min=focal_min,
+        focal_max=focal_max,
         country=country,
         date_from=date_from,
         date_to=date_to,

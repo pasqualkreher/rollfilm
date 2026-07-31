@@ -207,6 +207,7 @@ def _index_file(db, source_root: SourceRoot, path: Path, sha256: str | None = No
         taken_at=taken_at,
         camera_make=exif.get("camera_make"),
         camera_model=exif.get("camera_model"),
+        lens_model=exif.get("lens_model"),
         iso=exif.get("iso"),
         aperture=exif.get("aperture"),
         shutter_speed=exif.get("shutter_speed"),

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { IconSearch, IconX } from "./Icons";
 
 // Which routes have a grid that search filters in place. On any other page a
 // search falls back to the Library. Album detail keeps its own path so the
@@ -34,6 +35,9 @@ export function SearchBar() {
         submit(value);
       }}
     >
+      <span className="search-icon" aria-hidden>
+        <IconSearch size={14} />
+      </span>
       <input
         type="text"
         placeholder="Search the current view... e.g. 'dog on a beach'"
@@ -50,7 +54,7 @@ export function SearchBar() {
             submit("");
           }}
         >
-          ✕
+          <IconX size={12} />
         </button>
       )}
     </form>

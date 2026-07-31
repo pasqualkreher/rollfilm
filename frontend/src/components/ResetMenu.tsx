@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BulkResetOptions } from "../api/types";
 import { useWait } from "../state/wait";
+import { IconChevronDown } from "./Icons";
 
 interface Props {
   // How many photos are selected - shown on the apply button.
@@ -92,7 +93,7 @@ export function ResetMenu({ count, onReset }: Props) {
         onClick={() => setOpen((o) => !o)}
         title="Reset selected aspects back to the just-imported state"
       >
-        Reset… <span className="reset-menu-caret">▾</span>
+        Reset… <span className="reset-menu-caret"><IconChevronDown size={12} /></span>
       </button>
 
       {open && (

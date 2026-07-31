@@ -16,8 +16,8 @@
      squares the whole UI by zeroing the scale. True circles (border-radius:
      50% — spinners, dots, the colour wheel) deliberately stay round. */
   --corner-scale: 1;
-  --radius: calc(10px * var(--corner-scale));
-  --radius-sm: calc(7px * var(--corner-scale));
+  --radius: calc(8px * var(--corner-scale));
+  --radius-sm: calc(5px * var(--corner-scale));
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.18);
   color-scheme: light;
@@ -602,6 +602,10 @@
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* Desktop-tool density: the browser's 16px default reads like a website;
+     pro imaging apps sit around 13-14px for everything that isn't a heading. */
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
   background: var(--bg);
   color: var(--text);
   /* Native-app feel: clicking around the UI (especially shift-click range
@@ -609,6 +613,31 @@ body {
      Re-enabled below only where selecting text is the point. */
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* Slim overlay-style scrollbars on the inner scroll areas (editor panel,
+   detail rail, popovers) instead of the chunky native gutter. The main page
+   scrollers hide theirs entirely (see .page rules) in favour of the scrubber. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text) 30%, transparent);
+  background-clip: padding-box;
 }
 
 /* Typing fields keep normal text selection. */
@@ -628,6 +657,22 @@ button {
   cursor: pointer;
 }
 
+/* Inline SVG icons (components/Icons.tsx): sit on the text baseline and never
+   shrink inside flex rows. */
+.icon {
+  vertical-align: -2px;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.icon.rot-180 {
+  transform: rotate(180deg);
+}
+
+.icon.flip-h {
+  transform: scaleX(-1);
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -635,27 +680,34 @@ button {
   overflow: hidden;
 }
 
+/* App chrome sits on the elevated tone; the content area keeps the plain
+   background - the same page/panel split Lightroom and Capture One use to make
+   the chrome recede behind the photos. */
 .top-bar {
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 12px 20px;
+  gap: 20px;
+  min-height: 46px;
+  padding: 6px 16px;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  background: var(--bg);
+  background: var(--bg-elevated);
   z-index: 10;
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
   font-weight: 700;
-  font-size: 16px;
+  font-size: 13px;
+  letter-spacing: 0.03em;
   white-space: nowrap;
 }
 
 .nav-links {
   display: flex;
-  gap: 4px;
+  gap: 2px;
 }
 
 /* While a Settings task runs, the nav is locked so the user can't switch tabs
@@ -670,16 +722,44 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-muted);
   white-space: nowrap;
 }
 
+/* Utility pages (Settings, Help) as quiet icon buttons on the far right -
+   they're chrome, not photo modules, so they don't earn tabs. */
+.top-icon-links {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.top-icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: calc(6px * var(--corner-scale));
+  color: var(--text-muted);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.top-icon-link:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.top-icon-link.active {
+  background: var(--hover);
+  color: var(--text);
+}
+
 /* Small version tag pinned to the far right of the top bar. */
 .app-version {
-  margin-left: auto;
-  font-size: 11px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   white-space: nowrap;
   user-select: none;
@@ -749,14 +829,32 @@ button {
   }
 }
 
+/* Module-switcher tabs (Lightroom-style): quiet uppercase labels, the current
+   module in full text colour with a slim accent underline instead of a filled
+   pill - the chrome stays monochrome so the photos keep all the colour. */
 .nav-links a {
-  padding: 6px 12px;
-  border-radius: calc(8px * var(--corner-scale));
+  position: relative;
+  padding: 9px 11px;
+  border-radius: calc(4px * var(--corner-scale));
   text-decoration: none;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   color: var(--text-muted);
   transition: background 0.12s ease, color 0.12s ease;
+}
+
+.nav-links a::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  right: 11px;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.12s ease;
 }
 
 .nav-links a:hover {
@@ -764,11 +862,12 @@ button {
   color: var(--text);
 }
 
-/* The current page reads as a filled accent pill so "where am I" is obvious. */
 .nav-links a.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
+  color: var(--text);
+}
+
+.nav-links a.active::after {
+  background: var(--accent);
 }
 
 /* Collapsed nav for narrow windows: a burger button + current-page label,
@@ -786,12 +885,12 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 34px;
+  width: 34px;
+  height: 30px;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: calc(8px * var(--corner-scale));
-  background: var(--bg);
+  border-radius: calc(6px * var(--corner-scale));
+  background: transparent;
   color: var(--text);
   font-size: 16px;
   line-height: 1;
@@ -816,8 +915,10 @@ button {
 }
 
 .nav-current {
-  font-size: 14px;
+  font-size: 11.5px;
   font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -826,22 +927,22 @@ button {
   top: calc(100% + 8px);
   left: 0;
   z-index: 60;
-  min-width: 200px;
+  min-width: 190px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  background: var(--bg);
+  gap: 1px;
+  padding: 5px;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: calc(12px * var(--corner-scale));
+  border-radius: calc(8px * var(--corner-scale));
   box-shadow: var(--shadow-pop);
 }
 
 .nav-menu a {
-  padding: 9px 14px;
-  border-radius: calc(8px * var(--corner-scale));
+  padding: 8px 12px;
+  border-radius: calc(5px * var(--corner-scale));
   text-decoration: none;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text);
 }
@@ -856,20 +957,55 @@ button {
   font-weight: 600;
 }
 
+/* Centered between the nav and the right-hand icons via auto margins on both
+   sides - staying in the flex flow means it shrinks when space runs out
+   instead of overlapping its neighbours (absolute 50%-pinning did overlap the
+   nav tabs on wide layouts). */
+/* The bar's flanks: equal flex weight on both sides centers the search field
+   exactly on the bar's midpoint. A side never shrinks below its content
+   (flex-basis 0 + min-width auto), so when space gets tight the search field
+   gives way instead of anything overlapping or clipping. */
+.top-bar-side {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: 1 1 0;
+}
+
+.top-bar-side--right {
+  justify-content: flex-end;
+}
+
 .search-bar {
-  flex: 1;
-  max-width: 420px;
+  flex: 0 1 420px;
+  min-width: 0;
   position: relative;
 }
 
-.search-bar input {
+/* Recessed into the elevated chrome: the field uses the plain background so it
+   reads as an inset well, the way pro-app toolbars treat search. */
+/* The [type] attribute keeps this more specific than the shared
+   input[type="text"] rule further down, which would otherwise win on source
+   order and reset the left padding the magnifier icon needs. */
+.search-bar input[type="text"] {
   width: 100%;
-  padding: 8px 30px 8px 12px;
-  border-radius: calc(8px * var(--corner-scale));
+  padding: 6px 28px 6px 30px;
+  border-radius: calc(6px * var(--corner-scale));
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--bg);
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
+}
+
+/* Magnifier sitting inside the field's left edge. */
+.search-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  color: var(--text-muted);
+  pointer-events: none;
 }
 
 .page {
@@ -934,11 +1070,11 @@ button {
 .filter-bar--sticky {
   position: static;
   margin: 0;
-  padding: 12px 20px;
+  padding: 8px 20px;
   border: none;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
-  background: var(--bg);
+  background: var(--bg-elevated);
   flex-shrink: 0;
 }
 
@@ -986,8 +1122,8 @@ button {
   border: none;
   border-top: 1px solid var(--border);
   border-radius: 0;
-  background: var(--bg);
-  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.18);
+  background: var(--bg-elevated);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.14);
 }
 
 /* Reserve room at the foot of the scroll area so the last grid row can scroll
@@ -1057,16 +1193,11 @@ button {
   gap: 8px;
 }
 
-/* Consistent two-row layout across every filter bar (Library / Album / Import):
-   the filter controls (Album/Rating/Color/Tags/Date) always fill the first row,
-   and the view controls + page actions (type/Size/Merge · Select) drop to the
-   second row - regardless of window width or which filters a page shows. */
-.filter-bar--sticky > .control-group:first-child {
-  flex: 1 1 100%;
-}
+/* With every filter behind the single Filter chip, the whole bar fits one
+   row: Filter · view controls · actions. It only wraps when it must. */
 
-/* Divider before the selection/actions group, so "what you can do" reads as
-   separate from the view/filter options to its left. */
+/* One divider, right before the actions group - so the Select button reads
+   clearly apart from the Merge toggle next to it. */
 .control-group--actions {
   padding-left: 16px;
   border-left: 1px solid var(--border);
@@ -1091,7 +1222,7 @@ button {
 
   .top-bar {
     gap: 12px;
-    padding: 10px 16px;
+    padding: 6px 12px;
   }
 }
 
@@ -1105,19 +1236,27 @@ button {
 
   .search-bar {
     flex: 1 1 100%;
-    max-width: none;
     order: 10;
+  }
+
+  /* On the wrapped layout the two sides share the first row. */
+  .top-bar-side {
+    flex: 1 1 auto;
+    gap: 12px;
   }
 }
 
-/* A labelled control: small muted caption sitting left of its input. Sentence
-   case and a normal weight keep it a quiet caption, not a shouting label. */
+/* A labelled control: a small uppercase micro-label left of its input, the way
+   Lightroom/Capture One caption their tool bars - quiet but unmistakably a
+   label. (.filter-field-inline below opts back into sentence case.) */
 .filter-field {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--text-muted);
 }
 
@@ -1131,12 +1270,13 @@ button {
 
 .count-pill {
   margin-left: 10px;
-  padding: 2px 10px;
+  padding: 2px 9px;
   border-radius: calc(999px * var(--corner-scale));
-  background: var(--bg-elevated);
+  background: var(--bg);
   border: 1px solid var(--border);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   vertical-align: middle;
 }
@@ -1150,11 +1290,12 @@ button {
 }
 
 .segmented button {
-  padding: 6px 13px;
+  padding: 5px 11px;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
@@ -1178,25 +1319,25 @@ input[type="search"],
 input[type="email"],
 input[type="url"],
 textarea {
-  padding: 8px 12px;
+  padding: 7px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 select,
 .filter-bar input[type="number"],
 .filter-bar input[type="date"] {
-  padding: 6px 10px;
+  padding: 5px 9px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 13px;
+  font-size: 12.5px;
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -1215,11 +1356,114 @@ textarea:focus-visible {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
-/* Capture-date range: two date pickers with a dash between them. */
+/* Toolbar controls sit flat on the chrome (Lightroom/Capture One style): no
+   resting border - a boxed outline on every dropdown reads like a web form.
+   Hover brings up a soft fill, focus keeps the standard accent ring. The
+   doubled .filter-bar class keeps these ahead of the component rules further
+   down (.tag-filter-btn & co.), which would otherwise win on source order. */
+.filter-bar.filter-bar--sticky select,
+.filter-bar.filter-bar--sticky input[type="date"],
+.filter-bar.filter-bar--sticky .tag-filter-btn {
+  background: transparent;
+  border-color: transparent;
+}
+
+.filter-bar.filter-bar--sticky select:hover,
+.filter-bar.filter-bar--sticky input[type="date"]:hover,
+.filter-bar.filter-bar--sticky .tag-filter-btn:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: transparent;
+}
+
+.filter-bar.filter-bar--sticky .tag-filter-btn.active {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+/* Chip + popover (FilterChip): a quiet toolbar chip that opens a panel. The
+   Filter chip carries every photo filter in one labelled menu. */
+.filter-chip {
+  position: relative;
+  display: inline-flex;
+}
+
+.filter-chip-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  padding: 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: calc(8px * var(--corner-scale));
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Inside the panel, controls are ordinary boxed fields again - the flat
+   treatment is for the bar itself, not its dropdown. */
+.filter-bar.filter-bar--sticky .filter-chip-pop select,
+.filter-bar.filter-bar--sticky .filter-chip-pop input[type="date"],
+.filter-bar.filter-bar--sticky .filter-chip-pop .tag-filter-btn {
+  background: var(--bg);
+  border-color: var(--border);
+}
+
+/* The filter menu: one labelled row per filter, full-width controls. */
+.filter-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 250px;
+}
+
+.filter-menu-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+}
+
+.filter-menu-row select {
+  width: 100%;
+}
+
+.filter-menu-row .tag-filter,
+.filter-menu-row .tag-filter-btn {
+  width: 100%;
+  max-width: none;
+}
+
+.filter-menu-row .tag-filter-btn {
+  justify-content: space-between;
+}
+
+.filter-menu-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* In the panel the swatches can afford to be comfortable click targets. */
+.filter-chip-pop .color-swatch {
+  width: 20px;
+  height: 20px;
+}
+
+/* Capture-date range: two date pickers with a dash between them. Fixed width
+   keeps the two native pickers compact instead of stretching the row. */
 .date-range {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.date-range input[type="date"] {
+  width: 8.4em;
 }
 
 .date-range-sep {
@@ -1704,11 +1948,11 @@ textarea:focus-visible {
   width: fit-content;
   /* Left inset so the floating pill doesn't sit flush on the grid's left edge. */
   margin: 0 0 12px 10px;
-  padding: 6px 14px;
-  font-size: 15px;
-  font-weight: 700;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 650;
   color: var(--text);
-  border-radius: calc(16px * var(--corner-scale));
+  border-radius: calc(10px * var(--corner-scale));
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   backdrop-filter: blur(6px);
@@ -1848,20 +2092,20 @@ textarea:focus-visible {
   opacity: 1;
 }
 
+/* Flat photo tiles, like Lightroom's grid cells: no card border, no hover
+   lift - the photo IS the tile. Hover feedback is a subtle brightness bump on
+   the image plus the overlay info fading in. */
 .thumb-card {
   position: relative;
-  border-radius: calc(10px * var(--corner-scale));
+  border-radius: calc(5px * var(--corner-scale));
   overflow: hidden;
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
   height: 220px;
   cursor: pointer;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
 }
 
-.thumb-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+.thumb-card:hover img {
+  filter: brightness(1.06);
 }
 
 /* Draw the selection ring as an overlay border rather than an inset `outline`:
@@ -1874,8 +2118,9 @@ textarea:focus-visible {
   content: "";
   position: absolute;
   inset: 0;
-  border: 3px solid var(--accent);
+  border: 2px solid var(--accent);
   border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-contrast) 55%, transparent);
   pointer-events: none;
 }
 
@@ -1887,7 +2132,7 @@ textarea:focus-visible {
   /* Blank until the pixels arrive, then fade in softly instead of snapping in
      (the JS toggles .is-loaded on load - see Thumb in ThumbnailGrid.tsx). */
   opacity: 0;
-  transition: opacity 0.45s ease;
+  transition: opacity 0.45s ease, filter 0.12s ease;
 }
 
 .thumb-card img.is-loaded {
@@ -2154,10 +2399,15 @@ textarea:focus-visible {
 }
 
 /* Stage + panel sit below the header. */
+/* Framed like the detail lightbox: page-like padding around everything, the
+   back-arrow column left of the image box, and the image in a rounded elevated
+   box (below: .editor-stage-main) rather than a full-bleed grey stage. */
 .editor-body {
   flex: 1;
   min-height: 0;
   display: flex;
+  gap: 16px;
+  padding: 16px 20px 28px;
 }
 
 .editor-stage {
@@ -2166,16 +2416,12 @@ textarea:focus-visible {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  /* Generous band around the photo like the lightbox (.detail-image). Top must
-     clear the floating back button (14px offset + 38px button = 52px), so the
-     image can never slide underneath it in small windows; a bit more at the
-     bottom keeps the compare/background row breathing. */
-  padding: 60px 16px 56px;
   overflow: hidden;
-  transition: background 0.15s ease;
 }
 
-/* The image area; the background toggle sits in its own row below it. */
+/* The image box - same treatment as the lightbox's .detail-image: rounded,
+   elevated (or black), photo centered inside. The background toggle sits in
+   its own row below it. */
 .editor-stage-main {
   flex: 1;
   min-height: 0;
@@ -2184,14 +2430,17 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  border-radius: calc(12px * var(--corner-scale));
+  padding: 16px;
+  transition: background 0.15s ease;
 }
 
 /* Match the lightbox backgrounds exactly (see .detail-image / .detail-image-dark). */
-.editor-stage-dark {
+.editor-stage-dark .editor-stage-main {
   background: #000;
 }
 
-.editor-stage-light {
+.editor-stage-light .editor-stage-main {
   background: var(--bg-elevated);
 }
 
@@ -2339,9 +2588,9 @@ input.editor-preset-select {
   margin-bottom: 2px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -2400,9 +2649,9 @@ input.editor-preset-select {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: calc(6px * var(--corner-scale));
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--bg);
   color: var(--text);
   font-size: 12px;
   cursor: pointer;
@@ -2437,13 +2686,15 @@ input.editor-preset-select {
   font-size: 14px;
 }
 
+/* The develop panel sits on the elevated chrome tone, distinct from the stage,
+   so it reads as a tool panel (Lightroom's right rail) rather than more page. */
 .editor-panel {
   width: 320px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg);
+  background: var(--bg-elevated);
   color: var(--text);
   border-left: 1px solid var(--border);
   overflow: hidden;
@@ -2478,7 +2729,7 @@ input.editor-preset-select {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
 }
 
@@ -2515,7 +2766,7 @@ input.editor-preset-select {
   flex-direction: column;
   gap: 8px;
   padding: 14px 20px 20px;
-  background: var(--bg);
+  background: var(--bg-elevated);
   border-top: 1px solid var(--border);
 }
 
@@ -2550,8 +2801,9 @@ input.editor-preset-select {
     flex-direction: column;
   }
 
-  .editor-stage {
-    padding: 16px 10px;
+  .editor-body {
+    gap: 10px;
+    padding: 10px;
   }
 
   .editor-panel {
@@ -2730,8 +2982,10 @@ input.editor-preset-select {
   white-space: nowrap;
 }
 
-.tag-filter-caret {
-  font-size: 10px;
+.tag-filter-caret,
+.reset-menu-caret {
+  display: inline-flex;
+  align-items: center;
   opacity: 0.7;
 }
 
@@ -2799,15 +3053,181 @@ input.editor-preset-select {
   cursor: pointer;
 }
 
-/* Reset menu: a checkbox popover on the bottom action bar, so it opens upward. */
-.reset-menu {
+/* App dropdown (Dropdown.tsx): a popover menu anchored to its trigger button,
+   replacing native <select> everywhere - the OS menu renders detached from the
+   control and ignores the app's styling. The button reuses .tag-filter-btn so
+   it picks up the toolbar's flat treatment and the popover's boxed one. */
+.dropdown {
   position: relative;
   display: inline-flex;
 }
 
-.reset-menu-caret {
-  font-size: 10px;
-  opacity: 0.7;
+.dropdown-btn {
+  justify-content: space-between;
+  /* Fill the wrapper when a caller sizes it (.editor-grid-select & co.). */
+  flex: 1;
+  min-width: 0;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 70;
+  min-width: 100%;
+  max-width: 340px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Flipped above the trigger when there is no room below (bottom action bars). */
+.dropdown-menu--up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.dropdown-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.dropdown-option:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.dropdown-option.selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.dropdown-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.filter-menu-row .dropdown,
+.filter-menu-row .dropdown-btn {
+  width: 100%;
+  max-width: none;
+}
+
+/* Focal-length filter: a dual-thumb range slider whose stops are the focal
+   lengths actually present in the (cross-filtered) library. Two stacked native
+   range inputs; the inputs ignore pointer events, only their thumbs catch them. */
+.focal-range {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.focal-range-value {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.focal-range-value.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.dual-range {
+  position: relative;
+  height: 22px;
+}
+
+.dual-range-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.dual-range-fill {
+  position: absolute;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.dual-range input[type="range"] {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  pointer-events: none;
+}
+
+.dual-range input[type="range"]::-webkit-slider-runnable-track {
+  background: transparent;
+}
+
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  pointer-events: auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-elevated);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+
+.dual-range input[type="range"]::-moz-range-thumb {
+  pointer-events: auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-elevated);
+  cursor: pointer;
+}
+
+.dual-range input[type="range"]:focus-visible {
+  outline: none;
+}
+
+.dual-range input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Reset menu: a checkbox popover on the bottom action bar, so it opens upward. */
+.reset-menu {
+  position: relative;
+  display: inline-flex;
 }
 
 .reset-menu-pop {
@@ -2911,11 +3331,16 @@ input.editor-preset-select {
 }
 
 .rating-stars button {
+  display: inline-flex;
+  align-items: center;
   background: none;
   border: none;
-  font-size: 16px;
-  padding: 0;
+  padding: 1px;
   color: var(--text-muted);
+}
+
+.rating-stars button:hover:not(:disabled) {
+  color: var(--text);
 }
 
 .rating-stars button.filled {
@@ -2925,13 +3350,13 @@ input.editor-preset-select {
 .color-label-picker {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 4px;
   align-items: center;
 }
 
 .color-swatch {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
   border: 1px solid var(--border);
   cursor: pointer;
@@ -2969,24 +3394,25 @@ input.editor-preset-select {
 }
 
 .btn {
-  padding: 7px 14px;
+  padding: 6px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
   transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
 }
 
 .btn:hover:not(:disabled) {
-  border-color: var(--accent);
+  border-color: var(--text-muted);
   background: var(--hover);
 }
 
 /* Compact variant for inline secondary actions (e.g. "Clear"). */
 .btn-sm {
-  padding: 5px 10px;
-  font-size: 13px;
+  padding: 4px 9px;
+  font-size: 12px;
 }
 
 /* Round icon button - a small circle with a single glyph (e.g. the back arrow
@@ -3008,7 +3434,7 @@ input.editor-preset-select {
 }
 
 .icon-btn:hover:not(:disabled) {
-  border-color: var(--accent);
+  border-color: var(--text-muted);
   background: var(--hover);
 }
 
@@ -3025,25 +3451,30 @@ input.editor-preset-select {
   cursor: not-allowed;
 }
 
-/* Nudge the glyph up a hair so the arrow reads optically centred. */
-.back-btn {
+/* Back/exit arrow in its own slim column to the left of the image area, top
+   aligned. The negative margin tightens the layout's 40px column gap to a
+   comfortable distance without affecting the other columns. */
+.detail-back-btn {
   align-self: flex-start;
+  flex-shrink: 0;
+  margin-right: -24px;
 }
 
 /* An on/off toggle that reads as "enabled" via a soft accent tint, not a heavy
    solid-blue button - so it doesn't compete with real primary actions. */
 .toggle-chip {
-  padding: 6px 12px;
+  padding: 5px 11px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 
 .toggle-chip:hover {
-  border-color: var(--accent);
+  border-color: var(--text-muted);
   color: var(--text);
 }
 
@@ -3257,6 +3688,62 @@ input.editor-preset-select {
   overflow: hidden;
 }
 
+/* Filename header of the detail sidebar, with the delete trash can pinned to
+   the right edge. The name may ellipsize; the icon never shrinks. */
+.detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.detail-title-row .section-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* The row carries the spacing so the trash icon stays vertically centered. */
+  margin-bottom: 0;
+}
+
+.detail-trash-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.detail-trash-btn:hover {
+  background: var(--hover);
+  color: var(--danger);
+}
+
+/* The action buttons under the filename (Edit / Add to selects ...):
+   always one row - buttons shrink and ellipsize their label rather than
+   wrapping onto a second line in the narrow sidebar. */
+.detail-action-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin-bottom: 16px;
+  min-width: 0;
+}
+
+.detail-action-row .btn {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .detail-panel {
   flex: 1 1 280px;
   max-width: 320px;
@@ -3266,9 +3753,11 @@ input.editor-preset-select {
   max-height: 100%;
   overflow-y: auto;
   /* Small horizontal padding so selection outlines on flush-left controls (the
-     color swatches) aren't clipped by overflow-x: hidden at the content edge. */
+     color swatches) aren't clipped by overflow-x: hidden at the content edge.
+     The left hairline marks it off as a side rail, like the editor panel. */
   overflow-x: hidden;
-  padding: 0 4px;
+  padding: 0 4px 0 20px;
+  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -3287,9 +3776,9 @@ input.editor-preset-select {
 }
 
 .detail-section-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 10px;
@@ -3348,6 +3837,8 @@ input.editor-preset-select {
     flex-basis: 100%;
     max-width: none;
     max-height: 50vh;
+    border-left: none;
+    padding-left: 4px;
   }
 }
 
@@ -3599,8 +4090,9 @@ input.editor-preset-select {
 }
 
 .section-title {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   margin: 0 0 12px;
 }
 
@@ -4440,9 +4932,9 @@ kbd {
 
 .mask-subhead {
   margin-top: 4px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -4480,9 +4972,9 @@ kbd {
   margin-top: 4px;
   padding: 13px 6px 12px;
   border-top: 1px solid var(--border);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--text-muted);
   cursor: pointer;
@@ -4490,13 +4982,13 @@ kbd {
 }
 
 .editor-accordion-header:hover {
-  background: var(--accent-soft);
+  background: var(--hover);
   color: var(--text);
 }
 
 .editor-accordion-header:focus-visible {
   outline: none;
-  background: var(--accent-soft);
+  background: var(--hover);
   color: var(--text);
 }
 
@@ -4522,29 +5014,11 @@ kbd {
   padding-block: 4px 8px;
 }
 
-/* Editor: floating back button (the header bar is gone - the stage runs to the
-   top). Translucent pill over the photo, aligned with the stage's corner. */
-.editor-back-float {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  z-index: 30;
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 72%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  font-size: 18px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.editor-back-float:hover:not(:disabled) {
-  background: var(--bg-elevated);
+/* Editor: back button in its own slim column left of the stage (matches the
+   detail lightbox's back arrow placement). */
+.editor-back-btn {
+  align-self: flex-start;
+  flex-shrink: 0;
 }
 
 /* ---- Settings: colour-skin picker --------------------------------------- */

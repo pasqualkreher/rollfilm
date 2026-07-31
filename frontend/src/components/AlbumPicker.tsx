@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useTransientValue } from "../utils/transientMessage";
+import { Dropdown } from "./Dropdown";
 
 interface Props {
   onAdd: (albumId: string) => void | Promise<unknown>;
@@ -70,20 +71,16 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult }: Prop
         </div>
       )}
 
-      <select
+      <Dropdown
         value=""
+        placeholder="Add to album..."
         disabled={busy}
-        onChange={(e) => {
-          if (e.target.value) handleAdd(e.target.value);
+        ariaLabel="Add to album"
+        onChange={(v) => {
+          if (v) handleAdd(v);
         }}
-      >
-        <option value="">Add to album...</option>
-        {(albums ?? []).map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
-      </select>
+        options={(albums ?? []).map((a) => ({ value: a.id, label: a.name }))}
+      />
       {flash && (
         // Own line below the dropdown - inline it would wrap awkwardly next
         // to the select in the narrow sidebar.

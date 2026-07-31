@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, saveDownload } from "../api/client";
 import { useTransientMessage } from "../utils/transientMessage";
+import { Dropdown } from "./Dropdown";
 
 // Long-edge presets for the size dropdown; null = keep the original size.
 const SIZE_OPTIONS: { label: string; value: number | null }[] = [
@@ -133,20 +134,21 @@ export function ExportDialog({
       <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pair-delete-body">
           <h3>{imageIds.length === 1 ? "Export photo" : `Export ${imageIds.length} photos`}</h3>
-          <label className="editor-slider">
+          <div className="editor-slider">
             <span className="editor-slider-head">
               <span>Format</span>
             </span>
-            <select
-              className="preset-select"
+            <Dropdown
               value={format}
               disabled={busy}
-              onChange={(e) => setFormat(e.target.value as "jpeg" | "original")}
-            >
-              <option value="jpeg">JPEG - edits baked in</option>
-              <option value="original">Original files - 1:1 with all metadata</option>
-            </select>
-          </label>
+              ariaLabel="Export format"
+              onChange={(v) => setFormat(v as "jpeg" | "original")}
+              options={[
+                { value: "jpeg", label: "JPEG - edits baked in" },
+                { value: "original", label: "Original files - 1:1 with all metadata" },
+              ]}
+            />
+          </div>
           <p className="settings-desc" style={{ margin: 0 }}>
             {format === "original"
               ? `Downloads the files exactly as they are in your library - RAW stays RAW, every meta tag kept${
@@ -173,23 +175,21 @@ export function ExportDialog({
                   onChange={(e) => setQuality(Number(e.target.value))}
                 />
               </label>
-              <label className="editor-slider">
+              <div className="editor-slider">
                 <span className="editor-slider-head">
                   <span>Size</span>
                 </span>
-                <select
-                  className="preset-select"
-                  value={maxSize ?? ""}
+                <Dropdown
+                  value={String(maxSize ?? "")}
                   disabled={busy}
-                  onChange={(e) => setMaxSize(e.target.value === "" ? null : Number(e.target.value))}
-                >
-                  {SIZE_OPTIONS.map((opt) => (
-                    <option key={opt.label} value={opt.value ?? ""}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  ariaLabel="Export size"
+                  onChange={(v) => setMaxSize(v === "" ? null : Number(v))}
+                  options={SIZE_OPTIONS.map((opt) => ({
+                    value: String(opt.value ?? ""),
+                    label: opt.label,
+                  }))}
+                />
+              </div>
             </>
           )}
           {error && <span className="status-note status-note--error">{error}</span>}

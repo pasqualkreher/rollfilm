@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
 import { TagFilter } from "../components/TagFilter";
+import { IconChevronDown } from "../components/Icons";
 import type { AlbumOut, SmartAlbumOut } from "../api/types";
 
 // Cover thumbnail that fades in once decoded (see .smart-card img in CSS)
@@ -150,7 +151,10 @@ function MomentsRow({ items }: { items: SmartAlbumOut[] }) {
                 <div className="smart-card-name">{key}</div>
                 <div className="smart-card-count">
                   {members.reduce((sum, m) => sum + m.image_count, 0)} photos ·{" "}
-                  {members.length} moments <span aria-hidden>{expanded === key ? "▴" : "▾"}</span>
+                  {members.length} moments{" "}
+                  <span aria-hidden>
+                    <IconChevronDown size={11} className={expanded === key ? "rot-180" : ""} />
+                  </span>
                 </div>
               </div>
             </button>

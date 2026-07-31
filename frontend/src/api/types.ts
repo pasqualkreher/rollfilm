@@ -25,6 +25,7 @@ export interface ImageOut {
   deleted_at: string | null;
   camera_make: string | null;
   camera_model: string | null;
+  lens_model: string | null;
   iso: number | null;
   aperture: number | null;
   shutter_speed: string | null;
@@ -382,6 +383,12 @@ export interface LibraryFilters {
   rating_min?: number;
   color_label?: ColorLabel;
   camera_model?: string;
+  lens_model?: string;
+  // Focal-length range from the filter slider: bounds are facet values from
+  // LibraryFacets.focal_lengths (formatted mm numbers like "23" or "8.8");
+  // the backend parses them back. Unset side = unbounded.
+  focal_min?: string;
+  focal_max?: string;
   // Region filter: a reverse-geocoded country name, or the "__none__" sentinel
   // for photos with no location.
   country?: string;
@@ -400,6 +407,9 @@ export interface Facet {
 
 export interface LibraryFacets {
   cameras: Facet[];
+  lenses: Facet[];
+  // Distinct focal lengths as formatted mm numbers ("23", "8.8").
+  focal_lengths: Facet[];
   regions: Facet[];
   no_location_count: number;
 }

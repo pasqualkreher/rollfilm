@@ -258,8 +258,12 @@ export const api = {
       }
       return request(`/images?${params.toString()}`);
     },
-    facets(): Promise<LibraryFacets> {
-      return request(`/images/facets`);
+    // Filter-dropdown options, cross-filtered: pass the active filters so each
+    // facet reflects what the other filters leave over (the backend lifts each
+    // facet's own dimension, so its alternatives stay selectable).
+    facets(filters: Partial<LibraryFilters> = {}): Promise<LibraryFacets> {
+      const params = filtersToParams(filters).toString();
+      return request(`/images/facets${params ? `?${params}` : ""}`);
     },
     // Total photos the filter set matches (no filters = the whole library).
     count(filters: Partial<LibraryFilters> = {}): Promise<{ count: number }> {

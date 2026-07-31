@@ -21,6 +21,7 @@ class ImageOut(BaseModel):
     deleted_at: datetime | None
     camera_make: str | None
     camera_model: str | None
+    lens_model: str | None = None
     iso: int | None
     aperture: float | None
     shutter_speed: str | None
@@ -567,6 +568,10 @@ class Facet(BaseModel):
 
 class LibraryFacets(BaseModel):
     cameras: list[Facet]
+    # Lens names present in the library, and the distinct focal lengths (facet
+    # values are the formatted mm numbers, e.g. "23" or "8.8").
+    lenses: list[Facet]
+    focal_lengths: list[Facet]
     regions: list[Facet]
     # Photos with no GPS at all - offered as an explicit "no location" bucket.
     no_location_count: int
