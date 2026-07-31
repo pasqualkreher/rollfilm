@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
 import { IconArrowLeft, IconRotate } from "./Icons";
 import { Dropdown } from "./Dropdown";
+import { SaveCopyDialog } from "./SaveCopyDialog";
 import {
   adjustmentsFromImage,
   BAND_SWATCH,
@@ -464,6 +465,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [selectedPreset, setSelectedPreset] = useState("");
   // Inline preset naming (Electron has no window.prompt).
   const [namingPreset, setNamingPreset] = useState(false);
+  // Save-copy options dialog (quality/size, export-style) - the render runs
+  // while it's open, so it doubles as the progress popup.
+  const [saveCopyOpen, setSaveCopyOpen] = useState(false);
   const [presetName, setPresetName] = useState("");
   const [cropMode, setCropMode] = useState(false);
   const [drag, setDrag] = useState<DragRect | null>(null);
@@ -846,8 +850,11 @@ export function PhotoEditor({ image, onClose }: Props) {
     },
   });
 
+  // No withWait here: the Save-copy dialog itself blocks the editor and shows
+  // the busy state while the full-resolution render runs.
   const saveCopy = useMutation({
-    mutationFn: () => withWait("Saving copy…", () => api.images.saveCopy(image.id, edits)),
+    mutationFn: (opts: { quality: number; maxSize: number | null }) =>
+      api.images.saveCopy(image.id, edits, opts),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
@@ -914,7 +921,9 @@ export function PhotoEditor({ image, onClose }: Props) {
         if (colorPickMode) setColorPickMode(false);
         else if (maskDrawMode) setMaskDrawMode(false);
         else if (cropMode) setCropMode(false);
-        else if (!busy) onClose();
+        else if (saveCopyOpen) {
+          if (!saveCopy.isPending) setSaveCopyOpen(false);
+        } else if (!busy) onClose();
         return;
       }
 
@@ -949,7 +958,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode]);
+  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, saveCopyOpen, saveCopy.isPending]);
 
   function fractionAt(clientX: number, clientY: number) {
     const box = canvasRef.current!.getBoundingClientRect();
@@ -2493,9 +2502,9 @@ export function PhotoEditor({ image, onClose }: Props) {
           <div className="editor-footer-primary">
             <button
               className="btn"
-              onClick={() => saveCopy.mutate()}
+              onClick={() => setSaveCopyOpen(true)}
               disabled={busy}
-              title="Create a new edited photo in your library, tagged “edited”"
+              title="Create a new edited photo in your library, tagged “edit copy”"
             >
               {saveCopy.isPending ? "Saving…" : "Save copy"}
             </button>
@@ -2506,6 +2515,12 @@ export function PhotoEditor({ image, onClose }: Props) {
         </div>
       </div>
       </div>
+      {saveCopyOpen && (
+        <SaveCopyDialog
+          onClose={() => setSaveCopyOpen(false)}
+          onSave={(opts) => saveCopy.mutateAsync(opts)}
+        />
+      )}
     </div>
   );
 }

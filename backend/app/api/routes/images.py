@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from PIL import Image as PILImage
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from sqlalchemy import case, func, or_
@@ -1455,15 +1456,22 @@ def editor_preview(
 def save_copy(
     image_id: str,
     payload: schemas.ImageEdits,
+    quality: int = 95,
+    max_size: int | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Bake the given edit into a brand-new managed library photo (a flattened
     JPEG), tagged "edited" so edited shots are easy to find. The source photo -
-    and every original file on disk - is left completely untouched."""
+    and every original file on disk - is left completely untouched. `quality`
+    and `max_size` (long edge) mirror the export options; a size cap also lets
+    the render decode economically instead of at full sensor size."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
+    quality = max(1, min(100, quality))
+    if max_size is not None:
+        max_size = max(16, max_size)
     src = get_owned_image(db, current_user.id, image_id)
 
     crop = None
@@ -1483,13 +1491,16 @@ def save_copy(
             straighten=max(-45.0, min(45.0, float(payload.straighten))),
             persp_h=_clamp100(payload.persp_h),
             persp_v=_clamp100(payload.persp_v),
+            max_px=max_size,
         )
     except Exception:
         logger.exception("Failed to render edited copy of %s", src.id)
         raise HTTPException(status_code=500, detail="Could not render the edited copy")
 
+    if max_size and max(edited.size) > max_size:
+        edited.thumbnail((max_size, max_size), PILImage.LANCZOS)
     buf = io.BytesIO()
-    edited.save(buf, "JPEG", quality=95)
+    edited.save(buf, "JPEG", quality=quality)
     data = buf.getvalue()
 
     # Name edited copies "<stem>_edit-1.jpg", "_edit-2", ... - the first free

@@ -504,8 +504,16 @@ export const api = {
       return request(`/images/${id}/edits`, { method: "PATCH", body: JSON.stringify(apiEdits(edits)) });
     },
     // Bake the edit into a new managed library photo (tagged "edited").
-    saveCopy(id: string, edits: ImageEdits): Promise<ImageOut> {
-      return request(`/images/${id}/save-copy`, { method: "POST", body: JSON.stringify(apiEdits(edits)) });
+    // quality/maxSize mirror the export options (long-edge cap, JPEG quality).
+    saveCopy(id: string, edits: ImageEdits, opts?: { quality?: number; maxSize?: number | null }): Promise<ImageOut> {
+      const params = new URLSearchParams();
+      if (opts?.quality != null) params.set("quality", String(opts.quality));
+      if (opts?.maxSize != null) params.set("max_size", String(opts.maxSize));
+      const qs = params.toString();
+      return request(`/images/${id}/save-copy${qs ? `?${qs}` : ""}`, {
+        method: "POST",
+        body: JSON.stringify(apiEdits(edits)),
+      });
     },
     thumbnailUrl(id: string, version?: string): string {
       return derivativeUrl(`/images/${id}/thumbnail`, version);

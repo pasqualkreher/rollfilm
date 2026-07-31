@@ -4,7 +4,8 @@ import { useTransientMessage } from "../utils/transientMessage";
 import { Dropdown } from "./Dropdown";
 
 // Long-edge presets for the size dropdown; null = keep the original size.
-const SIZE_OPTIONS: { label: string; value: number | null }[] = [
+// Shared with the editor's Save-copy dialog, which offers the same choices.
+export const SIZE_OPTIONS: { label: string; value: number | null }[] = [
   { label: "Original size", value: null },
   { label: "3840 px (4K)", value: 3840 },
   { label: "2048 px", value: 2048 },
