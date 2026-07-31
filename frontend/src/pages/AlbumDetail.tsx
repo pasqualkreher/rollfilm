@@ -11,6 +11,7 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { AlbumPicker } from "../components/AlbumPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
+import { IconTrash } from "../components/Icons";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { Dropdown } from "../components/Dropdown";
 import { loadPresets } from "../utils/presets";
@@ -522,8 +523,9 @@ export function AlbumDetail() {
             style={{ marginLeft: "auto" }}
             onClick={deleteSelected}
             title="Delete the selected photos"
+            aria-label="Delete the selected photos"
           >
-            Delete
+            <IconTrash size={15} />
           </button>
           {(immichMsg || developMsg || albumMsg) && (
             <div className="action-bar-messages">

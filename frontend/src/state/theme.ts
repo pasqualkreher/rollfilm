@@ -100,11 +100,11 @@ const KEY = "pm.theme";
 
 const VALID: Theme[] = ["system", ...SKINS.map((s) => s.value)];
 
-// Ember is the default skin for fresh installs (no stored preference); picking
+// Greige is the default skin for fresh installs (no stored preference); picking
 // "System" in Settings still stores that choice and follows the OS from then on.
 export function getStoredTheme(): Theme {
   const v = localStorage.getItem(KEY);
-  return (VALID as string[]).includes(v ?? "") ? (v as Theme) : "ember";
+  return (VALID as string[]).includes(v ?? "") ? (v as Theme) : "greige";
 }
 
 // Apply a theme to the document. "system" removes the override so the OS
