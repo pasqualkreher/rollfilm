@@ -124,6 +124,23 @@
   color-scheme: light;
 }
 
+/* Atelier — vintage-minimal light: aged ivory paper, typewriter-ink text,
+   antique brass as the single restrained accent. Near-monochrome surfaces
+   keep it minimal; the warm cast keeps it vintage. Pairs with Darkroom. */
+:root[data-theme="atelier"] {
+  --bg: #f1eee6;
+  --bg-elevated: #f9f7f1;
+  --hover: #e6e1d5;
+  --border: #d8d2c4;
+  --text: #2e2a24;
+  --text-muted: #777060;
+  --accent: #8f6a4e;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(143, 106, 78, 0.14);
+  --danger: #b0523f;
+  color-scheme: light;
+}
+
 /* Oat — soft oatmeal beige with a warm tan accent, calm and low contrast. */
 :root[data-theme="oat"] {
   --bg: #eeeae1;
@@ -297,6 +314,26 @@
   --accent-contrast: #201d18;
   --accent-soft: rgba(224, 138, 60, 0.18);
   --danger: #cf5b3c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Darkroom — vintage-minimal dark, Atelier's counterpart: the warm near-black
+   of a photo lab, soft paper-white ink, the same antique brass accent but
+   desaturated for the dark surface. Quieter than Vintage (whose orange pops);
+   this one stays matte and calm. */
+:root[data-theme="darkroom"] {
+  --bg: #1e1c19;
+  --bg-elevated: #282521;
+  --hover: #322e28;
+  --border: #3d382f;
+  --text: #e8e2d4;
+  --text-muted: #9d9483;
+  --accent: #b5936b;
+  --accent-contrast: #1d1a16;
+  --accent-soft: rgba(181, 147, 107, 0.18);
+  --danger: #c95f4c;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
@@ -1036,12 +1073,12 @@ button {
    wheel/trackpad/drag. Settings and Albums have no scrubber, so they keep the
    app's slim always-visible scrollbar (the global ::-webkit-scrollbar style)
    whenever their content actually overflows. */
-.page:not(.settings-page):not(.albums-page),
+.page:not(.settings-page):not(.albums-page):not(.stats-page),
 .page-scroll {
   scrollbar-width: none;
 }
 
-.page:not(.settings-page):not(.albums-page)::-webkit-scrollbar,
+.page:not(.settings-page):not(.albums-page):not(.stats-page)::-webkit-scrollbar,
 .page-scroll::-webkit-scrollbar {
   width: 0;
   height: 0;
@@ -2340,6 +2377,10 @@ textarea:focus-visible {
   overflow: hidden;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
+  /* Size container: the footer sizes its stars/swatches off the card's real
+     width (cqw), so narrow tiles (XS grid, portrait shots) shrink their
+     symbols instead of clipping them at the edge. */
+  container-type: inline-size;
 }
 
 .import-card .thumb-card {
@@ -2361,8 +2402,18 @@ textarea:focus-visible {
    made the grid look inconsistent. */
 .import-card-footer {
   /* One shared symbol size: stars and color circles are always exactly the
-     same size as each other, on every card and at every grid size. */
-  --sym: clamp(11px, calc(var(--row-h, 240px) * 0.05 - 2px), 16px);
+     same size as each other, on every card and at every grid size. Two caps:
+     the grid-size term (bigger grid -> bigger symbols) and the card-width
+     term ((100cqw - padding - swatch gaps) / 8 swatches) - the second is
+     what keeps the 8-swatch row and the 5 stars INSIDE a narrow XS/portrait
+     card instead of clipping at its edge. */
+  --sym: max(
+    8px,
+    min(
+      clamp(9px, calc(var(--row-h, 240px) * 0.05 - 2px), 16px),
+      calc((100cqw - 30px) / 8)
+    )
+  );
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -2379,9 +2430,20 @@ textarea:focus-visible {
   line-height: 1;
 }
 
+/* IconStar renders with a FIXED width/height attribute (size={15}) - the
+   font-size above never reached it, so on narrow XS/portrait cards the five
+   15px stars overflowed and clipped at the card edge while the swatches
+   (CSS-sized) shrank correctly. CSS width beats the SVG attribute. */
+.import-card-footer .rating-stars button svg {
+  width: var(--sym);
+  height: var(--sym);
+}
+
 .import-card-footer .color-label-picker {
   flex-wrap: nowrap;
-  gap: max(2px, calc(var(--row-h, 240px) * 0.008));
+  /* 1px floor (not 2): on an 87px-wide portrait XS card those 7 saved pixels
+     are the difference between fitting and clipping. */
+  gap: max(1px, calc(var(--row-h, 240px) * 0.008));
 }
 
 .import-card-footer .color-swatch {
@@ -5697,4 +5759,231 @@ button.smart-card {
 
 .smart-card img.loaded {
   opacity: 1;
+}
+
+/* --- Statistics dashboard (pages/Stats.tsx) ---------------------------------
+   Single-series charts only: bars carry the skin's accent, all text stays in
+   text tokens, and every mark's value is written out (row counts, column
+   counts, tooltips) - identity never rides on color alone, which matters with
+   30+ user-selectable skins. The page itself is the scroll container (see the
+   .page scrollbar rules), so only the content blocks are width-capped. */
+.stats-tiles,
+.stats-card--wide,
+.stats-cards {
+  max-width: 1080px;
+}
+
+.stats-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.stat-tile-value {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-tile-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stat-tile-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+  align-items: start;
+}
+
+.stats-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px 16px;
+}
+
+.stats-card-title {
+  margin: 0 0 2px;
+  font-size: 14px;
+}
+
+.stats-card-desc {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stats-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.stats-bar-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 42%) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.stats-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-bar-track {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.stats-bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.stats-bar-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Photos-per-year column chart: thin accent columns with rounded data ends on
+   a hairline baseline; counts sit above the columns while they fit. */
+.stats-cols {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  height: 180px;
+  margin-top: 8px;
+}
+
+.stats-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stats-col-bararea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stats-col-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-col-bar {
+  display: block;
+  width: min(28px, 100%);
+  border-radius: 4px 4px 0 0;
+  background: var(--accent);
+}
+
+.stats-col-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Import review only: skip layout+paint for sections far from the viewport.
+   With thousands of staged cards the browser otherwise lays out and paints
+   the ENTIRE batch on every change - a large part of why huge imports felt
+   sluggish. contain-intrinsic-size auto: each section remembers its real
+   height once it has been rendered, so scroll geometry stays accurate. */
+.timeline-section--windowed {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 640px;
+}
+
+/* --- Import lightbox in the library photo view's clothes --------------------
+   Opaque app surface, back-arrow column, the same elevated .detail-image box
+   with the light/black toggle - no info panel. The review controls bar keeps
+   its layout but swaps the dark-glass look for app-surface tokens so it works
+   on every skin. */
+.lightbox-overlay--page {
+  background: var(--bg);
+  padding: 16px 20px 18px;
+}
+
+.lightbox-detail-layout {
+  flex: 1;
+  min-width: 0;
+}
+
+.lightbox-stage {
+  position: relative;
+}
+
+/* Nav arrows anchor to the image box (nearest positioned ancestor). On the
+   light box the old white-glass arrows vanished - use text-tinted fills. */
+.lightbox-stage .lightbox-nav-btn {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+}
+
+.lightbox-stage .lightbox-nav-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.lightbox-stage.detail-image-dark .lightbox-nav-btn {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.lightbox-overlay--page .lightbox-controls {
+  width: auto;
+  align-self: stretch;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  backdrop-filter: none;
+}
+
+.lightbox-overlay--page .lightbox-filename,
+.lightbox-overlay--page .lightbox-counter,
+.lightbox-overlay--page .lightbox-import-toggle {
+  color: var(--text);
+}
+
+.lightbox-overlay--page .lightbox-counter {
+  color: var(--text-muted);
 }

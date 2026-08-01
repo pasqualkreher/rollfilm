@@ -338,10 +338,25 @@ class StagedFileOut(BaseModel):
     height: int | None
     # Flagged for selective Immich sync during import review.
     immich_sync: bool = False
+    # RAW only: the background demosaiced grid thumbnail is ready - the review
+    # grid busts its img URL on the flip, swapping the embedded-preview thumb
+    # for the sensor-accurate render.
+    has_demosaic_thumb: bool = False
     # False while the background analysis (thumbnail/EXIF/duplicates) for this
     # file is still running - the review grid shows a placeholder card until
     # it flips, and commit is refused while any file is unprocessed.
     processed: bool = True
+
+
+class StagedFilesOut(BaseModel):
+    """The review grid's file list, with the session's change counter. When
+    the client polls with the version it already has and nothing changed, the
+    response is just {version, unchanged: true} - no rows loaded, nothing
+    serialized, nothing re-rendered."""
+
+    version: int
+    unchanged: bool = False
+    files: list[StagedFileOut] = []
 
 
 class StagedFileUpdate(BaseModel):
@@ -412,6 +427,9 @@ class ImportProgressOut(BaseModel):
     # Staging phase only: files whose bytes are fully copied into the staging
     # folder - runs ahead of `processed` while analysis catches up.
     copied: int = 0
+    # Bytes landed so far - the client computes copy rate/ETA from bytes so a
+    # tail of big RAWs doesn't make a per-file estimate grow mid-import.
+    copied_bytes: int = 0
     # Rolling estimate of seconds remaining in this phase; null until known.
     eta_seconds: float | None = None
 
@@ -642,6 +660,35 @@ class RestoreResult(BaseModel):
 class TagUsage(BaseModel):
     name: str
     count: int
+
+
+class StatCount(BaseModel):
+    """One labeled count in the stats dashboard (a camera, a year, a bucket)."""
+
+    name: str
+    count: int
+
+
+class LibraryStats(BaseModel):
+    """Aggregate snapshot for the statistics dashboard."""
+
+    total_photos: int
+    total_bytes: int
+    raw_count: int
+    jpeg_count: int
+    pair_count: int
+    edited_count: int
+    with_gps_count: int
+    rated_count: int
+    camera_count: int
+    lens_count: int
+    cameras: list[StatCount]
+    lenses: list[StatCount]
+    focal_buckets: list[StatCount]
+    years: list[StatCount]
+    ratings: list[StatCount]
+    first_taken_at: datetime | None = None
+    last_taken_at: datetime | None = None
 
 
 class PruneTagsResult(BaseModel):

@@ -10,10 +10,11 @@ from app.api.routes import (
     settings,
     smart_albums,
     sources,
+    stats,
     tags,
 )
 from app.config import settings as app_settings
-from app.db.session import SessionLocal, engine, ensure_indexes
+from app.db.session import SessionLocal, engine, ensure_indexes, start_wal_checkpointer
 from app.services.borg_backup import start_background_backup
 from app.services.cloudfiles import rehydrate_dirs_in_background
 from app.services.embeddings import ensure_embeddings_table
@@ -42,6 +43,7 @@ app.include_router(maintenance.router)
 app.include_router(settings.router)
 app.include_router(sources.router)
 app.include_router(tags.router)
+app.include_router(stats.router)
 
 
 @app.on_event("startup")
@@ -51,6 +53,9 @@ def on_startup() -> None:
     ensure_embeddings_table(engine)
     # Hot-path indexes for the library grid (idempotent, see ensure_indexes).
     ensure_indexes()
+    # WAL checkpoints run here, in the background, never inline in a writer's
+    # commit (auto-checkpoint is off - see db/session.py).
+    start_wal_checkpointer()
     # Restore the persisted RAW-decode mode into the live flag the decoder reads
     # (services/raw.py keeps it as a module global to avoid a DB hit per decode).
     from app.services import raw as raw_service

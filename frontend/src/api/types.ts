@@ -190,6 +190,9 @@ export interface ImportProgress {
   // Staging only: files fully copied into the staging folder - runs ahead of
   // `processed` while the background analysis catches up.
   copied: number;
+  // Bytes landed so far - copy rate/ETA are computed from bytes, so a tail
+  // of big RAWs after small JPEGs doesn't make the estimate grow.
+  copied_bytes: number;
   eta_seconds: number | null;
 }
 
@@ -233,9 +236,22 @@ export interface StagedFileOut {
   width: number | null;
   height: number | null;
   immich_sync: boolean;
+  // RAW only: the background demosaiced grid thumbnail is ready. The grid
+  // appends it to the img URL, so the card swaps from the fast embedded
+  // camera thumb to the sensor-accurate render when it lands.
+  has_demosaic_thumb: boolean;
   // False while the background analysis (thumbnail/EXIF/duplicates) is still
   // running for this file - the grid shows a placeholder card until it flips.
   processed: boolean;
+}
+
+// /files response: the staged list plus the session's change counter. When
+// polled with the version the client already holds and nothing changed, the
+// backend answers {version, unchanged: true} without loading anything.
+export interface StagedFilesOut {
+  version: number;
+  unchanged: boolean;
+  files: StagedFileOut[];
 }
 
 export interface StagedFileUpdatePatch {
@@ -345,6 +361,33 @@ export interface DirListing {
 export interface TagUsage {
   name: string;
   count: number;
+}
+
+// One labeled count in the stats dashboard (a camera, a year, a bucket).
+export interface StatCount {
+  name: string;
+  count: number;
+}
+
+// Aggregate snapshot for the statistics dashboard (GET /stats/library).
+export interface LibraryStats {
+  total_photos: number;
+  total_bytes: number;
+  raw_count: number;
+  jpeg_count: number;
+  pair_count: number;
+  edited_count: number;
+  with_gps_count: number;
+  rated_count: number;
+  camera_count: number;
+  lens_count: number;
+  cameras: StatCount[];
+  lenses: StatCount[];
+  focal_buckets: StatCount[];
+  years: StatCount[];
+  ratings: StatCount[];
+  first_taken_at: string | null;
+  last_taken_at: string | null;
 }
 
 // One photo in the library index: just enough to lay out and interact with a

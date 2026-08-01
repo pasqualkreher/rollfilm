@@ -24,10 +24,15 @@ interface ImportSessionState {
   stagingSessionId: string | null;
   // Folder import only: how many photos the scan found / are fully staged.
   totalFileCount: number | null;
+  // Folder import only: planned bytes of the whole import (scan sizes).
+  totalByteCount: number | null;
   stagedFileCount: number;
   // Folder import: live per-photo count of files fully *copied* into staging
   // (backend poll), so counters tick per file instead of jumping per batch.
   liveStagedCount: number | null;
+  // Bytes landed so far (backend poll) - rate/ETA readouts use bytes, not
+  // file count, so a run of big RAWs doesn't inflate the estimate.
+  liveStagedBytes: number | null;
   // THE display percentage for this import - photo-count based for folder
   // imports (live), byte-based for browser uploads. Every progress readout
   // (nav tab, wizard button) must use this one number so they never disagree.
@@ -69,6 +74,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const [importMode, setImportMode] = useState<"upload" | "folder" | null>(null);
   const [stagingSessionId, setStagingSessionId] = useState<string | null>(null);
   const [totalFileCount, setTotalFileCount] = useState<number | null>(null);
+  const [totalByteCount, setTotalByteCount] = useState<number | null>(null);
   const [stagedFileCount, setStagedFileCount] = useState(0);
   // Held for the lifetime of an in-flight upload so cancelUpload() can abort the
   // XHRs; the created staging session id is captured so a mid-upload cancel can
@@ -139,6 +145,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setImportMode("folder");
     setStagingSessionId(null);
     setTotalFileCount(null);
+    setTotalByteCount(null);
     setStagedFileCount(0);
     setIsUploading(true);
     setUploadError(null);
@@ -158,43 +165,58 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
       const files = await getFiles(controller.signal);
       setTotalFileCount(files.length);
       const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1;
+      setTotalByteCount(totalBytes);
       let stagedBytes = 0;
       let stagedFiles = 0;
-      let session: Awaited<ReturnType<typeof api.import.stagePaths>> | null = null;
-      let reviewOpened = false;
-      let i = 0;
-      while (i < files.length) {
+
+      // The prime batch runs alone: its response carries the session id every
+      // later batch appends to, and opening the review needs it.
+      const primeBatch = files.slice(0, PRIME_PATHS);
+      const session = await api.import.stagePaths(
+        primeBatch.map((f) => f.path),
+        label,
+        null,
+        totalBytes,
+        controller.signal
+      );
+      uploadSessionRef.current = session.id;
+      setStagingSessionId(session.id);
+      stagedBytes += primeBatch.reduce((sum, f) => sum + f.size, 0);
+      stagedFiles += primeBatch.length;
+      setStagedFileCount(stagedFiles);
+      setUploadProgress(Math.min(100, Math.round((stagedBytes / totalBytes) * 100)));
+      // Incremental import: open the review as soon as the first batch is
+      // staged, then keep staging the remaining batches in the background.
+      // The user starts culling immediately instead of staring at a bar
+      // through a slow copy; the grid refreshes as more photos land, and the
+      // commit button stays disabled (isUploading) until staging finishes.
+      setSourceLabel(session.source_path);
+      setSessionId(session.id);
+
+      // Then keep TWO batches in flight, like the browser-upload path: the
+      // server serializes the actual copying, but receives and parses the
+      // next request while the previous one copies - strictly sequential
+      // batches left the server idle for a full round-trip between each.
+      let pending: Promise<void> | null = null;
+      for (let i = PRIME_PATHS; i < files.length; i += BATCH_PATHS) {
         if (controller.signal.aborted) throw new DOMException("Upload cancelled", "AbortError");
-        const size = i === 0 ? PRIME_PATHS : BATCH_PATHS;
-        const batch = files.slice(i, i + size);
-        i += size;
-        session = await api.import.stagePaths(
-          batch.map((f) => f.path),
-          label,
-          session?.id ?? null,
-          totalBytes,
-          controller.signal
-        );
-        if (!uploadSessionRef.current) {
-          uploadSessionRef.current = session.id;
-          setStagingSessionId(session.id);
-        }
-        stagedBytes += batch.reduce((sum, f) => sum + f.size, 0);
-        stagedFiles += batch.length;
-        setStagedFileCount(stagedFiles);
-        setUploadProgress(Math.min(100, Math.round((stagedBytes / totalBytes) * 100)));
-        // Incremental import: open the review as soon as the first batch is
-        // staged, then keep staging the remaining batches in the background.
-        // The user starts culling immediately instead of staring at a bar
-        // through a slow copy; the grid refreshes as more photos land, and the
-        // commit button stays disabled (isUploading) until staging finishes.
-        if (!reviewOpened) {
-          reviewOpened = true;
-          setSourceLabel(session.source_path);
-          setSessionId(session.id);
-        }
+        const batch = files.slice(i, i + BATCH_PATHS);
+        const next = api.import
+          .stagePaths(batch.map((f) => f.path), label, session.id, totalBytes, controller.signal)
+          .then(() => {
+            stagedBytes += batch.reduce((sum, f) => sum + f.size, 0);
+            stagedFiles += batch.length;
+            setStagedFileCount(stagedFiles);
+            setUploadProgress(Math.min(100, Math.round((stagedBytes / totalBytes) * 100)));
+          });
+        // If an earlier batch fails the whole import aborts; this only keeps
+        // the still-running one from surfacing as an unhandled rejection.
+        next.catch(() => {});
+        if (pending) await pending;
+        pending = next;
       }
-      return { reviewOpened };
+      if (pending) await pending;
+      return { reviewOpened: true };
     })()
       .catch((err: Error) => {
         if (controller.signal.aborted || err.name === "AbortError") {
@@ -216,6 +238,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         setImportMode(null);
         setStagingSessionId(null);
         setTotalFileCount(null);
+        setTotalByteCount(null);
         setStagedFileCount(0);
       });
   }
@@ -247,6 +270,12 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
           Math.max(stagedFileCount, importProgress?.phase === "staging" ? importProgress.copied : 0)
         )
       : null;
+  // Bytes landed so far, straight from the backend poll - the honest basis
+  // for a copy rate/ETA (file counts mislead when file sizes vary).
+  const liveStagedBytes =
+    folderImportActive && importProgress?.phase === "staging"
+      ? importProgress.copied_bytes
+      : null;
   const effectiveUploadPct =
     folderImportActive && totalFileCount && liveStagedCount !== null
       ? Math.round((liveStagedCount / totalFileCount) * 100)
@@ -276,6 +305,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setImportMode(null);
     setStagingSessionId(null);
     setTotalFileCount(null);
+    setTotalByteCount(null);
     setStagedFileCount(0);
   }
 
@@ -291,8 +321,10 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         importMode,
         stagingSessionId,
         totalFileCount,
+        totalByteCount,
         stagedFileCount,
         liveStagedCount,
+        liveStagedBytes,
         effectiveUploadPct,
         analysisPending,
         analysisProcessed,

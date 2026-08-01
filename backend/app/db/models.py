@@ -343,9 +343,20 @@ class ImportStagedFile(Base):
     original_filename: Mapped[str] = mapped_column(String)
     file_type: Mapped[FileType] = mapped_column(Enum(FileType))
 
-    sha256: Mapped[str] = mapped_column(String, index=True)
+    # NULL until the background analysis hashes the landed file - the copy
+    # phase itself is a dumb native kernel copy and computes nothing.
+    sha256: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     perceptual_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     exif_json: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The handful of EXIF fields the review grid actually shows, denormalized
+    # into real columns at analysis time. The /files poll serves them straight
+    # from here - parsing exif_json per file per poll burned real CPU on
+    # multi-thousand imports. exif_json stays the full record for commit.
+    taken_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    camera_make: Mapped[str | None] = mapped_column(String, nullable=True)
+    camera_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # False while the background analysis (preview/phash/EXIF/thumbnail +
     # duplicate detection) hasn't finished for this file yet. The copy phase

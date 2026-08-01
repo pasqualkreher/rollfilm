@@ -1,3 +1,4 @@
+import errno
 import io
 import json
 import logging
@@ -20,11 +21,17 @@ from app.db.session import get_db
 from app.services.import_pipeline import (
     append_uploaded_files,
     commit_import_session,
-    compute_staged_pairs,
     discard_import_session,
     ensure_session_processing,
+    flush_analysis_buffer,
     get_import_progress,
+    get_session_files_view,
+    get_session_version,
+    get_view_row,
+    schedule_staged_raw_demosaic,
     stage_uploaded_files,
+    staged_demosaic_path,
+    update_view_row,
 )
 from app.services.borg_backup import run_backup_soon
 from app.services.raw import classify_file_type, extract_full_preview
@@ -34,12 +41,18 @@ logger = logging.getLogger(__name__)
 
 LIGHTBOX_PREVIEW_PX = 2048
 
-# Staging thumbnails RAW files from the embedded camera JPEG (fast, but it has
-# the camera's JPEG rendering baked in) makes a RAW card pixel-identical to its
-# JPEG sibling in the review grid. Demosaiced replacements are generated lazily
-# here on first request instead - same philosophy as the lightbox preview - and
-# this gate keeps a grid full of RAWs from demosaicing all at once.
-_RAW_THUMB_SLOTS = threading.BoundedSemaphore(min(4, max(2, (os.cpu_count() or 4) // 2)))
+# RAW staging thumbnails: the demosaiced (sensor-accurate) versions are
+# generated in the background by the import pipeline as each RAW finishes
+# analysis (see schedule_staged_raw_demosaic there). The thumbnail route below
+# always answers instantly - demosaic when cached, embedded thumb otherwise.
+
+# Lightbox previews of staged files are a full RAW demosaic per photo. Two
+# defenses keep that affordable: a DISK cache in the session's thumbnail
+# folder (previews are normally pre-written by analysis/demosaic, so this
+# render path is the exception), and a ONE-slot render gate - a render can
+# peak past 400MB on 40MP RAWs, and several at once pushed an 8GB machine
+# into swap. Deliberately the same on every machine: predictable > fast.
+_STAGED_PREVIEW_SLOTS = threading.BoundedSemaphore(1)
 
 router = APIRouter(prefix="/import", tags=["import"])
 
@@ -48,44 +61,6 @@ router = APIRouter(prefix="/import", tags=["import"])
 # grid or re-zapping the lightbox never re-downloads. Not immutable: a RAW's
 # thumb can upgrade once from the embedded fallback to the demosaiced render.
 _STAGED_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
-
-
-def _trashed_duplicate_ids(db: Session, files: list[ImportStagedFile]) -> set[str]:
-    """Ids of Trash-dwelling managed images referenced by these staged files'
-    exact-duplicate links, resolved in one query - the review UI shows those
-    files as "restores from Trash" (importable) rather than "already in
-    library" (blocked)."""
-    ids = {f.duplicate_of_image_id for f in files if f.duplicate_of_image_id}
-    if not ids:
-        return set()
-    rows = db.query(Image.id).filter(Image.id.in_(ids), Image.deleted_at.isnot(None)).all()
-    return {row.id for row in rows}
-
-
-def _to_staged_file_out(
-    f: ImportStagedFile, paired_id: str | None = None, duplicate_in_trash: bool = False
-) -> schemas.StagedFileOut:
-    exif = json.loads(f.exif_json) if f.exif_json else {}
-    return schemas.StagedFileOut(
-        id=f.id,
-        original_filename=f.original_filename,
-        file_type=f.file_type,
-        selected=f.selected,
-        rating=f.rating,
-        color_label=f.color_label,
-        duplicate_of_image_id=f.duplicate_of_image_id,
-        duplicate_of_staged_file_id=f.duplicate_of_staged_file_id,
-        is_near_duplicate=f.is_near_duplicate,
-        duplicate_in_trash=duplicate_in_trash,
-        paired_staged_file_id=paired_id,
-        taken_at=exif.get("taken_at"),
-        camera_make=exif.get("camera_make"),
-        camera_model=exif.get("camera_model"),
-        width=exif.get("width"),
-        height=exif.get("height"),
-        immich_sync=f.immich_sync,
-        processed=f.processed,
-    )
 
 
 # Keep this much of the disk out of reach of an import: the staged bytes are
@@ -153,12 +128,23 @@ def upload_import_session(
             detail="The disk is almost full - the import was stopped so the system stays usable.",
         )
 
-    if session_id:
-        session = get_owned_import_session(db, current_user.id, session_id)
-        if session.status != ImportSessionStatus.staging:
-            raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
-        return append_uploaded_files(db, session, current_user.id, files)
-    return stage_uploaded_files(db, current_user.id, files, source_label)
+    try:
+        if session_id:
+            session = get_owned_import_session(db, current_user.id, session_id)
+            if session.status != ImportSessionStatus.staging:
+                raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
+            return append_uploaded_files(db, session, current_user.id, files)
+        return stage_uploaded_files(db, current_user.id, files, source_label)
+    except OSError as e:
+        # The disk can fill up MID-batch (the preflight above only sees the
+        # state before it) - answer with the same clear 507 instead of a bare
+        # 500 that reads as a network error.
+        if e.errno == errno.ENOSPC:
+            raise HTTPException(
+                status_code=507,
+                detail="The disk filled up during the import - free some space and try again; photos already staged are kept.",
+            )
+        raise
 
 
 class _LocalUpload:
@@ -166,10 +152,13 @@ class _LocalUpload:
     interface as FastAPI's UploadFile (filename + file), so the direct folder
     import reuses the staging pipeline of the HTTP upload unchanged. `mtime`
     lets staging preserve the source file's modification time (the capture-date
-    fallback for files without EXIF)."""
+    fallback for files without EXIF). `source_path` unlocks the OS-native copy
+    fast path in the pipeline (kernel-space, like the Finder) instead of
+    pumping the bytes through Python."""
 
     def __init__(self, path: Path):
         self.filename = path.name
+        self.source_path = path
         self.file = path.open("rb")
         try:
             self.mtime: float | None = path.stat().st_mtime
@@ -271,6 +260,14 @@ def stage_local_paths(
                 raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
             return append_uploaded_files(db, session, current_user.id, uploads)
         return stage_uploaded_files(db, current_user.id, uploads, payload.source_label)
+    except OSError as e:
+        # Same mid-batch disk-full mapping as the upload route.
+        if e.errno == errno.ENOSPC:
+            raise HTTPException(
+                status_code=507,
+                detail="The disk filled up during the import - free some space and try again; photos already staged are kept.",
+            )
+        raise
     finally:
         for u in uploads:
             try:
@@ -286,21 +283,32 @@ def get_import_session(
     return get_owned_import_session(db, current_user.id, session_id)
 
 
-@router.get("/sessions/{session_id}/files", response_model=list[schemas.StagedFileOut])
+@router.get("/sessions/{session_id}/files", response_model=schemas.StagedFilesOut)
 def list_staged_files(
-    session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    session_id: str,
+    known_version: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     session = get_owned_import_session(db, current_user.id, session_id)
+    # Captured BEFORE loading/serializing: a change landing mid-build makes
+    # the client's next known_version mismatch, so nothing is ever missed.
+    version = get_session_version(session_id)
+    if known_version is not None and known_version == version:
+        # Nothing changed since the client's copy - the response is two ints.
+        # (Self-heal below is safe to skip too: any lost-job situation stems
+        # from a restart, which also reset the version seed -> mismatch.)
+        return schemas.StagedFilesOut(version=version, unchanged=True)
+    # Served from the import pipeline's in-memory view: plain dict copies,
+    # no ORM row load, no per-RAW stat, pairs cached until membership
+    # changes. The poll used to do all of that per second, which grew with
+    # the import and measurably slowed the copy loop (GIL).
+    files = get_session_files_view(db, session)
     # Self-healing: if the backend restarted mid-analysis (the worker queue is
     # in-memory), re-enqueue whatever is still unprocessed. The review screen
     # polls this route, so a stuck session recovers as soon as it's looked at.
     ensure_session_processing(session)
-    pairs = compute_staged_pairs(session.staged_files)
-    trashed = _trashed_duplicate_ids(db, session.staged_files)
-    return [
-        _to_staged_file_out(f, pairs.get(f.id), f.duplicate_of_image_id in trashed)
-        for f in session.staged_files
-    ]
+    return schemas.StagedFilesOut(version=version, files=files)
 
 
 @router.get("/sessions/{session_id}/files/{file_id}/thumbnail")
@@ -315,31 +323,17 @@ def get_staged_file_thumbnail(
 
     # RAW cards get a demosaiced thumbnail so they look like the actual sensor
     # data (as in the library) instead of the camera-rendered embedded JPEG,
-    # which is indistinguishable from the JPEG sibling's card. Generated lazily
-    # and cached; any failure falls back to the staging-time embedded thumb.
+    # which is indistinguishable from the JPEG sibling's card. Never rendered
+    # in the request (a grid of RAWs queued minutes behind synchronous
+    # demosaics): serve it when it's cached, otherwise answer with the fast
+    # embedded thumb below and (re)queue the background render - the /files
+    # poll flips has_demosaic_thumb when it lands, busting the img URL.
     staged = db.get(ImportStagedFile, file_id)
     if staged is not None and staged.import_session_id == session_id and staged.file_type == FileType.raw:
-        demosaic_path = thumb_dir / f"{file_id}.demosaic.jpg"
-        if not demosaic_path.exists():
-            source_path = settings.import_staging_root / staged.staged_path
-            if source_path.exists():
-                try:
-                    with _RAW_THUMB_SLOTS:
-                        if not demosaic_path.exists():
-                            preview = extract_full_preview(source_path)
-                            # Match the staging thumb's sizing: a quarter of the
-                            # original (the demosaic is half-size, so half of it),
-                            # capped like the library's grid thumbnails.
-                            tw = min(max(1, round(preview.width * 0.5)), THUMBNAIL_MAX_PX)
-                            th = min(max(1, round(preview.height * 0.5)), THUMBNAIL_MAX_PX)
-                            preview.thumbnail((tw, th), PILImage.LANCZOS)
-                            tmp_path = thumb_dir / f"{file_id}.demosaic.tmp"
-                            preview.save(tmp_path, "JPEG", quality=88)
-                            os.replace(tmp_path, demosaic_path)
-                except Exception:
-                    logger.exception("Demosaiced staging thumbnail failed for %s", staged.original_filename)
+        demosaic_path = staged_demosaic_path(session_id, file_id)
         if demosaic_path.exists():
             return FileResponse(demosaic_path, headers=_STAGED_CACHE_HEADERS)
+        schedule_staged_raw_demosaic(session_id, file_id, staged.staged_path)
 
     thumb_path = thumb_dir / f"{file_id}.jpg"
     if not thumb_path.exists():
@@ -366,21 +360,38 @@ def get_staged_file_preview(
     if not staged_full_path.exists():
         raise HTTPException(status_code=404, detail="Staged file missing from disk")
 
+    # Disk cache first: a preview is rendered exactly once per staged file
+    # (the folder disappears with the session on commit/discard).
+    cache_path = (
+        settings.import_staging_root / session_id / ".thumbnails" / f"{file_id}.preview.jpg"
+    )
+    if cache_path.exists():
+        return FileResponse(cache_path, headers=_STAGED_CACHE_HEADERS)
+
     # A damaged file must not take the request down with a 500 - the lightbox
     # shows a clean "can't display" state on 404 and the review keeps working.
     try:
-        preview = extract_full_preview(staged_full_path)
+        with _STAGED_PREVIEW_SLOTS:
+            if cache_path.exists():  # a concurrent request rendered it
+                return FileResponse(cache_path, headers=_STAGED_CACHE_HEADERS)
+            preview = extract_full_preview(staged_full_path)
+            preview.thumbnail((LIGHTBOX_PREVIEW_PX, LIGHTBOX_PREVIEW_PX))
+            buf = io.BytesIO()
+            preview.save(buf, "JPEG", quality=88)
+            data = buf.getvalue()
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = cache_path.with_suffix(".tmp")
+                tmp_path.write_bytes(data)
+                os.replace(tmp_path, cache_path)
+            except OSError:
+                logger.exception("Could not cache staged preview for %s", staged.original_filename)
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Staged preview render failed for %s", staged.original_filename)
         raise HTTPException(status_code=404, detail="Preview could not be rendered")
-    preview.thumbnail((LIGHTBOX_PREVIEW_PX, LIGHTBOX_PREVIEW_PX))
-    buf = io.BytesIO()
-    preview.save(buf, "JPEG", quality=88)
-    # Rendered on demand (RAW decode!) - caching saves the full re-render when
-    # the user zaps back to a photo in the lightbox.
-    return Response(
-        content=buf.getvalue(), media_type="image/jpeg", headers=_STAGED_CACHE_HEADERS
-    )
+    return Response(content=data, media_type="image/jpeg", headers=_STAGED_CACHE_HEADERS)
 
 
 @router.patch("/sessions/{session_id}/files/{file_id}", response_model=schemas.StagedFileOut)
@@ -418,20 +429,32 @@ def update_staged_file(
                 "this batch) and can't be imported again.",
             )
 
+    view_fields: dict = {}
     if payload.selected is not None:
         staged.selected = payload.selected
+        view_fields["selected"] = payload.selected
     if payload.rating is not None:
         staged.rating = payload.rating
+        view_fields["rating"] = payload.rating
     if payload.color_label is not None:
         staged.color_label = payload.color_label
+        view_fields["color_label"] = payload.color_label.value
     if payload.immich_sync is not None:
         staged.immich_sync = payload.immich_sync
+        view_fields["immich_sync"] = payload.immich_sync
     db.commit()
-    db.refresh(staged)
+    # Keep the in-memory review view in lockstep (bumps the version).
+    update_view_row(session_id, file_id, view_fields)
 
-    pairs = compute_staged_pairs(session.staged_files)
-    trashed = _trashed_duplicate_ids(db, [staged])
-    return _to_staged_file_out(staged, pairs.get(staged.id), staged.duplicate_of_image_id in trashed)
+    out = get_view_row(session_id, file_id)
+    if out is None:
+        # View not built yet (e.g. a PATCH before any /files call after a
+        # restart) - build it, then read the row.
+        get_session_files_view(db, session)
+        out = get_view_row(session_id, file_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="Staged file not found")
+    return out
 
 
 @router.patch("/sessions/{session_id}/files", response_model=list[schemas.StagedFileOut])
@@ -472,13 +495,23 @@ def bulk_update_staged_files(
         if payload.immich_sync is not None:
             staged.immich_sync = payload.immich_sync
     db.commit()
-    db.refresh(session)
-    pairs = compute_staged_pairs(session.staged_files)
-    trashed = _trashed_duplicate_ids(db, session.staged_files)
-    return [
-        _to_staged_file_out(f, pairs.get(f.id), f.duplicate_of_image_id in trashed)
-        for f in session.staged_files
-    ]
+    # Mirror the committed values into the in-memory review view (one version
+    # bump via each row update; the response is served from the view).
+    for file_id in payload.file_ids:
+        staged = by_id.get(file_id)
+        if staged is None:
+            continue
+        update_view_row(
+            session_id,
+            file_id,
+            {
+                "selected": staged.selected,
+                "rating": staged.rating,
+                "color_label": staged.color_label.value,
+                "immich_sync": staged.immich_sync,
+            },
+        )
+    return get_session_files_view(db, session)
 
 
 @router.post("/sessions/{session_id}/commit", response_model=list[schemas.ImageOut])
@@ -488,6 +521,10 @@ def commit_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Analysis results are buffered in memory (batched DB writes) - land them
+    # BEFORE this request's read snapshot opens, or fully-analyzed files would
+    # still read as unprocessed here.
+    flush_analysis_buffer(session_id)
     session = get_owned_import_session(db, current_user.id, session_id)
     if session.status != ImportSessionStatus.staging:
         raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")

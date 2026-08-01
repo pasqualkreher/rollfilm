@@ -12,6 +12,7 @@ export type Theme =
   | "soft-grey"
   | "graphite"
   | "greige"
+  | "atelier"
   | "oat"
   | "stone"
   | "fog"
@@ -32,6 +33,7 @@ export type Theme =
   | "taupe"
   | "slate"
   | "vintage"
+  | "darkroom"
   | "nord"
   | "forest"
   | "dracula"
@@ -63,6 +65,7 @@ export const SKINS: SkinInfo[] = [
   { value: "soft-grey", label: "Soft Grey", group: "light", bg: "#e8e8ea", elevated: "#f2f2f4", text: "#26262a", accent: "#3a6df0" },
   { value: "graphite", label: "Graphite", group: "light", bg: "#f3f3f4", elevated: "#fafafb", text: "#2b2b2f", accent: "#55555c" },
   { value: "greige", label: "Greige", group: "light", bg: "#e9e6e0", elevated: "#f2efe9", text: "#3a362f", accent: "#8a7f6d" },
+  { value: "atelier", label: "Atelier", group: "light", bg: "#f1eee6", elevated: "#f9f7f1", text: "#2e2a24", accent: "#8f6a4e" },
   { value: "oat", label: "Oat", group: "light", bg: "#eeeae1", elevated: "#f6f2ea", text: "#403a2f", accent: "#a9926b" },
   { value: "stone", label: "Stone", group: "light", bg: "#e7e6e3", elevated: "#f1f0ed", text: "#37352f", accent: "#7d7a70" },
   { value: "fog", label: "Fog", group: "light", bg: "#e8e9eb", elevated: "#f1f2f4", text: "#363840", accent: "#7c828e" },
@@ -83,6 +86,7 @@ export const SKINS: SkinInfo[] = [
   { value: "taupe", label: "Taupe", group: "dark", bg: "#302c28", elevated: "#3a3531", text: "#ece6dd", accent: "#b3a48d" },
   { value: "slate", label: "Slate", group: "dark", bg: "#2d2f33", elevated: "#363940", text: "#e6e8ea", accent: "#a4abb5" },
   { value: "vintage", label: "Vintage", group: "dark", bg: "#24211d", elevated: "#2e2a24", text: "#ece4d6", accent: "#e08a3c" },
+  { value: "darkroom", label: "Darkroom", group: "dark", bg: "#1e1c19", elevated: "#282521", text: "#e8e2d4", accent: "#b5936b" },
   { value: "nord", label: "Nord", group: "dark", bg: "#2e3440", elevated: "#3b4252", text: "#eceff4", accent: "#88c0d0" },
   { value: "forest", label: "Forest", group: "dark", bg: "#1a2620", elevated: "#223029", text: "#e4ede6", accent: "#6fbf8b" },
   { value: "dracula", label: "Dracula", group: "dark", bg: "#282a36", elevated: "#343746", text: "#f8f8f2", accent: "#bd93f9" },

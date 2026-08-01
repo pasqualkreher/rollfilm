@@ -14,7 +14,11 @@ import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
 import { IconArrowLeft, IconTrash } from "../components/Icons";
-import { preloadImage } from "../utils/preload";
+import { PinnedImageWindow, preloadImage } from "../utils/preload";
+
+// The lightbox keeps this many photos on EACH side of the current one pinned
+// in memory (see the pinned-neighbors effect) - 10 back + 10 ahead.
+const NEIGHBOR_WINDOW = 10;
 import { rememberLastViewedImage } from "../utils/lastViewed";
 import { useTransientMessage } from "../utils/transientMessage";
 import type { ColorLabel, ImageOut } from "../api/types";
@@ -302,32 +306,53 @@ export function ImageDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
-  // Once the user rests on a photo, pull its neighbors (the previous and next
-  // photo of the browsed set) into memory: their metadata into the query cache
-  // and their preview pixels into the browser cache. Arrow-key zapping then
-  // swaps instantly instead of showing an empty frame per photo. The preview
-  // URL is version-stamped for edited photos, so the metadata has to arrive
-  // first - a bare previewUrl(id) would miss the edited render.
+  // Once the user rests on a photo, hold a sliding window of the 10 previous
+  // and 10 next photos of the browsed set in memory: metadata in the query
+  // cache, preview pixels pinned via PinnedImageWindow (a strong reference
+  // per neighbor, so the decoded previews can't be evicted while nearby).
+  // Zapping many photos in either direction then swaps instantly; whatever
+  // falls out of the window is released. Warmed nearest-first, alternating
+  // ahead/behind, so the immediate neighbors are ready before the far ones.
+  // The preview URL is version-stamped for edited photos, so each neighbor's
+  // metadata has to arrive first - a bare previewUrl(id) would miss the
+  // edited render.
+  const pinnedNeighbors = useRef(new PinnedImageWindow());
+  useEffect(() => {
+    const pins = pinnedNeighbors.current;
+    return () => pins.clear();
+  }, []);
   useEffect(() => {
     if (!imageIds || imageIds.length === 0) return;
     const currentIndex = imageIds.indexOf(restedId);
     if (currentIndex === -1) return;
     let stale = false;
-    for (const neighborId of [imageIds[currentIndex + 1], imageIds[currentIndex - 1]]) {
-      if (!neighborId) continue;
-      queryClient
-        .prefetchQuery({
+    const order: string[] = [];
+    for (let d = 1; d <= NEIGHBOR_WINDOW; d++) {
+      const ahead = imageIds[currentIndex + d];
+      const behind = imageIds[currentIndex - d];
+      if (ahead) order.push(ahead);
+      if (behind) order.push(behind);
+    }
+    const urlFor = (neighborId: string) => {
+      const n = queryClient.getQueryData<ImageOut>(["image", neighborId]);
+      return n ? api.images.previewUrl(n.id, editVersion(n)) : null;
+    };
+    void (async () => {
+      for (const neighborId of order) {
+        if (stale) return;
+        // Metadata fetched one at a time (nearest first) so a rest never
+        // bursts 20 requests; fresh cache entries skip the round-trip.
+        await queryClient.prefetchQuery({
           queryKey: ["image", neighborId],
           queryFn: () => api.images.get(neighborId),
-        })
-        .then(() => {
-          // The user moved on while the metadata was in flight - don't also
-          // pull pixels for a position that's no longer next to anything.
-          if (stale) return;
-          const neighbor = queryClient.getQueryData<ImageOut>(["image", neighborId]);
-          if (neighbor) preloadImage(api.images.previewUrl(neighbor.id, editVersion(neighbor)));
+          staleTime: 60_000,
         });
-    }
+        if (stale) return;
+        // Re-sync the whole window after each arrival: the just-fetched
+        // neighbor gets pinned, anything now outside the window is released.
+        pinnedNeighbors.current.update(order, urlFor);
+      }
+    })();
     return () => {
       stale = true;
     };

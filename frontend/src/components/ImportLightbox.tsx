@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { ColorLabel, StagedFileOut } from "../api/types";
 import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
-import { preloadImage } from "../utils/preload";
-import { IconX } from "./Icons";
+import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
+import { IconArrowLeft } from "./Icons";
 
 interface Props {
   sessionId: string;
@@ -39,6 +39,8 @@ export function ImportLightbox({
   // state instead of the browser's broken-image icon; rating, the import
   // toggle and arrow-key navigation keep working.
   const [loadFailed, setLoadFailed] = useState(false);
+  // Light-table vs black background, same toggle as the library photo view.
+  const [bgMode, setBgMode] = useState<"light" | "dark">("light");
   useEffect(() => {
     setLoadFailed(false);
   }, [file?.id]);
@@ -70,14 +72,31 @@ export function ImportLightbox({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [index, files.length, onIndexChange, onClose, onUpdate, file]);
 
-  // Pull the previous/next photo's preview into memory while this one is on
-  // screen - zapping through a fresh import with the arrow keys then swaps
-  // instantly. This also triggers the server's lazy preview generation for
-  // RAW files one photo ahead, hiding that first-request cost.
+  // Hold the 10 previous and 10 next staged previews pinned in memory while
+  // this one is on screen (same sliding window as the library lightbox) -
+  // zapping through a fresh import with the arrow keys swaps instantly in
+  // both directions, and whatever falls out of the window is released. Also
+  // triggers the server's lazy preview generation for RAW files ahead of the
+  // user, hiding that first-request cost. Ordered nearest-first so the
+  // immediate neighbors are warm before the far ones.
+  const pinnedNeighbors = useRef(new PinnedImageWindow());
   useEffect(() => {
-    for (const neighbor of [files[index + 1], files[index - 1]]) {
-      if (neighbor) preloadImage(api.import.stagedPreviewUrl(sessionId, neighbor.id));
+    const pins = pinnedNeighbors.current;
+    return () => pins.clear();
+  }, []);
+  useEffect(() => {
+    const order: string[] = [];
+    // Narrow window (not ±10): each pinned preview holds ~11MB decoded, and
+    // a wide window fed system-wide swapping during imports. The depth
+    // scales with device RAM (±2 on 4GB machines, ±4 otherwise) - both
+    // cover arrow-key zapping speed comfortably.
+    for (let d = 1; d <= LIGHTBOX_NEIGHBOR_DEPTH; d++) {
+      const ahead = files[index + d];
+      const behind = files[index - d];
+      if (ahead) order.push(ahead.id);
+      if (behind) order.push(behind.id);
     }
+    pinnedNeighbors.current.update(order, (id) => api.import.stagedPreviewUrl(sessionId, id));
   }, [files, index, sessionId]);
 
   if (!file) return null;
@@ -85,37 +104,67 @@ export function ImportLightbox({
   const isExactDuplicate = Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id) && !file.is_near_duplicate;
 
   return (
-    <div className="lightbox-overlay" onClick={onClose}>
-      <button className="lightbox-close" onClick={onClose} aria-label="Close">
-        <IconX size={16} />
-      </button>
-
-      <button
-        className="lightbox-nav-btn lightbox-nav-prev"
-        onClick={(e) => {
-          e.stopPropagation();
-          onIndexChange(Math.max(0, index - 1));
-        }}
-        disabled={index === 0}
-      >
-        ‹
-      </button>
-
-      <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
-        {loadFailed ? (
-          <div className="lightbox-image lightbox-image-error">
-            <span className="detail-photo-error-icon" aria-hidden="true">🖼️</span>
-            <p>This photo can't be displayed - the file may be damaged or unreadable.</p>
+    // Styled like the library's photo view (opaque app surface, back-arrow
+    // column, the same elevated image box with the light/black background
+    // toggle) - just without the library's info panel; the review controls
+    // bar below stays.
+    <div className="lightbox-overlay lightbox-overlay--page" onClick={onClose}>
+      <div className="detail-layout lightbox-detail-layout" onClick={(e) => e.stopPropagation()}>
+        <button
+          className="icon-btn detail-back-btn"
+          onClick={onClose}
+          title="Back (Esc)"
+          aria-label="Back"
+        >
+          <IconArrowLeft size={16} />
+        </button>
+        <div className="detail-main">
+          <div className={`detail-image lightbox-stage${bgMode === "dark" ? " detail-image-dark" : ""}`}>
+            <button
+              className="lightbox-nav-btn lightbox-nav-prev"
+              onClick={(e) => {
+                e.stopPropagation();
+                onIndexChange(Math.max(0, index - 1));
+              }}
+              disabled={index === 0}
+            >
+              ‹
+            </button>
+            {loadFailed ? (
+              <div className="detail-photo-error">
+                <span className="detail-photo-error-icon" aria-hidden="true">🖼️</span>
+                <p>This photo can't be displayed - the file may be damaged or unreadable.</p>
+              </div>
+            ) : (
+              <img
+                className={bgMode === "dark" ? "framed" : undefined}
+                src={api.import.stagedPreviewUrl(sessionId, file.id)}
+                alt={file.original_filename}
+                onError={() => setLoadFailed(true)}
+              />
+            )}
+            <button
+              className="lightbox-nav-btn lightbox-nav-next"
+              onClick={(e) => {
+                e.stopPropagation();
+                onIndexChange(Math.min(files.length - 1, index + 1));
+              }}
+              disabled={index === files.length - 1}
+            >
+              ›
+            </button>
           </div>
-        ) : (
-          <img
-            className="lightbox-image"
-            src={api.import.stagedPreviewUrl(sessionId, file.id)}
-            alt={file.original_filename}
-            onError={() => setLoadFailed(true)}
-          />
-        )}
-        <div className="lightbox-controls">
+          <div className="detail-image-toolbar">
+            <span className="segmented">
+              <button className={bgMode === "light" ? "active" : ""} onClick={() => setBgMode("light")}>
+                Light background
+              </button>
+              <button className={bgMode === "dark" ? "active" : ""} onClick={() => setBgMode("dark")}>
+                Black background
+              </button>
+            </span>
+          </div>
+          <div className="lightbox-controls">
           <div className="lightbox-controls-meta">
             <span className="lightbox-filename">{file.original_filename}</span>
             <span
@@ -164,19 +213,9 @@ export function ImportLightbox({
             <RatingStars rating={file.rating} onChange={(rating) => onUpdate(file.id, { rating })} />
             <ColorLabelPicker value={file.color_label} onChange={(color_label) => onUpdate(file.id, { color_label })} />
           </div>
+          </div>
         </div>
       </div>
-
-      <button
-        className="lightbox-nav-btn lightbox-nav-next"
-        onClick={(e) => {
-          e.stopPropagation();
-          onIndexChange(Math.min(files.length - 1, index + 1));
-        }}
-        disabled={index === files.length - 1}
-      >
-        ›
-      </button>
     </div>
   );
 }

@@ -82,6 +82,16 @@ export function IconFilter(props: IconProps) {
   );
 }
 
+export function IconChart(props: IconProps) {
+  // Three rising bars on a baseline - the stats dashboard.
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2 13.5h12" />
+      <path d="M4 13.5V9.5M8 13.5V5.5M12 13.5V2.5" />
+    </svg>
+  );
+}
+
 export function IconTrash(props: IconProps) {
   return (
     <svg {...svgProps(props)}>

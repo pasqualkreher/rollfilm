@@ -23,6 +23,12 @@ export function FilterChip({ label, active = false, title, children }: Props) {
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
+      // Dropdown menus render through a portal on <body> (so modals can't
+      // clip them), which puts them OUTSIDE this wrapper in the DOM even when
+      // they belong to a dropdown inside this popover. Without this guard,
+      // picking a Camera/Lens/Album/Rating option closed the chip on
+      // mousedown - unmounting the menu before its option ever got the click.
+      if ((e.target as Element | null)?.closest?.(".dropdown-menu")) return;
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     }
     function onKey(e: KeyboardEvent) {

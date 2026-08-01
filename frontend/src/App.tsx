@@ -9,12 +9,13 @@ import { AlbumDetail } from "./pages/AlbumDetail";
 import { SmartAlbumDetail } from "./pages/SmartAlbumDetail";
 import { ImageDetail } from "./pages/ImageDetail";
 import { Settings } from "./pages/Settings";
+import { Stats } from "./pages/Stats";
 import { Selects } from "./pages/Selects";
 import { Trash } from "./pages/Trash";
 import { MapView } from "./pages/MapView";
 import { Help } from "./pages/Help";
 import { SearchBar } from "./components/SearchBar";
-import { IconGear, IconHelp } from "./components/Icons";
+import { IconChart, IconGear, IconHelp } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
@@ -262,6 +263,14 @@ function TopBar() {
         aria-label="Settings and help"
       >
         <NavLink
+          to="/stats"
+          className={({ isActive }) => `top-icon-link${isActive ? " active" : ""}`}
+          title="Statistics"
+          aria-label="Statistics"
+        >
+          <IconChart size={16} />
+        </NavLink>
+        <NavLink
           to="/settings"
           className={({ isActive }) => `top-icon-link${isActive ? " active" : ""}`}
           title="Settings"
@@ -329,6 +338,7 @@ export default function App() {
             <Route path="/map" element={<MapView />} />
             <Route path="/selects" element={<Selects />} />
             <Route path="/trash" element={<Trash />} />
+            <Route path="/stats" element={<Stats />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/help" element={<Help />} />
             </Routes>

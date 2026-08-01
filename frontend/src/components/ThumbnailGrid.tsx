@@ -5,7 +5,7 @@ import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { useMergePairs } from "../state/viewPrefs";
-import { watchNearViewport } from "../utils/preload";
+import { watchInViewport, watchNearViewport } from "../utils/preload";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 
 interface Props {
@@ -67,12 +67,14 @@ const RETRY_DELAYS_MS = [1200, 2500, 5000, 10000];
 // preload margin of the viewport (see utils/preload.ts) - well before it's
 // visible. Replaces native loading="lazy", whose preload distance is
 // browser-chosen and (especially in Safari) short enough to read as pop-in.
-// Fast scrolling stays cheap twice over: the stabilize delay keeps fly-by
-// tiles from requesting at all, and a tile that leaves the preload zone with
-// its request still in flight aborts it (src cleared), freeing the connection
-// for the region the user actually stopped at. Once a thumbnail has fully
-// loaded it stays loaded - scrolling back never re-fetches. Also used by the
-// import review grid, which otherwise fired every staged request at once.
+// The current view always wins the network: the stabilize delay keeps fly-by
+// tiles from requesting at all; a tile that scrolls back out of the (one
+// screenful) load margin aborts its in-flight request (src cleared), freeing
+// one of the ~6 HTTP/1.1 connections; and fetch priority follows actual
+// visibility - on-screen tiles request high, margin tiles low. Once a
+// thumbnail has fully loaded it stays loaded - scrolling back never
+// re-fetches. Also used by the import review grid, which otherwise fired
+// every staged request at once.
 export function Thumb({ src, alt }: { src: string; alt: string }) {
   const ref = useRef<HTMLImageElement | null>(null);
   const [shownSrc, setShownSrc] = useState<string | undefined>(undefined);
@@ -87,6 +89,21 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
   const [retrying, setRetrying] = useState(false);
   const retryCount = useRef(0);
   const retryTimer = useRef<number | null>(null);
+
+  // Fetch priority follows actual visibility: at/near the screen -> high,
+  // merely inside the load margin -> low. The browser reads the attribute
+  // when the request starts (and newer Chromium also re-prioritizes
+  // in-flight requests), so the photos the user is looking at always queue
+  // ahead of speculative preloads on the shared connections.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.setAttribute("fetchpriority", "low");
+    return watchInViewport(el, {
+      enter: () => el.setAttribute("fetchpriority", "high"),
+      leave: () => el.setAttribute("fetchpriority", "low"),
+    });
+  }, []);
 
   useEffect(() => {
     const el = ref.current;
@@ -170,7 +187,10 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
           const delay = RETRY_DELAYS_MS[retryCount.current];
           if (delay === undefined) {
             setRetrying(false);
-            return; // out of attempts - leave the tile blank
+            // Out of attempts: clear the failed src too, or the browser keeps
+            // rendering the broken-image glyph + alt text on the card.
+            setShownSrc(undefined);
+            return;
           }
           retryCount.current += 1;
           setRetrying(true);
