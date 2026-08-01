@@ -255,7 +255,7 @@ export function Albums() {
       clustersPending);
 
   return (
-    <div className="page">
+    <div className="page albums-page">
       <h2 className="section-title">Albums</h2>
 
       {smartLoading && (

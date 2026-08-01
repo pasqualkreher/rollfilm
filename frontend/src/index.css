@@ -1033,13 +1033,15 @@ button {
 
 /* Hide the native OS scrollbar on the app's scroll containers - the timeline
    scrubber is the app's own scroll affordance; scrolling still works by
-   wheel/trackpad/drag. */
-.page,
+   wheel/trackpad/drag. Settings and Albums have no scrubber, so they keep the
+   app's slim always-visible scrollbar (the global ::-webkit-scrollbar style)
+   whenever their content actually overflows. */
+.page:not(.settings-page):not(.albums-page),
 .page-scroll {
   scrollbar-width: none;
 }
 
-.page::-webkit-scrollbar,
+.page:not(.settings-page):not(.albums-page)::-webkit-scrollbar,
 .page-scroll::-webkit-scrollbar {
   width: 0;
   height: 0;
@@ -5503,7 +5505,10 @@ kbd {
   gap: 12px;
   overflow-x: auto;
   padding-bottom: 6px; /* keep the scrollbar off the cards */
-  scrollbar-width: thin;
+  /* No scrollbar-width here: specifying the standard property makes Chromium
+     ignore the ::-webkit-scrollbar styling and fall back to the OS overlay
+     bar, which stays invisible until you scroll. The global slim thumb shows
+     whenever the row actually overflows. */
 }
 
 .smart-card {
