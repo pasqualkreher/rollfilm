@@ -1,6 +1,7 @@
 import io
 import logging
 import math
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -300,7 +301,9 @@ def _oriented_size(im: PILImage.Image) -> tuple[int, int]:
     return w, h
 
 
-def extract_preview_with_size(path: Path) -> tuple[PILImage.Image, tuple[int, int]]:
+def extract_preview_with_size(
+    path: Path, io_gate: AbstractContextManager | None = None
+) -> tuple[PILImage.Image, tuple[int, int]]:
     """extract_preview() plus the true displayed dimensions of the *original*.
 
     The preview is decoded at a reduced DCT scale when the source is larger
@@ -308,26 +311,42 @@ def extract_preview_with_size(path: Path) -> tuple[PILImage.Image, tuple[int, in
     which cameras store at full sensor resolution. The size is read from the
     header *before* the reduced decode, so a caller sizing a thumbnail as a
     fraction of the original (staging) still sees the full dimensions.
-    """
+
+    `io_gate`: optional context manager held while the file's bytes are read
+    from disk. Import analysis passes a semaphore so only a few workers read
+    a spinning-disk staging area at once; the JPEG *decode* happens after the
+    gate is released, at the worker pool's full parallelism. (LibRaw here
+    can't read RAWs from a memory buffer, so the RAW is opened by path inside
+    the gate and only its embedded preview bytes leave it.)"""
+    gate = io_gate if io_gate is not None else nullcontext()
     if not is_raw(path):
-        im = PILImage.open(path)
+        with gate:
+            buf = io.BytesIO(path.read_bytes())
+        im = PILImage.open(buf)
         original_size = _oriented_size(im)
         return _load_jpeg_preview(im), original_size
 
-    with rawpy.imread(str(path)) as raw:
-        try:
-            thumb = raw.extract_thumb()
-        except rawpy.LibRawNoThumbnailError:
-            thumb = None
+    thumb_bytes: bytes | None = None
+    with gate:
+        with rawpy.imread(str(path)) as raw:
+            try:
+                thumb = raw.extract_thumb()
+            except rawpy.LibRawNoThumbnailError:
+                thumb = None
 
-        if thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG:
-            im = PILImage.open(io.BytesIO(thumb.data))
-            original_size = _oriented_size(im)
-            return _load_jpeg_preview(im), original_size
+            if thumb is not None and thumb.format == rawpy.ThumbFormat.JPEG:
+                thumb_bytes = thumb.data
+            else:
+                # No embedded JPEG (rare): demosaic while the file is open.
+                lin = _demosaic_linear(raw, half_size=True)
+                preview = PILImage.fromarray(
+                    default_tone_to_srgb(lin, compute_base_gain(lin))
+                )
+                return preview, preview.size
 
-        lin = _demosaic_linear(raw, half_size=True)
-        preview = PILImage.fromarray(default_tone_to_srgb(lin, compute_base_gain(lin)))
-        return preview, preview.size
+    im = PILImage.open(io.BytesIO(thumb_bytes))
+    original_size = _oriented_size(im)
+    return _load_jpeg_preview(im), original_size
 
 
 def extract_full_preview(path: Path) -> PILImage.Image:

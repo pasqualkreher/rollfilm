@@ -10,9 +10,11 @@ import { collapsePairsBy } from "../utils/pairing";
 // Grid tile minimum width in px. "combined" grids look best a touch larger, but
 // the value is purely how big each thumbnail renders - bigger = fewer per row.
 export const THUMB_SIZES = [
+  { key: "xs", label: "XS", px: 130 },
   { key: "s", label: "S", px: 180 },
   { key: "m", label: "M", px: 260 },
   { key: "l", label: "L", px: 360 },
+  { key: "xl", label: "XL", px: 500 },
 ] as const;
 
 export type ThumbSizeKey = (typeof THUMB_SIZES)[number]["key"];

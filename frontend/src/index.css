@@ -2131,6 +2131,10 @@ textarea:focus-visible {
   height: 100%;
   object-fit: cover;
   display: block;
+  /* The card's overflow:hidden alone isn't enough: Chromium skips the rounded
+     clip when the img is composited (its opacity fade / hover filter), so the
+     square corners poke past the card frame. Round the img itself too. */
+  border-radius: inherit;
   /* Blank until the pixels arrive, then fade in softly instead of snapping in
      (the JS toggles .is-loaded on load - see Thumb in ThumbnailGrid.tsx). */
   opacity: 0;
@@ -2152,6 +2156,9 @@ textarea:focus-visible {
   background-size: 200% 100%;
   animation: pm-skeleton 1.4s ease-in-out infinite;
   pointer-events: none;
+  /* Same composited-corner story as .thumb-card img: the shimmer animation can
+     lift this onto its own layer, past the card's rounded clip. */
+  border-radius: inherit;
 }
 
 /* Users who prefer reduced motion get everything immediately, no fades or
@@ -2336,7 +2343,12 @@ textarea:focus-visible {
 }
 
 .import-card .thumb-card {
-  border-radius: 0;
+  /* Top corners carry the OUTER card's radius (bottom stays square - the
+     footer continues below). Zeroing the radius here relied on the outer
+     card's overflow clip, which Chromium skips while the img is composited
+     (fade-in/hover filter) - square image corners poked over the card frame.
+     The img inherits this radius and rounds itself in every state. */
+  border-radius: calc(10px * var(--corner-scale)) calc(10px * var(--corner-scale)) 0 0;
   border: none;
 }
 
@@ -3979,6 +3991,7 @@ input.editor-preset-select {
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: inherit;
   background: linear-gradient(90deg, var(--bg-elevated) 30%, var(--hover) 50%, var(--bg-elevated) 70%);
   background-size: 200% 100%;
   animation: pm-skeleton 1.4s ease-in-out infinite;

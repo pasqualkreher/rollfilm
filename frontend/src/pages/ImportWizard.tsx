@@ -19,13 +19,19 @@ import { useMergePairs } from "../state/viewPrefs";
 import { useTransientMessage } from "../utils/transientMessage";
 import { IconChevronDown } from "../components/Icons";
 
-// Human-readable "time remaining" for the import ETA (e.g. "45s", "2m 10s").
+// Human-readable "time remaining" for the import ETA (e.g. "45s", "2m 10s",
+// "1h 57m" - never "116m 46s").
 function formatEta(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  const rem = s % 60;
-  return rem ? `${m}m ${rem}s` : `${m}m`;
+  if (m < 60) {
+    const rem = s % 60;
+    return rem ? `${m}m ${rem}s` : `${m}m`;
+  }
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM ? `${h}h ${remM}m` : `${h}h`;
 }
 
 // Byte-identical to a photo already in the library or elsewhere in this same
@@ -158,10 +164,17 @@ export function ImportWizard() {
     // - those cards' spinners then spun until some incidental refetch (window
     // focus) picked up the final state. Polling /files also drives the
     // backend's self-healing re-enqueue for files whose analysis job was lost.
-    refetchInterval: (query) =>
-      stagingInBackground || analysisPending || (query.state.data ?? []).some((f) => !f.processed)
-        ? 1000
-        : false,
+    refetchInterval: (query) => {
+      const data = query.state.data ?? [];
+      const active = stagingInBackground || analysisPending || data.some((f) => !f.processed);
+      if (!active) return false;
+      // Each poll ships (and re-renders) the ENTIRE staged list. At a 1s
+      // cadence with thousands of files that becomes serious backend + SQLite
+      // load competing with the copy itself - a big reason huge imports felt
+      // slower the further they got. Scale the interval with the grid size:
+      // snappy while small, easing off to 5s on multi-thousand imports.
+      return Math.min(5000, Math.max(1000, data.length));
+    },
   });
 
   const filesById = useMemo(() => new Map((files ?? []).map((f) => [f.id, f])), [files]);
@@ -271,6 +284,30 @@ export function ImportWizard() {
     }
   }, [isUploading, effectiveUploadPct]);
   const uploadEtaSuffix = uploadEta != null ? ` · ~${formatEta(uploadEta)} left` : "";
+
+  // Same projection for the review screen's "still copying" banner, but from
+  // the staged-file counter instead of byte percent: rate = files landed since
+  // the banner appeared / elapsed time. Waits for a handful of files and a
+  // couple of seconds so the first samples don't produce a wild estimate.
+  const copyStartRef = useRef<{ t: number; count: number } | null>(null);
+  const [copyEta, setCopyEta] = useState<number | null>(null);
+  useEffect(() => {
+    if (!stagingInBackground || liveStagedCount == null || totalFileCount == null) {
+      copyStartRef.current = null;
+      setCopyEta(null);
+      return;
+    }
+    if (copyStartRef.current === null) {
+      copyStartRef.current = { t: Date.now(), count: liveStagedCount };
+      return;
+    }
+    const elapsed = (Date.now() - copyStartRef.current.t) / 1000;
+    const landed = liveStagedCount - copyStartRef.current.count;
+    if (elapsed >= 2 && landed >= 5) {
+      const eta = ((totalFileCount - liveStagedCount) * elapsed) / landed;
+      setCopyEta(Number.isFinite(eta) && eta >= 0 ? eta : null);
+    }
+  }, [stagingInBackground, liveStagedCount, totalFileCount]);
 
   const discard = useMutation({
     mutationFn: () => api.import.discard(sessionId!),
@@ -680,7 +717,9 @@ export function ImportWizard() {
           <p className="import-staging-banner" role="status" aria-live="polite">
             <span className="spinner" aria-hidden="true" /> Still copying photos in the background…{" "}
             {liveStagedCount != null && totalFileCount != null
-              ? `${liveStagedCount.toLocaleString()} / ${totalFileCount.toLocaleString()}`
+              ? `${liveStagedCount.toLocaleString()} / ${totalFileCount.toLocaleString()}${
+                  copyEta != null ? ` · ~${formatEta(copyEta)} left` : ""
+                }`
               : ""}{" "}
             — you can start reviewing now.
           </p>
@@ -792,13 +831,18 @@ export function ImportWizard() {
                 : "Copies the selected photos into your library"
           }
         >
-          {commit.isPending
-            ? `Adding to library...${progressSuffix}`
-            : stagingInBackground
-              ? "Copying photos…"
-              : analysisPending
-                ? `Analyzing… ${analysisProcessed}/${analysisTotal}`
-                : `Add ${selectedCount} photo(s) to library`}
+          {commit.isPending ? (
+            <>
+              <span className="btn-spinner" aria-hidden="true" />
+              {`Adding to library...${progressSuffix}`}
+            </>
+          ) : stagingInBackground ? (
+            "Copying photos…"
+          ) : analysisPending ? (
+            `Analyzing… ${analysisProcessed}/${analysisTotal}`
+          ) : (
+            `Add ${selectedCount} photo(s) to library`
+          )}
         </button>
         <button
           className="btn"
@@ -820,7 +864,14 @@ export function ImportWizard() {
           }}
           disabled={discard.isPending}
         >
-          Discard batch
+          {discard.isPending ? (
+            <>
+              <span className="btn-spinner" aria-hidden="true" />
+              Discarding…
+            </>
+          ) : (
+            "Discard batch"
+          )}
         </button>
       </div>
 

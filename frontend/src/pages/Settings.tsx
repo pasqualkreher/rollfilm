@@ -752,7 +752,14 @@ export function Settings() {
             onClick={() => saveImmich.mutate()}
             disabled={!immichUrl.trim() || saveImmich.isPending}
           >
-            {saveImmich.isPending ? "Saving..." : "Save Immich settings"}
+            {saveImmich.isPending ? (
+              <>
+                <span className="btn-spinner" aria-hidden="true" />
+                Saving...
+              </>
+            ) : (
+              "Save Immich settings"
+            )}
           </button>
           <button
             className="btn"
@@ -760,7 +767,14 @@ export function Settings() {
             disabled={!immich?.api_key_set || testImmich.isPending}
             title={!immich?.api_key_set ? "Save a host and API key first" : undefined}
           >
-            {testImmich.isPending ? "Testing..." : "Test connection"}
+            {testImmich.isPending ? (
+              <>
+                <span className="btn-spinner" aria-hidden="true" />
+                Testing...
+              </>
+            ) : (
+              "Test connection"
+            )}
           </button>
         </div>
         {immichSaved && <Note>Immich settings saved.</Note>}
@@ -1087,9 +1101,14 @@ export function Settings() {
               ))}
             </div>
             <button className="btn" onClick={() => pruneTags.mutate()} disabled={pruneTags.isPending}>
-              {pruneTags.isPending
-                ? "Removing…"
-                : `Remove all ${unusedTags.length} unused tag${unusedTags.length === 1 ? "" : "s"}`}
+              {pruneTags.isPending ? (
+                <>
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Removing…
+                </>
+              ) : (
+                `Remove all ${unusedTags.length} unused tag${unusedTags.length === 1 ? "" : "s"}`
+              )}
             </button>
           </>
         )}
@@ -1107,7 +1126,14 @@ export function Settings() {
           </Desc>
           <div className="maintenance-run">
             <button className="btn" onClick={() => sync.mutate()} disabled={sync.isPending}>
-              {sync.isPending ? "Syncing..." : "Sync database to library"}
+              {sync.isPending ? (
+                <>
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Syncing...
+                </>
+              ) : (
+                "Sync database to library"
+              )}
             </button>
             {sync.isPending ? (
               <span className="maintenance-eta">
@@ -1135,7 +1161,14 @@ export function Settings() {
               onClick={() => rebuildThumbnails.mutate()}
               disabled={rebuildThumbnails.isPending}
             >
-              {rebuildThumbnails.isPending ? "Rebuilding..." : "Rebuild all thumbnails"}
+              {rebuildThumbnails.isPending ? (
+                <>
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Rebuilding...
+                </>
+              ) : (
+                "Rebuild all thumbnails"
+              )}
             </button>
             {rebuildThumbnails.isPending ? (
               <span className="maintenance-eta">Rebuilding… {rebuildProgressLine()}</span>
@@ -1156,7 +1189,14 @@ export function Settings() {
             differs - nothing else about the photos changes.
           </Desc>
           <button className="btn" onClick={() => repairDates.mutate()} disabled={repairDates.isPending}>
-            {repairDates.isPending ? "Repairing dates..." : "Repair capture dates"}
+            {repairDates.isPending ? (
+              <>
+                <span className="btn-spinner" aria-hidden="true" />
+                Repairing dates...
+              </>
+            ) : (
+              "Repair capture dates"
+            )}
           </button>
           {repairDatesResult && <Note>{repairDatesResult}</Note>}
         </div>
@@ -1232,7 +1272,14 @@ export function Settings() {
                 onClick={() => saveBorg.mutate(borg?.enabled ?? false)}
                 disabled={!borgRepo.trim() || saveBorg.isPending}
               >
-                {saveBorg.isPending ? "Saving..." : "Save backup settings"}
+                {saveBorg.isPending ? (
+                  <>
+                    <span className="btn-spinner" aria-hidden="true" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save backup settings"
+                )}
               </button>
               <button
                 className="btn"
@@ -1240,7 +1287,14 @@ export function Settings() {
                 disabled={!borg?.available || !borgRepo.trim() || testBorg.isPending}
                 title={!borg?.available ? "Install Borg first" : undefined}
               >
-                {testBorg.isPending ? "Testing..." : "Test repository"}
+                {testBorg.isPending ? (
+                  <>
+                    <span className="btn-spinner" aria-hidden="true" />
+                    Testing...
+                  </>
+                ) : (
+                  "Test repository"
+                )}
               </button>
               <button
                 className="btn"
@@ -1252,7 +1306,14 @@ export function Settings() {
                   !borg?.repo ? "Save a repository address first" : undefined
                 }
               >
-                {borg?.running ? "Backing up..." : "Back up now"}
+                {borg?.running || backupBorgNow.isPending ? (
+                  <>
+                    <span className="btn-spinner" aria-hidden="true" />
+                    Backing up...
+                  </>
+                ) : (
+                  "Back up now"
+                )}
               </button>
             </div>
             {borgSaved && <Note>Backup settings saved.</Note>}
@@ -1317,7 +1378,14 @@ export function Settings() {
               disabled={!restoreFile || restoreConfirmation.trim().toLowerCase() !== "delete" || restore.isPending}
               onClick={() => restore.mutate()}
             >
-              {restore.isPending ? "Restoring..." : "Restore from backup"}
+              {restore.isPending ? (
+                <>
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Restoring...
+                </>
+              ) : (
+                "Restore from backup"
+              )}
             </button>
           </div>
           {restoreResult && <Note>{restoreResult}</Note>}

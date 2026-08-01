@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import queue
 import shutil
 import threading
 import time
@@ -35,7 +36,7 @@ from app.services.exif import (
     to_int,
 )
 from app.services.filesystem import library_relative_path
-from app.services.hashing import hamming_int, perceptual_hash, phash_to_int, sha256_file
+from app.services.hashing import perceptual_hash, phash_to_int, sha256_file
 from app.services.pairing import pair_library, pair_siblings
 from app.services.raw import classify_file_type, extract_preview_with_size
 from app.services.settings_store import (
@@ -51,6 +52,7 @@ from app.workers.queue import (
     register_import_activity_probe,
 )
 
+import numpy as np
 from PIL import Image as PILImage
 
 
@@ -155,7 +157,13 @@ def _analyze_file(
     exif = ExifData()
 
     try:
-        preview, (orig_w, orig_h) = extract_preview_with_size(staged_path)
+        # The disk read inside extract_preview_with_size runs under the IO
+        # gate (protects spinning-disk staging from 16-way seek thrash
+        # against the copy stream); the decode and everything below run with
+        # the pool's full parallelism, so SSD systems lose nothing.
+        preview, (orig_w, orig_h) = extract_preview_with_size(
+            staged_path, io_gate=_analysis_read_gate
+        )
         perceptual = perceptual_hash(preview)
         # Match the library's grid thumbnail exactly (0.25 of the original,
         # capped, LANCZOS) so the import review shows the same quality. The
@@ -187,18 +195,47 @@ def _analyze_file(
 
 def _hash_and_copy(src: BinaryIO, dest: Path) -> tuple[str, int]:
     """Stream an upload to its staging path, hashing while the bytes pass
-    through - so the source medium is read exactly once instead of copied and
-    then re-read for sha256."""
+    through - the source medium is read exactly once. Read+hash and write run
+    as a two-stage pipeline (bounded queue, one writer thread): with source
+    and destination on different devices (SD card or one disk -> another)
+    both stay busy the whole time, where a single alternating loop idled each
+    side on every chunk - that alone halved cross-device throughput. On the
+    same physical disk the queue changes nothing (the head has to alternate
+    anyway). 8MB chunks keep spinning disks in long sequential runs."""
     digest = hashlib.sha256()
     size = 0
-    with dest.open("wb") as out:
-        while True:
-            chunk = src.read(1024 * 1024)
+    q: "queue.Queue[bytes | None]" = queue.Queue(maxsize=4)
+    write_error: list[BaseException] = []
+
+    def _writer() -> None:
+        try:
+            with dest.open("wb") as out:
+                while True:
+                    chunk = q.get()
+                    if chunk is None:
+                        return
+                    out.write(chunk)
+        except BaseException as e:
+            write_error.append(e)
+            # Keep draining so the (bounded) queue never blocks the reader.
+            while q.get() is not None:
+                pass
+
+    writer = threading.Thread(target=_writer, name="import-copy-writer", daemon=True)
+    writer.start()
+    try:
+        while not write_error:
+            chunk = src.read(8 * 1024 * 1024)
             if not chunk:
                 break
             digest.update(chunk)
-            out.write(chunk)
             size += len(chunk)
+            q.put(chunk)
+    finally:
+        q.put(None)
+        writer.join()
+    if write_error:
+        raise write_error[0]
     return digest.hexdigest(), size
 
 
@@ -212,6 +249,14 @@ def _hash_and_copy(src: BinaryIO, dest: Path) -> tuple[str, int]:
 _analysis_executor = ThreadPoolExecutor(
     max_workers=_STAGE_WORKERS, thread_name_prefix="import-analyze"
 )
+
+# Gate on the analysis workers' heavy file reads (preview extraction reads
+# the staged original). The pool is sized for CPU overlap (~2x cores), but on
+# a spinning-disk staging area 16 concurrent readers turn the copy stream
+# writing to the same disk into pure seek thrash - HDD-to-HDD imports crawled.
+# Four concurrent reads keep an HDD mostly sequential; on SSDs reads are fast
+# enough that the gate is rarely even contended.
+_analysis_read_gate = threading.BoundedSemaphore(4)
 
 # Each analysis worker thread keeps its own exiftool -stay_open helper (the
 # helper can't be shared between threads). Created lazily, lives as long as
@@ -233,6 +278,41 @@ _inflight: set[str] = set()
 _inflight_lock = threading.Lock()
 
 
+class _PhashIndex:
+    """Vectorized near-duplicate index: every phash lives in one uint64 array,
+    so a lookup is a single XOR + popcount sweep in C. The old per-file Python
+    loop over (library + already-staged) hashes ran inside the session lock,
+    so each additional photo made every later one a bit slower - the "imports
+    crawl the longer they run" effect on big batches."""
+
+    def __init__(self) -> None:
+        self._hashes = np.empty(1024, dtype=np.uint64)
+        self._n = 0
+        self._names: list[str] = []
+        self._ids: list[str] = []
+
+    def append(self, phash_int: int, filename: str, ref_id: str) -> None:
+        if self._n == len(self._hashes):
+            self._hashes = np.concatenate(
+                [self._hashes, np.empty(len(self._hashes), dtype=np.uint64)]
+            )
+        self._hashes[self._n] = phash_int
+        self._n += 1
+        self._names.append(filename)
+        self._ids.append(ref_id)
+
+    def near(self, phash_int: int, filename: str, threshold: int) -> str | None:
+        if self._n == 0:
+            return None
+        dist = np.bitwise_count(self._hashes[: self._n] ^ np.uint64(phash_int))
+        for idx in np.nonzero(dist <= threshold)[0]:
+            # A RAW+JPEG pair from the same shot has near-identical pixels but
+            # is a sibling to be paired (see pairing.py), not a duplicate.
+            if not _same_shot_stem(filename, self._names[int(idx)]):
+                return self._ids[int(idx)]
+        return None
+
+
 class _SessionDedupState:
     """Per-import-session duplicate-detection index, shared by all analysis
     jobs of that session. The library's hash indexes are loaded once (not
@@ -246,9 +326,9 @@ class _SessionDedupState:
         self.lock = threading.Lock()
         self.loaded = False
         self.image_by_hash: dict[str, tuple[str, str | None]] = {}  # sha -> (image id, source_root_id)
-        self.image_phashes: list[tuple[int, str, str]] = []  # (int phash, filename, image id)
+        self.image_phashes = _PhashIndex()
         self.staged_by_hash: dict[str, str] = {}  # sha -> staged file id
-        self.staged_phashes: list[tuple[int, str, str]] = []  # (int phash, filename, staged id)
+        self.staged_phashes = _PhashIndex()
 
 
 _session_states: dict[str, _SessionDedupState] = {}
@@ -282,7 +362,7 @@ def _load_dedup_state(state: _SessionDedupState, db: Session, session_id: str, o
         state.image_by_hash.setdefault(row.file_hash, (row.id, row.source_root_id))
         if row.perceptual_hash:
             state.image_phashes.append(
-                (phash_to_int(row.perceptual_hash), row.original_filename, row.id)
+                phash_to_int(row.perceptual_hash), row.original_filename, row.id
             )
     for existing in (
         db.query(ImportStagedFile)
@@ -295,7 +375,7 @@ def _load_dedup_state(state: _SessionDedupState, db: Session, session_id: str, o
         state.staged_by_hash.setdefault(existing.sha256, existing.id)
         if existing.perceptual_hash:
             state.staged_phashes.append(
-                (phash_to_int(existing.perceptual_hash), existing.original_filename, existing.id)
+                phash_to_int(existing.perceptual_hash), existing.original_filename, existing.id
             )
     state.loaded = True
 
@@ -306,16 +386,6 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
     file wins' duplicate ordering both need it)."""
     threshold = settings.duplicate_phash_hamming_threshold
     state = _session_state(session_id)
-
-    def _near(phash_int: int, filename: str, candidates: list[tuple[int, str, str]]) -> str | None:
-        for other_int, other_name, ref_id in candidates:
-            # A RAW+JPEG pair from the same shot has near-identical pixels but is
-            # a sibling to be paired (see pairing.py), not a duplicate.
-            if _same_shot_stem(filename, other_name):
-                continue
-            if hamming_int(phash_int, other_int) <= threshold:
-                return ref_id
-        return None
 
     with state.lock:
         db = SessionLocal()
@@ -359,12 +429,12 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
                 staged.selected = False
             elif a.perceptual_hash:
                 phash_int = phash_to_int(a.perceptual_hash)
-                near_image = _near(phash_int, a.original_filename, state.image_phashes)
+                near_image = state.image_phashes.near(phash_int, a.original_filename, threshold)
                 if near_image is not None:
                     staged.duplicate_of_image_id = near_image
                     staged.is_near_duplicate = True
                 else:
-                    near_staged = _near(phash_int, a.original_filename, state.staged_phashes)
+                    near_staged = state.staged_phashes.near(phash_int, a.original_filename, threshold)
                     if near_staged is not None:
                         staged.duplicate_of_staged_file_id = near_staged
                         staged.is_near_duplicate = True
@@ -375,7 +445,7 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
             state.staged_by_hash.setdefault(a.sha256, a.id)
             if a.perceptual_hash:
                 state.staged_phashes.append(
-                    (phash_to_int(a.perceptual_hash), a.original_filename, a.id)
+                    phash_to_int(a.perceptual_hash), a.original_filename, a.id
                 )
         finally:
             db.close()
@@ -465,6 +535,10 @@ def ensure_session_processing(session: ImportSession) -> None:
 # behind one process-wide lock. Copying is fast (analysis happens in the
 # background), so the wait is short.
 _staging_lock = threading.Lock()
+
+# How many copied files share one durable commit during staging (a commit is
+# an fsync - per-file it dominated big imports on spinning disks).
+_COPY_COMMIT_CHUNK = 25
 
 
 # --- Import progress (for the UI's "processing"/"importing" phase ETA) --------
@@ -655,6 +729,7 @@ def _stage_uploads_into(
     started = time.monotonic()
     total_bytes = 0
     _progress_add_total(session.id, len(incoming))
+    pending_enqueue: list[str] = []
 
     # Copying stays serial: sequential reads are what source media (SD card,
     # NAS, upload spool) do best, and the analysis pool works alongside.
@@ -693,11 +768,23 @@ def _stage_uploads_into(
                 processed=False,
             )
         )
-        # Commit per file: the row must be durable before the background job
-        # (which uses its own DB session) can pick it up.
-        db.commit()
         _progress_copy_step(session.id)
-        _enqueue_analysis(session.id, staged_id)
+        # Rows must be durable before their background jobs (own DB sessions)
+        # can pick them up - but committing per file meant one fsync per photo,
+        # which on a spinning disk added minutes to a big import. Commit in
+        # small chunks instead and enqueue each chunk once it's on disk; the
+        # review grid still sees new photos every second or two.
+        pending_enqueue.append(staged_id)
+        if len(pending_enqueue) >= _COPY_COMMIT_CHUNK:
+            db.commit()
+            for sid in pending_enqueue:
+                _enqueue_analysis(session.id, sid)
+            pending_enqueue.clear()
+
+    db.commit()
+    for sid in pending_enqueue:
+        _enqueue_analysis(session.id, sid)
+    pending_enqueue.clear()
 
     # One line per batch so a slow import is diagnosable from the server log
     # alone. This now measures the copy only - if it tracks the batch's byte
