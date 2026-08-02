@@ -47,8 +47,7 @@ export function ImportLightbox({
 
   useEffect(() => {
     if (!file) return;
-    const exactDuplicate =
-      Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id) && !file.is_near_duplicate;
+    const duplicate = Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id);
     function onKeyDown(e: KeyboardEvent) {
       // Don't hijack keys while a text/choice control (checkbox, select,
       // text field) has focus - let it handle its own Space/Enter natively.
@@ -69,7 +68,7 @@ export function ImportLightbox({
         // Space toggles whether this file is imported (skipped for files that
         // are already in the library and can't be re-imported).
         e.preventDefault();
-        if (!exactDuplicate) onUpdate(file!.id, { selected: !file!.selected });
+        if (!duplicate) onUpdate(file!.id, { selected: !file!.selected });
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -90,10 +89,10 @@ export function ImportLightbox({
   }, []);
   useEffect(() => {
     const order: string[] = [];
-    // Narrow window (not ±10): each pinned preview holds ~11MB decoded, and
-    // a wide window fed system-wide swapping during imports. The depth
-    // scales with device RAM (±2 on 4GB machines, ±4 otherwise) - both
-    // cover arrow-key zapping speed comfortably.
+    // Bounded window: each pinned preview holds ~11MB decoded, and an
+    // unbounded one fed system-wide swapping during imports. The depth scales
+    // with device RAM (±2 on 4GB machines, ±6 otherwise) - enough that a held
+    // arrow key doesn't outrun it.
     for (let d = 1; d <= LIGHTBOX_NEIGHBOR_DEPTH; d++) {
       const ahead = files[index + d];
       const behind = files[index - d];
@@ -105,7 +104,7 @@ export function ImportLightbox({
 
   if (!file) return null;
 
-  const isExactDuplicate = Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id) && !file.is_near_duplicate;
+  const isDuplicate = Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id);
 
   return (
     // Styled like the library's photo view (opaque app surface, back-arrow
@@ -195,7 +194,7 @@ export function ImportLightbox({
             {/* Selective sync replaces the import checkbox with the sync one -
                 two checkboxes crowded the bar, and import is still toggled by
                 Space (or Select mode in the grid). */}
-            {showImmichSync && !isExactDuplicate ? (
+            {showImmichSync && !isDuplicate ? (
               <label
                 className="lightbox-import-toggle"
                 title="Flag this photo for Immich sync — it uploads right after import (JPG only; RAW is skipped)"
@@ -208,14 +207,14 @@ export function ImportLightbox({
                 Sync to Immich
               </label>
             ) : (
-              <label className={`lightbox-import-toggle${isExactDuplicate ? " disabled" : ""}`}>
+              <label className={`lightbox-import-toggle${isDuplicate ? " disabled" : ""}`}>
                 <input
                   type="checkbox"
                   checked={file.selected}
-                  disabled={isExactDuplicate}
+                  disabled={isDuplicate}
                   onChange={(e) => onUpdate(file.id, { selected: e.target.checked })}
                 />{" "}
-                {isExactDuplicate ? "Already in library" : "Import this file"}
+                {isDuplicate ? "Already in library" : "Import this file"}
               </label>
             )}
             <RatingStars rating={file.rating} onChange={(rating) => onUpdate(file.id, { rating })} />

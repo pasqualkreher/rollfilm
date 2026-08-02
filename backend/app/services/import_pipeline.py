@@ -9,6 +9,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,9 +37,9 @@ from app.services.exif import (
     to_int,
 )
 from app.services.filesystem import library_relative_path
-from app.services.hashing import perceptual_hash, phash_to_int, sha256_file
+from app.services.hashing import perceptual_hash, sha256_file
 from app.services.pairing import pair_library, pair_siblings
-from app.services.raw import classify_file_type, extract_preview_with_size
+from app.services.raw import classify_file_type, extract_full_preview, extract_preview_with_size
 from app.services.settings_store import (
     IMMICH_MODE_FULL,
     IMMICH_MODE_MANUAL,
@@ -52,7 +53,6 @@ from app.workers.queue import (
     register_import_activity_probe,
 )
 
-import numpy as np
 from PIL import Image as PILImage
 
 
@@ -67,10 +67,6 @@ class UploadedFile(Protocol):
 
     filename: str | None
     file: BinaryIO
-
-
-def _same_shot_stem(name_a: str, name_b: str) -> bool:
-    return Path(name_a).stem.lower() == Path(name_b).stem.lower()
 
 
 def compute_staged_pairs(staged_files: list[ImportStagedFile]) -> dict[str, str]:
@@ -102,6 +98,148 @@ logger = logging.getLogger(__name__)
 # number of exiftool processes (each worker holds one, plus a small decoded
 # preview).
 _STAGE_WORKERS = min(16, max(4, (os.cpu_count() or 4) * 2))
+
+# --- RAW review derivatives ---------------------------------------------------
+# A RAW's staging thumbnail comes from the embedded camera JPEG (near-instant,
+# but it has the camera's rendering baked in, which makes a RAW card
+# pixel-identical to its JPEG sibling). The review therefore wants two more
+# renders per RAW, both fed by a real demosaic: a grid thumbnail and the larger
+# lightbox preview.
+#
+# Those used to be produced on demand, per request - which is what made the grid
+# fill slowly and put ~1.5s in front of every RAW opened in the lightbox. They
+# are generated up front now, in the background, while the import is still
+# copying: the CPU is nearly idle during a copy (the bottleneck is the disk), so
+# this is time the user is waiting anyway. The lazy paths in the routes stay as
+# the fallback for anything not covered (files staged before this existed, a
+# backend restart mid-import, a render that failed).
+STAGED_PREVIEW_PX = 2048
+
+# One decode of a big sensor's RAW is expensive in memory, so both the
+# background pass and the routes' fallback share this one gate - a grid full of
+# RAWs can't multiply it, and the two paths can't stack on top of each other.
+RAW_RENDER_SLOTS = threading.BoundedSemaphore(min(4, max(2, (os.cpu_count() or 4) // 2)))
+
+# Kept off the analysis pool: a demosaic takes ~100x longer than the embedded-
+# preview work, and letting it occupy those workers would delay the fast
+# thumbnail (and the "processed" flag the review grid waits on) for every file
+# behind it. Sized to the gate above, since that is what it will queue on.
+_derivative_executor = ThreadPoolExecutor(
+    max_workers=min(4, max(2, (os.cpu_count() or 4) // 2)),
+    thread_name_prefix="import-raw-derive",
+)
+
+
+def staged_thumb_dir(session_id: str) -> Path:
+    return settings.import_staging_root / session_id / ".thumbnails"
+
+
+def staged_demosaic_path(thumb_dir: Path, staged_id: str) -> Path:
+    return thumb_dir / f"{staged_id}.demosaic.jpg"
+
+
+def staged_preview_path(thumb_dir: Path, staged_id: str) -> Path:
+    return thumb_dir / f"{staged_id}.preview.jpg"
+
+
+def staged_tmp_path(dest: Path) -> Path:
+    """A private scratch name next to `dest`. Unique per writer: the background
+    pass and a request handler can legitimately render the same derivative at
+    the same time, and a shared temp name would let them interleave their bytes
+    into one corrupt file that then gets published by the rename."""
+    return dest.with_suffix(f".{uuid.uuid4().hex}.tmp")
+
+
+def _save_atomic(image: PILImage.Image, dest: Path) -> None:
+    """Write via a temp file so a reader never sees a half-written JPEG - the
+    review grid may request exactly this file while it is being produced."""
+    tmp = staged_tmp_path(dest)
+    try:
+        image.save(tmp, "JPEG", quality=88)
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def render_review_derivatives(
+    read_path: Path, staged_id: str, thumb_dir: Path, is_raw: bool, want_preview: bool = True
+) -> None:
+    """Write the review derivatives of one staged file.
+
+    Every file gets the lightbox preview, so opening a card is a file read
+    rather than a decode of the original - a 100MP JPEG is a few hundred
+    milliseconds of that, a RAW demosaic well over a second.
+
+    A RAW additionally gets a demosaiced grid thumbnail, and both of its
+    outputs come from ONE decode: the decode dominates the cost, so producing
+    them together costs barely more than either alone. Missing outputs are
+    (re)written, so this is safe to call again for a file that has one of
+    them."""
+    demosaic_path = staged_demosaic_path(thumb_dir, staged_id)
+    preview_path = staged_preview_path(thumb_dir, staged_id)
+
+    def _todo() -> tuple[bool, bool]:
+        return (
+            is_raw and not demosaic_path.exists(),
+            want_preview and not preview_path.exists(),
+        )
+
+    if not any(_todo()):
+        return
+
+    with RAW_RENDER_SLOTS:
+        # Re-checked inside the gate: while queuing, the other path may have
+        # produced exactly this file.
+        need_thumb, need_preview = _todo()
+        if not need_thumb and not need_preview:
+            return
+        rendered = extract_full_preview(read_path)
+        if need_preview:
+            lightbox = rendered.copy() if need_thumb else rendered
+            lightbox.thumbnail((STAGED_PREVIEW_PX, STAGED_PREVIEW_PX), PILImage.LANCZOS)
+            _save_atomic(lightbox, preview_path)
+        if need_thumb:
+            # Match the staging thumb's sizing: a quarter of the original (the
+            # demosaic is half-size, so half of it), capped like the library's
+            # grid thumbnails.
+            tw = min(max(1, round(rendered.width * 0.5)), THUMBNAIL_MAX_PX)
+            th = min(max(1, round(rendered.height * 0.5)), THUMBNAIL_MAX_PX)
+            rendered.thumbnail((tw, th), PILImage.LANCZOS)
+            _save_atomic(rendered, demosaic_path)
+
+
+def _enqueue_review_derivatives(
+    source: tuple[Path, int] | None,
+    staged_path: Path,
+    staged_id: str,
+    thumb_dir: Path,
+    is_raw: bool,
+) -> None:
+    """Queue the render pass for one staged file.
+
+    Like the analysis itself this prefers the original on the source medium -
+    each job reads a whole photo, and several of them pulling from the target
+    disk would take back exactly the throughput the copy just gained. Which
+    path is usable is decided when the job *runs*, not when it is queued: it
+    may start minutes later, by which time the card can be gone."""
+
+    def _work() -> None:
+        try:
+            if not thumb_dir.is_dir():
+                return  # session discarded or committed while this queued
+            read_path = _usable_source(source) or staged_path
+            if not read_path.exists():
+                return
+            render_review_derivatives(read_path, staged_id, thumb_dir, is_raw)
+        except Exception:
+            # The routes still render on demand, so a failure here costs speed,
+            # never correctness.
+            logger.exception("Review derivatives failed for %s", staged_id)
+
+    try:
+        _derivative_executor.submit(_work)
+    except Exception:
+        logger.exception("Could not queue RAW review derivatives for %s", staged_id)
 
 
 @dataclass
@@ -140,6 +278,8 @@ class _CommitEntry:
 
 def _analyze_file(
     staged_path: Path,
+    read_path: Path,
+    from_source: bool,
     original_filename: str,
     file_type: str,
     staged_id: str,
@@ -152,19 +292,24 @@ def _analyze_file(
     _hash_and_copy) so the bytes aren't read a second time here;
     preview/phash/thumbnail/exif are each guarded so a single corrupt file
     can't abort a large import - it's still staged (its bytes are known) just
-    without a preview/hash."""
+    without a preview/hash.
+
+    `read_path` is where the bytes are read from, and is not necessarily the
+    staged copy: for a folder import the original still sits on the source
+    medium, and reading it there leaves the target disk to the copy stream
+    (see _run_analysis). `staged_path` identifies the staged row either way."""
     perceptual = None
     exif = ExifData()
 
-    try:
+    def _preview_and_thumb(path: Path, gated_as_source: bool) -> str | None:
         # The disk read inside extract_preview_with_size runs under the IO
-        # gate (protects spinning-disk staging from 16-way seek thrash
-        # against the copy stream); the decode and everything below run with
-        # the pool's full parallelism, so SSD systems lose nothing.
+        # gate (which yields to the copy stream when it has to touch the
+        # target disk); the decode and everything below run with the pool's
+        # full parallelism, so SSD systems lose nothing.
         preview, (orig_w, orig_h) = extract_preview_with_size(
-            staged_path, io_gate=_analysis_read_gate
+            path, io_gate=_read_gate(gated_as_source)
         )
-        perceptual = perceptual_hash(preview)
+        computed = perceptual_hash(preview)
         # Match the library's grid thumbnail exactly (0.25 of the original,
         # capped, LANCZOS) so the import review shows the same quality. The
         # target is computed from the true original size (the JPEG preview above
@@ -174,13 +319,37 @@ def _analyze_file(
         th = min(THUMBNAIL_MAX_PX, max(1, round(orig_h * THUMBNAIL_SCALE)))
         thumb.thumbnail((tw, th), PILImage.LANCZOS)
         thumb.save(thumb_dir / f"{staged_id}.jpg", "JPEG", quality=88)
+        return computed
+
+    # Reading the source can fail in a way reading staging can't: the card gets
+    # pulled the moment the copy bar finishes, while analysis is still catching
+    # up. The staged copy is by definition still there, so fall back to it once
+    # rather than leaving those photos in the review grid without a thumbnail.
+    try:
+        perceptual = _preview_and_thumb(read_path, from_source)
     except Exception:
-        logger.exception("Preview/thumbnail failed for %s (staged without one)", original_filename)
+        if from_source:
+            try:
+                perceptual = _preview_and_thumb(staged_path, False)
+            except Exception:
+                logger.exception(
+                    "Preview/thumbnail failed for %s (staged without one)", original_filename
+                )
+        else:
+            logger.exception(
+                "Preview/thumbnail failed for %s (staged without one)", original_filename
+            )
 
     try:
-        exif = read_exif(staged_path, helper=helper)
+        exif = read_exif(read_path, helper=helper)
     except Exception:
-        logger.exception("EXIF read failed for %s", original_filename)
+        if from_source:
+            try:
+                exif = read_exif(staged_path, helper=helper)
+            except Exception:
+                logger.exception("EXIF read failed for %s", original_filename)
+        else:
+            logger.exception("EXIF read failed for %s", original_filename)
 
     return _Analyzed(
         id=staged_id,
@@ -250,13 +419,39 @@ _analysis_executor = ThreadPoolExecutor(
     max_workers=_STAGE_WORKERS, thread_name_prefix="import-analyze"
 )
 
-# Gate on the analysis workers' heavy file reads (preview extraction reads
-# the staged original). The pool is sized for CPU overlap (~2x cores), but on
-# a spinning-disk staging area 16 concurrent readers turn the copy stream
-# writing to the same disk into pure seek thrash - HDD-to-HDD imports crawled.
-# Four concurrent reads keep an HDD mostly sequential; on SSDs reads are fast
-# enough that the gate is rarely even contended.
-_analysis_read_gate = threading.BoundedSemaphore(4)
+# Gate on the analysis workers' heavy file reads (preview extraction reads the
+# original). The pool is sized for CPU overlap (~2x cores), but 16 concurrent
+# readers on a spinning disk turn a copy stream writing to that same disk into
+# pure seek thrash - HDD-to-HDD imports crawled. Four concurrent reads keep an
+# HDD mostly sequential; on SSDs reads are fast enough to rarely contend.
+_analysis_read_sem = threading.BoundedSemaphore(4)
+
+# Set while a staging batch is copying, so analysis reads that still land on
+# the *target* disk yield to the copy stream (see _read_gate).
+_copy_active = threading.Event()
+
+# Serializes those target-disk reads to one at a time while a copy runs.
+_analysis_solo_lock = threading.Lock()
+
+
+@contextmanager
+def _read_gate(from_source: bool):
+    """Held while an analysis worker reads a file's bytes off disk.
+
+    Reads from the *source* medium (SD card, source folder) only need the
+    plain concurrency bound: the source is idle apart from the copy's own
+    sequential read, and is typically much faster than the import target.
+
+    Reads from the staged copy land on the disk the copy stream is writing to,
+    so while a batch copies they are additionally serialized to one at a time.
+    The copy is what the user waits for, and a spinning disk loses more to
+    seeking between reader and writer than the readers gain from parallelism."""
+    with _analysis_read_sem:
+        if from_source or not _copy_active.is_set():
+            yield
+        else:
+            with _analysis_solo_lock:
+                yield
 
 # Each analysis worker thread keeps its own exiftool -stay_open helper (the
 # helper can't be shared between threads). Created lazily, lives as long as
@@ -278,57 +473,24 @@ _inflight: set[str] = set()
 _inflight_lock = threading.Lock()
 
 
-class _PhashIndex:
-    """Vectorized near-duplicate index: every phash lives in one uint64 array,
-    so a lookup is a single XOR + popcount sweep in C. The old per-file Python
-    loop over (library + already-staged) hashes ran inside the session lock,
-    so each additional photo made every later one a bit slower - the "imports
-    crawl the longer they run" effect on big batches."""
-
-    def __init__(self) -> None:
-        self._hashes = np.empty(1024, dtype=np.uint64)
-        self._n = 0
-        self._names: list[str] = []
-        self._ids: list[str] = []
-
-    def append(self, phash_int: int, filename: str, ref_id: str) -> None:
-        if self._n == len(self._hashes):
-            self._hashes = np.concatenate(
-                [self._hashes, np.empty(len(self._hashes), dtype=np.uint64)]
-            )
-        self._hashes[self._n] = phash_int
-        self._n += 1
-        self._names.append(filename)
-        self._ids.append(ref_id)
-
-    def near(self, phash_int: int, filename: str, threshold: int) -> str | None:
-        if self._n == 0:
-            return None
-        dist = np.bitwise_count(self._hashes[: self._n] ^ np.uint64(phash_int))
-        for idx in np.nonzero(dist <= threshold)[0]:
-            # A RAW+JPEG pair from the same shot has near-identical pixels but
-            # is a sibling to be paired (see pairing.py), not a duplicate.
-            if not _same_shot_stem(filename, self._names[int(idx)]):
-                return self._ids[int(idx)]
-        return None
-
-
 class _SessionDedupState:
     """Per-import-session duplicate-detection index, shared by all analysis
-    jobs of that session. The library's hash indexes are loaded once (not
+    jobs of that session. The library's hash index is loaded once (not
     re-queried per file - that's what keeps a big import from degrading into
     O(files x library) database round-trips), and every processed staged file
-    is appended so later files still dedup against earlier ones. The lock also
+    is added so later files still dedup against earlier ones. The lock also
     serializes the per-file DB write, which keeps the "first one processed is
-    the original, the rest are its duplicates" ordering consistent."""
+    the original, the rest are its duplicates" ordering consistent.
+
+    Content hashes only. Perceptual near-duplicate matching used to live here
+    too and was removed: a duplicate the import acts on by itself has to be an
+    identical file, not a similar-looking one."""
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.loaded = False
         self.image_by_hash: dict[str, tuple[str, str | None]] = {}  # sha -> (image id, source_root_id)
-        self.image_phashes = _PhashIndex()
         self.staged_by_hash: dict[str, str] = {}  # sha -> staged file id
-        self.staged_phashes = _PhashIndex()
 
 
 _session_states: dict[str, _SessionDedupState] = {}
@@ -353,19 +515,15 @@ def _drop_session_state(session_id: str) -> None:
 
 
 def _load_dedup_state(state: _SessionDedupState, db: Session, session_id: str, owner_id: int) -> None:
-    """Load the library's dedup indexes once per session, and seed the staged
-    indexes with files of this session that are already processed (matters
-    after a backend restart mid-analysis)."""
-    for row in db.query(
-        Image.id, Image.file_hash, Image.perceptual_hash, Image.original_filename, Image.source_root_id
-    ).filter(Image.owner_id == owner_id):
+    """Load the library's dedup index once per session, and seed the staged one
+    with files of this session that are already processed (matters after a
+    backend restart mid-analysis)."""
+    for row in db.query(Image.id, Image.file_hash, Image.source_root_id).filter(
+        Image.owner_id == owner_id
+    ):
         state.image_by_hash.setdefault(row.file_hash, (row.id, row.source_root_id))
-        if row.perceptual_hash:
-            state.image_phashes.append(
-                phash_to_int(row.perceptual_hash), row.original_filename, row.id
-            )
     for existing in (
-        db.query(ImportStagedFile)
+        db.query(ImportStagedFile.id, ImportStagedFile.sha256)
         .filter(
             ImportStagedFile.import_session_id == session_id,
             ImportStagedFile.processed.is_(True),
@@ -373,10 +531,6 @@ def _load_dedup_state(state: _SessionDedupState, db: Session, session_id: str, o
         .all()
     ):
         state.staged_by_hash.setdefault(existing.sha256, existing.id)
-        if existing.perceptual_hash:
-            state.staged_phashes.append(
-                phash_to_int(existing.perceptual_hash), existing.original_filename, existing.id
-            )
     state.loaded = True
 
 
@@ -384,7 +538,6 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
     """Persist one file's analysis results and flag duplicates. Serialized per
     session via the dedup-state lock (the index reads/updates and the 'earlier
     file wins' duplicate ordering both need it)."""
-    threshold = settings.duplicate_phash_hamming_threshold
     state = _session_state(session_id)
 
     with state.lock:
@@ -406,8 +559,13 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
             staged.perceptual_hash = a.perceptual_hash
             staged.exif_json = a.exif_json
 
-            # Exact library match first, then exact match earlier in this session,
-            # then a perceptual near-duplicate against the library, then the session.
+            # A duplicate means byte-identical, and nothing softer. Flagging a
+            # photo here unselects it and blocks re-selecting it, which is only
+            # a decision the import can make on the user's behalf when the two
+            # files really are the same bytes - "looks similar" is a judgement
+            # about a photo, not a fact about a file, and a burst of frames or a
+            # bracketed set is exactly where it guessed wrong.
+            # Library match first, then a match earlier in this same session.
             exact_image = state.image_by_hash.get(a.sha256)
             if exact_image is not None:
                 image_id, source_root_id = exact_image
@@ -427,34 +585,50 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
             elif a.sha256 in state.staged_by_hash:
                 staged.duplicate_of_staged_file_id = state.staged_by_hash[a.sha256]
                 staged.selected = False
-            elif a.perceptual_hash:
-                phash_int = phash_to_int(a.perceptual_hash)
-                near_image = state.image_phashes.near(phash_int, a.original_filename, threshold)
-                if near_image is not None:
-                    staged.duplicate_of_image_id = near_image
-                    staged.is_near_duplicate = True
-                else:
-                    near_staged = state.staged_phashes.near(phash_int, a.original_filename, threshold)
-                    if near_staged is not None:
-                        staged.duplicate_of_staged_file_id = near_staged
-                        staged.is_near_duplicate = True
 
             staged.processed = True
             db.commit()
 
             state.staged_by_hash.setdefault(a.sha256, a.id)
-            if a.perceptual_hash:
-                state.staged_phashes.append(
-                    phash_to_int(a.perceptual_hash), a.original_filename, a.id
-                )
         finally:
             db.close()
 
 
-def _run_analysis(session_id: str, staged_id: str) -> None:
+def _usable_source(source: tuple[Path, int] | None) -> Path | None:
+    """The source file to analyze instead of the staged copy, or None to fall
+    back to staging.
+
+    Only taken when the original is still there *and* still has the size that
+    was copied: a card swapped (or a file rewritten) between copy and analysis
+    could present a different photo under the same path, and analyzing that one
+    would stamp the wrong EXIF and thumbnail onto this staged file. Size costs
+    one stat - re-hashing would mean reading the whole file, which is the very
+    work this is here to avoid."""
+    if source is None:
+        return None
+    path, size = source
+    try:
+        if path.is_file() and path.stat().st_size == size:
+            return path
+    except OSError:
+        pass
+    return None
+
+
+def _run_analysis(
+    session_id: str, staged_id: str, source: tuple[Path, int] | None = None
+) -> None:
     """One background analysis job: read the staged row, do the heavy per-file
     work, persist the result. Never raises - a single bad file must not take
-    the worker thread (or the import) down with it."""
+    the worker thread (or the import) down with it.
+
+    `source` is the (path, size) of the original on the source medium, passed
+    by the copy phase when it knows it (folder import). Analyzing there instead
+    of on the staged copy keeps the target disk free for the copy stream - on a
+    spinning target that read-back is what holds the copy below disk speed. It
+    is deliberately in-memory only: after a restart the recovery sweep
+    re-enqueues without it and analysis falls back to the staged copy, which is
+    always correct, just slower."""
     try:
         db = SessionLocal()
         try:
@@ -476,8 +650,11 @@ def _run_analysis(session_id: str, staged_id: str) -> None:
             db.close()
 
         thumb_dir = settings.import_staging_root / session_id / ".thumbnails"
+        source_path = _usable_source(source)
         analyzed = _analyze_file(
             staged_full_path,
+            source_path or staged_full_path,
+            source_path is not None,
             original_filename,
             file_type,
             staged_id,
@@ -487,6 +664,13 @@ def _run_analysis(session_id: str, staged_id: str) -> None:
         )
         _apply_analysis(session_id, owner_id, analyzed)
         _progress_step(session_id)
+        # Queued only after the row is processed, so the card shows up in the
+        # review grid at embedded-preview speed and the heavier renders land
+        # moments later - rather than the card waiting on a decode that is far
+        # slower than everything above it.
+        _enqueue_review_derivatives(
+            source, staged_full_path, staged_id, thumb_dir, file_type == FileType.raw.value
+        )
     except Exception:
         logger.exception("Background analysis failed for staged file %s", staged_id)
     finally:
@@ -494,13 +678,15 @@ def _run_analysis(session_id: str, staged_id: str) -> None:
             _inflight.discard(staged_id)
 
 
-def _enqueue_analysis(session_id: str, staged_id: str) -> None:
+def _enqueue_analysis(
+    session_id: str, staged_id: str, source: tuple[Path, int] | None = None
+) -> None:
     with _inflight_lock:
         if staged_id in _inflight:
             return
         _inflight.add(staged_id)
     try:
-        _analysis_executor.submit(_run_analysis, session_id, staged_id)
+        _analysis_executor.submit(_run_analysis, session_id, staged_id, source)
     except Exception:
         with _inflight_lock:
             _inflight.discard(staged_id)
@@ -536,9 +722,16 @@ def ensure_session_processing(session: ImportSession) -> None:
 # background), so the wait is short.
 _staging_lock = threading.Lock()
 
-# How many copied files share one durable commit during staging (a commit is
-# an fsync - per-file it dominated big imports on spinning disks).
-_COPY_COMMIT_CHUNK = 25
+# How many copied files share one durable commit during staging. One: every
+# file becomes visible - and gets queued for analysis - the moment its bytes
+# are down, instead of the grid filling in clumps of 25.
+#
+# This used to be batched because "a commit is an fsync", which no longer holds:
+# the database runs WAL with synchronous=NORMAL (see db/session.py), where a
+# commit appends to the write-ahead log and only a checkpoint syncs. Measured on
+# the external library disk, 500 rows: 0.02 ms/row committed in 25s, 0.07 ms/row
+# committed individually - 0.08s of difference across a 1000-photo import.
+_COPY_COMMIT_CHUNK = 1
 
 
 # --- Import progress (for the UI's "processing"/"importing" phase ETA) --------
@@ -676,8 +869,12 @@ def stage_uploaded_files(
     db.add(session)
     db.flush()
     with _staging_lock:
-        _stage_uploads_into(db, session, owner_id, uploads)
-        db.commit()
+        _copy_active.set()
+        try:
+            _stage_uploads_into(db, session, owner_id, uploads)
+            db.commit()
+        finally:
+            _copy_active.clear()
     db.refresh(session)
     return session
 
@@ -694,8 +891,12 @@ def append_uploaded_files(
         # (the route already loaded the session row). End it so the copy phase
         # below starts fresh against whatever a concurrent batch committed.
         db.rollback()
-        _stage_uploads_into(db, session, owner_id, uploads)
-        db.commit()
+        _copy_active.set()
+        try:
+            _stage_uploads_into(db, session, owner_id, uploads)
+            db.commit()
+        finally:
+            _copy_active.clear()
     db.refresh(session)
     return session
 
@@ -710,7 +911,11 @@ def _stage_uploads_into(
     runs in the background while the next batch is already copying. Each row
     is committed individually so the review grid and the analysis workers see
     files the moment they land, not when the whole batch is done."""
-    session_dir = settings.import_staging_root / session.id
+    # Read once, up front: each commit in the loop below expires the loaded
+    # session object, so touching session.id afterwards would re-SELECT it -
+    # once per copied file now that every file commits on its own.
+    session_id = session.id
+    session_dir = settings.import_staging_root / session_id
     thumb_dir = session_dir / ".thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
@@ -728,8 +933,10 @@ def _stage_uploads_into(
 
     started = time.monotonic()
     total_bytes = 0
-    _progress_add_total(session.id, len(incoming))
-    pending_enqueue: list[str] = []
+    _progress_add_total(session_id, len(incoming))
+    # (staged id, source original) pairs - the source is passed to the analysis
+    # job so it reads there instead of on the disk this copy is writing to.
+    pending_enqueue: list[tuple[str, tuple[Path, int] | None]] = []
 
     # Copying stays serial: sequential reads are what source media (SD card,
     # NAS, upload spool) do best, and the analysis pool works alongside.
@@ -760,7 +967,7 @@ def _stage_uploads_into(
         db.add(
             ImportStagedFile(
                 id=staged_id,
-                import_session_id=session.id,
+                import_session_id=session_id,
                 staged_path=str(staged_path.relative_to(settings.import_staging_root)),
                 original_filename=original_filename,
                 file_type=FileType(file_type),
@@ -768,32 +975,43 @@ def _stage_uploads_into(
                 processed=False,
             )
         )
-        _progress_copy_step(session.id)
+        _progress_copy_step(session_id)
+        # Where the analysis should read this file: the original on the source
+        # medium when there is one (folder import), so the heavy reads stay off
+        # the disk this copy is writing to. Size travels with it as the
+        # identity check (see _usable_source).
+        source_path = getattr(upload, "source_path", None)
+        source = (source_path, size) if source_path is not None else None
         # Rows must be durable before their background jobs (own DB sessions)
         # can pick them up - but committing per file meant one fsync per photo,
         # which on a spinning disk added minutes to a big import. Commit in
         # small chunks instead and enqueue each chunk once it's on disk; the
         # review grid still sees new photos every second or two.
-        pending_enqueue.append(staged_id)
+        pending_enqueue.append((staged_id, source))
         if len(pending_enqueue) >= _COPY_COMMIT_CHUNK:
             db.commit()
-            for sid in pending_enqueue:
-                _enqueue_analysis(session.id, sid)
+            for sid, src in pending_enqueue:
+                _enqueue_analysis(session_id, sid, src)
             pending_enqueue.clear()
 
     db.commit()
-    for sid in pending_enqueue:
-        _enqueue_analysis(session.id, sid)
+    for sid, src in pending_enqueue:
+        _enqueue_analysis(session_id, sid, src)
     pending_enqueue.clear()
 
     # One line per batch so a slow import is diagnosable from the server log
-    # alone. This now measures the copy only - if it tracks the batch's byte
-    # size at the source medium's read speed, the source is the bottleneck.
+    # alone. This measures the copy only, and states its rate outright: compare
+    # it against what the two media do on their own (a plain file copy of the
+    # same size) - if the rate sits well below the slower of the two, the copy
+    # is losing throughput to something else on that disk, not to the media.
+    elapsed = time.monotonic() - started
     logger.info(
-        "import batch copied: %d files (%.0f MB) in %.1fs (analysis continues in background)",
+        "import batch copied: %d files (%.0f MB) in %.1fs = %.0f MB/s "
+        "(analysis continues in background)",
         len(incoming),
         total_bytes / 1e6,
-        time.monotonic() - started,
+        elapsed,
+        total_bytes / 1e6 / elapsed if elapsed > 0 else 0,
     )
 
 
@@ -804,15 +1022,15 @@ def commit_import_session(
     upload_to_immich: bool = False,
     sync_all_to_immich: bool = False,
 ) -> list[Image]:
-    def _exact_referenced_duplicate(f: ImportStagedFile) -> Image | None:
+    def _referenced_duplicate(f: ImportStagedFile) -> Image | None:
         """The existing image this staged file is a byte-identical copy of, if
-        importing it again is allowed. Two exact-duplicate cases qualify: a
-        scan-in-place (source root) row - a copy imported *into* the library is
-        the source of truth, so committing promotes that row to a managed one -
-        and a managed row sitting in the Trash, where importing the same bytes
-        is the explicit way to bring the photo back (it's restored at commit
-        instead of staying invisibly trashed forever)."""
-        if not f.duplicate_of_image_id or f.is_near_duplicate:
+        importing it again is allowed. Two cases qualify: a scan-in-place
+        (source root) row - a copy imported *into* the library is the source of
+        truth, so committing promotes that row to a managed one - and a managed
+        row sitting in the Trash, where importing the same bytes is the explicit
+        way to bring the photo back (it's restored at commit instead of staying
+        invisibly trashed forever)."""
+        if not f.duplicate_of_image_id:
             return None
         existing = db.get(Image, f.duplicate_of_image_id)
         if existing is None:
@@ -821,10 +1039,8 @@ def commit_import_session(
             return existing
         return None
 
-    def _is_exact_duplicate(f: ImportStagedFile) -> bool:
-        return bool(
-            (f.duplicate_of_image_id or f.duplicate_of_staged_file_id) and not f.is_near_duplicate
-        )
+    def _is_duplicate(f: ImportStagedFile) -> bool:
+        return bool(f.duplicate_of_image_id or f.duplicate_of_staged_file_id)
 
     def _find_moved_library_copy(staged: ImportStagedFile, taken_at: datetime) -> Path | None:
         """Locate a staged file that a previous, mid-way-failed commit attempt
@@ -861,7 +1077,7 @@ def commit_import_session(
         for f in session.staged_files
         if f.selected
         and f.processed
-        and (not _is_exact_duplicate(f) or _exact_referenced_duplicate(f) is not None)
+        and (not _is_duplicate(f) or _referenced_duplicate(f) is not None)
     ]
     new_images: list[Image] = []
 
@@ -888,10 +1104,10 @@ def commit_import_session(
         return db.query(Image.id).filter(Image.file_path == rel).first() is not None
 
     for staged in selected_files:
-        promoted = _exact_referenced_duplicate(staged)
+        promoted = _referenced_duplicate(staged)
         if promoted is not None and promoted.id in promoted_ids:
             promoted = None  # already claimed by an earlier file in this commit
-        if _is_exact_duplicate(staged) and promoted is None:
+        if _is_duplicate(staged) and promoted is None:
             continue
 
         exif_dict = json.loads(staged.exif_json) if staged.exif_json else {}

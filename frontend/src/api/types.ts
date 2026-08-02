@@ -225,7 +225,6 @@ export interface StagedFileOut {
   color_label: ColorLabel;
   duplicate_of_image_id: string | null;
   duplicate_of_staged_file_id: string | null;
-  is_near_duplicate: boolean;
   // The matching library photo sits in the Trash: importing this file is
   // allowed and restores it (instead of being blocked as "already in library").
   duplicate_in_trash: boolean;

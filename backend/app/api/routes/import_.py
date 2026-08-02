@@ -3,12 +3,10 @@ import json
 import logging
 import os
 import shutil
-import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
-from PIL import Image as PILImage
 from sqlalchemy.orm import Session
 
 from app import schemas
@@ -18,28 +16,23 @@ from app.config import settings
 from app.db.models import FileType, Image, ImportSessionStatus, ImportStagedFile, User
 from app.db.session import get_db
 from app.services.import_pipeline import (
+    STAGED_PREVIEW_PX,
     append_uploaded_files,
     commit_import_session,
     compute_staged_pairs,
     discard_import_session,
     ensure_session_processing,
     get_import_progress,
+    render_review_derivatives,
     stage_uploaded_files,
+    staged_demosaic_path,
+    staged_preview_path,
+    staged_thumb_dir,
 )
 from app.services.borg_backup import run_backup_soon
 from app.services.raw import classify_file_type, extract_full_preview
-from app.services.thumbnails import THUMBNAIL_MAX_PX
 
 logger = logging.getLogger(__name__)
-
-LIGHTBOX_PREVIEW_PX = 2048
-
-# Staging thumbnails RAW files from the embedded camera JPEG (fast, but it has
-# the camera's JPEG rendering baked in) makes a RAW card pixel-identical to its
-# JPEG sibling in the review grid. Demosaiced replacements are generated lazily
-# here on first request instead - same philosophy as the lightbox preview - and
-# this gate keeps a grid full of RAWs from demosaicing all at once.
-_RAW_THUMB_SLOTS = threading.BoundedSemaphore(min(4, max(2, (os.cpu_count() or 4) // 2)))
 
 router = APIRouter(prefix="/import", tags=["import"])
 
@@ -75,7 +68,6 @@ def _to_staged_file_out(
         color_label=f.color_label,
         duplicate_of_image_id=f.duplicate_of_image_id,
         duplicate_of_staged_file_id=f.duplicate_of_staged_file_id,
-        is_near_duplicate=f.is_near_duplicate,
         duplicate_in_trash=duplicate_in_trash,
         paired_staged_file_id=paired_id,
         taken_at=exif.get("taken_at"),
@@ -166,11 +158,17 @@ class _LocalUpload:
     interface as FastAPI's UploadFile (filename + file), so the direct folder
     import reuses the staging pipeline of the HTTP upload unchanged. `mtime`
     lets staging preserve the source file's modification time (the capture-date
-    fallback for files without EXIF)."""
+    fallback for files without EXIF).
+
+    `source_path` is what an HTTP upload can't offer: the original sits on a
+    readable path rather than only in the request body, so the background
+    analysis can read it there instead of on the staged copy - keeping those
+    reads off the disk the import is copying to."""
 
     def __init__(self, path: Path):
         self.filename = path.name
         self.file = path.open("rb")
+        self.source_path = path
         try:
             self.mtime: float | None = path.stat().st_mtime
         except OSError:
@@ -311,31 +309,26 @@ def get_staged_file_thumbnail(
     current_user: User = Depends(get_current_user),
 ):
     get_owned_import_session(db, current_user.id, session_id)
-    thumb_dir = settings.import_staging_root / session_id / ".thumbnails"
+    thumb_dir = staged_thumb_dir(session_id)
 
     # RAW cards get a demosaiced thumbnail so they look like the actual sensor
     # data (as in the library) instead of the camera-rendered embedded JPEG,
-    # which is indistinguishable from the JPEG sibling's card. Generated lazily
-    # and cached; any failure falls back to the staging-time embedded thumb.
+    # which is indistinguishable from the JPEG sibling's card. The background
+    # pass produces these during the import, so this is normally a plain file
+    # read; the render below only covers what it hasn't reached (or couldn't
+    # do), and any failure falls back to the staging-time embedded thumb.
     staged = db.get(ImportStagedFile, file_id)
     if staged is not None and staged.import_session_id == session_id and staged.file_type == FileType.raw:
-        demosaic_path = thumb_dir / f"{file_id}.demosaic.jpg"
+        demosaic_path = staged_demosaic_path(thumb_dir, file_id)
         if not demosaic_path.exists():
             source_path = settings.import_staging_root / staged.staged_path
             if source_path.exists():
                 try:
-                    with _RAW_THUMB_SLOTS:
-                        if not demosaic_path.exists():
-                            preview = extract_full_preview(source_path)
-                            # Match the staging thumb's sizing: a quarter of the
-                            # original (the demosaic is half-size, so half of it),
-                            # capped like the library's grid thumbnails.
-                            tw = min(max(1, round(preview.width * 0.5)), THUMBNAIL_MAX_PX)
-                            th = min(max(1, round(preview.height * 0.5)), THUMBNAIL_MAX_PX)
-                            preview.thumbnail((tw, th), PILImage.LANCZOS)
-                            tmp_path = thumb_dir / f"{file_id}.demosaic.tmp"
-                            preview.save(tmp_path, "JPEG", quality=88)
-                            os.replace(tmp_path, demosaic_path)
+                    # Thumbnail only: a grid scroll must not queue behind the
+                    # much larger lightbox preview for a photo nobody opened.
+                    render_review_derivatives(
+                        source_path, file_id, thumb_dir, is_raw=True, want_preview=False
+                    )
                 except Exception:
                     logger.exception("Demosaiced staging thumbnail failed for %s", staged.original_filename)
         if demosaic_path.exists():
@@ -354,30 +347,51 @@ def get_staged_file_preview(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Larger on-demand preview for zapping through staged photos in the
-    import review lightbox - generated lazily per-request rather than for
-    every staged file up front, so staging a big card stays fast."""
+    """Larger preview for zapping through staged photos in the import review
+    lightbox.
+
+    Normally a plain file read: the import renders this for every staged file
+    in the background (see render_review_derivatives), which is what keeps
+    opening a card instant - decoding the original on the spot costs a few
+    hundred milliseconds for a big JPEG and well over a second for a RAW.
+    Whatever that pass hasn't reached yet is rendered on first request and
+    kept, so at worst one viewer waits for it once."""
     get_owned_import_session(db, current_user.id, session_id)
     staged = db.get(ImportStagedFile, file_id)
     if staged is None or staged.import_session_id != session_id:
         raise HTTPException(status_code=404, detail="Staged file not found")
 
+    thumb_dir = staged_thumb_dir(session_id)
+    preview_path = staged_preview_path(thumb_dir, file_id)
+    if preview_path.exists():
+        return FileResponse(preview_path, headers=_STAGED_CACHE_HEADERS)
+
     staged_full_path = settings.import_staging_root / staged.staged_path
     if not staged_full_path.exists():
         raise HTTPException(status_code=404, detail="Staged file missing from disk")
 
+    is_raw = staged.file_type == FileType.raw
     # A damaged file must not take the request down with a 500 - the lightbox
     # shows a clean "can't display" state on 404 and the review keeps working.
+    try:
+        # Shares the render gate with the background pass (and produces a RAW's
+        # grid thumbnail in the same decode, if that pass hasn't got there yet).
+        render_review_derivatives(staged_full_path, file_id, thumb_dir, is_raw=is_raw)
+    except Exception:
+        logger.exception("Staged preview render failed for %s", staged.original_filename)
+    if preview_path.exists():
+        return FileResponse(preview_path, headers=_STAGED_CACHE_HEADERS)
+
+    # It couldn't be written (the session folder vanished under us, disk full):
+    # render once into memory so the review still shows the photo.
     try:
         preview = extract_full_preview(staged_full_path)
     except Exception:
         logger.exception("Staged preview render failed for %s", staged.original_filename)
         raise HTTPException(status_code=404, detail="Preview could not be rendered")
-    preview.thumbnail((LIGHTBOX_PREVIEW_PX, LIGHTBOX_PREVIEW_PX))
+    preview.thumbnail((STAGED_PREVIEW_PX, STAGED_PREVIEW_PX))
     buf = io.BytesIO()
     preview.save(buf, "JPEG", quality=88)
-    # Rendered on demand (RAW decode!) - caching saves the full re-render when
-    # the user zaps back to a photo in the lightbox.
     return Response(
         content=buf.getvalue(), media_type="image/jpeg", headers=_STAGED_CACHE_HEADERS
     )
@@ -396,10 +410,8 @@ def update_staged_file(
     if staged is None or staged.import_session_id != session_id:
         raise HTTPException(status_code=404, detail="Staged file not found")
 
-    is_exact_duplicate = (
-        staged.duplicate_of_image_id or staged.duplicate_of_staged_file_id
-    ) and not staged.is_near_duplicate
-    if payload.selected and is_exact_duplicate:
+    is_duplicate = bool(staged.duplicate_of_image_id or staged.duplicate_of_staged_file_id)
+    if payload.selected and is_duplicate:
         # Two exceptions: a byte-identical copy of a photo that's only *indexed
         # in place* from an external source root may be imported (the managed
         # library copy becomes the source of truth - the existing row is
@@ -452,10 +464,10 @@ def bulk_update_staged_files(
         if staged is None:
             continue
         if payload.selected is not None:
-            is_exact_duplicate = (
+            is_duplicate = bool(
                 staged.duplicate_of_image_id or staged.duplicate_of_staged_file_id
-            ) and not staged.is_near_duplicate
-            allowed = not payload.selected or not is_exact_duplicate
+            )
+            allowed = not payload.selected or not is_duplicate
             if not allowed and staged.duplicate_of_image_id:
                 # Same exceptions as the per-file route: source-root promotions
                 # and restores from the Trash may be (re)selected.

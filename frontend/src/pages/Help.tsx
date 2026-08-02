@@ -103,8 +103,9 @@ export function Help() {
           <li>
             Rollfilm checks every staged file against your library.{" "}
             <strong>"Already in library"</strong> means byte-identical — these can't be imported
-            again. <strong>"Possible duplicate"</strong> means visually near-identical — you decide.
-            "Hide duplicates" (on by default) keeps them out of view. Exception: a photo that so far
+            again. Nothing is flagged for merely looking similar, so a burst or a bracketed set
+            comes in complete. "Hide duplicates" (on by default) keeps them out of view. Exception:
+            a photo that so far
             only exists in an <em>external source</em> can still be imported — the imported copy
             becomes the library's own, and the photo keeps its stars, tags, albums and edits (the
             file in the external folder stays untouched).

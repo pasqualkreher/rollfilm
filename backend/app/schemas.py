@@ -325,7 +325,6 @@ class StagedFileOut(BaseModel):
     color_label: ColorLabel
     duplicate_of_image_id: str | None
     duplicate_of_staged_file_id: str | None
-    is_near_duplicate: bool
     # The exact duplicate this file matches is a managed photo sitting in the
     # Trash: importing it is allowed and restores that photo (so the review UI
     # says "restores from Trash" instead of "already in library").

@@ -12,9 +12,11 @@ import { fileTypeBadge, fileTypeBadgeClass, tileStyle, Thumb } from "../componen
 import { TimelineScrubber } from "../components/TimelineScrubber";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
+import { preloadImage, watchInViewport } from "../utils/preload";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "../components/AppDialogs";
 import { useTasks } from "../state/tasks";
+import { useWait } from "../state/wait";
 import { useMergePairs } from "../state/viewPrefs";
 import { useTransientMessage } from "../utils/transientMessage";
 import { IconChevronDown } from "../components/Icons";
@@ -38,13 +40,19 @@ function formatEta(seconds: number): string {
 // batch - the backend refuses to import these, so the UI shouldn't let you
 // select them in the first place. Exception: a copy of a photo sitting in the
 // Trash may be imported (it restores that photo), so it stays selectable.
-function isExactDuplicate(f: StagedFileOut): boolean {
-  return (
-    Boolean(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) &&
-    !f.is_near_duplicate &&
-    !f.duplicate_in_trash
-  );
+// A flagged duplicate is always an identical file: nothing is flagged for
+// merely looking alike, so there is no "maybe" case to keep selectable.
+function isDuplicate(f: StagedFileOut): boolean {
+  return Boolean(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && !f.duplicate_in_trash;
 }
+
+// What a single-file edit in the review grid can change.
+type StagedPatch = {
+  selected?: boolean;
+  rating?: number;
+  color_label?: ColorLabel;
+  immich_sync?: boolean;
+};
 
 // Shots where exactly one half of a RAW+JPEG pair is selected - used to ask
 // "did you mean to leave the other one out?" before committing.
@@ -151,9 +159,21 @@ export function ImportWizard() {
 
   const mergePairs = useMergePairs();
 
+  // Patches that have been painted into the grid but whose request hasn't come
+  // back yet (see updateStaged). A list poll in flight at that moment still
+  // carries the pre-patch value, and letting it land would flip the checkbox
+  // back for a second - so it is re-applied on top of whatever the server says
+  // until the request settles.
+  const pendingPatches = useRef(new Map<string, StagedPatch>());
+
   const { data: files, isLoading } = useQuery({
     queryKey: ["import-files", sessionId],
-    queryFn: () => api.import.files(sessionId!),
+    queryFn: async () => {
+      const data = await api.import.files(sessionId!);
+      const pending = pendingPatches.current;
+      if (pending.size === 0) return data;
+      return data.map((f) => (pending.has(f.id) ? { ...f, ...pending.get(f.id) } : f));
+    },
     enabled: !!sessionId,
     // While background copying/analysis is still running, refetch so newly
     // copied photos appear and analyzed ones swap their placeholder for the
@@ -168,34 +188,72 @@ export function ImportWizard() {
       const data = query.state.data ?? [];
       const active = stagingInBackground || analysisPending || data.some((f) => !f.processed);
       if (!active) return false;
-      // Each poll ships (and re-renders) the ENTIRE staged list. At a 1s
-      // cadence with thousands of files that becomes serious backend + SQLite
-      // load competing with the copy itself - a big reason huge imports felt
-      // slower the further they got. Scale the interval with the grid size:
-      // snappy while small, easing off to 5s on multi-thousand imports.
+      // While files are still landing, poll at a fixed short cadence no matter
+      // how big the grid has grown. This is the interval at which new photos
+      // can possibly appear, so anything longer shows them in clumps of
+      // "whatever was copied since the last poll" instead of one by one - and
+      // the backend now commits each file the moment its bytes are down
+      // (_COPY_COMMIT_CHUNK), so a card really is available that quickly.
+      if (stagingInBackground) return 1000;
+      // Nothing new is arriving any more - only analysis flags flipping on
+      // files that are already on screen. Each poll still ships (and re-renders)
+      // the ENTIRE staged list, which at a 1s cadence with thousands of files
+      // becomes real backend + SQLite load, so ease off with the grid size here.
       return Math.min(5000, Math.max(1000, data.length));
     },
   });
 
   const filesById = useMemo(() => new Map((files ?? []).map((f) => [f.id, f])), [files]);
 
+
+  // Merged view shows only the JPEG of a pair, so a change mirrors onto the
+  // hidden RAW partner - selecting/rating the one card affects both files.
+  const partnerOf = useCallback(
+    (fileId: string) => (mergePairs ? filesById.get(fileId)?.paired_staged_file_id : undefined),
+    [mergePairs, filesById]
+  );
+
   const updateStaged = useMutation({
-    mutationFn: async ({
-      fileId,
-      patch,
-    }: {
-      fileId: string;
-      patch: { selected?: boolean; rating?: number; color_label?: ColorLabel; immich_sync?: boolean };
-    }) => {
-      await api.import.updateStagedFile(sessionId!, fileId, patch);
-      // Merged view shows only the JPEG of a pair, so mirror the change onto the
-      // hidden RAW partner - selecting/rating the one card affects both files.
-      if (mergePairs) {
-        const partnerId = filesById.get(fileId)?.paired_staged_file_id;
-        if (partnerId) await api.import.updateStagedFile(sessionId!, partnerId, patch);
-      }
+    mutationFn: async ({ fileId, patch }: { fileId: string; patch: StagedPatch }) => {
+      const partnerId = partnerOf(fileId);
+      // Both halves go out at once - awaiting them one after the other doubled
+      // the round trip behind every keystroke on a merged card.
+      await Promise.all([
+        api.import.updateStagedFile(sessionId!, fileId, patch),
+        ...(partnerId ? [api.import.updateStagedFile(sessionId!, partnerId, patch)] : []),
+      ]);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] }),
+    // Paint the change immediately instead of after the round trip: a toggle
+    // used to wait for the PATCH *and* a full refetch of the entire staged list
+    // before the checkbox moved, which is why holding Space felt laggy - during
+    // an import that list query competes with the copy for the same disk. The
+    // request still runs; the cache carries the new value meanwhile.
+    onMutate: async ({ fileId, patch }) => {
+      const key = ["import-files", sessionId];
+      const partnerId = partnerOf(fileId);
+      const ids = partnerId != null ? [fileId, partnerId] : [fileId];
+      for (const id of ids) {
+        pendingPatches.current.set(id, { ...pendingPatches.current.get(id), ...patch });
+      }
+      // Stop an in-flight list refetch from landing on top of the new value.
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<StagedFileOut[]>(key);
+      queryClient.setQueryData<StagedFileOut[]>(key, (old) =>
+        (old ?? []).map((f) => (ids.includes(f.id) ? { ...f, ...patch } : f))
+      );
+      return { previous, ids };
+    },
+    // Some patches are legitimately refused (re-selecting an exact duplicate
+    // 400s), so a failure has to put the grid back and resync with the server.
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["import-files", sessionId], context.previous);
+      }
+      queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+    },
+    onSettled: (_data, _err, _vars, context) => {
+      for (const id of context?.ids ?? []) pendingPatches.current.delete(id);
+    },
   });
 
   const commit = useMutation({
@@ -309,8 +367,14 @@ export function ImportWizard() {
     }
   }, [stagingInBackground, liveStagedCount, totalFileCount]);
 
+  // Discarding deletes every staged copy - tens of gigabytes off the library
+  // disk for a big card, which takes long enough that the button label alone
+  // read as a hang. Block the screen with the same wait overlay as saving edits
+  // or resetting them, so it's clear the app is working and nothing else can be
+  // clicked into the half-deleted session meanwhile.
+  const { withWait } = useWait();
   const discard = useMutation({
-    mutationFn: () => api.import.discard(sessionId!),
+    mutationFn: () => withWait("Discarding this import…", () => api.import.discard(sessionId!)),
     // Always reset locally, even if the delete itself failed (e.g. the
     // session was already committed/discarded) - the point of Discard is to
     // get back to a clean import screen, and a stale server-side session is
@@ -379,6 +443,56 @@ export function ImportWizard() {
       : dateSorted;
   const selectedCount = (files ?? []).filter((f) => f.selected).length;
 
+  // Opening a card shows the full-size preview, which is a different (much
+  // larger) image than the grid thumbnail - so without this, every click
+  // started its request only once the lightbox was already open, and the photo
+  // arrived a beat later. Warm the preview of every card the user is currently
+  // looking at, so clicking one has nothing left to fetch.
+  //
+  // Deliberately after scrolling settles: these are a few hundred KB each, and
+  // firing them mid-scroll would compete with the thumbnails the grid is still
+  // filling in. Cache-warming only (preloadImage), not pinned pixels - the
+  // lightbox pins what it actually displays, and doing both would double the
+  // renderer's image memory for the same photos.
+  const visibleCardIds = useRef(new Set<string>());
+  const warmTimer = useRef<number | null>(null);
+  const warmVisiblePreviews = useCallback(() => {
+    if (!sessionId) return;
+    if (warmTimer.current !== null) window.clearTimeout(warmTimer.current);
+    warmTimer.current = window.setTimeout(() => {
+      warmTimer.current = null;
+      for (const id of visibleCardIds.current) {
+        preloadImage(api.import.stagedPreviewUrl(sessionId, id));
+      }
+    }, 250);
+  }, [sessionId]);
+
+  useEffect(() => {
+    const root = gridRootRef.current;
+    if (!root || !sessionId) return;
+    const unwatch: Array<() => void> = [];
+    root.querySelectorAll<HTMLElement>("[data-staged-id]").forEach((el) => {
+      const id = el.dataset.stagedId;
+      if (!id) return;
+      unwatch.push(
+        watchInViewport(el, {
+          enter: () => {
+            visibleCardIds.current.add(id);
+            warmVisiblePreviews();
+          },
+          leave: () => visibleCardIds.current.delete(id),
+        })
+      );
+    });
+    return () => {
+      unwatch.forEach((u) => u());
+      if (warmTimer.current !== null) {
+        window.clearTimeout(warmTimer.current);
+        warmTimer.current = null;
+      }
+    };
+  }, [visibleFiles, sessionId, warmVisiblePreviews]);
+
   // Day sections over the visible files (already date-sorted, so labels are
   // contiguous and unique), each entry keeping its index into visibleFiles -
   // the lightbox and shift-range selection keep addressing the flat list.
@@ -443,10 +557,10 @@ export function ImportWizard() {
   // checkbox still toggles import selection in either mode.
   async function toggleStagedSelect(index: number, shiftKey: boolean) {
     const target = visibleFiles[index];
-    if (!target || isExactDuplicate(target)) return;
+    if (!target || isDuplicate(target)) return;
     if (shiftKey && lastIndex !== null) {
       const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
-      const range = withPartners(visibleFiles.slice(start, end + 1)).filter((f) => !isExactDuplicate(f));
+      const range = withPartners(visibleFiles.slice(start, end + 1)).filter((f) => !isDuplicate(f));
       await api.import.bulkUpdateStagedFiles(sessionId!, range.map((f) => f.id), { selected: true });
       queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
     } else {
@@ -458,12 +572,12 @@ export function ImportWizard() {
   async function selectAll(selected: boolean) {
     // Selecting acts on the filtered view (select exactly what you see);
     // clearing acts on the WHOLE batch. Filters hide files that are still
-    // selected - near-duplicates under the default "Hide duplicates", the
+    // selected - Trash-restores under the default "Hide duplicates", the
     // other half of the type filter - and a clear scoped to the visible ones
     // left those invisibly selected: the count stayed above zero and they
     // would have been imported.
     const scope = selected ? withPartners(visibleFiles) : files ?? [];
-    const ids = scope.filter((f) => !selected || !isExactDuplicate(f)).map((f) => f.id);
+    const ids = scope.filter((f) => !selected || !isDuplicate(f)).map((f) => f.id);
     await api.import.bulkUpdateStagedFiles(sessionId!, ids, { selected });
     queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
   }
@@ -479,7 +593,7 @@ export function ImportWizard() {
     // fails, the commit below must run regardless (allSettled, not all): a
     // rejected select used to abort this handler silently, making the import
     // button appear dead.
-    const missingHalf = findIncompletePairs(files ?? []).filter((f) => !isExactDuplicate(f));
+    const missingHalf = findIncompletePairs(files ?? []).filter((f) => !isDuplicate(f));
     if (missingHalf.length > 0) {
       const includeBoth = await dialogs.confirm({
         title: "Incomplete RAW+JPEG pairs",
@@ -910,15 +1024,20 @@ export function ImportWizard() {
                 {section.items.map(({ file: f, index: i }) => (
                   <div
                     key={f.id}
+                    data-staged-id={f.id}
                     style={tileStyle(f.width, f.height)}
                     className={`import-card${f.selected ? " selected" : ""}`}
                   >
                     <div
                       className={`thumb-card${f.selected ? " selected" : ""}`}
+                      // The pointer landing on a card is the earliest signal
+                      // that this is the photo about to be opened - warming
+                      // here buys the preview the moment before the click.
+                      onPointerEnter={() => preloadImage(api.import.stagedPreviewUrl(sessionId, f.id))}
                       onClick={(e) => (selectMode ? toggleStagedSelect(i, e.shiftKey) : setLightboxIndex(i))}
                       title={
                         selectMode
-                          ? isExactDuplicate(f)
+                          ? isDuplicate(f)
                             ? "Already in your library - can't be imported"
                             : f.duplicate_in_trash
                               ? "This photo is in the Trash - importing it restores it"
@@ -940,7 +1059,7 @@ export function ImportWizard() {
                           className="select-checkbox"
                           type="checkbox"
                           checked={f.selected}
-                          disabled={isExactDuplicate(f)}
+                          disabled={isDuplicate(f)}
                           onClick={(e) => {
                             e.stopPropagation();
                             toggleStagedSelect(i, e.shiftKey);
@@ -950,11 +1069,7 @@ export function ImportWizard() {
                       )}
                       {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
                         <span className="duplicate-badge">
-                          {f.is_near_duplicate
-                            ? "Possible duplicate"
-                            : f.duplicate_in_trash
-                              ? "In Trash - restores"
-                              : "Already in library"}
+                          {f.duplicate_in_trash ? "In Trash - restores" : "Already in library"}
                         </span>
                       )}
                       <span

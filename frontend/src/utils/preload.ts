@@ -23,8 +23,12 @@ export const GRID_PIN_LIMIT = LOW_MEMORY_DEVICE ? 6 : 12;
 
 // How many neighbors each side of the current photo the lightboxes keep
 // pinned for arrow-key zapping. Two still swaps instantly at human zapping
-// speed; four gives fast flippers headroom where the RAM exists.
-export const LIGHTBOX_NEIGHBOR_DEPTH = LOW_MEMORY_DEVICE ? 2 : 4;
+// speed; six gives fast flippers real headroom - a held arrow key outruns a
+// window of four, and now that staged RAW previews are pre-rendered rather
+// than demosaiced per request, filling a wider window is a handful of file
+// reads instead of seconds of decoding. Still bounded by the renderer's RAM
+// (~11MB decoded each), which is what keeps this from simply growing.
+export const LIGHTBOX_NEIGHBOR_DEPTH = LOW_MEMORY_DEVICE ? 2 : 6;
 
 // URLs requested RECENTLY - a repeat new Image() for one of these would be
 // pure overhead, the browser's cache still holds the bytes. Deliberately a
@@ -95,13 +99,16 @@ export class PinnedImageWindow {
 }
 
 // How far outside the viewport a thumbnail may START (and keep) loading.
-// Deliberately about one screenful, not more: the same boundary is the abort
-// line, and over HTTP/1.1 an in-flight request occupies one of the ~6
-// per-origin connections until it finishes - so trailing tiles a scroll left
-// behind must abort PROMPTLY to free the pipe for the region the user
-// actually stopped at. Deeper look-ahead is the prewarm pass's job
-// (preloadImage above: low priority, debounced, uncancellable but polite).
-const START_MARGIN = "900px 0px";
+// Several screenfuls: a tile that only starts loading one screen ahead is
+// still arriving as it scrolls into view, which is exactly the "every photo
+// appears in front of me" effect - by the time a tile is looked at, its
+// pixels should already be there. The same boundary is also the abort line,
+// and over HTTP/1.1 an in-flight request holds one of the ~6 per-origin
+// connections, so this can't grow without limit - but the server here is on
+// localhost serving prepared files, so the requests it keeps alive are short.
+// Fetch priority (VIEW_MARGIN below) is what keeps the visible region ahead
+// of this look-ahead in the queue.
+const START_MARGIN = "2400px 0px";
 
 // "Actually at/entering the screen": tiles inside this tight band fetch at
 // high priority, everything else at low - the visible region always wins the

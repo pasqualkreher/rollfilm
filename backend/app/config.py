@@ -40,8 +40,6 @@ class Settings(BaseSettings):
     clip_model_name: str = "ViT-B-32"
     clip_model_pretrained: str = "laion2b_s34b_b79k"
 
-    duplicate_phash_hamming_threshold: int = 5
-
     @model_validator(mode="before")
     @classmethod
     def _derive_paths(cls, data):

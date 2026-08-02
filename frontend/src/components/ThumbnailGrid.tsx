@@ -52,8 +52,10 @@ export function tileStyle(width: number | null | undefined, height: number | nul
 
 // Delay before a near-viewport tile actually issues its request. A tile that
 // merely flies through the preload zone during a fast scroll leaves it again
-// within this window and never hits the network at all.
-const LOAD_STABILIZE_MS = 150;
+// within this window and never hits the network at all. Kept short: this sits
+// in front of EVERY tile, so it is the one delay that is felt even when
+// nothing is scrolling - long enough to swallow a fling, no longer.
+const LOAD_STABILIZE_MS = 60;
 
 // A thumbnail can legitimately not exist yet: right after an import the backend
 // generates derivatives in the background and sheds on-demand renders it can't

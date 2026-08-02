@@ -2172,10 +2172,14 @@ textarea:focus-visible {
      clip when the img is composited (its opacity fade / hover filter), so the
      square corners poke past the card frame. Round the img itself too. */
   border-radius: inherit;
-  /* Blank until the pixels arrive, then fade in softly instead of snapping in
-     (the JS toggles .is-loaded on load - see Thumb in ThumbnailGrid.tsx). */
+  /* Blank until the pixels arrive, then simply be there (the JS toggles
+     .is-loaded on load - see Thumb in ThumbnailGrid.tsx). This used to fade in
+     over 0.45s, which on a grid where tiles finish at slightly different
+     moments reads as the whole page fluttering rather than as one soft
+     appearance - the individual fade is invisible, the collective flicker
+     isn't. The shimmer underneath already communicates "still loading". */
   opacity: 0;
-  transition: opacity 0.45s ease, filter 0.12s ease;
+  transition: filter 0.12s ease;
 }
 
 .thumb-card img.is-loaded {
