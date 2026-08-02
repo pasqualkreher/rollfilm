@@ -115,6 +115,21 @@ const START_MARGIN = "2400px 0px";
 // connection queue over speculative preloads.
 const VIEW_MARGIN = "150px 0px";
 
+// Past this, a loaded tile lets its pixels go again.
+//
+// A grid thumbnail is up to 1600px on the long edge - around 7MB once decoded.
+// Keeping every tile ever scrolled past meant a 800-photo import held gigabytes
+// in the renderer, at which point the browser starts discarding decoded images
+// on its own; the ones it discards can come back broken, which is what put
+// broken-image glyphs on cards in the review grid. Releasing deliberately keeps
+// the retained set bounded (~60 tiles) instead of letting it grow with how far
+// the user has scrolled.
+//
+// Well clear of START_MARGIN so a tile can't load and release in a loop while
+// the user rocks back and forth, and coming back is a browser-cache hit rather
+// than a fresh render on the server.
+const RELEASE_MARGIN = "4000px 0px";
+
 interface NearViewportCallbacks {
   enter: () => void;
   leave: () => void;
@@ -160,3 +175,7 @@ export const watchNearViewport = makeWatcher(START_MARGIN);
 // Same contract, tight margin: is the tile at (or a beat away from) the
 // actual viewport? Drives fetch priority, not loading itself.
 export const watchInViewport = makeWatcher(VIEW_MARGIN);
+
+// Same contract, wide margin: `leave` means "far enough away that holding this
+// tile's pixels costs more than re-reading them later" (see RELEASE_MARGIN).
+export const watchFarFromViewport = makeWatcher(RELEASE_MARGIN);

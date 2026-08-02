@@ -656,6 +656,48 @@ class RestoreResult(BaseModel):
     albums_restored: int
 
 
+class LibraryMergeRequest(BaseModel):
+    # Absolute path of the other library's folder - the one holding its year
+    # folders and its .photomanager data dir.
+    path: str
+
+
+class LibraryMergeSummary(BaseModel):
+    """What merging that library would do, shown before anything is copied."""
+
+    library_root: str
+    photos: int
+    new_photos: int
+    known_photos: int
+    bytes_to_copy: int
+    albums: int
+    tags: int
+
+
+class LibraryMergeResult(BaseModel):
+    added: int
+    updated: int
+    skipped: int
+    copied_bytes: int
+    # Stopped by the user rather than run to the end. What had already come
+    # across stays; running it again picks up where it left off.
+    canceled: bool = False
+
+
+class LibraryMergeProgressOut(BaseModel):
+    """Live state of the background merge, polled by the import screen."""
+
+    active: bool
+    total: int
+    done: int
+    copied_bytes: int
+    # None until enough photos have finished to measure a rate from.
+    eta_seconds: float | None = None
+    # Outcome of the last finished run - still here after leaving the screen.
+    result: LibraryMergeResult | None = None
+    error: str | None = None
+
+
 class TagUsage(BaseModel):
     name: str
     count: int

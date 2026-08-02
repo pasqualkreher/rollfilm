@@ -455,3 +455,41 @@ export interface LibraryFacets {
   regions: Facet[];
   no_location_count: number;
 }
+
+// Folding another Rollfilm library (a drive taken travelling) into this one -
+// see the "Import a library" section of the import screen.
+export interface LibraryMergeSummary {
+  library_root: string;
+  // Photos the other library would hand over (its Trash and any photos it only
+  // indexes in place from an external drive stay behind).
+  photos: number;
+  // Not in this library yet - these get copied in.
+  new_photos: number;
+  // Already here byte for byte; only the review work done on them travels.
+  known_photos: number;
+  bytes_to_copy: number;
+  albums: number;
+  tags: number;
+}
+
+export interface LibraryMergeResult {
+  added: number;
+  updated: number;
+  skipped: number;
+  copied_bytes: number;
+  // Stopped by the user rather than run to the end. What already came across
+  // stays; running it again picks up where it left off.
+  canceled: boolean;
+}
+
+export interface LibraryMergeProgress {
+  active: boolean;
+  total: number;
+  done: number;
+  copied_bytes: number;
+  // Null until enough photos have finished to measure a rate from.
+  eta_seconds: number | null;
+  // Outcome of the last finished run - still here after leaving the screen.
+  result: LibraryMergeResult | null;
+  error: string | null;
+}

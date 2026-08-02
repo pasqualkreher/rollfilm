@@ -8,6 +8,7 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
 import { ExternalSources } from "../components/ExternalSources";
+import { ImportLibrary } from "../components/ImportLibrary";
 import { fileTypeBadge, fileTypeBadgeClass, tileStyle, Thumb } from "../components/ThumbnailGrid";
 import { TimelineScrubber } from "../components/TimelineScrubber";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
@@ -18,23 +19,9 @@ import { useAppDialogs } from "../components/AppDialogs";
 import { useTasks } from "../state/tasks";
 import { useWait } from "../state/wait";
 import { useMergePairs } from "../state/viewPrefs";
+import { formatEta } from "../utils/duration";
 import { useTransientMessage } from "../utils/transientMessage";
 import { IconChevronDown } from "../components/Icons";
-
-// Human-readable "time remaining" for the import ETA (e.g. "45s", "2m 10s",
-// "1h 57m" - never "116m 46s").
-function formatEta(seconds: number): string {
-  const s = Math.max(0, Math.round(seconds));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) {
-    const rem = s % 60;
-    return rem ? `${m}m ${rem}s` : `${m}m`;
-  }
-  const h = Math.floor(m / 60);
-  const remM = m % 60;
-  return remM ? `${h}h ${remM}m` : `${h}h`;
-}
 
 // Byte-identical to a photo already in the library or elsewhere in this same
 // batch - the backend refuses to import these, so the UI shouldn't let you
@@ -820,6 +807,8 @@ export function ImportWizard() {
               <p className="import-panel-desc" style={{ color: "var(--danger)" }}>Upload failed: {uploadError}</p>
             )}
           </div>
+
+          <ImportLibrary />
 
           <ExternalSources />
         </div>

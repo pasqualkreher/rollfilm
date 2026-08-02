@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { useMergePairs } from "../state/viewPrefs";
-import { watchInViewport, watchNearViewport } from "../utils/preload";
+import { watchFarFromViewport, watchInViewport, watchNearViewport } from "../utils/preload";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 
 interface Props {
@@ -73,10 +73,11 @@ const RETRY_DELAYS_MS = [1200, 2500, 5000, 10000];
 // tiles from requesting at all; a tile that scrolls back out of the (one
 // screenful) load margin aborts its in-flight request (src cleared), freeing
 // one of the ~6 HTTP/1.1 connections; and fetch priority follows actual
-// visibility - on-screen tiles request high, margin tiles low. Once a
-// thumbnail has fully loaded it stays loaded - scrolling back never
-// re-fetches. Also used by the import review grid, which otherwise fired
-// every staged request at once.
+// visibility - on-screen tiles request high, margin tiles low. A loaded tile
+// stays loaded while it is anywhere near the viewport and only lets its pixels
+// go once it is far behind (RELEASE_MARGIN), which keeps the renderer's image
+// memory bounded on a grid of thousands. Also used by the import review grid,
+// which otherwise fired every staged request at once.
 export function Thumb({ src, alt }: { src: string; alt: string }) {
   const ref = useRef<HTMLImageElement | null>(null);
   const [shownSrc, setShownSrc] = useState<string | undefined>(undefined);
@@ -92,6 +93,56 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
   const retryCount = useRef(0);
   const retryTimer = useRef<number | null>(null);
 
+  // A tile that finished loading can still end up broken later: under memory
+  // pressure the browser discards decoded pixels and silently re-fetches, and
+  // that fetch can fail. It does NOT reliably fire `error` again for an image
+  // that already completed - which is why relying on the error handler alone
+  // left cards showing the broken-image glyph and their filename. So check the
+  // image itself whenever a tile comes back on screen: `complete` with a
+  // naturalWidth of 0 is the browser's own "this is broken" state. Repairing
+  // means dropping back to not-loaded and letting the normal path re-request.
+  const repairIfBroken = useCallback(() => {
+    const el = ref.current;
+    if (!el || !doneRef.current) return;
+    if (el.complete && el.naturalWidth === 0) {
+      doneRef.current = false;
+      retryCount.current = 0;
+      setVisible(false);
+      setShownSrc(undefined);
+      // Next frame, so the browser really drops the failed image before the
+      // same URL is asked for again (re-assigning an unchanged src is a no-op).
+      requestAnimationFrame(() => setShownSrc(src));
+    }
+  }, [src]);
+
+  // Also checked on every render: while an import runs the grid re-renders
+  // about once a second, which is exactly when the memory pressure that breaks
+  // these images builds up - so a tile sitting on screen gets repaired without
+  // having to be scrolled away and back first.
+  useEffect(repairIfBroken);
+
+  // Let go of a tile that has been left far behind. Without this the renderer
+  // holds every thumbnail the user ever scrolled past (~7MB decoded each), and
+  // a big grid grows until the browser starts discarding images itself - the
+  // discarded ones are what came back broken. Coming back re-reads it from the
+  // browser cache, which is why this can afford to be strict.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    return watchFarFromViewport(el, {
+      // Fires once on subscribe for an off-screen tile, when nothing is loaded
+      // yet - the guard below makes that a no-op.
+      enter: () => {},
+      leave: () => {
+        if (!doneRef.current) return;
+        doneRef.current = false;
+        retryCount.current = 0;
+        setVisible(false);
+        setShownSrc(undefined);
+      },
+    });
+  }, []);
+
   // Fetch priority follows actual visibility: at/near the screen -> high,
   // merely inside the load margin -> low. The browser reads the attribute
   // when the request starts (and newer Chromium also re-prioritizes
@@ -102,10 +153,13 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
     if (!el) return;
     el.setAttribute("fetchpriority", "low");
     return watchInViewport(el, {
-      enter: () => el.setAttribute("fetchpriority", "high"),
+      enter: () => {
+        el.setAttribute("fetchpriority", "high");
+        repairIfBroken();
+      },
       leave: () => el.setAttribute("fetchpriority", "low"),
     });
-  }, []);
+  }, [repairIfBroken]);
 
   useEffect(() => {
     const el = ref.current;

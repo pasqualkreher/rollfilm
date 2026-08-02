@@ -4103,6 +4103,22 @@ input.editor-preset-select {
   margin-bottom: 0;
 }
 
+/* "Import a library": what merging the chosen library would bring in, shown
+   for confirmation before a byte moves (components/ImportLibrary.tsx). */
+.merge-summary-list {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.merge-summary-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* Inside a panel the toolbar shouldn't add its own bottom gap. */
 .import-panel .import-toolbar {
   margin-bottom: 0;

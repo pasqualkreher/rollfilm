@@ -493,7 +493,7 @@ def wipe_library(db: Session, owner_id: int) -> None:
         root.mkdir(parents=True, exist_ok=True)
 
 
-def _image_to_dict(image: Image, tags: list[str]) -> dict:
+def image_to_dict(image: Image, tags: list[str]) -> dict:
     # The legacy v1 edit_* slider columns are intentionally not exported: the
     # render pipeline no longer reads them, so the manifest carries only the
     # state that actually shapes pixels (geometry + edit_adjustments).
@@ -544,6 +544,66 @@ def _image_to_dict(image: Image, tags: list[str]) -> dict:
     }
 
 
+def image_row_from_dict(data: dict, owner_id: int, *, keep_id: bool = True) -> Image:
+    """Rebuild an Image row from an image_to_dict() record.
+
+    Shared by the backup restore, which puts a library back exactly as it was
+    and therefore keeps the original ids, and by the library merge, which folds
+    a second library into a populated one and needs fresh ids so a photo
+    merged twice can't collide with itself (services/library_merge.py).
+
+    .get() throughout: manifests written by older versions simply lack the keys
+    added since, and a restore of one of those must still work."""
+    fields = dict(
+        owner_id=owner_id,
+        file_path=data["file_path"],
+        original_filename=data["original_filename"],
+        file_hash=data["file_hash"],
+        perceptual_hash=data["perceptual_hash"],
+        file_type=FileType(data["file_type"]),
+        raw_format=data["raw_format"],
+        width=data["width"],
+        height=data["height"],
+        file_size=data["file_size"],
+        taken_at=datetime.fromisoformat(data["taken_at"]) if data["taken_at"] else None,
+        imported_at=datetime.fromisoformat(data["imported_at"]),
+        deleted_at=(
+            datetime.fromisoformat(data["deleted_at"]) if data.get("deleted_at") else None
+        ),
+        camera_make=data["camera_make"],
+        camera_model=data["camera_model"],
+        lens_model=data.get("lens_model"),
+        iso=data["iso"],
+        aperture=data["aperture"],
+        shutter_speed=data["shutter_speed"],
+        focal_length=data["focal_length"],
+        gps_lat=data["gps_lat"],
+        gps_lon=data["gps_lon"],
+        gps_country=data.get("gps_country"),
+        rating=data["rating"],
+        color_label=ColorLabel(data["color_label"]),
+        edit_rotation=data["edit_rotation"],
+        edit_crop_x=data["edit_crop_x"],
+        edit_crop_y=data["edit_crop_y"],
+        edit_crop_width=data["edit_crop_width"],
+        edit_crop_height=data["edit_crop_height"],
+        edit_flip_h=data.get("edit_flip_h", False),
+        edit_flip_v=data.get("edit_flip_v", False),
+        edit_straighten=data.get("edit_straighten", 0.0),
+        edit_persp_h=data.get("edit_persp_h", 0),
+        edit_persp_v=data.get("edit_persp_v", 0),
+        edit_distortion=data.get("edit_distortion", 0),
+        edit_adjustments=data.get("edit_adjustments"),
+        edit_rev=data.get("edit_rev", 0),
+        applied_adjustments=data.get("applied_adjustments"),
+        immich_sync=data.get("immich_sync", False),
+        immich_asset_id=data.get("immich_asset_id"),
+    )
+    if keep_id:
+        fields["id"] = data["id"]
+    return Image(**fields)
+
+
 def build_backup_zip(db: Session, owner_id: int) -> Path:
     """A portable backup: the actual library files plus a JSON manifest of
     all metadata (ratings, albums, edits, ...). Deliberately not a raw copy
@@ -582,7 +642,7 @@ def build_backup_zip(db: Session, owner_id: int) -> Path:
     manifest = {
         "version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "images": [_image_to_dict(i, sorted(tags_by_image.get(i.id, []))) for i in images],
+        "images": [image_to_dict(i, sorted(tags_by_image.get(i.id, []))) for i in images],
         "albums": [
             {
                 "id": a.id,
@@ -634,57 +694,7 @@ def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dic
                 shutil.copy2(src, dest)
 
         for image_data in manifest["images"]:
-            db.add(
-                Image(
-                    id=image_data["id"],
-                    owner_id=owner_id,
-                    file_path=image_data["file_path"],
-                    original_filename=image_data["original_filename"],
-                    file_hash=image_data["file_hash"],
-                    perceptual_hash=image_data["perceptual_hash"],
-                    file_type=FileType(image_data["file_type"]),
-                    raw_format=image_data["raw_format"],
-                    width=image_data["width"],
-                    height=image_data["height"],
-                    file_size=image_data["file_size"],
-                    taken_at=datetime.fromisoformat(image_data["taken_at"]) if image_data["taken_at"] else None,
-                    imported_at=datetime.fromisoformat(image_data["imported_at"]),
-                    deleted_at=(
-                        datetime.fromisoformat(image_data["deleted_at"])
-                        if image_data.get("deleted_at")
-                        else None
-                    ),
-                    camera_make=image_data["camera_make"],
-                    camera_model=image_data["camera_model"],
-                    # .get(): manifests from before the lens column carry no key.
-                    lens_model=image_data.get("lens_model"),
-                    iso=image_data["iso"],
-                    aperture=image_data["aperture"],
-                    shutter_speed=image_data["shutter_speed"],
-                    focal_length=image_data["focal_length"],
-                    gps_lat=image_data["gps_lat"],
-                    gps_lon=image_data["gps_lon"],
-                    gps_country=image_data.get("gps_country"),
-                    rating=image_data["rating"],
-                    color_label=ColorLabel(image_data["color_label"]),
-                    edit_rotation=image_data["edit_rotation"],
-                    edit_crop_x=image_data["edit_crop_x"],
-                    edit_crop_y=image_data["edit_crop_y"],
-                    edit_crop_width=image_data["edit_crop_width"],
-                    edit_crop_height=image_data["edit_crop_height"],
-                    edit_flip_h=image_data.get("edit_flip_h", False),
-                    edit_flip_v=image_data.get("edit_flip_v", False),
-                    edit_straighten=image_data.get("edit_straighten", 0.0),
-                    edit_persp_h=image_data.get("edit_persp_h", 0),
-                    edit_persp_v=image_data.get("edit_persp_v", 0),
-                    edit_distortion=image_data.get("edit_distortion", 0),
-                    edit_adjustments=image_data.get("edit_adjustments"),
-                    edit_rev=image_data.get("edit_rev", 0),
-                    applied_adjustments=image_data.get("applied_adjustments"),
-                    immich_sync=image_data.get("immich_sync", False),
-                    immich_asset_id=image_data.get("immich_asset_id"),
-                )
-            )
+            db.add(image_row_from_dict(image_data, owner_id))
         db.flush()
 
         tag_by_name: dict[str, Tag] = {}

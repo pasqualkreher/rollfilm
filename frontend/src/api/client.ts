@@ -24,6 +24,8 @@ import type {
   LibraryFacets,
   LibraryFilters,
   LibraryIndexImage,
+  LibraryMergeProgress,
+  LibraryMergeSummary,
   ScanStatus,
   SearchResultOut,
   SmartAlbumsOut,
@@ -762,6 +764,29 @@ export const api = {
     // Live "N of M photos" progress of a running rebuild, polled by Settings.
     rebuildProgress(): Promise<{ active: boolean; total: number; done: number }> {
       return request(`/maintenance/rebuild-progress`);
+    },
+    // Read-only look at another Rollfilm library (a drive taken travelling):
+    // what merging it would bring in. Touches nothing.
+    inspectLibraryMerge(path: string): Promise<LibraryMergeSummary> {
+      return request(`/maintenance/merge-library/inspect`, {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      });
+    },
+    // Starts the merge and returns at once - it runs in the background and is
+    // followed through mergeLibraryProgress(), which also carries the outcome.
+    mergeLibrary(path: string): Promise<LibraryMergeProgress> {
+      return request(`/maintenance/merge-library`, {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      });
+    },
+    // Asks a running merge to stop; it finishes the photo it is on first.
+    cancelLibraryMerge(): Promise<LibraryMergeProgress> {
+      return request(`/maintenance/merge-library/cancel`, { method: "POST" });
+    },
+    mergeLibraryProgress(): Promise<LibraryMergeProgress> {
+      return request(`/maintenance/merge-library/progress`);
     },
     // Re-read every photo's EXIF capture date and fix wrongly stored ones
     // (photos imported before the reader understood CreateDate/XMP fallbacks
