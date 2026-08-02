@@ -16,7 +16,6 @@ import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { GRID_PIN_LIMIT, preloadImage, watchInViewport } from "../utils/preload";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "../components/AppDialogs";
-import { useTasks } from "../state/tasks";
 import { useWait } from "../state/wait";
 import { useMergePairs } from "../state/viewPrefs";
 import { formatEta } from "../utils/duration";
@@ -145,6 +144,9 @@ export function ImportWizard() {
   const immichMode = immich?.sync_mode ?? "manual";
 
   const mergePairs = useMergePairs();
+  // Declared up here because both the commit and the discard below wrap
+  // themselves in it.
+  const { withWait } = useWait();
 
   // Patches that have been painted into the grid but whose request hasn't come
   // back yet (see updateStaged). A list poll in flight at that moment still
@@ -244,11 +246,17 @@ export function ImportWizard() {
   });
 
   const commit = useMutation({
+    // Blocking wait overlay, like saving or resetting edits and like Discard:
+    // the commit moves every selected photo into the library and there is
+    // nothing sensible to do in this screen while that happens - least of all
+    // clicking the button again.
     mutationFn: () =>
-      api.import.commit(
-        sessionId!,
-        uploadToImmich && immichConfigured,
-        syncAllToImmich && immichConfigured && immichMode === "selective"
+      withWait("Adding photos to your library…", () =>
+        api.import.commit(
+          sessionId!,
+          uploadToImmich && immichConfigured,
+          syncAllToImmich && immichConfigured && immichMode === "selective"
+        )
       ),
     onSuccess: () => {
       // The freshly-imported photos won't appear on the Library until its
@@ -359,7 +367,6 @@ export function ImportWizard() {
   // read as a hang. Block the screen with the same wait overlay as saving edits
   // or resetting them, so it's clear the app is working and nothing else can be
   // clicked into the half-deleted session meanwhile.
-  const { withWait } = useWait();
   const discard = useMutation({
     mutationFn: () => withWait("Discarding this import…", () => api.import.discard(sessionId!)),
     // Always reset locally, even if the delete itself failed (e.g. the
@@ -368,14 +375,6 @@ export function ImportWizard() {
     // exactly the case where that recovery matters most.
     onSettled: () => reset(),
   });
-
-  // Lock the nav + show the top-bar spinner while an import commit runs, same as
-  // the Settings maintenance tasks and the Immich upload.
-  const { setBusyLabel } = useTasks();
-  useEffect(() => {
-    setBusyLabel(commit.isPending ? "Adding photos to your library…" : null);
-  }, [commit.isPending, setBusyLabel]);
-  useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
   const filteredFiles: StagedFileOut[] = (files ?? []).filter((f) => {
     // Trash-restores stay visible even under "Hide duplicates": unlike blocked

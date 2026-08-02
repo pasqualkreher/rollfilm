@@ -31,15 +31,15 @@
       .wrap {
         height: 100%;
         box-sizing: border-box;
-        /* Real breathing room above the logo and below the status - without
-           it, content taller than the window makes the centred flex column
+        /* Breathing room above the logo and below the status - without it,
+           content taller than the window makes the centred flex column
            overflow both edges and the logo sits glued to the top. */
-        padding: 22px 18px;
+        padding: 14px 18px;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 14px;
+        gap: 12px;
       }
       .spinner {
         /* Never let the flex column squash the circle when the content is
@@ -69,7 +69,7 @@
       }
       #status {
         margin: 0;
-        padding-bottom: 14px;
+        padding-bottom: 6px;
         font-size: 12px;
         color: var(--muted);
         text-align: center;
@@ -80,7 +80,7 @@
     <div class="wrap">
       <!-- Inline copy of frontend/public/rollfilm.svg (X-Pro1-style camera) —
            keep in sync when the logo changes. -->
-      <svg width="84" height="84" viewBox="0 0 512 512" aria-hidden="true" style="flex: none">
+      <svg width="68" height="68" viewBox="0 0 512 512" aria-hidden="true" style="flex: none">
         <rect width="512" height="512" rx="116" fill="#f8f8f9"/>
         <rect x="368" y="128" width="56" height="34" rx="11" fill="#1e1e23"/>
         <circle cx="334" cy="148" r="13" fill="#4a4a55"/>

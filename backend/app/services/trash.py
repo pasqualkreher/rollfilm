@@ -11,7 +11,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.db.models import FileType, Image, ImmichPendingDeletion, ImportStagedFile
@@ -28,16 +28,17 @@ from app.services.settings_store import (
 logger = logging.getLogger(__name__)
 
 
-def prune_empty_dirs(start: Path, stop_at: Path) -> None:
-    """After deleting a managed original, remove any now-empty parent folders the
-    app created for it (the per-year / per-day import folders), walking upward.
-    Never touches stop_at (the library root) itself, and bails the moment it
-    would step outside it - so a bad path can't delete unrelated directories."""
+def prune_empty_dirs(directory: Path, stop_at: Path) -> None:
+    """Remove `directory` and any now-empty parents the app created for it (the
+    per-year / per-day import folders), walking upward and stopping at the
+    first one that still holds something. Never touches stop_at (the library
+    root) itself, and bails the moment it would step outside it - so a bad path
+    can't delete unrelated directories."""
     try:
         stop_at = stop_at.resolve()
     except OSError:
         return
-    current = start.parent
+    current = directory
     while True:
         try:
             resolved = current.resolve()
@@ -122,18 +123,37 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
         db.query(ImportStagedFile).filter(
             ImportStagedFile.duplicate_of_image_id.in_(image_ids)
         ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
+        # Album memberships and tag links are cascade="all, delete-orphan", so
+        # db.delete() below needs both collections loaded - and lazily that is
+        # two SELECTs per photo, which is what made emptying a full Trash crawl
+        # (with the database on the same external drive as the photos). Two
+        # queries for the whole batch instead.
+        db.query(Image).options(
+            selectinload(Image.albums), selectinload(Image.tag_links)
+        ).filter(Image.id.in_(image_ids)).all()
     db.flush()
+
+    # Folders to tidy afterwards rather than per photo: deleting 500 shots of
+    # one day would otherwise scan that same directory 500 times, each scan
+    # reading a folder that still holds hundreds of files.
+    emptied_dirs: set[Path] = set()
 
     for image in images:
         if delete_files and image.source_root_id is None:
-            # Managed (imported) library file - ours to delete. Also tidy the
-            # date folders the app created once they're empty, so deleting the
-            # last shot of a day/year doesn't leave hollow dirs.
+            # Managed (imported) library file - ours to delete.
             original = settings.library_root / image.file_path
             original.unlink(missing_ok=True)
-            prune_empty_dirs(original, settings.library_root)
-        shutil.rmtree(thumbnails.derivative_dir(image.id), ignore_errors=True)
+            emptied_dirs.add(original.parent)
+        # Deliberately not derivative_dir(), which *creates* the folder before
+        # this would remove it again - two pointless metadata writes per photo,
+        # and it conjured a directory for photos that never had derivatives.
+        shutil.rmtree(thumbnails.derivative_path(image.id), ignore_errors=True)
         db.delete(image)
+
+    # Tidy the date folders the app created once they're empty, so deleting the
+    # last shot of a day (or year) doesn't leave hollow dirs behind.
+    for directory in emptied_dirs:
+        prune_empty_dirs(directory, settings.library_root)
 
 
 def purge_expired() -> int:

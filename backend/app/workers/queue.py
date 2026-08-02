@@ -406,6 +406,15 @@ def _import_work_active() -> bool:
     return False
 
 
+def embeddings_running() -> bool:
+    """Whether the search-embedding backfill is working right now. Used by the
+    desktop shell's quit check: these are the computations that keep running
+    after an import screen is long gone, and cutting them off silently is what
+    leaves a library that can't be searched until someone notices."""
+    with _backfill_lock:
+        return _backfill_thread is not None and _backfill_thread.is_alive()
+
+
 def schedule_embedding_backfill() -> None:
     """Kick the embedding backfill (debounced - at most one worker ever runs).
     Called at startup for the catch-up pass and whenever the post-import render

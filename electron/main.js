@@ -285,10 +285,12 @@ function movePath(src, dest) {
 function createSplash() {
   splashWindow = new BrowserWindow({
     width: 380,
-    // Tall enough for logo + spinner + title + version + a two-line status
-    // plus the wrap's 22px top/bottom padding - a smaller box makes the flex
-    // column overflow and glues the logo to the top edge.
-    height: 288,
+    // Landscape rather than the near-square it used to be: still tall enough
+    // for logo + spinner + title + version + a two-line status inside the
+    // wrap's padding (that content is ~205px), but no taller. Trimming this
+    // without also trimming splash.html makes the centred flex column
+    // overflow both edges and glues the logo to the top.
+    height: 264,
     frame: false,
     resizable: false,
     fullscreenable: false,
@@ -507,6 +509,49 @@ function fetchImmichActivity() {
   });
 }
 
+function fetchBackgroundActivity() {
+  return new Promise((resolve) => {
+    const req = http.get(`${apiBaseUrl}/maintenance/background-activity`, (res) => {
+      let body = "";
+      res.on("data", (chunk) => (body += chunk));
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(2000, () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
+}
+
+// Everything still working after the screen that started it is gone: photos
+// being uploaded to Immich, thumbnails an import couldn't hand over ready-made,
+// the search index catching up, a library being merged in. Quitting mid-way
+// isn't destructive - all of it resumes on the next start - but doing it
+// silently leaves a library that looks half-finished for no visible reason.
+async function outstandingWork() {
+  const [immich, background] = await Promise.all([
+    fetchImmichActivity(),
+    fetchBackgroundActivity(),
+  ]);
+  const uploads = immich ? immich.pending_uploads || 0 : 0;
+  const derivatives = background ? background.derivatives_pending || 0 : 0;
+  const embeddings = Boolean(background && background.embeddings_running);
+  const merging = Boolean(background && background.merge_active);
+  const parts = [];
+  if (uploads > 0) parts.push(`${uploads} photo${uploads === 1 ? "" : "s"} uploading to Immich`);
+  if (merging) parts.push("a library being imported");
+  if (derivatives > 0) parts.push(`${derivatives} thumbnail${derivatives === 1 ? "" : "s"} to render`);
+  if (embeddings) parts.push("the search index catching up");
+  return { immich, uploads, derivatives, embeddings, merging, parts, busy: parts.length > 0 };
+}
+
 function cancelBackgroundWait() {
   if (backgroundWaitTimer) {
     clearInterval(backgroundWaitTimer);
@@ -525,26 +570,27 @@ async function confirmCloseWithSyncCheck() {
     mainWindow.close();
     return;
   }
-  const activity = await fetchImmichActivity();
-  const pending = activity ? activity.pending_uploads || 0 : 0;
+  const work = await outstandingWork();
   if (!mainWindow) return;
-  if (pending === 0) {
+  if (!work.busy) {
     forceClose = true;
     mainWindow.close();
     return;
   }
 
-  // In full/selective mode the startup sync loop re-uploads whatever is
-  // missing, so quitting only delays the sync; in manual mode the queued
-  // uploads are simply gone until the user pushes them again.
-  const resumesNextRun = activity.sync_mode === "full" || activity.sync_mode === "selective";
+  // Only Immich uploads in manual mode are actually lost by quitting - they
+  // are not retried until the user pushes them again. Everything else (the
+  // renders, the search index, a merge) is picked up automatically on the next
+  // start, so "quit now" costs time, not work.
+  const manualUploadsLost =
+    work.uploads > 0 && work.immich && work.immich.sync_mode === "manual";
   const { response } = await dialog.showMessageBox(mainWindow, {
     type: "info",
-    title: "Immich sync is still running",
-    message: `${pending} photo${pending === 1 ? " is" : "s are"} still uploading to Immich.`,
-    detail: resumesNextRun
-      ? "Finish in background: the window closes and the app quits by itself once the uploads are done.\n\nQuit now: the remaining uploads stop — they'll be caught up automatically the next time the app runs."
-      : "Finish in background: the window closes and the app quits by itself once the uploads are done.\n\nQuit now: the remaining uploads stop and won't be retried automatically (manual sync mode) — you'd have to push them to Immich again.",
+    title: "Rollfilm is still working",
+    message: `Still running: ${work.parts.join(", ")}.`,
+    detail: manualUploadsLost
+      ? "Finish in background: the window closes and the app quits by itself once it's done.\n\nQuit now: the remaining work stops. The renders and the search index are caught up automatically next time, but the queued Immich uploads are not (manual sync mode) — you'd have to push them again."
+      : "Finish in background: the window closes and the app quits by itself once it's done.\n\nQuit now: the remaining work stops — it's picked up again automatically the next time the app runs. Your photos and edits are already saved either way.",
     buttons: ["Finish in background", "Quit now", "Keep app open"],
     defaultId: 0,
     cancelId: 2,
@@ -563,9 +609,10 @@ async function confirmCloseWithSyncCheck() {
   // and cancels the auto-quit (see the activate handler).
   mainWindow.hide();
   backgroundWaitTimer = setInterval(async () => {
-    const current = await fetchImmichActivity();
-    // A backend that stopped answering can't be uploading anymore - quit too.
-    if (!current || (current.pending_uploads || 0) === 0) {
+    const current = await outstandingWork();
+    // A backend that stopped answering can't be working anymore - quit too
+    // (outstandingWork reads that as nothing outstanding).
+    if (!current.busy) {
       cancelBackgroundWait();
       forceClose = true;
       if (mainWindow) mainWindow.close();

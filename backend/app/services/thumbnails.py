@@ -82,8 +82,17 @@ def _linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     return np.where(a <= 0.0031308, a * 12.92, 1.055 * np.power(a, 1.0 / 2.4) - 0.055)
 
 
+def derivative_path(image_id: str) -> Path:
+    """Where an image's derivatives live - without bringing the folder into
+    existence. For readers and for deletion; writers want derivative_dir()."""
+    return settings.thumbnail_cache_root / image_id
+
+
 def derivative_dir(image_id: str) -> Path:
-    path = settings.thumbnail_cache_root / image_id
+    """Same folder, created if missing. Only for callers about to write into
+    it - creating it anywhere else leaves empty folders behind for photos that
+    have no derivatives."""
+    path = derivative_path(image_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
 

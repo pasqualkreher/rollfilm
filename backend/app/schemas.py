@@ -656,6 +656,23 @@ class RestoreResult(BaseModel):
     albums_restored: int
 
 
+class BackgroundActivityOut(BaseModel):
+    """Work that outlives the screen that started it. The desktop shell asks
+    before quitting, so a library isn't left half-rendered or unsearchable."""
+
+    # Thumbnails/previews still to render (only ever the ones an import
+    # couldn't hand over ready-made).
+    derivatives_pending: int
+    # The CLIP search backfill is scan-based, so it has no queue length - just
+    # whether it is working.
+    embeddings_running: bool
+    # A library merge copying photos in from another drive.
+    merge_active: bool
+    # Everything above resumes by itself on the next start, which is what makes
+    # "quit now" a safe offer rather than a loss.
+    resumes_next_run: bool = True
+
+
 class LibraryMergeRequest(BaseModel):
     # Absolute path of the other library's folder - the one holding its year
     # folders and its .photomanager data dir.

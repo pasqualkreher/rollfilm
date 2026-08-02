@@ -46,7 +46,7 @@ from app.services.settings_store import (
     IMMICH_MODE_SELECTIVE,
     get_immich_config,
 )
-from app.services.thumbnails import THUMBNAIL_MAX_PX, THUMBNAIL_SCALE
+from app.services.thumbnails import THUMBNAIL_MAX_PX, THUMBNAIL_SCALE, derivative_dir
 from app.workers.queue import (
     enqueue_immich_upload,
     enqueue_post_import,
@@ -206,6 +206,39 @@ def render_review_derivatives(
             th = min(max(1, round(rendered.height * 0.5)), THUMBNAIL_MAX_PX)
             rendered.thumbnail((tw, th), PILImage.LANCZOS)
             _save_atomic(rendered, demosaic_path)
+
+
+def adopt_staged_derivatives(session_id: str, staged_id: str, image_id: str) -> bool:
+    """Hand the review's already-rendered thumbnail and preview to the library.
+
+    The import renders both for every staged file so the review is instant
+    (render_review_derivatives). They are exactly what the library wants -
+    same sizes, and for a RAW the same demosaic - so re-rendering them after
+    the commit means decoding every photo a second time. That pass is what
+    made a freshly imported library sit there with empty tiles while the disk
+    ground away; handing the files over is a rename on the same volume.
+
+    All-or-nothing: the post-import worker only skips a photo when *both*
+    derivatives are present (has_derivatives), so half a handover would just
+    render both again. Returns whether the library is now covered."""
+    thumb_dir = staged_thumb_dir(session_id)
+    # A RAW's review thumbnail is the demosaiced one; anything else uses the
+    # thumbnail written straight from the file's own preview.
+    source_thumb = staged_demosaic_path(thumb_dir, staged_id)
+    if not source_thumb.exists():
+        source_thumb = thumb_dir / f"{staged_id}.jpg"
+    source_preview = staged_preview_path(thumb_dir, staged_id)
+    if not (source_thumb.exists() and source_preview.exists()):
+        return False
+
+    try:
+        out = derivative_dir(image_id)
+        shutil.move(str(source_thumb), out / "thumbnail.jpg")
+        shutil.move(str(source_preview), out / "preview.jpg")
+        return True
+    except OSError:
+        logger.exception("Could not hand review derivatives to image %s", image_id)
+        return False
 
 
 def _enqueue_review_derivatives(
@@ -1080,6 +1113,7 @@ def commit_import_session(
         and (not _is_duplicate(f) or _referenced_duplicate(f) is not None)
     ]
     new_images: list[Image] = []
+    staged_id_for_image: dict[str, str] = {}
 
     # Decide which staged files actually import, and where each lands, *before*
     # touching disk. The exact-duplicate promotion logic is order-dependent (an
@@ -1283,6 +1317,10 @@ def commit_import_session(
             db.add(image)
         db.flush()
         new_images.append(image)
+        # Which staged file each imported photo came from, so its already
+        # rendered review derivatives can be handed over below instead of being
+        # rendered a second time.
+        staged_id_for_image[image.id] = staged.id
         rows_since_commit += 1
         if rows_since_commit >= _COMMIT_CHUNK:
             db.commit()
@@ -1324,6 +1362,17 @@ def commit_import_session(
     for image in new_images:
         db.refresh(image)
         image_path = settings.library_root / image.file_path
+        # Hand over the thumbnail and preview the review already rendered. The
+        # post-import worker skips a photo that has both (has_derivatives), so
+        # this turns the whole re-render pass into a no-op for everything the
+        # import covered - the library grid is populated the moment the commit
+        # returns, instead of after every photo has been decoded again.
+        staged_id = staged_id_for_image.get(image.id)
+        if staged_id:
+            adopt_staged_derivatives(session.id, staged_id, image.id)
+        # Still enqueued either way: it is also what schedules the search
+        # embedding backfill once the queue drains, and it renders whatever the
+        # handover couldn't cover.
         enqueue_post_import(image.id, image_path)
 
         # Push only the JPEGs to Immich, never the RAWs.

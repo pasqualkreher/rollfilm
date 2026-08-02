@@ -16,6 +16,7 @@ from app.services.library_merge import (
     request_merge_cancel,
     start_merge,
 )
+from app.workers.queue import derivatives_pending, embeddings_running
 from app.services.maintenance import (
     build_backup_zip,
     get_rebuild_progress,
@@ -91,6 +92,18 @@ def restore(
 ):
     _require_delete_confirmation(confirmation)
     return restore_from_backup(db, current_user.id, file)
+
+
+@router.get("/background-activity", response_model=schemas.BackgroundActivityOut)
+def background_activity(current_user: User = Depends(get_current_user)):
+    """What is still being computed in the background. Polled by the desktop
+    shell when the user quits, so it can offer to finish first instead of
+    cutting the work off mid-photo."""
+    return schemas.BackgroundActivityOut(
+        derivatives_pending=derivatives_pending(),
+        embeddings_running=embeddings_running(),
+        merge_active=get_merge_progress()["active"],
+    )
 
 
 @router.post("/merge-library/inspect", response_model=schemas.LibraryMergeSummary)
