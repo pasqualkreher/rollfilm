@@ -50,10 +50,14 @@ export function ImportLightbox({
     const exactDuplicate =
       Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id) && !file.is_near_duplicate;
     function onKeyDown(e: KeyboardEvent) {
-      // Don't hijack keys while a control (checkbox/button) has focus - let it
-      // handle its own Space/Enter natively.
+      // Don't hijack keys while a text/choice control (checkbox, select,
+      // text field) has focus - let it handle its own Space/Enter natively.
+      // BUTTONS are deliberately NOT exempt: after clicking the ‹/› arrows
+      // the clicked button kept focus, and the browser's native "Space
+      // activates the focused button" then navigated AGAIN instead of
+      // toggling the photo's selection.
       const tag = (e.target as HTMLElement | null)?.tagName;
-      const inControl = tag === "INPUT" || tag === "BUTTON" || tag === "SELECT" || tag === "TEXTAREA";
+      const inControl = tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
 
       if (e.key === "Escape") onClose();
       else if (e.key === "ArrowLeft") onIndexChange(Math.max(0, index - 1));
@@ -124,9 +128,11 @@ export function ImportLightbox({
               className="lightbox-nav-btn lightbox-nav-prev"
               onClick={(e) => {
                 e.stopPropagation();
+                e.currentTarget.blur(); // Space/Enter must never re-trigger the arrow
                 onIndexChange(Math.max(0, index - 1));
               }}
               disabled={index === 0}
+              tabIndex={-1}
             >
               ‹
             </button>
@@ -147,9 +153,11 @@ export function ImportLightbox({
               className="lightbox-nav-btn lightbox-nav-next"
               onClick={(e) => {
                 e.stopPropagation();
+                e.currentTarget.blur(); // Space/Enter must never re-trigger the arrow
                 onIndexChange(Math.min(files.length - 1, index + 1));
               }}
               disabled={index === files.length - 1}
+              tabIndex={-1}
             >
               ›
             </button>

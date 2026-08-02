@@ -14,10 +14,11 @@ from app.api.routes import (
     tags,
 )
 from app.config import settings as app_settings
-from app.db.session import SessionLocal, engine, ensure_indexes, start_wal_checkpointer
+from app.db.session import SessionLocal, engine, ensure_indexes
 from app.services.borg_backup import start_background_backup
 from app.services.cloudfiles import rehydrate_dirs_in_background
 from app.services.embeddings import ensure_embeddings_table
+from app.services.exif import reap_orphaned_helpers
 from app.services.geocode import warm_in_background as warm_geocoder
 from app.services.immich_sync import start_background_immich_sync
 from app.services.maintenance import start_background_sync
@@ -53,9 +54,6 @@ def on_startup() -> None:
     ensure_embeddings_table(engine)
     # Hot-path indexes for the library grid (idempotent, see ensure_indexes).
     ensure_indexes()
-    # WAL checkpoints run here, in the background, never inline in a writer's
-    # commit (auto-checkpoint is off - see db/session.py).
-    start_wal_checkpointer()
     # Restore the persisted RAW-decode mode into the live flag the decoder reads
     # (services/raw.py keeps it as a module global to avoid a DB hit per decode).
     from app.services import raw as raw_service
@@ -88,6 +86,10 @@ def on_startup() -> None:
     # import commit (the desktop app restarts the backend on every launch, so
     # that first-commit stall was paid every session).
     warm_geocoder()
+    # A hard stop of a previous backend (dev restart, crash) leaves its
+    # exiftool -stay_open helpers orphaned forever - sweep them so they
+    # can't pile up across restarts (78 accumulated on a dev machine).
+    reap_orphaned_helpers()
     # If the library sits in a cloud-synced folder (iCloud/Nextcloud), the
     # provider may have evicted thumbnails or staged files to placeholders;
     # the first read of one blocks until it re-downloads, which shows up as

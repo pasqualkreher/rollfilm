@@ -1,11 +1,16 @@
 import json
+import logging
 import os
 import re
+import signal
+import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
 import exiftool
+
+logger = logging.getLogger(__name__)
 
 _helper: exiftool.ExifToolHelper | None = None
 
@@ -179,6 +184,42 @@ def new_helper() -> exiftool.ExifToolHelper:
     parallel staging gives each worker its own via a small pool of these."""
     executable = os.environ.get("EXIFTOOL_PATH") or "exiftool"
     return exiftool.ExifToolHelper(executable=executable)
+
+
+def reap_orphaned_helpers() -> int:
+    """Kill exiftool -stay_open helpers whose backend died without closing
+    them. A hard stop of the backend (dev restart, crash, OS kill) leaves
+    each worker's helper running forever - re-parented to PID 1 - and over
+    many restarts they pile up (78 were found on a dev machine). Matched by
+    BOTH the orphan state (PPID 1) and pyexiftool's exact -stay_open
+    argument fingerprint, so no other process can be hit. Called once at
+    backend startup; returns the number reaped. Best effort - any error is
+    swallowed, startup must never fail over cleanup."""
+    reaped = 0
+    try:
+        out = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,ppid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        for line in out.splitlines():
+            parts = line.strip().split(None, 2)
+            if len(parts) < 3:
+                continue
+            pid, ppid, command = parts
+            if ppid != "1" or "exiftool" not in command or "-stay_open" not in command:
+                continue
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+                reaped += 1
+            except (OSError, ValueError):
+                pass
+        if reaped:
+            logger.info("reaped %d orphaned exiftool helper(s) from earlier runs", reaped)
+    except Exception:
+        logger.exception("orphaned-exiftool sweep failed (ignored)")
+    return reaped
 
 
 # Only the tags read below. get_tags() lets exiftool skip formatting every

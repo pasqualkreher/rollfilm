@@ -1,8 +1,8 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ColorLabel, StagedFileOut, StagedFilesOut, ViewMode } from "../api/types";
+import type { ColorLabel, StagedFileOut, ViewMode } from "../api/types";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
@@ -13,10 +13,8 @@ import { TimelineScrubber } from "../components/TimelineScrubber";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
-import { GRID_PIN_LIMIT, PinnedImageWindow, watchInViewport } from "../utils/preload";
 import { useAppDialogs } from "../components/AppDialogs";
 import { useTasks } from "../state/tasks";
-import { useWait } from "../state/wait";
 import { useMergePairs } from "../state/viewPrefs";
 import { useTransientMessage } from "../utils/transientMessage";
 import { IconChevronDown } from "../components/Icons";
@@ -47,128 +45,6 @@ function isExactDuplicate(f: StagedFileOut): boolean {
     !f.duplicate_in_trash
   );
 }
-
-// One shared day-label formatter: toLocaleDateString constructs a fresh
-// Intl.DateTimeFormat on EVERY call, and at thousands of staged files per
-// render that alone burned tens of milliseconds of main thread.
-const DAY_LABEL_FMT = new Intl.DateTimeFormat(undefined, {
-  weekday: "short",
-  month: "long",
-  day: "numeric",
-  year: "numeric",
-});
-
-// One staged-file card, memoized: on a multi-thousand import the grid
-// re-renders often (progress polls, selection changes), and re-building every
-// card's tree each time made the review screen stutter. Structural sharing in
-// the files query keeps unchanged rows' identities, so unchanged cards bail
-// out here; the callbacks are ref-stable (see the wizard body).
-const ImportCard = memo(function ImportCard({
-  file: f,
-  index,
-  merged,
-  selectMode,
-  sessionId,
-  onOpen,
-  onToggle,
-  onPatch,
-  onInViewChange,
-}: {
-  file: StagedFileOut;
-  index: number;
-  merged: boolean;
-  selectMode: boolean;
-  sessionId: string;
-  onOpen: (index: number) => void;
-  onToggle: (index: number, shiftKey: boolean) => void;
-  onPatch: (
-    fileId: string,
-    patch: { selected?: boolean; rating?: number; color_label?: ColorLabel; immich_sync?: boolean }
-  ) => void;
-  // Reports viewport membership - the wizard PINS the big previews of
-  // visible cards in memory so opening one is instant (see onCardInView).
-  onInViewChange: (fileId: string, inView: boolean) => void;
-}) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    const unwatch = watchInViewport(el, {
-      enter: () => onInViewChange(f.id, true),
-      leave: () => onInViewChange(f.id, false),
-    });
-    return () => {
-      unwatch();
-      onInViewChange(f.id, false);
-    };
-  }, [f.id, onInViewChange]);
-  return (
-    <div ref={rootRef} style={tileStyle(f.width, f.height)} className={`import-card${f.selected ? " selected" : ""}`}>
-      <div
-        className={`thumb-card${f.selected ? " selected" : ""}`}
-        onClick={(e) => (selectMode ? onToggle(index, e.shiftKey) : onOpen(index))}
-        title={
-          selectMode
-            ? isExactDuplicate(f)
-              ? "Already in your library - can't be imported"
-              : f.duplicate_in_trash
-                ? "This photo is in the Trash - importing it restores it"
-                : "Click to select, shift-click for a range"
-            : "Click to preview"
-        }
-      >
-        {f.processed ? (
-          <Thumb
-            // ?v flips embedded -> demosaic once the background render lands.
-            src={`${api.import.stagedThumbnailUrl(sessionId, f.id)}${f.has_demosaic_thumb ? "?v=d" : ""}`}
-            alt={f.original_filename}
-          />
-        ) : (
-          // Copied but not yet analyzed - no thumbnail exists yet. The files
-          // refetch swaps this for the real Thumb when the background analysis
-          // finishes this file. Shimmers like the album skeleton cards instead
-          // of showing a spinner.
-          <div className="thumb-analyzing" title="Analyzing…" />
-        )}
-        {selectMode && (
-          <input
-            className="select-checkbox"
-            type="checkbox"
-            checked={f.selected}
-            disabled={isExactDuplicate(f)}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggle(index, e.shiftKey);
-            }}
-            onChange={() => {}}
-          />
-        )}
-        {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
-          <span className="duplicate-badge">
-            {f.is_near_duplicate
-              ? "Possible duplicate"
-              : f.duplicate_in_trash
-                ? "In Trash - restores"
-                : "Already in library"}
-          </span>
-        )}
-        {/* "RAW+JPG" only when this card is a merged stand-in for the pair;
-            unmerged/filtered views show each file's own type. */}
-        <span className={fileTypeBadgeClass(f.file_type, merged)}>
-          {fileTypeBadge(f.file_type, merged)}
-        </span>
-      </div>
-      {/* No per-card import checkbox here: it's cramped at grid sizes and
-          crowds the stars. Toggle import via "Select" mode (overlay checkbox /
-          click) or in the large preview (Space key). The footer keeps just
-          rating + color, which have room now. */}
-      <div className="import-card-footer">
-        <RatingStars rating={f.rating} onChange={(rating) => onPatch(f.id, { rating })} />
-        <ColorLabelPicker value={f.color_label} onChange={(color_label) => onPatch(f.id, { color_label })} />
-      </div>
-    </div>
-  );
-});
 
 // Shots where exactly one half of a RAW+JPEG pair is selected - used to ask
 // "did you mean to leave the other one out?" before committing.
@@ -222,9 +98,7 @@ export function ImportWizard() {
     importMode,
     stagingSessionId,
     totalFileCount,
-    totalByteCount,
     liveStagedCount,
-    liveStagedBytes,
     effectiveUploadPct,
     analysisPending,
     analysisProcessed,
@@ -235,7 +109,6 @@ export function ImportWizard() {
     cancelUpload,
     reset,
   } = useImportSession();
-  const { withWait } = useWait();
   // Review is open (sessionId set) but the remaining batches are still copying
   // in the background: keep the grid refreshing and block commit until done.
   const stagingInBackground = !!sessionId && isUploading;
@@ -278,18 +151,9 @@ export function ImportWizard() {
 
   const mergePairs = useMergePairs();
 
-  const { data: filesData, isLoading } = useQuery({
+  const { data: files, isLoading } = useQuery({
     queryKey: ["import-files", sessionId],
-    // Version-aware poll: send the version of the copy we hold; when nothing
-    // changed the backend answers a tiny {unchanged} and we RETURN THE
-    // PREVIOUS OBJECT - same identity, so no downstream memo recomputes and
-    // nothing re-renders. The expensive full response only travels when the
-    // session actually changed.
-    queryFn: async () => {
-      const prev = queryClient.getQueryData<StagedFilesOut>(["import-files", sessionId]);
-      const res = await api.import.files(sessionId!, prev?.version);
-      return res.unchanged && prev ? prev : res;
-    },
+    queryFn: () => api.import.files(sessionId!),
     enabled: !!sessionId,
     // While background copying/analysis is still running, refetch so newly
     // copied photos appear and analyzed ones swap their placeholder for the
@@ -301,22 +165,17 @@ export function ImportWizard() {
     // focus) picked up the final state. Polling /files also drives the
     // backend's self-healing re-enqueue for files whose analysis job was lost.
     refetchInterval: (query) => {
-      const data = query.state.data?.files ?? [];
-      // While photos are still COPYING, poll at a steady 1s so every file
-      // shows up in the grid basically the moment it lands (the backend
-      // flushes staged rows on a ~300ms clock) - photos appearing one by one
-      // is the visible heartbeat of the import. The render cost of a poll is
-      // tamed elsewhere (memoized pipeline + cards, windowed sections).
-      if (stagingInBackground) return 1000;
-      const active = analysisPending || data.some((f) => !f.processed);
+      const data = query.state.data ?? [];
+      const active = stagingInBackground || analysisPending || data.some((f) => !f.processed);
       if (!active) return false;
-      // The analysis/demosaic catch-up phase polls at 1s too - with the
-      // version short-circuit an unchanged poll costs next to nothing on
-      // either side, so there's no reason to ease off anymore.
-      return 1000;
+      // Each poll ships (and re-renders) the ENTIRE staged list. At a 1s
+      // cadence with thousands of files that becomes serious backend + SQLite
+      // load competing with the copy itself - a big reason huge imports felt
+      // slower the further they got. Scale the interval with the grid size:
+      // snappy while small, easing off to 5s on multi-thousand imports.
+      return Math.min(5000, Math.max(1000, data.length));
     },
   });
-  const files = filesData?.files;
 
   const filesById = useMemo(() => new Map((files ?? []).map((f) => [f.id, f])), [files]);
 
@@ -328,53 +187,15 @@ export function ImportWizard() {
       fileId: string;
       patch: { selected?: boolean; rating?: number; color_label?: ColorLabel; immich_sync?: boolean };
     }) => {
-      const updated = [await api.import.updateStagedFile(sessionId!, fileId, patch)];
+      await api.import.updateStagedFile(sessionId!, fileId, patch);
       // Merged view shows only the JPEG of a pair, so mirror the change onto the
       // hidden RAW partner - selecting/rating the one card affects both files.
       if (mergePairs) {
         const partnerId = filesById.get(fileId)?.paired_staged_file_id;
-        if (partnerId) updated.push(await api.import.updateStagedFile(sessionId!, partnerId, patch));
+        if (partnerId) await api.import.updateStagedFile(sessionId!, partnerId, patch);
       }
-      return updated;
     },
-    // OPTIMISTIC: Space/stars/color in the lightbox and cards must reflect
-    // instantly - waiting for the PATCH roundtrip + full-list refetch made a
-    // spacebar toggle lag for seconds while an import hammered the disk. The
-    // cache is patched immediately; the next version-poll (or the error
-    // rollback) reconciles with the server truth.
-    onMutate: async ({ fileId, patch }) => {
-      const key = ["import-files", sessionId];
-      await queryClient.cancelQueries({ queryKey: key });
-      const prev = queryClient.getQueryData<StagedFilesOut>(key);
-      if (prev) {
-        const partnerId = mergePairs
-          ? prev.files.find((f) => f.id === fileId)?.paired_staged_file_id
-          : null;
-        queryClient.setQueryData<StagedFilesOut>(key, {
-          ...prev,
-          files: prev.files.map((f) =>
-            f.id === fileId || (partnerId != null && f.id === partnerId) ? { ...f, ...patch } : f
-          ),
-        });
-      }
-      return { prev };
-    },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(["import-files", sessionId], ctx.prev);
-    },
-    // Reconcile with the rows the PATCH itself returned instead of
-    // invalidating: an invalidate refetched the ENTIRE staged-file list on
-    // every star/space toggle, and rapid rating passes over a multi-thousand
-    // import turned into a stream of full-list downloads that stuttered the
-    // grid. The cache's `version` stays behind on purpose - the next
-    // version-poll (if one is running) fetches the full truth anyway.
-    onSuccess: (updated) => {
-      queryClient.setQueryData<StagedFilesOut>(["import-files", sessionId], (prev) => {
-        if (!prev) return prev;
-        const byId = new Map(updated.map((u) => [u.id, u]));
-        return { ...prev, files: prev.files.map((f) => byId.get(f.id) ?? f) };
-      });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] }),
   });
 
   const commit = useMutation({
@@ -464,55 +285,32 @@ export function ImportWizard() {
   }, [isUploading, effectiveUploadPct]);
   const uploadEtaSuffix = uploadEta != null ? ` · ~${formatEta(uploadEta)} left` : "";
 
-  // ETA for the review screen's "still copying" banner, from a MOVING window
-  // over the staged-file counter (last 60s). The first version averaged from
-  // the very first sample, so the slow start (session setup, first review
-  // thumbnails) stayed baked into the estimate forever and the ETA barely
-  // moved even when the copy had long sped up. The current rate is shown
-  // alongside, so the real pace is visible without reading server logs.
-  const copySamples = useRef<{ t: number; count: number; bytes: number }[]>([]);
+  // Same projection for the review screen's "still copying" banner, but from
+  // the staged-file counter instead of byte percent: rate = files landed since
+  // the banner appeared / elapsed time. Waits for a handful of files and a
+  // couple of seconds so the first samples don't produce a wild estimate.
+  const copyStartRef = useRef<{ t: number; count: number } | null>(null);
   const [copyEta, setCopyEta] = useState<number | null>(null);
-  const [copyRateLabel, setCopyRateLabel] = useState<string | null>(null);
   useEffect(() => {
     if (!stagingInBackground || liveStagedCount == null || totalFileCount == null) {
-      copySamples.current = [];
+      copyStartRef.current = null;
       setCopyEta(null);
-      setCopyRateLabel(null);
       return;
     }
-    const now = Date.now();
-    const samples = copySamples.current;
-    samples.push({ t: now, count: liveStagedCount, bytes: liveStagedBytes ?? 0 });
-    while (samples.length > 2 && now - samples[0].t > 60_000) samples.shift();
-    const first = samples[0];
-    const elapsed = (now - first.t) / 1000;
-    if (elapsed < 5) return;
-    // Bytes are the honest basis: 200 small JPEGs and 200 big RAFs copy at
-    // the same MB/s but wildly different photos/min - a count-based ETA GREW
-    // mid-import whenever the big files' turn came. Falls back to counts if
-    // byte progress isn't available (older backend).
-    const landedBytes = (liveStagedBytes ?? 0) - first.bytes;
-    if (liveStagedBytes != null && totalByteCount != null && landedBytes > 0) {
-      const bps = landedBytes / elapsed;
-      setCopyRateLabel(`${(bps / 1e6).toFixed(0)} MB/s`);
-      const eta = Math.max(0, totalByteCount - liveStagedBytes) / bps;
-      setCopyEta(Number.isFinite(eta) ? eta : null);
+    if (copyStartRef.current === null) {
+      copyStartRef.current = { t: Date.now(), count: liveStagedCount };
       return;
     }
-    const landed = liveStagedCount - first.count;
-    if (landed >= 3) {
-      const rate = landed / elapsed;
-      setCopyRateLabel(`${(rate * 60).toFixed(0)} photos/min`);
-      const eta = (totalFileCount - liveStagedCount) / rate;
+    const elapsed = (Date.now() - copyStartRef.current.t) / 1000;
+    const landed = liveStagedCount - copyStartRef.current.count;
+    if (elapsed >= 2 && landed >= 5) {
+      const eta = ((totalFileCount - liveStagedCount) * elapsed) / landed;
       setCopyEta(Number.isFinite(eta) && eta >= 0 ? eta : null);
     }
-  }, [stagingInBackground, liveStagedCount, liveStagedBytes, totalFileCount, totalByteCount]);
+  }, [stagingInBackground, liveStagedCount, totalFileCount]);
 
-  // Behind the app-wide blocking wait popup (like Reset and the bulk
-  // actions): deleting a big staging folder takes a moment, and nothing may
-  // be clicked mid-discard.
   const discard = useMutation({
-    mutationFn: () => withWait("Discarding import…", () => api.import.discard(sessionId!)),
+    mutationFn: () => api.import.discard(sessionId!),
     // Always reset locally, even if the delete itself failed (e.g. the
     // session was already committed/discarded) - the point of Discard is to
     // get back to a clean import screen, and a stale server-side session is
@@ -528,114 +326,94 @@ export function ImportWizard() {
   }, [commit.isPending, setBusyLabel]);
   useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
-  // The whole files -> grid pipeline (filter, pair-aware date sort, pair
-  // merging, day sections) walks every staged file, so it's memoized on its
-  // REAL inputs. It used to run inline on every render - including the 500ms
-  // progress poll during copying - which on a multi-thousand import burned
-  // 50-200ms of main thread per tick and made the whole screen stutter.
-  const { visibleFiles, daySections, importSpansYears } = useMemo(() => {
-    const filteredFiles: StagedFileOut[] = (files ?? []).filter((f) => {
-      // A card only appears once its processing is DONE - thumbnail, EXIF
-      // and duplicate check land together, fully formed, usually seconds
-      // after the file copied (hot-window analysis). A wall of shimmering
-      // placeholders told the user nothing; the banner carries the counts.
-      if (!f.processed) return false;
-      // "Hide duplicates" hides only EXACT duplicates - the blocked,
-      // unimportable noise. Trash-restores stay visible (they actively
-      // restore a photo on import).
-      if (hideDuplicates && isExactDuplicate(f)) return false;
-      if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
-      if (viewMode === "raw_only" && f.file_type !== "raw") return false;
-      if (ratingMin > 0 && f.rating < ratingMin) return false;
-      if (colorFilter !== "none" && f.color_label !== colorFilter) return false;
-      return true;
-    });
-    // A file's capture date, falling back to its RAW/JPEG partner's (same shot,
-    // same moment). Mid-analysis one half of a pair can have its EXIF read while
-    // the other hasn't - without the fallback, pair-adjacent grouping would drag
-    // an undated file into a dated month run and split the section in two.
-    // Sorting and section labels below MUST both use this, never raw taken_at.
-    const effectiveTakenAt = (f: StagedFileOut): string | null =>
-      f.taken_at ??
-      (f.paired_staged_file_id ? filesById.get(f.paired_staged_file_id)?.taken_at ?? null : null);
+  const filteredFiles: StagedFileOut[] = (files ?? []).filter((f) => {
+    // Trash-restores stay visible even under "Hide duplicates": unlike blocked
+    // duplicates they actively do something on import (restore the photo).
+    if (
+      hideDuplicates &&
+      (f.duplicate_of_image_id || f.duplicate_of_staged_file_id) &&
+      !f.duplicate_in_trash
+    )
+      return false;
+    if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
+    if (viewMode === "raw_only" && f.file_type !== "raw") return false;
+    if (ratingMin > 0 && f.rating < ratingMin) return false;
+    if (colorFilter !== "none" && f.color_label !== colorFilter) return false;
+    return true;
+  });
+  // A file's capture date, falling back to its RAW/JPEG partner's (same shot,
+  // same moment). Mid-analysis one half of a pair can have its EXIF read while
+  // the other hasn't - without the fallback, pair-adjacent grouping would drag
+  // an undated file into a dated month run and split the section in two.
+  // Sorting and section labels below MUST both use this, never raw taken_at.
+  const effectiveTakenAt = (f: StagedFileOut): string | null =>
+    f.taken_at ??
+    (f.paired_staged_file_id ? filesById.get(f.paired_staged_file_id)?.taken_at ?? null : null);
 
-    // Chronological review, OLDEST first (shooting order, like a culling app) -
-    // deliberately the reverse of the library timeline: files stage in roughly
-    // capture order, so ascending dates mean every incoming batch and every
-    // still-analyzing file appends at the BOTTOM of the grid instead of
-    // reshuffling what's already on screen. Files whose EXIF hasn't been read
-    // yet have no date and wait at the end in staging order (the sort is
-    // stable); when their analysis lands they join their day - which, files
-    // arriving in capture order, is usually right where they already sit.
-    // Timestamps precomputed once (O(n)) instead of Date.parse inside the
-    // comparator (O(n log n) parses - real milliseconds at grid size).
-    const ts = new Map<string, number>();
-    for (const f of filteredFiles) {
-      const iso = effectiveTakenAt(f);
-      ts.set(f.id, iso ? Date.parse(iso) : NaN);
-    }
-    const dateSorted = [...filteredFiles].sort((a, b) => {
-      const ta = ts.get(a.id)!;
-      const tb = ts.get(b.id)!;
-      const aOk = Number.isFinite(ta);
-      const bOk = Number.isFinite(tb);
-      if (aOk && bOk) return ta - tb;
-      if (aOk !== bOk) return aOk ? -1 : 1;
-      return 0;
-    });
-    // In combined view, either merge each pair into one JPEG card (mergePairs) or
-    // keep the two halves adjacent. Other view modes show a flat list.
-    const visible =
-      viewMode === "combined"
-        ? mergePairs
-          ? collapsePairsBy(dateSorted, (f) => f.file_type, (f) => f.paired_staged_file_id)
-          : groupPairsAdjacent(dateSorted, (f) => f.file_type, (f) => f.paired_staged_file_id)
-        : dateSorted;
+  // Chronological review, OLDEST first (shooting order, like a culling app) -
+  // deliberately the reverse of the library timeline: files stage in roughly
+  // capture order, so ascending dates mean every incoming batch and every
+  // still-analyzing file appends at the BOTTOM of the grid instead of
+  // reshuffling what's already on screen. Files whose EXIF hasn't been read
+  // yet have no date and wait at the end in staging order (the sort is
+  // stable); when their analysis lands they join their day - which, files
+  // arriving in capture order, is usually right where they already sit.
+  const dateSorted = [...filteredFiles].sort((a, b) => {
+    const ia = effectiveTakenAt(a);
+    const ib = effectiveTakenAt(b);
+    const ta = ia ? Date.parse(ia) : NaN;
+    const tb = ib ? Date.parse(ib) : NaN;
+    const aOk = Number.isFinite(ta);
+    const bOk = Number.isFinite(tb);
+    if (aOk && bOk) return ta - tb;
+    if (aOk !== bOk) return aOk ? -1 : 1;
+    return 0;
+  });
+  // In combined view, either merge each pair into one JPEG card (mergePairs) or
+  // keep the two halves adjacent. Other view modes show a flat list.
+  const visibleFiles =
+    viewMode === "combined"
+      ? mergePairs
+        ? collapsePairsBy(dateSorted, (f) => f.file_type, (f) => f.paired_staged_file_id)
+        : groupPairsAdjacent(dateSorted, (f) => f.file_type, (f) => f.paired_staged_file_id)
+      : dateSorted;
+  const selectedCount = (files ?? []).filter((f) => f.selected).length;
 
-    // Day sections over the visible files (already date-sorted, so labels are
-    // contiguous and unique), each entry keeping its index into visibleFiles -
-    // the lightbox and shift-range selection keep addressing the flat list.
-    // Days rather than the library's months: an import typically spans one trip
-    // or shoot, where month granularity would collapse the whole batch into a
-    // single section and the scrubber into a single useless marker.
-    // label null = the dateless tail (files still being analyzed, or genuinely
-    // without a capture date): shown as a plain grid with NO header and no
-    // scrubber marker, rather than shouting "Unknown date" at every mid-import
-    // state.
-    const sections: {
-      label: string | null;
-      date: Date | null;
-      items: { file: StagedFileOut; index: number }[];
-    }[] = [];
-    visible.forEach((file, index) => {
-      const iso = effectiveTakenAt(file);
-      const parsed = iso ? new Date(iso) : null;
-      const date = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
-      const label = date ? DAY_LABEL_FMT.format(date) : null;
-      const last = sections[sections.length - 1];
-      if (last && last.label === label) last.items.push({ file, index });
-      else sections.push({ label, date, items: [{ file, index }] });
-    });
-    // The scrubber's big ticks are months, its small ticks day numbers. Month
-    // ticks carry the year only when the import actually spans more than one.
-    const spansYears =
-      new Set(sections.filter((s) => s.date).map((s) => s.date!.getFullYear())).size > 1;
-    return { visibleFiles: visible, daySections: sections, importSpansYears: spansYears };
-  }, [files, filesById, hideDuplicates, viewMode, ratingMin, colorFilter, mergePairs]);
-  // Counter semantics: "X of Y" counts only files that CAN be imported -
-  // exact duplicates are blocked from selection entirely, so including them
-  // in Y made the numbers look broken ("10 of 42" with 32 duplicates).
-  // They're called out separately instead.
-  const { selectedCount, importableCount, blockedDupCount } = useMemo(() => {
-    const all = files ?? [];
-    let selected = 0;
-    let blocked = 0;
-    for (const f of all) {
-      if (f.selected) selected += 1;
-      if (isExactDuplicate(f)) blocked += 1;
-    }
-    return { selectedCount: selected, importableCount: all.length - blocked, blockedDupCount: blocked };
-  }, [files]);
+  // Day sections over the visible files (already date-sorted, so labels are
+  // contiguous and unique), each entry keeping its index into visibleFiles -
+  // the lightbox and shift-range selection keep addressing the flat list.
+  // Days rather than the library's months: an import typically spans one trip
+  // or shoot, where month granularity would collapse the whole batch into a
+  // single section and the scrubber into a single useless marker.
+  // label null = the dateless tail (files still being analyzed, or genuinely
+  // without a capture date): shown as a plain grid with NO header and no
+  // scrubber marker, rather than shouting "Unknown date" at every mid-import
+  // state.
+  const daySections: {
+    label: string | null;
+    date: Date | null;
+    items: { file: StagedFileOut; index: number }[];
+  }[] = [];
+  visibleFiles.forEach((file, index) => {
+    const iso = effectiveTakenAt(file);
+    const parsed = iso ? new Date(iso) : null;
+    const date = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+    const label = date
+      ? date.toLocaleDateString(undefined, {
+          weekday: "short",
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        })
+      : null;
+    const last = daySections[daySections.length - 1];
+    if (last && last.label === label) last.items.push({ file, index });
+    else daySections.push({ label, date, items: [{ file, index }] });
+  });
+  // The scrubber's big ticks are months, its small ticks day numbers. Month
+  // ticks carry the year only when the import actually spans more than one.
+  const importSpansYears =
+    new Set(daySections.filter((s) => s.date).map((s) => s.date!.getFullYear())).size > 1;
 
   // When merged, a visible card stands in for both halves - expand a set of
   // visible files to also include each one's hidden RAW/JPEG partner so bulk
@@ -676,82 +454,6 @@ export function ImportWizard() {
     }
     setLastIndex(index);
   }
-
-  // Ref-stable card callbacks: the memoized ImportCards must never re-render
-  // just because this component did (toggleStagedSelect closes over fresh
-  // state each render, so it's routed through a ref).
-  const toggleStagedSelectRef = useRef(toggleStagedSelect);
-  toggleStagedSelectRef.current = toggleStagedSelect;
-  const onCardToggle = useCallback((index: number, shiftKey: boolean) => {
-    void toggleStagedSelectRef.current(index, shiftKey);
-  }, []);
-  const onCardOpen = useCallback((index: number) => setLightboxIndex(index), []);
-  const onCardPatch = useCallback(
-    (
-      fileId: string,
-      patch: { selected?: boolean; rating?: number; color_label?: ColorLabel; immich_sync?: boolean }
-    ) => updateStaged.mutate({ fileId, patch }),
-    [updateStaged.mutate]
-  );
-  // PIN the big previews of the cards currently in view (strong references,
-  // like the lightbox's neighbor window - a one-shot warm gets evicted again
-  // on small-RAM machines), so opening any visible photo is instant. Updated
-  // debounced as cards scroll in/out; capped at 40 pins (~tens of MB) and
-  // released the moment a card leaves the view. During the copy only photos
-  // whose preview already EXISTS on disk are fetched (JPEG: written by the
-  // analysis; RAW: written with the demosaic thumb) - a plain file serve,
-  // never an on-demand render stealing the staging disk from the copy.
-  const prewarmAllRef = useRef(false);
-  prewarmAllRef.current = !stagingInBackground;
-  const filesByIdRef = useRef(filesById);
-  filesByIdRef.current = filesById;
-  const visibleIdsRef = useRef<Set<string>>(new Set());
-  const visiblePins = useRef(new PinnedImageWindow());
-  const pinTimerRef = useRef<number | null>(null);
-  useEffect(() => {
-    const pins = visiblePins.current;
-    return () => {
-      if (pinTimerRef.current !== null) window.clearTimeout(pinTimerRef.current);
-      pins.clear();
-    };
-  }, []);
-  const refreshPins = useCallback(() => {
-    const ids = Array.from(visibleIdsRef.current)
-      .filter((id) => {
-        if (prewarmAllRef.current) return true;
-        const f = filesByIdRef.current.get(id);
-        if (!f) return false;
-        // Copy still running: fetch only disk-cached previews (see above).
-        return f.file_type === "raw" ? f.has_demosaic_thumb : f.processed;
-      })
-      // Capped (RAM-scaled: 6 pins ≈ ~65MB decoded on 4GB devices, 12 ≈
-      // ~130MB otherwise) - enough that the next photo the user opens is
-      // warm, without ballooning the renderer (40 pins held ~450MB and
-      // contributed to system-wide swapping during imports).
-      .slice(0, GRID_PIN_LIMIT);
-    visiblePins.current.update(ids, (id) => api.import.stagedPreviewUrl(sessionId!, id));
-  }, [sessionId]);
-  const onCardInView = useCallback(
-    (fileId: string, inView: boolean) => {
-      const set = visibleIdsRef.current;
-      if (inView) set.add(fileId);
-      else set.delete(fileId);
-      if (pinTimerRef.current !== null) return;
-      pinTimerRef.current = window.setTimeout(() => {
-        pinTimerRef.current = null;
-        refreshPins();
-      }, 300);
-    },
-    [refreshPins]
-  );
-  // Cards don't re-report visibility when their DATA changes - re-evaluate
-  // the pins on every poll so a preview that just landed (analysis/demosaic
-  // finished, copy ended) is pulled in while its card sits in view. Cheap:
-  // PinnedImageWindow.update skips ids whose url didn't change.
-  useEffect(() => {
-    if (lightboxIndex !== null) return; // the lightbox pins its own window
-    refreshPins();
-  }, [filesData, stagingInBackground, lightboxIndex, refreshPins]);
 
   async function selectAll(selected: boolean) {
     // Selecting acts on the filtered view (select exactly what you see);
@@ -1016,8 +718,8 @@ export function ImportWizard() {
             <span className="spinner" aria-hidden="true" /> Still copying photos in the background…{" "}
             {liveStagedCount != null && totalFileCount != null
               ? `${liveStagedCount.toLocaleString()} / ${totalFileCount.toLocaleString()}${
-                  copyRateLabel != null ? ` · ${copyRateLabel}` : ""
-                }${copyEta != null ? ` · ~${formatEta(copyEta)} left` : ""}`
+                  copyEta != null ? ` · ~${formatEta(copyEta)} left` : ""
+                }`
               : ""}{" "}
             — you can start reviewing now.
           </p>
@@ -1077,11 +779,7 @@ export function ImportWizard() {
       </PhotoFilters>
       <div className="page-scroll">
       <div className="filter-bar action-bar--bottom" ref={actionBarRef}>
-        <span>
-          {selectedCount} of {importableCount} selected for import
-          {blockedDupCount > 0 &&
-            ` · ${blockedDupCount} duplicate${blockedDupCount === 1 ? "" : "s"} skipped`}
-        </span>
+        <span>{selectedCount} of {files?.length ?? 0} selected for import</span>
         {/* Only shown when Immich is configured in Settings - an inert greyed
             checkbox is just clutter for everyone who doesn't use Immich. In
             selective/full sync modes the per-import checkbox is replaced by a
@@ -1186,16 +884,6 @@ export function ImportWizard() {
 
       {isLoading ? (
         <div className="empty-state">Processing uploaded files...</div>
-      ) : visibleFiles.length === 0 && (files?.length ?? 0) > 0 ? (
-        // Files are staged but none are visible - say WHY instead of showing
-        // a silent void.
-        <div className="empty-state">
-          {(files ?? []).every((f) => !f.processed)
-            ? "Photos are being copied and processed — the first finished ones appear here in a moment."
-            : blockedDupCount > 0 && blockedDupCount === (files?.length ?? 0)
-              ? `All ${blockedDupCount} staged photo(s) are already in your library - there is nothing new to import.`
-              : `All processed photos are hidden by the current view - check the RAW/JPEG type toggle, the filters${hideDuplicates ? ` and "Hide duplicates" (${blockedDupCount} hidden)` : ""}.`}
-        </div>
       ) : (
         /* Day-sectioned with the library's date scrubber on the right edge -
            reviewing a big card scrolls and navigates like the library, at the
@@ -1204,7 +892,7 @@ export function ImportWizard() {
           {daySections.map((section) => (
             <section
               key={section.label ?? "dateless-tail"}
-              className="timeline-section timeline-section--windowed"
+              className="timeline-section"
               ref={(el) => {
                 const label = section.label;
                 if (!label) return; // headerless tail - no scrubber anchor
@@ -1220,18 +908,84 @@ export function ImportWizard() {
               )}
               <div className={`thumbnail-grid${visibleFiles.length <= 2 ? " thumbnail-grid--few" : ""}`}>
                 {section.items.map(({ file: f, index: i }) => (
-                  <ImportCard
+                  <div
                     key={f.id}
-                    file={f}
-                    index={i}
-                    merged={mergePairs && viewMode === "combined" && Boolean(f.paired_staged_file_id)}
-                    selectMode={selectMode}
-                    sessionId={sessionId}
-                    onOpen={onCardOpen}
-                    onToggle={onCardToggle}
-                    onPatch={onCardPatch}
-                    onInViewChange={onCardInView}
-                  />
+                    style={tileStyle(f.width, f.height)}
+                    className={`import-card${f.selected ? " selected" : ""}`}
+                  >
+                    <div
+                      className={`thumb-card${f.selected ? " selected" : ""}`}
+                      onClick={(e) => (selectMode ? toggleStagedSelect(i, e.shiftKey) : setLightboxIndex(i))}
+                      title={
+                        selectMode
+                          ? isExactDuplicate(f)
+                            ? "Already in your library - can't be imported"
+                            : f.duplicate_in_trash
+                              ? "This photo is in the Trash - importing it restores it"
+                              : "Click to select, shift-click for a range"
+                          : "Click to preview"
+                      }
+                    >
+                      {f.processed ? (
+                        <Thumb src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
+                      ) : (
+                        // Copied but not yet analyzed - no thumbnail exists yet. The
+                        // 1s files refetch swaps this for the real Thumb when the
+                        // background analysis finishes this file. Shimmers like the
+                        // album skeleton cards instead of showing a spinner.
+                        <div className="thumb-analyzing" title="Analyzing…" />
+                      )}
+                      {selectMode && (
+                        <input
+                          className="select-checkbox"
+                          type="checkbox"
+                          checked={f.selected}
+                          disabled={isExactDuplicate(f)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleStagedSelect(i, e.shiftKey);
+                          }}
+                          onChange={() => {}}
+                        />
+                      )}
+                      {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
+                        <span className="duplicate-badge">
+                          {f.is_near_duplicate
+                            ? "Possible duplicate"
+                            : f.duplicate_in_trash
+                              ? "In Trash - restores"
+                              : "Already in library"}
+                        </span>
+                      )}
+                      <span
+                        className={fileTypeBadgeClass(
+                          f.file_type,
+                          mergePairs && viewMode === "combined" && Boolean(f.paired_staged_file_id)
+                        )}
+                      >
+                        {fileTypeBadge(
+                          f.file_type,
+                          // "RAW+JPG" only when this card is a merged stand-in for the
+                          // pair; unmerged/filtered views show each file's own type.
+                          mergePairs && viewMode === "combined" && Boolean(f.paired_staged_file_id)
+                        )}
+                      </span>
+                    </div>
+                    {/* No per-card import checkbox here: it's cramped at grid sizes and
+                        crowds the stars. Toggle import via "Select" mode (overlay
+                        checkbox / click) or in the large preview (Space key). The
+                        footer keeps just rating + color, which have room now. */}
+                    <div className="import-card-footer">
+                      <RatingStars
+                        rating={f.rating}
+                        onChange={(rating) => updateStaged.mutate({ fileId: f.id, patch: { rating } })}
+                      />
+                      <ColorLabelPicker
+                        value={f.color_label}
+                        onChange={(color_label) => updateStaged.mutate({ fileId: f.id, patch: { color_label } })}
+                      />
+                    </div>
+                  </div>
                 ))}
                 <i className="grid-filler" aria-hidden />
               </div>

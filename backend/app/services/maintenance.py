@@ -484,7 +484,11 @@ def wipe_library(db: Session, owner_id: int) -> None:
                     pass
     settings.library_root.mkdir(parents=True, exist_ok=True)
 
-    for root in (settings.thumbnail_cache_root, settings.import_staging_root):
+    for root in (
+        settings.thumbnail_cache_root,
+        settings.import_staging_root,
+        settings.staged_thumbs_root,
+    ):
         shutil.rmtree(root, ignore_errors=True)
         root.mkdir(parents=True, exist_ok=True)
 

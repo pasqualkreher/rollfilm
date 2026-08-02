@@ -30,7 +30,6 @@ import type {
   SmartAlbumSettings,
   SourceRoot,
   StagedFileOut,
-  StagedFilesOut,
   StagedFileUpdatePatch,
   TagUsage,
   RawDecodeSettings,
@@ -692,11 +691,8 @@ export const api = {
     progress(id: string): Promise<ImportProgress> {
       return request(`/import/sessions/${id}/progress`);
     },
-    // Pass the version of the copy you already hold: when nothing changed the
-    // backend answers {version, unchanged: true} without loading any rows.
-    files(id: string, knownVersion?: number): Promise<StagedFilesOut> {
-      const qs = knownVersion != null ? `?known_version=${knownVersion}` : "";
-      return request(`/import/sessions/${id}/files${qs}`);
+    files(id: string): Promise<StagedFileOut[]> {
+      return request(`/import/sessions/${id}/files`);
     },
     stagedThumbnailUrl(sessionId: string, fileId: string): string {
       return assetUrl(`/import/sessions/${sessionId}/files/${fileId}/thumbnail`);

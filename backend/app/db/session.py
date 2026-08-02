@@ -36,14 +36,6 @@ def _on_connect(dbapi_connection, connection_record):
     dbapi_connection.execute("PRAGMA journal_mode = WAL")
     dbapi_connection.execute("PRAGMA synchronous = NORMAL")
     dbapi_connection.execute("PRAGMA busy_timeout = 15000")
-    # NO auto-checkpoint: with the default (1000 pages) whichever writer
-    # crosses the threshold runs the checkpoint inline - during an import
-    # that's the COPY LOOP, pausing the copy stream to rewrite the DB file on
-    # the same (possibly spinning, saturated) disk. Measured on an HDD
-    # library: db time per 100-file batch grew 1.4s -> 35s as the WAL piled
-    # up behind the review poll's readers. A background thread checkpoints
-    # instead (see start_wal_checkpointer) - commits stay pure WAL appends.
-    dbapi_connection.execute("PRAGMA wal_autocheckpoint = 0")
     dbapi_connection.enable_load_extension(True)
     sqlite_vec.load(dbapi_connection)
     dbapi_connection.enable_load_extension(False)
@@ -64,55 +56,6 @@ def ensure_indexes() -> None:
             "CREATE INDEX IF NOT EXISTS idx_images_owner_country "
             "ON images (owner_id, gps_country)"
         )
-
-
-_checkpointer_started = False
-
-
-def start_wal_checkpointer() -> None:
-    """Background WAL checkpointing (auto-checkpoint is off, see _on_connect).
-    PASSIVE never blocks writers or readers; it just moves whatever pages it
-    can and resets the WAL when no reader pins it. Every ~2 minutes, when no
-    import/analysis work is running, a TRUNCATE pass reclaims the WAL file
-    itself. Called once at app startup; safe to call again."""
-    global _checkpointer_started
-    if _checkpointer_started:
-        return
-    _checkpointer_started = True
-
-    import threading
-    import time
-
-    def _loop() -> None:
-        ticks = 0
-        while True:
-            time.sleep(15)
-            ticks += 1
-            mode = "PASSIVE"
-            # Imported lazily - the pipeline pulls in model/service modules.
-            try:
-                from app.services.import_pipeline import (
-                    _staging_copy_active,
-                    has_active_import_work,
-                )
-
-                # While a copy stream saturates the (possibly HDD) volume,
-                # even a PASSIVE checkpoint's writes steal its throughput -
-                # let the WAL grow for the duration and catch up after.
-                if _staging_copy_active():
-                    continue
-                if ticks % 8 == 0 and not has_active_import_work():
-                    mode = "TRUNCATE"
-            except Exception:
-                pass
-            try:
-                with engine.connect() as conn:
-                    conn.exec_driver_sql(f"PRAGMA wal_checkpoint({mode})")
-            except Exception:
-                # Never let a transient lock error kill the checkpointer.
-                pass
-
-    threading.Thread(target=_loop, name="wal-checkpointer", daemon=True).start()
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

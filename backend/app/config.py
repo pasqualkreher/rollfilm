@@ -1,3 +1,4 @@
+import tempfile
 from pathlib import Path
 
 from pydantic import Field, model_validator
@@ -27,6 +28,14 @@ class Settings(BaseSettings):
     import_staging_root: Path = None  # type: ignore[assignment]
     thumbnail_cache_root: Path = None  # type: ignore[assignment]
     model_cache_root: Path = None  # type: ignore[assignment]
+    # Review thumbnails/previews of STAGED files. Deliberately NOT under
+    # pm_data_dir: when the library lives on an external HDD, staging shares
+    # that disk with the copy stream - and the per-photo thumbnail/preview
+    # writes (analysis) plus the review grid's reads were head seeks against
+    # the sequential copy. The system temp dir sits on the internal disk, and
+    # everything in here is disposable cache (deleted with its session;
+    # previews/demosaics re-render on a cache miss).
+    staged_thumbs_root: Path = None  # type: ignore[assignment]
 
     clip_model_name: str = "ViT-B-32"
     clip_model_pretrained: str = "laion2b_s34b_b79k"
@@ -44,6 +53,9 @@ class Settings(BaseSettings):
             data.setdefault("import_staging_root", base / "staging")
             data.setdefault("thumbnail_cache_root", base / "thumbnails")
             data.setdefault("model_cache_root", base / "models")
+            data.setdefault(
+                "staged_thumbs_root", Path(tempfile.gettempdir()) / "rollfilm-staged-thumbs"
+            )
         return data
 
 
@@ -55,5 +67,6 @@ for directory in (
     settings.import_staging_root,
     settings.thumbnail_cache_root,
     settings.model_cache_root,
+    settings.staged_thumbs_root,
 ):
     directory.mkdir(parents=True, exist_ok=True)

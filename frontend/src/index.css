@@ -5953,6 +5953,28 @@ button.smart-card {
   position: relative;
 }
 
+/* "Developing RAW…" hint while the sensor render is still being produced -
+   inline with the lightbox meta, spinner scaled to the text. */
+.lightbox-developing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lightbox-developing .spinner {
+  width: 11px;
+  height: 11px;
+}
+
+/* Wait indicator while the next photo decodes off-screen (the current one
+   stays visible, dimmed) - top corner, clear of the nav arrows. */
+.lightbox-wait-spinner {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+}
+
 /* Nav arrows anchor to the image box (nearest positioned ancestor). On the
    light box the old white-glass arrows vanished - use text-tinted fills. */
 .lightbox-stage .lightbox-nav-btn {

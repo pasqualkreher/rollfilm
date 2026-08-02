@@ -302,9 +302,7 @@ def _oriented_size(im: PILImage.Image) -> tuple[int, int]:
 
 
 def extract_preview_with_size(
-    path: Path,
-    io_gate: AbstractContextManager | None = None,
-    data: bytes | None = None,
+    path: Path, io_gate: AbstractContextManager | None = None
 ) -> tuple[PILImage.Image, tuple[int, int]]:
     """extract_preview() plus the true displayed dimensions of the *original*.
 
@@ -317,26 +315,20 @@ def extract_preview_with_size(
     `io_gate`: optional context manager held while the file's bytes are read
     from disk. Import analysis passes a semaphore so only a few workers read
     a spinning-disk staging area at once; the JPEG *decode* happens after the
-    gate is released, at the worker pool's full parallelism.
-
-    `data`: the file's bytes when the caller already has them in memory (the
-    import copy loop tees each file's stream to analysis) - the disk (and the
-    gate) is then never touched at all."""
+    gate is released, at the worker pool's full parallelism. (LibRaw here
+    can't read RAWs from a memory buffer, so the RAW is opened by path inside
+    the gate and only its embedded preview bytes leave it.)"""
     gate = io_gate if io_gate is not None else nullcontext()
     if not is_raw(path):
-        if data is not None:
-            buf = io.BytesIO(data)
-        else:
-            with gate:
-                buf = io.BytesIO(path.read_bytes())
+        with gate:
+            buf = io.BytesIO(path.read_bytes())
         im = PILImage.open(buf)
         original_size = _oriented_size(im)
         return _load_jpeg_preview(im), original_size
 
     thumb_bytes: bytes | None = None
-    src_gate = nullcontext() if data is not None else gate
-    with src_gate:
-        with rawpy.imread(io.BytesIO(data) if data is not None else str(path)) as raw:
+    with gate:
+        with rawpy.imread(str(path)) as raw:
             try:
                 thumb = raw.extract_thumb()
             except rawpy.LibRawNoThumbnailError:
