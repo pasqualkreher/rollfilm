@@ -697,40 +697,25 @@ function checkLibraryMounted() {
 
 
 // --- Application menu --------------------------------------------------------
-// Electron's default menu advertises itself (a Help entry pointing at
-// electronjs.org) and exposes Reload / Force Reload / Toggle DevTools, none of
-// which mean anything to someone sorting photos - a stray Cmd-R mid-import is
-// actively unhelpful. So the menu carries only what belongs to the app itself
-// and a Help entry that opens the app's own help page.
-function showHelpPage() {
-  if (!mainWindow) return;
-  if (!mainWindow.isVisible()) mainWindow.show();
-  mainWindow.focus();
-  // The renderer routes on the hash (see frontend/src/main.tsx), so this needs
-  // no IPC channel of its own.
-  mainWindow.webContents.executeJavaScript('window.location.hash = "#/help"').catch(() => {});
-}
-
+// Rollfilm carries its own bar inside the window (nav, search, Settings,
+// Help), so the OS menu is pure duplication - and Electron's default one is
+// worse than empty: it advertises electronjs.org and offers Reload, Force
+// Reload and Toggle DevTools, none of which mean anything while sorting photos
+// and one of which (a stray Cmd-R mid-import) is actively unhelpful.
+//
+// On Windows and Linux the menu bar can go entirely. On macOS it cannot: the
+// app-name menu belongs to the system, and every app has one - what an app can
+// decide is what sits NEXT to it, which here is nothing. Edit is kept but
+// hidden, because macOS takes the clipboard shortcuts from the menu: drop it
+// and Cmd-C/V/X/A stop working in every text field in the app (search, tags,
+// the Immich key).
 function buildApplicationMenu() {
-  const isMac = process.platform === "darwin";
-  const helpItem = {
-    label: "Rollfilm Help",
-    accelerator: isMac ? "Cmd+?" : "F1",
-    click: showHelpPage,
-  };
-
+  if (process.platform !== "darwin") {
+    Menu.setApplicationMenu(null);
+    return;
+  }
   Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      ...(isMac
-        ? [{ role: "appMenu" }]
-        : [{ label: "&File", submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }] }]),
-      // Deliberately hidden rather than dropped: on macOS the clipboard
-      // shortcuts come FROM the menu, so without these entries Cmd-C/V/X/A
-      // stop working in every text field in the app (search, tags, the Immich
-      // key). Hidden items keep their accelerators.
-      { role: "editMenu", visible: false },
-      { role: "help", submenu: isMac ? [helpItem] : [helpItem, { type: "separator" }, { role: "about" }] },
-    ])
+    Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu", visible: false }])
   );
 }
 
