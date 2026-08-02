@@ -12,7 +12,7 @@ import { fileTypeBadge, fileTypeBadgeClass, tileStyle, Thumb } from "../componen
 import { TimelineScrubber } from "../components/TimelineScrubber";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
-import { preloadImage, watchInViewport } from "../utils/preload";
+import { GRID_PIN_LIMIT, preloadImage, watchInViewport } from "../utils/preload";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "../components/AppDialogs";
 import { useTasks } from "../state/tasks";
@@ -454,18 +454,29 @@ export function ImportWizard() {
   // filling in. Cache-warming only (preloadImage), not pinned pixels - the
   // lightbox pins what it actually displays, and doing both would double the
   // renderer's image memory for the same photos.
+  // Held back while the import is still copying or analyzing: until the
+  // background pass has produced a file's preview, asking for one makes the
+  // server render it on the spot, and a screenful of those at once would take
+  // worker threads away from the very import that is producing them. Once the
+  // import is done every preview is a plain file read and warming is cheap.
+  const previewsAreCheap = !stagingInBackground && !analysisPending;
   const visibleCardIds = useRef(new Set<string>());
   const warmTimer = useRef<number | null>(null);
   const warmVisiblePreviews = useCallback(() => {
-    if (!sessionId) return;
+    if (!sessionId || !previewsAreCheap) return;
     if (warmTimer.current !== null) window.clearTimeout(warmTimer.current);
     warmTimer.current = window.setTimeout(() => {
       warmTimer.current = null;
+      // Bounded: a tall window can hold far more cards than are worth holding
+      // pixels for, and every warm request competes with the ~6 connections
+      // the on-screen thumbnails are using.
+      let budget = GRID_PIN_LIMIT;
       for (const id of visibleCardIds.current) {
+        if (budget-- <= 0) break;
         preloadImage(api.import.stagedPreviewUrl(sessionId, id));
       }
     }, 250);
-  }, [sessionId]);
+  }, [sessionId, previewsAreCheap]);
 
   useEffect(() => {
     const root = gridRootRef.current;

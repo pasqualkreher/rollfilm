@@ -173,9 +173,9 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
         src={shownSrc}
         decoding="async"
         alt={alt}
-        // Fades in via opacity once the pixels arrive (see .thumb-card img in
-        // index.css) instead of snapping to visible - a soft appearance rather
-        // than a hard pop-in. Stays blank (opacity 0) while pending/aborted.
+        // Blank (opacity 0, see .thumb-card img in index.css) until the pixels
+        // are actually there - so a pending, aborted or failed request shows
+        // the card background, never a broken-image glyph or the alt text.
         className={visible ? "is-loaded" : undefined}
         onLoad={() => {
           doneRef.current = true;
@@ -185,7 +185,19 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
         onError={() => {
           // Clearing src is what makes the browser re-issue the request: simply
           // re-assigning an unchanged URL is a no-op for the DOM.
-          if (doneRef.current || retryTimer.current !== null) return;
+          if (retryTimer.current !== null) return;
+          // A tile that ALREADY loaded can still fail later - the browser drops
+          // decoded pixels under memory pressure and silently re-fetches, and
+          // that fetch can be aborted or time out. This used to return early on
+          // the "already done" flag, which left the failed src on an img still
+          // marked .is-loaded: the card then painted the broken-image glyph and
+          // the filename over itself and stayed that way. Drop back to
+          // not-loaded (invisible again) and run the retry ladder from the top.
+          if (doneRef.current) {
+            doneRef.current = false;
+            retryCount.current = 0;
+            setVisible(false);
+          }
           const delay = RETRY_DELAYS_MS[retryCount.current];
           if (delay === undefined) {
             setRetrying(false);
