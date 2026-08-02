@@ -2491,12 +2491,16 @@ textarea:focus-visible {
 /* Framed like the detail lightbox: page-like padding around everything, the
    back-arrow column left of the image box, and the image in a rounded elevated
    box (below: .editor-stage-main) rather than a full-bleed grey stage. */
+/* Only the left edge is framed here. The develop panel is chrome, not page, so
+   it runs to the top, right and bottom edges of the window (see .editor-panel)
+   - the frame the photo needs is carried by .editor-stage's own padding
+   instead, which keeps the image inset exactly as it was. */
 .editor-body {
   flex: 1;
   min-height: 0;
   display: flex;
   gap: 16px;
-  padding: 16px 20px 28px;
+  padding: 0 0 0 20px;
 }
 
 .editor-stage {
@@ -2506,6 +2510,8 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* The vertical frame that used to sit on .editor-body. */
+  padding: 16px 0 28px;
 }
 
 /* The image box - same treatment as the lightbox's .detail-image: rounded,
@@ -2893,6 +2899,16 @@ input.editor-preset-select {
   .editor-body {
     gap: 10px;
     padding: 10px;
+  }
+
+  /* Stacked, the panel is a block under the photo rather than a side rail, so
+     the frame goes back on the body and the two children give theirs up. */
+  .editor-stage {
+    padding: 0;
+  }
+
+  .editor-back-btn {
+    margin-top: 0;
   }
 
   .editor-panel {
@@ -5206,6 +5222,9 @@ kbd {
 .editor-back-btn {
   align-self: flex-start;
   flex-shrink: 0;
+  /* Its own top inset, now that .editor-body has none - keeps the arrow level
+     with the top of the image box. */
+  margin-top: 16px;
 }
 
 /* ---- Settings: colour-skin picker --------------------------------------- */
