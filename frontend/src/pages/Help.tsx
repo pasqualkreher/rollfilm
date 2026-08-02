@@ -328,6 +328,13 @@ export function Help() {
             slider — the look becomes the base your other adjustments build on.
           </li>
           <li>
+            <strong>Curves:</strong> a point curve per channel (luma, red, green, blue) drawn over
+            that channel's histogram, or the parametric region sliders. Click to add a point and drag
+            it in one go, Shift-drag to hold its input value, arrow keys to nudge, double-click to
+            remove. The target button aims the curve at the photo: point at a tone and drag up or
+            down, and the point for exactly that tone moves with you.
+          </li>
+          <li>
             <strong>Color:</strong> temperature, tint, saturation, Fuji color chrome / chrome blue.
           </li>
           <li>
@@ -339,6 +346,18 @@ export function Help() {
             distortion, vignette, mist, grain and grain size, plus a <strong>white frame</strong> — a
             matte border drawn around the photo that saves and exports with it like any other
             adjustment.
+          </li>
+          <li>
+            <strong>Masks</strong> (local adjustments): radial, linear, brush, luminance and color
+            regions, each with its own set of sliders, combined by adding, subtracting or
+            intersecting. <strong>Select subject</strong> finds a region for you — sky, water,
+            greenery, people, buildings or ground — and drops it in as a mask you can then refine
+            like any other. The first subject on a photo takes a few seconds to analyse (the
+            detection model downloads itself once, on first use); any further subject on the same
+            photo is instant. Change the crop or straighten afterwards and the mask says so, with a
+            button to find it again in the new frame. The selected mask is marked on the photo so
+            you can see what it covers; the marking steps out of the way as soon as you move a
+            slider, and comes back when you click the mask in the list again.
           </li>
           <li>
             <strong>Presets:</strong> save your current look under a name and reapply it to other

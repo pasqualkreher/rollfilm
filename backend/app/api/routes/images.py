@@ -43,6 +43,7 @@ from app.services import (
     embeddings,
     geocode,
     immich as immich_service,
+    segmentation,
     sources as sources_service,
     thumbnails,
     trash as trash_service,
@@ -1450,6 +1451,71 @@ def editor_preview(
             if _editor_preview_latest.get(image_id) == seq:
                 del _editor_preview_latest[image_id]
     return Response(content=data, media_type="image/jpeg")
+
+
+# One segmentation at a time per process: the model is a shared object and each
+# run wants a few hundred MB of activations, so a user clicking Sky on several
+# photos in a row queues instead of stacking.
+_segment_lock = threading.Lock()
+
+
+@router.post("/{image_id}/segment", response_model=schemas.SegmentOut)
+def segment_image(
+    image_id: str,
+    payload: schemas.SegmentRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Find a named subject (sky, water, greenery, people, buildings, ground) in
+    the photo and return it as a soft mask, for the editor to drop into a mask as
+    a `semantic` sub-mask. Runs on the framed but untoned image, so the mask lines
+    up with the crop the user is looking at."""
+    if payload.rotation % 90 != 0:
+        raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
+    _validate_crop(payload.crop)
+    if payload.subject not in segmentation.CLASS_GROUPS:
+        raise HTTPException(status_code=400, detail=f"unknown subject {payload.subject!r}")
+    image = get_owned_image(db, current_user.id, image_id)
+    crop = None
+    if payload.crop is not None:
+        crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
+    geometry = dict(
+        rotation=payload.rotation % 360,
+        crop=crop,
+        distortion=_clamp100(payload.distortion),
+        flip_h=bool(payload.flip_h),
+        flip_v=bool(payload.flip_v),
+        straighten=max(-45.0, min(45.0, float(payload.straighten))),
+        persp_h=_clamp100(payload.persp_h),
+        persp_v=_clamp100(payload.persp_v),
+    )
+    # Identifies the exact frame being analysed, so asking for a second subject
+    # on it (sky, then greenery) reuses the first pass instead of re-running the
+    # model. The edit revision is in there because saving an edit can change the
+    # file the frame is decoded from.
+    cache_key = f"{image.id}:{image.edit_rev or 0}:" + json.dumps(geometry, sort_keys=True, default=str)
+    try:
+        with _segment_lock:
+            framed = thumbnails.render_framed_base_image(image, **geometry)
+            field, peak = segmentation.segment(framed, payload.subject, cache_key=cache_key)
+    except segmentation.SegmentationUnavailable as exc:
+        # First use downloads ~14MB of weights; offline, that's the failure the
+        # editor should explain rather than a bare 500.
+        logger.warning("Segmentation unavailable for %s: %s", image_id, exc)
+        raise HTTPException(status_code=503, detail="The subject-detection model isn't available yet")
+    except Exception:
+        logger.exception("Failed to segment %s", image_id)
+        raise HTTPException(status_code=500, detail="Could not analyse the photo")
+    mask, w, h = segmentation.encode_mask_png(field)
+    return schemas.SegmentOut(
+        subject=payload.subject,
+        mask=mask,
+        width=w,
+        height=h,
+        coverage=float(field.mean()),
+        peak=peak,
+        found=peak >= segmentation.FOUND_PEAK,
+    )
 
 
 @router.post("/{image_id}/save-copy", response_model=schemas.ImageOut)

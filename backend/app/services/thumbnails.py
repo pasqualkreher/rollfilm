@@ -1739,6 +1739,39 @@ def _render_editor_bytes(
     return buf.getvalue()
 
 
+def render_framed_base_image(
+    image: "Image",
+    rotation: int,
+    crop: CropBox | None,
+    distortion: int = 0,
+    flip_h: bool = False,
+    flip_v: bool = False,
+    straighten: float = 0.0,
+    persp_h: int = 0,
+    persp_v: int = 0,
+    max_px: int = EDITOR_PREVIEW_PX,
+) -> PILImage.Image:
+    """The photo with its geometry applied but *no* tonal edits - the exact frame
+    a mask lives in, in its neutral rendering.
+
+    This is what semantic segmentation runs on. Geometry has to be applied (the
+    mask is stored in the framed image's coordinates, like every other mask), but
+    the develop settings must not be: whether something is sky doesn't depend on
+    the exposure slider, and feeding a heavily-pushed frame to the model only
+    makes the recognition worse. The base gain IS applied - unlike the editor's
+    native rendering, which leaves a RAW dark, the model wants an ordinarily
+    exposed picture."""
+    from app.services.filesystem import resolve_image_path
+
+    path = resolve_image_path(image)
+    lin16, gain = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, max_px)
+    arr = lin16.astype(np.float32)
+    if distortion:
+        arr = apply_distortion_array(arr, distortion)
+    arr = apply_edits_array(arr, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
+    return PILImage.fromarray(raw_service.default_tone_to_srgb(arr, gain))
+
+
 def render_base_preview_bytes(image: "Image", max_px: int = PREVIEW_MAX_PX) -> bytes:
     """A JPEG of the auto-oriented original with *no* edits applied - no rotation,
     crop or tonal changes. The editor applies all of those live on top of this

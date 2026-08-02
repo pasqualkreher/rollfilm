@@ -142,12 +142,14 @@ export interface ColorCalibration {
   blue_hue: number;
   blue_saturation: number;
 }
-export type SubMaskType = "radial" | "linear" | "brush" | "luminance" | "color";
+export type SubMaskType = "radial" | "linear" | "brush" | "luminance" | "color" | "semantic";
 export type SubMaskMode = "additive" | "subtractive" | "intersect";
-// Brush stores `strokes` as [x, y, size][] (fractions of the frame); every other
-// parameter is a scalar. Coordinates/sizes are 0..1 so a mask drawn on the
-// preview lands identically on the full-resolution render.
-export type SubMaskParams = { [k: string]: number | number[][] };
+// Brush stores `strokes` as [x, y, size][] (fractions of the frame); semantic
+// stores its found region as a base64 PNG in `mask` plus the `subject` it was
+// found for and the `geom` signature it was found under; every other parameter
+// is a scalar. Coordinates/sizes are 0..1 so a mask drawn on the preview lands
+// identically on the full-resolution render.
+export type SubMaskParams = { [k: string]: number | number[][] | string };
 export interface SubMask {
   id: string;
   type: SubMaskType;
@@ -478,12 +480,25 @@ export const MASK_TYPES: { value: SubMaskType; label: string }[] = [
   { value: "color", label: "Color" },
 ];
 
+// Subjects the backend can find by name (segmentation.CLASS_GROUPS). Each one
+// becomes a `semantic` sub-mask whose region is computed server-side once and
+// then stored in the edit - see PhotoEditor.addSemanticMask.
+export const MASK_SUBJECTS: { value: string; label: string }[] = [
+  { value: "sky", label: "Sky" },
+  { value: "water", label: "Water" },
+  { value: "greenery", label: "Greenery" },
+  { value: "person", label: "People" },
+  { value: "building", label: "Buildings" },
+  { value: "ground", label: "Ground" },
+];
+
 const _MASK_LABEL: Record<SubMaskType, string> = {
   radial: "Radial",
   linear: "Linear",
   brush: "Brush",
   luminance: "Luminance",
   color: "Color",
+  semantic: "Subject",
 };
 const _DEFAULT_SUBMASK_PARAMS: Record<SubMaskType, SubMaskParams> = {
   radial: { center_x: 0.5, center_y: 0.5, radius_x: 0.25, radius_y: 0.25, rotation: 0, feather: 50 },
@@ -494,6 +509,10 @@ const _DEFAULT_SUBMASK_PARAMS: Record<SubMaskType, SubMaskParams> = {
   brush: { strokes: [] as number[][], feather: 50, size: 0.06, flow: 100, density: 100 },
   luminance: { range_min: 0, range_max: 50, feather: 35 },
   color: { target_r: 0.5, target_g: 0.5, target_b: 0.5, tolerance: 20, feather: 35 },
+  // `mask` is filled in by the segmentation call; feather defaults to 0 because
+  // the found region already fades where the detection is uncertain, and that
+  // edge is usually better than any blur we could add.
+  semantic: { subject: "sky", mask: "", geom: "", feather: 0 },
 };
 function _uid(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID

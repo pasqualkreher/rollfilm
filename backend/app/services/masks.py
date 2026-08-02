@@ -297,6 +297,105 @@ def _color_field(arr: np.ndarray, p: dict) -> np.ndarray:
     return _smoothstep((tol - dist) / fw + 0.5).astype(np.float32)
 
 
+# --- Semantic ("select the sky") masks ---------------------------------------
+# The field is computed once by app.services.segmentation and stored in the
+# sub-mask as a small PNG (see STORED_MASK_PX), so no model runs in the render
+# path. Two things happen on the way back up to render size:
+#
+#  1. A guided filter re-snaps the upscaled field to the image's own edges. A
+#     768px mask blown up to a 6000px export otherwise puts the sky/roofline
+#     boundary up to eight pixels off, which shows as a halo the moment you
+#     brighten one side of it. The filter is bounded to _REFINE_PX so a native
+#     render doesn't pay for it at 40MP.
+#  2. Feather blurs the result, exactly like the other masks' feather.
+_REFINE_PX = 2048
+# Guided-filter radius as a fraction of the long edge, and its regularisation.
+# eps is in the guide's units squared (the image is 0..1 here): 1e-4 means
+# "treat differences below ~1% brightness as flat", which keeps noise from
+# pulling the mask edge around while still following real contours.
+_REFINE_RADIUS_FRAC = 1 / 96
+_REFINE_EPS = 1e-4
+
+
+def _decode_mask_png(raw: str) -> np.ndarray | None:
+    """Base64 grayscale PNG -> (h, w) float32 0..1, or None if unreadable."""
+    import base64
+    import io
+
+    from PIL import Image as PILImage
+
+    try:
+        data = base64.b64decode(raw, validate=True)
+        img = PILImage.open(io.BytesIO(data)).convert("L")
+    except Exception:
+        return None
+    return np.asarray(img, dtype=np.float32) / 255.0
+
+
+def _resize_field(f: np.ndarray, h: int, w: int) -> np.ndarray:
+    if f.shape[0] == h and f.shape[1] == w:
+        return f
+    try:
+        import cv2
+
+        interp = cv2.INTER_AREA if (h * w) < (f.shape[0] * f.shape[1]) else cv2.INTER_LINEAR
+        return cv2.resize(f, (w, h), interpolation=interp).astype(np.float32)
+    except Exception:
+        # No cv2: fall back to PIL, which covers the same two cases well enough.
+        from PIL import Image as PILImage
+
+        return np.asarray(
+            PILImage.fromarray(f, mode="F").resize((w, h), PILImage.BILINEAR), dtype=np.float32
+        )
+
+
+def _refine_to_edges(f: np.ndarray, arr: np.ndarray) -> np.ndarray:
+    """Pull a soft, upscaled field back onto the image's edges with a guided
+    filter. Silently returns the input if opencv-contrib isn't there - the mask
+    stays usable, just softer at the boundary."""
+    try:
+        import cv2
+
+        h, w = f.shape
+        scale = min(1.0, _REFINE_PX / max(h, w))
+        gh, gw = (max(1, round(h * scale)), max(1, round(w * scale))) if scale < 1.0 else (h, w)
+        guide = _resize_field(arr[..., 1], gh, gw) if scale < 1.0 else arr[..., 1]
+        small = _resize_field(f, gh, gw) if scale < 1.0 else f
+        radius = max(2, int(max(gh, gw) * _REFINE_RADIUS_FRAC))
+        out = cv2.ximgproc.guidedFilter(
+            np.ascontiguousarray(guide, dtype=np.float32),
+            np.ascontiguousarray(small, dtype=np.float32),
+            radius,
+            _REFINE_EPS,
+        )
+        return _resize_field(np.clip(out, 0.0, 1.0).astype(np.float32), h, w)
+    except Exception:
+        return f
+
+
+def _semantic_field(h: int, w: int, p: dict, arr: np.ndarray) -> np.ndarray:
+    src = _decode_mask_png(str(p.get("mask") or ""))
+    if src is None or src.size == 0:
+        return np.zeros((h, w), dtype=np.float32)
+    field = _resize_field(src, h, w)
+    # Only worth refining when the stored mask is actually being stretched -
+    # at the scrub tier it's usually being shrunk instead.
+    if max(src.shape) * 1.4 < max(h, w):
+        field = _refine_to_edges(field, arr)
+    feather = np.clip(float(p.get("feather", 0)) / 100.0, 0.0, 1.0)
+    if feather > 0:
+        try:
+            import cv2
+
+            # Up to ~2% of the long edge, which is a wide, soft transition at
+            # 100 and a barely-there smoothing at low values.
+            sigma = feather * max(h, w) * 0.02
+            field = cv2.GaussianBlur(field, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        except Exception:
+            pass
+    return np.clip(field, 0.0, 1.0).astype(np.float32)
+
+
 def _submask_field(sm: dict, h: int, w: int, arr: np.ndarray) -> np.ndarray:
     t = sm.get("type")
     p = sm.get("parameters") or {}
@@ -310,6 +409,12 @@ def _submask_field(sm: dict, h: int, w: int, arr: np.ndarray) -> np.ndarray:
         f = _luminance_field(arr, p)
     elif t == "color":
         f = _color_field(arr, p)
+    elif t == "semantic":
+        # Decoding + refining costs enough to be worth the spatial cache, and the
+        # stored PNG is a pure function of the parameters like any other shape.
+        # The guide comes from the image, but a tonal edit never moves an edge
+        # far enough to be worth re-refining every frame.
+        f = _cached_spatial_field(t, p, h, w, lambda: _semantic_field(h, w, p, arr))
     elif t == "all":
         f = np.ones((h, w), dtype=np.float32)
     else:

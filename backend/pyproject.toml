@@ -21,6 +21,9 @@ dependencies = [
     "numpy>=1.26",
     "opencv-contrib-python-headless>=4.10",
     "open_clip_torch>=2.26",
+    # Semantic mask subjects (sky/water/...): SegFormer-B0 on ADE20K, ~14MB of
+    # weights fetched lazily into the model cache on first use.
+    "transformers>=4.44",
     "reverse_geocoder>=1.5",
     "pycountry>=24.0",
 ]

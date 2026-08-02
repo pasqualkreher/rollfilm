@@ -311,3 +311,43 @@ def test_neutral_jpeg_passthrough_uint8():
     img = PILImage.fromarray(base, "RGB")
     out = thumbnails.apply_adjustments(img, develop.defaults())
     assert out is img
+
+
+# --- the frame a mask lives in ------------------------------------------------
+
+def test_framed_base_applies_geometry_but_not_the_develop_settings(tmp_path, monkeypatch):
+    """Semantic masks are found on render_framed_base_image and then stored in
+    the *framed* image's coordinates, like every other mask. So it has to carry
+    the geometry (or the found region wouldn't line up with what the user sees)
+    and must not carry the tonal edits (whether something is sky doesn't depend
+    on the exposure slider, and a pushed frame only confuses the model)."""
+    from PIL import Image as PILImage
+
+    from app.services import filesystem
+
+    src = tmp_path / "frame.png"
+    # A distinctive corner marker, to tell which part of the frame survives.
+    arr = np.zeros((200, 400, 3), dtype=np.uint8)
+    arr[:, :] = 40
+    arr[:20, :20] = 255  # top-left
+    PILImage.fromarray(arr).save(src)
+
+    class _FakeImage:
+        id = "framed-base"
+
+    monkeypatch.setattr(filesystem, "resolve_image_path", lambda image: src)
+    thumbnails._cached_editor_base.cache_clear()
+
+    plain = thumbnails.render_framed_base_image(_FakeImage(), rotation=0, crop=None)
+    assert plain.size == (400, 200)
+    assert np.asarray(plain)[5, 5].min() > 200  # the marker is still top-left
+
+    # 90 degrees swaps the axes and takes the marker with it; a crop of the
+    # right half then leaves it behind entirely.
+    turned = thumbnails.render_framed_base_image(_FakeImage(), rotation=90, crop=None)
+    assert turned.size == (200, 400)
+    cropped = thumbnails.render_framed_base_image(
+        _FakeImage(), rotation=0, crop=(0.5, 0.0, 0.5, 1.0)
+    )
+    assert cropped.size == (200, 200)
+    assert np.asarray(cropped).max() < 200

@@ -204,6 +204,25 @@ export function MaskOverlay({
         )}
       </>
     );
+  } else if (sub.type === "semantic") {
+    // A found region has no shape to trace, so it shows as the region itself:
+    // the stored PNG used as a luminance mask over a translucent wash, the way
+    // every editor shows a selection. SVG's <mask> is luminance-based by
+    // definition, which is exactly what the stored grayscale PNG is - no colour
+    // conversion, and the soft edges come through as soft.
+    const png = typeof p.mask === "string" ? p.mask : "";
+    if (!png) return null;
+    const id = `mask-region-${sub.id}`;
+    shapes = (
+      <>
+        <defs>
+          <mask id={id} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+            <image href={`data:image/png;base64,${png}`} x="0" y="0" width="100" height="100" preserveAspectRatio="none" />
+          </mask>
+        </defs>
+        <rect x="0" y="0" width="100" height="100" className="mask-overlay-region" mask={`url(#${id})`} />
+      </>
+    );
   } else {
     return null;
   }

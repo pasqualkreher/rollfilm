@@ -215,7 +215,7 @@ def _norm_calibration(raw: Any) -> dict[str, int]:
 
 
 # --- Masks (local adjustments) ----------------------------------------------
-_SUBMASK_TYPES = ("radial", "linear", "brush", "luminance", "color", "all")
+_SUBMASK_TYPES = ("radial", "linear", "brush", "luminance", "color", "semantic", "all")
 _SUBMASK_MODES = ("additive", "subtractive", "intersect")
 
 

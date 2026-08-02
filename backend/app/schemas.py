@@ -154,6 +154,36 @@ class ImageEdits(BaseModel):
     adjustments: dict[str, Any] = Field(default_factory=dict)
 
 
+class SegmentRequest(ImageEdits):
+    """A segmentation ask: which subject to find, plus the geometry it should be
+    found in. Inherits the edit payload because the mask must come back in the
+    *framed* image's coordinates - the same space every other mask lives in - so
+    the server has to know the crop/rotation the editor is currently showing.
+    The tonal part of the payload is ignored (see
+    thumbnails.render_framed_base_image)."""
+
+    subject: str = "sky"
+
+
+class SegmentOut(BaseModel):
+    """The found region as a base64 8-bit grayscale PNG (soft, 0..255 = how
+    strongly the pixel belongs to the subject).
+
+    `found` is the answer to "is this subject in the photo at all", and it comes
+    from `peak` - the model's strongest evidence anywhere in the frame - NOT
+    from `coverage`. Five people at the far end of a room are unmistakably
+    people and cover a tenth of a percent of the frame; judging by area would
+    throw exactly the masks away that are most tedious to draw by hand."""
+
+    subject: str
+    mask: str
+    width: int
+    height: int
+    coverage: float  # 0..1, the mean of the returned field
+    peak: float  # 0..1, the model's peak confidence before the field was scaled
+    found: bool
+
+
 class AutoAdjustOut(BaseModel):
     """A develop suggestion learned from the user's saved edits: the blended
     adjustments plus how many similar edited photos it was derived from."""

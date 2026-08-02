@@ -10,6 +10,7 @@ import type {
   LibraryStats,
   ExportJobProgress,
   ImageOut,
+  SegmentResult,
   DirListing,
   ImmichActivity,
   ImmichSettings,
@@ -501,6 +502,16 @@ export const api = {
     // over edited photos). Pure suggestion - nothing is stored server-side.
     autoAdjust(id: string): Promise<AutoAdjustResult> {
       return request(`/images/${id}/auto-adjust`);
+    },
+    // Find a named subject (sky / water / greenery / people / buildings /
+    // ground) and get it back as a soft mask. The edits ride along because the
+    // mask comes back in the *framed* image's coordinates - the geometry has to
+    // match what the editor is showing.
+    segment(id: string, edits: ImageEdits, subject: string): Promise<SegmentResult> {
+      return request(`/images/${id}/segment`, {
+        method: "POST",
+        body: JSON.stringify({ ...apiEdits(edits), subject }),
+      });
     },
     // Save the full non-destructive edit (rotation + crop + tonal) in place.
     saveEdits(id: string, edits: ImageEdits): Promise<ImageOut> {

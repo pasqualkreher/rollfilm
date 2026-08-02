@@ -4705,13 +4705,23 @@ kbd {
   flex-shrink: 0;
 }
 
-/* Mode toggle (Point / Parametric) + Reset curve on one row. */
+/* Targeted-adjustment toggle + mode toggle (Point / Parametric) + Reset curve
+   on one row. */
 .curve-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin: 2px 0 8px;
+}
+
+/* Square icon button for the targeted-adjustment picker. */
+.curve-pick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 7px;
+  flex-shrink: 0;
 }
 
 /* Caption above the parametric-curve region sliders, clarifying they're the
@@ -4744,9 +4754,56 @@ kbd {
   cursor: crosshair;
 }
 
+.curve-editor-svg:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* Transparent full-bleed hit surface so empty-area clicks add a point. */
 .curve-bg {
   fill: transparent;
+}
+
+/* Histogram of the current preview behind the plot: faint enough that the grid
+   and the curve stay the things you read, present enough to aim at. */
+.curve-hist {
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+/* Where the on-image picker is pointing: a vertical guide at that input value
+   plus a ring on the curve, so a hover over the photo shows which part of the
+   curve owns that tone. */
+.curve-marker line {
+  stroke: var(--accent);
+  stroke-dasharray: 2 3;
+  opacity: 0.8;
+}
+
+.curve-marker circle {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.curve-marker {
+  pointer-events: none;
+}
+
+/* In/Out readout for the point being edited (or the picked tone). Sits in the
+   top-left, the corner a tone curve leaves empty. */
+.curve-readout {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  padding: 2px 6px;
+  border-radius: calc(4px * var(--corner-scale));
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  pointer-events: none;
 }
 
 .curve-grid-line {
@@ -4768,6 +4825,12 @@ kbd {
   stroke: var(--bg-elevated);
   stroke-width: 2;
   pointer-events: none;
+}
+
+/* The point arrow keys / Delete act on. */
+.curve-point-dot.selected {
+  stroke: var(--accent);
+  stroke-width: 2.5;
 }
 
 .curve-point-hit {
@@ -4894,6 +4957,14 @@ kbd {
   stroke-dasharray: 3 3;
 }
 
+/* The wash showing where a found subject (sky / water / ...) actually landed.
+   Same accent as the brush dabs, and light enough to judge the boundary
+   through. */
+.mask-overlay-region {
+  fill: var(--accent);
+  opacity: 0.38;
+}
+
 /* Draggable handles on radial/linear masks: a filled accent dot with a white
    outline so they read clearly over any photo. */
 .mask-handle {
@@ -4916,6 +4987,13 @@ kbd {
   margin: 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* Same line when it reports a problem: nothing found, or a subject mask that no
+   longer matches the frame it was found in. */
+.mask-hint-error {
+  margin: 2px 0 6px;
+  color: var(--danger);
 }
 
 /* Mask list rows */

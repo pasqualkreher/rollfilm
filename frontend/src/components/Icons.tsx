@@ -85,6 +85,17 @@ export function IconRotate(props: IconProps) {
   );
 }
 
+// Targeted adjustment (the curve picker): a crosshair over a target, with the
+// up/down arrows that say the gesture is a vertical drag.
+export function IconTarget(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="8" cy="8" r="3.2" />
+      <path d="M8 1v2.2M8 12.8V15M1 8h2.2M12.8 8H15" />
+    </svg>
+  );
+}
+
 export function IconStar({ filled = false, ...props }: IconProps & { filled?: boolean }) {
   const p = svgProps(props);
   return (

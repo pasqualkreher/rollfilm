@@ -25,8 +25,8 @@ function tent(x: number, centre: number, width: number): number {
 // The six basis functions of the parametric curve, in backend order and
 // scaling (develop_color._param_lut); x is 0..1, the value is the y-offset in
 // 0..255 units per full slider deflection (slider/100 = coefficient 1).
-const PARAM_KEYS = ["shadows", "darks", "lights", "highlights", "black_level", "white_level"] as const;
-const BASES: ((x: number) => number)[] = [
+export const PARAM_KEYS = ["shadows", "darks", "lights", "highlights", "black_level", "white_level"] as const;
+export const PARAM_BASES: ((x: number) => number)[] = [
   (x) => 55 * tent(x, 0.08, 0.34),
   (x) => 55 * tent(x, 0.35, 0.34),
   (x) => 55 * tent(x, 0.65, 0.34),
@@ -39,18 +39,18 @@ function paramNeutral(p: ParamCurveChannel): boolean {
   return PARAM_KEYS.every((k) => !p[k]);
 }
 
-function paramValue(p: ParamCurveChannel, x255: number): number {
+export function paramValue(p: ParamCurveChannel, x255: number): number {
   const x = x255 / 255;
   let y = x255;
   PARAM_KEYS.forEach((k, i) => {
-    y += (p[k] / 100) * BASES[i](x);
+    y += (p[k] / 100) * PARAM_BASES[i](x);
   });
   return Math.max(0, Math.min(255, y));
 }
 
 // Monotone cubic (Fritsch-Carlson) evaluation of a point curve, the same
 // interpolation the backend renders with (develop_color._pchip_lut).
-function pchipSample(points: Curve, xq: number[]): number[] {
+export function pchipSample(points: Curve, xq: number[]): number[] {
   const pts = [...points]
     .filter((p) => p.length >= 2)
     .sort((a, b) => a[0] - b[0]);
@@ -132,7 +132,7 @@ function pointsToParamChannel(points: Curve): ParamCurveChannel {
   const A: number[][] = Array.from({ length: 6 }, () => new Array(7).fill(0));
   for (let i = 0; i < 256; i++) {
     const x = i / 255;
-    const b = BASES.map((f) => f(x));
+    const b = PARAM_BASES.map((f) => f(x));
     const t = curve[i] - i;
     for (let r = 0; r < 6; r++) {
       for (let c = 0; c < 6; c++) A[r][c] += b[r] * b[c];
@@ -156,6 +156,45 @@ function pointsToParamChannel(points: Curve): ParamCurveChannel {
     out[k] = Math.max(-100, Math.min(100, Math.round(coef * 100)));
   });
   return out;
+}
+
+// ---- Targeted-adjustment picker support -------------------------------------
+// The picker samples a tone off the *rendered* preview, but a control point
+// lives at an *input* value on the curve's x axis. Inverting the curve maps one
+// to the other, so picking a highlight on a strong S-curve still lands on the
+// highlight end of the graph instead of drifting toward the middle.
+//
+// Only the tone curve is inverted - passes that run after it (grading, film
+// sim, vignette) still shift the sampled tone a little. That's the same
+// approximation Lightroom's TAT lives with, and it's well inside the precision
+// a hand-dragged control point needs.
+function invertLut(lut: number[], value: number): number {
+  let best = 0;
+  let bestErr = Infinity;
+  for (let x = 0; x < lut.length; x++) {
+    const err = Math.abs(lut[x] - value);
+    // Ties (a flat/clipped stretch of the curve) resolve to the first match,
+    // which is the shadow-most input producing this tone.
+    if (err < bestErr) {
+      bestErr = err;
+      best = x;
+    }
+  }
+  return best;
+}
+
+const GRID_255 = Array.from({ length: 256 }, (_, i) => i);
+
+// Input value (0..255) whose point-curve output is closest to `value`.
+export function pointCurveInput(points: Curve, value: number): number {
+  if (isIdentity(points)) return Math.round(value);
+  return invertLut(pchipSample(points, GRID_255), value);
+}
+
+// Same for a parametric channel.
+export function paramCurveInput(p: ParamCurveChannel, value: number): number {
+  if (paramNeutral(p)) return Math.round(value);
+  return invertLut(GRID_255.map((x) => paramValue(p, x)), value);
 }
 
 export function parametricToPoints(pc: ParametricCurve): PointCurves {

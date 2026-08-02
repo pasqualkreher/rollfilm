@@ -39,6 +39,13 @@ class Settings(BaseSettings):
 
     clip_model_name: str = "ViT-B-32"
     clip_model_pretrained: str = "laion2b_s34b_b79k"
+    # Subject detection for masks (sky/water/...). B4 is the accurate variant
+    # (~256MB, a couple of seconds per mask on CPU); a machine that would rather
+    # trade quality for speed and disk can point this at
+    # nvidia/segformer-b0-finetuned-ade-512-512 (~14MB, a fraction of a second).
+    # Any ADE20K-trained SegFormer checkpoint works - the class groups in
+    # services/segmentation.py resolve against the checkpoint's own labels.
+    segmentation_model_name: str = "nvidia/segformer-b4-finetuned-ade-512-512"
 
     @model_validator(mode="before")
     @classmethod

@@ -30,6 +30,10 @@ for pkg in (
     "torch",
     "torchvision",
     "open_clip",
+    # SegFormer for the "select the sky/water/..." masks. The weights are NOT
+    # bundled - they're fetched into the model cache on first use, like CLIP's -
+    # but the modelling code is loaded by name at runtime, so it has to be here.
+    "transformers",
     "rawpy",
     "sqlite_vec",
     "PIL",

@@ -109,6 +109,26 @@ export interface AutoAdjustResult {
   samples: number;
 }
 
+export interface SegmentResult {
+  // Which subject was looked for (sky, water, greenery, person, ...).
+  subject: string;
+  // The found region as a base64 8-bit grayscale PNG - soft, so it already
+  // fades where the detection is uncertain. Stored verbatim in the semantic
+  // sub-mask's `mask` parameter; the backend decodes and upsamples it at render
+  // time (services/masks._semantic_field).
+  mask: string;
+  width: number;
+  height: number;
+  // Share of the frame the region covers (0..1).
+  coverage: number;
+  // The model's strongest evidence anywhere in the frame (0..1), and whether
+  // that clears the "it's really there" bar. `found` is what the editor asks -
+  // NOT coverage: distant people are unmistakably people and cover almost none
+  // of the frame.
+  peak: number;
+  found: boolean;
+}
+
 export interface CropBox {
   x: number;
   y: number;

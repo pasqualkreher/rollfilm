@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconRotate } from "./Icons";
+import { IconArrowLeft, IconRotate, IconTarget } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog } from "./SaveCopyDialog";
 import {
@@ -15,6 +15,7 @@ import {
   editsFromImage,
   FILM_SIMS,
   MASK_ADJUST_FIELDS,
+  MASK_SUBJECTS,
   MASK_TYPES,
   neutralEdits,
   newMask,
@@ -40,9 +41,17 @@ import {
   type SubMaskParams,
   type SubMaskType,
 } from "../utils/adjustments";
-import { parametricToPoints, pointsToParametric } from "../utils/curveConvert";
+import {
+  PARAM_BASES,
+  PARAM_KEYS,
+  paramCurveInput,
+  parametricToPoints,
+  pchipSample,
+  pointCurveInput,
+  pointsToParametric,
+} from "../utils/curveConvert";
 import { loadPresets, savePreset, deletePreset, type EditPreset } from "../utils/presets";
-import { CurveEditor } from "./CurveEditor";
+import { CurveEditor, MAX_CURVE_POINTS } from "./CurveEditor";
 import { ColorWheel } from "./ColorWheel";
 import { MaskOverlay } from "./MaskOverlay";
 import { useAppDialogs } from "./AppDialogs";
@@ -276,18 +285,27 @@ function Slider({
   );
 }
 
-// Compute an RGB histogram (3 x 256 bins) from a rendered preview, sampling
-// ~120k pixels regardless of size.
+// Compute a histogram (4 x 256 bins: R, G, B, luma) from a rendered preview,
+// sampling ~120k pixels regardless of size. The luma bin is what the curve
+// editor draws behind the Luma channel - the master curve maps luminance, so a
+// per-channel silhouette would be the wrong backdrop to shape it against.
 function computeHistBins(img: ImageData): Uint32Array[] {
-  const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+  const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
   const d = img.data;
   const step = Math.max(1, Math.floor(d.length / 4 / 120000)) * 4;
   for (let i = 0; i < d.length; i += step) {
     bins[0][d[i]]++;
     bins[1][d[i + 1]]++;
     bins[2][d[i + 2]]++;
+    bins[3][luma255(d[i], d[i + 1], d[i + 2])]++;
   }
   return bins;
+}
+
+// Rec.709 luma, the same weighting the backend's curves use (_LUMA in
+// develop_color.py), rounded onto the 0..255 grid.
+function luma255(r: number, g: number, b: number): number {
+  return Math.max(0, Math.min(255, Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b)));
 }
 
 // Histogram readback goes through a small scratch canvas: the preview is
@@ -363,6 +381,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   // RGB histogram bins of the latest preview; the <Histogram> components (in the
   // Basic and Curves groups) draw from this and redraw when it changes or on mount.
   const [histBins, setHistBins] = useState<Uint32Array[] | null>(null);
+  // Downscaled copy of the current preview for the curve picker. Reading a
+  // pixel straight off the display canvas per pointer-move would force a GPU
+  // readback of the whole (multi-megapixel) surface each time; this is copied
+  // once per rendered frame, lazily, and only while the picker is armed.
+  const pickSnapRef = useRef<{ data: ImageData; w: number; h: number } | null>(null);
   // Server preview plumbing: abort a stale in-flight render when a newer edit
   // state supersedes it, and ignore late responses by sequence number.
   const abortRef = useRef<AbortController | null>(null);
@@ -460,6 +483,15 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [band, setBand] = useState<ColorBand>("red");
   // Which channel the curves editor targets (point + parametric share it).
   const [curveChannel, setCurveChannel] = useState<CurveChannel>("luma");
+  // Targeted-adjustment picker ("TAT" in Lightroom): armed from the curve
+  // toolbar, then a drag on the photo moves the curve where the tone under the
+  // pointer lives. `curveMarker` is that tone's input value (0..255), shown as a
+  // guide in the plot while the pointer is over the image.
+  const [curvePickMode, setCurvePickMode] = useState(false);
+  const [curveMarker, setCurveMarker] = useState<number | null>(null);
+  // Live picker drag: where it started, so every move is applied against the
+  // curve as it was at pointerdown instead of compounding.
+  const curvePickDrag = useRef<{ x: number; clientY: number; baseY: number; baseParam: number[] } | null>(null);
   const [gridOverlay, setGridOverlay] = useState<GridOverlay>("none");
   const [presets, setPresets] = useState<Record<string, EditPreset>>(() => loadPresets());
   const [selectedPreset, setSelectedPreset] = useState("");
@@ -508,6 +540,34 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [selectedMaskId, setSelectedMaskId] = useState<string | null>(null);
   const [maskDrawMode, setMaskDrawMode] = useState(false);
   const [colorPickMode, setColorPickMode] = useState(false);
+  // Subject detection ("Sky", "Water", ...): which subject is being looked for
+  // right now (null = idle), and the last failure to show under the buttons.
+  const [segmenting, setSegmenting] = useState<string | null>(null);
+  const [segmentError, setSegmentError] = useState<string | null>(null);
+  // Whether the selected mask's marking is drawn over the photo. It shows what
+  // a mask covers, which is what you want while picking one - and exactly what
+  // is in the way once you start adjusting, because the wash sits on top of the
+  // change you're trying to judge. So it steps aside at the first slider move
+  // and comes back when a mask is selected (or drawn, or found) again.
+  const [maskMarkVisible, setMaskMarkVisible] = useState(true);
+
+  useEffect(() => {
+    const isSlider = (t: EventTarget | null) => t instanceof HTMLInputElement && t.type === "range";
+    // Capture phase: the marking has to go before the drag paints its first
+    // frame, whichever control handles the gesture.
+    const onDown = (e: PointerEvent) => {
+      if (isSlider(e.target)) setMaskMarkVisible(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (isSlider(e.target) && e.key.startsWith("Arrow")) setMaskMarkVisible(false);
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, []);
   // Live cursor over the canvas while editing a mask (reflects the handle/body
   // under the pointer), and the pointer position for the brush-size ring.
   const [maskCursor, setMaskCursor] = useState("crosshair");
@@ -523,6 +583,12 @@ export function PhotoEditor({ image, onClose }: Props) {
     if (openGroup !== "masks") {
       setMaskDrawMode(false);
       setColorPickMode(false);
+      setSegmentError(null);
+    }
+    // Same for the curve picker: it only makes sense with the plot in view.
+    if (openGroup !== "curves") {
+      setCurvePickMode(false);
+      setCurveMarker(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openGroup]);
@@ -610,6 +676,7 @@ export function PhotoEditor({ image, onClose }: Props) {
       fitCanvasToStage();
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
+      pickSnapRef.current = null; // a new frame - the picker's copy is stale
       if (withHistogram) {
         const bins = computeHistBinsFromBitmap(bmp);
         if (bins) setHistBins(bins);
@@ -919,7 +986,10 @@ export function PhotoEditor({ image, onClose }: Props) {
       if (e.key === "Escape") {
         // Peel back the active on-canvas mode first, then close the editor.
         if (colorPickMode) setColorPickMode(false);
-        else if (maskDrawMode) setMaskDrawMode(false);
+        else if (curvePickMode) {
+          setCurvePickMode(false);
+          setCurveMarker(null);
+        } else if (maskDrawMode) setMaskDrawMode(false);
         else if (cropMode) setCropMode(false);
         else if (saveCopyOpen) {
           if (!saveCopy.isPending) setSaveCopyOpen(false);
@@ -958,7 +1028,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, saveCopyOpen, saveCopy.isPending]);
+  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending]);
 
   function fractionAt(clientX: number, clientY: number) {
     const box = canvasRef.current!.getBoundingClientRect();
@@ -1189,6 +1259,74 @@ export function PhotoEditor({ image, onClose }: Props) {
     return typeof v === "number" ? v : def;
   }
   const isSpatial = (t: SubMaskType | undefined) => t === "radial" || t === "linear" || t === "brush";
+  // A sub-mask parameter that holds text (the semantic mask's subject / stored
+  // region / geometry signature) rather than a number.
+  function subStr(sub: SubMask, key: string): string {
+    const v = sub.parameters[key];
+    return typeof v === "string" ? v : "";
+  }
+  const subjectLabel = (s: string) => MASK_SUBJECTS.find((x) => x.value === s)?.label ?? "Subject";
+
+  // Signature of everything that changes the framed image's geometry. A
+  // semantic mask is found in that frame, so if this changes afterwards the
+  // stored region no longer lines up and has to be found again.
+  function geomSignature(): string {
+    return [rotation, flipH ? 1 : 0, flipV ? 1 : 0, straighten, perspH, perspV, distortion,
+      crop ? `${crop.x},${crop.y},${crop.width},${crop.height}` : ""].join("|");
+  }
+
+  // Ask the server to find a subject and turn the answer into a mask. The
+  // region is stored in the sub-mask, so the model runs once here and never
+  // again in the render path.
+  async function runSegment(subject: string, maskId: string, subId: string) {
+    setSegmenting(subject);
+    setSegmentError(null);
+    try {
+      const res = await api.images.segment(image.id, previewEdits, subject);
+      if (!res.found) {
+        setSegmentError(`No ${subjectLabel(subject).toLowerCase()} found in this photo.`);
+        return false;
+      }
+      setAdj((a) => ({
+        ...a,
+        masks: a.masks.map((m) =>
+          m.id !== maskId
+            ? m
+            : {
+                ...m,
+                sub_masks: m.sub_masks.map((s) =>
+                  s.id !== subId ? s : { ...s, parameters: { ...s.parameters, mask: res.mask, geom: geomSignature() } }
+                ),
+              }
+        ),
+      }));
+      // A freshly found region is worth seeing before anything is done to it.
+      setMaskMarkVisible(true);
+      return true;
+    } catch {
+      setSegmentError("Subject detection isn't available – the model may still be downloading.");
+      return false;
+    } finally {
+      setSegmenting(null);
+    }
+  }
+
+  // "Sky", "Water", ... : a mask whose region the server finds. Added first and
+  // filled in when the answer arrives, so the panel shows what's happening; if
+  // nothing is found the empty mask is taken back out again.
+  async function addSemanticMask(subject: string) {
+    const mask = newMask("semantic");
+    mask.name = subjectLabel(subject);
+    mask.sub_masks[0].parameters = { ...mask.sub_masks[0].parameters, subject };
+    setAdj((a) => ({ ...a, masks: [...a.masks, mask] }));
+    setSelectedMaskId(mask.id);
+    setMaskDrawMode(false);
+    setColorPickMode(false);
+    setOpenGroup("masks");
+    setMaskMarkVisible(true);
+    const ok = await runSegment(subject, mask.id, mask.sub_masks[0].id);
+    if (!ok) deleteMask(mask.id);
+  }
 
   function addMask(type: SubMaskType) {
     const mask = newMask(type);
@@ -1196,6 +1334,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     setSelectedMaskId(mask.id);
     setColorPickMode(false);
     setOpenGroup("masks");
+    setMaskMarkVisible(true);
     if (isSpatial(type)) {
       // Radial/linear/brush are drawn on the image - drop into draw mode (and
       // out of crop mode, which shares the canvas pointer).
@@ -1220,6 +1359,8 @@ export function PhotoEditor({ image, onClose }: Props) {
     setMaskDrawMode(false);
     setColorPickMode(false);
     setOpenGroup("masks");
+    // Picking a mask is the gesture that asks "what does this one cover?".
+    setMaskMarkVisible(true);
   }
   function toggleMaskDraw() {
     setMaskDrawMode((on) => {
@@ -1257,6 +1398,137 @@ export function PhotoEditor({ image, onClose }: Props) {
     const py = Math.min(canvas.height - 1, Math.max(0, Math.floor(f.y * canvas.height)));
     const d = ctx.getImageData(px, py, 1, 1).data;
     updateSubMaskParams(mask.id, { target_r: d[0] / 255, target_g: d[1] / 255, target_b: d[2] / 255 });
+  }
+
+  // ---- Targeted-adjustment picker (curves) ---------------------------------
+  // Lightroom's TAT: arm it, then drag on the photo. The tone under the pointer
+  // decides *where* on the curve you're working, and the vertical drag decides
+  // by how much - so you shape the curve by pointing at the thing you want
+  // brighter, not by guessing which part of the x axis it sits on.
+
+  // Downscaled snapshot of the current preview, rebuilt on demand. ~256k px is
+  // far more than tone picking needs and keeps the copy cheap.
+  function pickSnapshot() {
+    if (pickSnapRef.current) return pickSnapRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas || !canvas.width || !canvas.height) return null;
+    const scale = Math.min(1, Math.sqrt(262144 / (canvas.width * canvas.height)));
+    const w = Math.max(1, Math.round(canvas.width * scale));
+    const h = Math.max(1, Math.round(canvas.height * scale));
+    histScratch ??= document.createElement("canvas");
+    histScratch.width = w;
+    histScratch.height = h;
+    const ctx = histScratch.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(canvas, 0, 0, w, h);
+    pickSnapRef.current = { data: ctx.getImageData(0, 0, w, h), w, h };
+    return pickSnapRef.current;
+  }
+
+  // The active channel's value (0..255) under the pointer, averaged over a
+  // small window so a single noisy pixel doesn't decide where the point lands.
+  function sampleToneAt(clientX: number, clientY: number): number | null {
+    const snap = pickSnapshot();
+    if (!snap) return null;
+    const f = fractionAt(clientX, clientY);
+    const cx = Math.min(snap.w - 1, Math.floor(f.x * snap.w));
+    const cy = Math.min(snap.h - 1, Math.floor(f.y * snap.h));
+    const r = 2; // 5x5 window, clipped at the edges
+    let sr = 0, sg = 0, sb = 0, n = 0;
+    for (let y = Math.max(0, cy - r); y <= Math.min(snap.h - 1, cy + r); y++) {
+      for (let x = Math.max(0, cx - r); x <= Math.min(snap.w - 1, cx + r); x++) {
+        const i = (y * snap.w + x) * 4;
+        sr += snap.data.data[i];
+        sg += snap.data.data[i + 1];
+        sb += snap.data.data[i + 2];
+        n++;
+      }
+    }
+    if (!n) return null;
+    const [rr, gg, bb] = [sr / n, sg / n, sb / n];
+    if (curveChannel === "red") return rr;
+    if (curveChannel === "green") return gg;
+    if (curveChannel === "blue") return bb;
+    return luma255(rr, gg, bb);
+  }
+
+  // The sampled tone is what the curve *output*; the control point belongs at
+  // the matching input, so the curve gets inverted on the way in.
+  function curveInputAt(clientX: number, clientY: number): number | null {
+    const tone = sampleToneAt(clientX, clientY);
+    if (tone == null) return null;
+    return adj.curve_mode === "point"
+      ? pointCurveInput(adj.point_curves[curveChannel], tone)
+      : paramCurveInput(adj.parametric_curve[curveChannel], tone);
+  }
+
+  // How much output value one pixel of vertical drag is worth.
+  const CURVE_PICK_SENS = 0.5;
+
+  function curvePickDown(clientX: number, clientY: number) {
+    const x = curveInputAt(clientX, clientY);
+    if (x == null) return;
+    if (adj.curve_mode === "point") {
+      // Land on (or create) a control point at that input value, sitting exactly
+      // on the current curve so arming the picker never changes the photo.
+      const pts = adj.point_curves[curveChannel];
+      const near = pts.findIndex((p) => Math.abs(p[0] - x) <= 4);
+      if (near >= 0) {
+        curvePickDrag.current = { x: pts[near][0], clientY, baseY: pts[near][1], baseParam: [] };
+      } else {
+        if (pts.length >= MAX_CURVE_POINTS) return;
+        let insert = 0;
+        while (insert < pts.length && pts[insert][0] <= x) insert++;
+        insert = Math.min(Math.max(insert, 1), pts.length);
+        const lo = pts[insert - 1][0] + 1;
+        const hi = insert < pts.length ? pts[insert][0] - 1 : 255;
+        if (lo > hi) return; // no room between the neighbouring points
+        const nx = Math.min(Math.max(x, lo), hi);
+        const y = Math.round(pchipSample(pts, [nx])[0]);
+        setPointCurve(curveChannel, [...pts.slice(0, insert), [nx, y] as CurvePoint, ...pts.slice(insert)]);
+        curvePickDrag.current = { x: nx, clientY, baseY: y, baseParam: [] };
+      }
+    } else {
+      const p = adj.parametric_curve[curveChannel];
+      curvePickDrag.current = { x, clientY, baseY: 0, baseParam: PARAM_KEYS.map((k) => p[k]) };
+    }
+    // The guide snaps to the point being dragged, not the raw sample, so it
+    // lines up with the dot that's actually moving.
+    setCurveMarker(curvePickDrag.current.x);
+  }
+
+  function curvePickMove(clientY: number) {
+    const drag = curvePickDrag.current;
+    if (!drag) return;
+    const delta = (drag.clientY - clientY) * CURVE_PICK_SENS; // drag up = brighter
+    if (adj.curve_mode === "point") {
+      const pts = adj.point_curves[curveChannel];
+      const i = pts.findIndex((p) => p[0] === drag.x);
+      if (i < 0) return;
+      const ny = Math.round(Math.min(255, Math.max(0, drag.baseY + delta)));
+      if (ny === pts[i][1]) return;
+      setPointCurve(curveChannel, pts.map((p, idx) => (idx === i ? ([p[0], ny] as CurvePoint) : p)));
+    } else {
+      // Spread the wanted shift over the four region sliders in proportion to
+      // how much each one reaches this input value - the minimum-norm solution
+      // of "make the parametric curve move by `delta` at x", so the regions that
+      // own this tone move most and the rest of the curve stays put.
+      const u = drag.x / 255;
+      const w = [0, 1, 2, 3].map((i) => PARAM_BASES[i](u));
+      const norm = w.reduce((s, v) => s + v * v, 0);
+      if (norm < 1e-6) return;
+      const patch: Partial<ParamCurveChannel> = {};
+      [0, 1, 2, 3].forEach((i) => {
+        const v = drag.baseParam[i] + (100 * delta * w[i]) / norm;
+        patch[PARAM_KEYS[i]] = Math.round(Math.min(100, Math.max(-100, v)));
+      });
+      setParamCurve(curveChannel, patch);
+    }
+  }
+
+  function curvePickHover(clientX: number, clientY: number) {
+    const x = curveInputAt(clientX, clientY);
+    setCurveMarker((prev) => (x == null || prev === x ? prev : x));
   }
 
   // ---- Mask hit-testing (all in 0..1 fraction space). Handle grab tolerance is
@@ -1598,7 +1870,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   // is a drawable type - the sub used for the on-canvas overlay.
   const selectedMask = selectedMaskId ? adj.masks.find((m) => m.id === selectedMaskId) ?? null : null;
   const selSub = selectedMask?.sub_masks[0] ?? null;
-  const selSpatialSub = selSub && isSpatial(selSub.type) ? selSub : null;
+  // Sub-masks that draw something over the image: the editable shapes, plus a
+  // semantic mask, which shows the region it found rather than a shape.
+  const selSpatialSub = selSub && (isSpatial(selSub.type) || selSub.type === "semantic") ? selSub : null;
   const maskLabel = (m: MaskDef) => MASK_TYPES.find((t) => t.value === m.sub_masks[0]?.type)?.label ?? "Mask";
 
   return (
@@ -1625,7 +1899,7 @@ export function PhotoEditor({ image, onClose }: Props) {
             className="editor-canvas"
             style={{
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-              cursor: colorPickMode
+              cursor: colorPickMode || curvePickMode
                 ? "crosshair"
                 : maskDrawMode
                   ? maskCursor
@@ -1643,6 +1917,12 @@ export function PhotoEditor({ image, onClose }: Props) {
               if (colorPickMode) {
                 pickColorAt(e.clientX, e.clientY);
                 setColorPickMode(false);
+                return;
+              }
+              // The curve picker stays armed across drags - shaping a curve
+              // takes several pulls at different tones.
+              if (curvePickMode) {
+                curvePickDown(e.clientX, e.clientY);
                 return;
               }
               if (maskDrawMode) {
@@ -1668,6 +1948,13 @@ export function PhotoEditor({ image, onClose }: Props) {
               }
             }}
             onMouseMove={(e) => {
+              if (curvePickMode) {
+                // Dragging shapes the curve; a plain hover just reports which
+                // input value the tone under the pointer maps to.
+                if (curvePickDrag.current) curvePickMove(e.clientY);
+                else curvePickHover(e.clientX, e.clientY);
+                return;
+              }
               if (maskDrawMode) {
                 maskPointerMove(e.clientX, e.clientY);
                 return;
@@ -1701,14 +1988,17 @@ export function PhotoEditor({ image, onClose }: Props) {
               setDragging(false);
               cropAction.current = null;
               panDragRef.current = null;
+              curvePickDrag.current = null;
               endMaskGesture();
             }}
             onMouseLeave={() => {
               setDragging(false);
               cropAction.current = null;
               panDragRef.current = null;
+              curvePickDrag.current = null;
               endMaskGesture();
               setMaskCursorPos(null);
+              setCurveMarker(null);
             }}
             onDoubleClick={(e) => {
               if (cropMode) return;
@@ -1762,7 +2052,7 @@ export function PhotoEditor({ image, onClose }: Props) {
           {/* Selected-mask guide + editable handles, transformed to track the
               canvas under zoom/pan. aspect keeps the round handles round on
               non-square images; cursor draws the brush-size ring. */}
-          {selSpatialSub && openGroup === "masks" && (
+          {selSpatialSub && openGroup === "masks" && (maskDrawMode || maskMarkVisible) && (
             <MaskOverlay
               sub={selSpatialSub}
               handles={maskDrawMode}
@@ -1979,8 +2269,10 @@ export function PhotoEditor({ image, onClose }: Props) {
         {accordionHeader("curves", "Curves")}
         {openGroup === "curves" && (
           <div className="editor-accordion-body">
-            {/* Histogram of the current preview, to shape the tone curve against. */}
-            <Histogram bins={histBins} />
+            {/* In point mode the histogram is drawn inside the plot (see the
+                CurveEditor), which is where it's actually read; parametric mode
+                has no plot, so it keeps the standalone one. */}
+            {adj.curve_mode !== "point" && <Histogram bins={histBins} />}
             <div className="curve-tabs">
               {CURVE_CHANNELS.map((c) => (
                 <button
@@ -1994,6 +2286,28 @@ export function PhotoEditor({ image, onClose }: Props) {
               ))}
             </div>
             <div className="curve-toolbar">
+              {/* Targeted adjustment: point at the tone you want to change on
+                  the photo and drag up/down. */}
+              <button
+                className={`btn btn-sm curve-pick${curvePickMode ? " primary" : ""}`}
+                aria-pressed={curvePickMode}
+                onClick={() =>
+                  setCurvePickMode((on) => {
+                    const next = !on;
+                    if (next) {
+                      setCropMode(false);
+                      setMaskDrawMode(false);
+                      setColorPickMode(false);
+                    } else {
+                      setCurveMarker(null);
+                    }
+                    return next;
+                  })
+                }
+                title="Targeted adjustment: drag on the photo to move the curve at that tone"
+              >
+                <IconTarget />
+              </button>
               <span className="segmented">
                 {/* Switching modes converts the current curve into the other
                     representation (sampled points / least-squares fitted
@@ -2032,6 +2346,9 @@ export function PhotoEditor({ image, onClose }: Props) {
                 points={adj.point_curves[curveChannel]}
                 color={CURVE_CHANNELS.find((c) => c.key === curveChannel)!.color}
                 onChange={(pts) => setPointCurve(curveChannel, pts)}
+                histogram={histBins}
+                channel={curveChannel}
+                marker={curvePickMode ? curveMarker : null}
               />
             ) : (
               <div className="editor-sliders">
@@ -2189,6 +2506,25 @@ export function PhotoEditor({ image, onClose }: Props) {
           ))}
         </div>
 
+        {/* Subject masks: the server finds the region, so these read as things
+            in the photo rather than as shapes to draw. */}
+        <div className="mask-add-row">
+          <span className="mask-add-label">Select subject</span>
+          <div className="mask-add-btns">
+            {MASK_SUBJECTS.map((s) => (
+              <button
+                key={s.value}
+                className="btn btn-sm"
+                disabled={segmenting !== null}
+                onClick={() => addSemanticMask(s.value)}
+              >
+                {segmenting === s.value ? "Finding…" : s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {segmentError && <p className="mask-hint mask-hint-error">{segmentError}</p>}
+
         <div className="mask-add-row">
           <span className="mask-add-label">Add mask</span>
           <div className="mask-add-btns">
@@ -2314,6 +2650,37 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={0}
                   max={100}
                   resetValue={35}
+                  onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
+                />
+              </>
+            )}
+
+            {selSub.type === "semantic" && (
+              <>
+                {/* The region was found in the frame as it was then. Crop or
+                    straighten afterwards and it no longer lines up - say so and
+                    offer the one-click fix rather than silently stretching it. */}
+                {subStr(selSub, "geom") !== geomSignature() && (
+                  <p className="mask-hint mask-hint-error">
+                    The frame changed since this was found — recompute it to line it up again.
+                  </p>
+                )}
+                <div className="mask-btn-row">
+                  <button
+                    className="btn btn-sm"
+                    disabled={segmenting !== null}
+                    onClick={() => runSegment(subStr(selSub, "subject") || "sky", selectedMask.id, selSub.id)}
+                    title="Find this subject again in the current frame"
+                  >
+                    {segmenting ? "Finding…" : "Recompute"}
+                  </button>
+                </div>
+                <Slider
+                  label="Feather"
+                  value={subNum(selSub, "feather", 0)}
+                  min={0}
+                  max={100}
+                  resetValue={0}
                   onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
                 />
               </>

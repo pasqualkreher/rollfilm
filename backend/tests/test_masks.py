@@ -242,6 +242,79 @@ def test_near_black_has_no_wild_chromaticity():
     assert np.abs(a - b).max() < 1e-6
 
 
+# --- semantic ("select the sky") masks ----------------------------------------
+# The model itself isn't exercised here (it's a download away); what matters for
+# rendering is that a stored region survives the round trip through the PNG and
+# lands where it was found, at any render size.
+
+def _stored_region(mask: np.ndarray) -> str:
+    """A 0..1 field as the segmentation endpoint would hand it to the editor."""
+    from app.services import segmentation
+
+    return segmentation.encode_mask_png(mask)[0]
+
+
+def _slanted_sky(h: int, w: int) -> np.ndarray:
+    """1 above a slanted horizon, 0 below - a shape that survives resampling."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    return (yy < h * 0.35 + h * 0.2 * (xx / w)).astype(np.float32)
+
+
+def test_stored_region_survives_the_round_trip():
+    field = masks._submask_field(
+        {"type": "semantic", "parameters": {"mask": _stored_region(_slanted_sky(H, W))}},
+        H, W, np.zeros((H, W, 3), dtype=np.float32),
+    )
+    truth = _slanted_sky(H, W)
+    # A PNG round trip plus two resamples: the boundary pixels move a little,
+    # the regions themselves must not.
+    assert field[truth > 0.5].mean() > 0.97
+    assert field[truth < 0.5].mean() < 0.03
+
+
+def test_region_still_lands_right_when_stretched_to_export_size():
+    """A region is stored at a fraction of the render size, so every export
+    upsamples it several times over. The selection must still sit where it was
+    found - a boundary that drifts is a halo along whatever it was tracing."""
+    big = 1400
+    truth = _slanted_sky(big, big)
+    # Stored small (as the endpoint does), rendered large, against a guide that
+    # has the real edge in it.
+    small = masks._resize_field(truth, 180, 180)
+    arr = np.zeros((big, big, 3), dtype=np.float32)
+    arr[truth > 0.5] = 0.85
+    field = masks._submask_field(
+        {"type": "semantic", "parameters": {"mask": _stored_region(small)}}, big, big, arr
+    )
+    assert np.abs(field - truth).mean() < 0.01
+    # More than a few pixels from the boundary, the selection must be committed.
+    yy, xx = np.mgrid[0:big, 0:big]
+    dist = yy - (big * 0.35 + big * 0.2 * (xx / big))
+    assert field[dist < -20].mean() > 0.97
+    assert field[dist > 20].mean() < 0.03
+
+
+def test_feather_softens_the_boundary():
+    params = {"mask": _stored_region(_slanted_sky(H, W))}
+    arr = np.zeros((H, W, 3), dtype=np.float32)
+    hard = masks._submask_field({"type": "semantic", "parameters": params}, H, W, arr)
+    soft = masks._submask_field(
+        {"type": "semantic", "parameters": {**params, "feather": 100}}, H, W, arr
+    )
+    width = lambda f: int(((f[:, W // 2] > 0.05) & (f[:, W // 2] < 0.95)).sum())
+    assert width(soft) > width(hard) * 3
+    # Feathering blurs the edge; it must not move the selection wholesale.
+    assert abs(float(soft.mean()) - float(hard.mean())) < 0.03
+
+
+def test_missing_region_selects_nothing():
+    """An unfilled or corrupt region must render as an empty mask, never as a
+    full-frame selection that would silently apply the adjustment everywhere."""
+    arr = np.zeros((16, 16, 3), dtype=np.float32)
+    for params in ({}, {"mask": ""}, {"mask": "not-a-png"}):
+        assert masks._submask_field({"type": "semantic", "parameters": params}, 16, 16, arr).max() == 0.0
+
+
 # --- container combination ----------------------------------------------------
 
 def test_sub_masks_combine_and_invert():
