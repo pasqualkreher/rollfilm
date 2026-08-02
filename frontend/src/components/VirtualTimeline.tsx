@@ -7,7 +7,11 @@ import { TimelineScrubber } from "./TimelineScrubber";
 import { Thumb, fileTypeBadge, fileTypeBadgeClass, tileAspectRatio } from "./ThumbnailGrid";
 import { useMergePairs } from "../state/viewPrefs";
 import { thumbPx, useThumbSize } from "../state/viewPrefs";
-import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
+import {
+  clearLastViewedImage,
+  peekLastViewedTarget,
+  rememberLastViewedImageAt,
+} from "../utils/lastViewed";
 import { preloadImage } from "../utils/preload";
 import {
   GAP,
@@ -116,24 +120,38 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
     }
 
     const top = lastScrollRef.current;
-    let anchorId: string | null = null;
+    let anchors: Set<string> | null = null;
     let frac = 0; // how far into the anchor row the viewport top sat
     outer: for (const s of prev.sections) {
       if (s.top + s.height <= top) continue;
       for (const r of s.rows) {
         const rowTop = s.top + r.top;
         if (rowTop + r.height > top) {
-          anchorId = r.tiles[0]?.item.id ?? null;
+          // Every photo in the anchor row AND each one's RAW/JPEG partner.
+          // Anchoring on a single id broke exactly when the id was the half
+          // that just disappeared - toggling "Merge RAW+JPG" drops every RAW
+          // from the list, so the anchor was nowhere in the new layout, no
+          // scroll correction ran, and the old offset pointed into a grid
+          // that had shrunk underneath it. That was the jump. The partner
+          // card shows the same shot, so it re-anchors seamlessly; the same
+          // holds for the RAW/JPEG view-mode switch.
+          anchors = new Set<string>();
+          for (const t of r.tiles) {
+            anchors.add(t.item.id);
+            if (t.item.paired_image_id) anchors.add(t.item.paired_image_id);
+          }
           frac = Math.max(-0.5, Math.min(1, (top - rowTop) / r.height));
           break outer;
         }
       }
     }
-    if (!anchorId) return;
+    if (!anchors || anchors.size === 0) return;
 
+    // First row holding any of them: the anchor row's photos stay contiguous
+    // in the new list, so that row is where the viewport top belongs.
     for (const s of layout.sections) {
       for (const r of s.rows) {
-        if (r.tiles.some((t) => t.item.id === anchorId)) {
+        if (r.tiles.some((t) => anchors!.has(t.item.id))) {
           const rootTop =
             root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
           scroller.scrollTop = rootTop + s.top + r.top + frac * r.height;
@@ -150,17 +168,24 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
   useEffect(() => {
     if (restoredRef.current || !layout || !scrollerRef.current || images.length === 0) return;
     restoredRef.current = true;
-    const target = peekLastViewedImage();
+    const target = peekLastViewedTarget();
     if (!target) return;
     clearLastViewedImage();
     for (const s of layout.sections) {
       for (const r of s.rows) {
-        if (r.tiles.some((t) => t.item.id === target)) {
+        if (r.tiles.some((t) => t.item.id === target.id)) {
           const root = rootRef.current!;
           const scroller = scrollerRef.current!;
           const rootTop =
             root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
-          scroller.scrollTop = rootTop + s.top + r.top - (scroller.clientHeight - r.height) / 2;
+          const rowTop = rootTop + s.top + r.top;
+          // Put the photo back exactly where it was when it was clicked. Only
+          // a photo the user arrowed to in the detail view (no recorded
+          // offset) gets centred - it had no tile position to return to.
+          scroller.scrollTop =
+            target.offset !== undefined
+              ? rowTop - target.offset
+              : rowTop - (scroller.clientHeight - r.height) / 2;
           return;
         }
       }
@@ -250,6 +275,16 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
           if (selectMode && onToggleSelect) {
             onToggleSelect(image.id, index, e.shiftKey);
           } else {
+            // Record where this tile sits in the viewport, so coming back
+            // lands on this exact spot rather than re-centring the photo.
+            const scroller = scrollerRef.current;
+            if (scroller) {
+              rememberLastViewedImageAt(
+                image.id,
+                e.currentTarget.getBoundingClientRect().top -
+                  scroller.getBoundingClientRect().top
+              );
+            }
             navigate(`/image/${image.id}`, { state: { imageIds: allIds } });
           }
         }}

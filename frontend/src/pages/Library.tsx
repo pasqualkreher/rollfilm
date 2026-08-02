@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -37,17 +37,58 @@ import { useTransientMessage, useTransientValue } from "../utils/transientMessag
 type GridImage = LibraryIndexImage | ImageOut;
 
 export function Library() {
-  const [viewMode, setViewMode] = useState<ViewMode>("combined");
-  const [ratingMin, setRatingMin] = useState<number>(0);
-  const [colorLabel, setColorLabel] = useState<ColorLabel>("none");
-  const [albumId, setAlbumId] = useState<string>("");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [camera, setCamera] = useState<string>("");
-  const [lens, setLens] = useState<string>("");
-  const [focalMin, setFocalMin] = useState<string>("");
-  const [focalMax, setFocalMax] = useState<string>("");
-  const [dateFrom, setDateFrom] = useState<string | null>(null);
-  const [dateTo, setDateTo] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // The filter set lives in the URL, not in component state. Opening a photo
+  // navigates to /image/:id, which unmounts this page - anything held in
+  // useState was gone by the time the user came back, so returning from the
+  // lightbox dropped them into the UNFILTERED library. In the query string the
+  // browser's own back navigation restores the exact filter set (and a
+  // filtered view can be reloaded or linked). `q` already worked this way.
+  //
+  // Setters can fire several times in one handler (PhotoFilters' "Clear
+  // filters" resets every field in a row), and each must build on what the
+  // previous one wrote - the render's searchParams hasn't caught up yet - so
+  // the pending params are tracked in a ref.
+  const paramsRef = useRef(searchParams);
+  paramsRef.current = searchParams;
+  function setParams(patch: Record<string, string | string[] | null>) {
+    const next = new URLSearchParams(paramsRef.current);
+    for (const [key, value] of Object.entries(patch)) {
+      next.delete(key);
+      if (Array.isArray(value)) value.forEach((v) => v && next.append(key, v));
+      else if (value) next.set(key, value);
+    }
+    paramsRef.current = next;
+    // Replace, not push: refining a filter is not a new place to go back to.
+    // Pushing would make the back arrow step through every filter tweak
+    // instead of leaving the lightbox and landing on the grid.
+    setSearchParams(next, { replace: true });
+  }
+
+  const viewMode = (searchParams.get("view") as ViewMode | null) ?? "combined";
+  const setViewMode = (v: ViewMode) => setParams({ view: v === "combined" ? null : v });
+  const ratingMin = Number(searchParams.get("rating")) || 0;
+  const setRatingMin = (v: number) => setParams({ rating: v ? String(v) : null });
+  const colorLabel = (searchParams.get("color") as ColorLabel | null) ?? "none";
+  const setColorLabel = (v: ColorLabel) => setParams({ color: v === "none" ? null : v });
+  const albumId = searchParams.get("album") ?? "";
+  const setAlbumId = (v: string) => setParams({ album: v || null });
+  const selectedTags = searchParams.getAll("tag");
+  const setSelectedTags = (v: string[]) => setParams({ tag: v });
+  const camera = searchParams.get("camera") ?? "";
+  const setCamera = (v: string) => setParams({ camera: v || null });
+  const lens = searchParams.get("lens") ?? "";
+  const setLens = (v: string) => setParams({ lens: v || null });
+  const focalMin = searchParams.get("focal_min") ?? "";
+  const focalMax = searchParams.get("focal_max") ?? "";
+  const setFocalRange = (min: string, max: string) =>
+    setParams({ focal_min: min || null, focal_max: max || null });
+  const dateFrom = searchParams.get("from");
+  const setDateFrom = (v: string | null) => setParams({ from: v });
+  const dateTo = searchParams.get("to");
+  const setDateTo = (v: string | null) => setParams({ to: v });
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
@@ -57,7 +98,6 @@ export function Library() {
   const selects = useSelects();
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
-  const [searchParams, setSearchParams] = useSearchParams();
   const q = (searchParams.get("q") ?? "").trim();
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
@@ -408,10 +448,7 @@ export function Library() {
         focalLengths={facets?.focal_lengths}
         focalMin={focalMin}
         focalMax={focalMax}
-        onFocalRange={(min, max) => {
-          setFocalMin(min);
-          setFocalMax(max);
-        }}
+        onFocalRange={setFocalRange}
         dateFrom={dateFrom}
         dateTo={dateTo}
         onDateFrom={setDateFrom}
@@ -446,11 +483,7 @@ export function Library() {
           </span>
           <button
             className="btn ghost"
-            onClick={() => {
-              const next = new URLSearchParams(searchParams);
-              next.delete("q");
-              setSearchParams(next);
-            }}
+            onClick={() => setParams({ q: null })}
           >
             Clear search
           </button>

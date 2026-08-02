@@ -24,7 +24,17 @@ export function SearchBar() {
 
   function submit(next: string) {
     const base = searchBaseFor(location.pathname);
-    navigate(next.trim() ? `${base}?q=${encodeURIComponent(next.trim())}` : base);
+    // Searching refines the view the user is looking at, so it keeps that
+    // view's other query params - the Library holds its filter set there, and
+    // rebuilding the query string from just `q` silently cleared every active
+    // filter (and clearing the search cleared them a second time). Params from
+    // a different page are dropped: they don't describe the grid we land on.
+    const carried = base === location.pathname ? new URLSearchParams(params) : new URLSearchParams();
+    const query = next.trim();
+    if (query) carried.set("q", query);
+    else carried.delete("q");
+    const qs = carried.toString();
+    navigate(qs ? `${base}?${qs}` : base);
   }
 
   return (
