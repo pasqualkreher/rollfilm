@@ -11,7 +11,7 @@
 //   4. Expose a native folder picker over IPC (the whole reason for going
 //      desktop: any host path is directly readable by the native backend).
 
-const { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } = require("electron");
+const { Menu, app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } = require("electron");
 const { initAutoUpdate } = require("./updater");
 const { spawn, spawnSync } = require("child_process");
 const net = require("net");
@@ -695,6 +695,45 @@ function checkLibraryMounted() {
   }, 2000);
 }
 
+
+// --- Application menu --------------------------------------------------------
+// Electron's default menu advertises itself (a Help entry pointing at
+// electronjs.org) and exposes Reload / Force Reload / Toggle DevTools, none of
+// which mean anything to someone sorting photos - a stray Cmd-R mid-import is
+// actively unhelpful. So the menu carries only what belongs to the app itself
+// and a Help entry that opens the app's own help page.
+function showHelpPage() {
+  if (!mainWindow) return;
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+  // The renderer routes on the hash (see frontend/src/main.tsx), so this needs
+  // no IPC channel of its own.
+  mainWindow.webContents.executeJavaScript('window.location.hash = "#/help"').catch(() => {});
+}
+
+function buildApplicationMenu() {
+  const isMac = process.platform === "darwin";
+  const helpItem = {
+    label: "Rollfilm Help",
+    accelerator: isMac ? "Cmd+?" : "F1",
+    click: showHelpPage,
+  };
+
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      ...(isMac
+        ? [{ role: "appMenu" }]
+        : [{ label: "&File", submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }] }]),
+      // Deliberately hidden rather than dropped: on macOS the clipboard
+      // shortcuts come FROM the menu, so without these entries Cmd-C/V/X/A
+      // stop working in every text field in the app (search, tags, the Immich
+      // key). Hidden items keep their accelerators.
+      { role: "editMenu", visible: false },
+      { role: "help", submenu: isMac ? [helpItem] : [helpItem, { type: "separator" }, { role: "about" }] },
+    ])
+  );
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -961,6 +1000,7 @@ function registerActivateHandler() {
 
 app.whenReady().then(async () => {
   setDevDockIcon();
+  buildApplicationMenu();
   createSplash();
 
   const isFirstStart = !readConfig().libraryRoot;

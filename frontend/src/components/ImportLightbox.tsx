@@ -5,7 +5,7 @@ import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
-import { IconArrowLeft } from "./Icons";
+import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "./Icons";
 
 interface Props {
   sessionId: string;
@@ -133,7 +133,7 @@ export function ImportLightbox({
               disabled={index === 0}
               tabIndex={-1}
             >
-              ‹
+              <IconChevronLeft size={24} />
             </button>
             {loadFailed ? (
               <div className="detail-photo-error">
@@ -158,7 +158,7 @@ export function ImportLightbox({
               disabled={index === files.length - 1}
               tabIndex={-1}
             >
-              ›
+              <IconChevronRight size={24} />
             </button>
           </div>
           <div className="detail-image-toolbar">

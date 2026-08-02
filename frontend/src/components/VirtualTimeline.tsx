@@ -9,125 +9,34 @@ import { useMergePairs } from "../state/viewPrefs";
 import { thumbPx, useThumbSize } from "../state/viewPrefs";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 import { preloadImage } from "../utils/preload";
+import {
+  GAP,
+  overscanFor,
+  buildJustifiedLayout,
+  useVirtualWindow,
+  type JustifiedLayout,
+  type LayoutRow,
+  type LayoutTile,
+} from "../utils/justifiedLayout";
 
-// Layout constants mirroring the CSS grid (.thumbnail-grid gap, month header
-// pill + margin, section spacing). They only need to be internally consistent:
-// the virtual grid positions everything itself, so these ARE the layout.
-const GAP = 12;
-const HEADER_H = 34;
-const HEADER_MB = 12;
-const SECTION_MB = 8;
-// How far beyond the viewport tiles are mounted. Large enough that normal
-// scrolling always meets already-mounted tiles (whose thumbnails are loading
-// via the near-viewport preloader), small enough that a jump across the
-// library only mounts the landing area.
-const OVERSCAN = 2000;
+// Layout, constants and the scroll-window tracking are shared with the import
+// review's grid - see utils/justifiedLayout.ts. Only what this timeline does
+// with them (month sections, navigation, re-anchoring) lives here.
+
 // Beyond the mounted band, thumbnails for the next stretch in both directions
 // are pre-warmed into the browser's cache (see utils/preload.ts) - when those
 // rows mount during scrolling, their pixels are already local.
 const PREWARM = 3000;
-// Scroll positions are quantized before landing in React state, so a smooth
-// scroll re-renders every ~2 tile rows instead of every frame.
-const SCROLL_QUANTUM = 400;
 
-interface Tile {
-  image: LibraryIndexImage;
-  index: number; // position in the flat ordered list (drives range-select)
-  left: number;
-  width: number;
-}
-
-interface Row {
-  top: number; // within the section
-  height: number;
-  tiles: Tile[];
-}
-
-interface Section {
-  label: string;
-  top: number; // within the whole timeline
-  height: number;
-  rows: Row[];
-  count: number;
-}
-
-interface Layout {
-  sections: Section[];
-  totalHeight: number;
-}
+type Tile = LayoutTile<LibraryIndexImage>;
+type Row = LayoutRow<LibraryIndexImage>;
+type Layout = JustifiedLayout<LibraryIndexImage>;
 
 function monthLabel(iso: string | null): string {
   if (!iso) return "Unknown date";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "Unknown date";
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-}
-
-// Justified-rows layout, the JS twin of the CSS flexbox grid (flex-grow: ar,
-// flex-basis: ar*rowH): fill a row while the tiles' natural widths fit, then
-// scale the row so it exactly spans the container. The last row of a section
-// keeps its natural height (the CSS grid-filler equivalent). Positions are
-// computed for EVERY photo up front - that's what makes the scrollbar exact
-// and lets a scrubber jump land pixel-perfect on month boundaries.
-function buildLayout(images: LibraryIndexImage[], width: number, rowH: number): Layout {
-  const sections: Section[] = [];
-  let y = 0;
-
-  const flushSection = (label: string, group: { image: LibraryIndexImage; index: number }[]) => {
-    const rows: Row[] = [];
-    let innerY = HEADER_H + HEADER_MB;
-    let pending: { image: LibraryIndexImage; index: number; ar: number }[] = [];
-    let sumAr = 0;
-
-    const flushRow = (last: boolean) => {
-      if (pending.length === 0) return;
-      const avail = width - GAP * (pending.length - 1);
-      const natural = sumAr * rowH;
-      // Underfull last row: keep the target height, left-aligned. Every other
-      // row is justified to span the container exactly.
-      const height = last && natural <= avail ? rowH : avail / sumAr;
-      let x = 0;
-      const tiles: Tile[] = pending.map((p) => {
-        const w = p.ar * height;
-        const tile = { image: p.image, index: p.index, left: x, width: w };
-        x += w + GAP;
-        return tile;
-      });
-      rows.push({ top: innerY, height, tiles });
-      innerY += height + GAP;
-      pending = [];
-      sumAr = 0;
-    };
-
-    for (const entry of group) {
-      const ar = tileAspectRatio(entry.image.width, entry.image.height);
-      if (pending.length > 0 && (sumAr + ar) * rowH + GAP * pending.length > width) {
-        flushRow(false);
-      }
-      pending.push({ ...entry, ar });
-      sumAr += ar;
-    }
-    flushRow(true);
-
-    const height = innerY - GAP + SECTION_MB;
-    sections.push({ label, top: y, height, rows, count: group.length });
-    y += height;
-  };
-
-  let currentLabel: string | null = null;
-  let group: { image: LibraryIndexImage; index: number }[] = [];
-  images.forEach((image, index) => {
-    const label = monthLabel(image.taken_at);
-    if (label !== currentLabel && group.length > 0) {
-      flushSection(currentLabel!, group);
-      group = [];
-    }
-    currentLabel = label;
-    group.push({ image, index });
-  });
-  if (group.length > 0) flushSection(currentLabel!, group);
-
-  return { sections, totalHeight: y };
 }
 
 interface Props {
@@ -153,62 +62,26 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
   const mergePairs = useMergePairs();
   const rowH = thumbPx(useThumbSize());
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const scrollerRef = useRef<HTMLElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
-  const [width, setWidth] = useState(0);
-  const [window_, setWindow] = useState({ top: 0, bottom: 0 });
-  // Unquantized scroll position (relative to the timeline root), for the
-  // re-anchoring below - the quantized window state is too coarse for it.
-  const lastScrollRef = useRef(0);
 
   const allIds = useMemo(() => images.map((im) => im.id), [images]);
+  const { width, window: window_, scrollerRef, lastScrollRef } = useVirtualWindow(
+    rootRef,
+    images.length > 0
+  );
   const layout = useMemo(
-    () => (width > 0 ? buildLayout(images, width, rowH) : null),
+    () =>
+      width > 0
+        ? buildJustifiedLayout(images, {
+            width,
+            rowHeight: rowH,
+            labelOf: (image) => monthLabel(image.taken_at),
+            aspectOf: (image) => tileAspectRatio(image.width, image.height),
+          })
+        : null,
     [images, width, rowH]
   );
 
-  // While the library is empty the early-return below skips rendering the
-  // root div entirely - so this must re-run when the first photos arrive
-  // (very first import), or the observer never attaches, width stays 0 and
-  // no layout is ever built until a remount (tab switch).
-  const isEmpty = images.length === 0;
-
-  // Track container width and the scroller's visible window (quantized, so
-  // scrolling doesn't re-render per frame).
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const scroller = (root.closest(".page-scroll") ?? root.parentElement) as HTMLElement;
-    scrollerRef.current = scroller;
-
-    const measure = () => {
-      setWidth(root.clientWidth);
-      const rootTop = root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
-      const top = scroller.scrollTop - rootTop;
-      lastScrollRef.current = top;
-      const raw = { top, bottom: top + scroller.clientHeight };
-      setWindow((prev) => {
-        const q = (v: number) => Math.round(v / SCROLL_QUANTUM) * SCROLL_QUANTUM;
-        return q(prev.top) === q(raw.top) && q(prev.bottom) === q(raw.bottom) ? prev : raw;
-      });
-    };
-
-    let raf = 0;
-    const onScroll = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(measure);
-    };
-    measure();
-    scroller.addEventListener("scroll", onScroll, { passive: true });
-    const ro = new ResizeObserver(measure);
-    ro.observe(root);
-    ro.observe(scroller);
-    return () => {
-      cancelAnimationFrame(raf);
-      scroller.removeEventListener("scroll", onScroll);
-      ro.disconnect();
-    };
-  }, [isEmpty]);
 
   // A filter change means a NEW result set: jump to its top right away (the
   // old grid is still shown until the new index arrives), and remember to skip
@@ -250,7 +123,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       for (const r of s.rows) {
         const rowTop = s.top + r.top;
         if (rowTop + r.height > top) {
-          anchorId = r.tiles[0]?.image.id ?? null;
+          anchorId = r.tiles[0]?.item.id ?? null;
           frac = Math.max(-0.5, Math.min(1, (top - rowTop) / r.height));
           break outer;
         }
@@ -260,7 +133,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
 
     for (const s of layout.sections) {
       for (const r of s.rows) {
-        if (r.tiles.some((t) => t.image.id === anchorId)) {
+        if (r.tiles.some((t) => t.item.id === anchorId)) {
           const rootTop =
             root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
           scroller.scrollTop = rootTop + s.top + r.top + frac * r.height;
@@ -282,7 +155,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
     clearLastViewedImage();
     for (const s of layout.sections) {
       for (const r of s.rows) {
-        if (r.tiles.some((t) => t.image.id === target)) {
+        if (r.tiles.some((t) => t.item.id === target)) {
           const root = rootRef.current!;
           const scroller = scrollerRef.current!;
           const rootTop =
@@ -303,9 +176,11 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
   useEffect(() => {
     if (!layout) return;
     const timer = window.setTimeout(() => {
+      // Just outside the mounted band, which now moves with the tile size.
+      const mounted = overscanFor(rowH);
       const zones: [number, number][] = [
-        [window_.bottom + OVERSCAN, window_.bottom + OVERSCAN + PREWARM],
-        [window_.top - OVERSCAN - PREWARM, window_.top - OVERSCAN],
+        [window_.bottom + mounted, window_.bottom + mounted + PREWARM],
+        [window_.top - mounted - PREWARM, window_.top - mounted],
       ];
       for (const s of layout.sections) {
         for (const [zoneTop, zoneBottom] of zones) {
@@ -315,7 +190,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
             if (rowTop + r.height <= zoneTop || rowTop >= zoneBottom) continue;
             for (const t of r.tiles) {
               preloadImage(
-                api.images.thumbnailUrl(t.image.id, t.image.thumb_version || DEFAULT_EDIT_VERSION)
+                api.images.thumbnailUrl(t.item.id, t.item.thumb_version || DEFAULT_EDIT_VERSION)
               );
             }
           }
@@ -339,7 +214,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
           for (const t of r.tiles) {
             if (warmed >= VISIBLE_PREVIEW_CAP) break;
             preloadImage(
-              api.images.previewUrl(t.image.id, t.image.thumb_version || DEFAULT_EDIT_VERSION)
+              api.images.previewUrl(t.item.id, t.item.thumb_version || DEFAULT_EDIT_VERSION)
             );
             warmed++;
           }
@@ -347,17 +222,18 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [layout, window_]);
+  }, [layout, window_, rowH]);
 
   if (images.length === 0) {
     return <div className="empty-state">No photos here yet.</div>;
   }
 
-  const winTop = window_.top - OVERSCAN;
-  const winBottom = window_.bottom + OVERSCAN;
+  const overscan = overscanFor(rowH);
+  const winTop = window_.top - overscan;
+  const winBottom = window_.bottom + overscan;
 
   function renderTile(tile: Tile, row: Row) {
-    const { image, index } = tile;
+    const { item: image, index } = tile;
     const merged = mergePairs && Boolean(image.paired_image_id);
     return (
       <div

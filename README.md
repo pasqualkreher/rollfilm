@@ -39,10 +39,11 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 ## Features
 
 ### Library & import
-- **Staged import wizard** — uploads are staged asynchronously, nothing blocks while you keep selecting photos
+- **Staged import wizard** — photos are copied at the speed of the media, reviewed in a virtualized grid that stays responsive at thousands of files, and analyzed in the background while you're already culling
 - **RAW support** (via rawpy) with automatic RAW+JPEG pairing
 - **EXIF extraction** (ExifTool) — capture date, camera, **lens**, exposure data — and reverse geocoding of GPS coordinates to country/place
-- **Near-duplicate detection** during import using perceptual hashes
+- **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
+- **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
 - Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
 - **Trash** with configurable retention and automatic background purge
 

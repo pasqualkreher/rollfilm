@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 const SECTIONS: { id: string; title: string }[] = [
   { id: "basics", title: "The basics: where your photos live" },
   { id: "importing", title: "Importing photos" },
+  { id: "import-library", title: "Importing a second library" },
   { id: "browsing", title: "Browsing the library" },
   { id: "search", title: "Search" },
   { id: "culling", title: "Culling: stars, colors, tags and Selects" },
@@ -128,6 +129,42 @@ export function Help() {
             folder; "Discard batch" throws the staging session away.
           </li>
         </ol>
+
+
+        <H id="import-library">Importing a second library</H>
+        <p>
+          Took a small drive travelling, made a library on it and culled the trip there? Back home,{" "}
+          <em>Import → Import a library</em> folds it into this one. Importing that drive as a plain
+          folder would bring the photos across too — but leave behind exactly the part the trip was
+          spent on. This carries it with them:
+        </p>
+        <ul>
+          <li>
+            Stars, colour labels, tags and every edit come across with each photo. Albums and tags
+            merge <strong>by name</strong>, so "Iceland 2026" joins the album you already have
+            instead of becoming a second one with the same name. RAW+JPEG pairs stay paired.
+          </li>
+          <li>
+            A photo this library already has (byte for byte) keeps its file where it is and only
+            takes over the ratings and edits you gave it on the trip — the newer decision wins.
+          </li>
+          <li>
+            Nothing here is removed, and <strong>the other drive is only ever read</strong>. Its
+            Trash stays behind (you threw those away on purpose), as do photos it merely indexes in
+            place from somewhere else.
+          </li>
+          <li>
+            The copy runs in the background: you can keep browsing, editing, even import a card
+            while it works. It shows how far along it is and roughly how long is left, and it can be
+            stopped — a stopped import keeps everything that already came across, and running it
+            again picks up where it left off.
+          </li>
+        </ul>
+        <p>
+          Both libraries have to be on the same Rollfilm version. If the travel one is older, open
+          it once with this version (<em>Settings → Library folder</em>) so it can update itself,
+          then merge it.
+        </p>
 
         <H id="browsing">Browsing the library</H>
         <p>
@@ -631,6 +668,15 @@ export function Help() {
         </table>
 
         <H id="troubleshooting">Troubleshooting</H>
+        <h4>Quitting says Rollfilm is "still working"</h4>
+        <p>
+          Some work outlives the screen that started it: uploads to Immich, thumbnails an import
+          couldn't hand over ready-made, the search index catching up, a library being merged in.
+          Quitting mid-way is safe — your photos and edits are already saved, and everything except
+          queued Immich uploads in manual mode is picked up again on the next start.{" "}
+          <strong>"Finish in background"</strong> closes the window and quits by itself once it's
+          done; <strong>"Quit now"</strong> stops the rest.
+        </p>
         <h4>The app takes very long to start, or says "Backend is taking a while"</h4>
         <p>
           The <strong>first launch</strong> after installing can take several minutes: the operating

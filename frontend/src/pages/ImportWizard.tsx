@@ -3,17 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ColorLabel, StagedFileOut, ViewMode } from "../api/types";
-import { RatingStars } from "../components/RatingStars";
-import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
+import { ImportReviewGrid, dayLabel, isDuplicate } from "../components/ImportReviewGrid";
 import { ExternalSources } from "../components/ExternalSources";
 import { ImportLibrary } from "../components/ImportLibrary";
-import { fileTypeBadge, fileTypeBadgeClass, tileStyle, Thumb } from "../components/ThumbnailGrid";
-import { TimelineScrubber } from "../components/TimelineScrubber";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
-import { GRID_PIN_LIMIT, preloadImage, watchInViewport } from "../utils/preload";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "../components/AppDialogs";
 import { useWait } from "../state/wait";
@@ -21,16 +17,6 @@ import { useMergePairs } from "../state/viewPrefs";
 import { formatEta } from "../utils/duration";
 import { useTransientMessage } from "../utils/transientMessage";
 import { IconChevronDown } from "../components/Icons";
-
-// Byte-identical to a photo already in the library or elsewhere in this same
-// batch - the backend refuses to import these, so the UI shouldn't let you
-// select them in the first place. Exception: a copy of a photo sitting in the
-// Trash may be imported (it restores that photo), so it stays selectable.
-// A flagged duplicate is always an identical file: nothing is flagged for
-// merely looking alike, so there is no "maybe" case to keep selectable.
-function isDuplicate(f: StagedFileOut): boolean {
-  return Boolean(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && !f.duplicate_in_trash;
-}
 
 // What a single-file edit in the review grid can change.
 type StagedPatch = {
@@ -129,8 +115,6 @@ export function ImportWizard() {
   // groupByDate timeline): the grid root to find the scroller from, one DOM
   // node per day section, and the fixed bottom action bar whose height the
   // rail must stay clear of.
-  const gridRootRef = useRef<HTMLDivElement | null>(null);
-  const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
   const actionBarRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -446,49 +430,6 @@ export function ImportWizard() {
   // worker threads away from the very import that is producing them. Once the
   // import is done every preview is a plain file read and warming is cheap.
   const previewsAreCheap = !stagingInBackground && !analysisPending;
-  const visibleCardIds = useRef(new Set<string>());
-  const warmTimer = useRef<number | null>(null);
-  const warmVisiblePreviews = useCallback(() => {
-    if (!sessionId || !previewsAreCheap) return;
-    if (warmTimer.current !== null) window.clearTimeout(warmTimer.current);
-    warmTimer.current = window.setTimeout(() => {
-      warmTimer.current = null;
-      // Bounded: a tall window can hold far more cards than are worth holding
-      // pixels for, and every warm request competes with the ~6 connections
-      // the on-screen thumbnails are using.
-      let budget = GRID_PIN_LIMIT;
-      for (const id of visibleCardIds.current) {
-        if (budget-- <= 0) break;
-        preloadImage(api.import.stagedPreviewUrl(sessionId, id));
-      }
-    }, 250);
-  }, [sessionId, previewsAreCheap]);
-
-  useEffect(() => {
-    const root = gridRootRef.current;
-    if (!root || !sessionId) return;
-    const unwatch: Array<() => void> = [];
-    root.querySelectorAll<HTMLElement>("[data-staged-id]").forEach((el) => {
-      const id = el.dataset.stagedId;
-      if (!id) return;
-      unwatch.push(
-        watchInViewport(el, {
-          enter: () => {
-            visibleCardIds.current.add(id);
-            warmVisiblePreviews();
-          },
-          leave: () => visibleCardIds.current.delete(id),
-        })
-      );
-    });
-    return () => {
-      unwatch.forEach((u) => u());
-      if (warmTimer.current !== null) {
-        window.clearTimeout(warmTimer.current);
-        warmTimer.current = null;
-      }
-    };
-  }, [visibleFiles, sessionId, warmVisiblePreviews]);
 
   // Day sections over the visible files (already date-sorted, so labels are
   // contiguous and unique), each entry keeping its index into visibleFiles -
@@ -509,14 +450,7 @@ export function ImportWizard() {
     const iso = effectiveTakenAt(file);
     const parsed = iso ? new Date(iso) : null;
     const date = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
-    const label = date
-      ? date.toLocaleDateString(undefined, {
-          weekday: "short",
-          month: "long",
-          day: "numeric",
-          year: "numeric",
-        })
-      : null;
+    const label = date ? dayLabel(iso) : null;
     const last = daySections[daySections.length - 1];
     if (last && last.label === label) last.items.push({ file, index });
     else daySections.push({ label, date, items: [{ file, index }] });
@@ -525,6 +459,24 @@ export function ImportWizard() {
   // ticks carry the year only when the import actually spans more than one.
   const importSpansYears =
     new Set(daySections.filter((s) => s.date).map((s) => s.date!.getFullYear())).size > 1;
+  // Built here (not in the grid) because only the wizard knows whether the
+  // batch spans years; the labels come from the same dayLabel() the grid
+  // sections by, so every tick finds its section.
+  const scrubberSections = daySections.flatMap((s) =>
+    s.label && s.date
+      ? [
+          {
+            label: s.label,
+            tickGroup: `${s.date.getFullYear()}-${s.date.getMonth()}`,
+            tickPrimary: s.date.toLocaleDateString(
+              undefined,
+              importSpansYears ? { month: "short", year: "numeric" } : { month: "short" }
+            ),
+            tickSecondary: String(s.date.getDate()),
+          },
+        ]
+      : []
+  );
 
   // When merged, a visible card stands in for both halves - expand a set of
   // visible files to also include each one's hidden RAW/JPEG partner so bulk
@@ -592,13 +544,18 @@ export function ImportWizard() {
     // button appear dead.
     const missingHalf = findIncompletePairs(files ?? []).filter((f) => !isDuplicate(f));
     if (missingHalf.length > 0) {
+      const one = missingHalf.length === 1;
       const includeBoth = await dialogs.confirm({
-        title: "Incomplete RAW+JPEG pairs",
-        message:
-          `${missingHalf.length} shot(s) have only the RAW or only the JPEG selected. ` +
-          `Include the missing file for these shots too?`,
-        confirmLabel: "Include both",
-        cancelLabel: "Keep selection as-is",
+        title: one ? "Import the second file too?" : "Import the second file of each pair?",
+        message: one
+          ? "Your camera saved this shot twice - once as a RAW, once as a JPEG - and only one " +
+            "of the two is ticked for import. Taking both keeps the pair together as one photo " +
+            "in your library."
+          : `Your camera saved ${missingHalf.length} of these shots twice - once as a RAW, once ` +
+            "as a JPEG - and for each of them only one of the two is ticked for import. Taking " +
+            "both keeps each pair together as one photo in your library.",
+        confirmLabel: "Import both files",
+        cancelLabel: "Import only what I ticked",
       });
       if (includeBoth) {
         await Promise.allSettled(
@@ -1001,135 +958,20 @@ export function ImportWizard() {
         /* Day-sectioned with the library's date scrubber on the right edge -
            reviewing a big card scrolls and navigates like the library, at the
            day granularity an import batch actually has. */
-        <div className="timeline has-scrubber" ref={gridRootRef}>
-          {daySections.map((section) => (
-            <section
-              key={section.label ?? "dateless-tail"}
-              className="timeline-section"
-              ref={(el) => {
-                const label = section.label;
-                if (!label) return; // headerless tail - no scrubber anchor
-                if (el) sectionEls.current.set(label, el);
-                else sectionEls.current.delete(label);
-              }}
-            >
-              {section.label && (
-                <h3 className="timeline-header">
-                  {section.label}
-                  <span className="timeline-header-count">{section.items.length}</span>
-                </h3>
-              )}
-              <div className={`thumbnail-grid${visibleFiles.length <= 2 ? " thumbnail-grid--few" : ""}`}>
-                {section.items.map(({ file: f, index: i }) => (
-                  <div
-                    key={f.id}
-                    data-staged-id={f.id}
-                    style={tileStyle(f.width, f.height)}
-                    className={`import-card${f.selected ? " selected" : ""}`}
-                  >
-                    <div
-                      className={`thumb-card${f.selected ? " selected" : ""}`}
-                      // The pointer landing on a card is the earliest signal
-                      // that this is the photo about to be opened - warming
-                      // here buys the preview the moment before the click.
-                      onPointerEnter={() => preloadImage(api.import.stagedPreviewUrl(sessionId, f.id))}
-                      onClick={(e) => (selectMode ? toggleStagedSelect(i, e.shiftKey) : setLightboxIndex(i))}
-                      title={
-                        selectMode
-                          ? isDuplicate(f)
-                            ? "Already in your library - can't be imported"
-                            : f.duplicate_in_trash
-                              ? "This photo is in the Trash - importing it restores it"
-                              : "Click to select, shift-click for a range"
-                          : "Click to preview"
-                      }
-                    >
-                      {f.processed ? (
-                        <Thumb src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
-                      ) : (
-                        // Copied but not yet analyzed - no thumbnail exists yet. The
-                        // 1s files refetch swaps this for the real Thumb when the
-                        // background analysis finishes this file. Shimmers like the
-                        // album skeleton cards instead of showing a spinner.
-                        <div className="thumb-analyzing" title="Analyzing…" />
-                      )}
-                      {selectMode && (
-                        <input
-                          className="select-checkbox"
-                          type="checkbox"
-                          checked={f.selected}
-                          disabled={isDuplicate(f)}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleStagedSelect(i, e.shiftKey);
-                          }}
-                          onChange={() => {}}
-                        />
-                      )}
-                      {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
-                        <span className="duplicate-badge">
-                          {f.duplicate_in_trash ? "In Trash - restores" : "Already in library"}
-                        </span>
-                      )}
-                      <span
-                        className={fileTypeBadgeClass(
-                          f.file_type,
-                          mergePairs && viewMode === "combined" && Boolean(f.paired_staged_file_id)
-                        )}
-                      >
-                        {fileTypeBadge(
-                          f.file_type,
-                          // "RAW+JPG" only when this card is a merged stand-in for the
-                          // pair; unmerged/filtered views show each file's own type.
-                          mergePairs && viewMode === "combined" && Boolean(f.paired_staged_file_id)
-                        )}
-                      </span>
-                    </div>
-                    {/* No per-card import checkbox here: it's cramped at grid sizes and
-                        crowds the stars. Toggle import via "Select" mode (overlay
-                        checkbox / click) or in the large preview (Space key). The
-                        footer keeps just rating + color, which have room now. */}
-                    <div className="import-card-footer">
-                      <RatingStars
-                        rating={f.rating}
-                        onChange={(rating) => updateStaged.mutate({ fileId: f.id, patch: { rating } })}
-                      />
-                      <ColorLabelPicker
-                        value={f.color_label}
-                        onChange={(color_label) => updateStaged.mutate({ fileId: f.id, patch: { color_label } })}
-                      />
-                    </div>
-                  </div>
-                ))}
-                <i className="grid-filler" aria-hidden />
-              </div>
-            </section>
-          ))}
-
-          <TimelineScrubber
-            getScroller={() =>
-              (gridRootRef.current?.closest(".page-scroll") ??
-                gridRootRef.current?.closest(".page")) as HTMLElement | null
-            }
-            getSectionEl={(label) => sectionEls.current.get(label) ?? null}
-            sections={daySections.flatMap((s) =>
-              s.label && s.date
-                ? [
-                    {
-                      label: s.label,
-                      tickGroup: `${s.date.getFullYear()}-${s.date.getMonth()}`,
-                      tickPrimary: s.date.toLocaleDateString(
-                        undefined,
-                        importSpansYears ? { month: "short", year: "numeric" } : { month: "short" }
-                      ),
-                      tickSecondary: String(s.date.getDate()),
-                    },
-                  ]
-                : []
-            )}
-            getBottomInset={() => actionBarRef.current?.offsetHeight ?? 0}
-          />
-        </div>
+        <ImportReviewGrid
+          sessionId={sessionId}
+          files={visibleFiles}
+          takenAtOf={effectiveTakenAt}
+          selectMode={selectMode}
+          mergePairs={mergePairs}
+          viewMode={viewMode}
+          onToggleSelect={toggleStagedSelect}
+          onOpen={setLightboxIndex}
+          onPatch={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
+          warmPreviews={previewsAreCheap}
+          scrubberSections={scrubberSections}
+          getBottomInset={() => actionBarRef.current?.offsetHeight ?? 0}
+        />
       )}
       </div>
 

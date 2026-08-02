@@ -39,6 +39,26 @@ export function IconChevronDown(props: IconProps) {
   );
 }
 
+// Drawn symmetrically about the middle of the 16px box (x 5.75-10.25,
+// y 3.5-12.5) so they sit dead centre in a round button. The "‹" and "›"
+// characters these replaced carry their own uneven side bearings, which is
+// exactly what made the lightbox arrows look off-centre.
+export function IconChevronLeft(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M10.25 3.5L5.75 8l4.5 4.5" />
+    </svg>
+  );
+}
+
+export function IconChevronRight(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5.75 3.5L10.25 8l-4.5 4.5" />
+    </svg>
+  );
+}
+
 export function IconArrowLeft(props: IconProps) {
   return (
     <svg {...svgProps(props)}>

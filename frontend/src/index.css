@@ -2421,8 +2421,17 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  justify-content: center;
   gap: 4px;
   padding: 6px 8px;
+  /* Fixed height, set by the virtual grid from the same row height it lays the
+     tiles out with (--card-footer-h). The grid has to know how tall a card is
+     before it renders one, and a footer whose height depended on its own
+     content would drift from the positions the layout computed - tiles would
+     overlap or leave gaps. Content smaller than the box just centres in it. */
+  height: var(--card-footer-h, auto);
+  box-sizing: border-box;
+  flex: none;
 }
 
 .import-card-footer .rating-stars {
@@ -3379,12 +3388,20 @@ input.editor-preset-select {
   background: rgba(255, 255, 255, 0.1);
   border: none;
   color: #fff;
-  font-size: 32px;
   width: 56px;
   height: 56px;
   border-radius: 50%;
   cursor: pointer;
   flex-shrink: 0;
+  /* Centre the icon geometrically. A button's default text centring leaves the
+     glyph sitting on its baseline with whatever side bearings the platform
+     font gives it, which is what made the arrow look off-centre in the circle
+     (see IconChevronLeft/Right - both are drawn symmetric about the box). */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 0;
 }
 
 .lightbox-nav-prev {
@@ -3461,12 +3478,12 @@ input.editor-preset-select {
   outline-offset: 1px;
 }
 
-/* The lightbox control bar is dark regardless of theme, so the selected
-   highlight can't follow --text - in light theme that's near-black and
-   invisible against the bar, making a clicked color look un-highlighted. */
-.lightbox-controls .color-swatch.selected {
-  outline-color: #fff;
-}
+/* The import lightbox's control bar used to be a dark translucent overlay, so
+   the selected swatch was outlined in white here. It is a light app surface
+   now (.lightbox-overlay--page below re-themed its text and background) -
+   which left a white ring on a near-white bar, i.e. a colour that looked as if
+   it had never been set. The default outline follows --text and is therefore
+   right in both themes; there is nothing left to override. */
 
 .btn {
   padding: 6px 12px;

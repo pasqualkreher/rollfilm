@@ -92,6 +92,9 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
   const [retrying, setRetrying] = useState(false);
   const retryCount = useRef(0);
   const retryTimer = useRef<number | null>(null);
+  // Plain ref, not state: visibility changes constantly while scrolling and
+  // must never itself cause a render.
+  const inViewRef = useRef(false);
 
   // A tile that finished loading can still end up broken later: under memory
   // pressure the browser discards decoded pixels and silently re-fetches, and
@@ -115,11 +118,14 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
     }
   }, [src]);
 
-  // Also checked on every render: while an import runs the grid re-renders
-  // about once a second, which is exactly when the memory pressure that breaks
-  // these images builds up - so a tile sitting on screen gets repaired without
-  // having to be scrolled away and back first.
-  useEffect(repairIfBroken);
+  // Re-checked on render, but only for a tile that is actually on screen: an
+  // unvirtualized grid can have thousands of these mounted at once, and doing
+  // DOM work per render for every one of them is exactly the kind of
+  // per-tile-per-render cost that makes a big grid crawl. Off-screen tiles get
+  // their check when they scroll back in (below).
+  useEffect(() => {
+    if (inViewRef.current) repairIfBroken();
+  });
 
   // Let go of a tile that has been left far behind. Without this the renderer
   // holds every thumbnail the user ever scrolled past (~7MB decoded each), and
@@ -154,10 +160,14 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
     el.setAttribute("fetchpriority", "low");
     return watchInViewport(el, {
       enter: () => {
+        inViewRef.current = true;
         el.setAttribute("fetchpriority", "high");
         repairIfBroken();
       },
-      leave: () => el.setAttribute("fetchpriority", "low"),
+      leave: () => {
+        inViewRef.current = false;
+        el.setAttribute("fetchpriority", "low");
+      },
     });
   }, [repairIfBroken]);
 
