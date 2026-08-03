@@ -1392,7 +1392,9 @@ def editor_preview(
     payload: schemas.ImageEdits,
     full: bool = False,
     scrub: bool = False,
+    ultra: bool = False,
     native: bool = False,
+    browse: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1401,8 +1403,14 @@ def editor_preview(
     base image is cached, so only the edit pipeline re-runs per request.
     `?scrub=1` renders the fast, small-base tier drawn while a control is being
     dragged; the default renders the accurate tier on release; `?full=1` renders
-    on the larger settled base once the sliders come to rest; `?native=1`
-    renders at TRUE full resolution - fetched in the background for 100% zoom."""
+    on the larger settled base once the sliders come to rest; `?ultra=1` is one
+    step above that, for when the settled render is still shown upscaled (it
+    costs no extra decode - see ULTRA_EDITOR_PREVIEW_PX); `?native=1` renders at
+    TRUE full resolution - fetched in the background for 100% zoom.
+
+    `?browse=1` renders a raw with the browsing auto-exposure instead of the
+    editor's native (dark) base - the "Original" half of the split view, which
+    has to be the photo as the library showed it, not the unlifted sensor data."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
@@ -1429,12 +1437,14 @@ def editor_preview(
             distortion=_clamp100(payload.distortion),
             full_quality=full,
             scrub=scrub,
+            ultra=ultra,
             native=native,
             flip_h=bool(payload.flip_h),
             flip_v=bool(payload.flip_v),
             straighten=max(-45.0, min(45.0, float(payload.straighten))),
             persp_h=_clamp100(payload.persp_h),
             persp_v=_clamp100(payload.persp_v),
+            browse=browse,
             is_stale=_is_stale,
         )
     except thumbnails.PreviewSuperseded:

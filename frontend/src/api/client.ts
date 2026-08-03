@@ -475,15 +475,32 @@ export const api = {
     // `full` renders on the full-resolution base (slow - fetched after settle).
     // mode: "scrub" = fast small-base frame drawn while dragging a control,
     // "fast" = accurate render on release, "full" = settled full-quality pass,
+    // "ultra" = one step above "full", for when the settled render is still
+    // being shown upscaled - it costs no extra decode, so the editor walks up to
+    // it before considering "native".
     // "native" = TRUE full-resolution render for 100% zoom (slowest, background).
+    // `browse` renders a raw with the library's auto-exposure instead of the
+    // editor's native (dark) base - only the split view's "Original" half wants
+    // that; every other render must stay native so edits are made on real data.
     async editorPreview(
       id: string,
       edits: ImageEdits,
       signal?: AbortSignal,
-      mode: "scrub" | "fast" | "full" | "native" = "fast"
+      mode: "scrub" | "fast" | "full" | "ultra" | "native" = "fast",
+      browse = false
     ): Promise<Blob> {
-      const q =
-        mode === "native" ? "?native=1" : mode === "full" ? "?full=1" : mode === "scrub" ? "?scrub=1" : "";
+      const tier =
+        mode === "native"
+          ? "native=1"
+          : mode === "ultra"
+            ? "ultra=1"
+            : mode === "full"
+              ? "full=1"
+              : mode === "scrub"
+                ? "scrub=1"
+                : "";
+      const params = [tier, browse ? "browse=1" : ""].filter(Boolean).join("&");
+      const q = params ? `?${params}` : "";
       const res = await fetch(`${BASE_URL}/images/${id}/editor-preview${q}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

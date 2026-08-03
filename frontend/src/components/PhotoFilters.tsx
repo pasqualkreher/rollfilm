@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { AlbumOut, ColorLabel, Facet, ViewMode } from "../api/types";
 import { ViewModeToggle } from "./ViewModeToggle";
 import { ColorLabelPicker } from "./ColorLabelPicker";
@@ -6,7 +6,8 @@ import { ViewPrefsControls } from "./ViewPrefsControls";
 import { TagFilter } from "./TagFilter";
 import { FilterChip } from "./FilterChip";
 import { Dropdown } from "./Dropdown";
-import { IconFilter } from "./Icons";
+import { IconChevronDown, IconFilter, IconPin } from "./Icons";
+import { setFilterPinned, useFilterPinned } from "../state/viewPrefs";
 
 // Dual-thumb slider over the focal lengths actually present in the library
 // (the facet's sorted, formatted mm values are its stops). Dragging both
@@ -189,6 +190,9 @@ export function PhotoFilters({
   viewExtras,
   children,
 }: Props) {
+  // Pinned: the same menu docks as a second row of the bar instead of hanging
+  // off the chip as a popover, so it survives every click while culling.
+  const pinned = useFilterPinned();
   const showDates = Boolean(onDateFrom && onDateTo);
   const showCamera = Boolean(cameras && onCamera);
   const showLens = Boolean(lenses && onLens);
@@ -218,6 +222,157 @@ export function PhotoFilters({
     onDateTo?.(null);
   }
 
+  const chipLabel = (
+    <>
+      <IconFilter size={12} /> Filter
+      {activeCount > 0 ? ` · ${activeCount}` : ""}
+    </>
+  );
+
+  // The pin sits in the panel's top-right corner, so it's found where the
+  // filters are and reads as "keep this panel". Toggling it moves the very same
+  // menu between the popover and the docked row. Unpinning mounts a fresh chip,
+  // whose popover starts closed - which would take the filters off screen
+  // entirely - so `reopen` opens it: the panel was just there, it should stay.
+  // Only read when a chip mounts, so leaving it set costs nothing.
+  const [reopen, setReopen] = useState(false);
+  const pinButton = (
+    <button
+      type="button"
+      className={`filter-pin${pinned ? " active" : ""}`}
+      aria-pressed={pinned}
+      title={pinned ? "Unpin the filters (back to a popover)" : "Pin the filters open"}
+      onClick={() => {
+        setReopen(pinned);
+        setFilterPinned(!pinned);
+      }}
+    >
+      <IconPin size={13} filled={pinned} />
+    </button>
+  );
+
+  const menu = (
+    <div className={`filter-menu${pinned ? " filter-menu--docked" : ""}`}>
+      {pinButton}
+      <div className="filter-menu-head">
+        <span className="filter-menu-title">Filter</span>
+      </div>
+      {albums && onAlbumId && (
+        <div className="filter-menu-row">
+          <span className="filter-menu-label">Album</span>
+          <Dropdown
+            ariaLabel="Album"
+            value={albumId ?? ""}
+            onChange={onAlbumId}
+            options={[
+              { value: "", label: "All photos" },
+              ...albums.map((a) => ({ value: a.id, label: a.name })),
+            ]}
+          />
+        </div>
+      )}
+
+      <div className="filter-menu-row">
+        <span className="filter-menu-label">Rating</span>
+        <Dropdown
+          ariaLabel="Rating"
+          value={String(ratingMin)}
+          onChange={(v) => onRatingMin(Number(v))}
+          options={[0, 1, 2, 3, 4, 5].map((n) => ({
+            value: String(n),
+            label: n === 0 ? "Any" : `${"★".repeat(n)}+`,
+          }))}
+        />
+      </div>
+
+      <div className="filter-menu-row">
+        <span className="filter-menu-label">Color</span>
+        <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
+      </div>
+
+      {allTags && onTags && (
+        <div className="filter-menu-row">
+          <span className="filter-menu-label">Tags</span>
+          <TagFilter options={allTags} value={selectedTags ?? []} onChange={onTags} />
+        </div>
+      )}
+
+      {showCamera && (
+        <div className="filter-menu-row">
+          <span className="filter-menu-label">Camera</span>
+          <Dropdown
+            ariaLabel="Camera"
+            value={camera ?? ""}
+            onChange={(v) => onCamera?.(v)}
+            // The selected value can drop out of the cross-filtered options
+            // (facets refetching); keep it listed so the button never shows a
+            // stale blank.
+            options={[
+              { value: "", label: "All cameras" },
+              ...cameras!.map((c) => ({ value: c.value, label: `${c.value} (${c.count})` })),
+              ...(camera && !cameras!.some((c) => c.value === camera)
+                ? [{ value: camera, label: camera }]
+                : []),
+            ]}
+          />
+        </div>
+      )}
+
+      {showLens && (
+        <div className="filter-menu-row">
+          <span className="filter-menu-label">Lens</span>
+          <Dropdown
+            ariaLabel="Lens"
+            value={lens ?? ""}
+            onChange={(v) => onLens?.(v)}
+            options={[
+              { value: "", label: "All lenses" },
+              ...lenses!.map((l) => ({ value: l.value, label: `${l.value} (${l.count})` })),
+              ...(lens && !lenses!.some((l) => l.value === lens)
+                ? [{ value: lens, label: lens }]
+                : []),
+            ]}
+          />
+        </div>
+      )}
+
+      {showFocal && focalLengths!.length > 0 && (
+        <div className="filter-menu-row">
+          <span className="filter-menu-label">Focal length</span>
+          <FocalRangeSlider
+            options={focalLengths!}
+            min={focalMin ?? ""}
+            max={focalMax ?? ""}
+            onChange={(min, max) => onFocalRange?.(min, max)}
+          />
+        </div>
+      )}
+
+      {showDates && (
+        <div className="filter-menu-row">
+          <span className="filter-menu-label">Date</span>
+          <span className="date-range">
+            <input
+              type="date"
+              value={dateFrom ?? ""}
+              max={dateTo ?? undefined}
+              onChange={(e) => onDateFrom?.(e.target.value || null)}
+              aria-label="From date"
+            />
+            <span className="date-range-sep">–</span>
+            <input
+              type="date"
+              value={dateTo ?? ""}
+              min={dateFrom ?? undefined}
+              onChange={(e) => onDateTo?.(e.target.value || null)}
+              aria-label="To date"
+            />
+          </span>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="filter-bar filter-bar--sticky">
       {/* View: how the same photos are displayed (type, size, pairing). */}
@@ -231,134 +386,27 @@ export function PhotoFilters({
           like a pro app's filter popover - the bar itself stays one calm row.
           Inside the menu every filter gets a labelled row and full-width
           control, where that verbosity belongs. Sits between the view
-          controls and the page actions. */}
+          controls and the page actions. Pinned, the chip collapses the docked
+          row instead of opening a popover. */}
       <div className="control-group">
-        <FilterChip
-          title="Filter photos"
-          active={isFiltering}
-          label={
-            <>
-              <IconFilter size={12} /> Filter
-              {activeCount > 0 ? ` · ${activeCount}` : ""}
-            </>
-          }
-        >
-          <div className="filter-menu">
-            {albums && onAlbumId && (
-              <div className="filter-menu-row">
-                <span className="filter-menu-label">Album</span>
-                <Dropdown
-                  ariaLabel="Album"
-                  value={albumId ?? ""}
-                  onChange={onAlbumId}
-                  options={[
-                    { value: "", label: "All photos" },
-                    ...albums.map((a) => ({ value: a.id, label: a.name })),
-                  ]}
-                />
-              </div>
-            )}
-
-            <div className="filter-menu-row">
-              <span className="filter-menu-label">Rating</span>
-              <Dropdown
-                ariaLabel="Rating"
-                value={String(ratingMin)}
-                onChange={(v) => onRatingMin(Number(v))}
-                options={[0, 1, 2, 3, 4, 5].map((n) => ({
-                  value: String(n),
-                  label: n === 0 ? "Any" : `${"★".repeat(n)}+`,
-                }))}
-              />
-            </div>
-
-            <div className="filter-menu-row">
-              <span className="filter-menu-label">Color</span>
-              <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
-            </div>
-
-            {allTags && onTags && (
-              <div className="filter-menu-row">
-                <span className="filter-menu-label">Tags</span>
-                <TagFilter options={allTags} value={selectedTags ?? []} onChange={onTags} />
-              </div>
-            )}
-
-            {showCamera && (
-              <div className="filter-menu-row">
-                <span className="filter-menu-label">Camera</span>
-                <Dropdown
-                  ariaLabel="Camera"
-                  value={camera ?? ""}
-                  onChange={(v) => onCamera?.(v)}
-                  // The selected value can drop out of the cross-filtered
-                  // options (facets refetching); keep it listed so the button
-                  // never shows a stale blank.
-                  options={[
-                    { value: "", label: "All cameras" },
-                    ...cameras!.map((c) => ({ value: c.value, label: `${c.value} (${c.count})` })),
-                    ...(camera && !cameras!.some((c) => c.value === camera)
-                      ? [{ value: camera, label: camera }]
-                      : []),
-                  ]}
-                />
-              </div>
-            )}
-
-            {showLens && (
-              <div className="filter-menu-row">
-                <span className="filter-menu-label">Lens</span>
-                <Dropdown
-                  ariaLabel="Lens"
-                  value={lens ?? ""}
-                  onChange={(v) => onLens?.(v)}
-                  options={[
-                    { value: "", label: "All lenses" },
-                    ...lenses!.map((l) => ({ value: l.value, label: `${l.value} (${l.count})` })),
-                    ...(lens && !lenses!.some((l) => l.value === lens)
-                      ? [{ value: lens, label: lens }]
-                      : []),
-                  ]}
-                />
-              </div>
-            )}
-
-            {showFocal && focalLengths!.length > 0 && (
-              <div className="filter-menu-row">
-                <span className="filter-menu-label">Focal length</span>
-                <FocalRangeSlider
-                  options={focalLengths!}
-                  min={focalMin ?? ""}
-                  max={focalMax ?? ""}
-                  onChange={(min, max) => onFocalRange?.(min, max)}
-                />
-              </div>
-            )}
-
-            {showDates && (
-              <div className="filter-menu-row">
-                <span className="filter-menu-label">Date</span>
-                <span className="date-range">
-                  <input
-                    type="date"
-                    value={dateFrom ?? ""}
-                    max={dateTo ?? undefined}
-                    onChange={(e) => onDateFrom?.(e.target.value || null)}
-                    aria-label="From date"
-                  />
-                  <span className="date-range-sep">–</span>
-                  <input
-                    type="date"
-                    value={dateTo ?? ""}
-                    min={dateFrom ?? undefined}
-                    onChange={(e) => onDateTo?.(e.target.value || null)}
-                    aria-label="To date"
-                  />
-                </span>
-              </div>
-            )}
-          </div>
-        </FilterChip>
+        {pinned ? (
+          <button
+            type="button"
+            className={`tag-filter-btn${isFiltering ? " active" : ""}`}
+            title="Collapse the filters"
+            aria-expanded
+            onClick={() => setFilterPinned(false)}
+          >
+            <span className="tag-filter-btn-label">{chipLabel}</span>
+            <span className="tag-filter-caret tag-filter-caret--up">
+              <IconChevronDown size={11} />
+            </span>
+          </button>
+        ) : (
+          <FilterChip title="Filter photos" active={isFiltering} label={chipLabel} initialOpen={reopen}>
+            {menu}
+          </FilterChip>
+        )}
 
         {isFiltering && (
           <button className="btn ghost btn-sm" onClick={clearAll}>
@@ -369,6 +417,9 @@ export function PhotoFilters({
 
       {/* Page-specific actions (Select, Select all, ...). */}
       {children && <div className="control-group control-group--actions">{children}</div>}
+
+      {/* Pinned: the same menu as a full-width second row of the bar. */}
+      {pinned && <div className="filter-dock">{menu}</div>}
     </div>
   );
 }

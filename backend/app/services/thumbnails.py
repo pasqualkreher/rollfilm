@@ -1002,48 +1002,91 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     return _display_color_block(_linear_tone_block(lin, adj, base_gain=1.0), adj)
 
 
-def _grain_noise(*shape: int) -> np.ndarray:
-    """Sum of 3 uniforms, centred and scaled to roughly [-1, 1] with a
-    bell-shaped (Irwin-Hall) distribution - much closer to how photographic
-    grain amplitude is actually distributed than flat np.random.rand noise."""
-    u = np.random.rand(*shape) + np.random.rand(*shape) + np.random.rand(*shape)
-    return ((u - 1.5) / 1.5).astype(np.float32)
+def _grain_field(h: int, w: int, particle_px: float, coarse: float, shape: float) -> np.ndarray:
+    """A monochrome silver-grain field of unit RMS (float32), built as a
+    band-pass noise stack rather than upscaled blocks.
+
+    Real grain has a *band-pass* Wiener spectrum: no energy at the pixel grid
+    (that reads as digital sensor noise) and none at low frequencies either
+    (that reads as blotchy mottling). The old field - white noise generated at
+    1/particle resolution, nearest-upscaled and blurred - had both: the nearest
+    upscale left an axis-aligned lattice of square blocks (nothing in film is
+    aligned to a grid), and the plain blur is a low-pass, so what survived was
+    soft mottling rather than particles.
+
+    Here one white-noise realisation is filtered into two difference-of-Gaussian
+    bands - a fine one peaking at ~1.1x the particle size and a `coarse` clump
+    band ~2.5x that - and mixed. Both are scale-free, so nothing lines up with
+    the pixel grid at any particle size.
+
+    Two shaping steps then turn Gaussian noise into *particles*:
+    `shape` (>1) raises the kurtosis, so amplitude concentrates into distinct
+    specks with clean gaps between them instead of an even fog, and a small
+    negative skew makes the dark specks bite a little harder than the light
+    ones - silver grains sit *in* the emulsion.
+
+    The noise is synthesised on a grid of ~3 samples per particle and lifted to
+    full size with a cubic (band-limited) upscale: the field carries no detail
+    finer than that, so this is exact reconstruction, and it keeps the blur
+    kernels small - coarse grain costs the same as fine grain."""
+    p = max(1.0, float(particle_px))
+    step = max(1.0, p / 3.0)
+    nh = max(4, int(round(h / step)))
+    nw = max(4, int(round(w / step)))
+    # Particle size in work-grid pixels - ~3 by construction, but clamped for
+    # the degenerate case of an image smaller than the 4px floor above.
+    ps = min(3.5, p / max(h / nh, 1e-6))
+
+    n = np.random.standard_normal((nh, nw)).astype(np.float32)
+    g_a = cv2.GaussianBlur(n, (0, 0), max(0.42, ps * 0.30))
+    g_b = cv2.GaussianBlur(n, (0, 0), max(0.95, ps * 0.75))
+    g_c = cv2.GaussianBlur(n, (0, 0), max(2.40, ps * 1.95))
+    fine = g_a - g_b
+    clump = g_b - g_c
+    fine /= float(fine.std()) + 1e-6
+    clump /= float(clump.std()) + 1e-6
+    field = fine * (1.0 - coarse) + clump * coarse
+
+    if shape > 1.0:
+        sign = np.sign(field)
+        np.power(np.abs(field, out=field), shape, out=field)
+        field *= sign
+    field /= float(field.std()) + 1e-6
+    # Mild negative skew (mean preserved), scaled by the square's own spread so
+    # the amount of skew stays the same whatever `shape` did to the tails.
+    sq = field * field
+    field -= (0.05 / (float(sq.std()) + 1e-6)) * (sq - float(sq.mean()))
+    field /= float(field.std()) + 1e-6
+    if (nh, nw) != (h, w):
+        field = cv2.resize(field, (w, h), interpolation=cv2.INTER_CUBIC)
+    return field
 
 
-def _grain_field(h: int, w: int, particle_px: float) -> np.ndarray:
-    """A film-grain noise field with a given particle size in pixels: noise is
-    generated at particle resolution, nearest-upscaled (hard speckle edges),
-    then lightly blurred so particles read as soft irregular blobs rather than
-    square pixels. Roughly [-1, 1], in float32 throughout."""
-    nh = min(h, max(1, int(round(h / particle_px))))
-    nw = min(w, max(1, int(round(w / particle_px))))
-    small = _grain_noise(nh, nw)
-    field = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
-    return cv2.GaussianBlur(field, (0, 0), max(0.35, particle_px * 0.4))
-
-
-# Preview-size grain fields, cached by size: generating + blurring two full-frame
-# noise fields cost ~1s of every accurate/settle render with grain active. The
-# field depends only on (h, w, particle size), so the editor's repeated renders
-# of the same image reuse it - which also stops the grain pattern re-rolling on
-# every slider tick. Native/full-resolution renders (saves, exports) stay above
-# the pixel cap and keep their fresh stochastic field per render.
-_GRAIN_CACHE: "OrderedDict[tuple[int, int, float], np.ndarray]" = OrderedDict()
+# Preview-size grain fields, cached by size: synthesising a full-frame noise
+# field costs a good chunk of every accurate/settle render with grain active.
+# The field depends only on (h, w, particle size, band mix, shaping), so the
+# editor's repeated renders of the same image reuse it - which also stops the
+# grain pattern re-rolling on every slider tick. Native/full-resolution renders
+# (saves, exports) stay above the pixel cap and keep their fresh stochastic
+# field per render.
+_GRAIN_CACHE: "OrderedDict[tuple[int, int, float, float, float], np.ndarray]" = OrderedDict()
 _GRAIN_CACHE_MAX = 8
 _GRAIN_CACHE_MAX_PX = 8_000_000
 _grain_cache_lock = threading.Lock()
 
 
-def _cached_grain_field(h: int, w: int, particle_px: float) -> np.ndarray:
+def _cached_grain_field(
+    h: int, w: int, particle_px: float, coarse: float, shape: float
+) -> np.ndarray:
     if h * w > _GRAIN_CACHE_MAX_PX:
-        return _grain_field(h, w, particle_px)
-    key = (h, w, round(particle_px, 4))
+        return _grain_field(h, w, particle_px, coarse, shape)
+    key = (h, w, round(particle_px, 4), round(coarse, 3), round(shape, 3))
     with _grain_cache_lock:
         hit = _GRAIN_CACHE.get(key)
         if hit is not None:
             _GRAIN_CACHE.move_to_end(key)
             return hit
-    f = _grain_field(h, w, particle_px)
+    f = _grain_field(h, w, particle_px, coarse, shape)
     f.flags.writeable = False  # shared across renders
     with _grain_cache_lock:
         _GRAIN_CACHE[key] = f
@@ -1054,53 +1097,55 @@ def _cached_grain_field(h: int, w: int, particle_px: float) -> np.ndarray:
 
 
 def _apply_grain(arr: np.ndarray, amount: int, size: int = 0, roughness: int = 50) -> np.ndarray:
-    """Fuji-style analog film grain.
+    """Fujifilm-style analog film grain.
 
-    Two layers: a fine base texture plus a coarser "clump" layer approximating
-    silver-halide clusters, blended toward the clumps as `size` grows. Both
-    particle sizes scale with the image's resolution (long edge), so grain
-    looks the *same* on the 2048px preview and the full-resolution save - the
-    old version generated 1px noise regardless of resolution, so full-size
-    renders came out with much finer (near-invisible) grain than the preview,
-    and per-pixel white noise reads as digital sensor noise, not film.
+    Monochromatic (the same offset on R/G/B), like silver grain - Fuji's Grain
+    Effect is monochrome too, and coloured grain reads as sensor noise.
 
-    Intensity follows a midtone bell like real film: strongest in the mids,
-    fading into deep shadows (film's thin toe) and highlights (dense areas of
-    the negative). Monochromatic (same offset on R/G/B), like silver grain.
+    Particle size scales with the image's resolution (long edge), so grain looks
+    the *same* on the 2048px preview and the full-resolution save. The field
+    itself (_grain_field) is band-pass noise shaped into discrete particles;
+    this function only decides how big they are, how much they clump, and how
+    they sit on the tone scale.
+
+    Tone response is the other half of the Fuji look. Grain lives in the
+    *density* of the emulsion: the thin shadow end of a negative holds almost no
+    developed silver, so deep blacks stay clean, while the mids and the bright
+    end - skies especially, where Fuji's grain is most recognisable - carry the
+    most. Amplitude therefore rises as sqrt(luma) and only eases back near
+    paper-white. A flat weighting (what this used before) lifts the blacks with
+    an even veil, which is the single clearest giveaway of digital fake grain.
+
     Stochastic - the preview shows a different pattern than the saved render."""
     h, w = arr.shape[:2]
-    size_f = size / 100.0
+    size_f = min(100, max(0, size)) / 100.0
+    rough = min(100, max(0, roughness)) / 100.0
     long_edge = max(h, w)
 
-    # Particle sizes relative to resolution. The smallest Grain Size lands on a
-    # crisp ~1px fine-ISO texture (the 1.0px floor, with the size-0 coefficient
-    # tuned so even the full-res settle render floors to 1px rather than drifting
-    # coarser). Size then grows the particles to chunky pushed-film clumps at the
-    # top; the coefficients keep the same maximum (0.55 + 2.95 = 3.5) as before,
-    # so only the fine end changes.
-    p_fine = max(1.0, (long_edge / 1500.0) * (0.55 + 2.95 * size_f))
-    p_clump = p_fine * (2.0 + size_f * 2.6)
+    # Particle size relative to resolution. The smallest Grain Size lands on a
+    # crisp ~1px fine-ISO texture (the 1.0px floor); the top end is chunky
+    # pushed-film. Slightly below the old 3.5 maximum because a band-pass
+    # particle reads visually larger than the old blurred block of the same
+    # nominal size.
+    p = max(1.0, (long_edge / 1500.0) * (0.55 + 2.45 * size_f))
+    # How much of the coarse clump band rides along. Big grain clumps more (that
+    # is what makes pushed film look pushed); Roughness nudges it either way.
+    coarse = min(0.85, max(0.0, 0.10 + 0.45 * size_f + 0.12 * (rough - 0.5)))
+    # Roughness is the particle *character*, not just a second volume knob:
+    # low = fine, even, almost Gaussian texture; high = sparse, hard-edged
+    # specks with clean gaps, plus a little more amplitude to match.
+    field = _cached_grain_field(h, w, p, coarse, 1.0 + 0.55 * rough)
 
-    fine = _cached_grain_field(h, w, p_fine)
-    clump = _cached_grain_field(h, w, p_clump)
-
-    # Barely any clump layer at the fine end - its blobs read as "big grain"
-    # even when the fine layer is tiny.
-    fine_weight = 1.0 - 0.45 * size_f
-    clump_weight = 0.08 + 0.67 * size_f
     luma = np.clip(arr @ _LUMA, 0.0, 1.0)
-    # Paper-grain tone weighting: present across the WHOLE tonal range - whites and
-    # near-blacks included, like the tooth of the paper - only gently stronger in
-    # the midtones. The old film-style bell (4*luma*(1-luma)) faded grain to zero in
-    # the whites/blacks, so bright areas came out unnaturally clean. In pure white
-    # the positive half of the noise clips, so grain there reads as fine darkening
-    # speckle - exactly how grain sits on white paper.
-    tone_w = 0.6 + 0.4 * np.power(4.0 * luma * (1.0 - luma), 0.5)
-    combined = (fine * fine_weight + clump * clump_weight) * tone_w
-    # Roughness scales grain amplitude/contrast (RapidRAW's Grain Roughness):
-    # smoother and finer at low values, coarse and pronounced near the top.
-    rough = min(100, max(0, roughness)) / 100.0
-    noise = combined * (amount / 100.0) * 0.18 * (0.6 + 0.85 * rough)
+    # sqrt(luma) - 0.45*luma^3, peaking around luma 0.68 and normalised to 1
+    # there: clean deep blacks, full strength through the mids and highlights,
+    # a gentle roll-off into pure white (where the positive half of the noise
+    # clips anyway, so grain there reads as fine darkening speckle).
+    tone_w = np.sqrt(luma)
+    tone_w -= 0.45 * luma * luma * luma
+    tone_w *= 1.0 / 0.683
+    noise = field * tone_w
+    noise *= (amount / 100.0) * 0.040 * (0.72 + 0.56 * rough)
     return np.clip(arr + noise[..., None], 0.0, 1.0)
 
 
@@ -1532,6 +1577,21 @@ SCRUB_PREVIEW_PX = 750
 # at this size as at full res, which is the whole point of the refinement pass.
 FULL_EDITOR_PREVIEW_PX = 2600
 
+# One step above the settle tier, for when 2600px is genuinely being shown
+# upscaled - a hi-dpi screen at fit view, or a moderate zoom. Sized to what the
+# HALF-SIZE demosaic already produces: a 40MP raw halves to 3876px, so this tier
+# costs no extra decode at all (measured: 1.07s for the half-size decode either
+# way), only the pipeline's own scaling with pixel count - about 2.2s against
+# 1.0s at 2600. That is the whole reason it exists: it hands back detail the
+# decode had already paid for and the old ladder threw away, and it means the
+# jump from "soft" to "sharp" no longer has to go via the native render, which
+# is 13.6s of decode plus 18.4s of pipeline on the same file.
+#
+# Files whose half-size decode lands below this just come back at their own
+# size (_downscale_linear is a no-op when it's already smaller), so this is a
+# ceiling, never an upscale.
+ULTRA_EDITOR_PREVIEW_PX = 3900
+
 # Only one settled full-quality render at a time. It's the memory-heavy path, so
 # serialising it keeps peak RAM to a single pipeline's worth even when a flurry
 # of slider settles each kick one off (the stale ones are aborted client-side,
@@ -1562,7 +1622,7 @@ def _downscale_linear(arr: np.ndarray, max_px: int) -> np.ndarray:
     return cv2.resize(arr.astype(np.float32), (nw, nh), interpolation=cv2.INTER_AREA)
 
 
-@lru_cache(maxsize=9)
+@lru_cache(maxsize=12)
 def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int) -> tuple[np.ndarray, float]:
     """The decoded, downscaled LINEAR base (float16 array + auto-exposure gain)
     the editor preview renders on top of. Cached so slider moves only re-run the
@@ -1571,9 +1631,9 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
     whole cache (see api/routes/settings.py). float16 halves the cache RAM and
     still beats a 16-bit-integer base for shadow precision; the array is marked
     read-only - callers convert to float32, which copies. maxsize covers the
-    three working sizes (SCRUB_PREVIEW_PX / EDITOR_PREVIEW_PX /
-    FULL_EDITOR_PREVIEW_PX) for a couple of images being browsed between in the
-    editor.
+    four working sizes (SCRUB_PREVIEW_PX / EDITOR_PREVIEW_PX /
+    FULL_EDITOR_PREVIEW_PX / ULTRA_EDITOR_PREVIEW_PX) for a couple of images
+    being browsed between in the editor.
 
     The scrub base is downscaled from the interactive base rather than decoded
     afresh: the RAW demosaic is the one genuinely slow step, so when the 1600px
@@ -1632,12 +1692,14 @@ def render_editor_preview_bytes(
     max_px: int = EDITOR_PREVIEW_PX,
     full_quality: bool = False,
     scrub: bool = False,
+    ultra: bool = False,
     native: bool = False,
     flip_h: bool = False,
     flip_v: bool = False,
     straighten: float = 0.0,
     persp_h: int = 0,
     persp_v: int = 0,
+    browse: bool = False,
     is_stale: Callable[[], bool] | None = None,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
@@ -1655,6 +1717,10 @@ def render_editor_preview_bytes(
       FULL_EDITOR_PREVIEW_PX) base - too slow for live drags, but fetched once
       the sliders settle so resolution-dependent passes (denoise radius, sharpen
       radius, grain) are previewed at the size they'll look like when saved.
+    - `ultra=True`: one step above that (ULTRA_EDITOR_PREVIEW_PX), for when the
+      settle tier is still being shown upscaled. Costs no extra decode - it's
+      the size the half-size demosaic already produces - so the editor walks up
+      to it before ever considering the native render.
     - `native=True`: the TRUE full-resolution render (full RAW demosaic), for
       100% zoom in the editor. Far too slow for anything live - the editor
       fetches it in the background once edits rest while zoomed in, exactly like
@@ -1681,24 +1747,26 @@ def render_editor_preview_bytes(
             return _render_editor_bytes(
                 image, path, 0, rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=90, fast=False, native=True,
+                browse=browse,
             )
-    if full_quality:
+    if full_quality or ultra:
         # Serialise + bound resolution so a burst of settle-renders can't stack
         # into many GB of concurrent full-frame numpy arrays.
         with _full_render_lock:
             _bail_if_stale()
             return _render_editor_bytes(
-                image, path, FULL_EDITOR_PREVIEW_PX, rotation, crop, adjustments, distortion,
-                flip_h, flip_v, straighten, persp_h, persp_v, quality=95, fast=False,
+                image, path, ULTRA_EDITOR_PREVIEW_PX if ultra else FULL_EDITOR_PREVIEW_PX,
+                rotation, crop, adjustments, distortion,
+                flip_h, flip_v, straighten, persp_h, persp_v, quality=95, fast=False, browse=browse,
             )
     if scrub:
         return _render_editor_bytes(
             image, path, SCRUB_PREVIEW_PX, rotation, crop, adjustments, distortion,
-            flip_h, flip_v, straighten, persp_h, persp_v, quality=82, fast=True,
+            flip_h, flip_v, straighten, persp_h, persp_v, quality=82, fast=True, browse=browse,
         )
     return _render_editor_bytes(
         image, path, max_px, rotation, crop, adjustments, distortion,
-        flip_h, flip_v, straighten, persp_h, persp_v, quality=88, fast=False,
+        flip_h, flip_v, straighten, persp_h, persp_v, quality=88, fast=False, browse=browse,
     )
 
 
@@ -1718,11 +1786,12 @@ def _render_editor_bytes(
     quality: int,
     fast: bool = False,
     native: bool = False,
+    browse: bool = False,
 ) -> bytes:
     if native:
-        lin16, _gain = _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
+        lin16, gain = _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
     else:
-        lin16, _gain = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, base_px)
+        lin16, gain = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, base_px)
     arr = lin16.astype(np.float32)
     if distortion:
         arr = apply_distortion_array(arr, distortion)
@@ -1732,7 +1801,13 @@ def _render_editor_bytes(
     # from the real data with full DR headroom. The Exposure slider (in adjustments)
     # is the only lift. For JPEG/PNG sources the base gain is already 1.0, so this
     # is a no-op there - only raws differ from the auto-exposed grid/lightbox.
-    img = apply_adjustments_linear(arr, 1.0, adjustments, fast=fast)
+    #
+    # `browse=True` is the one exception: the "Original" half of the editor's
+    # split view, which is the photo as the library shows it. A DR-mode raw
+    # demosaics 2-3 stops dark, so comparing an edit against the native render
+    # would only ever say "the edit is brighter" - the honest before/after is
+    # against the auto-exposed picture the user actually saw before opening it.
+    img = apply_adjustments_linear(arr, gain if browse else 1.0, adjustments, fast=fast)
     img = add_frame(img, adjustments)
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=quality)

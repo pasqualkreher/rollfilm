@@ -25,6 +25,11 @@ const MERGE_KEY = "pm.mergePairs";
 // remove only the shown file or the whole pair. Off (default) keeps the old
 // behaviour: a pair is one shot, so both halves go together, no prompt.
 const ASK_DELETE_KEY = "pm.askDeletePartner";
+// Pinned filter panel: the Filter chip's menu stays open, docked as a second row
+// of the filter bar, instead of being a popover that closes on the next click.
+// Shared by every screen with a filter bar (Library, Album detail, Import
+// review), so pinning it once keeps it open wherever you cull.
+const FILTER_PIN_KEY = "pm.filterPinned";
 const DEFAULT_THUMB: ThumbSizeKey = "m";
 
 // Minimal external store so a preference change re-renders every subscribed grid
@@ -49,6 +54,10 @@ function readMerge(): boolean {
 
 function readAskDeletePartner(): boolean {
   return localStorage.getItem(ASK_DELETE_KEY) === "1";
+}
+
+function readFilterPinned(): boolean {
+  return localStorage.getItem(FILTER_PIN_KEY) === "1";
 }
 
 export function thumbPx(key: ThumbSizeKey): number {
@@ -82,6 +91,11 @@ export function setAskDeletePartner(on: boolean) {
   emit();
 }
 
+export function setFilterPinned(on: boolean) {
+  localStorage.setItem(FILTER_PIN_KEY, on ? "1" : "0");
+  emit();
+}
+
 export function useThumbSize(): ThumbSizeKey {
   return useSyncExternalStore(subscribe, readThumb, () => DEFAULT_THUMB);
 }
@@ -92,6 +106,10 @@ export function useMergePairs(): boolean {
 
 export function useAskDeletePartner(): boolean {
   return useSyncExternalStore(subscribe, readAskDeletePartner, () => false);
+}
+
+export function useFilterPinned(): boolean {
+  return useSyncExternalStore(subscribe, readFilterPinned, () => false);
 }
 
 // Collapse each RAW+JPEG pair down to a single representative card (the JPEG,

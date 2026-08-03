@@ -526,6 +526,110 @@ export function newMask(type: SubMaskType): MaskDef {
   return { id: _uid(), name: _MASK_LABEL[type], visible: true, opacity: 100, invert: false, sub_masks: [newSubMask(type)], adjustments: {} };
 }
 
+// ---- Masks vs. the crop ------------------------------------------------------
+// A mask's coordinates are fractions of the *cropped* frame - that's the array
+// the backend rasterises them into (thumbnails.apply_masks runs after
+// apply_edits_array). So changing the crop moves every mask across the picture:
+// crop away the left third and a mask on the subject's face slides left with the
+// fractions instead of staying on the face. These helpers re-express the shapes
+// in the new frame so they stay on the same pixels.
+//
+// `base` is the *uncropped* framed image's pixel size, needed only for the brush,
+// whose `size` is a fraction of the frame's long edge (masks._brush_field) and so
+// depends on which edge is longer before and after.
+
+const FULL_CROP: CropBox = { x: 0, y: 0, width: 1, height: 1 };
+
+function remapSubMaskParams(
+  sub: SubMask,
+  from: CropBox,
+  to: CropBox,
+  base: { width: number; height: number }
+): SubMask | null {
+  const sx = from.width / to.width;
+  const sy = from.height / to.height;
+  // A point u in the old frame sits at (from.x + u*from.width) in the uncropped
+  // frame, which is ((that) - to.x) / to.width in the new one.
+  const ox = (from.x - to.x) / to.width;
+  const oy = (from.y - to.y) / to.height;
+  const mapX = (u: number) => ox + u * sx;
+  const mapY = (v: number) => oy + v * sy;
+  const p = sub.parameters;
+  const num = (k: string, d: number) => (typeof p[k] === "number" ? (p[k] as number) : d);
+
+  if (sub.type === "radial") {
+    return {
+      ...sub,
+      parameters: {
+        ...p,
+        center_x: mapX(num("center_x", 0.5)),
+        center_y: mapY(num("center_y", 0.5)),
+        radius_x: Math.max(1e-3, num("radius_x", 0.25) * sx),
+        radius_y: Math.max(1e-3, num("radius_y", 0.25) * sy),
+      },
+    };
+  }
+  if (sub.type === "linear") {
+    return {
+      ...sub,
+      parameters: {
+        ...p,
+        start_x: mapX(num("start_x", 0.5)),
+        start_y: mapY(num("start_y", 0.2)),
+        end_x: mapX(num("end_x", 0.5)),
+        end_y: mapY(num("end_y", 0.8)),
+      },
+    };
+  }
+  if (sub.type === "brush") {
+    const strokes = Array.isArray(p.strokes) ? (p.strokes as number[][]) : [];
+    // Long edge of the framed image before and after, in pixels: that's the unit
+    // a stroke's `size` is measured in, so a dab keeps its physical size.
+    const longFrom = Math.max(base.width * from.width, base.height * from.height);
+    const longTo = Math.max(base.width * to.width, base.height * to.height);
+    const ss = longTo > 0 ? longFrom / longTo : 1;
+    return {
+      ...sub,
+      parameters: {
+        ...p,
+        size: num("size", 0.06) * ss,
+        strokes: strokes.map((s) => [mapX(s[0] ?? 0), mapY(s[1] ?? 0), (s[2] ?? 0.06) * ss, s[3] ?? 0]),
+      },
+    };
+  }
+  // Luminance/colour masks have no geometry, so the crop can't move them. A
+  // semantic mask's stored region does live in the old frame - it can't be
+  // re-projected without losing the detection's edges, so it keeps its `geom`
+  // signature and the panel offers "Recompute" instead.
+  return null;
+}
+
+// Re-express every mask's geometry from the frame cropped by `from` into the one
+// cropped by `to` (null = the uncropped frame). `base` is the uncropped framed
+// image in pixels. Returns the same array when nothing needed moving, so callers
+// can skip a state update.
+export function remapMasksForCrop(
+  masks: MaskDef[],
+  from: CropBox | null,
+  to: CropBox | null,
+  base: { width: number; height: number }
+): MaskDef[] {
+  const f = from ?? FULL_CROP;
+  const t = to ?? FULL_CROP;
+  if (!masks.length || t.width <= 0 || t.height <= 0) return masks;
+  if (f.x === t.x && f.y === t.y && f.width === t.width && f.height === t.height) return masks;
+  let changed = false;
+  const next = masks.map((m) => {
+    const subs = m.sub_masks.map((s) => {
+      const remapped = remapSubMaskParams(s, f, t, base);
+      if (remapped) changed = true;
+      return remapped ?? s;
+    });
+    return { ...m, sub_masks: subs };
+  });
+  return changed ? next : masks;
+}
+
 // The scalar adjustments offered per-mask (a local-adjustment subset), as FieldDefs.
 export const MASK_ADJUST_FIELDS: FieldDef[] = (
   [

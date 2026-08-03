@@ -8,6 +8,11 @@ interface Props {
   // Tints the chip with the accent-soft "filter engaged" look.
   active?: boolean;
   title?: string;
+  // Start out open. Only the initial state - the chip owns it from then on.
+  // Used when a pinned panel is unpinned: the same filters were on screen a
+  // moment ago, so they shouldn't vanish just because they moved back into the
+  // popover.
+  initialOpen?: boolean;
   // Popover content.
   children: ReactNode;
 }
@@ -15,8 +20,8 @@ interface Props {
 // A quiet toolbar chip that opens a small popover - the shared pattern for
 // filters whose control is too loud to sit inline in the bar (color swatch
 // row, date-range pickers). Same look and behaviour as the TagFilter button.
-export function FilterChip({ label, active = false, title, children }: Props) {
-  const [open, setOpen] = useState(false);
+export function FilterChip({ label, active = false, title, initialOpen = false, children }: Props) {
+  const [open, setOpen] = useState(initialOpen);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   // Close on outside click / Escape, like a native dropdown.

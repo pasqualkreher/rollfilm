@@ -31,6 +31,14 @@ export function IconX(props: IconProps) {
   );
 }
 
+export function IconCheck(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M3 8.5l3.5 3.5L13 4.5" />
+    </svg>
+  );
+}
+
 export function IconChevronDown(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
@@ -85,6 +93,28 @@ export function IconRotate(props: IconProps) {
   );
 }
 
+// Flip horizontal / vertical: two arrowheads pointing away from a dashed
+// mirror axis. Same pair rotated a quarter turn, so the two read as one set.
+export function IconFlipH(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M8 1.5v13" strokeDasharray="2 2" />
+      <path d="M6 4.5 2.5 8 6 11.5" />
+      <path d="M10 4.5 13.5 8 10 11.5" />
+    </svg>
+  );
+}
+
+export function IconFlipV(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M1.5 8h13" strokeDasharray="2 2" />
+      <path d="M4.5 6 8 2.5 11.5 6" />
+      <path d="M4.5 10 8 13.5 11.5 10" />
+    </svg>
+  );
+}
+
 // Targeted adjustment (the curve picker): a crosshair over a target, with the
 // up/down arrows that say the gesture is a vertical drag.
 export function IconTarget(props: IconProps) {
@@ -109,6 +139,40 @@ export function IconFilter(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
       <path d="M1.5 3h13L9.75 8.6v4.4l-3.5 1.5V8.6L1.5 3z" />
+    </svg>
+  );
+}
+
+// The two compare modes, drawn as what they do to the frame.
+// Split: one picture cut down the middle by the divider you drag - the left
+// half hatched to say "this side is the other version".
+export function IconSplit(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="1.75" y="3.25" width="12.5" height="9.5" rx="1" />
+      <path d="M8 3.25v9.5" />
+      <path d="M3 6.5l3-3M3 9.5l4.5-4.5M3.5 12l4-4" strokeWidth={1} />
+    </svg>
+  );
+}
+
+// Side by side: two whole pictures, one per version.
+export function IconSideBySide(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="1" y="3.75" width="6" height="8.5" rx="1" />
+      <rect x="9" y="3.75" width="6" height="8.5" rx="1" />
+    </svg>
+  );
+}
+
+// A drawing pin seen from the side: head, shaft, point. `filled` is the
+// "pinned" state - the same shape solid, so the on/off reads at 13px.
+export function IconPin({ filled = false, ...props }: IconProps & { filled?: boolean }) {
+  return (
+    <svg {...svgProps(props)} fill={filled ? "currentColor" : "none"}>
+      <path d="M6 1.75h4l-.6 3.4 2.35 2.6H4.25L6.6 5.15 6 1.75z" />
+      <path d="M8 7.75v6.5" fill="none" />
     </svg>
   );
 }

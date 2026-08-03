@@ -1445,17 +1445,102 @@ textarea:focus-visible {
    treatment is for the bar itself, not its dropdown. */
 .filter-bar.filter-bar--sticky .filter-chip-pop select,
 .filter-bar.filter-bar--sticky .filter-chip-pop input[type="date"],
-.filter-bar.filter-bar--sticky .filter-chip-pop .tag-filter-btn {
+.filter-bar.filter-bar--sticky .filter-chip-pop .tag-filter-btn,
+.filter-bar.filter-bar--sticky .filter-dock select,
+.filter-bar.filter-bar--sticky .filter-dock input[type="date"],
+.filter-bar.filter-bar--sticky .filter-dock .tag-filter-btn {
   background: var(--bg);
   border-color: var(--border);
 }
 
-/* The filter menu: one labelled row per filter, full-width controls. */
+/* The filter menu: one labelled row per filter, full-width controls. Relative,
+   because the pin is parked in its top-right corner. */
 .filter-menu {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-width: 250px;
+  /* Room for the pin so no control ever runs under it. */
+  padding-right: 28px;
+}
+
+/* Menu header: the panel's own title (the pin sits in the corner, not here). */
+.filter-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-menu-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The pin itself: quiet until it's holding the panel open. Parked in the
+   panel's top-right corner - the same place in the popover and in the docked
+   row, so it never moves when the panel does. */
+.filter-pin {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: calc(6px * var(--corner-scale));
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.filter-pin:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.filter-pin.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Pinned: the menu docks as its own full-width row under the bar's controls,
+   laid out horizontally so it reads as a filter row rather than a tall column
+   that would eat the grid's height. */
+.filter-dock {
+  flex-basis: 100%;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.filter-menu--docked {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 16px;
+  min-width: 0;
+}
+
+.filter-menu--docked .filter-menu-row {
+  min-width: 150px;
+}
+
+/* The docked row has the bar's own "Filter" chip right above it, so the panel's
+   own title would just say it twice. */
+.filter-menu--docked .filter-menu-head {
+  display: none;
+}
+
+/* Caret on the pinned chip points up: clicking it collapses the docked row. */
+.tag-filter-caret--up {
+  transform: rotate(180deg);
 }
 
 .filter-menu-row {
@@ -1488,9 +1573,22 @@ textarea:focus-visible {
 }
 
 /* In the panel the swatches can afford to be comfortable click targets. */
-.filter-chip-pop .color-swatch {
+.filter-chip-pop .color-swatch,
+.filter-dock .color-swatch {
   width: 20px;
   height: 20px;
+}
+
+/* A bare swatch row is shorter than the boxed fields beside it, and the docked
+   row bottom-aligns its controls - so COLOR's label was dropping a step below
+   ALBUM's and RATING's. Give the row a field's height (padding + border + text
+   line of .tag-filter-btn) and centre the swatches in it, so the label lands on
+   the same line as the rest of the bar. */
+.filter-chip-pop .color-label-picker,
+.filter-dock .color-label-picker {
+  min-height: 28px;
+  align-items: center;
+  flex-wrap: nowrap;
 }
 
 /* Capture-date range: two date pickers with a dash between them. Fixed width
@@ -2585,6 +2683,118 @@ textarea:focus-visible {
   box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
 }
 
+/* Side-by-side compare: the stage holds two panes instead of one. The gap is
+   mirrored by PAIR_GAP in PhotoEditor, which subtracts it before halving the
+   stage - keep the two in step. */
+.editor-stage-main--pair {
+  gap: 12px;
+}
+
+/* The original's pane. Each pane clips its own contents so a zoomed photo can't
+   spill over its neighbour (both carry the same transform, so they zoom and pan
+   together). */
+.editor-pane,
+.editor-canvas-wrap--pane {
+  position: relative;
+  overflow: hidden;
+  line-height: 0;
+  /* Never let flex shrink a pane: with the overflow above, shrinking would crop
+     the photo instead of resizing it. fitCanvasToStage already sized both to
+     fit. */
+  flex: none;
+}
+
+.editor-pane-canvas {
+  display: block;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.editor-stage-dark .editor-pane-canvas {
+  border-radius: calc(3px * var(--corner-scale));
+  box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
+}
+
+/* Icon-only compare-mode toggles: square cells rather than the text-sized
+   padding the segmented control uses elsewhere. */
+.editor-compare-modes button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 9px;
+}
+
+.editor-compare-modes button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Split view: the original render laid exactly over the edited canvas and
+   clipped to the left of the divider. Stretched to the wrap (= the edited
+   canvas's displayed size) so the two line up whatever tier each was rendered
+   at, and carrying the same zoom/pan transform. */
+.editor-split-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  transform-origin: center center;
+  pointer-events: none;
+}
+
+/* The divider: a hairline the width of the photo's height, with a grip in the
+   middle. It's the only part of the split that takes the pointer. */
+.split-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  z-index: 3;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+/* Grab target: bigger than the hairline so the line is easy to catch. */
+.split-divider-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+/* Which half is which - small, in the top corners, out of the picture's way. */
+.split-tag {
+  position: absolute;
+  top: 8px;
+  z-index: 3;
+  padding: 2px 7px;
+  border-radius: calc(4px * var(--corner-scale));
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.split-tag-left {
+  left: 8px;
+}
+
+.split-tag-right {
+  right: 8px;
+}
+
 /* Composition grid overlay drawn over the image. A faint light drop-shadow
    gives the dark-grey lines a subtle edge so they read on dark photos too. */
 .editor-grid-overlay {
@@ -2639,6 +2849,9 @@ input.editor-preset-select {
 /* Crop selection drawn over the canvas while in crop mode. */
 .crop-rect {
   position: absolute;
+  /* Above the split view's original half and its divider - while a crop is
+     being drawn, the box and its scrim are what matter. */
+  z-index: 5;
   border: 1px solid #fff;
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
   pointer-events: none;
@@ -2665,15 +2878,74 @@ input.editor-preset-select {
 .crop-handle.e { right: -6px; top: 50%; transform: translateY(-50%); }
 .crop-handle.w { left: -6px; top: 50%; transform: translateY(-50%); }
 
-.editor-geometry {
+/* Transform: a row of tool buttons (rotate / flip). They share the width
+   evenly, so the row reads as one strip rather than buttons of whatever width
+   their glyph happens to need. */
+.editor-tool-row {
   display: flex;
-  /* The row grows past the panel width once crop mode adds its aspect select
-     + Apply/Clear - wrap onto extra lines instead of overflowing sideways. */
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  row-gap: 6px;
-  margin: 10px 0 4px;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.editor-tool-row > .btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+/* Label + control on one line (the Transform group's Grid and Crop selects).
+   The label column is fixed, so the selects line up under one another. */
+.editor-field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+  --field-action-w: 30px;
+}
+
+/* A row without the pair of trailing actions still reserves their footprint, so
+   every select in the column ends on the same line - otherwise the crop's tick
+   and cross make its select visibly shorter than the grid's right above it. */
+.editor-field-row:not(:has(.editor-field-btn)) {
+  padding-right: calc(2 * var(--field-action-w) + 20px);
+}
+
+.editor-field-label {
+  flex: 0 0 46px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.editor-field-row .editor-grid-select {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+/* Take-it / drop-it sitting on a field row (the crop's tick and cross). Square
+   and the select's own height, so the row reads as one control rather than a
+   select with buttons trailing after it - and it replaces a whole second row of
+   labelled buttons, which is what made the Transform block look busy. */
+.editor-field-row .editor-field-btn {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--field-action-w);
+  padding: 0;
+}
+
+/* The tick is the confirming one, so it carries the accent once there's
+   actually a crop waiting to be taken - the one moment it's worth looking at.
+   Disabled, it's as quiet as the cross beside it. */
+.editor-field-btn--confirm:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* Section divider in the edit panel (Light / Color / Color mixer / Lens). A
@@ -4949,36 +5221,34 @@ kbd {
   filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55));
 }
 
+/* Outlines belong to the marking, so they carry its pink; the draggable
+   handles below stay on the accent, because those are controls. No `fill` here:
+   the shapes that have one point at the zebra pattern through a `fill`
+   attribute, which a rule on this class would override. */
 .mask-overlay-shape {
-  stroke: var(--accent);
+  stroke: #ff2d95;
   stroke-width: 1.5;
-  fill: none;
 }
 
-.mask-overlay-fill {
-  fill: var(--accent-soft);
+/* Pink zebra: the shared marking for the area every mask covers. The accent is
+   a theme colour that can easily be the colour of the photo underneath, so the
+   marking uses a fixed hot pink nothing photographic lands on, in diagonal
+   stripes - a flat wash of any colour can be mistaken for the picture, a moving
+   pattern of stripes can't. The gaps are near-clear so the detail under the
+   mask stays judgeable. */
+.mask-zebra-bar {
+  fill: #ff2d95;
+  fill-opacity: 0.55;
 }
 
-/* Painted brush dabs. The radial gradient in MaskOverlay carries the falloff and
-   paints in currentColor, so this only sets the hue and a guide-level opacity.
-   Overlapping dabs do accumulate a little - acceptable in a guide, and it reads
-   much like the flow build-up the render actually performs. */
-.mask-overlay-brush-dab {
-  color: var(--accent);
-  opacity: 0.42;
+.mask-zebra-gap {
+  fill: #ff2d95;
+  fill-opacity: 0.12;
 }
 
 .mask-overlay-hint {
   opacity: 0.6;
   stroke-dasharray: 3 3;
-}
-
-/* The wash showing where a found subject (sky / water / ...) actually landed.
-   Same accent as the brush dabs, and light enough to judge the boundary
-   through. */
-.mask-overlay-region {
-  fill: var(--accent);
-  opacity: 0.38;
 }
 
 /* Draggable handles on radial/linear masks: a filled accent dot with a white

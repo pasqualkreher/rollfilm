@@ -14,6 +14,10 @@ interface Props {
   onChange: (value: string) => void;
   // Button text while no option matches `value` (e.g. options still loading).
   placeholder?: ReactNode;
+  // Button text when there is nothing to pick at all. An option-less menu
+  // would open as an empty sliver of border and shadow, so the button states
+  // the situation instead and stays shut (same as TagFilter's "No tags").
+  emptyLabel?: ReactNode;
   disabled?: boolean;
   title?: string;
   className?: string;
@@ -37,6 +41,7 @@ export function Dropdown({
   options,
   onChange,
   placeholder,
+  emptyLabel,
   disabled = false,
   title,
   className,
@@ -50,11 +55,18 @@ export function Dropdown({
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const selected = options.find((o) => o.value === value);
+  const isEmpty = options.length === 0;
 
   function close() {
     setOpen(false);
     setPos(null);
   }
+
+  // The options can drain away while the menu is open (the last album deleted
+  // in another view) - drop the menu rather than leave an empty box behind.
+  useEffect(() => {
+    if (isEmpty) close();
+  }, [isEmpty]);
 
   useEffect(() => {
     if (!open) return;
@@ -113,7 +125,7 @@ export function Dropdown({
       <button
         type="button"
         className="tag-filter-btn dropdown-btn"
-        disabled={disabled}
+        disabled={disabled || isEmpty}
         title={title}
         aria-label={ariaLabel}
         aria-haspopup="listbox"
@@ -126,12 +138,15 @@ export function Dropdown({
           }
         }}
       >
-        <span className="tag-filter-btn-label">{selected?.label ?? placeholder ?? ""}</span>
+        <span className="tag-filter-btn-label">
+          {selected?.label ?? (isEmpty ? emptyLabel ?? placeholder : placeholder) ?? ""}
+        </span>
         <span className="tag-filter-caret">
           <IconChevronDown size={11} />
         </span>
       </button>
       {open &&
+        !isEmpty &&
         createPortal(
           <div
             className="dropdown-menu"

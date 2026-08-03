@@ -21,7 +21,8 @@ interface Props {
 // only on the Albums page, so this stays a compact dropdown that fits in the
 // detail sidebar and the bulk action bar.
 export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult }: Props) {
-  const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
+  const { data: albums, isPending } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
+  const noAlbums = !isPending && (albums ?? []).length === 0;
 
   // Adding is otherwise invisible (the dropdown just snaps back to its
   // placeholder), so confirm briefly that it actually happened.
@@ -74,6 +75,12 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult }: Prop
       <Dropdown
         value=""
         placeholder="Add to album..."
+        // Until the list arrives there is nothing to pick either, but "No
+        // albums yet" would be a lie - the placeholder holds until we know.
+        emptyLabel={noAlbums ? "No albums yet" : undefined}
+        // The bulk action bar hides the hint below (no room for a second
+        // line), so the reason has to be reachable from the button itself.
+        title={noAlbums ? "Create an album on the Albums page first" : undefined}
         disabled={busy}
         ariaLabel="Add to album"
         onChange={(v) => {
@@ -91,9 +98,10 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult }: Prop
           {flash.text}
         </p>
       )}
-      {(albums ?? []).length === 0 && (
+      {noAlbums && (
+        // The button already says "No albums yet"; this only adds the where.
         <p className="album-picker-hint" style={{ color: "var(--text-muted)", fontSize: 12, margin: "6px 0 0" }}>
-          No albums yet — create one on the Albums page.
+          Create one on the Albums page.
         </p>
       )}
     </div>

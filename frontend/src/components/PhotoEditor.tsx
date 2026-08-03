@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconRotate, IconTarget } from "./Icons";
+import { IconArrowLeft, IconCheck, IconFlipH, IconFlipV, IconRotate, IconSideBySide, IconSplit, IconTarget, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog } from "./SaveCopyDialog";
 import {
@@ -20,6 +20,7 @@ import {
   neutralEdits,
   newMask,
   normalizeAdjustments,
+  remapMasksForCrop,
   SCALAR_SPEC,
   SECTIONS,
   TONE_MAPPERS,
@@ -73,10 +74,13 @@ interface DragRect {
 // (POST /images/:id/editor-preview), debounced per edit change - one
 // implementation of every effect, preview always identical to the save.
 type GridOverlay = "none" | "thirds" | "grid" | "diagonal";
+// Labels are what follows the row's own "Grid" label, so none of them repeats
+// it - the select used to read "Grid: Grid", which says nothing about which
+// grid it is.
 const GRID_OPTIONS: { value: GridOverlay; label: string }[] = [
-  { value: "none", label: "No grid" },
+  { value: "none", label: "None" },
   { value: "thirds", label: "Rule of thirds" },
-  { value: "grid", label: "Grid" },
+  { value: "grid", label: "Square grid" },
   { value: "diagonal", label: "Diagonals" },
 ];
 const MIX_CHANNELS: [number, string][] = [
@@ -121,6 +125,9 @@ const MASK_ROT_OFF = 0.07;
 const BRUSH_PEN_DOWN = 1;
 const BRUSH_ERASE = 2;
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+// Gap between the two panes of the side-by-side compare (matches .editor-pair's
+// CSS gap, which the fit maths has to subtract before halving the stage).
+const PAIR_GAP = 12;
 
 // Colour calibration: seven -100..100 sliders.
 const CALIB_FIELDS: { key: keyof ColorCalibration; label: string }[] = [
@@ -386,6 +393,14 @@ export function PhotoEditor({ image, onClose }: Props) {
   // readback of the whole (multi-megapixel) surface each time; this is copied
   // once per rendered frame, lazily, and only while the picker is armed.
   const pickSnapRef = useRef<{ data: ImageData; w: number; h: number } | null>(null);
+  // The UNCROPPED framed image in pixels, recovered from the last painted frame
+  // and the crop that frame was rendered with. Mask coordinates are fractions of
+  // the *cropped* frame, so moving them across a crop change needs the frame
+  // they're fractions of (see remapMasksForCrop).
+  const frameBaseRef = useRef<{ width: number; height: number } | null>(null);
+  // Square is the harmless fallback before the first frame has been painted:
+  // it only feeds the brush-size scaling, and nothing is croppable yet anyway.
+  const frameBase = () => frameBaseRef.current ?? { width: 1, height: 1 };
   // Server preview plumbing: abort a stale in-flight render when a newer edit
   // state supersedes it, and ignore late responses by sequence number.
   const abortRef = useRef<AbortController | null>(null);
@@ -402,9 +417,26 @@ export function PhotoEditor({ image, onClose }: Props) {
   // never the scrub tier - even though holding the button holds the pointer down
   // (which would otherwise flip on scrub mode). Mirrors the `compare` state.
   const compareRef = useRef(false);
-  // Whether the canvas is zoomed in (scale > 1) - read by the settle pass to
-  // decide if it should chase the full tier with a true-resolution render.
-  const zoomedRef = useRef(false);
+  // Current zoom factor - read by the settle pass to work out whether the frame
+  // it painted is being shown upscaled, and so whether it should chase the
+  // true-resolution render.
+  const scaleRef = useRef(1);
+
+  // Is the frame currently on the canvas being stretched past its own pixels?
+  // Compares the canvas's on-screen size in DEVICE pixels (layout size x zoom x
+  // devicePixelRatio) against the bitmap actually painted into it. This is the
+  // question "is the photo soft right now", which is what decides whether a
+  // full-resolution render is worth its seconds of CPU - a plain `scale > 1`
+  // test misses a hi-dpi screen, where the photo is already upscaled at fit.
+  function isUpscaled(): boolean {
+    const cv = canvasRef.current;
+    if (!cv || !cv.width || !cv.height) return false;
+    const dpr = window.devicePixelRatio || 1;
+    const shownW = (parseFloat(cv.style.width) || 0) * scaleRef.current * dpr;
+    const shownH = (parseFloat(cv.style.height) || 0) * scaleRef.current * dpr;
+    // A pixel of slack: rounding in fitCanvasToStage shouldn't trigger a render.
+    return shownW > cv.width + 1 || shownH > cv.height + 1;
+  }
   // The dirty-token at the moment the pointer went down, so pointer-up can tell a
   // real drag (edits changed → snap to the accurate render) from a plain click
   // that happened to land in the editor (nothing changed → skip the re-render).
@@ -440,12 +472,23 @@ export function PhotoEditor({ image, onClose }: Props) {
     // the frame's edges instead of leaving the padding visible.
     const rect = box.getBoundingClientRect();
     const cs = getComputedStyle(box);
-    const width = rect.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    let width = rect.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const height = rect.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
     if (width < 2 || height < 2) return;
+    // Side by side puts two panes of equal size in this one box.
+    if (pairRef.current) width = Math.max(2, (width - PAIR_GAP) / 2);
     const s = Math.min(width / canvas.width, height / canvas.height);
-    canvas.style.width = `${Math.round(canvas.width * s)}px`;
-    canvas.style.height = `${Math.round(canvas.height * s)}px`;
+    const w = `${Math.round(canvas.width * s)}px`;
+    const h = `${Math.round(canvas.height * s)}px`;
+    canvas.style.width = w;
+    canvas.style.height = h;
+    // The original pane is the same picture in the same frame, so it takes the
+    // edited pane's size exactly - whatever tier either was rendered at.
+    const orig = origCanvasRef.current;
+    if (orig && pairRef.current) {
+      orig.style.width = w;
+      orig.style.height = h;
+    }
   }
 
   // Refit whenever the stage box itself changes size - not just on window
@@ -456,12 +499,21 @@ export function PhotoEditor({ image, onClose }: Props) {
   useEffect(() => {
     const box = stageMainRef.current;
     if (!box) return;
-    const ro = new ResizeObserver(() => fitCanvasToStage());
+    // A refit changes how big the photo is shown, and therefore how much
+    // resolution it needs - a wider window (or a move to a hi-dpi screen) can
+    // leave the settled frame upscaled. Re-settle so it never stays soft.
+    const onResize = () => {
+      fitCanvasToStage();
+      // Only worth a render if the new fit actually leaves the photo stretched -
+      // this fires on every accordion open and window-drag tick too.
+      if (isUpscaled()) scheduleSettleRef.current();
+    };
+    const ro = new ResizeObserver(onResize);
     ro.observe(box);
-    window.addEventListener("resize", fitCanvasToStage);
+    window.addEventListener("resize", onResize);
     return () => {
       ro.disconnect();
-      window.removeEventListener("resize", fitCanvasToStage);
+      window.removeEventListener("resize", onResize);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -544,37 +596,22 @@ export function PhotoEditor({ image, onClose }: Props) {
   // right now (null = idle), and the last failure to show under the buttons.
   const [segmenting, setSegmenting] = useState<string | null>(null);
   const [segmentError, setSegmentError] = useState<string | null>(null);
-  // Whether the selected mask's marking is drawn over the photo. It shows what
-  // a mask covers, which is what you want while picking one - and exactly what
-  // is in the way once you start adjusting, because the wash sits on top of the
-  // change you're trying to judge. So it steps aside at the first slider move
-  // and comes back when a mask is selected (or drawn, or found) again.
-  const [maskMarkVisible, setMaskMarkVisible] = useState(true);
-
-  useEffect(() => {
-    const isSlider = (t: EventTarget | null) => t instanceof HTMLInputElement && t.type === "range";
-    // Capture phase: the marking has to go before the drag paints its first
-    // frame, whichever control handles the gesture.
-    const onDown = (e: PointerEvent) => {
-      if (isSlider(e.target)) setMaskMarkVisible(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (isSlider(e.target) && e.key.startsWith("Arrow")) setMaskMarkVisible(false);
-    };
-    window.addEventListener("pointerdown", onDown, true);
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("pointerdown", onDown, true);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, []);
+  // Which mask row in the panel the pointer is over. The marking showing what a
+  // mask covers is exactly what's in the way once you start adjusting - it sits
+  // on top of the change you're trying to judge - so it isn't a mode: point at a
+  // mask in the list to see it, move away and the photo is clean again. While
+  // drawing on the image the selected mask stays marked regardless, since you
+  // can't paint what you can't see.
+  const [hoveredMaskId, setHoveredMaskId] = useState<string | null>(null);
   // Live cursor over the canvas while editing a mask (reflects the handle/body
   // under the pointer), and the pointer position for the brush-size ring.
   const [maskCursor, setMaskCursor] = useState("crosshair");
   const [maskCursorPos, setMaskCursorPos] = useState<{ x: number; y: number } | null>(null);
   // Which control-panel accordion group is expanded. Only one is open at a time
   // ("" = all collapsed); purely presentational grouping of the existing panel.
-  const [openGroup, setOpenGroup] = useState<string>("basic");
+  // Opens fully collapsed, so the panel starts as a plain list of groups and
+  // the photo is what you look at first.
+  const [openGroup, setOpenGroup] = useState<string>("");
 
   // Leaving the Masks group hides the mask guides/handles on the image (see the
   // MaskOverlay render condition) - also drop out of draw/pick mode so canvas
@@ -585,10 +622,31 @@ export function PhotoEditor({ image, onClose }: Props) {
       setColorPickMode(false);
       setSegmentError(null);
     }
-    // Same for the curve picker: it only makes sense with the plot in view.
-    if (openGroup !== "curves") {
+    // The targeted picker is what the Curves panel is *for* - pointing at the
+    // tone you want to change beats guessing which part of the x axis it sits
+    // on - so opening the group arms it. The toolbar button still disarms it,
+    // and leaving the group puts it away (it only makes sense with the plot in
+    // view). Arming takes the canvas pointer, so drop the other canvas modes.
+    if (openGroup === "curves") {
+      setCurvePickMode(true);
+      setMaskDrawMode(false);
+      setColorPickMode(false);
+    } else {
       setCurvePickMode(false);
       setCurveMarker(null);
+    }
+    // Same idea for Transform: the group *is* the crop tool, so opening it arms
+    // the crop box (seeded from the crop already applied) rather than hiding it
+    // behind a mode button - ratio, Apply and Clear then sit in the panel with
+    // the rest of the geometry instead of appearing and reflowing it. Leaving
+    // the group puts the box away; the canvas pointer goes back to zoom/pan.
+    if (openGroup === "transform") {
+      setCropMode(true);
+      setMaskDrawMode(false);
+      setColorPickMode(false);
+      setDrag(crop ? { x0: crop.x, y0: crop.y, x1: crop.x + crop.width, y1: crop.y + crop.height } : null);
+    } else {
+      setCropMode(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openGroup]);
@@ -600,6 +658,26 @@ export function PhotoEditor({ image, onClose }: Props) {
   // effect neutralised (geometry kept, so the frame doesn't jump) - a quick
   // before/after against the original.
   const [compare, setCompare] = useState(false);
+  // Two ways to hold the original next to the edit instead of alternating with
+  // it, both fed by the same second render (see drawOriginal / paintOriginal):
+  //  - "split": the original laid over the photo up to a line you drag. Same
+  //    picture, same pixels, so a tonal change is judged where it happens.
+  //  - "pair":  the two as separate pictures side by side. Half the size, but
+  //    nothing is hidden - which is what you want for framing and colour.
+  const [compareMode, setCompareMode] = useState<"off" | "split" | "pair">("off");
+  const split = compareMode === "split";
+  const pair = compareMode === "pair";
+  const [splitPos, setSplitPos] = useState(0.5);
+  const origCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const splitDragRef = useRef(false);
+  // Read by the preview pump (does the original need rendering at all?) and by
+  // fitCanvasToStage / clampPan, which measure against half the stage in "pair".
+  const wantOrigRef = useRef(false);
+  const pairRef = useRef(false);
+  // Bumped when the original half goes stale (geometry changed); compared
+  // against what's actually painted on the original canvas.
+  const origToken = useRef(0);
+  const origRendered = useRef(-1);
   // Scroll/pinch to zoom (toward cursor), drag to pan - same as the lightbox.
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -622,7 +700,9 @@ export function PhotoEditor({ image, onClose }: Props) {
     if (!cv || !stage) return p;
     const dispW = parseFloat(cv.style.width) || 0;
     const dispH = parseFloat(cv.style.height) || 0;
-    const maxX = Math.max(0, (dispW * s - stage.clientWidth) / 2);
+    // Side by side: the viewport a pane can be panned inside is half the stage.
+    const viewW = pairRef.current ? Math.max(2, (stage.clientWidth - PAIR_GAP) / 2) : stage.clientWidth;
+    const maxX = Math.max(0, (dispW * s - viewW) / 2);
     const maxY = Math.max(0, (dispH * s - stage.clientHeight) / 2);
     return { x: Math.max(-maxX, Math.min(maxX, p.x)), y: Math.max(-maxY, Math.min(maxY, p.y)) };
   }
@@ -643,29 +723,45 @@ export function PhotoEditor({ image, onClose }: Props) {
   // mask overlays (they're positioned as fractions of the displayed image). So
   // while a spatial overlay is live, render the preview without the frame - it
   // still shows (and always saves) whenever no overlay needs pixel alignment.
-  const overlayActive = cropMode || openGroup === "masks";
-  const previewEdits: ImageEdits = useMemo(
-    () =>
-      compare
-        ? neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion)
-        : {
-            ...edits,
-            crop: cropMode ? null : crop,
-            adjustments: overlayActive && adj.frame_width ? { ...adj, frame_width: 0 } : adj,
-          },
+  const overlayActive = cropMode || openGroup === "masks" || compareMode !== "off";
+  const previewEdits: ImageEdits = useMemo(() => {
+    if (compare) {
+      return neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion);
+    }
+    let adjustments = overlayActive && adj.frame_width ? { ...adj, frame_width: 0 } : adj;
+    // Crop mode shows the UNCROPPED frame, and mask coordinates are fractions of
+    // the cropped one - so re-express them for this preview or every mask's
+    // effect sits somewhere else for as long as the crop box is open. Preview
+    // only: the stored masks move when the crop is actually applied.
+    if (cropMode && crop && adjustments.masks.length) {
+      adjustments = { ...adjustments, masks: remapMasksForCrop(adjustments.masks, crop, null, frameBase()) };
+    }
+    return { ...edits, crop: cropMode ? null : crop, adjustments };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [edits, compare, cropMode, overlayActive]
+  }, [edits, compare, cropMode, overlayActive]);
+  // The untouched photo in the same frame as the preview above it, which is what
+  // the split view's left half shows.
+  const origEdits: ImageEdits = useMemo(
+    () => neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion),
+    [rotation, crop, cropMode, flipH, flipV, straighten, perspH, perspV, distortion]
   );
+
   // Always hand the pump the newest edit state (read from a ref so the pump and
   // the pointer-up handler don't close over a stale value).
   previewEditsLatest.current = previewEdits;
   compareRef.current = compare;
-  zoomedRef.current = zoomed;
+  scaleRef.current = scale;
+  wantOrigRef.current = compareMode !== "off";
+  pairRef.current = pair;
+  const origEditsLatest = useRef(origEdits);
+  origEditsLatest.current = origEdits;
 
   // Paint a rendered JPEG onto the canvas, sizing it to the bitmap and
   // (optionally) refreshing the histogram. `seq` guards against a late or
   // superseded render painting over a newer frame.
-  const drawBlob = useCallback(async (blob: Blob, seq: number, withHistogram: boolean) => {
+  // `renderCrop` is the crop this frame was rendered with - the frame's own
+  // pixel size divided by it gives the uncropped frame (see frameBaseRef).
+  const drawBlob = useCallback(async (blob: Blob, seq: number, withHistogram: boolean, renderCrop: CropBox | null) => {
     const bmp = await createImageBitmap(blob);
     try {
       if (seq !== renderSeq.current) return;
@@ -673,6 +769,10 @@ export function PhotoEditor({ image, onClose }: Props) {
       if (!canvas) return;
       canvas.width = bmp.width;
       canvas.height = bmp.height;
+      frameBaseRef.current = {
+        width: bmp.width / (renderCrop?.width || 1),
+        height: bmp.height / (renderCrop?.height || 1),
+      };
       fitCanvasToStage();
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
@@ -689,41 +789,86 @@ export function PhotoEditor({ image, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Paint the compare view's original onto its own canvas, and keep the frame
+  // that was rendered: switching between split and side-by-side moves that
+  // canvas in the DOM, so React hands us a *new*, blank element and the same
+  // frame has to go back onto it - re-fetching it would be a render nobody
+  // needs. It's sized to the edited canvas (CSS in split, fitCanvasToStage in
+  // pair), so its own pixel size never has to match the edited tier.
+  const origFrame = useRef<Blob | null>(null);
+  const paintOriginal = useCallback(async () => {
+    const blob = origFrame.current;
+    const cv = origCanvasRef.current;
+    if (!blob || !cv) return;
+    const bmp = await createImageBitmap(blob);
+    try {
+      if (origCanvasRef.current !== cv) return; // moved again while decoding
+      cv.width = bmp.width;
+      cv.height = bmp.height;
+      cv.getContext("2d")!.drawImage(bmp, 0, 0);
+      fitCanvasToStage();
+    } finally {
+      bmp.close();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const drawOriginal = useCallback(
+    async (blob: Blob) => {
+      origFrame.current = blob;
+      await paintOriginal();
+    },
+    [paintOriginal]
+  );
+
   // Once edits come to rest, refine on the larger full-quality base so the
   // resolution-dependent passes (denoise/sharpen radii, grain) preview as they
   // will be saved. Cancelled the instant a new drag starts.
   const scheduleSettle = useCallback(() => {
     clearTimeout(settleTimer.current);
     settleTimer.current = setTimeout(async () => {
+      // A pointer is down, so a drag may still be in flight - but the settle
+      // must not be *dropped* here, or the photo stays on a preview tier until
+      // the next edit happens to come along (press the mouse again inside the
+      // 350ms and nothing would ever refine it). Re-arm and wait it out.
       // Hold-to-compare keeps the pointer down but still wants the full render.
-      if (scrubbing.current && !compareRef.current) return;
+      if (scrubbing.current && !compareRef.current) {
+        scheduleSettleRef.current();
+        return;
+      }
       const seq = renderSeq.current;
       fullAbortRef.current?.abort();
       const fctrl = new AbortController();
       fullAbortRef.current = fctrl;
       try {
-        const blob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, "full");
-        if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
-        await drawBlob(blob, seq, false);
-        // Chase the bounded settle base with the TRUE full-resolution render
-        // (like the lightbox's full.jpg) - but ONLY when zoomed in, where the
-        // bounded base would show upscaled pixels. At fit view the 2600px
-        // settle base already exceeds the displayed size, and chasing the
-        // native render anyway (a full demosaic + full pipeline at 24-40MP,
-        // seconds of pinned CPU) after EVERY slider pause on a RAW was what
-        // made the rest of the app crawl while editing.
-        // Same abort controller: any new edit/drag cancels it; the seq guard
-        // drops it if a newer frame was painted while it rendered.
-        if (zoomedRef.current) {
-          const nblob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, "native");
+        // Climb the quality ladder one rung at a time, re-checking after each
+        // painted frame whether the photo is STILL being shown upscaled - so it
+        // stops the moment the picture on screen covers its own pixels, and each
+        // rung is a visible improvement rather than one long stall.
+        //
+        // On the test file (40MP Fuji raw): "full" is ~1.0s, "ultra" ~2.2s for
+        // no extra decode at all (it's the size the half-size demosaic already
+        // hands back - the old ladder threw those pixels away), and "native" is
+        // 13.6s of decode plus 18.4s of pipeline. So a hi-dpi fit view now
+        // settles at "ultra" and never pays for native; only a real zoom, where
+        // nothing else can supply the detail, goes the whole way.
+        //
+        // Same abort controller throughout: any new edit or drag cancels the
+        // rest of the climb, and the seq guard drops a rung whose frame was
+        // superseded while it rendered.
+        for (const tier of ["full", "ultra", "native"] as const) {
+          const blob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, tier);
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
-          await drawBlob(nblob, seq, false);
+          await drawBlob(blob, seq, false, previewEditsLatest.current!.crop);
+          if (!isUpscaled()) break;
         }
       } catch {
         // Non-fatal: the accurate preview is already on screen.
       }
     }, 350);
   }, [image.id, drawBlob]);
+  // Re-entry point for the re-arm above (scheduleSettle can't name itself).
+  const scheduleSettleRef = useRef<() => void>(() => {});
+  scheduleSettleRef.current = scheduleSettle;
 
   // The live-preview pump. It renders the *latest* edit state, one request at a
   // time - never a backlog of superseded renders on the (uninterruptible) numpy
@@ -737,7 +882,33 @@ export function PhotoEditor({ image, onClose }: Props) {
     pumping.current = true;
     clearTimeout(settleTimer.current);
     try {
-      while (renderedToken.current !== dirtyToken.current) {
+      // The compare view's original rides in this same loop rather than fetching
+      // alongside it: the server keeps only the newest preview request per image
+      // and drops the rest, so two concurrent fetches would cancel each other at
+      // random. Edits come first; the original is brought up to date once
+      // they're settled.
+      while (
+        renderedToken.current !== dirtyToken.current ||
+        (wantOrigRef.current && origRendered.current !== origToken.current)
+      ) {
+        if (renderedToken.current === dirtyToken.current) {
+          const otoken = origToken.current;
+          abortRef.current?.abort();
+          fullAbortRef.current?.abort();
+          const octrl = new AbortController();
+          abortRef.current = octrl;
+          try {
+            // browse=1: a raw's "original" is the auto-exposed picture the
+            // library shows, not the editor's deliberately dark native base.
+            const blob = await api.images.editorPreview(image.id, origEditsLatest.current, octrl.signal, "fast", true);
+            await drawOriginal(blob);
+          } catch {
+            // Non-fatal - the original half keeps whatever it had. Marked
+            // rendered either way so a failure can't spin this loop.
+          }
+          origRendered.current = otoken;
+          continue;
+        }
         const token = dirtyToken.current;
         // Hold-to-compare shows the original at the accurate tier, so it renders
         // fast/full even while the pointer is held down.
@@ -755,7 +926,7 @@ export function PhotoEditor({ image, onClose }: Props) {
           // is stuck" into "instant preview, sharpens a moment later".
           if (!scrub && slowAccurate.current) {
             const quick = await api.images.editorPreview(image.id, edits, ctrl.signal, "scrub");
-            await drawBlob(quick, seq, true);
+            await drawBlob(quick, seq, true, edits.crop);
             setLoading(false);
             setReady(true);
           }
@@ -765,7 +936,7 @@ export function PhotoEditor({ image, onClose }: Props) {
           const t0 = performance.now();
           const blob = await api.images.editorPreview(image.id, edits, ctrl.signal, scrub ? "scrub" : "fast");
           if (!scrub) slowAccurate.current = performance.now() - t0 > 300;
-          await drawBlob(blob, seq, true);
+          await drawBlob(blob, seq, true, edits.crop);
           setError(null);
           setLoading(false);
           setReady(true);
@@ -780,10 +951,12 @@ export function PhotoEditor({ image, onClose }: Props) {
     } finally {
       pumping.current = false;
     }
-    // Refine to full quality when settled - or while holding compare, so the
-    // original reaches the same full-resolution tier as the edited preview.
-    if (!scrubbing.current || compareRef.current) scheduleSettle();
-  }, [image.id, drawBlob, scheduleSettle]);
+    // Every pump ends with a settle pending - unconditionally, which is the
+    // whole invariant: whatever frame the loop left on the canvas, a
+    // full-quality one is on its way. Called mid-drag it costs nothing, because
+    // the settle re-arms itself while a pointer is down instead of rendering.
+    scheduleSettle();
+  }, [image.id, drawBlob, drawOriginal, scheduleSettle]);
   pumpRef.current = () => void pump();
 
   // Kick the pump whenever the edit state changes (or the image switches).
@@ -795,12 +968,36 @@ export function PhotoEditor({ image, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image.id, previewEdits]);
 
-  // Zooming in while edits are at rest doesn't touch the pump (no edit change),
-  // so kick the settle pass directly - it chases the bounded settle render with
-  // the true-resolution one now that the canvas is zoomed.
+  // Geometry moved, so the compare view's original no longer matches the frame
+  // it's shown against; entering a compare mode wants it rendered in the first
+  // place. Either way the pump does the work (see its original branch).
   useEffect(() => {
-    if (zoomed) scheduleSettle();
-  }, [zoomed, scheduleSettle]);
+    origToken.current++;
+  }, [origEdits, image.id]);
+
+  useEffect(() => {
+    if (compareMode !== "off") void pump();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compareMode, origEdits, image.id]);
+
+  // Switching between split and side-by-side moves the original's canvas in the
+  // DOM (overlay vs. its own pane), so the frame has to be put back on the new
+  // element - and both panes re-fitted, since "pair" halves the room each gets.
+  useEffect(() => {
+    void paintOriginal();
+    fitCanvasToStage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compareMode]);
+
+  // Zooming while edits are at rest doesn't touch the pump (no edit change), so
+  // kick the settle directly whenever the new zoom leaves the painted frame
+  // stretched. Keyed on `scale` rather than a zoomed/not flag, so going 2x -> 6x
+  // fetches the resolution that step now needs; the settle's own delay coalesces
+  // a continuous wheel-zoom into one render.
+  useEffect(() => {
+    if (isUpscaled()) scheduleSettle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale, scheduleSettle]);
 
   // A pointer held down anywhere over the editor means a control is being
   // dragged (slider/curve/wheel/crop/mask handle) - render the scrub tier until
@@ -820,6 +1017,12 @@ export function PhotoEditor({ image, onClose }: Props) {
       if (dirtyToken.current !== dragBaseToken.current) {
         dirtyToken.current++;
         pumpRef.current();
+      } else {
+        // Nothing changed, so no render is due - but a settle may have been
+        // waiting on this pointer coming up (it re-arms rather than rendering
+        // mid-drag). Kick it, so a click that touched nothing can't be what
+        // leaves the photo sitting on a preview tier.
+        scheduleSettleRef.current();
       }
     };
     window.addEventListener("pointerdown", onDown, true);
@@ -990,7 +1193,10 @@ export function PhotoEditor({ image, onClose }: Props) {
           setCurvePickMode(false);
           setCurveMarker(null);
         } else if (maskDrawMode) setMaskDrawMode(false);
-        else if (cropMode) setCropMode(false);
+        // The crop box belongs to the open Transform group, so putting it away
+        // means closing that group - dropping crop mode alone would leave the
+        // panel showing crop controls with no box on the photo.
+        else if (cropMode) setOpenGroup("");
         else if (saveCopyOpen) {
           if (!saveCopy.isPending) setSaveCopyOpen(false);
         } else if (!busy) onClose();
@@ -1057,6 +1263,22 @@ export function PhotoEditor({ image, onClose }: Props) {
     const A = cv.width / cv.height;
     const R = ratio === "orig" ? A : ratio;
     return R / A;
+  }
+
+  // Commit the drawn crop (or clear it). The box stays on the photo - the crop
+  // tool is open for as long as the Transform group is, and the committed box
+  // is what it shows. Mask coordinates are
+  // fractions of the *cropped* frame, so they're re-expressed for the new frame
+  // in the same step - otherwise cropping slides every mask across the picture,
+  // off whatever it was drawn on. Semantic masks keep their found region and
+  // their now-stale geometry signature, which is what raises the panel's
+  // "recompute it" hint.
+  function applyCrop(next: CropBox | null) {
+    setAdj((a) => {
+      const masks = remapMasksForCrop(a.masks, crop, next, frameBase());
+      return masks === a.masks ? a : { ...a, masks };
+    });
+    setCrop(next);
   }
 
   // Picking a preset drops a centred crop of that ratio; picking Freeform just
@@ -1300,8 +1522,8 @@ export function PhotoEditor({ image, onClose }: Props) {
               }
         ),
       }));
-      // A freshly found region is worth seeing before anything is done to it.
-      setMaskMarkVisible(true);
+      // A freshly found region is worth seeing before anything is done to it -
+      // the pointer is on its row's button, so the hover marking already shows it.
       return true;
     } catch {
       setSegmentError("Subject detection isn't available – the model may still be downloading.");
@@ -1323,7 +1545,6 @@ export function PhotoEditor({ image, onClose }: Props) {
     setMaskDrawMode(false);
     setColorPickMode(false);
     setOpenGroup("masks");
-    setMaskMarkVisible(true);
     const ok = await runSegment(subject, mask.id, mask.sub_masks[0].id);
     if (!ok) deleteMask(mask.id);
   }
@@ -1334,7 +1555,6 @@ export function PhotoEditor({ image, onClose }: Props) {
     setSelectedMaskId(mask.id);
     setColorPickMode(false);
     setOpenGroup("masks");
-    setMaskMarkVisible(true);
     if (isSpatial(type)) {
       // Radial/linear/brush are drawn on the image - drop into draw mode (and
       // out of crop mode, which shares the canvas pointer).
@@ -1359,8 +1579,6 @@ export function PhotoEditor({ image, onClose }: Props) {
     setMaskDrawMode(false);
     setColorPickMode(false);
     setOpenGroup("masks");
-    // Picking a mask is the gesture that asks "what does this one cover?".
-    setMaskMarkVisible(true);
   }
   function toggleMaskDraw() {
     setMaskDrawMode((on) => {
@@ -1860,19 +2078,53 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   const drawn = drag ? normalizeRect(drag) : null;
   const hasDrawnCrop = drawn && drawn.width > 0.02 && drawn.height > 0.02;
+  // Apply only lights up while the drawn box differs from the crop already
+  // committed - with the controls permanently on show, that difference is what
+  // says "there's a crop waiting to be taken", and pressing it a second time
+  // would do nothing anyway.
+  const cropPending =
+    !!hasDrawnCrop &&
+    (!crop ||
+      Math.abs(drawn!.x - crop.x) > 1e-4 ||
+      Math.abs(drawn!.y - crop.y) > 1e-4 ||
+      Math.abs(drawn!.width - crop.width) > 1e-4 ||
+      Math.abs(drawn!.height - crop.height) > 1e-4);
   // One stringify per actual edit change (not per render), compared against the
   // pre-computed saved-state key.
   const editsKey = useMemo(() => JSON.stringify(edits), [edits]);
   const dirty = editsKey !== savedKey;
   const allNeutral = useMemo(() => editsAreNeutral(edits), [edits]);
 
-  // The selected mask (if any), its index-0 sub-mask, and - when that sub-mask
-  // is a drawable type - the sub used for the on-canvas overlay.
+  // Nothing left to compare once the edits are back to neutral - both sides
+  // would be the same picture, and the toggles disable themselves there, so the
+  // mode has to step out on its own rather than leave the user stuck inside it.
+  useEffect(() => {
+    if (allNeutral) setCompareMode("off");
+  }, [allNeutral]);
+
+  // The selected mask (if any) and its index-0 sub-mask - what the panel's mask
+  // editor is bound to.
   const selectedMask = selectedMaskId ? adj.masks.find((m) => m.id === selectedMaskId) ?? null : null;
   const selSub = selectedMask?.sub_masks[0] ?? null;
+  // Which mask the overlay is about: the one being pointed at in the list, else
+  // the one being drawn on the image. Pointing at a row is the explicit request,
+  // so it wins.
+  const hoveredMask = hoveredMaskId ? adj.masks.find((m) => m.id === hoveredMaskId) ?? null : null;
+  const overlayMask = hoveredMask ?? (maskDrawMode ? selectedMask : null);
+  const overlaySub = overlayMask?.sub_masks[0] ?? null;
   // Sub-masks that draw something over the image: the editable shapes, plus a
   // semantic mask, which shows the region it found rather than a shape.
-  const selSpatialSub = selSub && (isSpatial(selSub.type) || selSub.type === "semantic") ? selSub : null;
+  const overlaySpatialSub = overlaySub && (isSpatial(overlaySub.type) || overlaySub.type === "semantic") ? overlaySub : null;
+  // Two separate things over the photo. The zebra MARKING - what does this mask
+  // cover? - is asked for by pointing at the mask in the list, and goes the
+  // moment you point elsewhere, because it covers the very change you're trying
+  // to judge. The outline and HANDLES are the editing tools and stay for as long
+  // as the mask is being drawn. The one overlap: a brush's painted area is its
+  // only outline, so painting keeps it marked - there'd be nothing to see.
+  const overlayIsHovered = hoveredMask != null;
+  const overlayIsSelected = overlayMask != null && overlayMask.id === selectedMaskId;
+  const overlayMark =
+    overlayIsHovered || (maskDrawMode && overlayIsSelected && overlaySpatialSub?.type === "brush");
   const maskLabel = (m: MaskDef) => MASK_TYPES.find((t) => t.value === m.sub_masks[0]?.type)?.label ?? "Mask";
 
   return (
@@ -1890,10 +2142,30 @@ export function PhotoEditor({ image, onClose }: Props) {
           <IconArrowLeft size={16} />
         </button>
         <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
-        <div className="editor-stage-main" ref={stageMainRef}>
+        <div className={`editor-stage-main${pair ? " editor-stage-main--pair" : ""}`} ref={stageMainRef}>
         {loading && <div className="editor-hint">Loading…</div>}
         {error && <div className="editor-hint">{error}</div>}
-        <div className="editor-canvas-wrap" ref={wrapRef} style={{ display: loading || error ? "none" : "inline-block" }}>
+        {/* Side by side: the original gets a pane of its own, left of the edited
+            one. The stage is already a centred flex row, so the two just sit
+            next to each other; fitCanvasToStage gives each half the room. Panes
+            clip their own contents so a zoomed photo can't spill into its
+            neighbour - both carry the same transform, so they zoom together. */}
+        {pair && !loading && !error && (
+          <div className="editor-pane">
+            <canvas
+              ref={origCanvasRef}
+              className="editor-pane-canvas"
+              aria-hidden
+              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}
+            />
+            <span className="split-tag split-tag-left">Original</span>
+          </div>
+        )}
+        <div
+          className={`editor-canvas-wrap${pair ? " editor-canvas-wrap--pane" : ""}`}
+          ref={wrapRef}
+          style={{ display: loading || error ? "none" : "inline-block" }}
+        >
           <canvas
             ref={canvasRef}
             className="editor-canvas"
@@ -2017,6 +2289,55 @@ export function PhotoEditor({ image, onClose }: Props) {
               }
             }}
           />
+          {/* Split view: the original, drawn over the left of the edited canvas
+              up to the divider. It carries the canvas transform so the two
+              halves stay registered under zoom/pan, and the clip is applied
+              before that transform, so the line splits the *photo*. */}
+          {split && (
+            <canvas
+              ref={origCanvasRef}
+              className="editor-split-canvas"
+              aria-hidden
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                clipPath: `inset(0 ${(1 - splitPos) * 100}% 0 0)`,
+              }}
+            />
+          )}
+          {split && (
+            // Deliberately NOT under the canvas transform: a scaled divider
+            // would be a 12px bar with a huge grip at 6x zoom. Its position is
+            // the split fraction pushed through the same transform by hand
+            // (the canvas scales about the wrap's centre, then pans), so the
+            // line stays exactly on the clip edge at any zoom while keeping a
+            // constant on-screen weight.
+            <div
+              className="split-divider"
+              style={{ left: `calc(${50 + (splitPos - 0.5) * scale * 100}% + ${pan.x}px)` }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                splitDragRef.current = true;
+              }}
+              onPointerMove={(e) => {
+                if (splitDragRef.current) setSplitPos(clamp01(fractionAt(e.clientX, e.clientY).x));
+              }}
+              onPointerUp={(e) => {
+                splitDragRef.current = false;
+                if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+              }}
+            >
+              <span className="split-divider-grip" aria-hidden />
+            </div>
+          )}
+          {compareMode !== "off" && (
+            <>
+              {/* In "pair" the original has its own pane and its own label, so
+                  this side is only ever the edit. */}
+              {split && <span className="split-tag split-tag-left">Original</span>}
+              <span className="split-tag split-tag-right">Edited</span>
+            </>
+          )}
           {cropMode && hasDrawnCrop && (
             <div
               className="crop-rect"
@@ -2052,14 +2373,15 @@ export function PhotoEditor({ image, onClose }: Props) {
           {/* Selected-mask guide + editable handles, transformed to track the
               canvas under zoom/pan. aspect keeps the round handles round on
               non-square images; cursor draws the brush-size ring. */}
-          {selSpatialSub && openGroup === "masks" && (maskDrawMode || maskMarkVisible) && (
+          {overlaySpatialSub && openGroup === "masks" && (
             <MaskOverlay
-              sub={selSpatialSub}
-              handles={maskDrawMode}
+              sub={overlaySpatialSub}
+              mark={overlayMark}
+              handles={maskDrawMode && overlayIsSelected}
               aspect={canvasRef.current && canvasRef.current.height ? canvasRef.current.width / canvasRef.current.height : 1}
               cursor={
-                selSpatialSub.type === "brush" && maskDrawMode && maskCursorPos
-                  ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(selSpatialSub, "size", 0.06) }
+                overlaySpatialSub.type === "brush" && maskDrawMode && overlayIsSelected && maskCursorPos
+                  ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlaySpatialSub, "size", 0.06) }
                   : null
               }
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: "center center" }}
@@ -2082,11 +2404,37 @@ export function PhotoEditor({ image, onClose }: Props) {
               onMouseDown={() => setCompare(true)}
               onMouseUp={() => setCompare(false)}
               onMouseLeave={() => setCompare(false)}
-              disabled={allNeutral}
+              // A compare mode already shows the original; swapping the whole
+              // canvas under it would only make both sides the same picture.
+              disabled={allNeutral || compareMode !== "off"}
               title="Hold to compare with the original"
             >
               {compare ? "Showing original" : "Compare"}
             </button>
+            {/* The two ways to keep the original on screen. Each button toggles
+                its own mode, so clicking the lit one goes back to just the edit. */}
+            <span className="segmented editor-compare-modes">
+              <button
+                className={split ? "active" : ""}
+                aria-pressed={split}
+                aria-label="Compare split by a draggable line"
+                disabled={allNeutral}
+                onClick={() => setCompareMode((m) => (m === "split" ? "off" : "split"))}
+                title="Split: original and edit on the same picture, divided by a line you can drag"
+              >
+                <IconSplit size={14} />
+              </button>
+              <button
+                className={pair ? "active" : ""}
+                aria-pressed={pair}
+                aria-label="Compare side by side"
+                disabled={allNeutral}
+                onClick={() => setCompareMode((m) => (m === "pair" ? "off" : "pair"))}
+                title="Side by side: original and edit as two pictures, nothing hidden"
+              >
+                <IconSideBySide size={14} />
+              </button>
+            </span>
           </div>
         )}
       </div>
@@ -2100,68 +2448,37 @@ export function PhotoEditor({ image, onClose }: Props) {
           Non-destructive. Save updates this photo; Save copy makes a new edited photo.
         </p>
 
-        {/* Transform: composition grid, rotate/flip/crop, straighten + tilt. */}
+        {/* Transform: rotate/flip, the crop box and its ratio, straighten +
+            tilt. Opening the group arms the crop box on the photo (see the
+            openGroup effect), so everything here is live at once: the two
+            labelled selects, then the quarter-turn tools, then the sliders. */}
         {accordionHeader("transform", "Transform")}
         {openGroup === "transform" && (
           <div className="editor-accordion-body">
-        {/* Composition grid overlay - its own row above rotate/crop. */}
-        <div className="editor-geometry">
-          <Dropdown
-            className="editor-grid-select"
-            value={gridOverlay}
-            onChange={(v) => setGridOverlay(v as GridOverlay)}
-            title="Overlay grid"
-            ariaLabel="Overlay grid"
-            options={GRID_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-          />
-        </div>
+            {/* The two labelled selects sit together at the top - one column,
+                one left edge - and the button rows follow underneath. The grid
+                is what you frame *against*, so it leads. */}
+            <div className="editor-field-row">
+              <span className="editor-field-label">Grid</span>
+              <Dropdown
+                className="editor-grid-select"
+                value={gridOverlay}
+                onChange={(v) => setGridOverlay(v as GridOverlay)}
+                title="Overlay grid"
+                ariaLabel="Overlay grid"
+                options={GRID_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              />
+            </div>
 
-        {/* Geometry */}
-        <div className="editor-geometry">
-          <button className="btn btn-sm" onClick={() => setRotation((r) => (r + 270) % 360)} disabled={busy} title="Rotate left 90°">
-            <IconRotate size={13} className="flip-h" />
-          </button>
-          <button className="btn btn-sm" onClick={() => setRotation((r) => (r + 90) % 360)} disabled={busy} title="Rotate right 90°">
-            <IconRotate size={13} />
-          </button>
-          <button
-            className={`btn btn-sm${flipH ? " primary" : ""}`}
-            onClick={() => setFlipH((v) => !v)}
-            disabled={busy}
-            title="Flip horizontal"
-          >
-            ⇆
-          </button>
-          <button
-            className={`btn btn-sm${flipV ? " primary" : ""}`}
-            onClick={() => setFlipV((v) => !v)}
-            disabled={busy}
-            title="Flip vertical"
-          >
-            ⇅
-          </button>
-          <button
-            className={`btn btn-sm${cropMode ? " primary" : ""}`}
-            disabled={busy}
-            onClick={() => {
-              setCropMode((on) => {
-                const next = !on;
-                if (next) {
-                  // Crop and mask-draw share the canvas pointer - only one at a time.
-                  setMaskDrawMode(false);
-                  setColorPickMode(false);
-                  setOpenGroup("transform");
-                  if (crop) setDrag({ x0: crop.x, y0: crop.y, x1: crop.x + crop.width, y1: crop.y + crop.height });
-                  else setDrag(null);
-                }
-                return next;
-              });
-            }}
-          >
-            Crop
-          </button>
-          {cropMode && (
-            <>
+            {/* Crop: the ratio it locks to, then take it or drop it - all on one
+                row, so the whole thing is a single line in the panel instead of
+                a select with a bar of buttons parked under it. A tick and a
+                cross sitting on the select need no separator to say they belong
+                to it. Taking a crop re-frames the picture, and masks are stored
+                as fractions of that frame, so they're carried across to the new
+                one or a crop would slide every mask off what it was drawn on. */}
+            <div className="editor-field-row">
+              <span className="editor-field-label">Crop</span>
               <Dropdown
                 className="editor-grid-select"
                 value={aspectKey}
@@ -2170,45 +2487,100 @@ export function PhotoEditor({ image, onClose }: Props) {
                 ariaLabel="Crop aspect ratio"
                 options={ASPECT_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
               />
-              <button className="btn btn-sm primary" disabled={!hasDrawnCrop} onClick={() => { setCrop(normalizeRect(drag!)); setCropMode(false); }}>
-                Apply
+              <button
+                className="btn btn-sm editor-field-btn editor-field-btn--confirm"
+                disabled={!cropPending}
+                onClick={() => applyCrop(normalizeRect(drag!))}
+                title="Apply this crop"
+                aria-label="Apply this crop"
+              >
+                <IconCheck size={14} />
               </button>
-              <button className="btn btn-sm" disabled={!crop && !drawn} onClick={() => { setCrop(null); setDrag(null); setAspectKey("free"); setCropMode(false); }}>
-                Clear
+              <button
+                className="btn btn-sm editor-field-btn"
+                disabled={!crop && !drawn}
+                onClick={() => {
+                  applyCrop(null);
+                  setDrag(null);
+                  setAspectKey("free");
+                }}
+                title="Clear the crop"
+                aria-label="Clear the crop"
+              >
+                <IconX size={13} />
               </button>
-            </>
-          )}
-        </div>
+            </div>
 
-        {/* Straighten (rotation) + perspective / axis tilt. All auto-fill the
-            frame, so nothing shows empty corners. */}
-        <div className="editor-sliders">
-          <Slider
-            label="Straighten"
-            value={straighten}
-            onChange={setStraighten}
-            min={-45}
-            max={45}
-            step={0.25}
-            format={(v) => `${v > 0 ? "+" : ""}${v}°`}
-          />
-          <Slider label="Tilt horizontal" value={perspH} onChange={setPerspH} />
-          <Slider label="Tilt vertical" value={perspV} onChange={setPerspV} />
-          <Slider label="Distortion" value={distortion} onChange={setDistortion} />
-          {/* White frame: a matte border added around the photo, drawn last.
-              Bound to the develop object (not geometry), so it round-trips
-              through Save and Save copy like every other adjustment. */}
-          <Slider
-            label="White frame"
-            value={adj.frame_width}
-            onChange={(v) => setAdj((a) => ({ ...a, frame_width: v }))}
-            min={SCALAR_SPEC.frame_width.min}
-            max={SCALAR_SPEC.frame_width.max}
-            resetValue={SCALAR_SPEC.frame_width.def}
-            format={(v) => `${v}%`}
-          />
-        </div>
+            {/* Rotate / flip: four equal buttons, one row. */}
+            <div className="editor-tool-row">
+              <button
+                className="btn btn-sm"
+                onClick={() => setRotation((r) => (r + 270) % 360)}
+                disabled={busy}
+                title="Rotate left 90°"
+                aria-label="Rotate left 90°"
+              >
+                <IconRotate size={14} className="flip-h" />
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => setRotation((r) => (r + 90) % 360)}
+                disabled={busy}
+                title="Rotate right 90°"
+                aria-label="Rotate right 90°"
+              >
+                <IconRotate size={14} />
+              </button>
+              <button
+                className={`btn btn-sm${flipH ? " primary" : ""}`}
+                onClick={() => setFlipH((v) => !v)}
+                disabled={busy}
+                title="Flip horizontal"
+                aria-label="Flip horizontal"
+                aria-pressed={flipH}
+              >
+                <IconFlipH size={14} />
+              </button>
+              <button
+                className={`btn btn-sm${flipV ? " primary" : ""}`}
+                onClick={() => setFlipV((v) => !v)}
+                disabled={busy}
+                title="Flip vertical"
+                aria-label="Flip vertical"
+                aria-pressed={flipV}
+              >
+                <IconFlipV size={14} />
+              </button>
+            </div>
 
+            {/* Straighten (rotation) + perspective / axis tilt. All auto-fill the
+                frame, so nothing shows empty corners. */}
+            <div className="editor-sliders">
+              <Slider
+                label="Straighten"
+                value={straighten}
+                onChange={setStraighten}
+                min={-45}
+                max={45}
+                step={0.25}
+                format={(v) => `${v > 0 ? "+" : ""}${v}°`}
+              />
+              <Slider label="Tilt horizontal" value={perspH} onChange={setPerspH} />
+              <Slider label="Tilt vertical" value={perspV} onChange={setPerspV} />
+              <Slider label="Distortion" value={distortion} onChange={setDistortion} />
+              {/* White frame: a matte border added around the photo, drawn last.
+                  Bound to the develop object (not geometry), so it round-trips
+                  through Save and Save copy like every other adjustment. */}
+              <Slider
+                label="White frame"
+                value={adj.frame_width}
+                onChange={(v) => setAdj((a) => ({ ...a, frame_width: v }))}
+                min={SCALAR_SPEC.frame_width.min}
+                max={SCALAR_SPEC.frame_width.max}
+                resetValue={SCALAR_SPEC.frame_width.def}
+                format={(v) => `${v}%`}
+              />
+            </div>
           </div>
         )}
 
@@ -2477,6 +2849,10 @@ export function PhotoEditor({ image, onClose }: Props) {
               key={m.id}
               className={`mask-row${selectedMaskId === m.id ? " active" : ""}`}
               onClick={() => selectMask(m.id)}
+              // Pointing at a row marks that mask on the photo (see markedMask).
+              onMouseEnter={() => setHoveredMaskId(m.id)}
+              onMouseLeave={() => setHoveredMaskId((id) => (id === m.id ? null : id))}
+              title="Hover to see what this mask covers"
             >
               <button
                 className="mask-eye"

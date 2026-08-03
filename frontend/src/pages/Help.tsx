@@ -313,9 +313,10 @@ export function Help() {
         </p>
         <ul>
           <li>
-            <strong>Geometry:</strong> rotate in 90° steps, crop by dragging — freeform or locked to
-            an aspect ratio (Original, 1:1 and all the common sizes: 3:2, 4:3, 5:4, 7:5, 16:9 and
-            their portrait counterparts) — plus composition overlays (rule of thirds, grid,
+            <strong>Transform:</strong> opening the section puts the crop box on the photo — drag it
+            freeform or locked to an aspect ratio (Original, 1:1 and all the common sizes: 3:2, 4:3,
+            5:4, 7:5, 16:9 and their portrait counterparts), then <em>Apply</em>. Plus rotation in
+            90° steps, flips, straighten/tilt and composition overlays (rule of thirds, grid,
             diagonals).
           </li>
           <li>
@@ -629,7 +630,7 @@ export function Help() {
               <td>
                 <kbd>Esc</kbd>
               </td>
-              <td>Exit crop mode, or close the editor</td>
+              <td>Close the Transform section (and its crop box), or close the editor</td>
             </tr>
             <tr>
               <td>Editor</td>

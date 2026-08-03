@@ -9,10 +9,15 @@ import type { SubMask } from "../utils/adjustments";
 // image. Pointer-transparent - hit-testing + dragging live in PhotoEditor; this
 // only renders. Luminance/colour masks have no spatial shape, so nothing draws.
 //
+// When `mark` is set, every type paints the area it covers with the same pink
+// zebra (see ZebraPattern); its own outline and handles draw on top of that:
+//
 //  - radial : rotated ellipse + centre / 4 edge / 4 corner / rotation handles.
-//  - linear : the gradient line + a perpendicular hint + start & end handles.
-//  - brush  : a translucent dot per stroke point + a brush-size ring at the
-//             pointer (`cursor`) while painting/hovering.
+//  - linear : the gradient line + a perpendicular hint + start & end handles,
+//             over a zebra that ramps across the band like the render does.
+//  - brush  : the painted area, plus a brush-size ring at the pointer
+//             (`cursor`) while painting/hovering.
+//  - semantic: the found region, through the stored PNG.
 //
 // `aspect` (canvas width/height) makes the round handles render round on
 // non-square images: a viewBox circle is stretched non-uniformly, so handles
@@ -21,6 +26,22 @@ const HANDLE_R = 1.0; // handle radius in viewBox-x units (grab tolerance is lar
 // Rotation handle sits this far (viewBox units) beyond the ellipse top; mirrors
 // PhotoEditor's MASK_ROT_OFF (0.07 fraction) so render + hit-test agree.
 const ROT_OFF_VB = 7;
+
+// Every mask's *covered area* is marked with the same pink zebra: diagonal
+// candy stripes, the way a video scope marks a region. A flat wash reads as
+// part of the photo on a pink sunset or a grey wall; stripes never do, and
+// being able to see the picture between them is what lets the boundary be
+// judged. One pattern, referenced by every mask type's fill.
+const ZEBRA_ID = "mask-zebra";
+
+function ZebraPattern() {
+  return (
+    <pattern id={ZEBRA_ID} width="2" height="2" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="2" height="2" className="mask-zebra-gap" />
+      <rect width="1" height="2" className="mask-zebra-bar" />
+    </pattern>
+  );
+}
 
 // Gradient stops tracing the brush dab's own falloff, so the guide softens
 // exactly where the render does. `offset` is a fraction of the dab radius:
@@ -44,14 +65,19 @@ export function MaskOverlay({
   aspect = 1,
   cursor = null,
   handles = false,
+  mark = true,
 }: {
   sub: SubMask;
   style?: CSSProperties;
   aspect?: number;
   cursor?: { x: number; y: number; size: number } | null;
-  // Draw the drag handles (only while editing on the image); the shape outline
-  // always renders so a selected mask stays visible.
+  // Draw the drag handles - only while editing on the image. The shape's own
+  // outline renders either way, so a mask being edited stays locatable.
   handles?: boolean;
+  // Paint the zebra over the area the mask covers. Separate from `handles`:
+  // the marking answers "what does this cover?" and is asked for by pointing at
+  // the mask in the list, while the outline and handles are the editing tools.
+  mark?: boolean;
 }) {
   const p = sub.parameters;
   const num = (k: string, d: number) => (typeof p[k] === "number" ? (p[k] as number) : d);
@@ -82,7 +108,8 @@ export function MaskOverlay({
           rx={rx}
           ry={ry}
           transform={rot ? `rotate(${rot} ${cx} ${cy})` : undefined}
-          className="mask-overlay-shape mask-overlay-fill"
+          className="mask-overlay-shape"
+          fill={mark ? `url(#${ZEBRA_ID})` : "none"}
           vectorEffect="non-scaling-stroke"
         />
         {handles && (
@@ -141,8 +168,30 @@ export function MaskOverlay({
     const isoLine = (cx0: number, cy0: number, key: string, cls: string) => (
       <line key={key} x1={cx0 - qx * L} y1={cy0 - qy * L} x2={cx0 + qx * L} y2={cy0 + qy * L} className={cls} vectorEffect="non-scaling-stroke" />
     );
+    // The band shown as the zebra it selects, ramping 0 -> 1 across it exactly
+    // like the render: a full-frame zebra rect behind an SVG mask whose only
+    // content is the same gradient. The gradient axis is corrected for the
+    // viewBox's non-uniform stretch the same way the iso-lines above are - the
+    // backend measures the ramp in pixels, so an uncorrected SVG gradient would
+    // lean the wrong way on every non-square photo. `k` puts the stops back on
+    // the start/end points after that correction (k = 1 on a square image).
+    const a2 = aspect * aspect;
+    const denom = a2 * a2 * dx * dx + dy * dy || 1;
+    const k = (a2 * dx * dx + dy * dy) / denom;
+    const gradId = `mask-linear-ramp-${sub.id}`;
+    const maskId = `mask-linear-${sub.id}`;
     shapes = (
       <>
+        <defs>
+          <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1={sx} y1={sy} x2={sx + a2 * dx * k} y2={sy + dy * k}>
+            <stop offset="0%" stopColor="#000" />
+            <stop offset="100%" stopColor="#fff" />
+          </linearGradient>
+          <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+            <rect x="0" y="0" width="100" height="100" fill={`url(#${gradId})`} />
+          </mask>
+        </defs>
+        {mark && <rect x="0" y="0" width="100" height="100" fill={`url(#${ZEBRA_ID})`} mask={`url(#${maskId})`} />}
         {isoLine(sx, sy, "edge-s", "mask-overlay-shape mask-overlay-hint")}
         {isoLine(ex, ey, "edge-e", "mask-overlay-shape mask-overlay-hint")}
         {isoLine(mx, my, "center", "mask-overlay-shape")}
@@ -169,29 +218,39 @@ export function MaskOverlay({
     // got rendered.
     const rx = (s: number) => Math.max(0.3, s * 100 * (aspect >= 1 ? 1 : 1 / aspect));
     const ry = (s: number) => Math.max(0.3, s * 100 * (aspect >= 1 ? aspect : 1));
+    const fadeId = `mask-brush-fade-${sub.id}`;
+    const maskId = `mask-brush-${sub.id}`;
     shapes = (
       <>
         <defs>
           {/* Mirrors the render's falloff: solid out to (1 - feather) of the
               radius, then smoothstep to nothing at the edge. Without this the
-              guide was a hard-edged disc and the Feather slider looked dead. */}
-          <radialGradient id="mask-brush-fade">
+              guide was a hard-edged disc and the Feather slider looked dead.
+              White, because the dabs are the content of a luminance <mask>. */}
+          <radialGradient id={fadeId}>
             {brushFadeStops(feather).map(([offset, opacity], i) => (
-              <stop key={i} offset={`${offset * 100}%`} stopColor="currentColor" stopOpacity={opacity} />
+              <stop key={i} offset={`${offset * 100}%`} stopColor="#fff" stopOpacity={opacity} />
             ))}
           </radialGradient>
+          {/* The painted area drives a mask over the zebra, so the stripes are
+              the paint - a striped dab per sample would break up as the strokes
+              overlap. */}
+          <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+            {strokes.map((s, i) => (
+              <ellipse
+                key={i}
+                cx={(s[0] ?? 0) * 100}
+                cy={(s[1] ?? 0) * 100}
+                rx={rx(s[2] ?? 0.06)}
+                ry={ry(s[2] ?? 0.06)}
+                fill={`url(#${fadeId})`}
+              />
+            ))}
+          </mask>
         </defs>
-        {strokes.map((s, i) => (
-          <ellipse
-            key={i}
-            cx={(s[0] ?? 0) * 100}
-            cy={(s[1] ?? 0) * 100}
-            rx={rx(s[2] ?? 0.06)}
-            ry={ry(s[2] ?? 0.06)}
-            className="mask-overlay-brush-dab"
-            fill="url(#mask-brush-fade)"
-          />
-        ))}
+        {mark && strokes.length > 0 && (
+          <rect x="0" y="0" width="100" height="100" fill={`url(#${ZEBRA_ID})`} mask={`url(#${maskId})`} />
+        )}
         {cursor && (
           <ellipse
             cx={cursor.x * 100}
@@ -211,7 +270,7 @@ export function MaskOverlay({
     // definition, which is exactly what the stored grayscale PNG is - no colour
     // conversion, and the soft edges come through as soft.
     const png = typeof p.mask === "string" ? p.mask : "";
-    if (!png) return null;
+    if (!png || !mark) return null; // a found region IS its marking - no outline to keep
     const id = `mask-region-${sub.id}`;
     shapes = (
       <>
@@ -220,7 +279,7 @@ export function MaskOverlay({
             <image href={`data:image/png;base64,${png}`} x="0" y="0" width="100" height="100" preserveAspectRatio="none" />
           </mask>
         </defs>
-        <rect x="0" y="0" width="100" height="100" className="mask-overlay-region" mask={`url(#${id})`} />
+        <rect x="0" y="0" width="100" height="100" fill={`url(#${ZEBRA_ID})`} mask={`url(#${id})`} />
       </>
     );
   } else {
@@ -229,6 +288,9 @@ export function MaskOverlay({
 
   return (
     <svg className="mask-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" style={style}>
+      <defs>
+        <ZebraPattern />
+      </defs>
       {shapes}
     </svg>
   );
