@@ -4,10 +4,11 @@
 
 # Rollfilm
 
-**Import, organize and manage your photos. All on your own computer.**
+**From memory card to finished photo. One app, on your own computer.**
 
-A privacy-first desktop photo manager with local AI search, map & timeline browsing,
-RAW support — and first-class [Immich](https://immich.app) integration.
+Import, cull, search and edit — the whole path in one window, with first-class
+[Immich](https://immich.app) integration at the end of it.
+Local AI search, map & timeline browsing, RAW support.
 No account, no cloud, no Docker, no setup.
 
 [![Latest release](https://img.shields.io/github/v/release/pasqualkreher/Rollfilm?label=release&color=4c8dae)](https://github.com/pasqualkreher/Rollfilm/releases/latest)
@@ -34,7 +35,8 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 | :---: | :---: |
 | <img src="https://rollfilm.org/assets/search.jpg" alt="Semantic search" width="420"><br>**Semantic search** — describe what you remember | <img src="https://rollfilm.org/assets/map.jpg" alt="Map view" width="420"><br>**Map view** — every geotagged photo |
 | <img src="https://rollfilm.org/assets/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="https://rollfilm.org/assets/immich.jpg" alt="Immich integration" width="420"><br>**Immich sync** — your library, mirrored |
-| <img src="https://rollfilm.org/assets/edit-film.jpg" alt="Photo editor with film simulations" width="420"><br>**Editor** — non-destructive, with film sims | <img src="https://rollfilm.org/assets/themes.jpg" alt="Color themes" width="420"><br>**20+ themes** — light, dark and in between |
+| <img src="https://rollfilm.org/assets/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor** — non-destructive, masks, film sims | <img src="https://rollfilm.org/assets/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare** — split by a draggable line, or side by side |
+| <img src="https://rollfilm.org/assets/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="https://rollfilm.org/assets/themes.jpg" alt="Color themes" width="420"><br>**20+ themes** — light, dark and in between |
 
 ## Features
 
@@ -45,14 +47,16 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 - **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
 - **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
 - Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
-- **Trash** with configurable retention and automatic background purge
+- **Trash** with configurable retention and automatic background purge — a deletion keeps the photo's stars, tags, albums and edits, and Restore brings it all back
+- **Backup & restore** — one zip with every photo plus all ratings, colors, albums, tags and edits, and a one-click "sync database to library" repair
 
 ### Search & browsing
 - **Semantic search** — describe what you're looking for in natural language ("sunset at the beach", "dog in the snow"). Powered by CLIP embeddings stored in SQLite via `sqlite-vec`, fully local, no cloud API
 - Image-to-image similarity search
-- **Gear-aware filters** — narrow the library by camera, lens or a focal-length range slider; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot)
+- **Gear-aware filters** — narrow the library by camera, lens or a focal-length range slider; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot), and the filter bar can be **pinned open** so it stays put while you cull
 - **Map view** (Leaflet) of all geotagged photos
 - Timeline scrubber, thumbnail grid, lightbox
+- **Statistics** — photos per year, plus which camera bodies, lenses and focal-length ranges you actually shoot, how your ratings fall, and what the library is made of
 - **20+ light & dark color themes** — from a clean Light/Dark to Sepia, Nord, Forest and more
 
 ### Immich integration ⭐
@@ -76,7 +80,10 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 
 - All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
 - Edits are stored as values in the database; originals are never touched
-- Exposure/contrast/highlights/shadows, white balance, HSL color mixer, tone curves, color grading wheels, crop/rotate/perspective, masks, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
+- Exposure/contrast/highlights/shadows, white balance, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
+- **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives
+- **Masks** — radial, linear, brush, luminance and color, plus **AI subject selection** (sky, water, greenery, people, buildings, ground) run locally with SegFormer. Point at a mask in the list and it marks what it covers
+- **Compare against the original** — split by a divider you drag across the photo, or the two side by side. On a RAW the original half is shown with the library's auto-exposure, so the comparison isn't just "the edit is brighter"
 - **Auto develop** — an optional "Auto" button that suggests develop settings *learned from your own edits*: a local CLIP k-nearest-neighbor recommender finds the photos you've already edited that look most like the one you're working on and blends their settings. No training step, no cloud — every edit you save immediately makes the next suggestion better. Works on a single photo or a whole selection at once
 
 ## Download & installation
