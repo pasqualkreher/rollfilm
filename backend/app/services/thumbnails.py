@@ -1303,12 +1303,28 @@ def apply_adjustments_linear(
     preview/thumbnail, so what you saw in the editor vanished after saving.
 
     `fast=True` is the interactive *scrub* pipeline used while a control is being
-    dragged: it keeps the cheap per-pixel tonal pass, masks and vignette but
-    skips the expensive convolution passes (denoise, clarity/structure/sharpen,
-    chromatic aberration, dehaze, and the diffusion finishing effects + grain).
-    The accurate render on pointer-up brings them all back, so the settled
-    preview - and the save - are unchanged; only the transient drag frames are
-    lighter."""
+    dragged. It runs everything it can afford at scrub resolution and skips only
+    the four passes that cannot keep up.
+
+    Measured on a 1100px scrub frame of a 40MP raw, as marginal cost over the
+    25ms tone-only floor:
+
+        grain +4   sharpness +5   chromatic aberration +5   vignette +6
+        clarity +28   structure +29   halation +39   dehaze +42
+        ----------------------------------------------------- runs while dragging
+        flare +84   glow +143   mist +145   denoise +147
+
+    Everything above the line runs during a drag. It used to be skipped wholesale
+    for being "a convolution", which meant dragging Clarity or Structure changed
+    nothing on screen until the pointer came up - a slider whose effect you
+    cannot see while you move it is not a slider you can set, and no amount of
+    frame rate makes up for that. Each of those passes is also gated on its own
+    value being non-zero, so an edit that doesn't use them pays nothing.
+
+    Below the line stays out: at ~150ms a frame the preview would stop tracking
+    the pointer, which just trades one kind of unusable for another. Those four
+    come back on the accurate render at pointer-up, so the settled preview - and
+    the save - are unchanged either way."""
     long_edge = max(lin.shape[:2])
     arr = _linear_tone_block(lin, adj, base_gain)
     if develop.is_neutral(adj):
@@ -1321,6 +1337,13 @@ def apply_adjustments_linear(
     # barely resolves chroma detail, so it can take more without going soft).
     # Per-channel sliders still win where they're set higher. cv2's NLM needs
     # 8-bit input, so this one pass round-trips through uint8.
+    #
+    # The one pass a drag never gets: the luma NLM alone is ~147ms on a 1100px
+    # scrub frame, which would drop the preview to under 7 frames a second. It's
+    # also the pass a downscaled preview can say least about - by 1100px a 7752px
+    # raw has had its sensor noise averaged away, so what a live frame would show
+    # is smoothing applied to already-smooth data. Denoise is judged at 100%
+    # zoom, where the ladder renders natively and the pixels are real.
     dn = adj.get("denoise", 0)
     ln = max(adj.get("luma_noise_reduction", 0), dn)
     cn = max(adj.get("color_noise_reduction", 0), min(100, int(round(dn * 1.3))))
@@ -1331,9 +1354,11 @@ def apply_adjustments_linear(
         arr = np.asarray(denoised, dtype=np.float32) / 255.0
     # Detail (spatial): clarity = large-radius local contrast, structure =
     # medium-radius local contrast, sharpness = small-radius edge enhancement.
-    # All skipped in the fast scrub pipeline.
+    # These run during a drag too - they're the ones you most need to see move
+    # while you set them, and at scrub size they cost tens of ms (see the
+    # `fast` note in the docstring).
     cl = adj.get("clarity", 0)
-    if cl and not fast:
+    if cl:
         arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
         if cl < 0:
             # Fuji's negative clarity doesn't just flatten - it diffuses like a
@@ -1342,10 +1367,10 @@ def apply_adjustments_linear(
             # band softening; strength follows the slider.
             arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False)
     st = adj.get("structure", 0)
-    if st and not fast:
+    if st:
         arr = develop_effects.apply_structure(arr, st)
     sp = adj.get("sharpness", 0)
-    if sp and not fast:
+    if sp:
         # +sharpen / -soften share the unsharp formula (negative amount blends
         # toward the blur). Radius is capped so sharpening stays a fine, tight
         # edge enhancement; Threshold gates it away from noise/smooth areas.
@@ -1355,25 +1380,26 @@ def apply_adjustments_linear(
         )
     ca_rc = adj.get("chromatic_aberration_red_cyan", 0)
     ca_by = adj.get("chromatic_aberration_blue_yellow", 0)
-    if not fast and (ca_rc or ca_by):
+    if ca_rc or ca_by:
         arr = develop_effects.apply_chromatic_aberration(arr, ca_rc, ca_by)
     # Dehaze is spatial too (transmission map from the dark channel), so it runs
     # here rather than in the per-pixel tonal pass.
     dh = adj.get("dehaze", 0)
-    if dh and not fast:
+    if dh:
         arr = _dehaze(arr, dh)
     arr = _display_color_block(arr, adj)
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
     arr = apply_masks(arr, adj)
     # Highlight-bloom / diffusion effects run on the *toned* image (like a filter
-    # in front of the lens), after the tonal pass. All are large-radius blurs, so
-    # the fast scrub pipeline skips them (restored on the pointer-up render).
+    # in front of the lens), after the tonal pass. Halation is affordable at
+    # scrub size (+39ms); mist, glow and flare are not (+145/+143/+84), so those
+    # three sit out a drag and are restored on the pointer-up render.
     if not fast and adj.get("mist", 0) > 0:
         arr = _mist(arr, adj["mist"])
     if not fast and adj.get("glow_amount", 0) > 0:
         arr = develop_effects.apply_glow(arr, adj["glow_amount"])
-    if not fast and adj.get("halation_amount", 0) > 0:
+    if adj.get("halation_amount", 0) > 0:
         arr = develop_effects.apply_halation(arr, adj["halation_amount"])
     if not fast and adj.get("flare_amount", 0) > 0:
         arr = develop_effects.apply_flare(arr, adj["flare_amount"])
@@ -1385,7 +1411,7 @@ def apply_adjustments_linear(
             adj.get("vignette_roundness", 0),
             adj.get("vignette_feather", 50),
         )
-    if include_grain and not fast and adj.get("grain_amount", 0) > 0:
+    if include_grain and adj.get("grain_amount", 0) > 0:
         arr = _apply_grain(arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50))
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     return PILImage.fromarray(out, "RGB")
@@ -1559,13 +1585,22 @@ def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
 EDITOR_PREVIEW_PX = 1600
 
 # Working resolution for the *scrub* preview - the frames rendered continuously
-# while a slider/curve/wheel/mask handle is being dragged. Small on purpose: the
-# whole pipeline (and the JPEG encode) scales with pixel count, so ~750px is
-# roughly 4-5x fewer pixels than EDITOR_PREVIEW_PX and, together with the fast
-# pipeline that skips the convolution passes (see apply_adjustments(fast=True)),
-# keeps each drag frame at a few tens of ms. Replaced by the accurate 1600px
-# render the moment the pointer is released.
-SCRUB_PREVIEW_PX = 750
+# while a slider/curve/wheel/mask handle is being dragged. Smaller than the
+# accurate tier, because the whole pipeline (and the JPEG encode) scales with
+# pixel count and these frames have to keep up with the pointer; together with
+# the fast pipeline that skips the convolution passes (see
+# apply_adjustments(fast=True)) each one lands in tens of ms. Replaced by the
+# accurate 1600px render the moment the pointer is released.
+#
+# Measured on a 40MP raw, warm base: 750px = 16ms/frame, 1100px = 35ms, 1300px =
+# 50ms, 1600px = 75ms. 750 was leaving most of the budget unspent - a drag frame
+# blown up from 750px to a ~1400px canvas is a near-2x upscale, which is what
+# made the picture go visibly soft the instant a slider was touched. 1100 is
+# 2.2x the pixels for 19ms more, still ~28 renders a second, and lands close
+# enough to the displayed size that the softening stops reading as a quality
+# drop. Derived by downscaling the 1600px base (see _cached_editor_base), so it
+# costs no extra decode.
+SCRUB_PREVIEW_PX = 1100
 
 # Resolution for the settled "refinement" render. NOT the image's true full
 # resolution: a live preview at 40-60MP turns every numpy pass in the pipeline

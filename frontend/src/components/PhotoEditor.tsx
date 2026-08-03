@@ -716,14 +716,25 @@ export function PhotoEditor({ image, onClose }: Props) {
     [rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion, adj]
   );
 
+  const drawn = drag ? normalizeRect(drag) : null;
+  const hasDrawnCrop = drawn && drawn.width > 0.02 && drawn.height > 0.02;
+
   // What the preview should actually show right now: in crop mode the full
   // (uncropped) frame, in compare mode the untouched original with only the
   // geometry kept so the frame doesn't jump.
+  //
   // The white frame expands the canvas, which would offset the crop-rect and
-  // mask overlays (they're positioned as fractions of the displayed image). So
-  // while a spatial overlay is live, render the preview without the frame - it
-  // still shows (and always saves) whenever no overlay needs pixel alignment.
-  const overlayActive = cropMode || openGroup === "masks" || compareMode !== "off";
+  // mask overlays (they're positioned as fractions of the displayed image), so
+  // it's dropped from the preview while such an overlay is up. The test is
+  // whether one is ACTUALLY ON SCREEN, not whether its mode is armed: opening
+  // Transform arms the crop box, and the White frame slider lives in that very
+  // section, so keying this on the mode made the one control you cannot judge
+  // without seeing it the one control that never appeared - it only showed once
+  // you left for another section. With no crop box drawn there is no overlay to
+  // misalign, which is the state the slider is normally reached in.
+  const cropRectVisible = cropMode && !!hasDrawnCrop;
+  const maskOverlayVisible = openGroup === "masks" && (maskDrawMode || hoveredMaskId !== null);
+  const overlayActive = cropRectVisible || maskOverlayVisible || compareMode !== "off";
   const previewEdits: ImageEdits = useMemo(() => {
     if (compare) {
       return neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion);
@@ -767,13 +778,22 @@ export function PhotoEditor({ image, onClose }: Props) {
       if (seq !== renderSeq.current) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
-      canvas.width = bmp.width;
-      canvas.height = bmp.height;
+      // Only touch the size when it actually changed. Assigning canvas.width or
+      // .height reallocates the backing store and resets the context even when
+      // the value is identical, and fitCanvasToStage reads getBoundingClientRect
+      // + getComputedStyle, which forces a synchronous layout. Every frame of a
+      // slider drag comes back at the same size, so all of that was pure cost
+      // paid ~30 times a second for nothing - and it is exactly the kind of
+      // per-frame stall that reads as a jerky drag.
       frameBaseRef.current = {
         width: bmp.width / (renderCrop?.width || 1),
         height: bmp.height / (renderCrop?.height || 1),
       };
-      fitCanvasToStage();
+      if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+        canvas.width = bmp.width;
+        canvas.height = bmp.height;
+        fitCanvasToStage();
+      }
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
       pickSnapRef.current = null; // a new frame - the picker's copy is stale
@@ -2076,8 +2096,6 @@ export function PhotoEditor({ image, onClose }: Props) {
     );
   }
 
-  const drawn = drag ? normalizeRect(drag) : null;
-  const hasDrawnCrop = drawn && drawn.width > 0.02 && drawn.height > 0.02;
   // Apply only lights up while the drawn box differs from the crop already
   // committed - with the controls permanently on show, that difference is what
   // says "there's a crop waiting to be taken", and pressing it a second time
