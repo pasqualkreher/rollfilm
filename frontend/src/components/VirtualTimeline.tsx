@@ -6,7 +6,7 @@ import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { Thumb, fileTypeBadge, fileTypeBadgeClass, tileAspectRatio } from "./ThumbnailGrid";
 import { useMergePairs } from "../state/viewPrefs";
-import { thumbPx, useThumbSize } from "../state/viewPrefs";
+import { thumbPx, thumbTier, useThumbSize } from "../state/viewPrefs";
 import {
   clearLastViewedImage,
   peekLastViewedTarget,
@@ -64,7 +64,11 @@ interface Props {
 export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMode, resetKey }: Props) {
   const navigate = useNavigate();
   const mergePairs = useMergePairs();
-  const rowH = thumbPx(useThumbSize());
+  const thumbSize = useThumbSize();
+  const rowH = thumbPx(thumbSize);
+  // XS/S request the 640px tier - full 1600px thumbnails overflow the
+  // renderer's decoded-image budget at those densities (see thumbTier).
+  const tier = thumbTier(thumbSize);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -215,7 +219,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
             if (rowTop + r.height <= zoneTop || rowTop >= zoneBottom) continue;
             for (const t of r.tiles) {
               preloadImage(
-                api.images.thumbnailUrl(t.item.id, t.item.thumb_version || DEFAULT_EDIT_VERSION)
+                api.images.thumbnailUrl(t.item.id, t.item.thumb_version || DEFAULT_EDIT_VERSION, tier)
               );
             }
           }
@@ -247,7 +251,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [layout, window_, rowH]);
+  }, [layout, window_, rowH, tier]);
 
   if (images.length === 0) {
     return <div className="empty-state">No photos here yet.</div>;
@@ -290,7 +294,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
         }}
       >
         <Thumb
-          src={api.images.thumbnailUrl(image.id, image.thumb_version || DEFAULT_EDIT_VERSION)}
+          src={api.images.thumbnailUrl(image.id, image.thumb_version || DEFAULT_EDIT_VERSION, tier)}
           alt={image.original_filename}
         />
         <span className={fileTypeBadgeClass(image.file_type, merged)}>

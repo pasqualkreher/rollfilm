@@ -1692,8 +1692,31 @@ def _serve_derivative(image: Image, name: str, not_ready_detail: str) -> FileRes
 
 
 @router.get("/{image_id}/thumbnail")
-def get_thumbnail(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_thumbnail(
+    image_id: str,
+    size: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     image = get_owned_image(db, current_user.id, image_id)
+    # ?size=small: the 640px tier the dense grid sizes (XS/S) request - a 4K
+    # screenful there holds several hundred tiles, and full 1600px thumbnails
+    # overflow the renderer's decoded-image budget (tiles then paint empty).
+    # Same serve semantics as the full thumbnail; usually just a downscale of
+    # the existing thumbnail.jpg, so old libraries need no re-render.
+    if size == "small":
+        try:
+            path = thumbnails.ensure_small(image, slot_timeout=_ON_DEMAND_RENDER_WAIT_S)
+        except thumbnails.RenderBusy:
+            raise HTTPException(
+                status_code=503, detail="Thumbnail not ready yet", headers={"Retry-After": "2"}
+            )
+        except Exception:
+            logger.exception("On-demand small.jpg generation failed for image %s", image.id)
+            raise HTTPException(status_code=404, detail="Thumbnail not ready yet")
+        return FileResponse(
+            path, headers={"Cache-Control": "private, max-age=31536000, immutable"}
+        )
     return _serve_derivative(image, "thumbnail.jpg", "Thumbnail not ready yet")
 
 

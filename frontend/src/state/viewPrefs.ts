@@ -64,6 +64,16 @@ export function thumbPx(key: ThumbSizeKey): number {
   return THUMB_SIZES.find((s) => s.key === key)?.px ?? 200;
 }
 
+// Which thumbnail tier a grid size should request. XS/S get the 640px
+// small.jpg: on a 4K display those sizes put several hundred tiles on screen,
+// and full 1600px thumbnails (~6.4MB decoded each) overflow the renderer's
+// decoded-image budget - Chromium then drops decoded tiles, which paint as
+// empty cards until something (a hover) repaints them. 640px still covers the
+// largest XS/S tile on a 2x display.
+export function thumbTier(key: ThumbSizeKey): "small" | undefined {
+  return key === "xs" || key === "s" ? "small" : undefined;
+}
+
 // Push the current size into CSS variables the grid reads, so we don't have to
 // thread inline styles through every `.thumbnail-grid`. --row-h is the target
 // height of a justified row (see .thumbnail-grid); --thumb-min is kept for any

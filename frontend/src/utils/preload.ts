@@ -36,8 +36,14 @@ export const LIGHTBOX_NEIGHBOR_DEPTH = LOW_MEMORY_DEVICE ? 2 : 6;
 // evicts images from its caches, and a permanent "already preloaded" marker
 // made every preload one-shot - revisited areas then paged cold and never
 // re-warmed, which read as the app getting slower the longer it ran.
+//
+// The cap must comfortably exceed ONE warm-up pass's working set, or the pass
+// evicts its own earliest entries before it finishes and the marker stops
+// deduplicating anything: at XS on a 4K display the timeline warms ~680 URLs
+// per pass on top of ~450 mounted tiles, so a 500-entry cap meant every scroll
+// settle re-issued hundreds of already-warmed loads.
 const preloadedUrls = new Map<string, true>();
-const PRELOADED_URLS_MAX = 500;
+const PRELOADED_URLS_MAX = 2000;
 
 export function preloadImage(url: string | null | undefined): void {
   if (!url) return;

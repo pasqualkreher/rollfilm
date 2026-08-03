@@ -4,7 +4,7 @@ import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
-import { useMergePairs } from "../state/viewPrefs";
+import { thumbTier, useMergePairs, useThumbSize } from "../state/viewPrefs";
 import { watchFarFromViewport, watchInViewport, watchNearViewport } from "../utils/preload";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 
@@ -339,6 +339,9 @@ export function ThumbnailGrid({
 }: Props) {
   const navigate = useNavigate();
   const mergePairs = useMergePairs();
+  // XS/S request the 640px tier - full 1600px thumbnails overflow the
+  // renderer's decoded-image budget at those densities (see thumbTier).
+  const tier = thumbTier(useThumbSize());
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
   const cardEls = useRef<Map<string, HTMLElement>>(new Map());
@@ -384,7 +387,7 @@ export function ThumbnailGrid({
           }
         }}
       >
-        <Thumb src={api.images.thumbnailUrl(image.id, editVersion(image))} alt={image.original_filename} />
+        <Thumb src={api.images.thumbnailUrl(image.id, editVersion(image), tier)} alt={image.original_filename} />
         <span className={fileTypeBadgeClass(image.file_type, mergePairs && Boolean(image.paired_image_id))}>
           {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
         </span>

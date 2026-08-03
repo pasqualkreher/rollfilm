@@ -162,14 +162,16 @@ export async function saveDownload(
   URL.revokeObjectURL(url);
 }
 
-function derivativeUrl(path: string, version?: string): string {
+function derivativeUrl(path: string, version?: string, size?: string): string {
   let cb = "";
   try {
     cb = localStorage.getItem(CACHE_BUST_KEY) ?? "";
   } catch {
     /* ignore */
   }
-  const query = [version ? `v=${version}` : "", cb ? `cb=${cb}` : ""].filter(Boolean).join("&");
+  const query = [size ? `size=${size}` : "", version ? `v=${version}` : "", cb ? `cb=${cb}` : ""]
+    .filter(Boolean)
+    .join("&");
   return assetUrl(`${path}${query ? `?${query}` : ""}`);
 }
 
@@ -546,8 +548,10 @@ export const api = {
         body: JSON.stringify(apiEdits(edits)),
       });
     },
-    thumbnailUrl(id: string, version?: string): string {
-      return derivativeUrl(`/images/${id}/thumbnail`, version);
+    // `size: "small"` requests the 640px tier the dense grid sizes use (see
+    // thumbTier in state/viewPrefs.ts); omitted = the full 1600px thumbnail.
+    thumbnailUrl(id: string, version?: string, size?: "small"): string {
+      return derivativeUrl(`/images/${id}/thumbnail`, version, size);
     },
     previewUrl(id: string, version?: string): string {
       return derivativeUrl(`/images/${id}/preview`, version);

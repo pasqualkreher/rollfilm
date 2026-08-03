@@ -49,6 +49,13 @@ THUMBNAIL_SCALE = 0.25
 THUMBNAIL_MAX_PX = 1600
 PREVIEW_MAX_PX = 2048
 
+# Long-edge cap for small.jpg, the tier the dense grid sizes (XS/S) request. A
+# 4K screenful at those sizes is several hundred tiles; at 1600px each that is
+# over a gigabyte of decoded pixels - past what the renderer keeps decoded, so
+# it silently drops tiles and they paint empty. 640px covers the largest XS/S
+# tile on a 2x display and decodes at ~1/6 the memory.
+SMALL_MAX_PX = 640
+
 # Long-edge cap for the stored lightbox preview.jpg. Big enough for any screen;
 # the true 100%-zoom pixels come from full.jpg (rendered at full resolution on
 # demand), so preview.jpg no longer needs to carry the whole sensor.
@@ -1540,6 +1547,14 @@ def generate_derivatives(
             thumb = add_frame(thumb, adjustments)
         _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=88)
 
+        # small.jpg is derived from the finished thumbnail (grain/frame
+        # included), so the dense grid sizes show exactly the same rendering,
+        # just fewer pixels. Written here so an edit can never leave a stale
+        # small tier behind a fresh thumbnail.
+        small = thumb.copy()
+        small.thumbnail((SMALL_MAX_PX, SMALL_MAX_PX), PILImage.LANCZOS)
+        _save_atomic(small, out_dir / "small.jpg", quality=85)
+
         # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
         # is regenerated on next request with the new edits.
         (out_dir / "full.jpg").unlink(missing_ok=True)
@@ -1564,6 +1579,34 @@ def ensure_derivatives(image: "Image", slot_timeout: float | None = None) -> Non
         if has_derivatives(image.id):
             return
         regenerate_for_image(image, slot_timeout=slot_timeout)
+
+
+def ensure_small(image: "Image", slot_timeout: float | None = None) -> Path:
+    """Path to small.jpg (the XS/S grid tier), deriving it on demand.
+
+    generate_derivatives writes it alongside thumbnail.jpg, but libraries from
+    before the tier existed - and photos whose derivatives were moved into
+    place by an import commit or a library merge - only have thumbnail.jpg.
+    Downscaling that existing file is a few milliseconds and needs no render
+    slot; only a photo with no thumbnail at all falls back to the full
+    on-demand render (where RenderBusy applies as usual)."""
+    dest = derivative_path(image.id) / "small.jpg"
+    if dest.exists():
+        return dest
+    with _locked(_gen_lock(image.id), slot_timeout):
+        if dest.exists():
+            return dest
+        thumb_path = derivative_path(image.id) / "thumbnail.jpg"
+        if not thumb_path.exists():
+            regenerate_for_image(image, slot_timeout=slot_timeout)
+            # generate_derivatives writes small.jpg too.
+            if dest.exists():
+                return dest
+        with PILImage.open(thumb_path) as thumb_file:
+            small = thumb_file.convert("RGB")
+        small.thumbnail((SMALL_MAX_PX, SMALL_MAX_PX), PILImage.LANCZOS)
+        _save_atomic(small, derivative_dir(image.id) / "small.jpg", quality=85)
+    return dest
 
 
 def _save_atomic(image: PILImage.Image, dest: Path, quality: int) -> None:
