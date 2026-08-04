@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Rollfilm">
+  <rect x="0" y="0" width="1024" height="1024" rx="210" fill="#f6f5f3"/>
+  <!-- viewfinder bump -->
+  <rect x="735" y="250" width="133" height="95" rx="22" fill="#1b1d23"/>
+  <!-- shutter button -->
+  <circle cx="672" cy="300" r="26" fill="#54565d"/>
+  <!-- camera body -->
+  <rect x="100" y="318" width="825" height="470" rx="72" fill="#1b1d23"/>
+  <!-- nameplate -->
+  <rect x="178" y="372" width="188" height="108" rx="32" fill="#f6f5f3"/>
+  <!-- lens -->
+  <circle cx="600" cy="558" r="178" fill="#2c2e37"/>
+  <circle cx="600" cy="558" r="122" fill="#b7bec8"/>
+  <circle cx="600" cy="558" r="100" fill="#16181d"/>
+  <circle cx="600" cy="558" r="82" fill="#45557e"/>
+  <circle cx="568" cy="528" r="24" fill="#e7eaef"/>
+</svg>

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://rollfilm.org/logo.svg" alt="Rollfilm logo" width="90">
+<img src="docs/screenshots/logo.svg" alt="Rollfilm logo" width="90">
 
 # Rollfilm
 
@@ -18,7 +18,7 @@ No account, no cloud, no Docker, no setup.
 
 **[rollfilm.org](https://rollfilm.org)** · [Download](#download--installation) · [Screenshots](#screenshots) · [Features](#features) · [FAQ](https://rollfilm.org/#faq)
 
-<a href="https://rollfilm.org"><img src="https://rollfilm.org/assets/library.jpg" alt="Rollfilm library view" width="850"></a>
+<a href="https://rollfilm.org"><img src="docs/screenshots/library.jpg" alt="Rollfilm library view" width="850"></a>
 
 </div>
 
@@ -33,10 +33,10 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 
 | | |
 | :---: | :---: |
-| <img src="https://rollfilm.org/assets/search.jpg" alt="Semantic search" width="420"><br>**Semantic search** — describe what you remember | <img src="https://rollfilm.org/assets/map.jpg" alt="Map view" width="420"><br>**Map view** — every geotagged photo |
-| <img src="https://rollfilm.org/assets/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="https://rollfilm.org/assets/immich.jpg" alt="Immich integration" width="420"><br>**Immich sync** — your library, mirrored |
-| <img src="https://rollfilm.org/assets/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor** — non-destructive, masks, film sims | <img src="https://rollfilm.org/assets/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare** — split by a draggable line, or side by side |
-| <img src="https://rollfilm.org/assets/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="https://rollfilm.org/assets/themes.jpg" alt="Color skins" width="420"><br>**Skins** — a light one, a dark one, or follow the system |
+| <img src="docs/screenshots/search.jpg" alt="Semantic search" width="420"><br>**Semantic search** — describe what you remember | <img src="docs/screenshots/map.jpg" alt="Map view" width="420"><br>**Map view** — every geotagged photo |
+| <img src="docs/screenshots/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="docs/screenshots/immich-sync.jpg" alt="Immich sync modes" width="420"><br>**Immich sync** — your library, mirrored |
+| <img src="docs/screenshots/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor** — non-destructive, masks, film sims | <img src="docs/screenshots/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare** — split by a draggable line, or side by side |
+| <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="docs/screenshots/themes.jpg" alt="Color skins" width="420"><br>**Skins** — a light one, a dark one, or follow the system |
 
 ## Features
 
