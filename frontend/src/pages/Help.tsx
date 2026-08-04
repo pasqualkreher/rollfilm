@@ -564,11 +564,17 @@ export function Help() {
 
         <H id="appearance">Appearance &amp; themes</H>
         <p>
-          Under <em>Settings → Appearance</em> you can pick a color theme (skin). Choose{" "}
-          <strong>System</strong> to follow your operating system's light/dark setting, or pick one
-          of the light skins (Light, Soft Grey, Sepia, Rosé) or dark skins (Dim, Dark, Vintage, Nord,
-          Forest). Each tile previews its own colors, and the choice is remembered per computer — it
-          applies to the whole app immediately.
+          Under <em>Settings → Appearance</em> you set two skins — one light, one dark — and a mode
+          that decides which of them is showing: <strong>Light</strong>, <strong>Dark</strong>, or{" "}
+          <strong>Auto</strong>, which follows your operating system and switches along with it
+          while the app is open.
+        </p>
+        <p>
+          Three skins per side, all deliberately quiet so nothing competes with the photos:{" "}
+          <strong>Graphite</strong> (neutral grey, the default), <strong>Slate</strong> (cooler,
+          with a steel-blue accent) and <strong>Ink</strong> (high contrast — paper white, or a
+          near-black surround in the dark). Each tile previews its own colors, and the choice is
+          remembered per computer.
         </p>
 
         <H id="backup">Backup, restore &amp; maintenance</H>

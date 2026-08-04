@@ -34,6 +34,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 import threading
 from collections import OrderedDict
 
@@ -43,6 +44,22 @@ from PIL import Image as PILImage
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Apple's GPU runs this model about four times faster than the CPU does, and -
+# measured on real frames, all six subjects - returns bit-identical fields, so
+# there is no quality trade to weigh. float16 is NOT worth having: on MPS it
+# measured five times SLOWER than float32 (unsupported ops fall back to the CPU
+# one kernel at a time), which is why this stays float32 throughout.
+#
+# The fallback flag has to be set before torch is imported. Nothing in this
+# module imports it at module scope (see the note at the top of embeddings.py
+# about why), so this is early enough - and it turns an op the MPS backend
+# doesn't implement into a slow op rather than a failed mask.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+# Set PM_TORCH_DEVICE=cpu to pin segmentation to the CPU (a machine where the
+# GPU is needed elsewhere, or to rule the GPU out when a mask looks wrong).
+_DEVICE_OVERRIDE = os.environ.get("PM_TORCH_DEVICE", "").strip().lower()
 
 # What the editor offers, in terms of ADE20K class *labels*. Matching by label
 # rather than by index keeps this readable and survives a model swap - the ids
@@ -92,7 +109,47 @@ _ALIGN = 32
 _model = None
 _norm: tuple[np.ndarray, np.ndarray] | None = None
 _label_ids: dict[str, tuple[int, ...]] = {}
+_device = "cpu"
 _model_lock = threading.Lock()
+
+
+def _from_cache(name: str, cache: str, local_only: bool):
+    """The model and its image processor (wanted only for its normalisation
+    constants - the resizing it would do is exactly what we're avoiding)."""
+    from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
+
+    model = SegformerForSemanticSegmentation.from_pretrained(
+        name, cache_dir=cache, local_files_only=local_only
+    )
+    proc = SegformerImageProcessor.from_pretrained(
+        name, cache_dir=cache, local_files_only=local_only
+    )
+    return model, proc
+
+
+def _select_device(model):
+    """Move the model to the fastest device that actually works here.
+
+    The GPU is proven with a real forward pass rather than trusted: a driver
+    that reports MPS as available but then throws on one of SegFormer's ops
+    would otherwise turn every mask into a 500. The dummy pass doubles as a
+    warm-up - the first MPS run of a shape pays for compiling its kernels
+    (measured 4.2s against 1.4s once warm), and paying that here means the
+    user's first mask doesn't."""
+    import torch
+
+    if _DEVICE_OVERRIDE == "cpu":
+        return model, "cpu"
+    if _DEVICE_OVERRIDE not in ("", "mps") or not torch.backends.mps.is_available():
+        return model, "cpu"
+    try:
+        moved = model.to("mps")
+        with torch.inference_mode():
+            moved(pixel_values=torch.zeros(1, 3, _ALIGN * 4, _ALIGN * 4, device="mps"))
+        return moved, "mps"
+    except Exception:
+        logger.warning("Segmentation on the GPU failed a test pass; using the CPU", exc_info=True)
+        return model.to("cpu"), "cpu"
 
 
 class SegmentationUnavailable(RuntimeError):
@@ -101,25 +158,31 @@ class SegmentationUnavailable(RuntimeError):
 
 
 def _load():
-    global _model, _norm, _label_ids
+    global _model, _norm, _label_ids, _device
     # Like the CLIP loader: several request threads can reach for the model at
     # once on first use, and without the lock each would start its own download.
     if _model is None:
         with _model_lock:
             if _model is None:
                 try:
-                    from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
+                    import transformers  # noqa: F401
                 except ImportError as exc:  # pragma: no cover - depends on the install
                     raise SegmentationUnavailable("transformers is not installed") from exc
                 cache = str(settings.model_cache_root)
                 name = settings.segmentation_model_name
+                # Weights already on disk: load them without asking the hub
+                # whether they're current. That revalidation is three HTTP
+                # round-trips on the way to the user's first mask, and it makes
+                # a load on a flaky connection wait for a timeout to answer a
+                # question whose answer we don't act on anyway. Only the very
+                # first load (nothing cached) goes to the network.
                 try:
-                    model = SegformerForSemanticSegmentation.from_pretrained(name, cache_dir=cache)
-                    # Only for its normalisation constants - the resizing it
-                    # would do is exactly what we're avoiding.
-                    proc = SegformerImageProcessor.from_pretrained(name, cache_dir=cache)
-                except Exception as exc:
-                    raise SegmentationUnavailable(str(exc)) from exc
+                    model, proc = _from_cache(name, cache, local_only=True)
+                except Exception:
+                    try:
+                        model, proc = _from_cache(name, cache, local_only=False)
+                    except Exception as exc:
+                        raise SegmentationUnavailable(str(exc)) from exc
                 model.eval()
                 # Resolve each group's labels to checkpoint class ids once.
                 by_label = {str(v).strip().lower(): int(k) for k, v in model.config.id2label.items()}
@@ -135,6 +198,9 @@ def _load():
                     np.array(proc.image_std, dtype=np.float32),
                 )
                 _label_ids = resolved
+                model, device = _select_device(model)
+                _device = device
+                logger.info("Segmentation model %s ready on %s", name, device)
                 _model = model
     return _model, _norm, _label_ids
 
@@ -166,9 +232,13 @@ def _segment_all(image: PILImage.Image, max_px: int) -> dict[str, tuple[np.ndarr
     out_w = max(1, round(src.width * scale))
     out_h = max(1, round(src.height * scale))
     stacked: dict[str, torch.Tensor] = {}
-    with torch.no_grad():
+    # Softmax, the per-group sum and the upsample all stay on whichever device
+    # the model is on - they're small next to the forward pass, and moving the
+    # 150-channel logits back to the CPU to do them would cost more than they do.
+    with torch.inference_mode():
         for long_px in _INFER_SCALES:
-            logits = model(pixel_values=_model_input(src, long_px, *norm)).logits
+            pixel_values = _model_input(src, long_px, *norm).to(_device)
+            logits = model(pixel_values=pixel_values).logits
             # Softmax at the head's own resolution, then upsample only the
             # classes actually asked for - see the note at the top about not
             # carrying all 150 channels up to frame size.
@@ -183,7 +253,7 @@ def _segment_all(image: PILImage.Image, max_px: int) -> dict[str, tuple[np.ndarr
 
     out: dict[str, tuple[np.ndarray, float]] = {}
     for group, field in stacked.items():
-        arr = field.numpy().astype(np.float32)
+        arr = field.cpu().numpy().astype(np.float32)
         peak = float(arr.max())
         # Rescale so the model's own strongest evidence is a full-strength
         # selection. A distant person peaks around 0.4 even when it is
@@ -234,6 +304,27 @@ def segment(
     if group not in fields:
         raise SegmentationUnavailable(f"{group!r} matched no class in the model")
     return fields[group]
+
+
+def weights_are_cached() -> bool:
+    """Whether the checkpoint is already on disk.
+
+    A *speculative* pass must never be what fetches it: opening the Masks panel
+    out of curiosity on a fresh install would otherwise start a ~250MB download
+    in the background. Asking for an actual subject still downloads it, exactly
+    as before - that's a user who has said they want this."""
+    folder = "models--" + settings.segmentation_model_name.replace("/", "--")
+    try:
+        return (settings.model_cache_root / folder).is_dir()
+    except OSError:
+        return False
+
+
+def is_cached(cache_key: str, max_px: int = STORED_MASK_PX) -> bool:
+    """Whether this exact frame has already been through the model - so a
+    speculative pass can skip work the user's own click already paid for."""
+    with _result_lock:
+        return f"{cache_key}|{max_px}" in _RESULT_CACHE
 
 
 def encode_mask_png(field: np.ndarray) -> tuple[str, int, int]:

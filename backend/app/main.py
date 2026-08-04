@@ -18,6 +18,7 @@ from app.db.session import SessionLocal, engine, ensure_indexes
 from app.services.borg_backup import start_background_backup
 from app.services.cloudfiles import rehydrate_dirs_in_background
 from app.services.embeddings import ensure_embeddings_table
+from app.services.embeddings import start_background_warmup as start_background_clip_warmup
 from app.services.exif import reap_orphaned_helpers
 from app.services.geocode import warm_in_background as warm_geocoder
 from app.services.immich_sync import start_background_immich_sync
@@ -86,6 +87,12 @@ def on_startup() -> None:
     # import commit (the desktop app restarts the backend on every launch, so
     # that first-commit stall was paid every session).
     warm_geocoder()
+    # Same idea for semantic search: a query itself takes milliseconds, but the
+    # first one used to wait ~4s for torch and the CLIP weights. Load them on a
+    # background thread once any import has settled, and only when the weights
+    # are already on disk - warming up must not start a download on a fresh
+    # install (see embeddings.start_background_warmup).
+    start_background_clip_warmup()
     # A hard stop of a previous backend (dev restart, crash) leaves its
     # exiftool -stay_open helpers orphaned forever - sweep them so they
     # can't pile up across restarts (78 accumulated on a dev machine).

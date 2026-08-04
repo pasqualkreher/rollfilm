@@ -4,7 +4,7 @@ import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { BorgTestResult, ImmichSyncMode, ImmichTestResult } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
 import { IconX } from "../components/Icons";
-import { SKINS, useTheme } from "../state/theme";
+import { skinInfo, useAppearance, type Appearance } from "../state/theme";
 import { useCorners } from "../state/corners";
 import { useTasks } from "../state/tasks";
 import { useAskDeletePartner, setAskDeletePartner } from "../state/viewPrefs";
@@ -117,27 +117,28 @@ function Field({
   );
 }
 
-// Appearance: a compact summary of the current skin plus a button that opens
-// the full picker in a modal, so the (16-skin) grid doesn't flood the Settings
-// page. The little preview mirrors a skin's own colours (System shows a
-// light/dark split), matching the tiles inside the modal.
-function ThemeSummaryPreview({ theme }: { theme: string }) {
-  if (theme === "system") {
+// Appearance: a compact summary of the current setup plus a button that opens
+// the full picker in a modal, so the skin grid doesn't flood the Settings page.
+// Under Auto the preview is split - the light skin beside the dark one, since
+// both are in play - and otherwise shows the single skin that's on screen.
+function ThemeSummaryPreview({ appearance }: { appearance: Appearance }) {
+  const light = skinInfo(appearance.light);
+  const dark = skinInfo(appearance.dark);
+  if (appearance.mode === "auto") {
     return (
       <span className="theme-summary-preview tp-split">
-        <span className="tp-half" style={{ background: "#ffffff" }}>
-          <span className="tp-line" style={{ background: "#1a1a1a" }} />
-          <span className="tp-pill" style={{ background: "#3a6df0" }} />
+        <span className="tp-half" style={{ background: light.bg }}>
+          <span className="tp-line" style={{ background: light.text }} />
+          <span className="tp-pill" style={{ background: light.accent }} />
         </span>
-        <span className="tp-half" style={{ background: "#17181a" }}>
-          <span className="tp-line" style={{ background: "#f1f1f2" }} />
-          <span className="tp-pill" style={{ background: "#6d93ff" }} />
+        <span className="tp-half" style={{ background: dark.bg }}>
+          <span className="tp-line" style={{ background: dark.text }} />
+          <span className="tp-pill" style={{ background: dark.accent }} />
         </span>
       </span>
     );
   }
-  const skin = SKINS.find((s) => s.value === theme);
-  if (!skin) return null;
+  const skin = skinInfo(appearance.resolved);
   return (
     <span className="theme-summary-preview" style={{ background: skin.bg }}>
       <span className="tp-line" style={{ background: skin.text }} />
@@ -147,12 +148,18 @@ function ThemeSummaryPreview({ theme }: { theme: string }) {
 }
 
 function AppearanceSetting() {
-  const [theme] = useTheme();
+  const appearance = useAppearance();
   const [corners, setCorners] = useCorners();
   const [open, setOpen] = useState(false);
 
   const label =
-    theme === "system" ? "System" : SKINS.find((s) => s.value === theme)?.label ?? "System";
+    appearance.mode === "auto"
+      ? `${skinInfo(appearance.light).label} · ${skinInfo(appearance.dark).label}`
+      : skinInfo(appearance.resolved).label;
+  const sub =
+    appearance.mode === "auto"
+      ? `Follows your system — showing ${skinInfo(appearance.resolved).label}`
+      : `Always ${appearance.mode}`;
 
   useEffect(() => {
     if (!open) return;
@@ -165,14 +172,12 @@ function AppearanceSetting() {
 
   return (
     <>
-      <Desc>Pick a colour skin, or follow your system's light/dark setting.</Desc>
+      <Desc>Pick a light skin and a dark one, then choose which is showing.</Desc>
       <div className="theme-summary">
-        <ThemeSummaryPreview theme={theme} />
+        <ThemeSummaryPreview appearance={appearance} />
         <div className="theme-summary-text">
           <span className="theme-summary-label">{label}</span>
-          <span className="theme-summary-sub">
-            {theme === "system" ? "Follows your system light/dark setting" : "Colour skin"}
-          </span>
+          <span className="theme-summary-sub">{sub}</span>
         </div>
         <button className="btn" onClick={() => setOpen(true)}>
           Change appearance…

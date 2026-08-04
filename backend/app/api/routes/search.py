@@ -244,15 +244,25 @@ def search_images(
         vector = embeddings.encode_text(q)
         # Over-fetch candidates: many will be filtered out by the scope, so ask
         # for a generous pool and keep the first that survive, in similarity
-        # order. The set of ids allowed by the current scope is looked up once.
-        allowed_ids = {
-            row.id
-            for row in sources_service.exclude_unavailable(
-                _apply_scope(db.query(Image.id), **scope_kwargs), unavailable
-            ).all()
-        }
+        # order.
         candidate_pool = max(limit * 5, 200)
         matches = embeddings.query_similar(engine, vector, k=candidate_pool)
+        candidate_ids = [image_id for image_id, _ in matches if image_id not in seen_ids]
+        # Which of THOSE the current scope allows - one query over a couple of
+        # hundred ids. This used to load every id in scope into a set and test
+        # the candidates against it, which made a search cost a full pass over
+        # the library on a library that is only ever getting bigger. Same
+        # answer: the ranking never looked past this candidate pool either.
+        allowed_ids: set[str] = set()
+        for start in range(0, len(candidate_ids), 500):  # SQLite's parameter limit
+            chunk = candidate_ids[start : start + 500]
+            allowed_ids.update(
+                row.id
+                for row in sources_service.exclude_unavailable(
+                    _apply_scope(db.query(Image.id), **scope_kwargs).filter(Image.id.in_(chunk)),
+                    unavailable,
+                ).all()
+            )
         for image_id, distance in matches:
             if len(results) >= limit:
                 break

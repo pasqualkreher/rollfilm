@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import type { AlbumOut, ColorLabel, Facet, ViewMode } from "../api/types";
 import { ViewModeToggle } from "./ViewModeToggle";
 import { ColorLabelPicker } from "./ColorLabelPicker";
@@ -231,21 +231,17 @@ export function PhotoFilters({
 
   // The pin sits in the panel's top-right corner, so it's found where the
   // filters are and reads as "keep this panel". Toggling it moves the very same
-  // menu between the popover and the docked row. Unpinning mounts a fresh chip,
-  // whose popover starts closed - which would take the filters off screen
-  // entirely - so `reopen` opens it: the panel was just there, it should stay.
-  // Only read when a chip mounts, so leaving it set costs nothing.
-  const [reopen, setReopen] = useState(false);
+  // menu between the popover and the docked row. Unpinning lands on the closed
+  // chip rather than reopening the popover: unpinning is how you put the
+  // filters away, so leaving the same panel on screen only means clicking a
+  // second time to be rid of it.
   const pinButton = (
     <button
       type="button"
       className={`filter-pin${pinned ? " active" : ""}`}
       aria-pressed={pinned}
       title={pinned ? "Unpin the filters (back to a popover)" : "Pin the filters open"}
-      onClick={() => {
-        setReopen(pinned);
-        setFilterPinned(!pinned);
-      }}
+      onClick={() => setFilterPinned(!pinned)}
     >
       <IconPin size={13} filled={pinned} />
     </button>
@@ -403,7 +399,7 @@ export function PhotoFilters({
             </span>
           </button>
         ) : (
-          <FilterChip title="Filter photos" active={isFiltering} label={chipLabel} initialOpen={reopen}>
+          <FilterChip title="Filter photos" active={isFiltering} label={chipLabel}>
             {menu}
           </FilterChip>
         )}

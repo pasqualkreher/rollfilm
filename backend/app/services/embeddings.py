@@ -1,4 +1,7 @@
+import logging
 import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +11,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # torch and open_clip are imported lazily inside the functions that need them
 # (see _get_model / encode_*). They pull in hundreds of MB across thousands of
@@ -70,11 +75,58 @@ def _get_model():
     return _model, _preprocess, _tokenizer
 
 
+def warm_up() -> bool:
+    """Load the model now, off the request path. Returns whether it's ready.
+
+    The forward passes themselves are not the wait: a text query measures 13ms
+    once the model is up, against 4.3s to import open_clip and build it. That
+    load is the whole of "the first search is slow", so it belongs in the
+    background at startup - see start_background_warmup."""
+    try:
+        _get_model()
+        return True
+    except Exception:
+        logger.exception("CLIP warm-up failed; the model will load on first use instead")
+        return False
+
+
+def weights_are_cached() -> bool:
+    """Whether the CLIP weights are already on disk.
+
+    Warming up must never *fetch* them: on a fresh install that would put a
+    several-hundred-MB download in front of a user who has not searched for
+    anything yet. A miss here just means the model loads on first use, as it
+    always did."""
+    try:
+        return any(settings.model_cache_root.glob("models--*CLIP*"))
+    except OSError:
+        return False
+
+
+def start_background_warmup() -> None:
+    """Warm the model on a daemon thread once the import rush has passed."""
+
+    def run() -> None:
+        # An import is the one job that wants every core; the warm-up is not
+        # urgent, so it waits for the derivative queue to drain (a few minutes
+        # at most - a long import just means the model loads on first use).
+        from app.workers.queue import derivatives_pending
+
+        for _ in range(60):
+            if derivatives_pending() == 0:
+                break
+            time.sleep(5)
+        if weights_are_cached():
+            warm_up()
+
+    threading.Thread(target=run, name="clip-warmup", daemon=True).start()
+
+
 def encode_image(image: PILImage.Image) -> np.ndarray:
     import torch
 
     model, preprocess, _ = _get_model()
-    with torch.no_grad():
+    with torch.inference_mode():
         tensor = preprocess(image).unsqueeze(0)
         features = model.encode_image(tensor)
         features /= features.norm(dim=-1, keepdim=True)
@@ -88,22 +140,46 @@ def encode_images(images: list[PILImage.Image]) -> np.ndarray:
     import torch
 
     model, preprocess, _ = _get_model()
-    with torch.no_grad():
+    with torch.inference_mode():
         batch = torch.stack([preprocess(image) for image in images])
         features = model.encode_image(batch)
         features /= features.norm(dim=-1, keepdim=True)
     return features.numpy().astype(np.float32)
 
 
+# The same query text comes back constantly: the grid re-runs its search on
+# every filter change, and refining a rating or a date keeps `q` identical. The
+# vector for a given string never changes, so encoding it a second time is pure
+# waste - 2KB per entry buys back a forward pass each time.
+_TEXT_CACHE: OrderedDict[str, np.ndarray] = OrderedDict()
+_TEXT_CACHE_MAX = 256
+_text_cache_lock = threading.Lock()
+
+
 def encode_text(query: str) -> np.ndarray:
     import torch
 
+    with _text_cache_lock:
+        hit = _TEXT_CACHE.get(query)
+        if hit is not None:
+            _TEXT_CACHE.move_to_end(query)
+            # A copy, so a caller that scales or writes into the vector it got
+            # can't corrupt the cache for every later search.
+            return hit.copy()
+
     model, _, tokenizer = _get_model()
-    with torch.no_grad():
+    with torch.inference_mode():
         tokens = tokenizer([query])
         features = model.encode_text(tokens)
         features /= features.norm(dim=-1, keepdim=True)
-    return features.squeeze(0).numpy().astype(np.float32)
+    vector = features.squeeze(0).numpy().astype(np.float32)
+
+    with _text_cache_lock:
+        _TEXT_CACHE[query] = vector
+        _TEXT_CACHE.move_to_end(query)
+        while len(_TEXT_CACHE) > _TEXT_CACHE_MAX:
+            _TEXT_CACHE.popitem(last=False)
+    return vector.copy()
 
 
 def encode_texts(queries: list[str]) -> np.ndarray:
@@ -112,7 +188,7 @@ def encode_texts(queries: list[str]) -> np.ndarray:
     import torch
 
     model, _, tokenizer = _get_model()
-    with torch.no_grad():
+    with torch.inference_mode():
         tokens = tokenizer(queries)
         features = model.encode_text(tokens)
         features /= features.norm(dim=-1, keepdim=True)

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
@@ -543,15 +550,45 @@ export function ThumbnailGrid({
   // consumed by the first grid that renders with data (which is exactly the
   // grid the back navigation returns to), found or not, so it can never cause
   // a surprise jump in some later, unrelated grid.
+  //
+  // The jump used to flash: the grid painted at the top of the library for a
+  // frame or two and then snapped down. So the scroll moved into a LAYOUT
+  // effect (before the browser paints anything) and the grid stays invisible
+  // until it has happened, then eases in - what you see is the right part of
+  // the library fading up, never the wrong one. Only grids that were actually
+  // returned to do this; a normal visit renders as before.
+  // Hiding the grid means the un-hiding must be unconditional: every path out
+  // of this effect has to reach setRestoring(false), or the grid stays blank
+  // for good. It can be entered a second time with the marker already spent
+  // (StrictMode double-invokes effects, and any other grid may have consumed
+  // it first), so the scroll is guarded on its own and the reveal is not. The
+  // timer backs up the frame callback, which doesn't fire while the window is
+  // hidden - switching apps mid-transition must not leave an empty library.
   const pendingScrollId = useRef<string | null>(peekLastViewedImage());
+  const fadesIn = useRef(pendingScrollId.current !== null);
+  const [restoring, setRestoring] = useState(pendingScrollId.current !== null);
   const hasImages = images.length > 0;
-  useEffect(() => {
-    if (!hasImages || pendingScrollId.current === null) return;
-    const target = cardEls.current.get(pendingScrollId.current);
-    pendingScrollId.current = null;
-    clearLastViewedImage();
-    target?.scrollIntoView({ block: "center" });
-  }, [hasImages]);
+  useLayoutEffect(() => {
+    if (!restoring) return;
+    // Still waiting for the photos themselves; nothing to scroll to yet.
+    if (!hasImages) return;
+    if (pendingScrollId.current !== null) {
+      const target = cardEls.current.get(pendingScrollId.current);
+      pendingScrollId.current = null;
+      clearLastViewedImage();
+      target?.scrollIntoView({ block: "center" });
+    }
+    // Next frame, so the browser has the grid at opacity 0 in its "before"
+    // state and the class removal actually transitions instead of snapping.
+    const reveal = () => setRestoring(false);
+    const raf = requestAnimationFrame(reveal);
+    const timer = window.setTimeout(reveal, 250);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [hasImages, restoring]);
+  const fadeClass = fadesIn.current ? (restoring ? " grid-fade grid-restoring" : " grid-fade") : "";
 
   if (images.length === 0) {
     return <div className="empty-state">No photos here yet.</div>;
@@ -634,7 +671,7 @@ export function ThumbnailGrid({
 
   if (!groupByDate) {
     return (
-      <div className={`thumbnail-grid${fewClass}`}>
+      <div className={`thumbnail-grid${fewClass}${fadeClass}`}>
         {images.map((image, index) => renderCard(image, index))}
         <i className="grid-filler" aria-hidden />
       </div>
@@ -645,7 +682,7 @@ export function ThumbnailGrid({
   const sections = buildSections(images, granularity);
 
   return (
-    <div className="timeline has-scrubber" ref={rootRef}>
+    <div className={`timeline has-scrubber${fadeClass}`} ref={rootRef}>
       {sections.map((section) => (
         <section
           key={section.label}

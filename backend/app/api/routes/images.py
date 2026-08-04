@@ -1469,6 +1469,90 @@ def editor_preview(
 _segment_lock = threading.Lock()
 
 
+def _segment_geometry(payload: schemas.SegmentRequest) -> dict:
+    """The framing the mask has to be found in, validated."""
+    if payload.rotation % 90 != 0:
+        raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
+    _validate_crop(payload.crop)
+    crop = None
+    if payload.crop is not None:
+        crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
+    return dict(
+        rotation=payload.rotation % 360,
+        crop=crop,
+        distortion=_clamp100(payload.distortion),
+        flip_h=bool(payload.flip_h),
+        flip_v=bool(payload.flip_v),
+        straighten=max(-45.0, min(45.0, float(payload.straighten))),
+        persp_h=_clamp100(payload.persp_h),
+        persp_v=_clamp100(payload.persp_v),
+    )
+
+
+def _segment_cache_key(image: Image, geometry: dict) -> str:
+    """Identifies the exact frame being analysed, so asking for a second subject
+    on it (sky, then greenery) reuses the first pass instead of re-running the
+    model. The edit revision is in there because saving an edit can change the
+    file the frame is decoded from."""
+    return f"{image.id}:{image.edit_rev or 0}:" + json.dumps(geometry, sort_keys=True, default=str)
+
+
+# Frames whose speculative pass is queued or running, so opening and closing the
+# Masks panel a few times doesn't queue the same work again and again.
+_prepare_inflight: set[str] = set()
+_prepare_lock = threading.Lock()
+
+
+@router.post("/{image_id}/segment/prepare", status_code=202)
+def prepare_segmentation(
+    image_id: str,
+    payload: schemas.SegmentRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run the subject-detection pass for this frame now, in the background.
+
+    The editor calls this when the Masks panel opens - a second or two before
+    the user picks a subject. One pass finds all six, so by the time they click
+    Sky the answer is usually already in the cache and the click is instant;
+    if it isn't, /segment does exactly what it always did. Fire and forget:
+    nothing here is returned and a failure is not the user's problem, since the
+    real request will surface it."""
+    if not segmentation.weights_are_cached():
+        return {"status": "unavailable"}
+    geometry = _segment_geometry(payload)
+    image = get_owned_image(db, current_user.id, image_id)
+    cache_key = _segment_cache_key(image, geometry)
+    if segmentation.is_cached(cache_key):
+        return {"status": "cached"}
+    with _prepare_lock:
+        if cache_key in _prepare_inflight:
+            return {"status": "running"}
+        _prepare_inflight.add(cache_key)
+
+    def run() -> None:
+        try:
+            with SessionLocal() as bg_db:
+                bg_image = bg_db.get(Image, image_id)
+                if bg_image is None or bg_image.owner_id != current_user.id:
+                    return
+                # Behind the same lock as a real segmentation, so a speculative
+                # pass can never make the user's own click wait for the GPU.
+                with _segment_lock:
+                    if segmentation.is_cached(cache_key):
+                        return
+                    framed = thumbnails.render_framed_base_image(bg_image, **geometry)
+                    segmentation.segment(framed, "sky", cache_key=cache_key)
+        except Exception:
+            logger.info("Speculative segmentation for %s did not complete", image_id, exc_info=True)
+        finally:
+            with _prepare_lock:
+                _prepare_inflight.discard(cache_key)
+
+    threading.Thread(target=run, name=f"segment-prepare-{image_id[:8]}", daemon=True).start()
+    return {"status": "started"}
+
+
 @router.post("/{image_id}/segment", response_model=schemas.SegmentOut)
 def segment_image(
     image_id: str,
@@ -1480,30 +1564,11 @@ def segment_image(
     the photo and return it as a soft mask, for the editor to drop into a mask as
     a `semantic` sub-mask. Runs on the framed but untoned image, so the mask lines
     up with the crop the user is looking at."""
-    if payload.rotation % 90 != 0:
-        raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
-    _validate_crop(payload.crop)
     if payload.subject not in segmentation.CLASS_GROUPS:
         raise HTTPException(status_code=400, detail=f"unknown subject {payload.subject!r}")
+    geometry = _segment_geometry(payload)
     image = get_owned_image(db, current_user.id, image_id)
-    crop = None
-    if payload.crop is not None:
-        crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
-    geometry = dict(
-        rotation=payload.rotation % 360,
-        crop=crop,
-        distortion=_clamp100(payload.distortion),
-        flip_h=bool(payload.flip_h),
-        flip_v=bool(payload.flip_v),
-        straighten=max(-45.0, min(45.0, float(payload.straighten))),
-        persp_h=_clamp100(payload.persp_h),
-        persp_v=_clamp100(payload.persp_v),
-    )
-    # Identifies the exact frame being analysed, so asking for a second subject
-    # on it (sky, then greenery) reuses the first pass instead of re-running the
-    # model. The edit revision is in there because saving an edit can change the
-    # file the frame is decoded from.
-    cache_key = f"{image.id}:{image.edit_rev or 0}:" + json.dumps(geometry, sort_keys=True, default=str)
+    cache_key = _segment_cache_key(image, geometry)
     try:
         with _segment_lock:
             framed = thumbnails.render_framed_base_image(image, **geometry)

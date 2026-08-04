@@ -1,16 +1,39 @@
+/* ---- Palette -------------------------------------------------------------
+   Two skins are live at once - one for light, one for dark - plus a Light /
+   Dark / Auto switch that decides which of the two is showing (Settings ->
+   Appearance). state/theme.ts resolves those three values into a single
+   data-theme on <html> before React renders, so exactly one block below is
+   ever in play.
+
+   :root carries Graphite, the default light skin, because that is what paints
+   before any script runs; the media query right after does the same for
+   Graphite Dark on a system set to dark. Every skin defines the same
+   variables - only the values differ. color-scheme per skin keeps native
+   controls (scrollbars, date pickers, form widgets) in step with the palette.
+
+   The skins are deliberately few and deliberately quiet: neutral surfaces,
+   desaturated accents, nothing that competes with the photos. The picker's
+   swatches in state/theme.ts mirror --bg / --bg-elevated / --text / --accent
+   from here. */
 :root {
-  --bg: #ffffff;
-  --bg-elevated: #f6f6f7;
+  --bg: #f3f3f4;
+  --bg-elevated: #fafafb;
   /* A quieter fill for hover/rest states that shouldn't read as a raised card. */
-  --hover: #ececee;
-  --border: #e2e2e4;
-  --text: #1a1a1a;
-  --text-muted: #6b6b70;
-  --accent: #3a6df0;
+  --hover: #e8e8ea;
+  --border: #dedee1;
+  --text: #2b2b2f;
+  --text-muted: #78787e;
+  --accent: #55555c;
   --accent-contrast: #ffffff;
   /* Translucent accent for soft-selected states (active nav, active segment). */
-  --accent-soft: rgba(58, 109, 240, 0.12);
-  --danger: #d0392b;
+  --accent-soft: rgba(85, 85, 92, 0.12);
+  --danger: #bf4a3e;
+  /* Surround behind the photo when the editor/lightbox is set to "Light
+     background". On a light skin that's simply the panel colour; the dark skins
+     override it with something lighter than their own panels, so the option
+     still does what it says - a brighter surround to judge the photo against -
+     without going to white. */
+  --editor-stage-light: var(--bg-elevated);
   /* Corner style (Settings → Appearance): every radius in this file is a
      multiple of --corner-scale, so data-corners="square" (state/corners.ts)
      squares the whole UI by zeroing the scale. True circles (border-radius:
@@ -23,44 +46,26 @@
   color-scheme: light;
 }
 
-/* Dark palette, shared by the OS-auto rule and the manual "force dark" rule
-   below. Only applied automatically when the user hasn't picked a theme
-   (:root has no data-theme); a manual choice sets data-theme and wins. */
+/* First paint on a dark system, before state/theme.ts sets data-theme. Same
+   values as the Graphite Dark block below. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #17181a;
-    --bg-elevated: #212226;
-    --hover: #2b2c31;
-    --border: #34353a;
-    --text: #f1f1f2;
+    --bg: #2b2b2f;
+    --bg-elevated: #34343a;
+    --hover: #3d3d44;
+    --border: #45454c;
+    --text: #f3f3f4;
     --text-muted: #9a9aa0;
-    --accent: #6d93ff;
-    --accent-contrast: #0c0c0d;
-    --accent-soft: rgba(109, 147, 255, 0.18);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
+    --accent: #b4b4bc;
+    --accent-contrast: #26262a;
+    --accent-soft: rgba(180, 180, 188, 0.16);
+    --danger: #e0685b;
+    --editor-stage-light: #4b4b52;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
     color-scheme: dark;
   }
 }
-
-/* User forced dark (Settings → Appearance), regardless of the OS setting. */
-:root[data-theme="dark"] {
-  --bg: #17181a;
-  --bg-elevated: #212226;
-  --hover: #2b2c31;
-  --border: #34353a;
-  --text: #f1f1f2;
-  --text-muted: #9a9aa0;
-  --accent: #6d93ff;
-  --accent-contrast: #0c0c0d;
-  --accent-soft: rgba(109, 147, 255, 0.18);
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
-  color-scheme: dark;
-}
-
-/* User forced light: the :root defaults already are light, so nothing more is
-   needed - setting data-theme="light" simply disables the OS-dark rule above. */
 
 /* Square corner style (Settings → Appearance): zeroing the scale collapses
    every calc(<px> * var(--corner-scale)) radius in this file to 0. */
@@ -69,188 +74,21 @@
 }
 
 
-/* ---- Colour skins (Settings → Appearance) ------------------------------------
-   Each block is a full palette keyed off data-theme, driven by state/theme.ts
-   (the picker's swatch colours mirror --bg / --bg-elevated / --text / --accent
-   here). color-scheme per skin keeps native controls (scrollbars, date pickers,
-   form widgets) in step with the palette. */
+/* ---- Skins ---------------------------------------------------------------
+   Three pairs, each a light and a dark cut of the same idea:
 
-/* Soft Grey — a calm light grey rather than stark white; elevated reads lighter
-   than the page so cards still lift off it. */
-:root[data-theme="soft-grey"] {
-  --bg: #e8e8ea;
-  --bg-elevated: #f2f2f4;
-  --hover: #dcdce0;
-  --border: #cbcbd0;
-  --text: #26262a;
-  --text-muted: #66666d;
-  --accent: #3a6df0;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(58, 109, 240, 0.12);
-  --danger: #c9382b;
-  color-scheme: light;
-}
+   Graphite - neutral greys with a light-black accent; the quietest of the
+              three and the default pair.
+   Slate    - the same restraint pulled cool, steel blue instead of grey.
+   Ink      - high contrast: paper white against near-black, so the surround
+              drops away and only the photo carries colour.
 
-/* Graphite — a very soft monochrome light skin: light-grey surfaces with a
-   muted "light black" graphite accent (buttons, active states, focus rings)
-   instead of a saturated colour, so everything reads gentle and understated. */
-:root[data-theme="graphite"] {
-  --bg: #f3f3f4;
-  --bg-elevated: #fafafb;
-  --hover: #e8e8ea;
-  --border: #dedee1;
-  --text: #2b2b2f;
-  --text-muted: #78787e;
-  --accent: #55555c;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(85, 85, 92, 0.12);
-  --danger: #bf4a3e;
-  color-scheme: light;
-}
+   data-theme="graphite" needs no block of its own - :root above already is
+   that palette. */
 
-/* Greige — warm grey-beige, low contrast: soft taupe surfaces with a muted
-   taupe accent, everything gentle and close in tone. */
-:root[data-theme="greige"] {
-  --bg: #e9e6e0;
-  --bg-elevated: #f2efe9;
-  --hover: #ded9d0;
-  --border: #cec8bd;
-  --text: #3a362f;
-  --text-muted: #837c70;
-  --accent: #8a7f6d;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(138, 127, 109, 0.15);
-  --danger: #b5544a;
-  color-scheme: light;
-}
-
-/* Atelier — vintage-minimal light: aged ivory paper, typewriter-ink text,
-   antique brass as the single restrained accent. Near-monochrome surfaces
-   keep it minimal; the warm cast keeps it vintage. Pairs with Darkroom. */
-:root[data-theme="atelier"] {
-  --bg: #f1eee6;
-  --bg-elevated: #f9f7f1;
-  --hover: #e6e1d5;
-  --border: #d8d2c4;
-  --text: #2e2a24;
-  --text-muted: #777060;
-  --accent: #8f6a4e;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(143, 106, 78, 0.14);
-  --danger: #b0523f;
-  color-scheme: light;
-}
-
-/* Oat — soft oatmeal beige with a warm tan accent, calm and low contrast. */
-:root[data-theme="oat"] {
-  --bg: #eeeae1;
-  --bg-elevated: #f6f2ea;
-  --hover: #e4decd;
-  --border: #d6cfbd;
-  --text: #403a2f;
-  --text-muted: #8a8170;
-  --accent: #a9926b;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(169, 146, 107, 0.15);
-  --danger: #b5544a;
-  color-scheme: light;
-}
-
-/* Stone — neutral warm-grey stone, very low contrast with a soft stone accent. */
-:root[data-theme="stone"] {
-  --bg: #e7e6e3;
-  --bg-elevated: #f1f0ed;
-  --hover: #dcdad5;
-  --border: #ccc9c2;
-  --text: #37352f;
-  --text-muted: #7e7b73;
-  --accent: #7d7a70;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(125, 122, 112, 0.14);
-  --danger: #b5544a;
-  color-scheme: light;
-}
-
-/* Fog — cool light grey, very low contrast with a soft slate accent. */
-:root[data-theme="fog"] {
-  --bg: #e8e9eb;
-  --bg-elevated: #f1f2f4;
-  --hover: #dddfe2;
-  --border: #ccced2;
-  --text: #363840;
-  --text-muted: #787b83;
-  --accent: #7c828e;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(124, 130, 142, 0.14);
-  --danger: #bf4a3e;
-  color-scheme: light;
-}
-
-/* Sand — pale warm sand with a muted golden-tan accent, soft and low contrast. */
-:root[data-theme="sand"] {
-  --bg: #f0e9dc;
-  --bg-elevated: #f7f1e7;
-  --hover: #e7ddca;
-  --border: #dccdb2;
-  --text: #443b2b;
-  --text-muted: #8c8069;
-  --accent: #b09168;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(176, 145, 104, 0.15);
-  --danger: #b5544a;
-  color-scheme: light;
-}
-
-/* Sepia — warm cream paper with dark-brown ink and a terracotta accent. */
-:root[data-theme="sepia"] {
-  --bg: #f4ecdd;
-  --bg-elevated: #ece2cf;
-  --hover: #e4d8c0;
-  --border: #d8c9ac;
-  --text: #3d3226;
-  --text-muted: #7d6f57;
-  --accent: #b5651d;
-  --accent-contrast: #fff8ec;
-  --accent-soft: rgba(181, 101, 29, 0.15);
-  --danger: #b3402e;
-  color-scheme: light;
-}
-
-/* Rosé — soft warm blush with a dusty-rose accent. */
-:root[data-theme="rose"] {
-  --bg: #f7edea;
-  --bg-elevated: #fbf3f1;
-  --hover: #f0e0db;
-  --border: #e6cfc8;
-  --text: #43322f;
-  --text-muted: #8a6f69;
-  --accent: #c25d6e;
-  --accent-contrast: #fff6f4;
-  --accent-soft: rgba(194, 93, 110, 0.15);
-  --danger: #bb3b46;
-  color-scheme: light;
-}
-
-/* Dim — a soft slate that's dark but not black; easier on the eyes at night. */
-:root[data-theme="dim"] {
-  --bg: #2c2f36;
-  --bg-elevated: #363a43;
-  --hover: #40454f;
-  --border: #474d58;
-  --text: #e6e8ec;
-  --text-muted: #a3a9b4;
-  --accent: #7aa2f7;
-  --accent-contrast: #1a1c20;
-  --accent-soft: rgba(122, 162, 247, 0.18);
-  --danger: #e0685b;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
-  color-scheme: dark;
-}
-
-/* Graphite Dark — the inverse of Graphite: soft "light black" charcoal surfaces
-   with a muted light-grey accent (buttons, active states, focus rings) instead
-   of a saturated colour, so it stays gentle and understated in the dark. */
+/* Graphite Dark — soft "light black" charcoal surfaces with a muted light-grey
+   accent (buttons, active states, focus rings) instead of a saturated colour,
+   so it stays gentle and understated in the dark. */
 :root[data-theme="graphite-dark"] {
   --bg: #2b2b2f;
   --bg-elevated: #34343a;
@@ -262,373 +100,79 @@
   --accent-contrast: #26262a;
   --accent-soft: rgba(180, 180, 188, 0.16);
   --danger: #e0685b;
+  --editor-stage-light: #4b4b52;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
 }
 
-/* Taupe — warm dark taupe, low contrast: soft brown-grey surfaces with a muted
-   grey-beige accent, gentle and close in tone. */
-:root[data-theme="taupe"] {
-  --bg: #302c28;
-  --bg-elevated: #3a3531;
-  --hover: #443e39;
-  --border: #4d463f;
-  --text: #ece6dd;
-  --text-muted: #a39a8c;
-  --accent: #b3a48d;
-  --accent-contrast: #2a2621;
-  --accent-soft: rgba(179, 164, 141, 0.16);
-  --danger: #d9705d;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Slate — cool dark grey, low contrast with a soft cool-grey accent. */
+/* Slate — cool light greys with a blue cast, and a deep steel blue as the one
+   piece of colour. Reads a shade crisper than Graphite without going loud. */
 :root[data-theme="slate"] {
-  --bg: #2d2f33;
-  --bg-elevated: #363940;
-  --hover: #40434a;
-  --border: #494d55;
-  --text: #e6e8ea;
-  --text-muted: #9a9ea6;
-  --accent: #a4abb5;
-  --accent-contrast: #26282c;
-  --accent-soft: rgba(164, 171, 181, 0.16);
-  --danger: #e0685b;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
-  color-scheme: dark;
-}
-
-/* Vintage — warm charcoal ("light black") with a vintage-orange accent. */
-:root[data-theme="vintage"] {
-  --bg: #24211d;
-  --bg-elevated: #2e2a24;
-  --hover: #38332b;
-  --border: #423c33;
-  --text: #ece4d6;
-  --text-muted: #a89e8c;
-  --accent: #e08a3c;
-  --accent-contrast: #201d18;
-  --accent-soft: rgba(224, 138, 60, 0.18);
-  --danger: #cf5b3c;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Darkroom — vintage-minimal dark, Atelier's counterpart: the warm near-black
-   of a photo lab, soft paper-white ink, the same antique brass accent but
-   desaturated for the dark surface. Quieter than Vintage (whose orange pops);
-   this one stays matte and calm. */
-:root[data-theme="darkroom"] {
-  --bg: #1e1c19;
-  --bg-elevated: #282521;
-  --hover: #322e28;
-  --border: #3d382f;
-  --text: #e8e2d4;
-  --text-muted: #9d9483;
-  --accent: #b5936b;
-  --accent-contrast: #1d1a16;
-  --accent-soft: rgba(181, 147, 107, 0.18);
-  --danger: #c95f4c;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Nord — cool blue-grey with a frost-cyan accent. */
-:root[data-theme="nord"] {
-  --bg: #2e3440;
-  --bg-elevated: #3b4252;
-  --hover: #434c5e;
-  --border: #4c566a;
-  --text: #eceff4;
-  --text-muted: #a9b1c2;
-  --accent: #88c0d0;
-  --accent-contrast: #2e3440;
-  --accent-soft: rgba(136, 192, 208, 0.2);
-  --danger: #bf616a;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
-  color-scheme: dark;
-}
-
-/* Forest — deep green with a leafy accent. */
-:root[data-theme="forest"] {
-  --bg: #1a2620;
-  --bg-elevated: #223029;
-  --hover: #2b3b32;
-  --border: #35473c;
-  --text: #e4ede6;
-  --text-muted: #96a89c;
-  --accent: #6fbf8b;
-  --accent-contrast: #121a15;
-  --accent-soft: rgba(111, 191, 139, 0.18);
-  --danger: #e0685b;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
-  color-scheme: dark;
-}
-
-/* Solarized Light — the classic warm-cream base with a cyan accent. */
-:root[data-theme="solarized-light"] {
-  --bg: #fdf6e3;
-  --bg-elevated: #eee8d5;
-  --hover: #e6dfc4;
-  --border: #ddd5b8;
-  --text: #586e75;
-  --text-muted: #93a1a1;
-  --accent: #268bd2;
-  --accent-contrast: #fdf6e3;
-  --accent-soft: rgba(38, 139, 210, 0.14);
-  --danger: #dc322f;
-  color-scheme: light;
-}
-
-/* Lavender — cool light lilac with a violet accent. */
-:root[data-theme="lavender"] {
-  --bg: #f1eef8;
-  --bg-elevated: #f8f6fc;
-  --hover: #e7e1f3;
-  --border: #d8cfec;
-  --text: #322b47;
-  --text-muted: #746b8c;
-  --accent: #7c5cd6;
+  --bg: #edeff2;
+  --bg-elevated: #f8f9fb;
+  --hover: #e2e5ea;
+  --border: #d3d8de;
+  --text: #23272d;
+  --text-muted: #6d7480;
+  --accent: #4c6079;
   --accent-contrast: #ffffff;
-  --accent-soft: rgba(124, 92, 214, 0.14);
-  --danger: #cc3b57;
+  --accent-soft: rgba(76, 96, 121, 0.13);
+  --danger: #b8493c;
   color-scheme: light;
 }
 
-/* Mint — crisp pale green with a teal accent. */
-:root[data-theme="mint"] {
-  --bg: #ecf5ef;
-  --bg-elevated: #f4faf6;
-  --hover: #ddece2;
-  --border: #cbe0d3;
-  --text: #223a2e;
-  --text-muted: #5f7d6d;
-  --accent: #10967e;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(16, 150, 126, 0.14);
-  --danger: #cc4136;
-  color-scheme: light;
-}
-
-/* Sky — cool pale blue with an azure accent. */
-:root[data-theme="sky"] {
-  --bg: #eaf2fa;
-  --bg-elevated: #f4f9fd;
-  --hover: #dce9f4;
-  --border: #c6dbec;
-  --text: #1d3247;
-  --text-muted: #5e7b93;
-  --accent: #2b7fd4;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(43, 127, 212, 0.14);
-  --danger: #cc4136;
-  color-scheme: light;
-}
-
-/* Peach — warm apricot with a soft-orange accent. */
-:root[data-theme="peach"] {
-  --bg: #fdf1e7;
-  --bg-elevated: #fef7f0;
-  --hover: #f7e4d2;
-  --border: #eed3ba;
-  --text: #463122;
-  --text-muted: #8d7360;
-  --accent: #e0763a;
-  --accent-contrast: #fff8f1;
-  --accent-soft: rgba(224, 118, 58, 0.15);
-  --danger: #c94a2e;
-  color-scheme: light;
-}
-
-/* Gruvbox Light — retro yellowed paper with a burnt-orange accent. */
-:root[data-theme="gruvbox-light"] {
-  --bg: #fbf1c7;
-  --bg-elevated: #f2e5bc;
-  --hover: #ebdbb2;
-  --border: #d5c4a1;
-  --text: #3c3836;
-  --text-muted: #7c6f64;
-  --accent: #d65d0e;
-  --accent-contrast: #fbf1c7;
-  --accent-soft: rgba(214, 93, 14, 0.14);
-  --danger: #cc241d;
-  color-scheme: light;
-}
-
-/* Ember Light — neutral light greys with the same vivid, popping orange
-   accent as the Ember dark skin. */
-:root[data-theme="ember-light"] {
-  --bg: #f6f5f4;
-  --bg-elevated: #ffffff;
-  --hover: #ebeae8;
-  --border: #dedcd9;
-  --text: #232324;
-  --text-muted: #6f6e73;
-  --accent: #ff7a1a;
-  --accent-contrast: #1a120a;
-  --accent-soft: rgba(255, 122, 26, 0.22);
-  --danger: #d0392b;
-  color-scheme: light;
-}
-
-/* Dracula — dark blue-grey with a vivid purple accent. */
-:root[data-theme="dracula"] {
-  --bg: #282a36;
-  --bg-elevated: #343746;
-  --hover: #3d4054;
-  --border: #474b5e;
-  --text: #f8f8f2;
-  --text-muted: #a0a3b8;
-  --accent: #bd93f9;
-  --accent-contrast: #21222c;
-  --accent-soft: rgba(189, 147, 249, 0.2);
-  --danger: #ff5555;
+/* Slate Dark — the same cool cast at night: blue-grey charcoal with a softened
+   steel-blue accent that stays legible against it. */
+:root[data-theme="slate-dark"] {
+  --bg: #22262c;
+  --bg-elevated: #2a2f36;
+  --hover: #333941;
+  --border: #3c434c;
+  --text: #e7eaee;
+  --text-muted: #97a0ab;
+  --accent: #8fa8c4;
+  --accent-contrast: #1b1f24;
+  --accent-soft: rgba(143, 168, 196, 0.16);
+  --danger: #dd6a5c;
+  --editor-stage-light: #414851;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
 }
 
-/* Solarized Dark — the classic teal-charcoal base with a blue accent. */
-:root[data-theme="solarized-dark"] {
-  --bg: #002b36;
-  --bg-elevated: #073642;
-  --hover: #0d4450;
-  --border: #16505c;
-  --text: #eee8d5;
-  --text-muted: #8ba1a6;
-  --accent: #268bd2;
-  --accent-contrast: #002b36;
-  --accent-soft: rgba(38, 139, 210, 0.22);
-  --danger: #dc322f;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
+/* Ink — white paper, near-black type, and the accent is that same near-black:
+   the most contrasted of the three, for bright rooms and for judging prints. */
+:root[data-theme="ink"] {
+  --bg: #ffffff;
+  --bg-elevated: #f7f7f8;
+  --hover: #ececee;
+  --border: #dcdcdf;
+  --text: #121214;
+  --text-muted: #6a6a70;
+  --accent: #1c1c1f;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(28, 28, 31, 0.1);
+  --danger: #c0392b;
+  color-scheme: light;
 }
 
-/* Midnight — deep navy with an electric-blue accent. */
-:root[data-theme="midnight"] {
-  --bg: #10141f;
-  --bg-elevated: #192030;
-  --hover: #222b40;
-  --border: #2c374f;
-  --text: #e5eaf5;
-  --text-muted: #8b95ad;
-  --accent: #4d8dff;
-  --accent-contrast: #0a0d16;
-  --accent-soft: rgba(77, 141, 255, 0.2);
-  --danger: #e0685b;
+/* Ink Dark — the near-black surround photographers ask for: the interface
+   recedes almost to nothing and a near-white accent carries the controls. */
+:root[data-theme="ink-dark"] {
+  --bg: #0f0f11;
+  --bg-elevated: #17171a;
+  --hover: #202024;
+  --border: #2b2b31;
+  --text: #f4f4f5;
+  --text-muted: #8e8e96;
+  --accent: #e6e6e9;
+  --accent-contrast: #131316;
+  --accent-soft: rgba(230, 230, 233, 0.14);
+  --danger: #e5675a;
+  --editor-stage-light: #2f2f34;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6);
-  color-scheme: dark;
-}
-
-/* Plum — warm dark aubergine with a magenta accent. */
-:root[data-theme="plum"] {
-  --bg: #241b2b;
-  --bg-elevated: #2f2338;
-  --hover: #3a2c45;
-  --border: #453551;
-  --text: #efe6f2;
-  --text-muted: #a897ad;
-  --accent: #d16ba5;
-  --accent-contrast: #1c141f;
-  --accent-soft: rgba(209, 107, 165, 0.2);
-  --danger: #e0685b;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Ocean — deep teal-blue with a cyan accent. */
-:root[data-theme="ocean"] {
-  --bg: #0f1e26;
-  --bg-elevated: #172b34;
-  --hover: #1f3843;
-  --border: #2a4855;
-  --text: #e2edf1;
-  --text-muted: #86a4b0;
-  --accent: #33b3c8;
-  --accent-contrast: #0a161c;
-  --accent-soft: rgba(51, 179, 200, 0.2);
-  --danger: #e0685b;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Monokai — the classic olive-charcoal editor look with a magenta accent. */
-:root[data-theme="monokai"] {
-  --bg: #272822;
-  --bg-elevated: #32332b;
-  --hover: #3b3c33;
-  --border: #48493e;
-  --text: #f8f8f2;
-  --text-muted: #a6a795;
-  --accent: #f92672;
-  --accent-contrast: #1e1f1a;
-  --accent-soft: rgba(249, 38, 114, 0.18);
-  --danger: #e64b3c;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Rosé Pine — muted violet night with a dusty-rose accent. */
-:root[data-theme="rose-pine"] {
-  --bg: #191724;
-  --bg-elevated: #1f1d2e;
-  --hover: #26233a;
-  --border: #3a3654;
-  --text: #e0def4;
-  --text-muted: #908caa;
-  --accent: #ea9a97;
-  --accent-contrast: #191724;
-  --accent-soft: rgba(234, 154, 151, 0.18);
-  --danger: #eb6f92;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6);
-  color-scheme: dark;
-}
-
-/* Gruvbox Dark — warm retro charcoal with a golden-yellow accent. */
-:root[data-theme="gruvbox-dark"] {
-  --bg: #282828;
-  --bg-elevated: #32302f;
-  --hover: #3c3836;
-  --border: #504945;
-  --text: #ebdbb2;
-  --text-muted: #a89984;
-  --accent: #fabd2f;
-  --accent-contrast: #211f1e;
-  --accent-soft: rgba(250, 189, 47, 0.18);
-  --danger: #fb4934;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Ember — neutral "light black" greys with a vivid, popping orange accent. */
-:root[data-theme="ember"] {
-  --bg: #1c1c1e;
-  --bg-elevated: #262629;
-  --hover: #303034;
-  --border: #3a3a3f;
-  --text: #f2f1ef;
-  --text-muted: #9d9ca2;
-  --accent: #ff7a1a;
-  --accent-contrast: #1a120a;
-  --accent-soft: rgba(255, 122, 26, 0.3);
-  --danger: #e5443a;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
 }
 
@@ -1072,14 +616,21 @@ button {
    scrubber is the app's own scroll affordance; scrolling still works by
    wheel/trackpad/drag. Settings and Albums have no scrubber, so they keep the
    app's slim always-visible scrollbar (the global ::-webkit-scrollbar style)
-   whenever their content actually overflows. */
+   whenever their content actually overflows.
+   Search results and other flat grids have no scrubber either - they're ranked
+   or curated, not a timeline - so hiding the scrollbar there left the right
+   edge empty: no way to grab the view, and no sense of how far down the
+   results you were. They keep the slim scrollbar too. `.has-scrubber` is the
+   marker the timeline roots (VirtualTimeline / ThumbnailGrid) carry; matching
+   it as a direct child keeps the :has() cheap on a grid of thousands of
+   tiles. */
 .page:not(.settings-page):not(.albums-page):not(.stats-page),
-.page-scroll {
+.page-scroll:has(> .has-scrubber) {
   scrollbar-width: none;
 }
 
 .page:not(.settings-page):not(.albums-page):not(.stats-page)::-webkit-scrollbar,
-.page-scroll::-webkit-scrollbar {
+.page-scroll:has(> .has-scrubber)::-webkit-scrollbar {
   width: 0;
   height: 0;
 }
@@ -1146,6 +697,13 @@ button {
 .page-timeline .page-scroll {
   padding-right: 58px;
   padding-bottom: 56px;
+}
+
+/* Same page, no scrubber (a search or a flat grid): the wide gutter would be
+   dead space, so the grid goes back to the normal page inset and ends beside
+   the scrollbar instead of 40px short of it. */
+.page-timeline .page-scroll:not(:has(> .has-scrubber)) {
+  padding-right: 20px;
 }
 
 /* Bulk-action bar (shown when photos are selected): pinned to the bottom of the
@@ -1994,6 +1552,29 @@ textarea:focus-visible {
   align-content: flex-start;
 }
 
+/* Returning from the detail view. ThumbnailGrid renders the grid hidden for the
+   one commit it needs to scroll the photo you left from back into place, then
+   drops .grid-restoring - so instead of a flash of the top of the library, the
+   right part of it eases up. Only set on a grid that was actually returned to.
+   The hidden state carries no transition of its own, so the fade only ever runs
+   in one direction. */
+.grid-fade {
+  transition: opacity 0.18s ease;
+}
+
+.grid-fade.grid-restoring {
+  opacity: 0;
+  transition: none;
+}
+
+/* Reduced motion still skips the flash (the grid is hidden until it has
+   scrolled), it just appears instead of fading. */
+@media (prefers-reduced-motion: reduce) {
+  .grid-fade {
+    transition: none;
+  }
+}
+
 /* Every direct child is a justified tile (a bare .thumb-card in the library /
    album grids, or an .import-card wrapper in the import review). */
 .thumbnail-grid > .thumb-card,
@@ -2655,13 +2236,15 @@ textarea:focus-visible {
   transition: background 0.15s ease;
 }
 
-/* Match the lightbox backgrounds exactly (see .detail-image / .detail-image-dark). */
+/* Black is the lightbox's black exactly (see .detail-image-dark); the light
+   surround is its own variable, because on a dark skin the panel colour is too
+   close to black for "Light background" to mean anything. */
 .editor-stage-dark .editor-stage-main {
   background: #000;
 }
 
 .editor-stage-light .editor-stage-main {
-  background: var(--bg-elevated);
+  background: var(--editor-stage-light);
 }
 
 /* Light/Black background switch in its own row under the image (like the
@@ -5524,7 +5107,17 @@ kbd {
   margin-top: 16px;
 }
 
-/* ---- Settings: colour-skin picker --------------------------------------- */
+/* ---- Settings: appearance picker ----------------------------------------- */
+
+/* Light / Dark / Auto, above the two skin grids. Same shape as the Corners row
+   on the Settings page so the modal doesn't invent its own layout. */
+.theme-mode-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0 2px;
+}
 
 /* A responsive grid of skin tiles, each a live preview + label. The previews
    use the skin's own colours (from state/theme.ts) so they read correctly no
@@ -5645,14 +5238,35 @@ kbd {
   line-height: 1;
 }
 
-/* A quiet caption above each skin group (Light / Dark). */
+/* One line on what the skin is for, under its name. */
+.theme-tile-hint {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+/* A quiet caption above each skin group (Light skin / Dark skin). */
 .theme-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 18px 0 0;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/* Marks the group whose skin is painted right now - the other one is still
+   editable, it just won't change anything until the mode switches. */
+.theme-group-badge {
+  padding: 2px 7px;
+  border-radius: calc(999px * var(--corner-scale));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.04em;
 }
 
 /* Appearance summary row in Settings: current skin preview + name + a button
@@ -5723,10 +5337,10 @@ kbd {
   padding: 6px 18px 18px;
 }
 
-/* Inside the modal the first group starts right under the header, so drop the
-   picker's default top margin on the leading grid. */
-.theme-modal-body > div > .theme-picker:first-child {
-  margin-top: 4px;
+/* Inside the modal the mode switch starts right under the header, so it keeps
+   its own spacing instead of the Settings-page padding. */
+.theme-modal-body > div > .theme-mode-row:first-child {
+  padding-top: 2px;
 }
 
 .theme-modal-footer {

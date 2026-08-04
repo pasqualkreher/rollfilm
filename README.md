@@ -36,7 +36,7 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 | <img src="https://rollfilm.org/assets/search.jpg" alt="Semantic search" width="420"><br>**Semantic search** — describe what you remember | <img src="https://rollfilm.org/assets/map.jpg" alt="Map view" width="420"><br>**Map view** — every geotagged photo |
 | <img src="https://rollfilm.org/assets/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="https://rollfilm.org/assets/immich.jpg" alt="Immich integration" width="420"><br>**Immich sync** — your library, mirrored |
 | <img src="https://rollfilm.org/assets/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor** — non-destructive, masks, film sims | <img src="https://rollfilm.org/assets/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare** — split by a draggable line, or side by side |
-| <img src="https://rollfilm.org/assets/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="https://rollfilm.org/assets/themes.jpg" alt="Color themes" width="420"><br>**20+ themes** — light, dark and in between |
+| <img src="https://rollfilm.org/assets/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="https://rollfilm.org/assets/themes.jpg" alt="Color skins" width="420"><br>**Skins** — a light one, a dark one, or follow the system |
 
 ## Features
 
@@ -57,7 +57,7 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 - **Map view** (Leaflet) of all geotagged photos
 - Timeline scrubber, thumbnail grid, lightbox
 - **Statistics** — photos per year, plus which camera bodies, lenses and focal-length ranges you actually shoot, how your ratings fall, and what the library is made of
-- **20+ light & dark color themes** — from a clean Light/Dark to Sepia, Nord, Forest and more
+- **Light & dark skins** — three restrained pairs (Graphite, Slate, Ink), a light one and a dark one chosen separately, with a Light / Dark / Auto switch that can follow the system
 
 ### Immich integration ⭐
 This is one of the highlights of the project: keep your library mirrored to an existing [Immich](https://immich.app) server without giving up local-first management.

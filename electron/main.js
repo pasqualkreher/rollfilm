@@ -696,6 +696,58 @@ function checkLibraryMounted() {
 }
 
 
+// --- View zoom ---------------------------------------------------------------
+// The whole UI scales with the usual Cmd/Ctrl +, - and 0. These are zoom
+// LEVELS, not factors - the factor is 1.2^level, so half a level is the same
+// increment Chrome and Electron's own zoom roles step by. Clamped at both ends:
+// held-down keys stop at half size and roughly double, past which the toolbar
+// stops fitting the window. Cmd-0 is the way back from either end.
+const ZOOM_STEP = 0.5;
+const ZOOM_MIN = -4; // ~ 48 %
+const ZOOM_MAX = 4; // ~ 207 %
+
+function zoomBy(contents, delta) {
+  if (!contents || contents.isDestroyed()) return;
+  const level = delta === 0 ? 0 : contents.getZoomLevel() + delta;
+  contents.setZoomLevel(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, level)));
+}
+
+// Menu items zoom whichever window is focused, falling back to the main one
+// (the menu is alive while a dialog holds focus, and browserWindow is undefined
+// then).
+function zoomMenuItem(label, accelerator, delta) {
+  return {
+    label,
+    accelerator,
+    click: (_item, browserWindow) => zoomBy((browserWindow || mainWindow)?.webContents, delta),
+  };
+}
+
+// Off-menu accelerators: the unshifted Cmd-= that browsers accept for zoom in,
+// and the numeric keypad's +/-/0. Hidden entries, present only to register the
+// keys - macOS still takes accelerators from invisible items.
+function hiddenZoomItem(label, accelerator, delta) {
+  return { ...zoomMenuItem(label, accelerator, delta), visible: false };
+}
+
+// Windows and Linux have no menu bar to hang the accelerators on (see below), so
+// the same keys come off the renderer's input stream instead. Only registered
+// there, or macOS would zoom twice per keypress.
+function attachZoomShortcuts(contents) {
+  if (process.platform === "darwin") return;
+  contents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || !input.control || input.alt || input.meta) return;
+    const delta =
+      input.key === "+" || input.key === "=" ? ZOOM_STEP
+      : input.key === "-" ? -ZOOM_STEP
+      : input.key === "0" ? 0
+      : null;
+    if (delta === null) return;
+    zoomBy(contents, delta);
+    event.preventDefault();
+  });
+}
+
 // --- Application menu --------------------------------------------------------
 // Rollfilm carries its own bar inside the window (nav, search, Settings,
 // Help), so the OS menu is pure duplication - and Electron's default one is
@@ -705,8 +757,9 @@ function checkLibraryMounted() {
 //
 // On Windows and Linux the menu bar can go entirely. On macOS it cannot: the
 // app-name menu belongs to the system, and every app has one - what an app can
-// decide is what sits NEXT to it, which here is nothing. Edit is kept but
-// hidden, because macOS takes the clipboard shortcuts from the menu: drop it
+// decide is what sits NEXT to it, which here is View - Zoom In, Zoom Out and
+// Actual Size, the one thing the window itself has no control for. Edit is kept
+// but hidden, because macOS takes the clipboard shortcuts from the menu: drop it
 // and Cmd-C/V/X/A stop working in every text field in the app (search, tags,
 // the Immich key).
 function buildApplicationMenu() {
@@ -715,7 +768,22 @@ function buildApplicationMenu() {
     return;
   }
   Menu.setApplicationMenu(
-    Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu", visible: false }])
+    Menu.buildFromTemplate([
+      { role: "appMenu" },
+      { role: "editMenu", visible: false },
+      {
+        label: "View",
+        submenu: [
+          zoomMenuItem("Zoom In", "CommandOrControl+Plus", ZOOM_STEP),
+          zoomMenuItem("Zoom Out", "CommandOrControl+-", -ZOOM_STEP),
+          zoomMenuItem("Actual Size", "CommandOrControl+0", 0),
+          hiddenZoomItem("Zoom In", "CommandOrControl+=", ZOOM_STEP),
+          hiddenZoomItem("Zoom In", "CommandOrControl+numadd", ZOOM_STEP),
+          hiddenZoomItem("Zoom Out", "CommandOrControl+numsub", -ZOOM_STEP),
+          hiddenZoomItem("Actual Size", "CommandOrControl+num0", 0),
+        ],
+      },
+    ])
   );
 }
 
@@ -735,6 +803,8 @@ function createWindow() {
       additionalArguments: [`--pm-api-base=${apiBaseUrl}`],
     },
   });
+
+  attachZoomShortcuts(mainWindow.webContents);
 
   if (USE_DEV_SERVER) {
     mainWindow.loadURL(DEV_SERVER_URL);

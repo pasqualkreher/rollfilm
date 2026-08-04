@@ -532,6 +532,17 @@ export const api = {
         body: JSON.stringify({ ...apiEdits(edits), subject }),
       });
     },
+    // Ask the server to run the subject-detection pass for this frame now,
+    // before any subject has been picked. One pass finds all six subjects, so
+    // opening the Masks panel a second or two ahead of the click is usually
+    // enough for the click itself to be instant. Fire and forget - if it
+    // doesn't finish (or fails), segment() does the work as it always did.
+    segmentPrepare(id: string, edits: ImageEdits): Promise<void> {
+      return request(`/images/${id}/segment/prepare`, {
+        method: "POST",
+        body: JSON.stringify(apiEdits(edits)),
+      });
+    },
     // Save the full non-destructive edit (rotation + crop + tonal) in place.
     saveEdits(id: string, edits: ImageEdits): Promise<ImageOut> {
       return request(`/images/${id}/edits`, { method: "PATCH", body: JSON.stringify(apiEdits(edits)) });

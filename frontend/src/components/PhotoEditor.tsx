@@ -621,6 +621,13 @@ export function PhotoEditor({ image, onClose }: Props) {
       setMaskDrawMode(false);
       setColorPickMode(false);
       setSegmentError(null);
+    } else {
+      // Opening the panel is the earliest honest sign that a subject mask might
+      // be wanted, and the model pass costs the same whether it runs now or on
+      // the click - so start it now, while the user is still reading the list.
+      // One pass covers all six subjects. Fire and forget: runSegment behaves
+      // exactly as before if this never finishes.
+      api.images.segmentPrepare(image.id, previewEdits).catch(() => {});
     }
     // The targeted picker is what the Curves panel is *for* - pointing at the
     // tone you want to change beats guessing which part of the x axis it sits
@@ -3051,14 +3058,11 @@ export function PhotoEditor({ image, onClose }: Props) {
 
             {selSub.type === "semantic" && (
               <>
-                {/* The region was found in the frame as it was then. Crop or
-                    straighten afterwards and it no longer lines up - say so and
-                    offer the one-click fix rather than silently stretching it. */}
-                {subStr(selSub, "geom") !== geomSignature() && (
-                  <p className="mask-hint mask-hint-error">
-                    The frame changed since this was found — recompute it to line it up again.
-                  </p>
-                )}
+                {/* The region was found in the frame as it was then, so a crop
+                    or a straighten afterwards leaves it out of line. Recompute
+                    is the fix and sits right here, always available - it used
+                    to be introduced by a red warning line, which shouted at
+                    every crop for something the button already says. */}
                 <div className="mask-btn-row">
                   <button
                     className="btn btn-sm"
