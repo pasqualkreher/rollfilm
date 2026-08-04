@@ -2270,13 +2270,25 @@ textarea:focus-visible {
      clip when the img is composited (its opacity fade / hover filter), so the
      square corners poke past the card frame. Round the img itself too. */
   border-radius: inherit;
-  /* Blank until the pixels arrive, then simply be there (the JS toggles
-     .is-loaded on load - see Thumb in ThumbnailGrid.tsx). This used to fade in
-     over 0.45s, which on a grid where tiles finish at slightly different
-     moments reads as the whole page fluttering rather than as one soft
-     appearance - the individual fade is invisible, the collective flicker
-     isn't. The shimmer underneath already communicates "still loading". */
+  /* Blank until the pixels arrive, then ease in (the JS toggles .is-loaded on
+     load - see Thumb in ThumbnailGrid.tsx). The shimmer underneath fades out
+     on the same curve, so a tile resolves from "loading" to "photo" rather
+     than blinking through the bare card between the two.
+     Kept well short of the 0.45s this once used: a grid finishes tiles at
+     slightly different moments, and a fade long enough to overlap several of
+     them reads as the whole page fluttering rather than as one soft
+     appearance. */
   opacity: 0;
+  transition:
+    opacity 0.3s ease-out,
+    filter 0.12s ease;
+}
+
+/* Pixels that were already in the browser cache: no fade at all. Fading these
+   is what made the old animation feel like flutter - scrolling back over
+   photos the user has already seen would have every one of them appear to
+   load again, when in truth nothing was ever fetched. */
+.thumb-card img.is-instant {
   transition: filter 0.12s ease;
 }
 
@@ -2300,10 +2312,25 @@ textarea:focus-visible {
   border-radius: inherit;
 }
 
+/* The photo above has arrived and is easing in - fade out underneath it on the
+   same curve instead of vanishing in one frame, which would show the bare card
+   through the half-transparent image. Stays mounted (harmlessly, at opacity 0
+   with the animation stopped) rather than being unmounted mid-transition. */
+.thumb-card .thumb-skeleton.is-done {
+  opacity: 0;
+  animation: none;
+  transition: opacity 0.3s ease-out;
+}
+
 /* Users who prefer reduced motion get everything immediately, no fades or
    entrance animations. */
 @media (prefers-reduced-motion: reduce) {
+  /* .is-instant is listed explicitly: it carries its own transition at a
+     higher specificity than the plain img selector, so without it that rule
+     would survive this override. */
   .thumb-card img,
+  .thumb-card img.is-instant,
+  .thumb-card .thumb-skeleton.is-done,
   .detail-photo {
     transition: none;
   }

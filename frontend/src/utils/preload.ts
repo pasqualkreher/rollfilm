@@ -37,27 +37,72 @@ export const LIGHTBOX_NEIGHBOR_DEPTH = LOW_MEMORY_DEVICE ? 2 : 6;
 // made every preload one-shot - revisited areas then paged cold and never
 // re-warmed, which read as the app getting slower the longer it ran.
 //
-// The cap must comfortably exceed ONE warm-up pass's working set, or the pass
-// evicts its own earliest entries before it finishes and the marker stops
-// deduplicating anything: at XS on a 4K display the timeline warms ~680 URLs
-// per pass on top of ~450 mounted tiles, so a 500-entry cap meant every scroll
-// settle re-issued hundreds of already-warmed loads.
-const preloadedUrls = new Map<string, true>();
-const PRELOADED_URLS_MAX = 2000;
+// The cap must comfortably exceed one browsing session's working set, or the
+// marker evicts its own entries faster than the user comes back to them and
+// stops deduplicating anything.
+class RecentUrls {
+  private urls = new Map<string, true>();
+
+  constructor(private readonly max: number) {}
+
+  has(url: string): boolean {
+    if (!this.urls.has(url)) return false;
+    // Refresh recency, so the URLs of the area being browsed right now are the
+    // last to age out.
+    this.urls.delete(url);
+    this.urls.set(url, true);
+    return true;
+  }
+
+  add(url: string): void {
+    this.urls.delete(url);
+    this.urls.set(url, true);
+    if (this.urls.size > this.max) this.urls.delete(this.urls.keys().next().value!);
+  }
+
+  delete(url: string): void {
+    this.urls.delete(url);
+  }
+}
+
+const preloadedUrls = new RecentUrls(2000);
+
+// Thumbnails that have finished loading at least once. Their bytes are then in
+// the browser's HTTP cache - derivatives are served immutable and versioned by
+// edit (see images._serve_derivative) - so asking for one again costs no
+// network at all. That is what lets a tile the user has already seen come back
+// instantly: it goes straight to its src on the first render, skipping the
+// stabilize delay, the fast-scroll gate and the shimmer, none of which buy
+// anything when there is nothing to wait for. Without it, scrolling back over
+// ground you just covered made every photo fade in again from grey.
+//
+// Deliberately URL strings only, no Image objects: pinning decoded pixels
+// instead would hold ~1MB per XS tile across hundreds of tiles, which is the
+// very thing releaseMarginFor exists to prevent. The browser's cache is the
+// pixel store; this is only the memo of what is in it. Sized well past a long
+// browsing session (a few hundred KB of strings at worst) so the memo doesn't
+// age out faster than the cache it describes.
+const loadedThumbUrls = new RecentUrls(20000);
+
+export function markThumbLoaded(url: string): void {
+  loadedThumbUrls.add(url);
+}
+
+export function isThumbLoaded(url: string): boolean {
+  return loadedThumbUrls.has(url);
+}
+
+// The browser evicted it after all (or the render was invalidated): drop the
+// memo, so the tile goes back through the normal patient path instead of
+// insisting on an instant paint that can't happen.
+export function forgetThumbLoaded(url: string): void {
+  loadedThumbUrls.delete(url);
+}
 
 export function preloadImage(url: string | null | undefined): void {
   if (!url) return;
-  if (preloadedUrls.has(url)) {
-    // Refresh recency, so the URLs of the area being browsed right now are
-    // the last to age out of the marker.
-    preloadedUrls.delete(url);
-    preloadedUrls.set(url, true);
-    return;
-  }
-  preloadedUrls.set(url, true);
-  if (preloadedUrls.size > PRELOADED_URLS_MAX) {
-    preloadedUrls.delete(preloadedUrls.keys().next().value!);
-  }
+  if (preloadedUrls.has(url)) return;
+  preloadedUrls.add(url);
   const img = new Image();
   img.decoding = "async";
   // Cache-warming must never compete with what's on screen: over HTTP/1.1 the
@@ -104,22 +149,48 @@ export class PinnedImageWindow {
   }
 }
 
-// How far outside the viewport a thumbnail may START (and keep) loading.
-// Several screenfuls: a tile that only starts loading one screen ahead is
-// still arriving as it scrolls into view, which is exactly the "every photo
-// appears in front of me" effect - by the time a tile is looked at, its
-// pixels should already be there. The same boundary is also the abort line,
-// and over HTTP/1.1 an in-flight request holds one of the ~6 per-origin
-// connections, so this can't grow without limit - but the server here is on
-// localhost serving prepared files, so the requests it keeps alive are short.
-// Fetch priority (VIEW_MARGIN below) is what keeps the visible region ahead
-// of this look-ahead in the queue.
-const START_MARGIN = "2400px 0px";
+// How far outside the viewport a thumbnail may START (and keep) loading:
+// several rows in each direction, so a row has long finished loading by the
+// time it reaches the screen and scrolling meets photos rather than shimmer.
+//
+// Counted in ROWS, not pixels, because the cost is per TILE: the same pixel
+// band holds four times as many tiles at XS (130px rows) as at M (260px) and
+// twelve times as many as at XL, so one fixed number is either too little
+// look-ahead for the big sizes or hundreds of speculative requests for the
+// small ones.
+//
+// This is also the number overscanFor (utils/justifiedLayout.ts) derives the
+// MOUNTED band from - a virtualized grid can only load a tile it has mounted,
+// so growing the look-ahead without growing the mounted band does nothing.
+//
+// Ten rows is deliberately generous: the point is that the user never catches
+// the grid loading. At a readable scroll speed that is several seconds of
+// lead, so a row has long since finished by the time it reaches the screen,
+// and the rows they scroll back over are already in the browser cache.
+//
+// The floor keeps a useful lead at XS, where ten rows are barely any pixels.
+// The ceiling only guards against absurdity - it must stay clear of ten rows
+// at every real tile size, because clamping it in pixels is exactly the
+// mistake this is counted in rows to avoid: XL rows are 4x the height of XS
+// rows but hold a QUARTER of the tiles, so a pixel cap bites hardest where the
+// look-ahead is cheapest.
+const PRELOAD_ROWS = 10;
 
-// "Actually at/entering the screen": tiles inside this tight band fetch at
-// high priority, everything else at low - the visible region always wins the
-// connection queue over speculative preloads.
-const VIEW_MARGIN = "150px 0px";
+export function loadMarginFor(rowHeight: number): number {
+  return Math.round(Math.min(6000, Math.max(700, rowHeight * PRELOAD_ROWS)));
+}
+
+// "On screen, or the next rows about to be": tiles inside this band fetch at
+// high priority, everything else at low - what the user is looking at, and
+// what they are about to be looking at, always win the connection queue over
+// the rest of the look-ahead.
+//
+// Two rows rather than a fixed 150px, which was less than one row at every
+// size above XS: the row about to scroll in is the single most urgent request
+// on the page, and it was queueing behind ten rows of speculative loads.
+function viewMarginFor(rowHeight: number): number {
+  return Math.round(Math.max(300, rowHeight * 2));
+}
 
 // Past this, a loaded tile lets its pixels go again.
 //
@@ -128,21 +199,152 @@ const VIEW_MARGIN = "150px 0px";
 // in the renderer, at which point the browser starts discarding decoded images
 // on its own; the ones it discards can come back broken, which is what put
 // broken-image glyphs on cards in the review grid. Releasing deliberately keeps
-// the retained set bounded (~60 tiles) instead of letting it grow with how far
-// the user has scrolled.
+// the retained set bounded instead of letting it grow with how far the user has
+// scrolled.
 //
-// Well clear of START_MARGIN so a tile can't load and release in a loop while
-// the user rocks back and forth, and coming back is a browser-cache hit rather
-// than a fresh render on the server.
-const RELEASE_MARGIN = "4000px 0px";
+// Six rows beyond the load margin, so a tile can't load and release in a loop
+// while the user rocks back and forth; coming back inside it is a browser-cache
+// hit rather than a fresh render on the server. Derived from the load margin
+// rather than clamped in pixels, which would be a real bug and not just a
+// mistuning: a pixel cap below the load margin at the big tile sizes would put
+// the release line INSIDE the band where tiles are told to load, and every tile
+// in the overlap would load, release, and load again.
+//
+// The six rows also put it beyond the mounted band (overscanFor, two rows), so
+// this only ever fires for the unvirtualized grid - elsewhere unmounting frees
+// the tile first, which is stricter still.
+function releaseMarginFor(rowHeight: number): number {
+  return Math.round(loadMarginFor(rowHeight) + rowHeight * 6);
+}
+
+// Grid size to assume when a caller doesn't say (M - see THUMB_SIZES).
+const DEFAULT_ROW_HEIGHT = 260;
+
+// --- scroll activity -------------------------------------------------------
+//
+// A backstop for one case only: the view moving so fast that the grid is not
+// being looked at at all, but dragged through - a scrubber drag maps a few
+// hundred pixels of rail onto the whole library, so one drag sweeps hundreds
+// of thousands of pixels of grid and would fire (and abort) a request for
+// every tile on the way.
+//
+// It used to hold back ordinary flings too, and that was the wrong call: the
+// look-ahead only works if it is filling WHILE the user scrolls. Holding
+// everything back until the scroll stopped meant the band was empty exactly
+// when it was needed, and then several hundred tiles set their src in the same
+// tick when it released - one long frame, which is what read as stutter.
+
+// Above this the view is being dragged, not scrolled. Far above any real
+// gesture: a hard trackpad fling peaks around 5-8 px/ms and must keep loading
+// as it goes, while a scrubber drag runs to hundreds of px/ms.
+const FAST_SCROLL_PX_PER_MS = 20;
+
+// Scroll events stop arriving when the scroll stops, so a window with no event
+// in it is the only "the gesture ended" signal there is. Also the re-check
+// interval while a fast scroll is still going.
+const SCROLL_CALM_MS = 90;
+
+let lastScrollTarget: EventTarget | null = null;
+let lastScrollPos = 0;
+let lastScrollAt = 0;
+let scrollingFast = false;
+let calmTimer: number | null = null;
+const calmWaiters = new Set<() => void>();
+
+function scrollPosOf(target: EventTarget | null): number {
+  if (!target || target === document || target === window) return window.scrollY;
+  return (target as HTMLElement).scrollTop ?? 0;
+}
+
+function armCalmTimer(): void {
+  if (calmTimer !== null) return;
+  calmTimer = window.setTimeout(() => {
+    calmTimer = null;
+    // A whole window with no scroll event: the gesture is over.
+    if (performance.now() - lastScrollAt >= SCROLL_CALM_MS) scrollingFast = false;
+    if (scrollingFast) {
+      armCalmTimer();
+      return;
+    }
+    const waiters = [...calmWaiters];
+    calmWaiters.clear();
+    for (const waiter of waiters) waiter();
+  }, SCROLL_CALM_MS);
+}
+
+// Scroll events don't bubble, but they DO run through the capture phase - so
+// one document-level listener sees every scroller in the app (the page, the
+// timeline, the import review) without each of them having to report in.
+document.addEventListener(
+  "scroll",
+  (e) => {
+    const now = performance.now();
+    const pos = scrollPosOf(e.target);
+    const dt = now - lastScrollAt;
+    // A different scroller, or the first event after a pause: no two samples
+    // to measure a speed from yet. A scrubber jump lands here too, and that is
+    // correct - it teleports rather than dragging the view across the library,
+    // so nothing in between is ever requested and there is nothing to hold
+    // back.
+    if (e.target !== lastScrollTarget || dt > SCROLL_CALM_MS * 3) {
+      scrollingFast = false;
+    } else if (dt > 0) {
+      scrollingFast = Math.abs(pos - lastScrollPos) / dt >= FAST_SCROLL_PX_PER_MS;
+    }
+    lastScrollTarget = e.target;
+    lastScrollPos = pos;
+    lastScrollAt = now;
+    armCalmTimer();
+  },
+  { capture: true, passive: true }
+);
+
+// Run `fn` once the view has been still for `delay` ms - and never in the
+// middle of a fast scroll, where it waits for the scroll to calm down and then
+// serves out the delay again. Returns a cancel function; callers cancel when
+// whatever made the work worth doing stops being true (a tile leaving the load
+// margin again, or unmounting).
+export function afterScrollSettles(fn: () => void, delay: number): () => void {
+  let timer: number | null = null;
+  let waiting: (() => void) | null = null;
+
+  const arm = () => {
+    timer = window.setTimeout(() => {
+      timer = null;
+      if (!scrollingFast) {
+        fn();
+        return;
+      }
+      waiting = () => {
+        waiting = null;
+        arm();
+      };
+      calmWaiters.add(waiting);
+    }, delay);
+  };
+  arm();
+
+  return () => {
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+    if (waiting !== null) {
+      calmWaiters.delete(waiting);
+      waiting = null;
+    }
+  };
+}
 
 interface NearViewportCallbacks {
   enter: () => void;
   leave: () => void;
 }
 
+type Watch = (el: Element, cbs: NearViewportCallbacks) => () => void;
+
 // One shared IntersectionObserver per margin (not one per tile).
-function makeWatcher(rootMargin: string) {
+function makeWatcher(rootMargin: string): Watch {
   let observer: IntersectionObserver | null = null;
   const callbacks = new Map<Element, NearViewportCallbacks>();
   return function watch(el: Element, cbs: NearViewportCallbacks): () => void {
@@ -168,6 +370,24 @@ function makeWatcher(rootMargin: string) {
   };
 }
 
+// The margins now depend on the grid's tile size, so there is one observer per
+// distinct margin rather than one per band. Bounded by construction: the sizes
+// come from the five THUMB_SIZES, and rounding folds near-identical margins
+// (e.g. two grids whose rows differ by a pixel) onto the same observer.
+function watcherFor(cache: Map<number, Watch>, marginPx: number): Watch {
+  const key = Math.round(marginPx / 50) * 50;
+  let watch = cache.get(key);
+  if (!watch) {
+    watch = makeWatcher(`${key}px 0px`);
+    cache.set(key, watch);
+  }
+  return watch;
+}
+
+const nearWatchers = new Map<number, Watch>();
+const viewWatchers = new Map<number, Watch>();
+const farWatchers = new Map<number, Watch>();
+
 // Track whether `el` is within the load margin of the viewport: `enter` fires
 // when it comes near, `leave` when it moves far away again. During a fast
 // scroll a tile can enter and leave within one frame batch - callers use the
@@ -176,12 +396,33 @@ function makeWatcher(rootMargin: string) {
 // unsubscribe for effect cleanup. Note the observer also fires once right
 // after subscribing, reporting the initial state - a leave() for an
 // off-screen tile - so leave handlers must be no-ops when nothing started.
-export const watchNearViewport = makeWatcher(START_MARGIN);
+//
+// `rowHeight` is the grid's tile size, which is what the look-ahead is measured
+// in (see PRELOAD_ROWS); a caller that re-renders at a new size must re-watch.
+export function watchNearViewport(
+  el: Element,
+  cbs: NearViewportCallbacks,
+  rowHeight: number = DEFAULT_ROW_HEIGHT
+): () => void {
+  return watcherFor(nearWatchers, loadMarginFor(rowHeight))(el, cbs);
+}
 
-// Same contract, tight margin: is the tile at (or a beat away from) the
-// actual viewport? Drives fetch priority, not loading itself.
-export const watchInViewport = makeWatcher(VIEW_MARGIN);
+// Same contract, tight margin: is the tile on screen or in the next rows about
+// to be? Drives fetch priority, not loading itself.
+export function watchInViewport(
+  el: Element,
+  cbs: NearViewportCallbacks,
+  rowHeight: number = DEFAULT_ROW_HEIGHT
+): () => void {
+  return watcherFor(viewWatchers, viewMarginFor(rowHeight))(el, cbs);
+}
 
 // Same contract, wide margin: `leave` means "far enough away that holding this
-// tile's pixels costs more than re-reading them later" (see RELEASE_MARGIN).
-export const watchFarFromViewport = makeWatcher(RELEASE_MARGIN);
+// tile's pixels costs more than re-reading them later" (see releaseMarginFor).
+export function watchFarFromViewport(
+  el: Element,
+  cbs: NearViewportCallbacks,
+  rowHeight: number = DEFAULT_ROW_HEIGHT
+): () => void {
+  return watcherFor(farWatchers, releaseMarginFor(rowHeight))(el, cbs);
+}

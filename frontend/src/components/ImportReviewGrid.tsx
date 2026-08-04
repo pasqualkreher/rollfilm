@@ -184,7 +184,11 @@ export function ImportReviewGrid({
           }
         >
           {f.processed ? (
-            <Thumb src={api.import.stagedThumbnailUrl(sessionId, f.id)} alt={f.original_filename} />
+            <Thumb
+              src={api.import.stagedThumbnailUrl(sessionId, f.id)}
+              alt={f.original_filename}
+              rowHeight={rowH}
+            />
           ) : (
             // Copied but not yet analyzed - no thumbnail exists yet. The files
             // poll swaps this for the real Thumb when the background analysis

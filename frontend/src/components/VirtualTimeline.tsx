@@ -27,11 +27,6 @@ import {
 // review's grid - see utils/justifiedLayout.ts. Only what this timeline does
 // with them (month sections, navigation, re-anchoring) lives here.
 
-// Beyond the mounted band, thumbnails for the next stretch in both directions
-// are pre-warmed into the browser's cache (see utils/preload.ts) - when those
-// rows mount during scrolling, their pixels are already local.
-const PREWARM = 3000;
-
 type Tile = LayoutTile<LibraryIndexImage>;
 type Row = LayoutRow<LibraryIndexImage>;
 type Layout = JustifiedLayout<LibraryIndexImage>;
@@ -196,41 +191,23 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
     }
   }, [layout, images.length]);
 
-  // Pre-warm the browser cache for the stretches just outside the mounted
-  // band, so tiles scrolling in have their pixels already local. Debounced:
-  // warming fires only after the window has been stable for a moment, so
-  // scrubbing/jumping across the library never floods the network with
-  // uncancellable warm-up fetches for regions the user flew past - only the
-  // place they actually stop at gets warmed. preloadImage dedups per URL.
+  // Warm the DETAIL previews for what's actually on screen right now (capped):
+  // clicking any visible photo then opens the lightbox with its preview already
+  // in the browser cache - instant, no request round-trip. A dozen previews are
+  // a few MB once; preloadImage dedups so photos that stay in view cost nothing
+  // on subsequent passes. Debounced, so scrubbing or scrolling across the
+  // library only warms the place the user actually stops at.
+  //
+  // Thumbnails are deliberately NOT warmed this way. An Image() fetch cannot be
+  // cancelled, so a pass over the rows outside the viewport went on competing
+  // with the visible tiles for the ~6 per-origin connections long after the
+  // user had scrolled somewhere else - which is what made a grid feel like it
+  // was loading the whole library. Tiles request themselves as they approach
+  // the viewport (see Thumb / START_MARGIN), and drop the request the moment
+  // they fall away again.
   useEffect(() => {
     if (!layout) return;
     const timer = window.setTimeout(() => {
-      // Just outside the mounted band, which now moves with the tile size.
-      const mounted = overscanFor(rowH);
-      const zones: [number, number][] = [
-        [window_.bottom + mounted, window_.bottom + mounted + PREWARM],
-        [window_.top - mounted - PREWARM, window_.top - mounted],
-      ];
-      for (const s of layout.sections) {
-        for (const [zoneTop, zoneBottom] of zones) {
-          if (s.top + s.height <= zoneTop || s.top >= zoneBottom) continue;
-          for (const r of s.rows) {
-            const rowTop = s.top + r.top;
-            if (rowTop + r.height <= zoneTop || rowTop >= zoneBottom) continue;
-            for (const t of r.tiles) {
-              preloadImage(
-                api.images.thumbnailUrl(t.item.id, t.item.thumb_version || DEFAULT_EDIT_VERSION, tier)
-              );
-            }
-          }
-        }
-      }
-
-      // Also warm the DETAIL previews for what's actually on screen right now
-      // (capped): clicking any visible photo then opens the lightbox with its
-      // preview already in the browser cache - instant, no request round-trip.
-      // A dozen previews are a few MB once; preloadImage dedups so photos that
-      // stay in view cost nothing on subsequent passes.
       const VISIBLE_PREVIEW_CAP = 12;
       let warmed = 0;
       for (const s of layout.sections) {
@@ -251,7 +228,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [layout, window_, rowH, tier]);
+  }, [layout, window_]);
 
   if (images.length === 0) {
     return <div className="empty-state">No photos here yet.</div>;
@@ -296,6 +273,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
         <Thumb
           src={api.images.thumbnailUrl(image.id, image.thumb_version || DEFAULT_EDIT_VERSION, tier)}
           alt={image.original_filename}
+          rowHeight={rowH}
         />
         <span className={fileTypeBadgeClass(image.file_type, merged)}>
           {fileTypeBadge(image.file_type, merged)}

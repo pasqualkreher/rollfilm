@@ -4,8 +4,16 @@ import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
-import { thumbTier, useMergePairs, useThumbSize } from "../state/viewPrefs";
-import { watchFarFromViewport, watchInViewport, watchNearViewport } from "../utils/preload";
+import { thumbPx, thumbTier, useMergePairs, useThumbSize } from "../state/viewPrefs";
+import {
+  afterScrollSettles,
+  forgetThumbLoaded,
+  isThumbLoaded,
+  markThumbLoaded,
+  watchFarFromViewport,
+  watchInViewport,
+  watchNearViewport,
+} from "../utils/preload";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 
 interface Props {
@@ -50,38 +58,92 @@ export function tileStyle(width: number | null | undefined, height: number | nul
   return { "--ar": tileAspectRatio(width, height) } as CSSProperties;
 }
 
-// Delay before a near-viewport tile actually issues its request. A tile that
-// merely flies through the preload zone during a fast scroll leaves it again
-// within this window and never hits the network at all. Kept short: this sits
-// in front of EVERY tile, so it is the one delay that is felt even when
-// nothing is scrolling - long enough to swallow a fling, no longer.
-const LOAD_STABILIZE_MS = 60;
+// Delay before a tile entering the load margin actually issues its request. A
+// tile that merely flickers through the margin - a scrubber drag passing over
+// it, a layout settling - leaves it again within this window and never hits
+// the network at all.
+//
+// Short on purpose. It sits in front of EVERY tile, and with ten rows of
+// look-ahead the whole point is that the band is already full by the time the
+// user gets there; a delay long enough to be a filter is also long enough to
+// be the reason the row underneath the fold is still grey.
+const LOAD_STABILIZE_MS = 40;
+
+// How long a tile that expects to paint from cache is allowed to stay blank
+// before it gives up on that and shows the shimmer after all. A real cache hit
+// paints within a frame or two; anything past this is a request that is
+// actually going somewhere, and the user should see that it is.
+const INSTANT_GRACE_MS = 150;
 
 // A thumbnail can legitimately not exist yet: right after an import the backend
 // generates derivatives in the background and sheds on-demand renders it can't
 // start promptly (503 + Retry-After, see images._serve_derivative) so a whole
 // grid scrolling into view can't stall the API. Retry on a backoff instead of
 // leaving the tile shimmering forever. The last delay is the give-up point -
-// scrolling away and back still starts over.
-const RETRY_DELAYS_MS = [1200, 2500, 5000, 10000];
+// scrolling away and back still starts over, and so does scrolling it into the
+// viewport (see ensureLoading), which is the moment the user actually cares.
+// Reaches ~68s in total, deliberately: right after an import the backend is
+// generating thousands of derivatives, and a ladder that gave up after 19s
+// left permanent holes in a library that was only busy, not broken. Each step
+// only runs while the tile is still within the load margin - scrolling away
+// cancels the budget and coming back starts it over.
+const RETRY_DELAYS_MS = [1200, 2500, 5000, 10000, 20000, 30000];
 
 // Grid thumbnail that starts loading shortly after it comes within the
 // preload margin of the viewport (see utils/preload.ts) - well before it's
 // visible. Replaces native loading="lazy", whose preload distance is
 // browser-chosen and (especially in Safari) short enough to read as pop-in.
-// The current view always wins the network: the stabilize delay keeps fly-by
-// tiles from requesting at all; a tile that scrolls back out of the (one
-// screenful) load margin aborts its in-flight request (src cleared), freeing
-// one of the ~6 HTTP/1.1 connections; and fetch priority follows actual
-// visibility - on-screen tiles request high, margin tiles low. A loaded tile
-// stays loaded while it is anywhere near the viewport and only lets its pixels
-// go once it is far behind (RELEASE_MARGIN), which keeps the renderer's image
-// memory bounded on a grid of thousands. Also used by the import review grid,
-// which otherwise fired every staged request at once.
-export function Thumb({ src, alt }: { src: string; alt: string }) {
+// The current view always wins the network: nothing requests while the grid is
+// being flung past and the stabilize delay keeps fly-by tiles from requesting
+// at all; a tile that scrolls back out of the (few rows deep) load margin
+// aborts its in-flight request (src cleared), freeing one of the ~6 HTTP/1.1
+// connections; and fetch priority follows actual visibility - on-screen tiles
+// request high, margin tiles low. A loaded tile stays loaded while it is
+// anywhere near the viewport and only lets its pixels go once it is far behind
+// (releaseMarginFor), which keeps the renderer's image memory bounded on a grid
+// of thousands. Also used by the import review grid, which otherwise fired
+// every staged request at once.
+//
+// `rowHeight` is the grid's current tile size: both margins are measured in
+// rows, so the look-ahead is the same few rows at XS as at XL.
+export function Thumb({
+  src,
+  alt,
+  rowHeight,
+}: {
+  src: string;
+  alt: string;
+  rowHeight?: number;
+}) {
   const ref = useRef<HTMLImageElement | null>(null);
-  const [shownSrc, setShownSrc] = useState<string | undefined>(undefined);
+  // A thumbnail this session has already loaded is in the browser's cache, so
+  // it starts with its src set: it paints from the very first render, with no
+  // observer round-trip, no stabilize delay and no shimmer over a photo the
+  // user has already seen. Everything else starts blank and earns its request.
+  const [shownSrc, setShownSrc] = useState<string | undefined>(() =>
+    isThumbLoaded(src) ? src : undefined
+  );
+  // Whether the pixels currently being waited on are expected to be there
+  // already. Drives everything about how the tile APPEARS: an instant tile
+  // shows no shimmer and does not fade (there is nothing to wait for, and
+  // animating it would make scrolling back over seen photos look like they are
+  // all loading again), a fresh one shimmers and then eases in.
+  //
+  // It is a GUESS - the memo says the browser cached this URL, but the browser
+  // evicts what it likes and the request can still fail. Being wrong must
+  // therefore be survivable, which is what the grace timer below is for: a
+  // tile that claims to be instant and then isn't falls back to the normal
+  // appearance instead of sitting there as an empty card.
+  const [instant, setInstant] = useState(shownSrc !== undefined);
   const doneRef = useRef(false);
+
+  // Point the element at `url`, recording whether that is expected to be a
+  // cache hit. Every path that sets a src goes through here, so the appearance
+  // can never drift from what was actually asked for.
+  const show = useCallback((url: string, isInstant: boolean) => {
+    setInstant(isInstant);
+    setShownSrc(url);
+  }, []);
   // Tiles stay visually blank (just the card background) until the pixels
   // have actually arrived - never a broken-image glyph or alt text flash
   // while pending/aborted.
@@ -110,13 +172,62 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
     if (el.complete && el.naturalWidth === 0) {
       doneRef.current = false;
       retryCount.current = 0;
+      // Whatever the cache holds for this URL is not usable, so stop claiming
+      // it can paint instantly.
+      forgetThumbLoaded(src);
       setVisible(false);
       setShownSrc(undefined);
       // Next frame, so the browser really drops the failed image before the
       // same URL is asked for again (re-assigning an unchanged src is a no-op).
-      requestAnimationFrame(() => setShownSrc(src));
+      requestAnimationFrame(() => show(src, false));
     }
-  }, [src]);
+  }, [src, show]);
+
+  // Unmounting mid-flight (a long jump in the virtualized grid): abort the
+  // request imperatively - React only discards the node, the browser would
+  // finish the download anyway. Freeing the connection means the newest
+  // viewport's thumbnails always win over stale ones.
+  //
+  // Its own effect with no deps, so the cleanup runs ONLY on unmount. It used
+  // to hang off the load effect, whose cleanup also runs on every src and
+  // rowHeight change - so changing the grid size while tiles were loading tore
+  // the src attribute off elements that were staying, behind React's back.
+  // React still had the URL in state, saw no change to render, and never put
+  // the attribute back: those tiles shimmered forever without a request.
+  useEffect(() => {
+    const el = ref.current;
+    return () => {
+      if (el && !doneRef.current && el.getAttribute("src")) el.removeAttribute("src");
+    };
+  }, []);
+
+  // Last line of defence against an empty card. The tile is ON SCREEN with
+  // nothing shown, nothing loaded and nothing in flight - whatever the reason
+  // (the retry ladder ran out, a watcher missed an edge, a release with no
+  // request to follow it), the user is looking straight at a hole and the only
+  // right move is to ask for the photo again.
+  //
+  // The img element is the source of truth for "is something in flight", not a
+  // piece of React state: it is what the browser is actually acting on, and it
+  // cannot drift from it.
+  //
+  // Deliberately only on ENTERING the viewport, not on every render: a
+  // thumbnail that truly cannot be served (the derivative does not exist)
+  // would otherwise retry forever. Entering is a real user action, so it is
+  // both bounded and exactly when a fresh attempt is worth making.
+  const ensureLoading = useCallback(() => {
+    const el = ref.current;
+    if (!el || doneRef.current || retryTimer.current !== null) return;
+    if (el.getAttribute("src")) return;
+    retryCount.current = 0;
+    show(src, isThumbLoaded(src));
+    // And put it on the element directly. React state may ALREADY hold this
+    // exact URL while the attribute is missing - then setting the state again
+    // changes nothing, React re-renders nothing, and the element stays empty
+    // forever. Writing both is what makes this a guarantee rather than a
+    // second opinion.
+    el.setAttribute("src", src);
+  }, [src, show]);
 
   // Re-checked on render, but only for a tile that is actually on screen: an
   // unvirtualized grid can have thousands of these mounted at once, and doing
@@ -127,6 +238,21 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
     if (inViewRef.current) repairIfBroken();
   });
 
+  // The "already cached, will paint immediately" guess was wrong: whatever the
+  // memo says, this tile has been sitting there with a src and nothing to show
+  // for it. Drop back to the normal appearance so it shimmers like any other
+  // loading tile and eases in when it arrives.
+  //
+  // Without this, being wrong is invisible AND silent - the shimmer is
+  // suppressed for an instant tile, so a request that is slow, shed by the
+  // backend (503 + Retry-After) or failing leaves a blank card with no
+  // indication that anything is happening at all.
+  useEffect(() => {
+    if (!instant || visible || !shownSrc) return;
+    const timer = window.setTimeout(() => setInstant(false), INSTANT_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [instant, visible, shownSrc]);
+
   // Let go of a tile that has been left far behind. Without this the renderer
   // holds every thumbnail the user ever scrolled past (~7MB decoded each), and
   // a big grid grows until the browser starts discarding images itself - the
@@ -135,19 +261,23 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    return watchFarFromViewport(el, {
-      // Fires once on subscribe for an off-screen tile, when nothing is loaded
-      // yet - the guard below makes that a no-op.
-      enter: () => {},
-      leave: () => {
-        if (!doneRef.current) return;
-        doneRef.current = false;
-        retryCount.current = 0;
-        setVisible(false);
-        setShownSrc(undefined);
+    return watchFarFromViewport(
+      el,
+      {
+        // Fires once on subscribe for an off-screen tile, when nothing is
+        // loaded yet - the guard below makes that a no-op.
+        enter: () => {},
+        leave: () => {
+          if (!doneRef.current) return;
+          doneRef.current = false;
+          retryCount.current = 0;
+          setVisible(false);
+          setShownSrc(undefined);
+        },
       },
-    });
-  }, []);
+      rowHeight
+    );
+  }, [rowHeight]);
 
   // Fetch priority follows actual visibility: at/near the screen -> high,
   // merely inside the load margin -> low. The browser reads the attribute
@@ -158,70 +288,98 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
     const el = ref.current;
     if (!el) return;
     el.setAttribute("fetchpriority", "low");
-    return watchInViewport(el, {
-      enter: () => {
-        inViewRef.current = true;
-        el.setAttribute("fetchpriority", "high");
-        repairIfBroken();
+    return watchInViewport(
+      el,
+      {
+        enter: () => {
+          inViewRef.current = true;
+          el.setAttribute("fetchpriority", "high");
+          repairIfBroken();
+          ensureLoading();
+        },
+        leave: () => {
+          inViewRef.current = false;
+          el.setAttribute("fetchpriority", "low");
+        },
       },
-      leave: () => {
-        inViewRef.current = false;
-        el.setAttribute("fetchpriority", "low");
-      },
-    });
-  }, [repairIfBroken]);
+      rowHeight
+    );
+  }, [repairIfBroken, ensureLoading, rowHeight]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (doneRef.current) {
-      // Loaded once already - just follow src changes (edit-version bumps);
-      // never unload again.
-      setShownSrc(src);
-      return;
-    }
-    let timer: number | null = null;
-    const unwatch = watchNearViewport(el, {
-      enter: () => {
-        if (timer === null && !doneRef.current) {
-          timer = window.setTimeout(() => {
-            timer = null;
-            setShownSrc(src);
-          }, LOAD_STABILIZE_MS);
-        }
+    // Loaded once already - follow src changes (edit-version bumps) straight
+    // away; the watcher below then no-ops for as long as doneRef holds.
+    //
+    // It is subscribed either way, and that matters: this effect re-runs on
+    // every grid-size change (rowHeight), and at M/L/XL the URL does not
+    // change with it, so a loaded tile used to return here without a watcher
+    // at all. The far watcher can still RELEASE that tile later - and with
+    // nothing observing it, nothing was left to ever bring it back. It stayed
+    // an empty card until the grid was rebuilt.
+    if (doneRef.current) show(src, isThumbLoaded(src));
+    // Followed the src to a URL that is itself already cached (an edit-version
+    // bump back to a render seen earlier): same shortcut as on mount.
+    else if (isThumbLoaded(src)) show(src, true);
+
+    let cancelLoad: (() => void) | null = null;
+    const unwatch = watchNearViewport(
+      el,
+      {
+        enter: () => {
+          if (doneRef.current) return;
+          // Cached: there is nothing to stabilize against and no connection to
+          // queue for, so waiting would only make the user watch a photo they
+          // have already seen come back slowly. Re-checked here rather than
+          // remembered, because the browser can drop a cache entry at any time
+          // and the answer is one Map lookup.
+          if (isThumbLoaded(src)) {
+            show(src, true);
+            return;
+          }
+          if (cancelLoad === null) {
+            cancelLoad = afterScrollSettles(() => {
+              cancelLoad = null;
+              show(src, false);
+            }, LOAD_STABILIZE_MS);
+          }
+        },
+        leave: () => {
+          if (cancelLoad !== null) {
+            cancelLoad();
+            cancelLoad = null;
+          }
+          // Scrolled away mid-backoff: drop the pending retry and start the
+          // budget over, so coming back later gets a fresh set of attempts.
+          if (retryTimer.current !== null) {
+            window.clearTimeout(retryTimer.current);
+            retryTimer.current = null;
+          }
+          retryCount.current = 0;
+          setRetrying(false);
+          // Far away again with the request still in flight: removing src makes
+          // the browser abort it. No-op when the image already finished - a
+          // loaded tile keeps its pixels until the release margin, cached or
+          // not. A cached tile that is still loading gets dropped like any
+          // other: "cached" is a memo that can be wrong (the browser evicts
+          // what it likes), and if it is wrong this is a real network request
+          // that must not survive being scrolled away from. Coming back is
+          // instant either way - `enter` re-sets it without the delay.
+          if (!doneRef.current) setShownSrc(undefined);
+        },
       },
-      leave: () => {
-        if (timer !== null) {
-          window.clearTimeout(timer);
-          timer = null;
-        }
-        // Scrolled away mid-backoff: drop the pending retry and start the budget
-        // over, so coming back later gets a fresh set of attempts.
-        if (retryTimer.current !== null) {
-          window.clearTimeout(retryTimer.current);
-          retryTimer.current = null;
-        }
-        retryCount.current = 0;
-        setRetrying(false);
-        // Far away again with the request still in flight: removing src makes
-        // the browser abort it. No-op when the image already finished.
-        if (!doneRef.current) setShownSrc(undefined);
-      },
-    });
+      rowHeight
+    );
     return () => {
-      if (timer !== null) window.clearTimeout(timer);
+      cancelLoad?.();
       if (retryTimer.current !== null) {
         window.clearTimeout(retryTimer.current);
         retryTimer.current = null;
       }
       unwatch();
-      // Unmounting mid-flight (a long jump in the virtualized grid): abort
-      // the request imperatively - React only discards the node, the browser
-      // would finish the download anyway. Freeing the connection means the
-      // newest viewport's thumbnails always win over stale ones.
-      if (!doneRef.current && el.getAttribute("src")) el.removeAttribute("src");
     };
-  }, [src]);
+  }, [src, rowHeight, show]);
 
   return (
     <>
@@ -230,8 +388,19 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
           cards use - so freshly imported/loading photos animate instead of
           sitting as flat grey blocks. Only shown for tiles actually loading
           (src set, not yet loaded), never for far-off tiles that haven't
-          started. Also kept up across a retry backoff, when src is cleared. */}
-      {(shownSrc || retrying) && !visible && <div className="thumb-skeleton" aria-hidden />}
+          started. Also kept up across a retry backoff, when src is cleared.
+          A cached tile skips it: it paints within a frame or two, and a
+          shimmer that brief on a photo the user has already seen reads as a
+          flicker rather than as loading. If the cache turns out to be gone
+          after all, the error path drops the memo and the shimmer comes back
+          with the retry.
+          Deliberately NOT unmounted the moment the photo arrives: it stays and
+          fades out under the image easing in on top (.is-done), so the tile
+          resolves from shimmer to photo instead of blinking through the bare
+          card in between. */}
+      {(shownSrc || retrying) && !instant && (
+        <div className={`thumb-skeleton${visible ? " is-done" : ""}`} aria-hidden />
+      )}
       <img
         ref={ref}
         src={shownSrc}
@@ -240,13 +409,30 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
         // Blank (opacity 0, see .thumb-card img in index.css) until the pixels
         // are actually there - so a pending, aborted or failed request shows
         // the card background, never a broken-image glyph or the alt text.
-        className={visible ? "is-loaded" : undefined}
+        // `is-instant` suppresses the ease-in for pixels that were already
+        // cached; everything else eases up out of its shimmer.
+        className={
+          `${visible ? "is-loaded" : ""}${instant ? " is-instant" : ""}`.trim() || undefined
+        }
         onLoad={() => {
           doneRef.current = true;
+          // Remember the URL, not the pixels: coming back to this photo later
+          // is then a browser-cache hit that paints straight away. `shownSrc`,
+          // not `src` - they differ for the render between an edit-version
+          // bump and the effect that follows it, and what the browser just
+          // cached is what the element was actually pointed at.
+          if (shownSrc) markThumbLoaded(shownSrc);
           setRetrying(false);
           setVisible(true);
         }}
         onError={() => {
+          // Whatever the cache had for this URL is gone or unusable - back to
+          // the patient path until it loads again. Clearing `instant` is what
+          // brings the shimmer back: without it a tile that was believed
+          // cached sits blank through the whole retry ladder (up to ~19s) and
+          // then stays blank for good, showing nothing at any point.
+          setInstant(false);
+          if (shownSrc) forgetThumbLoaded(shownSrc);
           // Clearing src is what makes the browser re-issue the request: simply
           // re-assigning an unchanged URL is a no-op for the DOM.
           if (retryTimer.current !== null) return;
@@ -275,7 +461,9 @@ export function Thumb({ src, alt }: { src: string; alt: string }) {
           setShownSrc(undefined);
           retryTimer.current = window.setTimeout(() => {
             retryTimer.current = null;
-            setShownSrc(src);
+            // A retry is never instant by definition - it shimmers through the
+            // backoff and eases in when it finally arrives.
+            show(src, false);
           }, delay);
         }}
       />
@@ -339,9 +527,13 @@ export function ThumbnailGrid({
 }: Props) {
   const navigate = useNavigate();
   const mergePairs = useMergePairs();
+  const thumbSize = useThumbSize();
   // XS/S request the 640px tier - full 1600px thumbnails overflow the
   // renderer's decoded-image budget at those densities (see thumbTier).
-  const tier = thumbTier(useThumbSize());
+  const tier = thumbTier(thumbSize);
+  // Target row height of the CSS grid (--row-h), which is what the preload
+  // look-ahead is counted in.
+  const rowH = thumbPx(thumbSize);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
   const cardEls = useRef<Map<string, HTMLElement>>(new Map());
@@ -387,7 +579,11 @@ export function ThumbnailGrid({
           }
         }}
       >
-        <Thumb src={api.images.thumbnailUrl(image.id, editVersion(image), tier)} alt={image.original_filename} />
+        <Thumb
+          src={api.images.thumbnailUrl(image.id, editVersion(image), tier)}
+          alt={image.original_filename}
+          rowHeight={rowH}
+        />
         <span className={fileTypeBadgeClass(image.file_type, mergePairs && Boolean(image.paired_image_id))}>
           {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
         </span>

@@ -14,6 +14,8 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 
+import { loadMarginFor } from "./preload";
+
 // Layout constants mirroring the CSS grid (.thumbnail-grid gap, header pill +
 // margin, section spacing). They only need to be internally consistent: the
 // virtual grid positions everything itself, so these ARE the layout.
@@ -22,22 +24,21 @@ export const HEADER_H = 34;
 export const HEADER_MB = 12;
 export const SECTION_MB = 8;
 
-// How far beyond the viewport tiles are mounted. Large enough that normal
-// scrolling always meets already-mounted tiles (whose thumbnails are loading
-// via the near-viewport preloader), small enough that a jump across the
-// library only mounts the landing area.
+// How far beyond the viewport tiles are mounted. Two rows wider than the band
+// in which a thumbnail may load (utils/preload.ts), and derived from it rather
+// than tuned alongside it: a virtualized grid can only load a tile it has
+// mounted, so a mounted band narrower than the load margin would silently cap
+// the look-ahead - the tiles would be allowed to load and simply not exist.
+// The two extra rows are the slack that keeps a tile mounted a moment before
+// it is allowed to start, and a moment after it is told to stop.
 //
-// Scaled by tile size, because the cost is per MOUNTED TILE, not per pixel: a
-// fixed band holds four times as many cards at XS (130px rows) as at M (260px)
-// and twelve times as many as at XL - which is why the small grid sizes were
-// the ones that got sluggish. Tying it to the row height keeps the number of
-// live cards roughly level across the sizes.
-//
-// The floor keeps at least a full screen of buffer either way, so fast
-// scrolling still meets mounted tiles at XS; the ceiling stops the big sizes
-// from holding more decoded pixels than they need.
+// Both scale with the tile size, because the cost is per MOUNTED TILE, not per
+// pixel: a fixed band holds four times as many cards at XS (130px rows) as at
+// M (260px) and twelve times as many as at XL - which is why the small grid
+// sizes were the ones that got sluggish. Tying it to the row height keeps the
+// number of live cards roughly level across the sizes.
 export function overscanFor(rowHeight: number): number {
-  return Math.round(Math.min(2600, Math.max(900, rowHeight * 7.5)));
+  return Math.round(loadMarginFor(rowHeight) + rowHeight * 2);
 }
 
 // Scroll positions are quantized before landing in React state, so a smooth
