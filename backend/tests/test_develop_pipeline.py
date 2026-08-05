@@ -5,6 +5,7 @@ conftest.py sets PM_DATA_DIR before these imports, so importing app modules at
 module level is safe."""
 
 import numpy as np
+from PIL import Image as PILImage
 import pytest
 
 from app.services import develop, thumbnails
@@ -351,3 +352,199 @@ def test_framed_base_applies_geometry_but_not_the_develop_settings(tmp_path, mon
     )
     assert cropped.size == (200, 200)
     assert np.asarray(cropped).max() < 200
+
+
+# --- The editor preview's tone/denoise stage cache ---------------------------
+# Reusing the stage across renders that differ only below it is a pure speed
+# optimisation, so the only thing worth testing is that it stays invisible.
+
+
+def _editor_render(lin, adj, *, fast=False, key=None) -> np.ndarray:
+    thumbnails.invalidate_tone_stage()
+    if key is not None:  # populate, then render again off the warm cache
+        thumbnails.apply_adjustments_linear(lin, 1.0, adj, fast=fast, tone_cache_key=key)
+    return np.asarray(
+        thumbnails.apply_adjustments_linear(lin, 1.0, adj, fast=fast, tone_cache_key=key)
+    )
+
+
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {},                                                  # neutral: never cached
+        {"clarity": 60},
+        {"clarity": -70},                                    # pulls in the mist pass
+        {"denoise": 55},
+        {"denoise": 55, "clarity": -40},                     # the pairing this exists for
+        {"exposure": 0.8, "contrast": 30, "highlights": -40, "blacks": 15},
+        {"tone_mapper": "agx", "exposure": 0.5, "denoise": 40},
+        {"structure": 40, "sharpness": 50, "dehaze": 35, "denoise": 20},
+        {"saturation": 30, "hue": 12, "mist": 20, "grain_amount": 30, "denoise": 25},
+    ],
+)
+def test_tone_stage_cache_is_bit_identical(fast, edit):
+    """A warm cache must produce exactly the bytes the uncached pipeline does."""
+    lin = _rng(7).random((80, 120, 3)).astype(np.float32) * 1.4
+    adj = develop.defaults() | edit
+    assert np.array_equal(
+        _editor_render(lin, adj, fast=fast, key=None),
+        _editor_render(lin, adj, fast=fast, key="base"),
+    )
+
+
+def test_tone_stage_cache_key_splits_at_the_denoise_cut():
+    """Adjustments below the cut reuse the stage; everything else recomputes it.
+    A key missing from _POST_DENOISE_KEYS would silently serve a stale stage,
+    so every field the pipeline has is checked, not a hand-picked few."""
+    lin = _rng(3).random((40, 60, 3)).astype(np.float32)
+    base = develop.defaults() | {"denoise": 50, "clarity": 20}
+
+    def stage_key(adj) -> str:
+        thumbnails.invalidate_tone_stage()
+        thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="base")
+        return thumbnails._tone_stage[0]
+
+    reference = stage_key(base)
+    assert stage_key(base | {"clarity": -80}) == reference       # below the cut
+    assert stage_key(base | {"grain_amount": 40}) == reference
+    assert stage_key(base | {"denoise": 10}) != reference        # the cut itself
+    assert stage_key(base | {"exposure": 1.0}) != reference      # above it
+
+    probes = {"tone_mapper": "agx", "film_sim": "provia", "curve_mode": "parametric"}
+    stale = [
+        key for key in develop.defaults()
+        if key not in thumbnails._POST_DENOISE_KEYS
+        and stage_key(base | {key: probes.get(key, 7)}) == reference
+    ]
+    assert not stale, f"changing these leaves a stale cached stage: {stale}"
+
+
+def test_tone_stage_cache_is_opt_in():
+    """Only the editor preview passes a key. Exports and thumbnails render each
+    frame once, so caching a stage for them would be pure memory."""
+    lin = _rng(1).random((40, 60, 3)).astype(np.float32)
+    thumbnails.invalidate_tone_stage()
+    thumbnails.apply_adjustments_linear(lin, 1.0, develop.defaults() | {"denoise": 30})
+    assert thumbnails._tone_stage is None
+
+
+def test_tone_stage_cache_refuses_oversized_frames():
+    """The native 100%-zoom stage is ~480MB a copy - too much of the process to
+    hold for a second of denoise, so it renders uncached like it always did."""
+    lin = _rng(1).random((40, 60, 3)).astype(np.float32)
+    thumbnails.invalidate_tone_stage()
+    adj = develop.defaults() | {"denoise": 30}
+    monkey = thumbnails._TONE_STAGE_MAX_BYTES
+    try:
+        thumbnails._TONE_STAGE_MAX_BYTES = 1
+        thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="base")
+        assert thumbnails._tone_stage is None
+    finally:
+        thumbnails._TONE_STAGE_MAX_BYTES = monkey
+
+
+# --- Clarity and denoise are detail controls, not colour controls ------------
+
+
+def _saturated_chart(h=300, w=600) -> np.ndarray:
+    """Saturated patches with fine brightness texture and hard colour edges
+    between them - the content a per-channel filter damages."""
+    import colorsys
+    arr = np.zeros((h, w, 3), np.float32)
+    step = w // 6
+    for i, hue in enumerate([0.0, 0.08, 0.17, 0.33, 0.55, 0.75]):
+        arr[:, i * step:(i + 1) * step] = colorsys.hsv_to_rgb(hue, 0.75, 0.6)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    return np.clip(arr * (1.0 + 0.25 * np.sin(xx / 3.0) * np.sin(yy / 3.0))[..., None], 0.01, 1.0)
+
+
+def _hue_sat_drift(before: np.ndarray, after: np.ndarray) -> tuple[float, float]:
+    """(max saturation change, max hue rotation in degrees)."""
+    import cv2
+    b = cv2.cvtColor(np.clip(before, 0, 1), cv2.COLOR_RGB2HSV)
+    a = cv2.cvtColor(np.clip(after, 0, 1), cv2.COLOR_RGB2HSV)
+    dh = np.abs(((a[..., 0] - b[..., 0] + 180.0) % 360.0) - 180.0)
+    return float(np.abs(a[..., 1] - b[..., 1]).max()), float(dh.max())
+
+
+@pytest.mark.parametrize("amount", [1.3, 0.65, -0.65, -1.3])
+def test_clarity_never_touches_colour(amount):
+    """Clarity controls detail depth. It runs on luminance and is applied as one
+    shared RGB ratio, so hue and saturation survive to float32 rounding - the
+    per-channel version this replaced moved them by 0.05 and 10 degrees."""
+    chart = _saturated_chart()
+    dsat, dhue = _hue_sat_drift(chart, thumbnails._clarity(chart, 12.0, amount))
+    assert dsat < 1e-5, f"saturation moved by {dsat}"
+    assert dhue < 1e-3, f"hue rotated by {dhue} degrees"
+
+
+def test_clarity_still_changes_detail_depth():
+    """Guard against the ratio being a no-op: local contrast must actually move,
+    up for positive and down for negative."""
+    chart = _saturated_chart()
+    luma = lambda a: (a @ thumbnails._LUMA).astype(np.float32)
+
+    def detail(a):  # energy left after removing the local average
+        import cv2
+        y = luma(a)
+        return float((y - cv2.GaussianBlur(y, (0, 0), 3.0)).std())
+
+    assert detail(thumbnails._clarity(chart, 12.0, 0.65)) > detail(chart) * 1.02
+    assert detail(thumbnails._clarity(chart, 12.0, -0.65)) < detail(chart) * 0.98
+
+
+def test_denoise_guard_protects_colour_on_a_clean_image(monkeypatch):
+    """Denoise scales its chroma correction by the noise level it can measure, so
+    a photo with nothing to denoise keeps its colours. Asserted against the same
+    pass with the guard lifted rather than against a fixed number: how much a
+    chroma blur damages colour depends on the image, but the guard has to be a
+    strict improvement on any of them."""
+    chart = _saturated_chart()
+    src = PILImage.fromarray((chart * 255 + 0.5).astype(np.uint8), "RGB")
+    ref = np.asarray(src, np.float32) / 255.0
+
+    guarded = _hue_sat_drift(ref, np.asarray(thumbnails._denoise_image(src, 50, 65), np.float32) / 255.0)
+    monkeypatch.setattr(thumbnails, "_CHROMA_NOISE_K", 1e9)  # the pass as it was
+    unguarded = _hue_sat_drift(ref, np.asarray(thumbnails._denoise_image(src, 50, 65), np.float32) / 255.0)
+
+    assert guarded[0] < unguarded[0] * 0.75, f"saturation: {guarded[0]:.3f} vs {unguarded[0]:.3f}"
+    assert guarded[1] < unguarded[1] * 0.75, f"hue: {guarded[1]:.1f} vs {unguarded[1]:.1f} degrees"
+
+
+def test_denoise_still_removes_chroma_noise():
+    """The colour guard must not cost the pass its job: real chroma blotching
+    still has to come out, measured against the clean original."""
+    import cv2
+    clean = _saturated_chart()
+    rng = _rng(4)
+    ycc = cv2.cvtColor((clean * 255 + 0.5).astype(np.uint8), cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    for c in (1, 2):  # low-frequency blotching, the shape high-ISO noise takes
+        blob = cv2.GaussianBlur(rng.normal(0, 1, ycc.shape[:2]).astype(np.float32), (0, 0), 6.0)
+        ycc[..., c] += blob / blob.std() * 7.0 + rng.normal(0, 2.0, ycc.shape[:2])
+    noisy = cv2.cvtColor(np.clip(ycc, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
+
+    def chroma_err(a):
+        a8 = a if a.dtype == np.uint8 else (np.clip(a, 0, 1) * 255 + 0.5).astype(np.uint8)
+        d = (cv2.cvtColor(a8, cv2.COLOR_RGB2YCrCb)[..., 1:].astype(np.float32)
+             - cv2.cvtColor((clean * 255 + 0.5).astype(np.uint8), cv2.COLOR_RGB2YCrCb)[..., 1:])
+        return float(np.sqrt((d ** 2).mean()))
+
+    out = thumbnails._denoise_image(PILImage.fromarray(noisy, "RGB"), 50, 65)
+    assert chroma_err(np.asarray(out)) < chroma_err(noisy) * 0.95
+
+
+def test_clarity_keeps_colour_on_fully_saturated_content():
+    """The hardest case for a brightness ratio: colours already at the top of a
+    channel, where a plain clip would compress the brightest channel hardest and
+    rotate the hue. The ratio is capped instead, so they keep their colour."""
+    import colorsys
+    h, w = 200, 400
+    chart = np.zeros((h, w, 3), np.float32)
+    for i, hue in enumerate([0.0, 0.15, 0.35, 0.6]):
+        chart[:, i * 100:(i + 1) * 100] = colorsys.hsv_to_rgb(hue, 1.0, 1.0)  # S=V=1
+    xx = np.mgrid[0:h, 0:w][1].astype(np.float32)
+    chart = np.clip(chart * (0.5 + 0.5 * np.sin(xx / 3.0))[..., None], 0.001, 1.0)
+    for amount in (1.3, -1.3):  # slider at the ends of its travel
+        _, dhue = _hue_sat_drift(chart, thumbnails._clarity(chart, 12.0, amount))
+        assert dhue < 0.05, f"clarity {amount:+} rotated hue by {dhue:.3f} degrees"

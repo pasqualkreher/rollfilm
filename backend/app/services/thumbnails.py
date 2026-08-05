@@ -574,6 +574,17 @@ def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
     return np.clip(arr + (j - arr) * keep[..., None], 0.0, 1.0)
 
 
+# How far above the estimated chroma-noise level a correction may reach before
+# it is treated as real colour and shrunk away (see _denoise_image). Measured
+# against noise-free charts and synthetic high-ISO blotching: 4 halves the hue
+# damage on hard colour boundaries (32 -> 13 degrees) and near-eliminates it on
+# smooth colour (11 -> 2.5 degrees) while removing MORE chroma noise than the
+# unguarded pass on edged content (RMSE 6.4 against 8.4). Higher values denoise
+# flat colour slightly better and cost colour fidelity roughly linearly; the
+# unguarded pass is the limit as this goes to infinity.
+_CHROMA_NOISE_K = 4.0
+
+
 def _denoise_image(image: PILImage.Image, luma_amt: int, color_amt: int) -> PILImage.Image:
     """Camera-style NR, split by channel in YCrCb. The ugly part of high-ISO
     noise is the low-frequency colour blotching (rainbow mottling), whose blobs
@@ -625,8 +636,29 @@ def _denoise_image(image: PILImage.Image, luma_amt: int, color_amt: int) -> PILI
         # the smoothed colour back onto real edges.
         smooth = cv2.ximgproc.guidedFilter(guide, up.astype(np.float32) / 255.0, 8, 2e-3)
         ch = ycc[..., c].astype(np.float32) / 255.0
-        ch = ch + (smooth - ch) * w
-        out[..., c] = np.clip(ch * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
+        # NR must not repaint the picture ("denoise changes the colours"), the
+        # chroma counterpart of the tone add-back in the luma pass above. The
+        # quarter-scale blur is wide (up to ~20px at full size) and the guided
+        # upsample can only put back edges LUMA can see - two saturated areas of
+        # the same brightness have no luma edge between them, so their colours
+        # bled into each other. Measured on a noise-free chart, denoise 50 moved
+        # hue by up to 42 degrees and saturation by 0.24: damage done to a photo
+        # with nothing to denoise.
+        #
+        # So keep only the part of the correction that is plausibly noise. The
+        # image states its own noise level - the median |correction| is a robust
+        # estimate of it, since noise is everywhere and edges are not - and
+        # corrections far above it are shrunk toward zero (Wiener-style, smooth
+        # rather than a hard cut, so nothing switches on at a threshold). Noise
+        # sits at or below the level and passes through nearly untouched; a real
+        # colour boundary is an order of magnitude above it and is left alone.
+        # On a clean image the estimate collapses and the pass becomes a no-op,
+        # which is the behaviour that was actually wanted all along.
+        delta = smooth - ch
+        level = float(np.median(np.abs(delta[::4, ::4])))
+        limit = max(_CHROMA_NOISE_K * level, 1e-5)
+        delta *= (limit * limit) / (delta * delta + limit * limit)
+        out[..., c] = np.clip((ch + delta * w) * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
     return PILImage.fromarray(cv2.cvtColor(out, cv2.COLOR_YCrCb2RGB), "RGB")
 
 
@@ -1192,27 +1224,71 @@ def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
     detail (wrinkles, pores, skin/fabric texture) goes soft and less visible while
     genuine edges stay sharp. The diffusion glow that completes the look (reviews
     compare it to a Pro-Mist filter) is layered on in apply_adjustments via
-    _mist."""
-    src = np.clip(arr, 0.0, 1.0).astype(np.float32)
+    _mist.
+
+    Both directions are a control over DETAIL DEPTH, not over colour, so the
+    whole thing is computed on luminance alone and applied to RGB as one shared
+    ratio - the same reason raw.reinhard_ratio is a ratio rather than a
+    per-channel curve. Running the band per channel (as this did) meant the
+    three channels got different amounts of local contrast wherever their
+    texture differed, which pushed saturation up and rotated hue: measured on
+    saturated textured patches, +65 clarity moved saturation by up to 0.05 and
+    hue by up to 10 degrees. Luminance-only, both survive to float32 rounding
+    (1e-7) - clarity changes how deep the detail reads and nothing else.
+
+    The slider does bite slightly harder than the per-channel version did, by 3%
+    at +30 rising to 11% at +130 (measured as local-contrast energy): a
+    single-channel guide has less to distinguish an edge with, so its base is
+    smoother and the band it leaves is wider. Saved edits therefore render a
+    touch deeper than they did. Not compensated with a fudge factor - the
+    deviation is amount-dependent, so no single scale matches everywhere, and
+    the honest reading is that this is what the slider always meant to do.
+
+    A single-channel guide
+    is also about half the cost of a three-channel one (47ms against 84ms on a
+    2600px frame), so the fix is faster than what it replaces."""
+    y = np.clip(arr, 0.0, 1.0).astype(np.float32) @ _LUMA
+    y = np.maximum(y, 1e-6)
     if amount > 0:
         # Positive clarity: midtone local contrast (definition / "bite").
-        smooth = cv2.GaussianBlur(src, (0, 0), max(0.8, radius / 40.0))
+        smooth = cv2.GaussianBlur(y, (0, 0), max(0.8, radius / 40.0))
         base = cv2.ximgproc.guidedFilter(smooth, smooth, int(max(4, radius)), 0.01)
         band = smooth - base
-        luma = arr @ _LUMA
-        mask = np.power(1.0 - np.abs(2.0 * luma - 1.0), 1.5)[..., None]  # peaks at midtones
+        mask = np.power(1.0 - np.abs(2.0 * y - 1.0), 1.5)  # peaks at midtones
         delta = amount * band * mask
         delta -= 0.15 * amount * np.abs(band) * mask
-        return np.clip(arr + delta, 0.0, 1.0)
-    # Negative clarity: a pure fine-detail *softener* (the Fuji look), NOT a
-    # contrast control. Blend the image toward an edge-preserving guided-filter
-    # smooth so low-contrast fine texture (wrinkles, pores, skin) goes soft and
-    # less visible while genuine edges (face outline, eyes) stay crisp. Overall and
-    # local contrast are left untouched - it reads as softening, not as reduced
-    # contrast. The diffusion glow that completes the look is layered on via _mist.
-    fine = cv2.ximgproc.guidedFilter(src, src, int(max(2.0, radius / 6.0)), 7e-3)
-    blend = min(0.9, abs(amount) * 0.8)
-    return np.clip(arr * (1.0 - blend) + fine * blend, 0.0, 1.0)
+        y_out = y + delta
+    else:
+        # Negative clarity: a pure fine-detail *softener* (the Fuji look), NOT a
+        # contrast control. Blend toward an edge-preserving guided-filter smooth
+        # so low-contrast fine texture (wrinkles, pores, skin) goes soft and less
+        # visible while genuine edges (face outline, eyes) stay crisp. Overall and
+        # local contrast are left untouched - it reads as softening, not as
+        # reduced contrast. The diffusion glow that completes the look is layered
+        # on via _mist.
+        fine = cv2.ximgproc.guidedFilter(y, y, int(max(2.0, radius / 6.0)), 7e-3)
+        blend = min(0.9, abs(amount) * 0.8)
+        y_out = y * (1.0 - blend) + fine * blend
+    # Shared ratio: every channel is scaled by the same factor, so the colour of
+    # a pixel is untouched and only its brightness carries the effect.
+    ratio = np.maximum(y_out, 0.0) / y
+    # Cap the ratio where brightening would push a channel past 1: clipping it
+    # afterwards would compress the brightest channel hardest and rotate the hue
+    # of exactly the most saturated colours (measured 3 degrees on a fully
+    # saturated chart at +130). Capping instead costs those few pixels a little
+    # of the effect and keeps their colour. The midtone mask already fades the
+    # effect out near white, so this bites on almost nothing.
+    # (A black pixel's cap is 1e6, which never binds - and scaling zero by
+    # anything is still zero, so it needs no special case.)
+    #
+    # Three explicit maxima rather than arr.max(axis=-1): numpy's generic
+    # reduction over a length-3 trailing axis is ~8x slower than the pairwise
+    # form (95ms against 13ms on a 3900px frame), which is the difference
+    # between this guard costing half the pass and costing a twentieth of it.
+    peak = np.maximum(np.maximum(arr[..., 0], arr[..., 1]), arr[..., 2])
+    np.maximum(peak, 1e-6, out=peak)
+    np.minimum(ratio, np.reciprocal(peak), out=ratio)
+    return np.clip(arr * ratio[..., None], 0.0, 1.0)
 
 
 def _grain_pil(image: PILImage.Image, adj: dict) -> PILImage.Image:
@@ -1276,6 +1352,88 @@ def apply_masks(arr: np.ndarray, adj: dict) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0)
 
 
+# --- The editor preview's tone/denoise stage cache ---------------------------
+#
+# Every adjustment the pipeline reads STRICTLY AFTER the denoise pass. The cache
+# key is the adjustment dict with exactly these removed, so dragging any of them
+# reuses the stored stage while touching anything else recomputes it.
+#
+# The list is a denylist on purpose. A key that belongs here but is missing costs
+# a cache miss - a slower frame, never a wrong one. The reverse (an allowlist of
+# tone keys) would turn the same oversight into a stale render, which in an
+# editor is the bug you never want. So: when in doubt, leave a key out.
+_POST_DENOISE_KEYS = frozenset({
+    # Detail (spatial)
+    "clarity", "structure", "sharpness", "sharpness_threshold", "dehaze",
+    "chromatic_aberration_red_cyan", "chromatic_aberration_blue_yellow",
+    # Display colour block
+    "film_sim", "lut_intensity", "curve_mode", "point_curves", "parametric_curve",
+    "color_calibration", "hsl", "hue", "chrome_effect", "chrome_blue",
+    "color_grading", "saturation", "vibrance",
+    # Local adjustments
+    "masks",
+    # Finishing effects + frame
+    "mist", "glow_amount", "halation_amount", "flare_amount",
+    "vignette_amount", "vignette_midpoint", "vignette_roundness", "vignette_feather",
+    "grain_amount", "grain_size", "grain_roughness", "frame_width",
+})
+
+# One entry, not an LRU: a drag is one slider on one image at one tier, which is
+# exactly the access pattern a single slot serves. An LRU of a few would multiply
+# the biggest thing in the process - a 3900px float32 RGB frame is 122MB - by its
+# depth, and this cache exists to make the editor cheaper, not fatter.
+_tone_stage: tuple[str, np.ndarray] | None = None
+_tone_stage_lock = threading.Lock()
+
+# Don't store frames bigger than the ultra tier (122MB). The native 100%-zoom
+# render is ~480MB per copy, where holding one to save a second of denoise is a
+# bad trade against the rest of the process; it recomputes like it always did.
+_TONE_STAGE_MAX_BYTES = 160 * 1024 * 1024
+
+
+def _tone_stage_key(base_key: str, base_gain: float, adj: dict, fast: bool) -> str:
+    pre = {k: v for k, v in adj.items() if k not in _POST_DENOISE_KEYS}
+    # `fast` is part of the key because it decides whether denoise ran at all -
+    # a scrub frame's stage and a settled frame's stage are different arrays.
+    return json.dumps(
+        [base_key, round(float(base_gain), 6), bool(fast), pre],
+        sort_keys=True, separators=(",", ":"), default=str,
+    )
+
+
+def _tone_stage_get(key: str | None) -> np.ndarray | None:
+    """The cached stage as a fresh writeable array, or None. Callers get a copy:
+    the passes downstream are free to work in place, and the stored array has to
+    survive being handed out repeatedly. The copy costs ~5ms at the settle tier
+    against the ~360ms denoise it saves."""
+    if key is None:
+        return None
+    with _tone_stage_lock:
+        hit = _tone_stage
+    if hit is None or hit[0] != key:
+        return None
+    return hit[1].copy()
+
+
+def _tone_stage_put(key: str | None, arr: np.ndarray) -> None:
+    global _tone_stage
+    if key is None or arr.nbytes > _TONE_STAGE_MAX_BYTES:
+        return
+    stored = arr.copy()
+    # Read-only so a future pass that starts writing in place fails loudly here
+    # instead of quietly poisoning every later frame that reuses this stage.
+    stored.flags.writeable = False
+    with _tone_stage_lock:
+        _tone_stage = (key, stored)
+
+
+def invalidate_tone_stage() -> None:
+    """Drop the stage cache (image edited on disk, decode settings changed)."""
+    global _tone_stage
+    with _tone_stage_lock:
+        _tone_stage = None
+
+
 def apply_adjustments(
     image: PILImage.Image, adj: dict, include_grain: bool = True, fast: bool = False
 ) -> PILImage.Image:
@@ -1292,8 +1450,34 @@ def apply_adjustments(
     )
 
 
+def _denoise_stage(arr: np.ndarray, adj: dict, fast: bool) -> np.ndarray:
+    """Denoise (spatial), split into Luminance + Colour like RapidRAW. The single
+    "Denoise" slider is a master over both: it feeds luma 1:1 and chroma a bit
+    harder (colour blotching is the ugly part of high-ISO noise and the eye
+    barely resolves chroma detail, so it can take more without going soft).
+    Per-channel sliders still win where they're set higher. cv2's NLM needs
+    8-bit input, so this one pass round-trips through uint8.
+
+    The one pass a drag never gets: the luma NLM alone is ~147ms on a 1100px
+    scrub frame, which would drop the preview to under 7 frames a second. It's
+    also the pass a downscaled preview can say least about - by 1100px a 7752px
+    raw has had its sensor noise averaged away, so what a live frame would show
+    is smoothing applied to already-smooth data. Denoise is judged at 100%
+    zoom, where the ladder renders natively and the pixels are real."""
+    dn = adj.get("denoise", 0)
+    ln = max(adj.get("luma_noise_reduction", 0), dn)
+    cn = max(adj.get("color_noise_reduction", 0), min(100, int(round(dn * 1.3))))
+    if fast or (ln <= 0 and cn <= 0):
+        return arr
+    denoised = _denoise_image(
+        PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB"), ln, cn
+    )
+    return np.asarray(denoised, dtype=np.float32) / 255.0
+
+
 def apply_adjustments_linear(
-    lin: np.ndarray, base_gain: float, adj: dict, include_grain: bool = True, fast: bool = False
+    lin: np.ndarray, base_gain: float, adj: dict, include_grain: bool = True, fast: bool = False,
+    tone_cache_key: str | None = None,
 ) -> PILImage.Image:
     """The develop pipeline on a scene-referred linear float base (the RAW
     demosaic, values may exceed 1.0 after the gain).
@@ -1303,6 +1487,13 @@ def apply_adjustments_linear(
     detail (clarity/structure/sharpen/CA/dehaze, judged on the *toned* image the
     way Lightroom does - noise and edges look the same as what's on screen) ->
     display colour block -> masks -> finishing effects.
+
+    `tone_cache_key` names the exact array this render starts from (base +
+    geometry). Passing one lets the tone block and denoise be reused across
+    renders that differ only below them - the editor preview passes one, exports
+    and thumbnails don't, since they render each frame once. It changes nothing
+    about the output: the cut is at a point where the two passes above depend on
+    their own sliders and nothing else (see _POST_DENOISE_KEYS).
 
     `include_grain=False` skips the grain pass so the caller can add grain
     *after* downscaling to the output size (see generate_derivatives): grain
@@ -1321,6 +1512,10 @@ def apply_adjustments_linear(
         ----------------------------------------------------- runs while dragging
         flare +84   glow +143   mist +145   denoise +147
 
+    Negative clarity straddles that line: its band softening is the cheap half
+    (+17), but the Pro-Mist diffusion that completes the look IS the +145 mist
+    pass, so only the softening runs while dragging.
+
     Everything above the line runs during a drag. It used to be skipped wholesale
     for being "a convolution", which meant dragging Clarity or Structure changed
     nothing on screen until the pointer came up - a slider whose effect you
@@ -1333,32 +1528,24 @@ def apply_adjustments_linear(
     come back on the accurate render at pointer-up, so the settled preview - and
     the save - are unchanged either way."""
     long_edge = max(lin.shape[:2])
-    arr = _linear_tone_block(lin, adj, base_gain)
     if develop.is_neutral(adj):
-        # Nothing but the neutral rendering (gain + shoulder) to do.
+        # Nothing but the neutral rendering (gain + shoulder) to do. Checked
+        # before the cache so a neutral edit can never take a cached stage and
+        # fall through the rest of the pipeline instead of returning here.
+        arr = _linear_tone_block(lin, adj, base_gain)
         return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
 
-    # Denoise (spatial), split into Luminance + Colour like RapidRAW. The single
-    # "Denoise" slider is a master over both: it feeds luma 1:1 and chroma a bit
-    # harder (colour blotching is the ugly part of high-ISO noise and the eye
-    # barely resolves chroma detail, so it can take more without going soft).
-    # Per-channel sliders still win where they're set higher. cv2's NLM needs
-    # 8-bit input, so this one pass round-trips through uint8.
-    #
-    # The one pass a drag never gets: the luma NLM alone is ~147ms on a 1100px
-    # scrub frame, which would drop the preview to under 7 frames a second. It's
-    # also the pass a downscaled preview can say least about - by 1100px a 7752px
-    # raw has had its sensor noise averaged away, so what a live frame would show
-    # is smoothing applied to already-smooth data. Denoise is judged at 100%
-    # zoom, where the ladder renders natively and the pixels are real.
-    dn = adj.get("denoise", 0)
-    ln = max(adj.get("luma_noise_reduction", 0), dn)
-    cn = max(adj.get("color_noise_reduction", 0), min(100, int(round(dn * 1.3))))
-    if not fast and (ln > 0 or cn > 0):
-        denoised = _denoise_image(
-            PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB"), ln, cn
-        )
-        arr = np.asarray(denoised, dtype=np.float32) / 255.0
+    # Tone + denoise depend on their own sliders and nothing else, so when
+    # `tone_cache_key` names the base being rendered (the editor preview passes
+    # one; exports and thumbnails don't) the result is reusable. That is what
+    # makes a Clarity drag cheap: it re-runs the detail pass and downwards, not
+    # the ~360ms denoise sitting above it. See _POST_DENOISE_KEYS for the split.
+    key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
+    arr = _tone_stage_get(key)
+    if arr is None:
+        arr = _linear_tone_block(lin, adj, base_gain)
+        arr = _denoise_stage(arr, adj, fast)
+        _tone_stage_put(key, arr)
     # Detail (spatial): clarity = large-radius local contrast, structure =
     # medium-radius local contrast, sharpness = small-radius edge enhancement.
     # These run during a drag too - they're the ones you most need to see move
@@ -1367,11 +1554,21 @@ def apply_adjustments_linear(
     cl = adj.get("clarity", 0)
     if cl:
         arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
-        if cl < 0:
+        if cl < 0 and not fast:
             # Fuji's negative clarity doesn't just flatten - it diffuses like a
             # Pro-Mist filter (soft halation around brights). Layer a gentle
             # whole-highlight glow (not the light-source-only Mist) on top of the
             # band softening; strength follows the slider.
+            #
+            # `not fast` for the same reason the Mist slider itself sits out a
+            # drag (see the finishing block below): this is literally that pass,
+            # and it is the most expensive one in the pipeline - 143ms on a
+            # 1100px scrub frame, against 17ms for the band softening it
+            # accompanies. Without the gate, dragging Clarity leftward dropped
+            # the preview from ~28 frames a second to ~5 while every other
+            # slider stayed fluid. The softening (the part the slider is *for*)
+            # still tracks the pointer live; the glow rejoins on the pointer-up
+            # render, so the settled preview and the save are unchanged.
             arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False)
     st = adj.get("structure", 0)
     if st:
@@ -1759,6 +1956,9 @@ def clear_editor_base_caches() -> None:
     global _native_editor_base
     _cached_editor_base.cache_clear()
     _native_editor_base = None
+    # The tone/denoise stage was computed from one of those bases, so it has to
+    # go with them - its own key can't see a decode setting change.
+    invalidate_tone_stage()
 
 
 def render_editor_preview_bytes(
@@ -1866,14 +2066,25 @@ def _render_editor_bytes(
     native: bool = False,
     browse: bool = False,
 ) -> bytes:
+    mtime_ns = path.stat().st_mtime_ns
     if native:
-        lin16, gain = _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
+        lin16, gain = _cached_native_base(image.id, str(path), mtime_ns)
     else:
-        lin16, gain = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, base_px)
+        lin16, gain = _cached_editor_base(image.id, str(path), mtime_ns, base_px)
     arr = lin16.astype(np.float32)
     if distortion:
         arr = apply_distortion_array(arr, distortion)
     arr = apply_edits_array(arr, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
+    # Names the exact array the tone/denoise stage would be computed from, so the
+    # cache can only ever be reused for it: the base (image + mtime + tier) plus
+    # every geometry op applied above, plus which exposure the render is judged
+    # at. The native tier is left out on purpose - one copy of that stage is
+    # ~480MB, too much of the process to hold for a second of denoise.
+    tone_key = None if native else json.dumps(
+        [image.id, mtime_ns, base_px, rotation, crop, distortion, flip_h, flip_v,
+         straighten, persp_h, persp_v, browse],
+        sort_keys=True, separators=(",", ":"), default=str,
+    )
     # The editor renders the raw NATIVE (base_gain=1.0), never the browsing
     # auto-exposure: opening a photo shows its true sensor exposure so you develop
     # from the real data with full DR headroom. The Exposure slider (in adjustments)
@@ -1885,7 +2096,9 @@ def _render_editor_bytes(
     # demosaics 2-3 stops dark, so comparing an edit against the native render
     # would only ever say "the edit is brighter" - the honest before/after is
     # against the auto-exposed picture the user actually saw before opening it.
-    img = apply_adjustments_linear(arr, gain if browse else 1.0, adjustments, fast=fast)
+    img = apply_adjustments_linear(
+        arr, gain if browse else 1.0, adjustments, fast=fast, tone_cache_key=tone_key
+    )
     img = add_frame(img, adjustments)
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=quality)
