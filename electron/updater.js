@@ -39,6 +39,9 @@ let macPromptedVersion = null;
  *   allowQuit()                               bypass the "Immich uploads still
  *                                             running" close interception so
  *                                             quitAndInstall isn't blocked
+ *   stopBackend()                             kill the backend (and its
+ *                                             exiftool workers) before the
+ *                                             installer starts - see below
  */
 function initAutoUpdate(hooks) {
   // Dev runs update against nothing; the version is meaningless there.
@@ -93,6 +96,16 @@ function initElectronUpdater(hooks) {
     // The close handler intercepts quits while Immich uploads are pending;
     // the user just chose to restart, so that decision is already made.
     hooks.allowQuit();
+    // quitAndInstall() spawns the installer FIRST and quits afterwards, so the
+    // backend would still be holding files in the install dir when NSIS starts
+    // replacing them. Take it down here, before the installer exists - the
+    // taskkill in build/installer.nsh stays as the safety net for the
+    // "install on next quit" path and for orphans from an earlier crash.
+    try {
+      hooks.stopBackend?.();
+    } catch (err) {
+      console.warn("[updater] stopping backend before install failed:", err.message);
+    }
     autoUpdater.quitAndInstall();
   });
 

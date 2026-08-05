@@ -1077,6 +1077,9 @@ app.whenReady().then(async () => {
     allowQuit: () => {
       forceClose = true;
     },
+    // The NSIS installer can only replace files nothing is holding open, and
+    // the backend (plus its exiftool workers) lives inside the install dir.
+    stopBackend,
   });
 
   if (isFirstStart) {
