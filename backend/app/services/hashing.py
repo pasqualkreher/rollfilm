@@ -1,17 +1,34 @@
 import hashlib
+import threading
 from pathlib import Path
 
 import imagehash
 from PIL import Image as PILImage
 
-# imagehash.phash() lazily does `import scipy.fftpack` on its first call. That
-# import means loading scipy's many small files from disk, which on a cold
-# (or Nextcloud-throttled) filesystem can take tens of seconds - and it would
-# happen in the middle of the first import request, looking like a hang.
-# Trigger it here instead, so the cost is paid once at server startup.
-import scipy.fftpack  # noqa: F401  (imported for its side effect, used by imagehash)
 
-imagehash.phash(PILImage.new("L", (32, 32)))
+def warm_phash() -> None:
+    """Pay imagehash's hidden startup cost up front, off the critical path.
+
+    imagehash.phash() lazily does `import scipy.fftpack` on its first call. That
+    import means loading scipy's many small files from disk, which on a cold
+    (or Nextcloud-throttled) filesystem can take tens of seconds - and it would
+    happen in the middle of the first import request, looking like a hang.
+
+    This used to run at module import, which put it on the path to the server
+    answering /health at all - and the desktop shell holds the window behind a
+    splash screen until it does. Measured at ~150ms of every single launch, for
+    a cost only an import ever needs to have been paid. It runs on a background
+    thread now (see main.on_startup), alongside the geocoder and CLIP warmups,
+    which is the same trade those already make: nothing waits for it, and an
+    import arriving first simply pays what it would have paid anyway.
+    """
+    import scipy.fftpack  # noqa: F401  (imported for its side effect, used by imagehash)
+
+    imagehash.phash(PILImage.new("L", (32, 32)))
+
+
+def warm_phash_in_background() -> None:
+    threading.Thread(target=warm_phash, name="phash-warmup", daemon=True).start()
 
 
 def sha1_file(path: Path) -> str | None:

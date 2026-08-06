@@ -1,6 +1,6 @@
 {
   "name": "rollfilm-desktop",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "description": "Rollfilm — native desktop photo library & film-look editor",
   "main": "main.js",
   "author": "Pasqual Kreher",

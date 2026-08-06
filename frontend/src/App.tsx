@@ -1,19 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
-import { ImportWizard } from "./pages/ImportWizard";
-import { Albums } from "./pages/Albums";
-import { AlbumDetail } from "./pages/AlbumDetail";
-import { SmartAlbumDetail } from "./pages/SmartAlbumDetail";
-import { ImageDetail } from "./pages/ImageDetail";
-import { Settings } from "./pages/Settings";
-import { Stats } from "./pages/Stats";
-import { Selects } from "./pages/Selects";
-import { Trash } from "./pages/Trash";
-import { MapView } from "./pages/MapView";
-import { Help } from "./pages/Help";
 import { SearchBar } from "./components/SearchBar";
 import { IconChart, IconGear, IconHelp } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
@@ -22,6 +11,60 @@ import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
 import { WaitProvider } from "./state/wait";
+
+// Every screen except the Library is code-split. The app used to ship as one
+// bundle, so each launch parsed and compiled the photo editor (by far the
+// biggest module), the whole Settings page, Help, and Leaflet along with the
+// map - before the library it was about to show could paint. None of that is
+// needed to look at photos, and most launches never touch any of it.
+//
+// The Library itself stays eagerly imported: it is what the app opens on, and
+// splitting it would only trade compile time for a loading flash on the one
+// route that must be there immediately.
+//
+// These are named exports, hence the unwrapping - React.lazy wants a module
+// whose `default` is the component.
+const page = <T extends Record<string, unknown>, K extends keyof T>(
+  load: () => Promise<T>,
+  name: K
+) => lazy(() => load().then((m) => ({ default: m[name] as React.ComponentType })));
+
+const importWizard = () => import("./pages/ImportWizard");
+const imageDetail = () => import("./pages/ImageDetail");
+
+const ImportWizard = page(importWizard, "ImportWizard");
+const ImageDetail = page(imageDetail, "ImageDetail");
+const Albums = page(() => import("./pages/Albums"), "Albums");
+const AlbumDetail = page(() => import("./pages/AlbumDetail"), "AlbumDetail");
+const SmartAlbumDetail = page(() => import("./pages/SmartAlbumDetail"), "SmartAlbumDetail");
+const Settings = page(() => import("./pages/Settings"), "Settings");
+const Stats = page(() => import("./pages/Stats"), "Stats");
+const Selects = page(() => import("./pages/Selects"), "Selects");
+const Trash = page(() => import("./pages/Trash"), "Trash");
+const MapView = page(() => import("./pages/MapView"), "MapView");
+const Help = page(() => import("./pages/Help"), "Help");
+
+// Splitting a route moves its cost from startup to the first navigation, which
+// would be the wrong trade for the two screens the Library leads to constantly:
+// opening a photo is the single most common thing anyone does here, and a fresh
+// launch with an empty library goes straight to Import. So fetch those two
+// chunks once the app has settled - off the startup critical path, and long
+// before the click that needs them. Everything else loads when it is asked for.
+function usePrefetchLikelyRoutes() {
+  useEffect(() => {
+    const warm = () => {
+      void imageDetail();
+      void importWizard();
+    };
+    const idle = window.requestIdleCallback;
+    if (idle) {
+      const handle = idle(warm, { timeout: 3000 });
+      return () => window.cancelIdleCallback?.(handle);
+    }
+    const timer = window.setTimeout(warm, 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
+}
 
 // Source-root scans run in the background (started from Settings or the
 // automatic startup scan) and commit their new photos when they finish. This
@@ -317,6 +360,7 @@ function ImmichSyncIndicator() {
 }
 
 export default function App() {
+  usePrefetchLikelyRoutes();
   return (
     <TasksProvider>
       <WaitProvider>
@@ -328,6 +372,12 @@ export default function App() {
             <EmptyLibraryRedirect />
             <TopBar />
 
+            {/* Same wording and styling as a page waiting on its own data, so a
+                chunk that isn't in memory yet reads as the page loading rather
+                than as the app blanking out. In practice it is rarely seen: the
+                chunks come off local disk, and the two routes the Library leads
+                to are prefetched while the app idles. */}
+            <Suspense fallback={<div className="empty-state">Loading...</div>}>
             <Routes>
             <Route path="/" element={<Library />} />
             <Route path="/import" element={<ImportWizard />} />
@@ -342,6 +392,7 @@ export default function App() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/help" element={<Help />} />
             </Routes>
+            </Suspense>
 
             <OnboardingWizard />
           </div>

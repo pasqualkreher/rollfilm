@@ -146,8 +146,17 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     recompute();
     // Reveal the bubble on real user scrolls only (not the mount/resize
     // recomputes), and auto-hide a moment after scrolling stops.
+    //
+    // Coalesced onto animation frames, the same way the grid's own scroll
+    // tracking is (useVirtualWindow): scroll events fire faster than the screen
+    // refreshes, and every one of them used to recompute the whole rail and
+    // push new marker state through React - work that can only be seen once per
+    // frame no matter how often it is done, on the thread the scroll itself
+    // needs.
+    let raf = 0;
     const onScroll = () => {
-      recompute();
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(recompute);
       setScrolling(true);
       clearTimeout(scrollHideTimer.current);
       scrollHideTimer.current = setTimeout(() => setScrolling(false), 900);
@@ -162,6 +171,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     // next scroll or resize.
     window.addEventListener("animationend", recompute);
     return () => {
+      cancelAnimationFrame(raf);
       scroller.removeEventListener("scroll", onScroll);
       ro.disconnect();
       window.removeEventListener("resize", recompute);

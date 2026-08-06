@@ -162,7 +162,24 @@ export async function saveDownload(
   URL.revokeObjectURL(url);
 }
 
-function derivativeUrl(path: string, version?: string, size?: string): string {
+// The desktop shell serves cached derivatives off disk through its own rf://
+// scheme (see electron/main.js), which sidesteps the six-connections-per-origin
+// limit Chromium puts on HTTP/1.1 - the ceiling that capped how many of a
+// grid's tiles could ever be loading at once, however far ahead the look-ahead
+// reached. Only in Electron; the web/Docker build has no such scheme and stays
+// on HTTP.
+const HAS_DESKTOP_SHELL = typeof window !== "undefined" && Boolean(window.photoManager?.apiBaseUrl);
+
+// Which on-disk file a derivative route corresponds to, or null for the ones
+// that are RENDERED per request (full-resolution zoom, the editor's geometry
+// base) and therefore have to go to the backend.
+function derivativeFile(route: string, size?: string): string | null {
+  if (route === "preview") return "preview.jpg";
+  if (route === "thumbnail") return size ? `${size}.jpg` : "thumbnail.jpg";
+  return null;
+}
+
+function derivativeUrl(id: string, route: string, version?: string, size?: string): string {
   let cb = "";
   try {
     cb = localStorage.getItem(CACHE_BUST_KEY) ?? "";
@@ -172,7 +189,13 @@ function derivativeUrl(path: string, version?: string, size?: string): string {
   const query = [size ? `size=${size}` : "", version ? `v=${version}` : "", cb ? `cb=${cb}` : ""]
     .filter(Boolean)
     .join("&");
-  return assetUrl(`${path}${query ? `?${query}` : ""}`);
+  const file = HAS_DESKTOP_SHELL ? derivativeFile(route, size) : null;
+  // The query string is carried onto the rf:// URL unchanged even though the
+  // handler resolves the path from the id and filename alone: `v`/`cb` are what
+  // make the URL change when the pixels change, and that has to hold on both
+  // branches or an edit would keep painting the cached old render.
+  const base = file ? `rf://derivative/${id}/${file}` : assetUrl(`/images/${id}/${route}`);
+  return `${base}${query ? `?${query}` : ""}`;
 }
 
 // Serialise library/search filters to query params. Array values (e.g. `tags`)
@@ -562,18 +585,18 @@ export const api = {
     // `size: "small"` requests the 640px tier the dense grid sizes use (see
     // thumbTier in state/viewPrefs.ts); omitted = the full 1600px thumbnail.
     thumbnailUrl(id: string, version?: string, size?: "small"): string {
-      return derivativeUrl(`/images/${id}/thumbnail`, version, size);
+      return derivativeUrl(id, "thumbnail", version, size);
     },
     previewUrl(id: string, version?: string): string {
-      return derivativeUrl(`/images/${id}/preview`, version);
+      return derivativeUrl(id, "preview", version);
     },
     // Full-resolution edited render for true 100% zoom.
     fullUrl(id: string, version?: string): string {
-      return derivativeUrl(`/images/${id}/full`, version);
+      return derivativeUrl(id, "full", version);
     },
     // Geometry-only render (no tonal edits) the editor draws its live preview on.
     basePreviewUrl(id: string, version?: string): string {
-      return derivativeUrl(`/images/${id}/base-preview`, version);
+      return derivativeUrl(id, "base-preview", version);
     },
   },
   albums: {

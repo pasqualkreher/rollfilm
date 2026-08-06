@@ -21,6 +21,7 @@ from app.services.embeddings import ensure_embeddings_table
 from app.services.embeddings import start_background_warmup as start_background_clip_warmup
 from app.services.exif import reap_orphaned_helpers
 from app.services.geocode import warm_in_background as warm_geocoder
+from app.services.hashing import warm_phash_in_background
 from app.services.immich_sync import start_background_immich_sync
 from app.services.maintenance import start_background_sync
 from app.services.sources import scan_all_sources
@@ -87,6 +88,10 @@ def on_startup() -> None:
     # import commit (the desktop app restarts the backend on every launch, so
     # that first-commit stall was paid every session).
     warm_geocoder()
+    # Same idea for perceptual hashing: imagehash pulls in scipy.fftpack on its
+    # first call, which is a lot of small files off disk. Only imports need it,
+    # so it must not sit between launching the app and the window appearing.
+    warm_phash_in_background()
     # Same idea for semantic search: a query itself takes milliseconds, but the
     # first one used to wait ~4s for torch and the CLIP weights. Load them on a
     # background thread once any import has settled, and only when the weights

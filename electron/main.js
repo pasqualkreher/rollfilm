@@ -11,7 +11,21 @@
 //   4. Expose a native folder picker over IPC (the whole reason for going
 //      desktop: any host path is directly readable by the native backend).
 
-const { Menu, app, BrowserWindow, dialog, ipcMain, powerMonitor, shell } = require("electron");
+// `net` below is Node's socket module (getFreePort); Electron's own net - the
+// one that can fetch file:// and http:// for the rf:// handler - comes in under
+// an explicit name so the two can't be confused.
+const {
+  Menu,
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  net: electronNet,
+  powerMonitor,
+  protocol,
+  shell,
+} = require("electron");
+const { pathToFileURL } = require("url");
 const { initAutoUpdate } = require("./updater");
 const { spawn, spawnSync } = require("child_process");
 const net = require("net");
@@ -23,6 +37,26 @@ const fs = require("fs");
 // files (used by `npm run dev`). Backend source is always chosen by app.isPackaged.
 const USE_DEV_SERVER = process.env.PM_DEV === "1";
 const DEV_SERVER_URL = "http://localhost:5173";
+
+// Grid thumbnails and lightbox previews are served to the renderer over our own
+// rf:// scheme instead of over the backend's HTTP port. The reason is a hard
+// browser limit, not a micro-optimisation: Chromium opens at most six
+// concurrent HTTP/1.1 connections per origin, so no matter how many tiles the
+// grid's look-ahead wants, only six could ever be in flight - and on a 4K
+// screen at the dense sizes there are several hundred. Every one of them also
+// cost a FastAPI request with a database session and an ownership query, for a
+// file whose path follows from the image id alone.
+//
+// This must run before app.whenReady(). `standard` gives the URLs normal
+// origin/path parsing, `stream` lets a response body be piped rather than
+// buffered, and `supportFetchAPI`/`corsEnabled` keep them usable from renderer
+// code rather than only as an <img src>.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "rf",
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
+  },
+]);
 
 let backendProc = null;
 let apiPort = 0;
@@ -223,6 +257,164 @@ function thumbnailRootFor(lib) {
 }
 function stagingRootFor(lib) {
   return path.join(libraryDataDir(lib), "staging");
+}
+
+// --- rf:// derivative serving ----------------------------------------------
+//
+// rf://derivative/<image-id>/<file>?v=…&cb=… -> the cached derivative on disk,
+// falling back to the backend when it isn't there yet.
+
+// The derivatives that are plain cached files, mapped to the API route that
+// produces one when it's missing. Deliberately an allowlist: it is also the
+// path-traversal guard, and it keeps renders OFF this route - full.jpg and
+// base-preview are generated per request by the backend and have no business
+// being read straight off disk.
+const RF_DERIVATIVES = new Map([
+  ["small.jpg", "thumbnail?size=small"],
+  ["thumbnail.jpg", "thumbnail"],
+  ["preview.jpg", "preview"],
+]);
+
+// What may stand in for a tier that hasn't been derived yet, best first.
+//
+// small.jpg and thumbnail.jpg are the same picture at different sizes, so a
+// missing tier must never make anyone WAIT: a library predating the tier has
+// none of them, and deriving one costs a read, a resize and a write on the
+// library's disk, per tile. Putting that on the path of tiles scrolling into
+// view is what made jumping around the grid leave cards grey for seconds -
+// every fresh region paid it again, through the very HTTP path this scheme
+// exists to avoid.
+//
+// Serving the next size up is instant and looks identical - it is exactly what
+// the grid got before the tier existed. The proper tier is then warmed in the
+// background (see warmTier) so the next visit gets the cheaper decode.
+const RF_TIER_FALLBACKS = new Map([
+  ["small.jpg", ["small.jpg", "thumbnail.jpg"]],
+  ["thumbnail.jpg", ["thumbnail.jpg"]],
+  // The lightbox preview has no larger sibling to borrow from; a miss there
+  // goes to the backend, which renders it.
+  ["preview.jpg", ["preview.jpg"]],
+]);
+
+// Deriving the real tier for images that were served a stand-in. Deliberately
+// throttled and deduplicated: a scrubber drag can sweep thousands of tiles, and
+// firing a request per tile would rebuild the very queue this is meant to keep
+// off the user's path. Nothing waits on any of it - the picture is already on
+// screen - so it can afford to trickle.
+const warmQueue = [];
+const warmQueued = new Set();
+let warmActive = 0;
+const WARM_MAX_CONCURRENT = 2;
+const WARM_MAX_QUEUED = 200;
+
+function pumpWarmQueue() {
+  while (warmActive < WARM_MAX_CONCURRENT && warmQueue.length > 0) {
+    const url = warmQueue.shift();
+    warmQueued.delete(url);
+    warmActive += 1;
+    electronNet
+      .fetch(url)
+      // Read the body so the backend isn't left writing into a dropped socket.
+      .then((res) => res.arrayBuffer())
+      .catch(() => {})
+      .finally(() => {
+        warmActive -= 1;
+        pumpWarmQueue();
+      });
+  }
+}
+
+function warmTier(imageId, apiRoute) {
+  if (!apiBaseUrl) return;
+  const url = `${apiBaseUrl}/images/${imageId}/${apiRoute}`;
+  if (warmQueued.has(url)) return;
+  // Drop the oldest rather than grow without bound: the newest requests are for
+  // where the user actually is.
+  if (warmQueue.length >= WARM_MAX_QUEUED) warmQueued.delete(warmQueue.shift());
+  warmQueue.push(url);
+  warmQueued.add(url);
+  pumpWarmQueue();
+}
+
+// Image ids are generated identifiers; anything else cannot address a real
+// derivative and must not reach path.join.
+const RF_IMAGE_ID = /^[A-Za-z0-9_-]+$/;
+
+// Version-stamped URLs (?v= edit revision, ?cb= global rebuild token), so a
+// given URL's bytes never change - the same contract the HTTP route promises,
+// and what lets a scrolled-back grid area paint without touching the disk again.
+const RF_CACHE_CONTROL = "private, max-age=31536000, immutable";
+
+// Ceiling on a single backend request for a derivative that isn't on disk.
+// Above the grid's 1.5s budget on purpose: reaching this path at all means
+// there are no pixels anywhere to meet that budget with, and a cheap derivation
+// (downscaling an existing thumbnail) finishes in milliseconds. What this
+// prevents is the other end - one stuck render holding a connection open
+// indefinitely.
+const RF_BACKEND_DEADLINE_MS = 2000;
+
+async function serveDerivative(request) {
+  const url = new URL(request.url);
+  // "/<image-id>/<file>" -> ["", "<image-id>", "<file>"]
+  const [, imageId, file] = url.pathname.split("/");
+  const apiRoute = RF_DERIVATIVES.get(file);
+  if (!apiRoute || !imageId || !RF_IMAGE_ID.test(imageId)) {
+    return new Response("Not found", { status: 404 });
+  }
+
+  if (libraryRoot) {
+    const dir = path.join(thumbnailRootFor(libraryRoot), imageId);
+    for (const candidate of RF_TIER_FALLBACKS.get(file) ?? [file]) {
+      try {
+        // A missing file surfaces as a rejection on some platforms and as a
+        // non-ok response on others; both mean the same thing here.
+        const fromDisk = await electronNet.fetch(pathToFileURL(path.join(dir, candidate)).toString());
+        if (!fromDisk.ok) continue;
+        const exact = candidate === file;
+        // A stand-in must NOT be cached under the requested tier's URL. That URL
+        // is version-stamped and served immutable, so caching the larger file
+        // against it would pin the oversized decode for a year - the tier would
+        // be derived in the background and never actually used.
+        if (!exact) warmTier(imageId, apiRoute);
+        return new Response(fromDisk.body, {
+          status: 200,
+          headers: {
+            "content-type": "image/jpeg",
+            "cache-control": exact ? RF_CACHE_CONTROL : "no-store",
+          },
+        });
+      } catch {
+        // Try the next size up.
+      }
+    }
+  }
+
+  // The fallback is the whole reason this is safe to put in front of every
+  // tile. A derivative legitimately may not exist: right after an import the
+  // background worker is still generating them, and an older library predates
+  // the downscaled tiers entirely. Handing those requests to the backend keeps
+  // on-demand generation, its render-slot shedding (503 + Retry-After) and the
+  // grid's retry ladder working exactly as before - the disk read above is only
+  // a shortcut for the case that is already settled, which is nearly all of them.
+  if (!apiBaseUrl) return new Response("Backend not ready", { status: 503 });
+  const separator = apiRoute.includes("?") ? "&" : "?";
+  const query = url.search ? `${separator}${url.search.slice(1)}` : "";
+  try {
+    return await electronNet.fetch(`${apiBaseUrl}/images/${imageId}/${apiRoute}${query}`, {
+      // A hard ceiling on how long one tile may hold out for the backend. This
+      // path only runs when the photo has no derivative on disk at all, so it
+      // is already outside what any budget can promise - but "we cannot show it
+      // yet" must still come back promptly. Left hanging, a single stuck render
+      // pins one of the renderer's connections and takes its neighbours down
+      // with it; answering keeps the grid's retry moving instead.
+      signal: AbortSignal.timeout(RF_BACKEND_DEADLINE_MS),
+    });
+  } catch (err) {
+    console.warn(`[main] rf:// fallback failed for ${imageId}/${file}: ${err.message}`);
+    // Retry-After matches the grid's own fast retry (see RETRY_DELAYS_MS): the
+    // photo is being generated, so coming back shortly is the right move.
+    return new Response("Not available", { status: 503, headers: { "retry-after": "1" } });
+  }
 }
 
 // Older builds kept each library's data in userData under a per-library key
@@ -1066,6 +1258,11 @@ app.whenReady().then(async () => {
   // comes up before the backend has even started.
   apiPort = await getFreePort();
   apiBaseUrl = `http://127.0.0.1:${apiPort}`;
+  // After apiBaseUrl (the handler's fallback target) and before any window, so
+  // no renderer can ever request a derivative the scheme can't answer yet. The
+  // handler reads `libraryRoot` per request rather than capturing it - on a
+  // first run it is still empty here and gets set by the onboarding wizard.
+  protocol.handle("rf", serveDerivative);
   registerActivateHandler();
 
   // Update checks run detached from startup (first one after a delay, see

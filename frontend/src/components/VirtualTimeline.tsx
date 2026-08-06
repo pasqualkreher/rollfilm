@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { LibraryIndexImage } from "../api/types";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
@@ -230,6 +230,17 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
     return () => window.clearTimeout(timer);
   }, [layout, window_]);
 
+  // Stable identities for everything the scrubber is handed. These all used to
+  // be built fresh on every render, and they sit in the scrubber's recompute
+  // deps - so its scroll listener was torn down and re-attached on every
+  // scroll step.
+  const getScroller = useCallback(() => scrollerRef.current, []);
+  const getSectionEl = useCallback((label: string) => sectionEls.current.get(label) ?? null, []);
+  const scrubberSections = useMemo(
+    () => (layout?.sections ?? []).map((s) => ({ label: s.label })),
+    [layout]
+  );
+
   if (images.length === 0) {
     return <div className="empty-state">No photos here yet.</div>;
   }
@@ -312,6 +323,10 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       className="timeline has-scrubber"
       style={{ position: "relative", display: "block", height: layout?.totalHeight }}
     >
+      {/* Every section stays mounted, not just the visible ones: the scrubber's
+          rail is built by MEASURING these elements, so unmounting the
+          off-screen months silently shrinks the rail to whatever happens to be
+          on screen. Only the tiles inside are virtualized. */}
       {layout?.sections.map((section) => {
         const sectionVisible = section.top < winBottom && section.top + section.height > winTop;
         return (
@@ -358,9 +373,9 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
       })}
 
       <TimelineScrubber
-        getScroller={() => scrollerRef.current}
-        getSectionEl={(label) => sectionEls.current.get(label) ?? null}
-        sections={(layout?.sections ?? []).map((s) => ({ label: s.label }))}
+        getScroller={getScroller}
+        getSectionEl={getSectionEl}
+        sections={scrubberSections}
       />
     </div>
   );

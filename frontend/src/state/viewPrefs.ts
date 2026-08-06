@@ -70,6 +70,15 @@ export function thumbPx(key: ThumbSizeKey): number {
 // decoded-image budget - Chromium then drops decoded tiles, which paint as
 // empty cards until something (a hover) repaints them. 640px still covers the
 // largest XS/S tile on a 2x display.
+//
+// A middle 1024px tier for M was tried and taken back out. The sizing argument
+// held - an M tile is nowhere near 1600px on screen - but every existing photo
+// would have had to have that file derived before it could be shown, and with a
+// library on a slow disk that derivation landed squarely on the path of tiles
+// scrolling into view. Any new tier needs the files to exist BEFORE the grid
+// asks for them, i.e. a background backfill first and the client switched over
+// only afterwards; a tier that has to be built on demand is a tier that makes
+// browsing worse for exactly as long as it takes to build.
 export function thumbTier(key: ThumbSizeKey): "small" | undefined {
   return key === "xs" || key === "s" ? "small" : undefined;
 }

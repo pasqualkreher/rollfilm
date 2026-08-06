@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -116,8 +116,11 @@ export function Library() {
   // the tag note appears. Carries its own error flag since a failed add must not
   // read like a success.
   const [albumMsg, setAlbumMsg] = useTransientValue<{ text: string; error: boolean }>();
-  // Read once per render so the preset dropdown reflects saves made in the editor.
-  const presetNames = Object.keys(loadPresets());
+  // Read once per MOUNT rather than per render: this parses localStorage, and
+  // the editor lives on its own route (/image/:id), so returning from it
+  // remounts this page anyway - the dropdown still picks up presets saved
+  // there, without paying for the parse on every unrelated re-render.
+  const presetNames = useMemo(() => Object.keys(loadPresets()), []);
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Settings maintenance tasks.
@@ -169,7 +172,19 @@ export function Library() {
     // previous grid until the new index arrives, instead of blanking to a
     // "Loading..." screen - on a busy backend that request can take seconds.
     placeholderData: (prev) => prev,
-    staleTime: 15_000,
+    // The index is the WHOLE filtered library in one response - on a big one
+    // that is megabytes of JSON to build server-side and to parse (blocking) in
+    // the renderer. At 15s that bill was paid again on virtually every return
+    // from the lightbox and on every window-focus regain, for data that had not
+    // changed: every mutation path already invalidates ["images"] explicitly.
+    //
+    // Deliberately NOT Infinity, though. Server-side background work can change
+    // the library with no client-side signal at all - the startup maintenance
+    // sync reconciles the DB against the library folder (see main.on_startup) -
+    // and stale-forever would leave the grid wrong until a filter change or a
+    // restart. A few minutes keeps that self-healing while removing the
+    // per-navigation refetch.
+    staleTime: 5 * 60_000,
   });
 
   // A search query switches to scoped search (same filters, ranked by
@@ -187,12 +202,23 @@ export function Library() {
 
   // In combined view, either merge each RAW+JPEG pair into one JPEG card, or
   // just keep the two partners adjacent. Other view modes show a flat list.
-  const orderedImages: GridImage[] =
-    viewMode === "combined"
-      ? mergePairs
-        ? collapsePairsBy(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
-        : groupPairsAdjacent(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
-      : images ?? [];
+  //
+  // Memoised, and that is load-bearing rather than a micro-optimisation: this
+  // array is what the virtual timeline lays out, and its IDENTITY is the
+  // layout's memo key (see VirtualTimeline). Built inline it was a fresh array
+  // on every render of this page - a selection click, a flash message, a facets
+  // refetch - so buildJustifiedLayout re-ran over the WHOLE library each time,
+  // which is a long frame on a big one. Now it only rebuilds when the photos or
+  // the pairing mode actually change.
+  const orderedImages: GridImage[] = useMemo(
+    () =>
+      viewMode === "combined"
+        ? mergePairs
+          ? collapsePairsBy(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
+          : groupPairsAdjacent(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
+        : images ?? [],
+    [images, viewMode, mergePairs]
+  );
 
   // Expand a set of ids with each one's RAW/JPEG partner, but only in merged
   // view where the partner is hidden behind the shown card. In the split view
@@ -421,7 +447,10 @@ export function Library() {
   const allSelectedSynced =
     selected.size > 0 && (images ?? []).filter((im) => selected.has(im.id)).every((im) => im.immich_sync);
 
-  const sharedMeta = selectionSharedMeta(images ?? [], selected);
+  // Scans the whole library to find what the selection has in common, so it is
+  // memoised on the two things it actually reads - not re-run for every
+  // unrelated render of this page.
+  const sharedMeta = useMemo(() => selectionSharedMeta(images ?? [], selected), [images, selected]);
 
   return (
     <div className="page page-timeline">

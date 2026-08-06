@@ -82,19 +82,40 @@ const LOAD_STABILIZE_MS = 40;
 // actually going somewhere, and the user should see that it is.
 const INSTANT_GRACE_MS = 150;
 
+// How long a tile on screen may take to show a picture. This is a product
+// requirement, not a tuning knob: everything below that could make the user
+// wait is sized against it, and anything that cannot be bounded by it has to
+// serve a stand-in instead of a wait (see the on-disk fallback chain in
+// electron/main.js).
+//
+// It cannot cover one case, and no amount of client-side tuning could: a photo
+// whose derivatives have never been rendered has no pixels to show anywhere, at
+// any size. Those tiles shimmer and keep asking - see the tail of the ladder.
+export const THUMB_BUDGET_MS = 1500;
+
 // A thumbnail can legitimately not exist yet: right after an import the backend
 // generates derivatives in the background and sheds on-demand renders it can't
 // start promptly (503 + Retry-After, see images._serve_derivative) so a whole
 // grid scrolling into view can't stall the API. Retry on a backoff instead of
-// leaving the tile shimmering forever. The last delay is the give-up point -
-// scrolling away and back still starts over, and so does scrolling it into the
-// viewport (see ensureLoading), which is the moment the user actually cares.
-// Reaches ~68s in total, deliberately: right after an import the backend is
-// generating thousands of derivatives, and a ladder that gave up after 19s
-// left permanent holes in a library that was only busy, not broken. Each step
-// only runs while the tile is still within the load margin - scrolling away
-// cancels the budget and coming back starts it over.
-const RETRY_DELAYS_MS = [1200, 2500, 5000, 10000, 20000, 30000];
+// leaving the tile shimmering forever.
+//
+// Two ladders in one. The first three steps sum to well under THUMB_BUDGET_MS,
+// so anything transient - a shed request, an aborted fetch, a request that lost
+// its connection to a burst of neighbours - is recovered from inside the budget
+// rather than after it. That is what this front half is for; it used to open
+// with 1200ms, which spent the whole budget before the second attempt was even
+// made.
+//
+// The tail is for the one case the budget cannot reach: a derivative that does
+// not exist yet, where retrying faster changes nothing except load on the
+// backend that is busy generating it. It still reaches ~68s in total,
+// deliberately - a ladder that gave up after 19s left permanent holes in a
+// library that was only busy, not broken.
+//
+// The last delay is the give-up point. Scrolling away and back starts over, and
+// so does scrolling the tile into the viewport (see ensureLoading), which is
+// the moment the user actually cares.
+const RETRY_DELAYS_MS = [200, 400, 800, 2500, 5000, 10000, 20000, 30000];
 
 // Grid thumbnail that starts loading shortly after it comes within the
 // preload margin of the viewport (see utils/preload.ts) - well before it's
@@ -224,8 +245,21 @@ export function Thumb({
   // both bounded and exactly when a fresh attempt is worth making.
   const ensureLoading = useCallback(() => {
     const el = ref.current;
-    if (!el || doneRef.current || retryTimer.current !== null) return;
-    if (el.getAttribute("src")) return;
+    if (!el || doneRef.current) return;
+    // A pending backoff is abandoned rather than waited out. This used to
+    // return early while a retry timer was set, which meant a tile that had
+    // failed once could be scrolled INTO VIEW and still sit grey for the rest
+    // of its backoff - up to half a minute at the far end of the ladder, with
+    // the user looking straight at it. The ladder is for a tile the user is not
+    // watching; the moment they are, the only acceptable answer is to ask now.
+    if (retryTimer.current !== null) {
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+      setRetrying(false);
+    } else if (el.getAttribute("src")) {
+      // Something is already in flight and nothing is waiting on a timer.
+      return;
+    }
     retryCount.current = 0;
     show(src, isThumbLoaded(src));
     // And put it on the element directly. React state may ALREADY hold this

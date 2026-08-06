@@ -122,7 +122,17 @@ def main() -> None:
 
     port = int(os.environ.get("PM_PORT", "8000"))
     host = os.environ.get("PM_HOST", "127.0.0.1")
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    # access_log off: the desktop shell spawns this with stdout on a pipe, so
+    # every request cost a formatted log line plus a pipe write ON the request
+    # thread - and browsing a grid is hundreds of thumbnail requests a second.
+    # Errors and the app's own INFO lines (import timing, workers) are
+    # unaffected; only the per-request "GET /images/... 200" noise goes.
+    #
+    # loop/http are deliberately left on uvicorn's "auto": uvicorn[standard]
+    # already pulls in uvloop and httptools and auto prefers them, while naming
+    # them explicitly would turn a bundle that happens to miss one into a
+    # backend that refuses to start.
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
 
 
 if __name__ == "__main__":

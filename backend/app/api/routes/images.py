@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from PIL import Image as PILImage
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
-from sqlalchemy import case, func, or_
+from sqlalchemy import String, case, func, or_, type_coerce
 from sqlalchemy.orm import Session
 
 from app import schemas
@@ -326,10 +326,23 @@ def library_index(
         db, current_user, view_mode, album_id, rating_min, color_label,
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
     )
+    # file_type, color_label and taken_at are asked for as plain strings rather
+    # than as their mapped types. The database already holds exactly what this
+    # response needs - the enum values as text, the timestamp as
+    # "YYYY-MM-DD HH:MM:SS.ffffff" - and the mapped columns made every row pay
+    # for decoding that into Enum/datetime objects only to have the lines below
+    # encode them straight back. On a 50k-photo library that round trip alone
+    # was most of the endpoint's time (measured: 412ms -> 221ms for a
+    # byte-identical response).
+    #
+    # type_coerce, not literal_column: it reuses the real column expression, so
+    # this cannot come apart if the filter chain ever aliases the table - it
+    # only overrides how the RESULT is read back.
     rows = (
         query.with_entities(
-            Image.id, Image.original_filename, Image.file_type, Image.width,
-            Image.height, Image.taken_at, Image.rating, Image.color_label,
+            Image.id, Image.original_filename, type_coerce(Image.file_type, String),
+            Image.width, Image.height, type_coerce(Image.taken_at, String),
+            Image.rating, type_coerce(Image.color_label, String),
             Image.immich_sync, Image.paired_image_id, Image.source_root_id,
             Image.edit_rev,
         )
@@ -337,22 +350,32 @@ def library_index(
         .all()
     )
 
+    # Unpacked positionally rather than by attribute: at this row count the
+    # attribute lookups are themselves a measurable share of the loop.
     images = [
         {
-            "id": r.id,
-            "original_filename": r.original_filename,
-            "file_type": r.file_type.value,
-            "width": r.width,
-            "height": r.height,
-            "taken_at": r.taken_at.isoformat() if r.taken_at else None,
-            "rating": r.rating,
-            "color_label": r.color_label.value,
-            "immich_sync": r.immich_sync,
-            "paired_image_id": r.paired_image_id,
-            "source_root_id": r.source_root_id,
-            "thumb_version": str(r.edit_rev) if r.edit_rev else "",
+            "id": id_,
+            "original_filename": filename,
+            "file_type": file_type,
+            "width": width,
+            "height": height,
+            # Stored with a space separator and always six fractional digits;
+            # the API has always sent ISO-8601 seconds (datetime.isoformat()
+            # omits a zero microsecond part), so cut at the seconds and swap the
+            # separator. Sub-second capture times are not something the grid can
+            # show - it groups by month or day.
+            "taken_at": f"{taken_at[:10]}T{taken_at[11:19]}" if taken_at else None,
+            "rating": rating,
+            "color_label": color_label,
+            "immich_sync": bool(immich_sync),
+            "paired_image_id": paired_image_id,
+            "source_root_id": source_root_id,
+            "thumb_version": str(edit_rev) if edit_rev else "",
         }
-        for r in rows
+        for (
+            id_, filename, file_type, width, height, taken_at, rating, color_label,
+            immich_sync, paired_image_id, source_root_id, edit_rev,
+        ) in rows
     ]
     return Response(
         content=json.dumps({"images": images}, separators=(",", ":")),
@@ -1711,11 +1734,18 @@ def save_copy(
     return new_image
 
 
-# How long a thumbnail/preview request waits for a render slot before giving up
-# with 503 + Retry-After. Long enough that on an otherwise idle library the
-# on-demand generation just happens (the self-heal path this fallback exists
-# for), short enough that a saturated one frees the server thread quickly.
-_ON_DEMAND_RENDER_WAIT_S = 3.0
+# How long a thumbnail/preview request waits for SOMEONE ELSE'S render before
+# giving up with 503 + Retry-After. It does not bound the render itself: on an
+# idle library the lock is free, so the self-heal path this fallback exists for
+# still generates inline however long that takes.
+#
+# Held to the grid's tile budget (THUMB_BUDGET_MS in ThumbnailGrid.tsx). It used
+# to be 3s, which is twice that - a tile queued behind the post-import storm sat
+# there for the whole wait, blowing the budget before it could even start
+# retrying. Shedding at the budget hands the tile back to the grid's fast retry
+# while the background worker gets on with generating it, which is the outcome
+# that actually puts a picture on screen sooner.
+_ON_DEMAND_RENDER_WAIT_S = 1.5
 
 
 def _serve_derivative(image: Image, name: str, not_ready_detail: str) -> FileResponse:
@@ -1767,17 +1797,22 @@ def get_thumbnail(
     # ?size=small: the 640px tier the dense grid sizes (XS/S) request - a 4K
     # screenful there holds several hundred tiles, and full 1600px thumbnails
     # overflow the renderer's decoded-image budget (tiles then paint empty).
-    # Same serve semantics as the full thumbnail; usually just a downscale of
-    # the existing thumbnail.jpg, so old libraries need no re-render.
-    if size == "small":
+    #
+    # Same serve semantics as the full thumbnail; usually just a downscale of the
+    # existing thumbnail.jpg, so old libraries need no re-render. An unrecognised
+    # size falls through to the full thumbnail rather than erroring - a stale
+    # renderer bundle asking for a tier this build doesn't know still gets a
+    # picture.
+    ensure_tier = {"small": thumbnails.ensure_small}.get(size or "")
+    if ensure_tier is not None:
         try:
-            path = thumbnails.ensure_small(image, slot_timeout=_ON_DEMAND_RENDER_WAIT_S)
+            path = ensure_tier(image, slot_timeout=_ON_DEMAND_RENDER_WAIT_S)
         except thumbnails.RenderBusy:
             raise HTTPException(
                 status_code=503, detail="Thumbnail not ready yet", headers={"Retry-After": "2"}
             )
         except Exception:
-            logger.exception("On-demand small.jpg generation failed for image %s", image.id)
+            logger.exception("On-demand %s tier generation failed for image %s", size, image.id)
             raise HTTPException(status_code=404, detail="Thumbnail not ready yet")
         return FileResponse(
             path, headers={"Cache-Control": "private, max-age=31536000, immutable"}

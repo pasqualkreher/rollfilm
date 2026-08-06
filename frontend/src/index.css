@@ -1820,6 +1820,13 @@ textarea:focus-visible {
   background: var(--bg-elevated);
   height: 220px;
   cursor: pointer;
+  /* A grid holds hundreds of these at the dense sizes, and every one of them is
+     self-contained: nothing inside a card affects any other card's layout, and
+     `overflow: hidden` already means nothing paints outside it. Saying so lets
+     the engine treat a card as its own layout/paint unit instead of
+     re-evaluating the whole grid when one tile's image arrives, its selection
+     ring appears, or its overlay fades in. */
+  contain: layout paint style;
 }
 
 .thumb-card:hover img {
@@ -1884,13 +1891,40 @@ textarea:focus-visible {
 .thumb-card .thumb-skeleton {
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, var(--bg-elevated) 30%, var(--hover) 50%, var(--bg-elevated) 70%);
-  background-size: 200% 100%;
-  animation: pm-skeleton 1.4s ease-in-out infinite;
+  background: var(--bg-elevated);
+  overflow: hidden;
   pointer-events: none;
   /* Same composited-corner story as .thumb-card img: the shimmer animation can
      lift this onto its own layer, past the card's rounded clip. */
   border-radius: inherit;
+}
+
+/* The travelling highlight, swept by `transform` on a pseudo-element rather
+   than by animating `background-position` on the skeleton itself (which the
+   other pm-skeleton users still do - there are a handful of them, so it costs
+   nothing there).
+   Here it is the difference between a smooth grid and a stuttering one: right
+   after an import, or on any fast scroll at XS, a hundred-plus tiles shimmer at
+   once, and a background-position animation repaints every one of them on the
+   MAIN THREAD every frame - competing with the very scroll and image decodes
+   the shimmer is covering for. A transform is handed to the compositor and
+   costs the main thread nothing at all.
+   The sweep: the element is twice the card's width with the highlight at its
+   centre, so translating it from -75% to 25% of its own width carries that
+   centre from just off the left edge to just off the right. The 30%/70% stops
+   keep the highlight the same width it was when this was a background-position
+   animation - the look is unchanged, only how it is drawn. Transparent rather
+   than --bg-elevated at the ends, so the card's own background shows through
+   instead of being painted twice. */
+.thumb-card .thumb-skeleton::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  background: linear-gradient(90deg, transparent 30%, var(--hover) 50%, transparent 70%);
+  animation: pm-skeleton-sweep 1.4s ease-in-out infinite;
 }
 
 /* The photo above has arrived and is easing in - fade out underneath it on the
@@ -1899,8 +1933,15 @@ textarea:focus-visible {
    with the animation stopped) rather than being unmounted mid-transition. */
 .thumb-card .thumb-skeleton.is-done {
   opacity: 0;
-  animation: none;
   transition: opacity 0.3s ease-out;
+}
+
+/* The sweep lives on the pseudo-element now, so stopping it has to name the
+   pseudo-element - `animation: none` on the skeleton itself no longer reaches
+   it, and a finished tile would keep a composited layer shimmering under a
+   photo for as long as it stayed mounted. */
+.thumb-card .thumb-skeleton.is-done::after {
+  animation: none;
 }
 
 /* Users who prefer reduced motion get everything immediately, no fades or
@@ -1916,6 +1957,7 @@ textarea:focus-visible {
     transition: none;
   }
   .thumb-card .thumb-skeleton,
+  .thumb-card .thumb-skeleton::after,
   .page,
   .editor-overlay,
   .detail-photo {
@@ -5771,6 +5813,14 @@ button.smart-card {
 @keyframes pm-skeleton {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+/* Compositor-only twin of pm-skeleton, for the grid tiles - where hundreds
+   shimmer at once and a per-frame main-thread repaint is not affordable. See
+   .thumb-card .thumb-skeleton::after for the geometry. */
+@keyframes pm-skeleton-sweep {
+  0% { transform: translateX(-75%); }
+  100% { transform: translateX(25%); }
 }
 
 .smart-card--skeleton,
