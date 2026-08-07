@@ -27,6 +27,7 @@ from app.db.models import (
 )
 from app.services.exif import capture_date_from_filename, new_helper, read_exif
 from app.services.filesystem import resolve_image_path
+from app.services.hashing import sha256_file
 from app.services.raw import classify_file_type, raw_dimensions
 from app.services.thumbnails import derivative_dir, regenerate_for_image
 from app.services.trash import hard_delete_images
@@ -189,15 +190,76 @@ def backfill_lens_metadata(db: Session, owner_id: int) -> tuple[int, int]:
     return filled, skipped
 
 
+def _follow_renamed_files(
+    missing: list[Image], untracked_paths: list[Path]
+) -> tuple[list[Image], list[Path]]:
+    """Re-attach rows whose file vanished to an untracked file with the same
+    bytes - i.e. follow the photos the user renamed or moved in Finder.
+
+    A file's identity is its content, so the match is on the content hash the
+    row already stores. Hashing is the expensive part (a RAW is tens of
+    megabytes), so only files whose byte count matches some vanished row's are
+    ever opened - which on a normal sync, where nothing is missing, is none.
+
+    Returns the rows that were re-pointed (caller commits) and the untracked
+    files left over.
+    """
+    if not missing or not untracked_paths:
+        return [], untracked_paths
+
+    wanted_sizes = {image.file_size for image in missing}
+    candidates: list[Path] = []
+    for path in untracked_paths:
+        try:
+            if path.stat().st_size in wanted_sizes:
+                candidates.append(path)
+        except OSError:
+            continue
+    if not candidates:
+        return [], untracked_paths
+
+    # Several rows can share a hash (a photo imported twice), so each hash keeps
+    # a queue: the first untracked file claims the first row, and so on.
+    by_hash: dict[str, list[Image]] = {}
+    for image in missing:
+        by_hash.setdefault(image.file_hash, []).append(image)
+
+    relocated: list[Image] = []
+    claimed: set[Path] = set()
+    for path in candidates:
+        try:
+            digest = sha256_file(path)
+        except OSError:
+            logger.exception("Could not hash %s while looking for renamed files", path)
+            continue
+        group = by_hash.get(digest)
+        if not group:
+            continue
+        image = group.pop(0)
+        image.file_path = str(path.relative_to(settings.library_root))
+        image.original_filename = path.name
+        relocated.append(image)
+        claimed.add(path)
+
+    return relocated, [path for path in untracked_paths if path not in claimed]
+
+
 def sync_db_with_library(db: Session, owner_id: int) -> dict:
     """The filesystem is the source of truth: reconcile the database *and* the
     thumbnail cache with what is actually in the library.
 
+    - A row whose file is gone from its old path, while an untracked file with
+      the SAME BYTES sits in the library, is that photo renamed or moved in
+      Finder: the row follows the file instead of being deleted. Identity is
+      content, not name (same rule as an external source's scan, see
+      services/sources._run_scan), so the photo keeps its id and with it every
+      rating, tag, album and edit.
     - DB rows whose managed file no longer exists under LIBRARY_ROOT (deleted/
-      moved outside the app) are removed. Done FK-safe via hard_delete_images:
-      RAW+JPEG pairs point at each other (and staged import files can point at
-      images), so plain row deletes could violate those constraints and abort
-      the whole sync half-way, leaving ghost entries behind.
+      moved outside the app) and that no such file matches are removed. Done
+      FK-safe via hard_delete_images: RAW+JPEG pairs point at each other (and
+      staged import files can point at images), so plain row deletes could
+      violate those constraints and abort the whole sync half-way, leaving
+      ghost entries behind.
     - Cached thumbnail folders that belong to no image anymore are deleted.
     - Photos whose thumbnail/preview is missing get it regenerated in the
       background (only when their original is currently reachable).
@@ -225,27 +287,36 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
         if image.source_root_id is None
         and not (settings.library_root / image.file_path).exists()
     ]
-    hard_delete_images(db, missing, delete_files=False)
-    db.commit()
-
-    kept = db.query(Image).filter(Image.owner_id == owner_id).all()
 
     tracked = {
         str((settings.library_root / img.file_path).resolve())
-        for img in kept
+        for img in images
         if img.source_root_id is None
     }
     # The database, thumbnails and staging live in a ".photomanager" subfolder
     # of the library; skip it so its JPG thumbnails aren't counted as untracked
     # photos.
-    untracked = sum(
-        1
+    untracked_paths = [
+        path
         for path in settings.library_root.rglob("*")
         if path.is_file()
         and ".photomanager" not in path.relative_to(settings.library_root).parts
         and classify_file_type(path) is not None
         and str(path.resolve()) not in tracked
-    )
+    ]
+
+    relocated, untracked_paths = _follow_renamed_files(missing, untracked_paths)
+    if relocated:
+        db.commit()
+        logger.info("Library sync: followed %d renamed/moved file(s)", len(relocated))
+    relocated_ids = {image.id for image in relocated}
+    missing = [image for image in missing if image.id not in relocated_ids]
+
+    hard_delete_images(db, missing, delete_files=False)
+    db.commit()
+
+    kept = db.query(Image).filter(Image.owner_id == owner_id).all()
+    untracked = len(untracked_paths)
 
     # Thumbnail cache holds one folder per image id - drop any that no image
     # row (of any owner; ids are globally unique) points at anymore, e.g. left
@@ -276,6 +347,7 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
 
     return {
         "removed_missing_files": len(missing),
+        "renamed_files_followed": len(relocated),
         "untracked_files_found": untracked,
         "orphan_thumbnails_removed": orphan_thumbnails_removed,
         "thumbnails_queued": thumbnails_queued,
@@ -523,6 +595,7 @@ def image_to_dict(image: Image, tags: list[str]) -> dict:
         "gps_country": image.gps_country,
         "rating": image.rating,
         "color_label": image.color_label.value,
+        "description": image.description,
         "paired_image_id": image.paired_image_id,
         "edit_rotation": image.edit_rotation,
         "edit_crop_x": image.edit_crop_x,
@@ -582,6 +655,7 @@ def image_row_from_dict(data: dict, owner_id: int, *, keep_id: bool = True) -> I
         gps_country=data.get("gps_country"),
         rating=data["rating"],
         color_label=ColorLabel(data["color_label"]),
+        description=data.get("description"),
         edit_rotation=data["edit_rotation"],
         edit_crop_x=data["edit_crop_x"],
         edit_crop_y=data["edit_crop_y"],

@@ -5,6 +5,7 @@ import { api, DEFAULT_EDIT_VERSION } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { Thumb, fileTypeBadge, fileTypeBadgeClass, tileAspectRatio } from "./ThumbnailGrid";
+import { usePhotoInfoCard } from "./PhotoInfoCard";
 import { useMergePairs } from "../state/viewPrefs";
 import { thumbPx, thumbTier, useThumbSize } from "../state/viewPrefs";
 import {
@@ -66,6 +67,9 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
   const tier = thumbTier(thumbSize);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
+  // The per-tile "i" that opens a photo's details. Hidden while selecting -
+  // the tile's top-left corner is the checkbox's there.
+  const { infoButton, overlay: infoOverlay } = usePhotoInfoCard(!selectMode);
 
   const allIds = useMemo(() => images.map((im) => im.id), [images]);
   const { width, window: window_, scrollerRef, lastScrollRef } = useVirtualWindow(
@@ -289,6 +293,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
         <span className={fileTypeBadgeClass(image.file_type, merged)}>
           {fileTypeBadge(image.file_type, merged)}
         </span>
+        {infoButton(image.id)}
         {selectMode && onToggleSelect && (
           <input
             className="select-checkbox"
@@ -377,6 +382,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
         getSectionEl={getSectionEl}
         sections={scrubberSections}
       />
+      {infoOverlay}
     </div>
   );
 }

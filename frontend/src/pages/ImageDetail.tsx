@@ -13,24 +13,33 @@ import { useMergePairs } from "../state/viewPrefs";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
-import { IconArrowLeft, IconTrash } from "../components/Icons";
+import { IconArrowLeft, IconCheck, IconPencil, IconTrash, IconX } from "../components/Icons";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
 
 // The lightbox keeps this many photos on EACH side of the current one pinned
 // in memory (see the pinned-neighbors effect) - 10 back + 10 ahead.
 const NEIGHBOR_WINDOW = 10;
 import { rememberLastViewedImage } from "../utils/lastViewed";
+import { formatShutterSpeed, splitFilename } from "../utils/photoMeta";
 import { useTransientMessage } from "../utils/transientMessage";
 import type { ColorLabel, ImageOut } from "../api/types";
 
-// exiftool delivers the exposure time as a plain decimal ("0.003571428571");
-// photographers read shutter speeds as fractions ("1/280") or whole seconds.
-function formatShutterSpeed(value: string | null): string {
-  if (!value) return "—";
-  const secs = Number(value);
-  if (!isFinite(secs) || secs <= 0) return value; // already "1/280"-style or unparseable
-  if (secs >= 1) return `${Number(secs.toFixed(1))}s`;
-  return `1/${Math.round(1 / secs)}`;
+// A failed request carries the backend's explanation as a JSON body inside the
+// thrown message ('... failed: 409 {"detail":"…"}'). Rename is the one place
+// the user reads those - "that name is taken" is the whole point of the
+// message - so unwrap it instead of showing the raw HTTP line.
+function errorText(e: unknown): string {
+  const raw = (e as Error).message ?? String(e);
+  const brace = raw.indexOf("{");
+  if (brace !== -1) {
+    try {
+      const detail = JSON.parse(raw.slice(brace)).detail;
+      if (typeof detail === "string") return detail;
+    } catch {
+      /* not JSON after all - fall through to the raw message */
+    }
+  }
+  return raw;
 }
 
 export function ImageDetail() {
@@ -42,6 +51,18 @@ export function ImageDetail() {
   const [activeId, setActiveId] = useState(id!);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  // Renaming the file on disk: the title row swaps to an input while this is
+  // on. The draft holds the STEM only - the extension isn't editable.
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  // What became of the RAW/JPEG partner - auto-dismisses like the other notes.
+  const [renameNote, setRenameNote] = useTransientMessage();
+  // The description box is a local draft saved on blur, not per keystroke.
+  const [descDraft, setDescDraft] = useState("");
+  const [descBusy, setDescBusy] = useState(false);
+  const [descNote, setDescNote] = useTransientMessage();
   const [bgMode, setBgMode] = useState<"light" | "dark">("light");
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
@@ -177,6 +198,19 @@ export function ImageDetail() {
     enabled: !!activeId,
   });
 
+  // Adopt the server's note whenever a DIFFERENT photo comes on screen. Keyed
+  // on the id rather than on image.description: re-syncing on every change of
+  // the field would fight the user's typing the moment a save round-trips back.
+  // A half-typed name is dropped for the same reason - it belonged to the photo
+  // that just left.
+  const shownImageId = image?.id;
+  useEffect(() => {
+    setDescDraft(image?.description ?? "");
+    setRenaming(false);
+    setRenameError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownImageId]);
+
   // A saved edit regenerates the preview in place but deletes full.jpg, whose
   // full-resolution re-render happens lazily on request and can take a minute
   // for a RAW. If the lightbox had upgraded to the full render (hiRes latches
@@ -254,6 +288,19 @@ export function ImageDetail() {
     function onKeyDown(e: KeyboardEvent) {
       if (adjustOpen) return;
 
+      // While a text field has focus the keyboard belongs to it: arrows move
+      // the caret, Esc backs out of the field. Without this, naming a photo or
+      // writing its description paged to the next photo mid-word.
+      const tagName = (e.target as HTMLElement | null)?.tagName;
+      const typing = tagName === "INPUT" || tagName === "TEXTAREA";
+      if (typing) {
+        if (e.key === "Escape") {
+          if (renaming) setRenaming(false);
+          (e.target as HTMLElement).blur();
+        }
+        return;
+      }
+
       // Esc closes the lightbox - but first drop back to fit if zoomed in, so
       // one press doesn't do both.
       if (e.key === "Escape") {
@@ -268,10 +315,9 @@ export function ImageDetail() {
       }
 
       // Number keys set the star rating (0 clears it) - same shortcut as the
-      // import lightbox. Skipped while a control has focus so typing into the
-      // tag input or a text field never rates the photo.
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      const inControl = tag === "INPUT" || tag === "BUTTON" || tag === "SELECT" || tag === "TEXTAREA";
+      // import lightbox. Skipped while a control has focus, so a keystroke
+      // meant for it never rates the photo (text fields already returned above).
+      const inControl = tagName === "BUTTON" || tagName === "SELECT";
       if (!inControl && image && e.key >= "0" && e.key <= "5") {
         setRating(Number(e.key));
         return;
@@ -288,7 +334,7 @@ export function ImageDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [imageIds, id, navigate, adjustOpen, image, paired, activeId, zoomed]);
+  }, [imageIds, id, navigate, adjustOpen, image, paired, activeId, zoomed, renaming]);
 
   // The photo the user has actually SETTLED on: follows activeId only after a
   // short pause without further navigation. Holding an arrow key changes
@@ -453,6 +499,65 @@ export function ImageDetail() {
   async function setColor(color_label: ColorLabel) {
     await api.images.update(image!.id, { color_label, apply_to_pair: mergePairs });
     invalidateActiveAndPair();
+  }
+
+  function startRename() {
+    if (!image) return;
+    setNameDraft(splitFilename(image.original_filename).stem);
+    setRenameError(null);
+    setRenaming(true);
+  }
+
+  // The one action in the app that writes to the user's original file. The
+  // photo keeps its id, so its stars, tags, albums, edits and cached
+  // derivatives all survive - but the grid caches the old name, so the library
+  // queries have to be refreshed alongside this photo's own.
+  async function submitRename() {
+    if (!image) return;
+    const stem = nameDraft.trim();
+    if (!stem || stem === splitFilename(image.original_filename).stem) {
+      setRenaming(false);
+      return;
+    }
+    setRenameBusy(true);
+    setRenameError(null);
+    try {
+      const result = await api.images.rename(image.id, stem);
+      setRenaming(false);
+      if (result.pair_error) setRenameNote(result.pair_error);
+      else if (result.paired_filename) setRenameNote(`Renamed the pair to ${result.paired_filename} too.`);
+      queryClient.invalidateQueries({ queryKey: ["image", activeId] });
+      if (image.paired_image_id) {
+        queryClient.invalidateQueries({ queryKey: ["image", image.paired_image_id] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+    } catch (e) {
+      // Kept open with the draft intact: "that name is taken" is something the
+      // user fixes by editing what they typed, not by starting over.
+      setRenameError(errorText(e));
+    } finally {
+      setRenameBusy(false);
+    }
+  }
+
+  // Saved when the box loses focus rather than per keystroke - a note is
+  // written in sentences, and one request per character would be absurd.
+  async function saveDescription() {
+    if (!image) return;
+    const next = descDraft.trim();
+    if (next === (image.description ?? "")) return;
+    setDescBusy(true);
+    try {
+      await api.images.update(image.id, { description: next });
+      // Only this photo's row: the library index doesn't carry the note, and
+      // invalidating ["images"] would refetch the whole library for nothing.
+      queryClient.invalidateQueries({ queryKey: ["image", activeId] });
+      setDescNote(next ? "Description saved." : "Description cleared.");
+    } catch (e) {
+      setDescNote(errorText(e));
+    } finally {
+      setDescBusy(false);
+    }
   }
 
   async function addTag(name: string) {
@@ -660,16 +765,93 @@ export function ImageDetail() {
         </div>
         <div className="detail-panel">
           <div className="detail-title-row">
-            <h3 className="section-title">{image.original_filename}</h3>
-            <button
-              className="detail-trash-btn"
-              onClick={deletePhoto}
-              title="Delete this photo (and its RAW/JPEG partner) - library photos move to the Trash, external photos are only removed from the catalog"
-              aria-label="Delete photo"
-            >
-              <IconTrash size={15} />
-            </button>
+            {renaming ? (
+              <form
+                className="detail-rename"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submitRename();
+                }}
+              >
+                <span className="detail-rename-field">
+                  <input
+                    autoFocus
+                    className="detail-rename-input"
+                    value={nameDraft}
+                    disabled={renameBusy}
+                    aria-label="File name"
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onFocus={(e) => e.currentTarget.select()}
+                  />
+                  {/* Shown, never edited: the extension is what makes a RAF a
+                      RAF, and the backend keeps it whatever gets typed. */}
+                  <span className="detail-rename-ext">
+                    {splitFilename(image.original_filename).ext}
+                  </span>
+                </span>
+                {/* The same tick/cross pair the crop tool confirms with, so
+                    "apply" and "discard" look the same wherever the app asks.
+                    Icon-sized, they leave the narrow panel's width to the name
+                    itself - which two labelled buttons did not. */}
+                <button
+                  type="submit"
+                  className="btn btn-sm editor-field-btn editor-field-btn--confirm"
+                  disabled={renameBusy}
+                  title="Rename the file"
+                  aria-label="Rename the file"
+                >
+                  <IconCheck size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm editor-field-btn"
+                  disabled={renameBusy}
+                  onClick={() => setRenaming(false)}
+                  title="Keep the current name"
+                  aria-label="Cancel renaming"
+                >
+                  <IconX size={13} />
+                </button>
+              </form>
+            ) : (
+              <>
+                <h3 className="section-title">{image.original_filename}</h3>
+                <button
+                  className="detail-rename-btn"
+                  onClick={startRename}
+                  title="Rename this photo - this renames the file on disk too"
+                  aria-label="Rename photo"
+                >
+                  <IconPencil size={15} />
+                </button>
+              </>
+            )}
+            {/* Hidden while renaming: the row belongs to the name field then,
+                and deleting is not something to offer a hand's width from the
+                Rename button. */}
+            {!renaming && (
+              <button
+                className="detail-trash-btn"
+                onClick={deletePhoto}
+                title="Delete this photo (and its RAW/JPEG partner) - library photos move to the Trash, external photos are only removed from the catalog"
+                aria-label="Delete photo"
+              >
+                <IconTrash size={15} />
+              </button>
+            )}
           </div>
+          {renaming && (
+            <p className="status-note detail-rename-hint">
+              {renameError ? (
+                <span className="detail-rename-error">{renameError}</span>
+              ) : paired ? (
+                `Renames the file on disk, and ${paired.original_filename} with it.`
+              ) : (
+                "Renames the file on disk. The photo keeps its rating, tags and edits."
+              )}
+            </p>
+          )}
+          {renameNote && <p className="status-note detail-rename-hint">{renameNote}</p>}
 
           <div className="detail-action-row">
             <button className="btn primary" onClick={() => setAdjustOpen(true)}>
@@ -743,6 +925,24 @@ export function ImageDetail() {
           <div className="detail-section">
             <div className="detail-section-label">Color label</div>
             <ColorLabelPicker value={image.color_label} onChange={setColor} />
+          </div>
+          <div className="detail-section">
+            <div className="detail-section-label">Description</div>
+            <textarea
+              className="detail-description"
+              value={descDraft}
+              disabled={descBusy}
+              placeholder="What is this photo?"
+              aria-label="Description"
+              onChange={(e) => setDescDraft(e.target.value)}
+              onBlur={saveDescription}
+              onKeyDown={(e) => {
+                // Cmd/Ctrl+Enter saves without reaching for the mouse; plain
+                // Enter stays a line break, since this is prose.
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.currentTarget.blur();
+              }}
+            />
+            {descNote && <p className="status-note detail-description-note">{descNote}</p>}
           </div>
           <div className="detail-section">
             <div className="detail-section-label">Tags</div>

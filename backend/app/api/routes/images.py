@@ -1227,11 +1227,173 @@ def update_image(
         image.rating = update.rating
     if update.color_label is not None:
         image.color_label = update.color_label
+    if update.description is not None:
+        # "" means "cleared" - stored as NULL so an empty note and no note are
+        # the same thing everywhere downstream.
+        image.description = update.description.strip() or None
     if update.apply_to_pair:
         _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
     db.commit()
     db.refresh(image)
     return image
+
+
+# Characters no sane filename carries, and that Windows outright forbids: path
+# separators (a rename is not a move), the reserved punctuation, and control
+# bytes. Checked on the *typed* name so the error names the real problem
+# instead of some silently mangled result.
+_ILLEGAL_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _renamed_filename(typed: str, current_suffix: str) -> str:
+    """Turn what the user typed into the actual new filename, keeping the
+    photo's extension.
+
+    The extension is what makes a RAF a RAF, so it is never up for editing: a
+    typed name that already ends in it has it stripped (the UI shows it, and
+    people re-type it), anything else is taken as the stem whole - dots inside
+    a name like "Sunset 2026.07.14" are part of the name, not a new extension.
+    """
+    stem = typed.strip()
+    if not stem:
+        raise HTTPException(status_code=400, detail="The name can't be empty.")
+    if _ILLEGAL_NAME_CHARS.search(stem):
+        raise HTTPException(
+            status_code=400,
+            detail="A file name can't contain / \\ : * ? \" < > or |.",
+        )
+    if current_suffix and stem.lower().endswith(current_suffix.lower()):
+        stem = stem[: -len(current_suffix)].strip()
+    # After stripping the extension there has to be something left, and a name
+    # that is only dots is a directory reference, not a file.
+    if not stem or set(stem) == {"."}:
+        raise HTTPException(status_code=400, detail="The name can't be empty.")
+    new_name = f"{stem}{current_suffix}"
+    # The common filesystem cap is 255 *bytes*, which non-ASCII names hit far
+    # sooner than their character count suggests.
+    if len(new_name.encode("utf-8")) > 255:
+        raise HTTPException(status_code=400, detail="That name is too long.")
+    return new_name
+
+
+def _stored_path(image: Image, path: Path) -> str:
+    """The value Image.file_path takes for `path` - relative to the library
+    root for managed photos, absolute for ones indexed from a source root.
+    The inverse of services.filesystem.resolve_image_path."""
+    return str(path) if image.source_root_id else str(path.relative_to(settings.library_root))
+
+
+def _check_rename_target(db: Session, image: Image, source: Path, target: Path) -> None:
+    """Refuse a rename that would land on top of something else. Both the disk
+    and the catalog get a say: a path can be free on disk yet still claimed by
+    a row whose file went missing, and re-using it would break that row's way
+    back (UNIQUE on file_path)."""
+    if target.exists() and not target.samefile(source):
+        raise HTTPException(
+            status_code=409, detail=f"“{target.name}” already exists in this folder."
+        )
+    taken = (
+        db.query(Image.id)
+        .filter(Image.file_path == _stored_path(image, target), Image.id != image.id)
+        .first()
+    )
+    if taken:
+        raise HTTPException(
+            status_code=409, detail=f"Another photo in the library is already called “{target.name}”."
+        )
+
+
+@router.post("/{image_id}/rename", response_model=schemas.ImageRenameResult)
+def rename_image(
+    image_id: str,
+    payload: schemas.ImageRenameRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Rename a photo's file on disk and follow it in the catalog.
+
+    This really does rename the original - it is the one place in the app that
+    writes to the user's file rather than layering something on top of it - so
+    the file and what the library calls it never drift apart. The photo keeps
+    its id, and with it every rating, tag, album, edit and cached derivative.
+
+    By default the RAW/JPEG partner is renamed to the same stem (keeping its
+    own extension), so one shot stays one name on disk. If only the partner's
+    rename fails the photo's own still stands, reported via `pair_error`.
+    """
+    image = get_owned_image(db, current_user.id, image_id)
+    source = resolve_image_path(image)
+    if not source.exists():
+        raise HTTPException(
+            status_code=409,
+            detail="This photo's file isn't reachable right now, so it can't be renamed.",
+        )
+
+    new_name = _renamed_filename(payload.name, source.suffix)
+    target = source.with_name(new_name)
+    if target == source:
+        return schemas.ImageRenameResult(image=image)
+    _check_rename_target(db, image, source, target)
+
+    # The partner is resolved (and vetted) before anything moves, so a partner
+    # we can't rename doesn't leave the pair half-done - it just isn't renamed.
+    partner: Image | None = None
+    partner_source: Path | None = None
+    partner_target: Path | None = None
+    pair_error: str | None = None
+    if payload.rename_pair and image.paired_image_id:
+        candidate = db.get(Image, image.paired_image_id)
+        if candidate is not None and candidate.owner_id == current_user.id:
+            partner_source = resolve_image_path(candidate)
+            if not partner_source.exists():
+                pair_error = f"{candidate.original_filename} isn't reachable - it kept its name."
+                partner_source = None
+            else:
+                partner_target = partner_source.with_name(
+                    f"{Path(new_name).stem}{partner_source.suffix}"
+                )
+                try:
+                    _check_rename_target(db, candidate, partner_source, partner_target)
+                    partner = candidate
+                except HTTPException as exc:
+                    pair_error = f"{candidate.original_filename} kept its name: {exc.detail}"
+                    partner_source = partner_target = None
+
+    renamed: list[tuple[Path, Path]] = []
+    try:
+        source.rename(target)
+        renamed.append((target, source))
+        if partner is not None and partner_source is not None and partner_target is not None:
+            partner_source.rename(partner_target)
+            renamed.append((partner_target, partner_source))
+
+        image.file_path = _stored_path(image, target)
+        image.original_filename = target.name
+        if partner is not None and partner_target is not None:
+            partner.file_path = _stored_path(partner, partner_target)
+            partner.original_filename = partner_target.name
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Put every file back before surfacing the failure: a rename that made
+        # it to disk but not into the database would look to the next library
+        # sync exactly like a file the user renamed in Finder.
+        for moved, original in reversed(renamed):
+            try:
+                moved.rename(original)
+            except OSError:
+                logger.exception("Could not undo rename of %s", moved)
+        db.rollback()
+        logger.exception("Rename failed for image %s", image_id)
+        raise HTTPException(status_code=500, detail=f"Could not rename the file: {exc}") from exc
+
+    db.refresh(image)
+    return schemas.ImageRenameResult(
+        image=image,
+        paired_filename=partner.original_filename if partner is not None else None,
+        pair_error=pair_error,
+    )
 
 
 @router.post("/{image_id}/tags", response_model=schemas.ImageOut)

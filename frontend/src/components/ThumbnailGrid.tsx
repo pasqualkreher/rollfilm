@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
+import { usePhotoInfoCard } from "./PhotoInfoCard";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { thumbPx, thumbTier, useMergePairs, useThumbSize } from "../state/viewPrefs";
 import {
@@ -578,6 +579,9 @@ export function ThumbnailGrid({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
   const cardEls = useRef<Map<string, HTMLElement>>(new Map());
+  // The per-tile "i" that opens a photo's details. Hidden while selecting -
+  // the tile's top-left corner is the checkbox's there.
+  const { infoButton, overlay: infoOverlay } = usePhotoInfoCard(!selectMode);
 
   // Coming back from the detail view: scroll the photo the user was looking
   // at back into view instead of landing at the top. The marker is one-shot -
@@ -658,6 +662,7 @@ export function ThumbnailGrid({
         <span className={fileTypeBadgeClass(image.file_type, mergePairs && Boolean(image.paired_image_id))}>
           {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
         </span>
+        {infoButton(image.id)}
         {!selectMode && onRemove && (
           <button
             className="card-remove"
@@ -708,6 +713,7 @@ export function ThumbnailGrid({
       <div className={`thumbnail-grid${fewClass}${fadeClass}`}>
         {images.map((image, index) => renderCard(image, index))}
         <i className="grid-filler" aria-hidden />
+        {infoOverlay}
       </div>
     );
   }
@@ -757,6 +763,7 @@ export function ThumbnailGrid({
             : { label: s.label }
         )}
       />
+      {infoOverlay}
     </div>
   );
 }

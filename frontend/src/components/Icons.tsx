@@ -196,6 +196,25 @@ export function IconTrash(props: IconProps) {
   );
 }
 
+export function IconInfo(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="8" cy="8" r="6.25" />
+      <path d="M8 7.2v4" />
+      <circle cx="8" cy="4.9" r="0.55" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IconPencil(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M11.1 2.4a1.35 1.35 0 0 1 1.9 1.9l-7.3 7.3-2.5.6.6-2.5 7.3-7.3z" />
+      <path d="M10.1 3.4l1.9 1.9" />
+    </svg>
+  );
+}
+
 export function IconGear(props: IconProps) {
   // A real cog with teeth (Bootstrap Icons "gear", MIT) - the spoke-based
   // version read as a brightness/sun icon. Filled outline, not stroked.

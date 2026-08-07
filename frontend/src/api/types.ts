@@ -35,6 +35,8 @@ export interface ImageOut {
   gps_country: string | null;
   rating: number;
   color_label: ColorLabel;
+  // Free-text note typed in the detail view; null when there is none.
+  description: string | null;
   immich_sync: boolean;
   paired_image_id: string | null;
   source_root_id: string | null;
@@ -58,6 +60,17 @@ export interface ImageOut {
   edit_rev: number;
   tags: string[];
   album_ids: string[];
+}
+
+// What POST /images/:id/rename answers with: the renamed photo, plus what
+// happened to its RAW/JPEG partner (renamed to the same stem by default).
+export interface ImageRenameResult {
+  image: ImageOut;
+  // The partner's new name when it was renamed too, else null.
+  paired_filename: string | null;
+  // Set when the partner should have been renamed but couldn't be - the photo
+  // itself still was, so this is a note rather than a failure.
+  pair_error: string | null;
 }
 
 export interface TrashSettings {

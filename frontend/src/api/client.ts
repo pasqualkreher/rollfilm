@@ -10,6 +10,7 @@ import type {
   LibraryStats,
   ExportJobProgress,
   ImageOut,
+  ImageRenameResult,
   SegmentResult,
   DirListing,
   ImmichActivity,
@@ -313,9 +314,26 @@ export const api = {
     },
     update(
       id: string,
-      patch: { rating?: number; color_label?: string; apply_to_pair?: boolean }
+      patch: {
+        rating?: number;
+        color_label?: string;
+        // "" clears the note; omit the field to leave it as it is.
+        description?: string;
+        apply_to_pair?: boolean;
+      }
     ): Promise<ImageOut> {
       return request(`/images/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+    },
+    // Renames the photo's actual file on disk and follows it in the catalog -
+    // the photo keeps its id, and with it its rating, tags, albums and edits.
+    // `name` may be typed with or without the extension; the extension is
+    // always kept. rename_pair (default true) gives the RAW/JPEG partner the
+    // same stem.
+    rename(id: string, name: string, rename_pair = true): Promise<ImageRenameResult> {
+      return request(`/images/${id}/rename`, {
+        method: "POST",
+        body: JSON.stringify({ name, rename_pair }),
+      });
     },
     bulkUpdate(
       image_ids: string[],
@@ -818,6 +836,9 @@ export const api = {
   maintenance: {
     sync(): Promise<{
       removed_missing_files: number;
+      // Files renamed or moved outside the app, matched back to their photo by
+      // content hash instead of being treated as gone.
+      renamed_files_followed: number;
       untracked_files_found: number;
       orphan_thumbnails_removed: number;
       thumbnails_queued: number;

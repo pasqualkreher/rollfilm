@@ -533,6 +533,14 @@ export function Settings() {
         `Removed ${result.removed_missing_files} entr${result.removed_missing_files === 1 ? "y" : "ies"} for files no longer on disk`,
         `cleaned up ${result.orphan_thumbnails_removed} orphaned thumbnail folder(s)`,
       ];
+      if (result.renamed_files_followed > 0) {
+        // Worth its own sentence: the photos kept their stars, tags and edits
+        // instead of being dropped, which is the opposite of what the first
+        // number would otherwise suggest happened to them.
+        parts.push(
+          `followed ${result.renamed_files_followed} file(s) you renamed or moved yourself`
+        );
+      }
       if (result.thumbnails_queued > 0) {
         parts.push(
           `queued ${result.thumbnails_queued} missing thumbnail(s) for rebuild (finishes in the background)`

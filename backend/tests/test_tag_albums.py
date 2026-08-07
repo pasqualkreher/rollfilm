@@ -212,3 +212,60 @@ def test_build_clusters_groups_same_label_siblings(monkeypatch):
     for cluster in clusters:
         assert len(cluster.image_ids) == size
         assert cluster.cover_image_id in cluster.image_ids
+
+
+def test_the_moments_cut_gives_every_subject_a_slot_before_seconds(monkeypatch):
+    """The selection is what decides whether the Moments row describes the
+    whole library or only its busiest weekend.
+
+    Three big, separate clusters of one subject and one small cluster of
+    another, with room for two: cutting by size alone seats the busy subject
+    twice and the second subject never appears, however much of it there is.
+    The round-robin has to seat both subjects first.
+    """
+    dims = 6
+    subject_a = np.eye(dims, dtype=np.float32)[0]
+    subject_b = np.eye(dims, dtype=np.float32)[1]
+    # Three takes on subject A: each leans strongly towards A (0.8) but they
+    # are only 0.64 similar to one ANOTHER - below the clustering threshold, so
+    # they stay three clusters, which is what one busy subject shot on three
+    # days looks like.
+    a_takes = []
+    for k in range(3):
+        v = 0.8 * subject_a + 0.6 * np.eye(dims, dtype=np.float32)[3 + k]
+        a_takes.append(v.astype(np.float32))
+
+    ids: list[str] = []
+    rows: list[np.ndarray] = []
+    big = smart_albums.MIN_CLUSTER_SIZE * 4
+    for k, v in enumerate(a_takes):
+        for i in range(big):
+            ids.append(f"a{k}-{i}")
+            rows.append(v)
+    for i in range(smart_albums.MIN_CLUSTER_SIZE):  # the small, lone B cluster
+        ids.append(f"b-{i}")
+        rows.append(subject_b)
+
+    monkeypatch.setattr(
+        smart_albums, "_get_label_matrix", lambda: np.stack([subject_a, subject_b])
+    )
+    monkeypatch.setattr(
+        smart_albums,
+        "_LABELS",
+        [("Alpha", "a photo of alpha"), ("Beta", "a photo of beta")],
+    )
+    monkeypatch.setattr(
+        smart_albums,
+        "_get_qualifier_matrix",
+        lambda: np.zeros((len(smart_albums._QUALIFIERS), dims), dtype=np.float32),
+    )
+    # Two slots for four qualifying clusters: the contested case.
+    monkeypatch.setattr(smart_albums, "MAX_CLUSTERS", 2)
+
+    clusters = smart_albums._build_clusters(ids, np.stack(rows), {})
+
+    # Beta is a quarter the size of any single Alpha cluster and loses a
+    # biggest-N cut outright; it is here because it is a subject the library
+    # contains, and Alpha only gets one of its three clusters.
+    assert {c.group for c in clusters} == {"Alpha", "Beta"}
+    assert len(clusters) == 2

@@ -31,6 +31,8 @@ class ImageOut(BaseModel):
     gps_country: str | None = None
     rating: int
     color_label: ColorLabel
+    # Free-text note typed in the detail view; null when there's none.
+    description: str | None = None
     # Flagged for selective Immich sync (see settings_store sync modes).
     immich_sync: bool = False
     paired_image_id: str | None
@@ -67,9 +69,31 @@ class ImageOut(BaseModel):
 class ImageUpdate(BaseModel):
     rating: int | None = None
     color_label: ColorLabel | None = None
+    # Free-text note. "" clears it; omitted (null) leaves it alone.
+    description: str | None = None
     # When set, the same rating/color is also written to this image's RAW+JPEG
     # partner - so rating the JPEG rates the RAW too.
     apply_to_pair: bool = False
+
+
+class ImageRenameRequest(BaseModel):
+    # The new name. With an extension it must match the file's current one (the
+    # extension is what makes a RAF a RAF); without one the current extension is
+    # kept. Path separators are rejected - a rename is not a move.
+    name: str
+    # Rename this photo's RAW/JPEG partner to the same stem, keeping its own
+    # extension - so the two halves of one shot stay named alike on disk.
+    rename_pair: bool = True
+
+
+class ImageRenameResult(BaseModel):
+    image: ImageOut
+    # The partner's new name when it was renamed too, else null.
+    paired_filename: str | None = None
+    # Set when the partner was meant to be renamed but couldn't be (its own
+    # target name is taken, or its file is unreachable) - the UI says so
+    # instead of silently leaving the pair half-renamed.
+    pair_error: str | None = None
 
 
 class AddTagRequest(BaseModel):

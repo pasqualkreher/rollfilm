@@ -1086,8 +1086,24 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+/* The docked row is meant to be ONE row. Every field shares the width evenly
+   and gives ground as the window narrows (the dropdown labels ellipsize), so
+   the whole filter set stays on one line instead of Date dropping to a second
+   one the moment the bar is a little too tight. Wrapping is still allowed - it
+   is the fallback for a genuinely narrow window, not the normal state. */
 .filter-menu--docked .filter-menu-row {
-  min-width: 150px;
+  flex: 1 1 0;
+  min-width: 96px;
+}
+
+/* ...except the two that cannot usefully shrink: the colour swatches are fixed
+   circles, and the date range is two native pickers whose text would clip
+   rather than ellipsize. They keep their natural width and the flexible fields
+   absorb the difference. */
+.filter-menu--docked .filter-menu-row:has(.color-label-picker),
+.filter-menu--docked .filter-menu-row:has(.date-range) {
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 /* The docked row has the bar's own "Filter" chip right above it, so the panel's
@@ -3755,6 +3771,271 @@ input.editor-preset-select {
 .detail-trash-btn:hover {
   background: var(--hover);
   color: var(--danger);
+}
+
+/* The pencil beside the filename - same bare, borderless shape and size as the
+   trash can it sits next to, so the two read as one pair of row actions. */
+.detail-rename-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.detail-rename-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* Renaming: the title row becomes the name field plus the crop tool's
+   tick/cross pair. Icon-width buttons, so the name keeps the panel's width. */
+.detail-rename {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-rename .editor-field-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+}
+
+/* Input and extension share one bordered box, so ".RAF" reads as part of the
+   name being edited rather than as a label next to it. */
+.detail-rename-field {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+/* Matches the focus ring every other text input in the app gets - the box, not
+   the bare <input> inside it, is what reads as the field here. */
+.detail-rename-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.detail-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.detail-rename-ext {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.detail-rename-hint {
+  margin: -6px 0 12px;
+}
+
+.detail-rename-error {
+  color: var(--danger);
+}
+
+/* The per-photo note. A fixed box that scrolls its own text: it sits in a
+   column of sections whose heights the user reads as stable, so a long note
+   scrolls inside the box rather than pushing rating, tags and albums down the
+   panel. Not resizable for the same reason. */
+/* Border, background and focus ring come from the shared textarea rule; only
+   the fixed, self-scrolling box is this element's own. */
+.detail-description {
+  display: block;
+  width: 100%;
+  height: 76px;
+  box-sizing: border-box;
+  line-height: 1.45;
+  resize: none;
+  overflow-y: auto;
+}
+
+.detail-description-note {
+  margin: 6px 0 0;
+}
+
+/* --- Grid photo-info card (components/PhotoInfoCard.tsx) ------------------
+   A small "i" in each tile's top-left opens the shot in a larger frame - shown
+   whole, never cropped - with its EXIF beside it and its note, place, tags and
+   albums below. Rendered into <body> (the grid clips its own overflow). */
+/* A small pane of smoked glass rather than a button: it darkens and blurs
+   whatever corner of the photo it sits on, so the glyph reads on a white sky
+   and a night shot alike without ever being a solid chip competing with the
+   picture. Deliberately quiet - it is a hint that details exist. Fixed rgba
+   (not the skin's variables) because it sits ON a photo, not on a panel. */
+.thumb-info-btn {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 50%;
+  background: rgba(38, 38, 42, 0.42);
+  backdrop-filter: blur(6px);
+  color: rgba(255, 255, 255, 0.88);
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+/* Revealed on hover, but permanently visible while its card is open (and
+   whenever it has keyboard focus) - otherwise the control that opened the card
+   vanishes from under the pointer. */
+.thumb-card:hover .thumb-info-btn,
+.thumb-info-btn:focus-visible {
+  opacity: 0.62;
+}
+
+.thumb-card:hover .thumb-info-btn:hover,
+.thumb-info-btn[aria-expanded="true"] {
+  opacity: 1;
+  background: rgba(28, 28, 32, 0.62);
+}
+
+.info-card {
+  position: fixed;
+  z-index: 3500;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+  animation: info-card-in 0.12s ease-out;
+  /* Inert: it must never come between the pointer and the grid, or it would
+     take the mouse-leave that is supposed to dismiss it. */
+  pointer-events: none;
+}
+
+@keyframes info-card-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+.info-card-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.info-card-filename {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.info-card-stars {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+
+.info-card-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* The measured facts: label/value pairs in two columns, values ellipsizing so
+   a long lens name can't widen the card. */
+.info-card-exif {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  align-content: start;
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.info-card-exif dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.info-card-exif dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A note can run long; show the first few lines and stop, rather than letting
+   one photo's essay define the card's height. */
+.info-card-description {
+  margin: 10px 0 0;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.info-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.info-card-chip {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* Albums read as containers, tags as labels - outlined vs filled tells them
+   apart without a second colour. */
+.info-card-chip--album {
+  background: none;
+  border: 1px solid var(--border);
 }
 
 /* The action buttons under the filename (Edit / Add to selects ...):

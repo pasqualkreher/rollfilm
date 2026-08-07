@@ -133,6 +133,9 @@ class Image(Base):
 
     rating: Mapped[int] = mapped_column(Integer, default=0)
     color_label: Mapped[ColorLabel] = mapped_column(Enum(ColorLabel), default=ColorLabel.none)
+    # Free-text note typed in the detail view. Database-only, like every other
+    # edit here - the original file is never rewritten. Null or "" = no note.
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Selective Immich sync: when set, this photo is synced to Immich (JPEG only)
     # automatically - on import and when the flag is toggled on. Ignored in the

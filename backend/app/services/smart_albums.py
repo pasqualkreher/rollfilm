@@ -52,9 +52,18 @@ from app.services import sources as sources_service
 # kind of scene) instead of a loose theme - 0.72 pulled in merely related
 # shots and made mixed-bag moments.
 SIMILARITY_THRESHOLD = 0.76
-# Below this a "cluster" is just a handful of stragglers, not an album.
-MIN_CLUSTER_SIZE = 8
-MAX_CLUSTERS = 15
+# Below this a "cluster" is just a handful of stragglers, not an album. Five is
+# already a set of photos of one thing - the old floor of eight quietly threw
+# away plenty of perfectly good moments (an afternoon with one subject rarely
+# runs to eight keepers) without making the surviving ones any better.
+MIN_CLUSTER_SIZE = 5
+# How many moments the section may show. This is a display budget, not a
+# quality bar: everything past it was dropped purely for being smaller than the
+# rest, so a library with many distinct subjects was cut back to the same
+# fifteen cards as a library with few. The naming pass costs one small matrix
+# product per cluster, so the higher cap is not what the build spends its time
+# on - the clustering passes over every embedding are, and those are unchanged.
+MAX_CLUSTERS = 40
 # Minimum centroid/label cosine similarity to trust a name. CLIP image/text
 # similarities are much lower than image/image ones; a good match is ~0.2-0.3.
 LABEL_MIN_SIMILARITY = 0.17
@@ -128,6 +137,47 @@ _LABELS: list[tuple[str, str]] = [
     ("Markets", "a photo of a street market with stalls"),
     ("Screenshots", "a screenshot of a computer or phone screen"),
     ("Documents", "a photo of a document or a receipt"),
+    # Built places, beyond the bare "building facade" of Architecture.
+    ("Houses", "a photo of a house"),
+    ("Old Towns", "a photo of a narrow street in an old historic town"),
+    ("Castles", "a photo of a castle"),
+    ("Ruins", "a photo of ancient stone ruins"),
+    ("Monuments", "a photo of a statue or a monument"),
+    ("Street Art", "a photo of graffiti or a mural painted on a wall"),
+    ("Neon Lights", "a photo of glowing neon signs at night"),
+    ("Harbours", "a photo of a harbour with docked boats"),
+    ("Lighthouses", "a photo of a lighthouse on the coast"),
+    ("Windmills", "a photo of wind turbines in a field"),
+    ("Airports", "a photo inside an airport terminal"),
+    # Landscapes the existing five (mountains, forest, lake, beach, snow)
+    # cannot stand in for.
+    ("Countryside", "a photo of farmland and fields in the countryside"),
+    ("Coast & Cliffs", "a photo of a rocky coastline with steep cliffs"),
+    ("Islands", "a photo of an island surrounded by sea"),
+    ("Deserts", "a photo of a desert with sand dunes"),
+    ("Caves", "a photo taken inside a cave"),
+    ("Roads", "a photo of an empty road stretching into the distance"),
+    ("Trees", "a photo of a single tree in a field"),
+    # Light and weather, which turn the same place into a different photo.
+    ("Sunrise", "a photo of a sunrise at dawn"),
+    ("Fog & Mist", "a photo of a landscape covered in fog and mist"),
+    ("Storms", "a photo of dark storm clouds over a landscape"),
+    ("Reflections", "a photo of a mirror reflection in still water"),
+    ("Aerial Views", "an aerial drone photo looking straight down"),
+    # Doing things: Sports is one bucket for what people actually shoot as
+    # separate days out.
+    ("Running", "a photo of people running a race"),
+    ("Climbing", "a photo of a climber on a rock wall"),
+    ("Surfing", "a photo of a surfer riding a wave"),
+    ("Fishing", "a photo of a person fishing at the water"),
+    ("Picnics", "a photo of a picnic on a blanket outdoors"),
+    ("Birthdays", "a photo of a birthday cake with candles"),
+    ("Selfies", "a selfie photo taken at arm's length"),
+    # Nature close up, past Flowers and the generic Macro.
+    ("Mushrooms", "a close-up photo of mushrooms on the forest floor"),
+    ("Farm Animals", "a photo of cows and sheep in a pasture"),
+    ("Underwater", "an underwater photo of fish and coral"),
+    ("Books", "a photo of a stack of books"),
 ]
 
 # Qualifiers used to tell same-label clusters apart ("Mountains · Sunny" vs
@@ -198,7 +248,7 @@ _label_lock = threading.Lock()
 # Part of the cache signature: bumping it makes every stored cache stale, so
 # an algorithm/naming change reaches users on their next visit instead of
 # waiting for the library to change.
-_ALGO_VERSION = 4
+_ALGO_VERSION = 7
 
 
 def _library_signature(db: Session) -> tuple:
@@ -436,37 +486,73 @@ def _build_clusters(
         if s >= SIMILARITY_THRESHOLD:
             members.setdefault(int(c), []).append(i)
 
-    # Largest first here so the biggest clusters claim the plain label names
-    # (smaller same-label ones get numbered); the final list is sorted by name.
+    # Largest first, so the biggest cluster of a subject claims the plain label
+    # name and its smaller siblings get the qualifier; the final list is sorted
+    # by name. NOT cut to MAX_CLUSTERS here - the cut is made per subject
+    # further down, and needs to know what each cluster is about first.
     kept = sorted(
         (m for m in members.values() if len(m) >= MIN_CLUSTER_SIZE),
         key=len,
         reverse=True,
-    )[:MAX_CLUSTERS]
+    )
     if not kept:
         return []
 
     # Name each cluster zero-shot: its (renormalized) centroid against the
-    # label prompts, encoded with the same CLIP model as the images.
+    # label prompts, encoded with the same CLIP model as the images. Scored for
+    # every cluster in one matrix product rather than one at a time - there can
+    # now be hundreds of candidates, and only the selection below decides which
+    # of them the user ever sees.
     label_matrix = _get_label_matrix()
     titles = [title for title, _ in _LABELS]
-    named: list[dict] = []  # per kept cluster, still in size order
+    cluster_centroids = []
     for member_idx in kept:
-        cvecs = vecs[member_idx]
-        centroid = cvecs.mean(axis=0)
-        centroid = centroid / (np.linalg.norm(centroid) or 1.0)
+        centroid = vecs[member_idx].mean(axis=0)
+        cluster_centroids.append(centroid / (np.linalg.norm(centroid) or 1.0))
+    cluster_centroids = np.stack(cluster_centroids)
+    all_label_sims = cluster_centroids @ label_matrix.T
 
-        label_sims = label_matrix @ centroid
-        best_label = int(np.argmax(label_sims))
-        if label_sims[best_label] >= LABEL_MIN_SIMILARITY:
+    candidates: list[dict] = []  # still in size order
+    for pos, member_idx in enumerate(kept):
+        centroid = cluster_centroids[pos]
+        best_label = int(np.argmax(all_label_sims[pos]))
+        if all_label_sims[pos][best_label] >= LABEL_MIN_SIMILARITY:
             base = titles[best_label]
         else:
             base = "Moments"
         # Cover: the most central photo, i.e. the best single example.
-        cover = member_idx[int(np.argmax(cvecs @ centroid))]
-        named.append(
+        cover = member_idx[int(np.argmax(vecs[member_idx] @ centroid))]
+        candidates.append(
             {"members": member_idx, "centroid": centroid, "base": base, "cover": cover}
         )
+
+    # Which candidates make the section, and this is the part that decides
+    # whether the moments describe the LIBRARY or just its busiest weekend.
+    #
+    # Taking the N biggest clusters spent every slot on whatever there is most
+    # of: three days at one bike race are three big, tight clusters, and a
+    # library's entire forest, food and street output - hundreds of photos, but
+    # in smaller, more varied clusters - could miss the cut completely. So the
+    # slots go round-robin over the subjects instead: every subject the library
+    # actually contains gets its first moment before any subject gets a second,
+    # and only then a third. Within a subject it is still biggest-first.
+    by_subject: dict[str, list[int]] = {}
+    for i, info in enumerate(candidates):
+        by_subject.setdefault(info["base"], []).append(i)
+
+    picked: list[int] = []
+    for rank in range(max(len(idxs) for idxs in by_subject.values())):
+        if len(picked) >= MAX_CLUSTERS:
+            break
+        for idxs in by_subject.values():
+            if rank < len(idxs):
+                picked.append(idxs[rank])
+                if len(picked) >= MAX_CLUSTERS:
+                    break
+    # Back into size order, so the "biggest claims the plain name" rule below
+    # still holds for the clusters that were actually selected.
+    picked.sort()
+    named = [candidates[i] for i in picked]
 
     # Two clusters can score the same label (e.g. two distinct trips both
     # reading as "Mountains"). They stay one family: every sibling shares the
