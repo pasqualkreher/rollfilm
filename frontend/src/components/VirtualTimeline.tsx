@@ -239,9 +239,12 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
   // deps - so its scroll listener was torn down and re-attached on every
   // scroll step.
   const getScroller = useCallback(() => scrollerRef.current, []);
-  const getSectionEl = useCallback((label: string) => sectionEls.current.get(label) ?? null, []);
+  const getSectionEl = useCallback((key: string) => sectionEls.current.get(key) ?? null, []);
+  // Identified by `key`, not by the month's name: a photo sitting out of date
+  // order splits a month into two sections that are both called "June 2024",
+  // and keying either map by the name drops one of them (see LayoutSection.key).
   const scrubberSections = useMemo(
-    () => (layout?.sections ?? []).map((s) => ({ label: s.label })),
+    () => (layout?.sections ?? []).map((s) => ({ key: s.key, label: s.label })),
     [layout]
   );
 
@@ -336,11 +339,11 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
         const sectionVisible = section.top < winBottom && section.top + section.height > winTop;
         return (
           <section
-            key={section.label}
+            key={section.key}
             className="timeline-section"
             ref={(el) => {
-              if (el) sectionEls.current.set(section.label, el);
-              else sectionEls.current.delete(section.label);
+              if (el) sectionEls.current.set(section.key, el);
+              else sectionEls.current.delete(section.key);
             }}
             style={{
               position: "absolute",

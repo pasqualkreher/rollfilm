@@ -68,8 +68,19 @@ def start_background_sync() -> None:
             # Re-pair pass: link any still-unpaired RAW+JPEG siblings (halves
             # imported in different sessions, or libraries from before the
             # metadata-aware pairing). Idempotent and cheap once caught up.
-            from app.services.pairing import pair_library
+            from app.services.pairing import pair_library, unpair_conflicting
 
+            # Break the pairs the metadata contradicts FIRST, so a half freed
+            # here can find its real partner in the same pass. Not one-shot
+            # behind a settings flag like the repairs below: a pair can also go
+            # wrong later, when a capture time arrives that wasn't there when
+            # the two were linked, and this is what catches that.
+            broken = unpair_conflicting(db, LOCAL_USER_ID)
+            if broken:
+                db.commit()
+                logger.info(
+                    "Startup un-pair: broke %d RAW+JPEG pair(s) the metadata contradicts", broken
+                )
             paired = pair_library(db, LOCAL_USER_ID)
             if paired:
                 db.commit()

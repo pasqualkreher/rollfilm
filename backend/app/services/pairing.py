@@ -94,6 +94,50 @@ def pair_siblings(images: list[Image]) -> int:
     return made
 
 
+def unpair_conflicting(db: Session, owner_id: int) -> int:
+    """Break links between two files the metadata says were never one shot - a
+    basename the camera recycled on a different day, or on a different body.
+
+    The counterpart to pair_library, and the reason it has to exist: pairing has
+    guarded against this since the metadata-aware rules landed, but nothing ever
+    revisits a pair once it is made. A library paired before those rules - or
+    paired while one half's capture time had not been read yet - carries its bad
+    links forever.
+
+    A wrong pair is not a cosmetic problem. In the merged view the pair collapses
+    to a single card shown at the OTHER half's position, so one photo from July
+    2021 lands in the middle of the June 2024 run. The timeline groups by a run
+    of equal month labels, so that one photo splits June 2024 into several
+    sections with the same name - and anything keyed by the month, the date
+    scrubber's ticks among it, then collapses those sections onto one. Months
+    disappear from the rail that have thousands of photos behind them.
+
+    Returns the number of pairs broken; the caller commits."""
+    paired = (
+        db.query(Image)
+        .filter(
+            Image.owner_id == owner_id,
+            Image.paired_image_id.isnot(None),
+            Image.deleted_at.is_(None),
+        )
+        .all()
+    )
+    by_id = {image.id: image for image in paired}
+    broken = 0
+    for image in paired:
+        partner = by_id.get(image.paired_image_id)
+        # Judge each pair once, from the half with the smaller id. A partner
+        # that isn't here at all (trashed, or on an unavailable source) is not
+        # evidence of anything - leave that link alone.
+        if partner is None or partner.id < image.id:
+            continue
+        if _conflict(image, partner):
+            image.paired_image_id = None
+            partner.paired_image_id = None
+            broken += 1
+    return broken
+
+
 def pair_library(db: Session, owner_id: int, stems: set[str] | None = None) -> int:
     """Library-wide re-pair of the *managed* library: link still-unpaired
     RAW+JPEG siblings across import sessions - the two halves of a pair are

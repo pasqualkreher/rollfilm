@@ -60,6 +60,16 @@ export interface LayoutRow<T> {
 
 export interface LayoutSection<T> {
   label: string;
+  // Identity, for React keys and for the maps that find a section's element.
+  // The LABEL cannot serve as that: sections are runs of equal labels, so a
+  // single photo sitting out of date order (a mispaired RAW+JPEG shown at its
+  // partner's position, a hand-edited capture time) splits a month into two
+  // sections that are both called "June 2024". Keyed by label, the second one
+  // overwrites the first in those maps and every tick between them vanishes
+  // from the scrubber - months with thousands of photos behind them simply not
+  // on the rail. Equal to the label for the first section of that name, so the
+  // normal case keeps its stable, position-independent key.
+  key: string;
   top: number; // within the whole timeline
   height: number;
   rows: LayoutRow<T>[];
@@ -95,6 +105,12 @@ export function buildJustifiedLayout<T>(
   { width, rowHeight, labelOf, aspectOf, rowExtra = 0 }: LayoutOptions<T>
 ): JustifiedLayout<T> {
   const sections: LayoutSection<T>[] = [];
+  // How many sections of each label have been emitted, so a repeated label
+  // still yields a unique key (see LayoutSection.key). Counting occurrences
+  // rather than using the section's index keeps the key stable when photos are
+  // added above: a plain index would change for every section below the
+  // insertion and remount the whole timeline.
+  const labelSeen = new Map<string, number>();
   let y = 0;
 
   const flushSection = (label: string, group: { item: T; index: number }[]) => {
@@ -134,7 +150,16 @@ export function buildJustifiedLayout<T>(
     flushRow(true);
 
     const height = innerY - GAP + SECTION_MB;
-    sections.push({ label, top: y, height, rows, count: group.length });
+    const seen = (labelSeen.get(label) ?? 0) + 1;
+    labelSeen.set(label, seen);
+    sections.push({
+      label,
+      key: seen === 1 ? label : `${label}#${seen}`,
+      top: y,
+      height,
+      rows,
+      count: group.length,
+    });
     y += height;
   };
 

@@ -6,7 +6,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // the hierarchy - the import review scrubs month→day instead of year→month.
 // When omitted, the defaults below split "July 2026"-style labels.
 export interface ScrubberSection {
-  label: string; // unique key, bubble text, and getSectionEl lookup key
+  label: string; // bubble text; also the identity when `key` is omitted
+  // Identity: the React key and what getSectionEl is called with. Only needed
+  // where the same label can occur twice - the library timeline, where a photo
+  // out of date order splits a month into two same-named sections (see
+  // LayoutSection.key). Keyed by label alone, the second section overwrites the
+  // first in the element map and every tick between them disappears.
+  key?: string;
   tickGroup?: string;
   tickPrimary?: string;
   tickSecondary?: string;
@@ -25,6 +31,7 @@ interface Props {
 }
 
 interface Marker {
+  key: string; // section identity (see ScrubberSection.key)
   label: string;
   group: string; // primary ticks appear where this changes
   primary: string;
@@ -50,6 +57,7 @@ function monthOf(label: string): string {
 function toMarkerFields(s: ScrubberSection): Omit<Marker, "frac"> {
   const primary = s.tickPrimary ?? yearOf(s.label);
   return {
+    key: s.key ?? s.label,
     label: s.label,
     group: s.tickGroup ?? primary,
     primary,
@@ -83,6 +91,73 @@ function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
+// --- tick placement --------------------------------------------------------
+//
+// With many sections (or a short rail) the raw markers overlap into an
+// unreadable stack, so only the labels that have room are drawn. Ticks are
+// centered on their position (translateY -50%), so the spacings below are what
+// each kind needs: a year block is two lines (~22px), a month label one
+// (~10px). A section whose label is dropped draws nothing - dragging still
+// scrolls through it, and the bubble names it on the way past.
+
+type LabelKind = "primary" | "secondary";
+
+interface Annotated {
+  m: Marker;
+  y: number;
+  isGroupStart: boolean;
+}
+
+interface PlacedTick {
+  marker: Marker;
+  kind: LabelKind;
+}
+
+// A label is either a two-line year block or a bare month. Year blocks are
+// placed first and always win their space; a month label needs to clear the
+// previously placed label AND the next year block below it - without that
+// look-ahead, months sat right on top of the next year's label.
+function placeLabels(annotated: Annotated[]): PlacedTick[] {
+  const PRIMARY_SPACING = 30;
+  const SECONDARY_TO_SECONDARY = 13;
+  const SECONDARY_TO_PRIMARY = 19;
+
+  const primaryTicks: Annotated[] = [];
+  let lastPrimaryY = -Infinity;
+  for (const a of annotated) {
+    if (a.isGroupStart && a.y - lastPrimaryY >= PRIMARY_SPACING) {
+      primaryTicks.push(a);
+      lastPrimaryY = a.y;
+    }
+  }
+  const primarySet = new Set(primaryTicks);
+
+  const out: PlacedTick[] = [];
+  let nextPrimaryIdx = 0;
+  let prevY = -Infinity;
+  let prevWasPrimary = false;
+  for (const a of annotated) {
+    if (primarySet.has(a)) {
+      out.push({ marker: a.m, kind: "primary" });
+      prevY = a.y;
+      prevWasPrimary = true;
+      nextPrimaryIdx++;
+      continue;
+    }
+    // A group-start whose year label was dropped (years too dense): writing it
+    // out as a bare month would just re-crowd the space that dropping the year
+    // label freed.
+    if (a.isGroupStart) continue;
+    if (a.y - prevY < (prevWasPrimary ? SECONDARY_TO_PRIMARY : SECONDARY_TO_SECONDARY)) continue;
+    const nextPrimary = primaryTicks[nextPrimaryIdx];
+    if (nextPrimary && nextPrimary.y - a.y < SECONDARY_TO_PRIMARY) continue;
+    out.push({ marker: a.m, kind: "secondary" });
+    prevY = a.y;
+    prevWasPrimary = false;
+  }
+  return out;
+}
+
 /**
  * Immich-style date scrubber pinned to the right edge of the library timeline:
  * year/month markers positioned by where each section sits in the scroll range,
@@ -92,7 +167,10 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
   const railRef = useRef<HTMLDivElement | null>(null);
   const [markers, setMarkers] = useState<Marker[]>([]);
   const [currentFrac, setCurrentFrac] = useState(0);
-  const [activeLabel, setActiveLabel] = useState<string | null>(null);
+  // The section at the fold, held by identity rather than by name: two months
+  // can carry the same label (see ScrubberSection.key), and highlighting by
+  // name lights up both of them.
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   // Read by the scroll handler, which must not be rebuilt (and its listener
   // torn down and re-attached) just because a drag started or ended.
@@ -107,7 +185,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
   const rangeRef = useRef({ firstOffset: 0, span: 1 });
   // Where each section starts in the scroll range, in document order. Measured
   // with the rail rather than per scroll frame - see measure().
-  const offsetsRef = useRef<{ label: string; offset: number }[]>([]);
+  const offsetsRef = useRef<{ key: string; offset: number }[]>([]);
   // The scroll range those offsets were measured against: the one thing that
   // can invalidate them without `sections` changing too.
   const measuredHeightRef = useRef(0);
@@ -131,11 +209,11 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     setCurrentFrac(clamp01((top - firstOffset) / span));
     if (draggingRef.current) return;
     // Deepest section still at/above the fold - the one you're currently in.
-    let topmost = offsetsRef.current[0]?.label ?? null;
+    let topmost = offsetsRef.current[0]?.key ?? null;
     for (const o of offsetsRef.current) {
-      if (o.offset <= top + 4) topmost = o.label;
+      if (o.offset <= top + 4) topmost = o.key;
     }
-    setActiveLabel(topmost);
+    setActiveKey(topmost);
   }, [getScroller]);
 
   const measure = useCallback(() => {
@@ -163,14 +241,17 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     // scrolls it pushes the first label well down the rail.
     const raw: { section: ScrubberSection; offset: number }[] = [];
     for (const section of sections) {
-      const el = getSectionEl(section.label);
+      const el = getSectionEl(section.key ?? section.label);
       if (!el) continue;
       raw.push({ section, offset: el.getBoundingClientRect().top - scrollerTop + scroller.scrollTop });
     }
     const firstOffset = raw.length ? Math.min(...raw.map((r) => r.offset)) : 0;
     const span = Math.max(1, maxScroll - firstOffset);
     rangeRef.current = { firstOffset, span };
-    offsetsRef.current = raw.map((r) => ({ label: r.section.label, offset: r.offset }));
+    offsetsRef.current = raw.map((r) => ({
+      key: r.section.key ?? r.section.label,
+      offset: r.offset,
+    }));
     measuredHeightRef.current = scroller.scrollHeight;
 
     setMarkers(
@@ -243,12 +324,12 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
       // grid (nearest-marker would flip to the next section a bit too early).
       // Markers are in document order => ascending frac, regardless of whether
       // the timeline runs newest-first (library) or oldest-first (import).
-      let topmost = markers[0]?.label ?? null;
+      let topmost = markers[0]?.key ?? null;
       for (const m of markers) {
-        if (m.frac <= clamped + 1e-4) topmost = m.label;
+        if (m.frac <= clamped + 1e-4) topmost = m.key;
         else break;
       }
-      setActiveLabel(topmost);
+      setActiveKey(topmost);
     },
     [getScroller, markers]
   );
@@ -278,61 +359,18 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     };
   }, [dragging, scrollToFrac, fracFromEvent]);
 
-  // Declutter: with many sections (or a short rail) the raw markers overlap
-  // into an unreadable stack. Ticks are centered on their position (translateY
-  // -50%); a primary tick (year, or month in the import's month→day scale) is
-  // two lines (~22px), a secondary tick one (~10px). Primaries are placed
-  // first and always win their space; a secondary label only renders when it
-  // clears the previously placed tick AND the next primary tick below it -
-  // without that look-ahead, secondaries sat right on top of the next
-  // primary's label. Dropped ticks are only labels: dragging still scrolls
-  // through them.
-  //
-  // Depends only on the rail's geometry, so it survives a drag untouched -
-  // which is the point of keeping `markers` stable across scrolls.
+  // What the rail shows for each section, in document order. Depends only on
+  // the rail's geometry and which mode it is in, so it survives a drag
+  // untouched - which is the point of keeping `markers` stable across scrolls.
   const shown = useMemo(() => {
-    const PRIMARY_SPACING = 30;
-    const SECONDARY_TO_SECONDARY = 16;
-    const SECONDARY_TO_PRIMARY = 22;
     const usable = Math.max(0, railHeight - RAIL_INSET * 2);
     const seenGroups = new Set<string>();
-    const annotated = markers.map((m) => {
+    const annotated: Annotated[] = markers.map((m) => {
       const isGroupStart = !seenGroups.has(m.group);
       if (isGroupStart) seenGroups.add(m.group);
       return { m, y: m.frac * usable, isGroupStart };
     });
-    const primaryTicks: typeof annotated = [];
-    let lastPrimaryY = -Infinity;
-    for (const a of annotated) {
-      if (a.isGroupStart && a.y - lastPrimaryY >= PRIMARY_SPACING) {
-        primaryTicks.push(a);
-        lastPrimaryY = a.y;
-      }
-    }
-    const primaryTickSet = new Set(primaryTicks);
-    const out: { marker: Marker; showPrimary: boolean }[] = [];
-    let nextPrimaryIdx = 0;
-    let prevY = -Infinity;
-    let prevWasPrimary = false;
-    for (const a of annotated) {
-      if (primaryTickSet.has(a)) {
-        out.push({ marker: a.m, showPrimary: true });
-        prevY = a.y;
-        prevWasPrimary = true;
-        nextPrimaryIdx++;
-        continue;
-      }
-      // A group-start whose primary label was dropped (primaries too dense):
-      // showing it as a bare secondary would just re-crowd the freed-up space.
-      if (a.isGroupStart) continue;
-      if (a.y - prevY < (prevWasPrimary ? SECONDARY_TO_PRIMARY : SECONDARY_TO_SECONDARY)) continue;
-      const nextPrimary = primaryTicks[nextPrimaryIdx];
-      if (nextPrimary && nextPrimary.y - a.y < SECONDARY_TO_PRIMARY) continue;
-      out.push({ marker: a.m, showPrimary: false });
-      prevY = a.y;
-      prevWasPrimary = false;
-    }
-    return out;
+    return placeLabels(annotated);
   }, [markers, railHeight]);
 
   // The ticks themselves only change when the rail is re-measured or the
@@ -341,25 +379,32 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
   // the handle so a drag doesn't rebuild every label on the rail per frame.
   const ticks = useMemo(
     () =>
-      shown.map(({ marker: m, showPrimary }) => {
-        const isActive = m.label === activeLabel;
+      shown.map(({ marker: m, kind }) => {
+        const isActive = m.key === activeKey;
         return (
           <div
-            key={m.label}
-            className={`scrubber-tick${showPrimary ? " year-start" : ""}${isActive ? " active" : ""}`}
+            key={m.key}
+            className={`scrubber-tick${kind === "primary" ? " year-start" : ""}${isActive ? " active" : ""}`}
             style={{ top: posTop(m.frac) }}
           >
-            {showPrimary && <span className="scrubber-year">{m.primary}</span>}
+            {kind === "primary" && <span className="scrubber-year">{m.primary}</span>}
             {/* When the primary line already shows the whole label (a no-year
                 label like "Unknown date"), a second truncated line under it
                 would just repeat its first letters. */}
-            {(!showPrimary || m.primary !== m.label) && (
+            {kind === "secondary" || (kind === "primary" && m.primary !== m.label) ? (
               <span className="scrubber-month">{m.secondary}</span>
-            )}
+            ) : null}
           </div>
         );
       }),
-    [shown, activeLabel]
+    [shown, activeKey]
+  );
+
+  // Bubble text for whichever section is at the fold. Looked up rather than
+  // stored alongside the key, so it can never drift from the markers.
+  const activeLabel = useMemo(
+    () => markers.find((m) => m.key === activeKey)?.label ?? null,
+    [markers, activeKey]
   );
 
   if (sections.length < 1) return null;
