@@ -16,6 +16,7 @@ import { thumbPx, thumbTier, useMergePairs, useThumbSize } from "../state/viewPr
 import {
   afterScrollSettles,
   forgetThumbLoaded,
+  isScrollingFast,
   isThumbLoaded,
   markThumbLoaded,
   watchFarFromViewport,
@@ -337,7 +338,16 @@ export function Thumb({
           inViewRef.current = true;
           el.setAttribute("fetchpriority", "high");
           repairIfBroken();
-          ensureLoading();
+          // Not while the view is being DRAGGED. A scrubber drag sweeps the
+          // whole library through the viewport, so every tile on the way
+          // "enters" it - and this path sets src directly, without the
+          // stabilize delay that holds the rest of the grid back. Each of
+          // those requests reached the backend and was aborted a frame later
+          // when the tile unmounted, leaving it busy rendering thumbnails
+          // nobody would ever see while the photos at the landing spot queued
+          // behind them. The near-viewport watcher already has these tiles
+          // waiting; they load together the moment the drag stops.
+          if (!isScrollingFast()) ensureLoading();
         },
         leave: () => {
           inViewRef.current = false;

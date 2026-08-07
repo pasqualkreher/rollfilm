@@ -249,7 +249,6 @@ let lastScrollPos = 0;
 let lastScrollAt = 0;
 let scrollingFast = false;
 let calmTimer: number | null = null;
-const calmWaiters = new Set<() => void>();
 
 function scrollPosOf(target: EventTarget | null): number {
   if (!target || target === document || target === window) return window.scrollY;
@@ -262,14 +261,15 @@ function armCalmTimer(): void {
     calmTimer = null;
     // A whole window with no scroll event: the gesture is over.
     if (performance.now() - lastScrollAt >= SCROLL_CALM_MS) scrollingFast = false;
-    if (scrollingFast) {
-      armCalmTimer();
-      return;
-    }
-    const waiters = [...calmWaiters];
-    calmWaiters.clear();
-    for (const waiter of waiters) waiter();
+    if (scrollingFast) armCalmTimer();
   }, SCROLL_CALM_MS);
+}
+
+// Is the view being dragged rather than scrolled right now? For the one caller
+// that starts a load outside afterScrollSettles - the on-screen backstop in
+// Thumb - which would otherwise be the hole in this gate.
+export function isScrollingFast(): boolean {
+  return scrollingFast;
 }
 
 // Scroll events don't bubble, but they DO run through the capture phase - so
@@ -299,40 +299,65 @@ document.addEventListener(
   { capture: true, passive: true }
 );
 
-// Run `fn` once the view has been still for `delay` ms - and never in the
-// middle of a fast scroll, where it waits for the scroll to calm down and then
-// serves out the delay again. Returns a cancel function; callers cancel when
-// whatever made the work worth doing stops being true (a tile leaving the load
-// margin again, or unmounting).
-export function afterScrollSettles(fn: () => void, delay: number): () => void {
-  let timer: number | null = null;
-  let waiting: (() => void) | null = null;
+// Everything waiting out the stabilize delay sits in ONE queue behind ONE
+// timer, rather than each caller holding its own.
+//
+// A timer per caller is a TASK per caller, and at the end of a scrubber jump
+// the entire mounted band comes due at the same moment - hundreds of tiles at
+// the small grid sizes on a wide window. As separate tasks React commits each
+// tile's src on its own and the browser gets a chance to re-render between
+// every one of them; that run of hundreds of commits is the hitch right after
+// a fast scrub. Released together, inside a single task, React batches them
+// into one render and the browser starts the requests as one group it can
+// prioritize among.
+//
+// The trade is that the wait becomes a sliding 0..delay window rather than
+// exactly `delay` per caller - a tile joining a queue whose timer was armed
+// 39ms ago waits 1ms. That is fine for what the delay is for: it filters tiles
+// that flicker through the load margin, and the case it really guards against -
+// a scrubber drag - is held by scrollingFast until the gesture ends, not by
+// this timer.
+interface PendingWait {
+  // Nulled by the caller's cancel, so work can still be called off after its
+  // batch has been taken off the queue.
+  run: (() => void) | null;
+}
 
-  const arm = () => {
-    timer = window.setTimeout(() => {
-      timer = null;
-      if (!scrollingFast) {
-        fn();
-        return;
-      }
-      waiting = () => {
-        waiting = null;
-        arm();
-      };
-      calmWaiters.add(waiting);
-    }, delay);
+const pendingWaits = new Set<PendingWait>();
+let flushTimer: number | null = null;
+
+function scheduleFlush(delay: number): void {
+  if (flushTimer !== null) return;
+  flushTimer = window.setTimeout(() => {
+    flushTimer = null;
+    // Mid-gesture: keep the queue held and re-check on the same interval, so
+    // the whole of it is released within one `delay` of the drag ending.
+    if (scrollingFast) {
+      scheduleFlush(delay);
+      return;
+    }
+    const batch = [...pendingWaits];
+    pendingWaits.clear();
+    for (const wait of batch) wait.run?.();
+  }, delay);
+}
+
+// Run `fn` once the view has been still for up to `delay` ms - and never in the
+// middle of a fast scroll, where it waits for the scroll to calm down first.
+// Returns a cancel function; callers cancel when whatever made the work worth
+// doing stops being true (a tile leaving the load margin again, or unmounting).
+export function afterScrollSettles(fn: () => void, delay: number): () => void {
+  const wait: PendingWait = { run: null };
+  wait.run = () => {
+    wait.run = null;
+    fn();
   };
-  arm();
+  pendingWaits.add(wait);
+  scheduleFlush(delay);
 
   return () => {
-    if (timer !== null) {
-      window.clearTimeout(timer);
-      timer = null;
-    }
-    if (waiting !== null) {
-      calmWaiters.delete(waiting);
-      waiting = null;
-    }
+    wait.run = null;
+    pendingWaits.delete(wait);
   };
 }
 

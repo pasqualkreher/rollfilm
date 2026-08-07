@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // The rail draws two tick levels: a bold "primary" line where `tickGroup`
 // changes (the library's years) and a small "secondary" line for the sections
@@ -72,6 +72,17 @@ const RAIL_INSET = 24;
 // room automatically.
 const RAIL_GAP = 6;
 
+// Inset positions a little from the rail's top/bottom edges so the first and
+// last labels aren't jammed against the ends. Kept in lockstep with
+// fracFromEvent via RAIL_INSET so clicks land on the label they point at.
+function posTop(frac: number): string {
+  return `calc(${frac} * (100% - ${RAIL_INSET * 2}px) + ${RAIL_INSET}px)`;
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
 /**
  * Immich-style date scrubber pinned to the right edge of the library timeline:
  * year/month markers positioned by where each section sits in the scroll range,
@@ -83,6 +94,9 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
   const [currentFrac, setCurrentFrac] = useState(0);
   const [activeLabel, setActiveLabel] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // Read by the scroll handler, which must not be rebuilt (and its listener
+  // torn down and re-attached) just because a drag started or ended.
+  const draggingRef = useRef(false);
   // Briefly reveal the scrubber + position bubble while the user scrolls the
   // grid, then fade back out - so scrolling shows where you are, like the drag.
   const [scrolling, setScrolling] = useState(false);
@@ -91,11 +105,40 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
   // firstOffset is the topmost section's content offset (mapped to the rail's
   // top, since the rail is anchored to the first photo, not to scrollTop 0).
   const rangeRef = useRef({ firstOffset: 0, span: 1 });
+  // Where each section starts in the scroll range, in document order. Measured
+  // with the rail rather than per scroll frame - see measure().
+  const offsetsRef = useRef<{ label: string; offset: number }[]>([]);
+  // The scroll range those offsets were measured against: the one thing that
+  // can invalidate them without `sections` changing too.
+  const measuredHeightRef = useRef(0);
   const [railTop, setRailTop] = useState(120);
   const [railBottom, setRailBottom] = useState(RAIL_GAP);
   const [railHeight, setRailHeight] = useState(0);
 
-  const recompute = useCallback(() => {
+  // What a scroll actually changes: where the handle sits, and which section
+  // is at the fold. Everything else about the rail is geometry, and geometry
+  // does not move when you scroll past it. Measuring it per frame anyway meant
+  // a scrubber drag - hundreds of scroll positions, each one a frame - read
+  // every month's element back out of the DOM and pushed a fresh array of
+  // markers through React, re-rendering every tick on the rail, to draw the
+  // exact same ticks in the exact same places. That was the drag stuttering
+  // against its own bookkeeping.
+  const sync = useCallback(() => {
+    const scroller = getScroller();
+    if (!scroller) return;
+    const { firstOffset, span } = rangeRef.current;
+    const top = scroller.scrollTop;
+    setCurrentFrac(clamp01((top - firstOffset) / span));
+    if (draggingRef.current) return;
+    // Deepest section still at/above the fold - the one you're currently in.
+    let topmost = offsetsRef.current[0]?.label ?? null;
+    for (const o of offsetsRef.current) {
+      if (o.offset <= top + 4) topmost = o.label;
+    }
+    setActiveLabel(topmost);
+  }, [getScroller]);
+
+  const measure = useCallback(() => {
     const scroller = getScroller();
     if (!scroller) return;
     const maxScroll = Math.max(1, scroller.scrollHeight - scroller.clientHeight);
@@ -118,7 +161,6 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     // doing this leaves the small gap above the first section as a fraction of
     // the scroll range - invisible in a long library, but in one that barely
     // scrolls it pushes the first label well down the rail.
-    const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
     const raw: { section: ScrubberSection; offset: number }[] = [];
     for (const section of sections) {
       const el = getSectionEl(section.label);
@@ -128,57 +170,60 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     const firstOffset = raw.length ? Math.min(...raw.map((r) => r.offset)) : 0;
     const span = Math.max(1, maxScroll - firstOffset);
     rangeRef.current = { firstOffset, span };
+    offsetsRef.current = raw.map((r) => ({ label: r.section.label, offset: r.offset }));
+    measuredHeightRef.current = scroller.scrollHeight;
 
-    const next: Marker[] = raw.map(({ section, offset }) => ({
-      ...toMarkerFields(section),
-      frac: clamp01((offset - firstOffset) / span),
-    }));
-    // Deepest section still at/above the fold - the one you're currently in.
-    const topmost = raw.filter((r) => r.offset <= scroller.scrollTop + 4).pop()?.section.label ?? null;
-    setMarkers(next);
-    setCurrentFrac(clamp01((scroller.scrollTop - firstOffset) / span));
-    if (!dragging) setActiveLabel(topmost ?? next[0]?.label ?? null);
-  }, [getScroller, getSectionEl, sections, dragging, getBottomInset]);
+    setMarkers(
+      raw.map(({ section, offset }) => ({
+        ...toMarkerFields(section),
+        frac: clamp01((offset - firstOffset) / span),
+      }))
+    );
+    sync();
+  }, [getScroller, getSectionEl, sections, getBottomInset, sync]);
 
   useEffect(() => {
     const scroller = getScroller();
     if (!scroller) return;
-    recompute();
+    measure();
     // Reveal the bubble on real user scrolls only (not the mount/resize
-    // recomputes), and auto-hide a moment after scrolling stops.
+    // measurements), and auto-hide a moment after scrolling stops.
     //
     // Coalesced onto animation frames, the same way the grid's own scroll
     // tracking is (useVirtualWindow): scroll events fire faster than the screen
-    // refreshes, and every one of them used to recompute the whole rail and
-    // push new marker state through React - work that can only be seen once per
-    // frame no matter how often it is done, on the thread the scroll itself
-    // needs.
+    // refreshes, and the result can only be seen once per frame no matter how
+    // often it is computed - on the thread the scroll itself needs.
     let raf = 0;
     const onScroll = () => {
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(recompute);
+      raf = requestAnimationFrame(() => {
+        // The grid grew or shrank underneath us: the cached offsets describe a
+        // scroll range that no longer exists, so re-measure before using them.
+        if (scroller.scrollHeight !== measuredHeightRef.current) measure();
+        else sync();
+      });
       setScrolling(true);
       clearTimeout(scrollHideTimer.current);
       scrollHideTimer.current = setTimeout(() => setScrolling(false), 900);
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    const ro = new ResizeObserver(recompute);
+    const ro = new ResizeObserver(measure);
     ro.observe(scroller);
-    window.addEventListener("resize", recompute);
+    window.addEventListener("resize", measure);
     // The page-enter animation slides `.page` down a few px while this first
     // measures, so re-measure once any enter animation settles (animationend
     // bubbles to window) - otherwise the rail keeps that offset until the
     // next scroll or resize.
-    window.addEventListener("animationend", recompute);
+    window.addEventListener("animationend", measure);
     return () => {
       cancelAnimationFrame(raf);
       scroller.removeEventListener("scroll", onScroll);
       ro.disconnect();
-      window.removeEventListener("resize", recompute);
-      window.removeEventListener("animationend", recompute);
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("animationend", measure);
       clearTimeout(scrollHideTimer.current);
     };
-  }, [getScroller, recompute]);
+  }, [getScroller, measure, sync]);
 
   const scrollToFrac = useCallback(
     (frac: number) => {
@@ -186,12 +231,12 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
       const rail = railRef.current;
       if (!scroller || !rail) return;
       const clamped = Math.min(1, Math.max(0, frac));
-      // Invert the recompute() mapping: frac 0 = the topmost section, frac 1 =
+      // Invert the measure() mapping: frac 0 = the topmost section, frac 1 =
       // the bottom of the scroll range.
       const { firstOffset, span } = rangeRef.current;
       scroller.scrollTop = firstOffset + clamped * span;
       // Move the indicator with the pointer right away, rather than waiting for
-      // the scroll event to round-trip through recompute().
+      // the scroll event to round-trip through sync().
       setCurrentFrac(clamped);
       // Show the section that's actually at the top after this scroll - the
       // last marker at or above the drag position - so the bubble matches the
@@ -221,7 +266,10 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
   useEffect(() => {
     if (!dragging) return;
     const onMove = (e: PointerEvent) => scrollToFrac(fracFromEvent(e.clientY));
-    const onUp = () => setDragging(false);
+    const onUp = () => {
+      draggingRef.current = false;
+      setDragging(false);
+    };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     return () => {
@@ -229,13 +277,6 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
       window.removeEventListener("pointerup", onUp);
     };
   }, [dragging, scrollToFrac, fracFromEvent]);
-
-  if (sections.length < 1) return null;
-
-  // Inset positions a little from the rail's top/bottom edges so the first and
-  // last labels aren't jammed against the ends. Kept in lockstep with
-  // fracFromEvent via RAIL_INSET so clicks land on the label they point at.
-  const posTop = (frac: number) => `calc(${frac} * (100% - ${RAIL_INSET * 2}px) + ${RAIL_INSET}px)`;
 
   // Declutter: with many sections (or a short rail) the raw markers overlap
   // into an unreadable stack. Ticks are centered on their position (translateY
@@ -246,59 +287,61 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
   // without that look-ahead, secondaries sat right on top of the next
   // primary's label. Dropped ticks are only labels: dragging still scrolls
   // through them.
-  const PRIMARY_SPACING = 30;
-  const SECONDARY_TO_SECONDARY = 16;
-  const SECONDARY_TO_PRIMARY = 22;
-  const usable = Math.max(0, railHeight - RAIL_INSET * 2);
-  const seenGroups = new Set<string>();
-  const annotated = markers.map((m) => {
-    const isGroupStart = !seenGroups.has(m.group);
-    if (isGroupStart) seenGroups.add(m.group);
-    return { m, y: m.frac * usable, isGroupStart };
-  });
-  const primaryTicks: typeof annotated = [];
-  let lastPrimaryY = -Infinity;
-  for (const a of annotated) {
-    if (a.isGroupStart && a.y - lastPrimaryY >= PRIMARY_SPACING) {
-      primaryTicks.push(a);
-      lastPrimaryY = a.y;
+  //
+  // Depends only on the rail's geometry, so it survives a drag untouched -
+  // which is the point of keeping `markers` stable across scrolls.
+  const shown = useMemo(() => {
+    const PRIMARY_SPACING = 30;
+    const SECONDARY_TO_SECONDARY = 16;
+    const SECONDARY_TO_PRIMARY = 22;
+    const usable = Math.max(0, railHeight - RAIL_INSET * 2);
+    const seenGroups = new Set<string>();
+    const annotated = markers.map((m) => {
+      const isGroupStart = !seenGroups.has(m.group);
+      if (isGroupStart) seenGroups.add(m.group);
+      return { m, y: m.frac * usable, isGroupStart };
+    });
+    const primaryTicks: typeof annotated = [];
+    let lastPrimaryY = -Infinity;
+    for (const a of annotated) {
+      if (a.isGroupStart && a.y - lastPrimaryY >= PRIMARY_SPACING) {
+        primaryTicks.push(a);
+        lastPrimaryY = a.y;
+      }
     }
-  }
-  const primaryTickSet = new Set(primaryTicks);
-  const shown: { marker: Marker; showPrimary: boolean }[] = [];
-  let nextPrimaryIdx = 0;
-  let prevY = -Infinity;
-  let prevWasPrimary = false;
-  for (const a of annotated) {
-    if (primaryTickSet.has(a)) {
-      shown.push({ marker: a.m, showPrimary: true });
+    const primaryTickSet = new Set(primaryTicks);
+    const out: { marker: Marker; showPrimary: boolean }[] = [];
+    let nextPrimaryIdx = 0;
+    let prevY = -Infinity;
+    let prevWasPrimary = false;
+    for (const a of annotated) {
+      if (primaryTickSet.has(a)) {
+        out.push({ marker: a.m, showPrimary: true });
+        prevY = a.y;
+        prevWasPrimary = true;
+        nextPrimaryIdx++;
+        continue;
+      }
+      // A group-start whose primary label was dropped (primaries too dense):
+      // showing it as a bare secondary would just re-crowd the freed-up space.
+      if (a.isGroupStart) continue;
+      if (a.y - prevY < (prevWasPrimary ? SECONDARY_TO_PRIMARY : SECONDARY_TO_SECONDARY)) continue;
+      const nextPrimary = primaryTicks[nextPrimaryIdx];
+      if (nextPrimary && nextPrimary.y - a.y < SECONDARY_TO_PRIMARY) continue;
+      out.push({ marker: a.m, showPrimary: false });
       prevY = a.y;
-      prevWasPrimary = true;
-      nextPrimaryIdx++;
-      continue;
+      prevWasPrimary = false;
     }
-    // A group-start whose primary label was dropped (primaries too dense):
-    // showing it as a bare secondary would just re-crowd the freed-up space.
-    if (a.isGroupStart) continue;
-    if (a.y - prevY < (prevWasPrimary ? SECONDARY_TO_PRIMARY : SECONDARY_TO_SECONDARY)) continue;
-    const nextPrimary = primaryTicks[nextPrimaryIdx];
-    if (nextPrimary && nextPrimary.y - a.y < SECONDARY_TO_PRIMARY) continue;
-    shown.push({ marker: a.m, showPrimary: false });
-    prevY = a.y;
-    prevWasPrimary = false;
-  }
+    return out;
+  }, [markers, railHeight]);
 
-  return (
-    <div
-      ref={railRef}
-      className={`timeline-scrubber${dragging ? " dragging" : ""}${scrolling ? " scrolling" : ""}`}
-      style={{ top: railTop, bottom: railBottom }}
-      onPointerDown={(e) => {
-        setDragging(true);
-        scrollToFrac(fracFromEvent(e.clientY));
-      }}
-    >
-      {shown.map(({ marker: m, showPrimary }) => {
+  // The ticks themselves only change when the rail is re-measured or the
+  // highlighted section changes - not on every step of a scroll, which is what
+  // moves the handle and the bubble below. Kept out of the render that follows
+  // the handle so a drag doesn't rebuild every label on the rail per frame.
+  const ticks = useMemo(
+    () =>
+      shown.map(({ marker: m, showPrimary }) => {
         const isActive = m.label === activeLabel;
         return (
           <div
@@ -315,7 +358,24 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
             )}
           </div>
         );
-      })}
+      }),
+    [shown, activeLabel]
+  );
+
+  if (sections.length < 1) return null;
+
+  return (
+    <div
+      ref={railRef}
+      className={`timeline-scrubber${dragging ? " dragging" : ""}${scrolling ? " scrolling" : ""}`}
+      style={{ top: railTop, bottom: railBottom }}
+      onPointerDown={(e) => {
+        draggingRef.current = true;
+        setDragging(true);
+        scrollToFrac(fracFromEvent(e.clientY));
+      }}
+    >
+      {ticks}
 
       <div className="scrubber-handle" style={{ top: posTop(currentFrac) }} />
 
