@@ -36,3 +36,11 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+# So a contributor can just run `pytest` from this folder. Without testpaths it
+# also walks pyi-dist/ - the PyInstaller output, which contains a vendored copy
+# of torch's own test suite and fails collection outright. pythonpath saves
+# everyone the PYTHONPATH=. that importing `app` would otherwise need.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

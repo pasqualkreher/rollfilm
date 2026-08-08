@@ -1,0 +1,20 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question, or not sure it's a bug
+    url: https://github.com/pasqualkreher/Rollfilm/discussions
+    about: >
+      Ask in Discussions. "Is this supposed to work like this?" belongs here,
+      not in an issue.
+  - name: Installation and first-launch problems
+    url: https://github.com/pasqualkreher/Rollfilm#download--installation
+    about: >
+      macOS "damaged or unverified" and the Windows SmartScreen warning are both
+      expected — the app isn't code-signed. The README has the one-line fix.
+  - name: Security vulnerability
+    url: https://github.com/pasqualkreher/Rollfilm/security/advisories/new
+    about: Report it privately, never as a public issue.
+  - name: Self-hosted, multi-user version
+    url: https://github.com/pasqualkreher/rollfilm-hosted
+    about: >
+      Running Rollfilm on a server with accounts is a separate project. File
+      issues about it over there.

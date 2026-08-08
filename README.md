@@ -16,7 +16,7 @@ No account, no cloud, no Docker, no setup.
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Windows%20·%20Linux-lightgrey)](#download--installation)
 
-**[rollfilm.org](https://rollfilm.org)** · [Download](#download--installation) · [Screenshots](#screenshots) · [Features](#features) · [FAQ](https://rollfilm.org/#faq)
+**[rollfilm.org](https://rollfilm.org)** · [Download](#download--installation) · [Screenshots](#screenshots) · [Features](#features) · [Contributing](CONTRIBUTING.md) · [FAQ](https://rollfilm.org/#faq)
 
 <a href="https://rollfilm.org"><img src="docs/screenshots/library.jpg" alt="Rollfilm library view" width="850"></a>
 
@@ -26,6 +26,33 @@ Your photos stay on your own machine. Rollfilm imports them into a managed libra
 
 > **Project status: work in progress.**
 > This is an early but already very usable release that I wanted to share. The core — import pipeline, library organization, semantic search, and especially the Immich integration — works well. The built-in photo editor is experimental and should be seen as a fun extra rather than a finished feature (see [Photo editor](#photo-editor-experimental)).
+
+## Who builds this, and how
+
+Rollfilm is a **one-person hobby project**. There is no company behind it, no
+team, no roadmap meeting — just me, my own photo library as the test case, and
+whatever time is left over in the evening.
+
+It is also **fully vibe coded**: essentially every line is written by an AI
+assistant (Claude), with me directing, reviewing, testing and deciding what
+ships. Every commit carries that in its trailer. I'm saying it plainly rather
+than burying it, because you deserve to know what you are installing and because
+it visibly shapes the code — you'll find long comments explaining *why* a
+three-line function exists, which is how the reasoning survives between sessions.
+
+What that means in practice:
+
+- **It's tested where it counts.** 220+ backend tests cover the paths that could
+  lose your photos or your edits — import, trash, pairing, library sync. Your
+  originals are never modified; edits live in the database beside them.
+- **It also means one person's blind spots.** Rollfilm is used daily on one
+  library, one camera bag, one operating system more than the others. Bug
+  reports from a different setup are genuinely the most useful thing you can
+  send.
+- **Keep a backup.** That is true of any photo manager, and I'd rather say it out
+  loud than have you assume otherwise.
+
+If that trade sounds fine to you, welcome. If not, that's a reasonable call too.
 
 ## Screenshots
 
@@ -47,6 +74,9 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 - **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
 - **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
 - Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
+- **Rename photos from the app** — the file on disk is renamed with them, the RAW/JPEG partner follows to the same name, and the photo keeps its stars, tags, albums, edits and cached previews
+- **Free-text descriptions** per photo, stored in the database like every other edit
+- **Renames survive Finder** — a photo you rename or move outside the app is matched back by its content, not its name, so it keeps everything you gave it instead of being treated as deleted
 - **Trash** with configurable retention and automatic background purge — a deletion keeps the photo's stars, tags, albums and edits, and Restore brings it all back
 - **Backup & restore** — one zip with every photo plus all ratings, colors, albums, tags and edits, and a one-click "sync database to library" repair
 
@@ -55,7 +85,8 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 - Image-to-image similarity search
 - **Gear-aware filters** — narrow the library by camera, lens or a focal-length range slider; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot), and the filter bar can be **pinned open** so it stays put while you cull
 - **Map view** (Leaflet) of all geotagged photos
-- Timeline scrubber, thumbnail grid, lightbox
+- **A timeline that stays out of the way at any size** — the whole library is laid out up front, so the scrollbar is exact from the first frame and the date scrubber on the right lands anywhere in it instantly; only the tiles near the viewport are ever mounted
+- **Details without leaving the grid** — hover a tile for an "i" that opens camera, lens, exposure, tags and albums beside it
 - **Statistics** — photos per year, plus which camera bodies, lenses and focal-length ranges you actually shoot, how your ratings fall, and what the library is made of
 - **Light & dark skins** — three restrained pairs (Graphite, Slate, Ink), a light one and a dark one chosen separately, with a Light / Dark / Auto switch that can follow the system
 
@@ -98,6 +129,8 @@ Prebuilt installers for macOS, Windows, and Linux are on the [Releases page](htt
 
 On first start the app downloads the CLIP model for semantic search; after that everything works offline.
 
+Updates install themselves: the app checks the Releases page, downloads a new version in the background and applies it on the next quit.
+
 ### macOS first launch
 
 The app is not notarized with Apple (no paid developer certificate), so Gatekeeper will block it with a "damaged or unverified" warning. After dragging Rollfilm into `/Applications`, remove the quarantine flag once:
@@ -121,7 +154,7 @@ Everything runs locally — the only network access is the initial CLIP model do
 
 ## Getting started (development)
 
-Rollfilm is a native desktop app (Electron). Requires Node.js and a Python 3.11+ that supports loading SQLite extensions (on macOS use Homebrew Python, not the system one).
+Rollfilm is a native desktop app (Electron). You need Node.js 18+, a Python 3.11+ that can load SQLite extensions (on macOS use Homebrew Python — the system build has extension loading compiled out and `sqlite-vec` will fail), and ExifTool on your `PATH` (the packaged app ships its own; development does not).
 
 ```bash
 # Development (Vite dev server + Electron)
@@ -140,9 +173,12 @@ There is also a GitHub Actions workflow ([.github/workflows/build-desktop.yml](.
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"
 python run_server.py   # runs Alembic migrations, then starts the API on localhost
+pytest                 # 220+ tests, in-memory database, a few seconds
 ```
+
+Thinking about contributing? [CONTRIBUTING.md](CONTRIBUTING.md) covers what is likely to be accepted, the commit style, and what to run before opening a pull request.
 
 ## Configuration
 
@@ -169,15 +205,23 @@ Notable design decisions:
 - Database migrations run automatically on startup, with retry logic for external drives.
 - Handles cloud-synced folders (iCloud/Nextcloud placeholder files) and exFAT/NTFS drives.
 
-## Known limitations / roadmap
+## Known limitations
 
 - The photo editor is experimental (see above)
-- No test suite yet (pytest is set up, tests are WIP)
-- Single-user only — no accounts or sharing
+- **Single user, no authentication** — the backend binds to localhost for the app's own window. Don't put it on a network as-is. If you want accounts and a server, that's a separate build: [rollfilm-hosted](https://github.com/pasqualkreher/rollfilm-hosted)
+- **Not code-signed or notarized** — hence the one-time Gatekeeper and SmartScreen steps above. A matter of certificate cost, not of anything being wrong with the build
+- The UI is only really exercised on macOS; Windows and Linux get less day-to-day use
 
-Issues and pull requests are welcome, but please keep in mind this is a hobby project — response times may vary.
+## Contributing
 
-## Support
+Issues and pull requests are welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md) first. The short version: open an issue before building anything big, run `pytest` and the frontend typecheck before opening a PR, and expect replies to take a few days.
+
+- [Report a bug or request a feature](https://github.com/pasqualkreher/Rollfilm/issues/new/choose)
+- [Ask a question](https://github.com/pasqualkreher/Rollfilm/discussions) — or see [SUPPORT.md](SUPPORT.md)
+- [Report a security problem privately](SECURITY.md) — never as a public issue
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+
+## Support the project
 
 Rollfilm is free and open source, built in my spare time. If it's useful to you, a star on GitHub or a mention to a friend already helps. More on [rollfilm.org](https://rollfilm.org/#about).
 

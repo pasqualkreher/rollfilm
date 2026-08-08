@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest something Rollfilm should be able to do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. Two things worth knowing before you write:
+
+        - This is a **one-person hobby project**. Plenty of good ideas will be
+          declined simply because there is no time for them, and that is not a
+          judgement on the idea.
+        - If you're offering to build it, say so — that changes the answer. Read
+          [CONTRIBUTING.md](https://github.com/pasqualkreher/Rollfilm/blob/main/CONTRIBUTING.md)
+          first, especially the section on what is unlikely to be merged.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: >
+        The situation, not the solution. What were you doing with your photos
+        when Rollfilm got in the way? This matters more than the feature itself
+        — there may be a better answer than the one you have in mind.
+      placeholder: >
+        After a trip I want to find the handful of frames worth editing, but I
+        have to open each one full-screen to tell the sharp ones from the
+        near-misses.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should Rollfilm do instead?
+      placeholder: >
+        A zoom-to-100% peek on the grid tile under the cursor, without leaving
+        the grid.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried?
+      description: >
+        Existing features that nearly work, or how you solve this today in
+        another app. Knowing what nearly works often shapes the design.
+
+  - type: dropdown
+    id: offer
+    attributes:
+      label: Would you want to build it?
+      options:
+        - "Just suggesting it"
+        - "I'd like to try, with some guidance"
+        - "I can build and test it myself"
+    validations:
+      required: true

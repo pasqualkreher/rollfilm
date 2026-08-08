@@ -1,0 +1,91 @@
+name: Bug report
+description: Something in Rollfilm doesn't work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Rollfilm is a one-person hobby project, so a
+        reply may take a few days — but every report gets read.
+
+        **Security problem?** Don't file it here. See
+        [SECURITY.md](https://github.com/pasqualkreher/Rollfilm/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        I dragged the date scrubber to 2022 and the grid stayed on 2024.
+        I expected it to jump to the first photo from 2022.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that still shows the problem.
+      placeholder: |
+        1. Open the Library
+        2. Drag the scrubber handle to the bottom
+        3. Let go
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Rollfilm version
+      description: Settings → About, or the installer filename.
+      placeholder: "0.1.45"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux (AppImage)
+        - Other / built from source
+    validations:
+      required: true
+
+  - type: textarea
+    id: library
+    attributes:
+      label: About your library
+      description: >
+        Only what's relevant — roughly how many photos, whether they're RAW,
+        JPEG or both, and whether the library sits on an external or network
+        drive. Several bugs only appear at a certain size or on a certain
+        filesystem.
+      placeholder: "~9000 photos, RAW+JPEG pairs, library on an external SSD (exFAT)"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Backend log
+      description: |
+        The single most useful thing you can attach. Paste the last ~50 lines,
+        or drop the file in.
+
+        - **macOS** — `~/Library/Application Support/rollfilm-desktop/logs/backend.log`
+        - **Windows** — `%APPDATA%\rollfilm-desktop\logs\backend.log`
+        - **Linux** — `~/.config/rollfilm-desktop/logs/backend.log`
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I'm on the latest release, or I've said which version I'm on
+          required: true
+        - label: I searched existing issues for this
+          required: true
