@@ -34,6 +34,13 @@ jobs:
       matrix: ${{ steps.m.outputs.matrix }}
       tag: ${{ steps.rel.outputs.tag }}
     steps:
+      # Full history and every tag: the release notes below are the commit
+      # subjects since the previous tag, and a shallow clone knows neither the
+      # previous tag nor the commits between.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - id: m
         run: |
           case "${{ github.event.inputs.platform || 'all' }}" in
@@ -55,11 +62,41 @@ jobs:
           else
             TAG="desktop-${{ github.run_id }}"
           fi
+
+          # The release page is where a downloader lands, so it should say what
+          # changed. It can: the commit subjects in this project are already
+          # user-readable sentences - that is the whole point of the commit
+          # convention - so the changelog is simply the subjects since the
+          # previous tag. The trailing "; 0.1.46" comes off because the version
+          # is already the title.
+          STRIP='s/;[[:space:]]*(bump to[[:space:]]+)?[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$//'
+          NOTES="$RUNNER_TEMP/notes.md"
+          TITLE="Desktop installers ($TAG)"
+          {
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
+              if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; else RANGE="$TAG"; fi
+              git log --format='%s' --no-merges "$RANGE" | sed -E "$STRIP" | sed 's/^/- /'
+              TITLE="$TAG — $(git log -1 --format='%s' "$TAG" | sed -E "$STRIP")"
+            else
+              echo "Unreleased build from ${{ github.sha }}."
+            fi
+            echo
+            echo "---"
+            echo
+            echo "Installers for macOS, Windows and Linux are below. They are not code-signed —"
+            echo "macOS and Windows each say so in their own way, and the one-time way past it is"
+            echo "in the [README](https://github.com/${{ github.repository }}#download--installation)."
+            echo "Every installer has a \`.sha256\` file beside it if you want to verify the download."
+          } > "$NOTES"
+
           gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "${{ github.repository }}" \
-              --title "Desktop installers ($TAG)" \
-              --notes "Automated desktop build from ${{ github.sha }}." \
-              --prerelease
+              --title "$TITLE" --notes-file "$NOTES" --prerelease
+          # Also on a re-run, where the release already existed: the notes are
+          # rebuilt from git every time rather than frozen at first creation.
+          gh release edit "$TAG" --repo "${{ github.repository }}" \
+            --title "$TITLE" --notes-file "$NOTES"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
   build:
