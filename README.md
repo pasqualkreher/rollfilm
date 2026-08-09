@@ -238,7 +238,7 @@ Notable design decisions:
 ## Known limitations
 
 - The photo editor is experimental (see above)
-- **Single user, no authentication** — the backend binds to localhost for the app's own window. Don't put it on a network as-is. If you want accounts and a server, that's a separate build: [rollfilm-hosted](https://github.com/pasqualkreher/rollfilm-hosted)
+- **Single user, no authentication** — the backend binds to localhost for the app's own window. Don't put it on a network as-is: there is no login, no accounts and no server mode, and none is planned
 - **Not code-signed or notarized** — hence the one-time Gatekeeper and SmartScreen steps above. A matter of certificate cost, not of anything being wrong with the build
 - The UI is only really exercised on macOS; Windows and Linux get less day-to-day use
 

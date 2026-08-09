@@ -13,8 +13,3 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/pasqualkreher/Rollfilm/security/advisories/new
     about: Report it privately, never as a public issue.
-  - name: Self-hosted, multi-user version
-    url: https://github.com/pasqualkreher/rollfilm-hosted
-    about: >
-      Running Rollfilm on a server with accounts is a separate project. File
-      issues about it over there.

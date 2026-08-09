@@ -31,7 +31,6 @@ what is actually on disk and fixes most of this without anyone's help.
 | A reproducible bug | [New issue](https://github.com/pasqualkreher/Rollfilm/issues/new/choose) |
 | An idea | [Feature request](https://github.com/pasqualkreher/Rollfilm/issues/new/choose) |
 | A security problem | [Privately](SECURITY.md) — never a public issue |
-| A question about the server/multi-user version | [rollfilm-hosted](https://github.com/pasqualkreher/rollfilm-hosted) |
 
 ## What helps most
 
@@ -45,5 +44,4 @@ because reproducing them needs a detail nobody thought to mention.
   backup — keep one.
 - Promise a fix, or a date for one.
 - Support running the desktop backend exposed to a network. It is built for a
-  single local user; the [hosted build](https://github.com/pasqualkreher/rollfilm-hosted)
-  is the one with accounts and authentication.
+  single local user, and there is no login or multi-user mode to turn on.

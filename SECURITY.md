@@ -54,9 +54,8 @@ is meant to be reachable only by the app's own window. Things that matter:
 
 - **The backend being unauthenticated.** That is the design: a single local user,
   a backend bound to localhost, CORS open for the app's own UI. It is documented
-  in the README. Exposing that port to a network is unsupported — if you need
-  multi-user with real authentication, that is a
-  [separate build](https://github.com/pasqualkreher/rollfilm-hosted).
+  in the README. Exposing that port to a network is unsupported, and there is no
+  authenticated or multi-user mode to fall back on.
 - **The app not being code-signed or notarized.** Known, documented, and a matter
   of certificate cost rather than a fixable defect.
 - Vulnerabilities in dependencies with no working path to them through Rollfilm.

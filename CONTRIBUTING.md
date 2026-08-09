@@ -124,9 +124,10 @@ makes that easy.
 
 ## What is unlikely to be merged
 
-- **Adding authentication or multi-user support to the desktop app.** That
-  already exists as a separate build:
-  [rollfilm-hosted](https://github.com/pasqualkreher/rollfilm-hosted).
+- **Adding authentication or multi-user support.** Rollfilm is a single-user
+  desktop app whose backend is bound to localhost by design. Accounts, sessions
+  and a server mode would touch every route for a use case this build does not
+  have.
 - **Cloud services, telemetry, or anything that phones home.** The one network
   call is the initial CLIP model download; the only server is your own Immich.
 - **Large dependency additions** for something a small amount of code can do. The
