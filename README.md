@@ -121,25 +121,55 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 
 Prebuilt installers for macOS, Windows, and Linux are on the [Releases page](https://github.com/pasqualkreher/Rollfilm/releases/latest) and on [rollfilm.org](https://rollfilm.org/#download).
 
-| Platform | File | Notes |
-| --- | --- | --- |
-| macOS (Apple Silicon) | `Rollfilm-<version>-arm64.dmg` | See [macOS first launch](#macos-first-launch) below — the app is not code-signed yet. |
-| Windows | `Rollfilm Setup <version>.exe` | SmartScreen may warn about an unknown publisher — choose **More info → Run anyway**. |
-| Linux | `Rollfilm-<version>.AppImage` | Make it executable (`chmod +x Rollfilm-*.AppImage`) and run it. |
-
 On first start the app downloads the CLIP model for semantic search; after that everything works offline.
 
-Updates install themselves: the app checks the Releases page, downloads a new version in the background and applies it on the next quit.
+> **The installers are not code-signed.** An Apple Developer membership is 99 € a year and a Windows certificate costs on top of that; Rollfilm is an unpaid hobby project. Nothing is wrong with the download — but both systems will say so in their own way, and the steps below are how you get past it. Every installer is published with a `.sha256` file next to it if you want to verify what you downloaded.
 
-### macOS first launch
+### macOS (Apple Silicon)
 
-The app is not notarized with Apple (no paid developer certificate), so Gatekeeper will block it with a "damaged or unverified" warning. After dragging Rollfilm into `/Applications`, remove the quarantine flag once:
+**What's going on:** when a browser downloads a file, it tags it with an attribute called `com.apple.quarantine`. On a tagged app that Apple hasn't notarized, Gatekeeper refuses the first launch. So there are three ways in — one that avoids the tag, one that removes it, one that leaves it and approves the app instead. Any of them works; they differ only in whether you want to touch a terminal.
+
+**A · Download in the terminal — the tag is never set.**
+
+```bash
+curl -L -o ~/Downloads/Rollfilm.dmg "$(curl -fsSL \
+  https://api.github.com/repos/pasqualkreher/Rollfilm/releases/latest \
+  | grep -o 'https://[^"]*arm64\.dmg' | head -n1)"
+open ~/Downloads/Rollfilm.dmg
+```
+
+`curl` isn't a browser and doesn't tag anything. Drag Rollfilm into `/Applications` and start it — no dialog at any point.
+
+**B · Already downloaded in the browser — strip the tag off.** Drag Rollfilm into `/Applications`, then run once:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Rollfilm.app"
 ```
 
-Then start the app normally. Alternatively: right-click the app → **Open** → **Open** on the first launch.
+This deletes the attribute the browser added (`-d`) from the whole app bundle (`-r`). Afterwards the app is in exactly the state route A would have produced. You do *not* have to try launching it first.
+
+**C · No terminal at all — approve the app in System Settings.** Drag Rollfilm into `/Applications`, then:
+
+1. Open Rollfilm. macOS refuses and shows a warning — close it.
+2. Go to **System Settings → Privacy & Security** and scroll to the bottom.
+3. Next to *"Rollfilm was blocked to protect your Mac"* click **Open Anyway**, confirm, and enter your admin password.
+4. From then on Rollfilm starts by double-click like any other app.
+
+Step 1 is not optional here — the entry in System Settings only appears *after* a blocked launch attempt. On macOS 14 and older there was a shortcut (right-click → **Open**); Apple removed it in macOS 15 Sequoia.
+
+**The difference:** A and B end up identical — no quarantine attribute, so Gatekeeper has nothing to complain about. C leaves the attribute in place and instead records a one-time exception for this specific app. All three are permanent for the copy you installed; a future version you download in a browser goes through the same thing again.
+
+### Windows
+
+Run `Rollfilm-Setup-<version>.exe`. SmartScreen will warn about an unknown publisher — choose **More info → Run anyway**.
+
+### Linux
+
+Download `Rollfilm-<version>.AppImage`, make it executable (`chmod +x Rollfilm-*.AppImage`) and run it.
+
+### Updates
+
+On Windows and Linux the app updates itself: it checks the Releases page, downloads the new version in the background and applies it on the next quit. **On macOS it can't** — swapping an app bundle in place requires a signed build — so it only tells you a new version exists and opens the release page. Updating there means repeating the install: same two commands, drag over the old app.
 
 ## Tech stack
 

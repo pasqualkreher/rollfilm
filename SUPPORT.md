@@ -6,9 +6,11 @@ support team and no response-time promise — but everything below gets read.
 ## Start here
 
 **The app won't open after installing.** That is expected and not a bug: the app
-isn't code-signed. The [README](README.md#macos-first-launch) has the one-line
-fix for macOS; on Windows choose **More info → Run anyway** in the SmartScreen
-dialog.
+isn't code-signed. On macOS there are three ways past it — download the `.dmg` in
+the terminal, strip the quarantine attribute with `xattr`, or approve the app
+under **System Settings → Privacy & Security**. All three, and how they differ,
+are in the [README](README.md#macos-apple-silicon). On Windows choose **More info
+→ Run anyway** in the SmartScreen dialog.
 
 **Something looks broken.** Check the backend log before anything else — it
 usually says plainly what went wrong:
