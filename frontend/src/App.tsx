@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
-import { IconChart, IconGear, IconHelp } from "./components/Icons";
+import { IconChart, IconGear, IconHelp, IconMail } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
@@ -303,7 +303,7 @@ function TopBar() {
       </span>
       <nav
         className={`top-icon-links${locked ? " nav-links--locked" : ""}`}
-        aria-label="Settings and help"
+        aria-label="Statistics, settings, help and contact"
       >
         <NavLink
           to="/stats"
@@ -329,6 +329,20 @@ function TopBar() {
         >
           <IconHelp size={16} />
         </NavLink>
+        {/* Sits last, after Help: when the built-in help doesn't answer it,
+            the next step is a human. The version rides along in the subject
+            because the first question back is always "which version?" - and
+            the person writing has no reason to know where to look it up. */}
+        <a
+          className="top-icon-link"
+          href={`mailto:contact@rollfilm.org?subject=${encodeURIComponent(
+            `Rollfilm v${__APP_VERSION__}`
+          )}`}
+          title="Contact — report a problem or send an idea"
+          aria-label="Contact"
+        >
+          <IconMail size={16} />
+        </a>
       </nav>
       </div>
     </div>

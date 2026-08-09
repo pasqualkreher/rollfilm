@@ -235,3 +235,12 @@ export function IconHelp(props: IconProps) {
     </svg>
   );
 }
+
+export function IconMail(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="1.75" y="3.75" width="12.5" height="8.5" rx="1.5" />
+      <path d="M2.6 4.9 8 8.9l5.4-4" />
+    </svg>
+  );
+}

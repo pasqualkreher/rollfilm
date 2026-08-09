@@ -979,6 +979,52 @@ function buildApplicationMenu() {
   );
 }
 
+// --- Links that leave the app --------------------------------------------
+// A link pointing outside the app belongs to the OS, and Electron's defaults
+// get both halves of that wrong. A target="_blank" link opens a second,
+// chrome-less BrowserWindow - a browser with no address bar, no back button
+// and this app's preload attached. And a plain navigation to mailto: is
+// dropped on the floor, because the renderer can't load a scheme it has no
+// handler for: the Contact icon would simply do nothing.
+//
+// So external URLs are handed to the system handler (default browser, default
+// mail client) and the in-app navigation is refused. Two addresses are http://
+// but are *not* external and must keep loading in place: the dev server, and
+// the bundled backend the UI links straight at for the backup download.
+const EXTERNAL_SCHEMES = new Set(["http:", "https:", "mailto:"]);
+
+function isOwnOrigin(parsed, base) {
+  try {
+    return !!base && new URL(base).origin === parsed.origin;
+  } catch {
+    return false;
+  }
+}
+
+function openExternally(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (!EXTERNAL_SCHEMES.has(parsed.protocol)) return false;
+  if (isOwnOrigin(parsed, apiBaseUrl)) return false;
+  if (USE_DEV_SERVER && isOwnOrigin(parsed, DEV_SERVER_URL)) return false;
+  shell.openExternal(rawUrl);
+  return true;
+}
+
+function routeExternalLinksToTheOS(webContents) {
+  webContents.setWindowOpenHandler(({ url }) => {
+    openExternally(url);
+    return { action: "deny" };
+  });
+  webContents.on("will-navigate", (event, url) => {
+    if (openExternally(url)) event.preventDefault();
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -997,6 +1043,7 @@ function createWindow() {
   });
 
   attachZoomShortcuts(mainWindow.webContents);
+  routeExternalLinksToTheOS(mainWindow.webContents);
 
   if (USE_DEV_SERVER) {
     mainWindow.loadURL(DEV_SERVER_URL);

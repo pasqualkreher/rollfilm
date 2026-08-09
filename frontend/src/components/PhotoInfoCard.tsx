@@ -218,7 +218,11 @@ export function usePhotoInfoCard(enabled: boolean) {
       enabled ? (
         <button
           className="thumb-info-btn"
-          title="Photo details"
+          // No `title`: the browser tooltip would describe the button ("Photo
+          // details") right where the card with the actual photo details is
+          // about to appear, and the two overlap. The card is the answer; a
+          // label repeating what the "i" means is noise. aria-label stays -
+          // it is never painted, and a screen reader has no card to read.
           aria-label="Show photo details"
           aria-expanded={anchor?.id === id}
           onMouseEnter={(e) => {
