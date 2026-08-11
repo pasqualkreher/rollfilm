@@ -254,7 +254,7 @@ export function PhotoFilters({
         <span className="filter-menu-title">Filter</span>
       </div>
       {albums && onAlbumId && (
-        <div className="filter-menu-row">
+        <div className="filter-menu-row filter-menu-row--album">
           <span className="filter-menu-label">Album</span>
           <Dropdown
             ariaLabel="Album"
@@ -268,7 +268,7 @@ export function PhotoFilters({
         </div>
       )}
 
-      <div className="filter-menu-row">
+      <div className="filter-menu-row filter-menu-row--rating">
         <span className="filter-menu-label">Rating</span>
         <Dropdown
           ariaLabel="Rating"
@@ -281,20 +281,20 @@ export function PhotoFilters({
         />
       </div>
 
-      <div className="filter-menu-row">
+      <div className="filter-menu-row filter-menu-row--color">
         <span className="filter-menu-label">Color</span>
         <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
       </div>
 
       {allTags && onTags && (
-        <div className="filter-menu-row">
+        <div className="filter-menu-row filter-menu-row--tags">
           <span className="filter-menu-label">Tags</span>
           <TagFilter options={allTags} value={selectedTags ?? []} onChange={onTags} />
         </div>
       )}
 
       {showCamera && (
-        <div className="filter-menu-row">
+        <div className="filter-menu-row filter-menu-row--camera">
           <span className="filter-menu-label">Camera</span>
           <Dropdown
             ariaLabel="Camera"
@@ -315,7 +315,7 @@ export function PhotoFilters({
       )}
 
       {showLens && (
-        <div className="filter-menu-row">
+        <div className="filter-menu-row filter-menu-row--lens">
           <span className="filter-menu-label">Lens</span>
           <Dropdown
             ariaLabel="Lens"
@@ -333,7 +333,7 @@ export function PhotoFilters({
       )}
 
       {showFocal && focalLengths!.length > 0 && (
-        <div className="filter-menu-row">
+        <div className="filter-menu-row filter-menu-row--focal">
           <span className="filter-menu-label">Focal length</span>
           <FocalRangeSlider
             options={focalLengths!}
@@ -345,7 +345,7 @@ export function PhotoFilters({
       )}
 
       {showDates && (
-        <div className="filter-menu-row">
+        <div className="filter-menu-row filter-menu-row--date">
           <span className="filter-menu-label">Date</span>
           <span className="date-range">
             <input

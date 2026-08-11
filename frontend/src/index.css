@@ -1074,36 +1074,119 @@ textarea:focus-visible {
 .filter-dock {
   flex-basis: 100%;
   min-width: 0;
-  padding-top: 8px;
+  margin-top: 2px;
+  padding-top: 10px;
+  padding-bottom: 2px;
   border-top: 1px solid var(--border);
 }
 
 .filter-menu--docked {
+  /* One field height for the whole row (see below): every control is built
+     differently - a button, a native date input, a swatch strip, a slider - and
+     left alone they end up 28-39px tall. Bottom-aligned rows then push the
+     taller ones' captions a step above the rest, which is what made the row
+     read as ragged. Pinning one height puts every caption on one line and every
+     control on one band. */
+  --filter-field-h: 30px;
   flex-direction: row;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px 16px;
+  align-items: flex-start;
+  gap: 10px 18px;
   min-width: 0;
+  /* The pin is a row item here, not the corner overlay it is in the popover. */
+  padding-right: 0;
 }
 
-/* The docked row is meant to be ONE row. Every field shares the width evenly
-   and gives ground as the window narrows (the dropdown labels ellipsize), so
-   the whole filter set stays on one line instead of Date dropping to a second
-   one the moment the bar is a little too tight. Wrapping is still allowed - it
-   is the fallback for a genuinely narrow window, not the normal state. */
+/* The docked row is meant to be ONE row. The fields share the width and give
+   ground as the window narrows (their labels ellipsize), so the whole filter
+   set stays on one line instead of Date dropping to a second one the moment the
+   bar is a little too tight. Wrapping is still allowed - it is the fallback for
+   a genuinely narrow window, not the normal state.
+
+   The share is weighted rather than equal: an even split makes Rating (which
+   only ever says "Any" or up to five stars) exactly as wide as Camera, and on a
+   wide monitor stretches every dropdown into a bar of empty space. So the
+   name-carrying fields get the larger share, and all of them stop growing at a
+   sane field width. */
 .filter-menu--docked .filter-menu-row {
   flex: 1 1 0;
   min-width: 96px;
+  max-width: 230px;
 }
 
-/* ...except the two that cannot usefully shrink: the colour swatches are fixed
-   circles, and the date range is two native pickers whose text would clip
-   rather than ellipsize. They keep their natural width and the flexible fields
-   absorb the difference. */
-.filter-menu--docked .filter-menu-row:has(.color-label-picker),
-.filter-menu--docked .filter-menu-row:has(.date-range) {
+.filter-menu--docked .filter-menu-row--album,
+.filter-menu--docked .filter-menu-row--camera,
+.filter-menu--docked .filter-menu-row--lens {
+  flex-grow: 1.5;
+}
+
+.filter-menu--docked .filter-menu-row--rating {
+  flex: 0 0 96px;
+}
+
+/* The focal row carries its readout on the caption line (below), so it needs
+   room for both. */
+.filter-menu--docked .filter-menu-row--focal {
+  position: relative;
+  flex-grow: 1.2;
+  min-width: 178px;
+}
+
+/* Colour and Date cannot usefully shrink: the swatches are fixed circles, and
+   the date range is two native pickers whose text clips rather than ellipsizes.
+   They keep their natural width and the flexible fields absorb the difference. */
+.filter-menu--docked .filter-menu-row--color,
+.filter-menu--docked .filter-menu-row--date {
   flex: 0 0 auto;
   min-width: 0;
+  max-width: none;
+}
+
+/* The single shared field height. Every control in the row is normalised to it
+   so the fields form one band with their captions on one line. */
+.filter-menu--docked .tag-filter-btn,
+.filter-menu--docked .color-label-picker,
+.filter-menu--docked .focal-range,
+.filter-menu--docked .dual-range {
+  min-height: var(--filter-field-h);
+}
+
+.filter-bar.filter-bar--sticky .filter-menu--docked input[type="date"] {
+  min-height: 0;
+  height: var(--filter-field-h);
+}
+
+/* Focal length: the readout rides up onto the caption line, right-aligned, so
+   the control below is a single slider of field height instead of a two-line
+   block that would drag its caption out of the row. (A library with just one
+   focal length renders a bare value with no slider - that one stays inline.) */
+.filter-menu--docked .focal-range {
+  justify-content: center;
+}
+
+.filter-menu--docked .focal-range > .focal-range-value {
+  position: absolute;
+  top: 0;
+  right: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+/* Docked, the pin joins the row as its last item, parked at the far right on
+   the control line - as a corner overlay it floated above the fields with
+   nothing to relate to. */
+.filter-menu--docked .filter-pin {
+  position: static;
+  order: 99;
+  flex: 0 0 auto;
+  align-self: flex-end;
+  margin-left: auto;
+  width: var(--filter-field-h);
+  height: var(--filter-field-h);
 }
 
 /* The docked row has the bar's own "Filter" chip right above it, so the panel's
@@ -1141,9 +1224,17 @@ textarea:focus-visible {
 .filter-menu-label {
   font-size: 10.5px;
   font-weight: 600;
+  /* Fixed, so a caption is exactly one line box tall everywhere - the docked
+     row hangs the focal readout on that line and needs it not to drift. */
+  line-height: 14px;
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--text-muted);
+  /* A caption never widens its field or wraps to two lines; the row can be
+     narrower than "Focal length" when the window is tight. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* In the panel the swatches can afford to be comfortable click targets. */
@@ -1153,14 +1244,12 @@ textarea:focus-visible {
   height: 20px;
 }
 
-/* A bare swatch row is shorter than the boxed fields beside it, and the docked
-   row bottom-aligns its controls - so COLOR's label was dropping a step below
-   ALBUM's and RATING's. Give the row a field's height (padding + border + text
-   line of .tag-filter-btn) and centre the swatches in it, so the label lands on
-   the same line as the rest of the bar. */
+/* A bare swatch row is shorter than the boxed fields beside it, so give it a
+   field's height and centre the swatches in it - otherwise COLOR's caption
+   lands a step off from ALBUM's and RATING's. */
 .filter-chip-pop .color-label-picker,
 .filter-dock .color-label-picker {
-  min-height: 28px;
+  min-height: var(--filter-field-h, 28px);
   align-items: center;
   flex-wrap: nowrap;
 }
