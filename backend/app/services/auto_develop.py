@@ -58,7 +58,7 @@ GROUP_FIELDS: dict[str, tuple[str, ...]] = {
     "tone": ("exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks", "tone_mapper"),
     "white_balance": ("temperature", "tint"),
     "color": ("vibrance", "saturation", "hue", "chrome_effect", "chrome_blue",
-              "film_sim", "hsl", "color_grading", "color_calibration"),
+              "film_sim", "hsl", "hsl_range", "color_grading", "color_calibration"),
     "details": ("sharpness", "sharpness_threshold", "clarity", "dehaze", "structure",
                 "denoise", "luma_noise_reduction", "color_noise_reduction",
                 "chromatic_aberration_red_cyan", "chromatic_aberration_blue_yellow"),
@@ -197,6 +197,10 @@ def blend_adjustments(examples: list[tuple[dict[str, Any], float]]) -> dict[str,
         out[key] = _vote([a[key] for a in adjs], w)
     out["hsl"] = {
         band: [_wmean([a["hsl"][band][i] for a in adjs], w) for i in range(3)]
+        for band in develop.COLOR_BANDS
+    }
+    out["hsl_range"] = {
+        band: _wmean([a["hsl_range"][band] for a in adjs], w)
         for band in develop.COLOR_BANDS
     }
     out["point_curves"] = {

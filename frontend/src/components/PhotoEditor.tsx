@@ -1405,6 +1405,10 @@ export function PhotoEditor({ image, onClose }: Props) {
     });
   }
 
+  function setBandRange(v: number) {
+    setAdj((a) => ({ ...a, hsl_range: { ...a.hsl_range, [band]: v } }));
+  }
+
   // ---- Nested writers for the Phase-2 groups. All immutable, so the preview
   // (which re-renders on any adj change) picks each edit up live.
   function setPointCurve(ch: CurveChannel, pts: CurvePoint[]) {
@@ -2793,7 +2797,9 @@ export function PhotoEditor({ image, onClose }: Props) {
               {COLOR_BANDS.map((b) => (
                 <button
                   key={b}
-                  className={`mixer-band${band === b ? " active" : ""}${!adj.hsl[b].every((v) => v === 0) ? " edited" : ""}`}
+                  className={`mixer-band${band === b ? " active" : ""}${
+                    !adj.hsl[b].every((v) => v === 0) || adj.hsl_range[b] !== 0 ? " edited" : ""
+                  }`}
                   style={{ background: BAND_SWATCH[b] }}
                   title={b}
                   onClick={() => setBand(b)}
@@ -2804,6 +2810,10 @@ export function PhotoEditor({ image, onClose }: Props) {
               {MIX_CHANNELS.map(([ch, lbl]) => (
                 <Slider key={ch} label={lbl} value={adj.hsl[band][ch]} onChange={(v) => setBandChannel(ch, v)} />
               ))}
+              {/* How far this band's three sliders reach into the neighbouring
+                  hues before the next band takes over. Negative keeps the edit
+                  tight around this colour, positive carries it across. */}
+              <Slider label="Range" value={adj.hsl_range[band]} onChange={setBandRange} />
             </div>
 
             {/* Colour grading: four hue/saturation wheels + blending / balance. */}

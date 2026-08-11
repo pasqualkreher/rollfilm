@@ -84,6 +84,11 @@ export type ScalarKey = keyof typeof SCALAR_SPEC;
 export const COLOR_BANDS = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"] as const;
 export type ColorBand = (typeof COLOR_BANDS)[number];
 export type HslMix = Record<ColorBand, [number, number, number]>;
+// Per-band Range, -100..100 (0 = the plain linear ramp between band centres):
+// how far a band's edit carries into the neighbouring hues before the next band
+// takes over. The weights still sum to 1 at every hue, so this only moves the
+// handover - a band is always at full strength on its own centre hue.
+export type HslRange = Record<ColorBand, number>;
 export const BAND_SWATCH: Record<ColorBand, string> = {
   red: "#e5484d",
   orange: "#e8912a",
@@ -192,6 +197,7 @@ export type Adjustments = { [K in ScalarKey]: number } & {
   curve_mode: "point" | "parametric";
   film_sim: FilmSim;
   hsl: HslMix;
+  hsl_range: HslRange;
   point_curves: PointCurves;
   parametric_curve: ParametricCurve;
   color_grading: ColorGrading;
@@ -201,6 +207,9 @@ export type Adjustments = { [K in ScalarKey]: number } & {
 
 function neutralHsl(): HslMix {
   return Object.fromEntries(COLOR_BANDS.map((b) => [b, [0, 0, 0]])) as HslMix;
+}
+function neutralHslRange(): HslRange {
+  return Object.fromEntries(COLOR_BANDS.map((b) => [b, 0])) as HslRange;
 }
 function identityPointCurves(): PointCurves {
   const id = (): Curve => [
@@ -240,6 +249,7 @@ export function defaultAdjustments(): Adjustments {
     curve_mode: "point",
     film_sim: "none",
     hsl: neutralHsl(),
+    hsl_range: neutralHslRange(),
     point_curves: identityPointCurves(),
     parametric_curve: neutralParametricCurve(),
     color_grading: neutralColorGrading(),
@@ -274,6 +284,12 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
     for (const b of COLOR_BANDS) {
       const v = raw.hsl[b];
       if (Array.isArray(v)) base.hsl[b] = [v[0] ?? 0, v[1] ?? 0, v[2] ?? 0];
+    }
+  }
+  if (raw.hsl_range) {
+    for (const b of COLOR_BANDS) {
+      const v = raw.hsl_range[b];
+      if (typeof v === "number" && Number.isFinite(v)) base.hsl_range[b] = Math.round(clamp(v, -100, 100));
     }
   }
   if (raw.point_curves) base.point_curves = raw.point_curves as PointCurves;

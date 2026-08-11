@@ -340,7 +340,11 @@ export function Help() {
           </li>
           <li>
             <strong>Color mixer:</strong> hue / saturation / luminance per color band (red, orange,
-            yellow, green, aqua, blue, purple, magenta).
+            yellow, green, aqua, blue, purple, magenta), plus <strong>Range</strong> — how far that
+            band's edit carries into the neighbouring colors before the next band takes over. Turn it
+            down to keep a change tight around one color, up to let it wash across the ones beside
+            it. The band always stays at full strength on its own color, so Range only moves the
+            handover.
           </li>
           <li>
             <strong>Detail:</strong> clarity, sharpness, denoise. <strong>Lens &amp; effects:</strong>{" "}

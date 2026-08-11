@@ -422,6 +422,42 @@ def apply_edits_array(
 COLOR_BANDS = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
 _BAND_EDGES = (0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 280.0, 320.0, 360.0)
 
+# Per-band Range reshapes that blend: how far a band's edit carries into the
+# neighbouring hues before the neighbour takes over. -100..100, 0 = the plain
+# linear ramp the mixer has always used.
+#
+# A segment's blend runs on t in 0..1 from one band's centre to the next, and the
+# two weights are (1-f(t)) and f(t). Shaping f instead of widening a kernel is
+# what keeps this well-behaved: the weights still sum to 1 at every hue, so a
+# band is always at full strength on its own centre hue and setting every band
+# alike still applies that value evenly - Range only moves the handover.
+#
+#   f(t) = t^a / (t^a + (1-t)^b)
+#
+# with `a` from the band on the left of the segment and `b` from the one on the
+# right. Each exponent governs how long its own band holds on: a = b = 1 divides
+# out to f(t) = t, i.e. exactly the old ramp, so stored edits render unchanged.
+# Above 1 the band keeps close to full weight well into its neighbour's half
+# (bleeds further); below 1 it drops away right next to its own centre (stays
+# tight). f is strictly increasing for any positive a, b, so the blend never
+# folds back on itself.
+_RANGE_EXP = 4.0  # exponent at +-100; geometric, so -100 and +100 are mirrors
+
+
+def _range_exp(rng: float) -> float:
+    return float(_RANGE_EXP ** (float(rng) / 100.0))
+
+
+def _blend_shape(t: np.ndarray, a: float, b: float) -> np.ndarray:
+    """Reshape a 0..1 segment blend by the two bounding bands' Range exponents."""
+    if a == 1.0 and b == 1.0:
+        return t
+    ta = np.power(t, a)
+    tb = np.power(1.0 - t, b)
+    # ta and tb are never both zero on 0..1 (that would need t == 0 and t == 1),
+    # so the epsilon is belt-and-braces against float underflow, not a real case.
+    return ta / (ta + tb + 1e-9)
+
 
 def _rgb_to_hsl(arr: np.ndarray):
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
@@ -457,23 +493,29 @@ def _hsl_to_rgb(hue: np.ndarray, sat: np.ndarray, lum: np.ndarray) -> np.ndarray
     return np.clip(np.stack([r + m, g + m, b + m], axis=-1), 0.0, 1.0)
 
 
-def _apply_color_mix(arr: np.ndarray, mix: dict, hue_deg: float = 0.0) -> np.ndarray:
+def _apply_color_mix(arr: np.ndarray, mix: dict, hue_deg: float = 0.0,
+                     ranges: dict | None = None) -> np.ndarray:
     """Shift hue / saturation / luminance of each colour band. `mix` maps a band
     name to [hue, sat, lum], each -100..100. `hue_deg` rotates *all* hues by a
-    number of degrees (-180..180) to shift the whole palette."""
-    bands = {b: list(mix.get(b, [0, 0, 0])) for b in COLOR_BANDS}
-    if not hue_deg and not any(any(v) for v in bands.values()):
+    number of degrees (-180..180) to shift the whole palette. `ranges` maps a band
+    name to -100..100 (0 = neutral) and sets how far that band's edit reaches into
+    the neighbouring hues - see _blend_shape."""
+    bands = [list(mix.get(b, [0, 0, 0])) for b in COLOR_BANDS]
+    # Range only reshapes how the bands' *values* are blended, so with every band
+    # neutral there is nothing for it to reshape - the early-out stays correct.
+    if not hue_deg and not any(any(v) for v in bands):
         return arr
+    exps = [_range_exp((ranges or {}).get(b, 0)) for b in COLOR_BANDS]
     hue, sat, lum = _rgb_to_hsl(arr)
     hue_shift = np.zeros_like(hue)
     sat_adj = np.zeros_like(hue)
     lum_adj = np.zeros_like(hue)
     for j in range(8):
         lo, hi = _BAND_EDGES[j], _BAND_EDGES[j + 1]
-        b0 = list(bands.values())[j]
-        b1 = list(bands.values())[(j + 1) % 8]
+        nxt = (j + 1) % 8
+        b0, b1 = bands[j], bands[nxt]
         m = (hue >= lo) & (hue < hi)
-        t = (hue[m] - lo) / (hi - lo)
+        t = _blend_shape((hue[m] - lo) / (hi - lo), exps[j], exps[nxt])
         hue_shift[m] = (1 - t) * b0[0] + t * b1[0]
         sat_adj[m] = (1 - t) * b0[1] + t * b1[1]
         lum_adj[m] = (1 - t) * b0[2] + t * b1[2]
@@ -1007,7 +1049,8 @@ def _display_color_block(arr: np.ndarray, adj: dict) -> np.ndarray:
     mix = adj.get("hsl")
     hue_deg = adj.get("hue", 0)
     if (mix and any(any(v) for v in mix.values())) or hue_deg:
-        arr = _apply_color_mix(np.clip(arr, 0.0, 1.0), mix or {}, hue_deg)
+        arr = _apply_color_mix(np.clip(arr, 0.0, 1.0), mix or {}, hue_deg,
+                               adj.get("hsl_range") or {})
     arr = _apply_chrome(arr, adj.get("chrome_effect", 0), adj.get("chrome_blue", 0))
     # 3-way colour grading (shadows/midtones/highlights/global wheels) on the
     # graded image, after the mixer/chrome.
@@ -1368,7 +1411,7 @@ _POST_DENOISE_KEYS = frozenset({
     "chromatic_aberration_red_cyan", "chromatic_aberration_blue_yellow",
     # Display colour block
     "film_sim", "lut_intensity", "curve_mode", "point_curves", "parametric_curve",
-    "color_calibration", "hsl", "hue", "chrome_effect", "chrome_blue",
+    "color_calibration", "hsl", "hsl_range", "hue", "chrome_effect", "chrome_blue",
     "color_grading", "saturation", "vibrance",
     # Local adjustments
     "masks",

@@ -21,7 +21,9 @@ from typing import Any
 
 # The 8 HSL colour-mixer bands (same hues as the legacy mixer, so existing
 # ``edit_color_mix`` data maps straight across). Each band carries
-# [hue, saturation, luminance], each -100..100.
+# [hue, saturation, luminance], each -100..100, under ``hsl``; plus a
+# ``hsl_range`` entry per band (-100..100, 0 = neutral) for how far that band's
+# edit carries into the neighbouring hues.
 COLOR_BANDS: tuple[str, ...] = ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
 
 # Scalar adjustments: key -> (default, min, max, is_float). Order is the order the
@@ -109,6 +111,10 @@ def _default_hsl() -> dict[str, list[int]]:
     return {b: [0, 0, 0] for b in COLOR_BANDS}
 
 
+def _default_hsl_range() -> dict[str, int]:
+    return {b: 0 for b in COLOR_BANDS}
+
+
 def _default_point_curves() -> dict[str, list[list[int]]]:
     return {ch: [p[:] for p in _IDENTITY_CURVE] for ch in _CURVE_CHANNELS}
 
@@ -128,6 +134,7 @@ def defaults() -> dict[str, Any]:
     out: dict[str, Any] = {k: v[0] for k, v in SCALAR_SPEC.items()}
     out.update({k: v[0] for k, v in ENUM_SPEC.items()})
     out["hsl"] = _default_hsl()
+    out["hsl_range"] = _default_hsl_range()
     out["point_curves"] = _default_point_curves()
     out["parametric_curve"] = _default_parametric_curve()
     out["color_grading"] = _default_color_grading()
@@ -154,6 +161,15 @@ def _norm_hsl(raw: Any) -> dict[str, list[int]]:
             vals = raw.get(band)
             if isinstance(vals, (list, tuple)):
                 out[band] = [int(_clampf(vals[i] if i < len(vals) else 0, -100, 100, 0, False)) for i in range(3)]
+    return out
+
+
+def _norm_hsl_range(raw: Any) -> dict[str, int]:
+    out = _default_hsl_range()
+    if isinstance(raw, dict):
+        for band in COLOR_BANDS:
+            if band in raw:
+                out[band] = int(_clampf(raw[band], -100, 100, 0, False))
     return out
 
 
@@ -283,6 +299,7 @@ def normalize(raw: Any) -> dict[str, Any]:
         v = src.get(k, default)
         out[k] = v if v in allowed else default
     out["hsl"] = _norm_hsl(src.get("hsl"))
+    out["hsl_range"] = _norm_hsl_range(src.get("hsl_range"))
     out["point_curves"] = _norm_point_curves(src.get("point_curves"))
     out["parametric_curve"] = _norm_parametric(src.get("parametric_curve"))
     out["color_grading"] = _norm_color_grading(src.get("color_grading"))
