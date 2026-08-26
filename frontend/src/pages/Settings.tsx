@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { BorgTestResult, ImmichSyncMode, ImmichTestResult } from "../api/types";
@@ -23,18 +23,54 @@ import {
 // parallelised rebuild; the old sequential key's rate would overestimate ~3x.
 const REBUILD_EST_KEY = "pm.est.rebuildThumbs.v2";
 
-// A collapsible Settings section, driven as an accordion: opening one closes
-// the others (the parent tracks a single open title). Clicking the open one
-// closes it, so all sections can be shut. Nothing is open by default.
-function Section({ title, children }: { title: string; children: ReactNode }) {
+// One Settings section. `hidden` is set by the page for every section that
+// belongs to a tab other than the open one: not rendered rather than merely
+// invisible, so the tab really is the shorter page it looks like.
+function Section({
+  title,
+  hidden,
+  children,
+}: {
+  title: string;
+  hidden?: boolean;
+  children: ReactNode;
+}) {
+  if (hidden) return null;
   return (
-    // data-settings-section lets the guided tour (SettingsTour) discover the
+    // data-settings-section lets the guided tour (SettingsTour) find the
     // rendered sections and scroll/highlight each one.
     <section className="settings-section" data-settings-section={title}>
       <h3 className="settings-section-header">{title}</h3>
       <div className="settings-section-body">{children}</div>
     </section>
   );
+}
+
+// The tabs across the top of Settings, and which sections live under each.
+// Eleven sections in one column was a page you had to scroll and re-scan to
+// find anything; five groups of two or three is a page you can look at.
+// Section titles are the identity everywhere (the tour, data-settings-section),
+// so they are what's listed here.
+const SETTINGS_TABS: { id: string; label: string; sections: string[] }[] = [
+  { id: "look", label: "Look & feel", sections: ["Appearance"] },
+  {
+    id: "library",
+    label: "Library",
+    sections: ["Library folder", "Library data", "Smart albums", "Tags", "Trash"],
+  },
+  { id: "photos", label: "Photos", sections: ["RAW files", "Auto develop"] },
+  { id: "integrations", label: "Integrations", sections: ["Immich integration"] },
+  {
+    id: "maintenance",
+    label: "Maintenance",
+    sections: ["Library maintenance", "Backup & restore"],
+  },
+];
+
+// Which tab a section belongs to. A section missing from the table above would
+// otherwise be unreachable, so it falls back to the first tab.
+function tabOfSection(title: string): string {
+  return SETTINGS_TABS.find((t) => t.sections.includes(title))?.id ?? SETTINGS_TABS[0].id;
 }
 
 // ---- Shared building blocks so every section is styled the same way -------
@@ -274,9 +310,13 @@ export function Settings() {
   // Client-side view preference (see viewPrefs), not a server setting.
   const askDeletePartner = useAskDeletePartner();
 
-  // Sections are always open (no accordion) - sectionProps just carries the
-  // title so every call site stays unchanged.
-  const sectionProps = (title: string) => ({ title });
+  // The open tab. sectionProps stays the single indirection every section call
+  // site goes through, so grouping them cost no change at the call sites.
+  const [activeTab, setActiveTab] = useState(SETTINGS_TABS[0].id);
+  const sectionProps = (title: string) => ({
+    title,
+    hidden: tabOfSection(title) !== activeTab,
+  });
 
   // Guided section-by-section tour: auto-starts when the onboarding wizard
   // sent the user here (sessionStorage flag), restartable anytime via the
@@ -308,6 +348,16 @@ export function Settings() {
 
   // Library folder: only available in the desktop app (Electron bridge).
   const desktop = window.photoManager;
+  // The tour's script: every section THIS build renders, in tab order. Two of
+  // them exist only in the desktop app, so the web build's tour simply skips
+  // them - it used to get that for free by reading the DOM, which the tabs
+  // took away (all but one tab's sections are unrendered at any moment).
+  const tourSections = useMemo(() => {
+    const absent = new Set<string>();
+    if (!desktop?.changeLibraryRoot) absent.add("Library folder");
+    if (!desktop?.getDataRoot) absent.add("Library data");
+    return SETTINGS_TABS.flatMap((tab) => tab.sections.filter((title) => !absent.has(title)));
+  }, [desktop]);
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
   const [dataRoot, setDataRoot] = useState<string | null>(null);
   useEffect(() => {
@@ -681,6 +731,20 @@ export function Settings() {
           Show me around
         </button>
       </h2>
+
+      <nav className="settings-tabs" role="tablist" aria-label="Settings sections">
+        {SETTINGS_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            className={`settings-tab${activeTab === tab.id ? " active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
 
       <Section {...sectionProps("Appearance")}>
         <AppearanceSetting />
@@ -1406,7 +1470,14 @@ export function Settings() {
         </div>
       </Section>
 
-      <SettingsTour open={tourOpen} onClose={() => setTourOpen(false)} />
+      <SettingsTour
+        sections={tourSections}
+        open={tourOpen}
+        onClose={() => setTourOpen(false)}
+        // The tour visits sections across all tabs, so it opens the one a stop
+        // needs before looking for its element.
+        onShowSection={(title) => setActiveTab(tabOfSection(title))}
+      />
     </div>
   );
 }

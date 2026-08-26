@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Guided walk through the Settings page: steps through every rendered
 // settings section, scrolls it into view and highlights it, with a floating
@@ -35,59 +35,86 @@ const TOUR_TEXT: Record<string, string> = {
     "Download a backup of your managed library (photos, ratings, albums, edits) and restore it later - worth doing every now and then.",
 };
 
-type Stop = { title: string; text: string; el: HTMLElement };
-
-export function SettingsTour({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SettingsTour({
+  open,
+  onClose,
+  sections,
+  onShowSection,
+}: {
+  open: boolean;
+  onClose: () => void;
+  // Every section this build shows, in the order the tour should visit them.
+  // Handed in rather than read off the DOM: the sections live under tabs now,
+  // so at any moment all but one tab's worth of them are unrendered - and a
+  // desktop-only section is absent from this list in the web build, which is
+  // what DOM discovery used to give us for free.
+  sections: string[];
+  // Opens the tab a section sits under, before the tour looks for it.
+  onShowSection?: (title: string) => void;
+}) {
   const [index, setIndex] = useState(0);
-
-  // Discover the stops from what's actually rendered, fresh on every start -
-  // desktop-only sections are simply absent in the web build. Must run in an
-  // effect (after the DOM commit): when the tour auto-starts on mount, the
-  // sections don't exist yet during the first render.
-  const [stops, setStops] = useState<Stop[]>([]);
   useEffect(() => {
-    if (!open) {
-      setStops([]);
-      return;
-    }
-    setIndex(0);
-    setStops(
-      Array.from(document.querySelectorAll<HTMLElement>("[data-settings-section]")).map((el) => {
-        const title = el.dataset.settingsSection ?? "";
-        return { title, text: TOUR_TEXT[title] ?? "Everything in this section can be changed anytime.", el };
-      })
-    );
+    if (open) setIndex(0);
   }, [open]);
 
-  // Highlight + scroll the current stop; clean the highlight up on leave/close.
-  const stop = stops[Math.min(index, stops.length - 1)];
+  // Held in a ref so an inline arrow from the page doesn't re-run the effect
+  // below (and re-scroll) on every one of the page's renders.
+  const showSectionRef = useRef(onShowSection);
+  showSectionRef.current = onShowSection;
+
+  const clamped = Math.min(index, Math.max(0, sections.length - 1));
+  const title = sections[clamped];
+
+  // Open the stop's tab, then highlight and scroll to it. The element only
+  // exists after that tab switch has been rendered, hence the frame's wait;
+  // a second frame covers a tab whose contents mount a beat later.
   useEffect(() => {
-    if (!open || !stop) return;
-    stop.el.classList.add("tour-highlight");
-    stop.el.scrollIntoView({ block: "center", behavior: "smooth" });
-    return () => stop.el.classList.remove("tour-highlight");
-  }, [open, stop]);
+    if (!open || !title) return;
+    showSectionRef.current?.(title);
+    let found: HTMLElement | null = null;
+    let second = 0;
+    const reveal = () => {
+      found = document.querySelector<HTMLElement>(
+        `[data-settings-section="${CSS.escape(title)}"]`
+      );
+      if (found) {
+        found.classList.add("tour-highlight");
+        found.scrollIntoView({ block: "center", behavior: "smooth" });
+        return true;
+      }
+      return false;
+    };
+    const first = requestAnimationFrame(() => {
+      if (!reveal()) second = requestAnimationFrame(reveal);
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+      found?.classList.remove("tour-highlight");
+    };
+  }, [open, title]);
 
-  if (!open || stops.length === 0 || !stop) return null;
+  if (!open || !title) return null;
 
-  const isLast = index >= stops.length - 1;
+  const text = TOUR_TEXT[title] ?? "Everything in this section can be changed anytime.";
+  const isLast = clamped >= sections.length - 1;
 
   return (
     <div className="settings-tour-card" role="dialog" aria-label="Settings tour">
       <div className="settings-tour-head">
-        <strong>{stop.title}</strong>
+        <strong>{title}</strong>
         <span className="settings-tour-progress">
-          {index + 1} / {stops.length}
+          {clamped + 1} / {sections.length}
         </span>
       </div>
-      <p className="settings-tour-text">{stop.text}</p>
+      <p className="settings-tour-text">{text}</p>
       <div className="settings-tour-actions">
         <button className="btn subtle" onClick={onClose}>
           Skip tour
         </button>
         <div className="settings-tour-actions-right">
-          {index > 0 && (
-            <button className="btn" onClick={() => setIndex(index - 1)}>
+          {clamped > 0 && (
+            <button className="btn" onClick={() => setIndex(clamped - 1)}>
               Back
             </button>
           )}
@@ -96,7 +123,7 @@ export function SettingsTour({ open, onClose }: { open: boolean; onClose: () => 
               Done
             </button>
           ) : (
-            <button className="btn primary" onClick={() => setIndex(index + 1)}>
+            <button className="btn primary" onClick={() => setIndex(clamped + 1)}>
               Next
             </button>
           )}

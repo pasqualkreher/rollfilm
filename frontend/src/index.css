@@ -5839,6 +5839,46 @@ kbd {
 
 /* ---- Settings: flat sections, separated by a divider -------------------- */
 
+/* Tabs across the top of Settings. Sticky, so switching group is possible from
+   anywhere down a long section without scrolling back up first. */
+.settings-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 24px;
+  padding: 4px 0 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-tab {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 14px 10px;
+  cursor: pointer;
+  /* The underline is always there, transparent until active - so nothing
+     shifts by a pixel when a tab is selected. */
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.settings-tab:hover {
+  color: var(--text);
+}
+
+.settings-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
 .settings-section {
   border-top: 1px solid var(--border);
   padding-top: 22px;
