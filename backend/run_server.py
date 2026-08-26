@@ -78,6 +78,32 @@ def rehydrate_database() -> None:
             materialize(p)
 
 
+def use_bundled_ca_certificates() -> None:
+    """Make the stdlib's HTTPS trust the same roots httpx already does.
+
+    The frozen backend links against the OpenSSL that ships inside the OpenCV
+    wheel, and that library's compiled-in trust store is the path it was built
+    with - Homebrew's /opt/homebrew/etc/openssl@3/cert.pem. No user machine has
+    that file, so every plain-urllib HTTPS call (the Immich connection test and
+    the asset uploads) died with 'CERTIFICATE_VERIFY_FAILED: unable to get local
+    issuer certificate' while requests through httpx, which carries certifi's
+    bundle, went through fine in the very same process. Fall back to that same
+    bundle. An SSL_CERT_FILE the user set themselves - a corporate root, a
+    private CA in front of their own server - still wins.
+    """
+    import ssl
+
+    if os.environ.get("SSL_CERT_FILE"):
+        return
+    if ssl.get_default_verify_paths().cafile:  # None when the file isn't there
+        return
+    try:
+        import certifi
+    except ImportError:
+        return
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+
+
 def raise_open_files_limit() -> None:
     """Raise the soft open-files limit toward the hard cap. macOS starts
     GUI-spawned processes (the Electron shell and thus this child) with a soft
@@ -101,6 +127,7 @@ def main() -> None:
     if str(BASE_DIR) not in sys.path:
         sys.path.insert(0, str(BASE_DIR))
 
+    use_bundled_ca_certificates()
     raise_open_files_limit()
     rehydrate_database()
     run_migrations_with_retry()

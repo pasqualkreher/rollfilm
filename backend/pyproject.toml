@@ -25,6 +25,9 @@ dependencies = [
     # weights fetched lazily into the model cache on first use.
     "transformers>=4.44",
     "reverse_geocoder>=1.5",
+    # CA bundle the frozen build falls back to: the OpenSSL inside the OpenCV
+    # wheel looks for its build machine's trust store, which no user has.
+    "certifi>=2024.7.4",
     "pycountry>=24.0",
 ]
 
