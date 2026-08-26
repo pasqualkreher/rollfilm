@@ -949,11 +949,12 @@ function attachZoomShortcuts(contents) {
 //
 // On Windows and Linux the menu bar can go entirely. On macOS it cannot: the
 // app-name menu belongs to the system, and every app has one - what an app can
-// decide is what sits NEXT to it, which here is View - Zoom In, Zoom Out and
-// Actual Size, the one thing the window itself has no control for. Edit is kept
-// but hidden, because macOS takes the clipboard shortcuts from the menu: drop it
-// and Cmd-C/V/X/A stop working in every text field in the app (search, tags,
-// the Immich key).
+// decide is what sits NEXT to it, which here is Edit and View - Zoom In, Zoom
+// Out and Actual Size, the one thing the window itself has no control for.
+// Edit has to be there in the flesh: macOS takes the clipboard shortcuts from
+// the menu, and a hidden top-level menu is no menu at all - it is dropped from
+// the bar along with its key equivalents, which is why Cmd-C/V/X/A did nothing
+// in every text field in the app (search, tags, the Immich host and key).
 function buildApplicationMenu() {
   if (process.platform !== "darwin") {
     Menu.setApplicationMenu(null);
@@ -962,7 +963,7 @@ function buildApplicationMenu() {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       { role: "appMenu" },
-      { role: "editMenu", visible: false },
+      { role: "editMenu" },
       {
         label: "View",
         submenu: [
