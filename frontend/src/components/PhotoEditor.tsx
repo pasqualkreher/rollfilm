@@ -2532,6 +2532,15 @@ export function PhotoEditor({ image, onClose }: Props) {
           Non-destructive. Save updates this photo; Save copy makes a new edited photo.
         </p>
 
+        {/* The histogram belongs to the photo, not to any one group of
+            sliders: it is what you watch WHILE dragging exposure, curves or
+            colour. It used to live inside the Tone group, so it disappeared
+            the moment you opened any other one. Pinned here it stays on screen
+            through every group and through the panel's own scrolling. */}
+        <div className="editor-histogram-pinned">
+          <Histogram bins={histBins} />
+        </div>
+
         {/* Transform: rotate/flip, the crop box and its ratio, straighten +
             tilt. Opening the group arms the crop box on the photo (see the
             openGroup effect), so everything here is live at once: the two
@@ -2715,8 +2724,6 @@ export function PhotoEditor({ image, onClose }: Props) {
               ariaLabel="Tone mapper"
               options={TONE_MAPPERS.map((t) => ({ value: t.value, label: t.label }))}
             />
-            {/* Live RGB histogram of the current preview, with the tonal controls. */}
-            <Histogram bins={histBins} />
             {scalarSliders(sectionFields("Basic"))}
           </div>
         )}
@@ -2725,10 +2732,6 @@ export function PhotoEditor({ image, onClose }: Props) {
         {accordionHeader("curves", "Curves")}
         {openGroup === "curves" && (
           <div className="editor-accordion-body">
-            {/* In point mode the histogram is drawn inside the plot (see the
-                CurveEditor), which is where it's actually read; parametric mode
-                has no plot, so it keeps the standalone one. */}
-            {adj.curve_mode !== "point" && <Histogram bins={histBins} />}
             <div className="curve-tabs">
               {CURVE_CHANNELS.map((c) => (
                 <button

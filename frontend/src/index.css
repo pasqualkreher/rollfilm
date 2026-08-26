@@ -2581,6 +2581,23 @@ textarea:focus-visible {
   width: 100%;
 }
 
+/* The histogram's slot at the top of the edit panel. Sticky, so it stays in
+   view while the panel scrolls through the groups below it - it is read WHILE
+   the sliders move, which is only possible if it can't scroll away. The
+   background is the panel's own, or the sliders would show through it. */
+.editor-histogram-pinned {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-elevated);
+  /* Pulled out to the panel's edges and padded back in, so the strip that
+     covers the scrolling sliders spans the full width - inside the body's
+     padding, they would slide past in the gutters either side. */
+  margin: 0 -20px 2px;
+  padding: 0 20px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
 /* Live RGB histogram at the top of the edit panel (always a dark plot, like
    every serious editor, regardless of app theme). */
 .editor-histogram {
