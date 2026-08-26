@@ -10,6 +10,7 @@ import { GRID_PIN_LIMIT, preloadImage } from "../utils/preload";
 import {
   overscanFor,
   buildJustifiedLayout,
+  useLayoutScrollAnchor,
   useVirtualWindow,
   type LayoutRow,
   type LayoutTile,
@@ -74,6 +75,9 @@ interface Props {
     tickSecondary?: string;
   }[];
   getBottomInset?: () => number;
+  // Changes when the review filters do - a filtered batch is a new list, so the
+  // grid jumps to its top instead of chasing the photo that was on screen.
+  resetKey?: string;
 }
 
 // The import review grid, virtualized exactly like the library timeline
@@ -95,12 +99,16 @@ export function ImportReviewGrid({
   warmPreviews,
   scrubberSections,
   getBottomInset,
+  resetKey,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
   const rowH = thumbPx(useThumbSize());
   const footerH = footerHeight(rowH);
-  const { width, window: window_, scrollerRef } = useVirtualWindow(rootRef, files.length > 0);
+  const { width, window: window_, scrollerRef, lastScrollRef } = useVirtualWindow(
+    rootRef,
+    files.length > 0
+  );
 
   const layout = useMemo(
     () =>
@@ -118,6 +126,20 @@ export function ImportReviewGrid({
         : null,
     [files, width, rowH, footerH, takenAtOf]
   );
+
+  // Hold the scroll position across every layout rebuild. An import reflows
+  // constantly while a card is being read in: each poll appends freshly copied
+  // photos, and every file whose EXIF is finally parsed leaves the dateless
+  // tail for its own day section, pushing everything after it down. Without
+  // this the grid slid under the user for as long as the SD card was copying.
+  useLayoutScrollAnchor({
+    layout,
+    rootRef,
+    scrollerRef,
+    lastScrollRef,
+    partnerIdOf: (file) => file.paired_staged_file_id,
+    resetKey,
+  });
 
   // Warm the full-size preview of the cards on screen, so opening one has
   // nothing left to fetch. Only what is actually mounted, and only once the

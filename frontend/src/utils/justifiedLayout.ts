@@ -12,7 +12,7 @@
 // on their tiles (a library photo navigates; a staged file has a checkbox,
 // stars and a duplicate badge) but position them identically.
 
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 import { loadMarginFor } from "./preload";
 
@@ -244,4 +244,121 @@ export function useVirtualWindow(
   }, [enabled]);
 
   return { width, window: window_, scrollerRef, lastScrollRef };
+}
+
+// Whether two layouts place everything identically. Section tops and heights
+// are enough: rows are laid out from them, so equal sections mean equal rows.
+function sameGeometry<T>(a: JustifiedLayout<T>, b: JustifiedLayout<T>): boolean {
+  if (a.totalHeight !== b.totalHeight || a.sections.length !== b.sections.length) return false;
+  return a.sections.every((section, i) => {
+    const other = b.sections[i];
+    return (
+      section.top === other.top && section.height === other.height && section.key === other.key
+    );
+  });
+}
+
+// Re-anchor the scroll position across layout changes.
+//
+// Both grids rebuild their layout under the user: the library when the tile
+// size, the window width or the filtered set changes, the import review every
+// time a poll brings new photos or an analyzed file finally learns its capture
+// date and moves out of the dateless tail into its day. Raw scrollTop then
+// points at whatever happens to sit at that pixel now - which is what reads as
+// the grid "jumping" while a card is still being read in. So: find the row at
+// the top of the viewport in the OLD layout and scroll so that same photo sits
+// at the same relative spot in the new one.
+export function useLayoutScrollAnchor<T extends { id: string }>({
+  layout,
+  rootRef,
+  scrollerRef,
+  lastScrollRef,
+  partnerIdOf,
+  resetKey,
+}: {
+  layout: JustifiedLayout<T> | null;
+  rootRef: RefObject<HTMLElement | null>;
+  scrollerRef: RefObject<HTMLElement | null>;
+  lastScrollRef: { current: number };
+  // The item's RAW/JPEG partner, if it has one - see the anchor set below.
+  partnerIdOf?: (item: T) => string | null | undefined;
+  // When this changes the list is a NEW set (a filter was applied): jump to its
+  // top instead of chasing the previously-visible photo into it.
+  resetKey?: string;
+}): void {
+  const pendingResetRef = useRef(false);
+  const prevResetKeyRef = useRef(resetKey);
+  useEffect(() => {
+    if (prevResetKeyRef.current === resetKey) return;
+    prevResetKeyRef.current = resetKey;
+    pendingResetRef.current = true;
+    if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
+  }, [resetKey, scrollerRef]);
+
+  const prevLayoutRef = useRef<JustifiedLayout<T> | null>(null);
+  useLayoutEffect(() => {
+    const prev = prevLayoutRef.current;
+    prevLayoutRef.current = layout;
+    const scroller = scrollerRef.current;
+    const root = rootRef.current;
+    if (!prev || !layout || prev === layout || !scroller || !root) return;
+
+    if (pendingResetRef.current) {
+      pendingResetRef.current = false;
+      scroller.scrollTop = 0;
+      return;
+    }
+
+    // Nothing moved: a rebuilt layout with identical geometry (the import polls
+    // every second, and most polls only flip a flag on a card that is already
+    // where it belongs) needs no correction - and applying one anyway would
+    // write back a scroll offset that is up to a frame old, which is felt as
+    // the grid fighting the wheel.
+    if (sameGeometry(prev, layout)) return;
+
+    const top = lastScrollRef.current;
+    let anchors: Set<string> | null = null;
+    let frac = 0; // how far into the anchor row the viewport top sat
+    outer: for (const s of prev.sections) {
+      if (s.top + s.height <= top) continue;
+      for (const r of s.rows) {
+        const rowTop = s.top + r.top;
+        if (rowTop + r.height > top) {
+          // Every photo in the anchor row AND each one's RAW/JPEG partner.
+          // Anchoring on a single id broke exactly when the id was the half
+          // that just disappeared - toggling "Merge RAW+JPG" drops every RAW
+          // from the list, so the anchor was nowhere in the new layout, no
+          // scroll correction ran, and the old offset pointed into a grid
+          // that had shrunk underneath it. That was the jump. The partner
+          // card shows the same shot, so it re-anchors seamlessly; the same
+          // holds for the RAW/JPEG view-mode switch.
+          anchors = new Set<string>();
+          for (const t of r.tiles) {
+            anchors.add(t.item.id);
+            const partner = partnerIdOf?.(t.item);
+            if (partner) anchors.add(partner);
+          }
+          frac = Math.max(-0.5, Math.min(1, (top - rowTop) / r.height));
+          break outer;
+        }
+      }
+    }
+    if (!anchors || anchors.size === 0) return;
+
+    // First row holding any of them: the anchor row's photos stay contiguous
+    // in the new list, so that row is where the viewport top belongs.
+    for (const s of layout.sections) {
+      for (const r of s.rows) {
+        if (r.tiles.some((t) => anchors!.has(t.item.id))) {
+          const rootTop =
+            root.getBoundingClientRect().top -
+            scroller.getBoundingClientRect().top +
+            scroller.scrollTop;
+          scroller.scrollTop = rootTop + s.top + r.top + frac * r.height;
+          return;
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
 }

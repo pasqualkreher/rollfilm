@@ -101,7 +101,15 @@ export function ImportWizard() {
   const [colorFilter, setColorFilter] = useState<ColorLabel>("none");
   // Flash message - auto-dismisses after a moment.
   const [pickError, setPickError] = useTransientMessage(8000);
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  // The open preview follows the FILE, not its position in the list. An import
+  // re-sorts under the user for as long as it runs - every file whose EXIF is
+  // read joins its capture day and shifts everything after it - so an
+  // index-keyed preview silently swapped to a different photo mid-review.
+  const [lightboxFileId, setLightboxFileId] = useState<string | null>(null);
+  // Where it last sat, for the case where the file leaves the visible list
+  // altogether (a filter, or "Merge RAW+JPG" swallowing the RAW half): the
+  // preview then stays put at that position instead of closing.
+  const lightboxFallback = useRef(0);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [uploadToImmich, setUploadToImmich] = useState(false);
@@ -360,29 +368,40 @@ export function ImportWizard() {
     onSettled: () => reset(),
   });
 
-  const filteredFiles: StagedFileOut[] = (files ?? []).filter((f) => {
-    // Trash-restores stay visible even under "Hide duplicates": unlike blocked
-    // duplicates they actively do something on import (restore the photo).
-    if (
-      hideDuplicates &&
-      (f.duplicate_of_image_id || f.duplicate_of_staged_file_id) &&
-      !f.duplicate_in_trash
-    )
-      return false;
-    if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
-    if (viewMode === "raw_only" && f.file_type !== "raw") return false;
-    if (ratingMin > 0 && f.rating < ratingMin) return false;
-    if (colorFilter !== "none" && f.color_label !== colorFilter) return false;
-    return true;
-  });
+  // Memoized as one unit: the review grid lays out (and re-anchors) whenever
+  // this array's identity changes, so rebuilding it on every unrelated render
+  // would have the grid correcting its own scroll position under the user.
+  const filteredFiles: StagedFileOut[] = useMemo(
+    () =>
+      (files ?? []).filter((f) => {
+        // Trash-restores stay visible even under "Hide duplicates": unlike
+        // blocked duplicates they actively do something on import (restore
+        // the photo).
+        if (
+          hideDuplicates &&
+          (f.duplicate_of_image_id || f.duplicate_of_staged_file_id) &&
+          !f.duplicate_in_trash
+        )
+          return false;
+        if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
+        if (viewMode === "raw_only" && f.file_type !== "raw") return false;
+        if (ratingMin > 0 && f.rating < ratingMin) return false;
+        if (colorFilter !== "none" && f.color_label !== colorFilter) return false;
+        return true;
+      }),
+    [files, hideDuplicates, viewMode, ratingMin, colorFilter]
+  );
   // A file's capture date, falling back to its RAW/JPEG partner's (same shot,
   // same moment). Mid-analysis one half of a pair can have its EXIF read while
   // the other hasn't - without the fallback, pair-adjacent grouping would drag
   // an undated file into a dated month run and split the section in two.
   // Sorting and section labels below MUST both use this, never raw taken_at.
-  const effectiveTakenAt = (f: StagedFileOut): string | null =>
-    f.taken_at ??
-    (f.paired_staged_file_id ? filesById.get(f.paired_staged_file_id)?.taken_at ?? null : null);
+  const effectiveTakenAt = useCallback(
+    (f: StagedFileOut): string | null =>
+      f.taken_at ??
+      (f.paired_staged_file_id ? filesById.get(f.paired_staged_file_id)?.taken_at ?? null : null),
+    [filesById]
+  );
 
   // Chronological review, OLDEST first (shooting order, like a culling app) -
   // deliberately the reverse of the library timeline: files stage in roughly
@@ -392,25 +411,52 @@ export function ImportWizard() {
   // yet have no date and wait at the end in staging order (the sort is
   // stable); when their analysis lands they join their day - which, files
   // arriving in capture order, is usually right where they already sit.
-  const dateSorted = [...filteredFiles].sort((a, b) => {
-    const ia = effectiveTakenAt(a);
-    const ib = effectiveTakenAt(b);
-    const ta = ia ? Date.parse(ia) : NaN;
-    const tb = ib ? Date.parse(ib) : NaN;
-    const aOk = Number.isFinite(ta);
-    const bOk = Number.isFinite(tb);
-    if (aOk && bOk) return ta - tb;
-    if (aOk !== bOk) return aOk ? -1 : 1;
-    return 0;
-  });
   // In combined view, either merge each pair into one JPEG card (mergePairs) or
   // keep the two halves adjacent. Other view modes show a flat list.
-  const visibleFiles =
-    viewMode === "combined"
-      ? mergePairs
-        ? collapsePairsBy(dateSorted, (f) => f.file_type, (f) => f.paired_staged_file_id)
-        : groupPairsAdjacent(dateSorted, (f) => f.file_type, (f) => f.paired_staged_file_id)
-      : dateSorted;
+  const visibleFiles = useMemo(() => {
+    const dateSorted = [...filteredFiles].sort((a, b) => {
+      const ia = effectiveTakenAt(a);
+      const ib = effectiveTakenAt(b);
+      const ta = ia ? Date.parse(ia) : NaN;
+      const tb = ib ? Date.parse(ib) : NaN;
+      const aOk = Number.isFinite(ta);
+      const bOk = Number.isFinite(tb);
+      if (aOk && bOk) return ta - tb;
+      if (aOk !== bOk) return aOk ? -1 : 1;
+      return 0;
+    });
+    if (viewMode !== "combined") return dateSorted;
+    return mergePairs
+      ? collapsePairsBy(dateSorted, (f) => f.file_type, (f) => f.paired_staged_file_id)
+      : groupPairsAdjacent(dateSorted, (f) => f.file_type, (f) => f.paired_staged_file_id);
+  }, [filteredFiles, effectiveTakenAt, viewMode, mergePairs]);
+  const lightboxIndex = useMemo(() => {
+    if (lightboxFileId === null || visibleFiles.length === 0) return null;
+    const found = visibleFiles.findIndex((f) => f.id === lightboxFileId);
+    return found >= 0 ? found : Math.min(lightboxFallback.current, visibleFiles.length - 1);
+  }, [lightboxFileId, visibleFiles]);
+
+  // Keep the remembered position current, and adopt whatever file the fallback
+  // landed on so the next arrow-key step continues from there.
+  useEffect(() => {
+    if (lightboxFileId === null) return;
+    if (lightboxIndex === null) {
+      setLightboxFileId(null);
+      return;
+    }
+    lightboxFallback.current = lightboxIndex;
+    const shown = visibleFiles[lightboxIndex];
+    if (shown && shown.id !== lightboxFileId) setLightboxFileId(shown.id);
+  }, [lightboxIndex, lightboxFileId, visibleFiles]);
+
+  const openLightboxAt = useCallback(
+    (index: number) => {
+      const file = visibleFiles[index];
+      if (file) setLightboxFileId(file.id);
+    },
+    [visibleFiles]
+  );
+
   const selectedCount = (files ?? []).filter((f) => f.selected).length;
 
   // Opening a card shows the full-size preview, which is a different (much
@@ -966,11 +1012,15 @@ export function ImportWizard() {
           mergePairs={mergePairs}
           viewMode={viewMode}
           onToggleSelect={toggleStagedSelect}
-          onOpen={setLightboxIndex}
+          onOpen={openLightboxAt}
           onPatch={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
           warmPreviews={previewsAreCheap}
           scrubberSections={scrubberSections}
           getBottomInset={() => actionBarRef.current?.offsetHeight ?? 0}
+          // Only the *set-narrowing* filters reset the scroll. The view mode
+          // and pair merging are handled by the anchor's partner lookup, which
+          // keeps the same shot on screen across the switch.
+          resetKey={`${hideDuplicates}|${ratingMin}|${colorFilter}`}
         />
       )}
       </div>
@@ -980,8 +1030,8 @@ export function ImportWizard() {
           sessionId={sessionId}
           files={visibleFiles}
           index={lightboxIndex}
-          onIndexChange={setLightboxIndex}
-          onClose={() => setLightboxIndex(null)}
+          onIndexChange={openLightboxAt}
+          onClose={() => setLightboxFileId(null)}
           onUpdate={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
           showImmichSync={immichConfigured && immichMode === "selective"}
           pairsMerged={mergePairs && viewMode === "combined"}

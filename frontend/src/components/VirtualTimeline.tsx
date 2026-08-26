@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { LibraryIndexImage } from "../api/types";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
@@ -18,8 +18,8 @@ import {
   GAP,
   overscanFor,
   buildJustifiedLayout,
+  useLayoutScrollAnchor,
   useVirtualWindow,
-  type JustifiedLayout,
   type LayoutRow,
   type LayoutTile,
 } from "../utils/justifiedLayout";
@@ -30,7 +30,6 @@ import {
 
 type Tile = LayoutTile<LibraryIndexImage>;
 type Row = LayoutRow<LibraryIndexImage>;
-type Layout = JustifiedLayout<LibraryIndexImage>;
 
 function monthLabel(iso: string | null): string {
   if (!iso) return "Unknown date";
@@ -90,79 +89,16 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
   );
 
 
-  // A filter change means a NEW result set: jump to its top right away (the
-  // old grid is still shown until the new index arrives), and remember to skip
-  // the re-anchoring below once the new layout lands - it would otherwise
-  // chase the previously-visible photo to wherever it sits in the filtered set.
-  const pendingResetRef = useRef(false);
-  const prevResetKeyRef = useRef(resetKey);
-  useEffect(() => {
-    if (prevResetKeyRef.current === resetKey) return;
-    prevResetKeyRef.current = resetKey;
-    pendingResetRef.current = true;
-    if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
-  }, [resetKey]);
-
-  // Re-anchor across layout changes: when the tile size (S/M/L), the window
-  // width or the image set changes, every position shifts - raw scrollTop
-  // would land on completely different photos and read as a jump. Instead,
-  // find the photo row at the top of the viewport in the OLD layout and
-  // scroll so that same photo sits at the same relative spot in the new one.
-  const prevLayoutRef = useRef<Layout | null>(null);
-  useLayoutEffect(() => {
-    const prev = prevLayoutRef.current;
-    prevLayoutRef.current = layout;
-    const scroller = scrollerRef.current;
-    const root = rootRef.current;
-    if (!prev || !layout || prev === layout || !scroller || !root) return;
-
-    if (pendingResetRef.current) {
-      pendingResetRef.current = false;
-      scroller.scrollTop = 0;
-      return;
-    }
-
-    const top = lastScrollRef.current;
-    let anchors: Set<string> | null = null;
-    let frac = 0; // how far into the anchor row the viewport top sat
-    outer: for (const s of prev.sections) {
-      if (s.top + s.height <= top) continue;
-      for (const r of s.rows) {
-        const rowTop = s.top + r.top;
-        if (rowTop + r.height > top) {
-          // Every photo in the anchor row AND each one's RAW/JPEG partner.
-          // Anchoring on a single id broke exactly when the id was the half
-          // that just disappeared - toggling "Merge RAW+JPG" drops every RAW
-          // from the list, so the anchor was nowhere in the new layout, no
-          // scroll correction ran, and the old offset pointed into a grid
-          // that had shrunk underneath it. That was the jump. The partner
-          // card shows the same shot, so it re-anchors seamlessly; the same
-          // holds for the RAW/JPEG view-mode switch.
-          anchors = new Set<string>();
-          for (const t of r.tiles) {
-            anchors.add(t.item.id);
-            if (t.item.paired_image_id) anchors.add(t.item.paired_image_id);
-          }
-          frac = Math.max(-0.5, Math.min(1, (top - rowTop) / r.height));
-          break outer;
-        }
-      }
-    }
-    if (!anchors || anchors.size === 0) return;
-
-    // First row holding any of them: the anchor row's photos stay contiguous
-    // in the new list, so that row is where the viewport top belongs.
-    for (const s of layout.sections) {
-      for (const r of s.rows) {
-        if (r.tiles.some((t) => anchors!.has(t.item.id))) {
-          const rootTop =
-            root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
-          scroller.scrollTop = rootTop + s.top + r.top + frac * r.height;
-          return;
-        }
-      }
-    }
-  }, [layout]);
+  // Re-anchoring across layout changes (tile size, window width, a new filtered
+  // set) is shared with the import review grid - see useLayoutScrollAnchor.
+  useLayoutScrollAnchor({
+    layout,
+    rootRef,
+    scrollerRef,
+    lastScrollRef,
+    partnerIdOf: (image) => image.paired_image_id,
+    resetKey,
+  });
 
   // Returning from the detail view: jump straight to the photo the user was
   // looking at. With the full layout known this works for ANY photo in the
