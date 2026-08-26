@@ -55,6 +55,9 @@ import { loadPresets, savePreset, deletePreset, type EditPreset } from "../utils
 import { CurveEditor, MAX_CURVE_POINTS } from "./CurveEditor";
 import { ColorWheel } from "./ColorWheel";
 import { MaskOverlay } from "./MaskOverlay";
+import { ZoomReadout } from "./ZoomReadout";
+import { StageBackgroundToggle } from "./StageBackgroundToggle";
+import { useStageBg } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
 import { useWait } from "../state/wait";
 
@@ -660,7 +663,8 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  const [bgMode, setBgMode] = useState<"light" | "dark">("light");
+  // Shared with the library photo view and the import preview.
+  const bgMode = useStageBg();
   // Hold-to-compare: while true, the canvas re-renders with every tonal/colour/
   // effect neutralised (geometry kept, so the frame doesn't jump) - a quick
   // before/after against the original.
@@ -688,13 +692,44 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Scroll/pinch to zoom (toward cursor), drag to pan - same as the lightbox.
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const MAX_ZOOM = 6;
   const MIN_ZOOM = 0.2; // allow zooming out below fit
+  const MAX_NATIVE_ZOOM = 4; // 400% of actual pixels, as in the lightbox
   const zoomed = scale > 1.001;
+
+  // How much the fitted canvas must be scaled to show ACTUAL photo pixels
+  // 1:1 - the reference behind "100%", the zoom ceiling and the readout.
+  // Measured against the ORIGINAL file, not the canvas, because the canvas
+  // swaps between the preview render and the full-resolution one as you zoom
+  // (see the settle pass): tying the percentage to it would make the number
+  // jump while nothing on screen moved.
+  function nativeScale(): number {
+    const cv = canvasRef.current;
+    const dispW = cv ? parseFloat(cv.style.width) || 0 : 0;
+    if (!cv || dispW <= 0) return 1;
+    // A quarter turn swaps the frame's sides; the crop box is a fraction of
+    // the frame as displayed, so it applies after that.
+    const swap = rotation === 90 || rotation === 270;
+    const baseW = (swap ? image.height : image.width) || cv.width;
+    const shownW = baseW * (crop ? crop.width : 1);
+    return shownW > 0 ? shownW / dispW : 1;
+  }
+
+  // 400% of actual pixels, the same ceiling the lightbox uses. A photo smaller
+  // than the stage keeps at least 2x fit to play with (see useImageZoomPan).
+  function maxZoom(): number {
+    return Math.max(2, nativeScale() * MAX_NATIVE_ZOOM);
+  }
 
   function resetZoom() {
     setScale(1);
     setPan({ x: 0, y: 0 });
+  }
+
+  // Zoom to a multiple of actual pixels, keeping the stage centre put.
+  function zoomToNative(factor: number) {
+    const target = Math.min(maxZoom(), nativeScale() * factor);
+    setScale(target);
+    setPan((prev) => clampPan(prev, target));
   }
 
   // Clamp the pan so the view stays *inside the image* - you can never pan past
@@ -1079,6 +1114,11 @@ export function PhotoEditor({ image, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, rotation, crop, cropMode]);
 
+  // The wheel listener below is attached once and would otherwise close over
+  // the first render's ceiling.
+  const zoomLimitRef = useRef(maxZoom);
+  zoomLimitRef.current = maxZoom;
+
   // Scroll / pinch to zoom toward the cursor (native non-passive listener so we
   // can preventDefault - mirrors the lightbox).
   useEffect(() => {
@@ -1093,7 +1133,7 @@ export function PhotoEditor({ image, onClose }: Props) {
       const dy = e.clientY - (rect.top + rect.height / 2);
       setScale((prev) => {
         const factor = Math.exp(-e.deltaY * 0.0015);
-        const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prev * factor));
+        const next = Math.min(zoomLimitRef.current(), Math.max(MIN_ZOOM, prev * factor));
         setPan((pp) =>
           next <= 1.001
             ? { x: 0, y: 0 }
@@ -2303,19 +2343,33 @@ export function PhotoEditor({ image, onClose }: Props) {
             }}
             onDoubleClick={(e) => {
               if (cropMode) return;
-              // Lightroom-style: double-click toggles fit <-> 100% at the cursor.
+              // Lightroom-style, cycling fit -> 100% -> 200% -> 400% -> fit at
+              // the cursor - the same steps as the lightbox.
               const wrap = wrapRef.current!;
+              // The wrap is the canvas's UNTRANSFORMED box (the transform sits
+              // on the canvas itself), so its centre is the fixed point the
+              // pan is measured from.
               const rect = wrap.getBoundingClientRect();
               const dx = e.clientX - (rect.left + rect.width / 2);
               const dy = e.clientY - (rect.top + rect.height / 2);
-              if (zoomed) {
-                resetZoom();
-              } else {
-                const cv = canvasRef.current!;
-                const target = Math.min(MAX_ZOOM, Math.max(2, cv.width / rect.width));
-                setScale(target);
-                setPan(clampPan({ x: dx - dx * target, y: dy - dy * target }, target));
-              }
+              const native = nativeScale();
+              const ceiling = maxZoom();
+              const steps = [
+                Math.min(ceiling, Math.max(1.5, native)),
+                Math.min(ceiling, Math.max(3, native * 2)),
+                ceiling,
+              ];
+              const target = steps.find((step) => scale < step - 0.001) ?? 1;
+              setScale(target);
+              // Keep whatever is under the cursor under the cursor: the point
+              // sits at dx from the centre, so it must stay there after the
+              // scale change (ratio = target / current).
+              const ratio = target / scale;
+              setPan((prev) =>
+                target === 1
+                  ? { x: 0, y: 0 }
+                  : clampPan({ x: dx - (dx - prev.x) * ratio, y: dy - (dy - prev.y) * ratio }, target)
+              );
             }}
           />
           {/* Split view: the original, drawn over the left of the edited canvas
@@ -2420,14 +2474,15 @@ export function PhotoEditor({ image, onClose }: Props) {
         </div>
         {!loading && !error && (
           <div className="editor-bg-toggle">
-            <span className="segmented">
-              <button className={bgMode === "light" ? "active" : ""} onClick={() => setBgMode("light")}>
-                Light background
-              </button>
-              <button className={bgMode === "dark" ? "active" : ""} onClick={() => setBgMode("dark")}>
-                Black background
-              </button>
-            </span>
+            <StageBackgroundToggle />
+            <ZoomReadout
+              zoom={{
+                zoomed,
+                zoomPercent: Math.round((scale / nativeScale()) * 100),
+                resetZoom,
+                zoomToNative,
+              }}
+            />
             <button
               className={`btn btn-sm editor-compare-btn${compare ? " active" : ""}`}
               onMouseDown={() => setCompare(true)}

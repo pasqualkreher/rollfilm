@@ -28,12 +28,17 @@
   /* Translucent accent for soft-selected states (active nav, active segment). */
   --accent-soft: rgba(85, 85, 92, 0.12);
   --danger: #bf4a3e;
-  /* Surround behind the photo when the editor/lightbox is set to "Light
-     background". On a light skin that's simply the panel colour; the dark skins
-     override it with something lighter than their own panels, so the option
-     still does what it says - a brighter surround to judge the photo against -
-     without going to white. */
-  --editor-stage-light: var(--bg-elevated);
+  /* Surround behind a photo shown big (library photo view, import preview,
+     editor), in three steps: light grey, the mid grey every darkroom and photo
+     app judges against, and black. Greys are neutral by construction - they
+     bias neither the highlights nor the shadows the way a panel-coloured
+     surround does. Deliberately NOT themed: a photo has to look the same in
+     all three views AND under every skin, so no theme block overrides these.
+     Percentages are ink coverage (12.5% is nearly white, 50% is mid grey). */
+  --stage-lightest: #dfdfdf; /* 12.5% */
+  --stage-light: #bfbfbf; /* 25% */
+  --stage-medium: #808080; /* 50% */
+  --stage-dark: #000000;
   /* Corner style (Settings → Appearance): every radius in this file is a
      multiple of --corner-scale, so data-corners="square" (state/corners.ts)
      squares the whole UI by zeroing the scale. True circles (border-radius:
@@ -60,7 +65,6 @@
     --accent-contrast: #26262a;
     --accent-soft: rgba(180, 180, 188, 0.16);
     --danger: #e0685b;
-    --editor-stage-light: #4b4b52;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
     color-scheme: dark;
@@ -100,7 +104,6 @@
   --accent-contrast: #26262a;
   --accent-soft: rgba(180, 180, 188, 0.16);
   --danger: #e0685b;
-  --editor-stage-light: #4b4b52;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
@@ -135,7 +138,6 @@
   --accent-contrast: #1b1f24;
   --accent-soft: rgba(143, 168, 196, 0.16);
   --danger: #dd6a5c;
-  --editor-stage-light: #414851;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
@@ -170,7 +172,6 @@
   --accent-contrast: #131316;
   --accent-soft: rgba(230, 230, 233, 0.14);
   --danger: #e5675a;
-  --editor-stage-light: #2f2f34;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6);
   color-scheme: dark;
@@ -2387,11 +2388,19 @@ textarea:focus-visible {
    surround is its own variable, because on a dark skin the panel colour is too
    close to black for "Light background" to mean anything. */
 .editor-stage-dark .editor-stage-main {
-  background: #000;
+  background: var(--stage-dark);
+}
+
+.editor-stage-lightest .editor-stage-main {
+  background: var(--stage-lightest);
 }
 
 .editor-stage-light .editor-stage-main {
-  background: var(--editor-stage-light);
+  background: var(--stage-light);
+}
+
+.editor-stage-medium .editor-stage-main {
+  background: var(--stage-medium);
 }
 
 /* Light/Black background switch in its own row under the image (like the
@@ -2400,6 +2409,9 @@ textarea:focus-visible {
   display: flex;
   justify-content: center;
   align-items: center;
+  /* Background steps, the zoom control and hold-to-compare share this row; on
+     a narrow window it wraps rather than pushing the compare button off. */
+  flex-wrap: wrap;
   gap: 10px;
   padding-top: 14px;
 }
@@ -3718,7 +3730,10 @@ input.editor-preset-select {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-elevated);
+  /* Same three steps as the editor's stage (below): the photo must not change
+     appearance between browsing it, reviewing it in the import and developing
+     it. Mid grey is the default; the modifier classes carry the other two. */
+  background: var(--stage-medium);
   border-radius: calc(12px * var(--corner-scale));
   /* Clips the zoomed-in photo to the frame (the loupe effect). */
   overflow: hidden;
@@ -3729,8 +3744,20 @@ input.editor-preset-select {
   padding: 40px 16px;
 }
 
+.detail-image-lightest {
+  background: var(--stage-lightest);
+}
+
+.detail-image-light {
+  background: var(--stage-light);
+}
+
+.detail-image-medium {
+  background: var(--stage-medium);
+}
+
 .detail-image-dark {
-  background: #000;
+  background: var(--stage-dark);
 }
 
 /* On a black background, lift the photo with a soft shadow and a hairline edge
@@ -3817,6 +3844,37 @@ input.editor-preset-select {
 .detail-zoom-hint {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps, the
+   live percentage, and the hint. One row, same height as the background
+   toggle beside it. */
+.zoom-readout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Tabular figures so the number doesn't jitter while the wheel is turning. */
+.zoom-readout-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  min-width: 44px;
+  text-align: right;
+}
+
+.zoom-readout-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Narrow windows: the hint is the first thing to go - the buttons and the
+   number carry the same information in less space. */
+@media (max-width: 1100px) {
+  .zoom-readout-hint {
+    display: none;
+  }
 }
 
 /* The detail view fills the viewport and doesn't scroll itself - the side panel

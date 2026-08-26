@@ -30,6 +30,23 @@ const ASK_DELETE_KEY = "pm.askDeletePartner";
 // Shared by every screen with a filter bar (Library, Album detail, Import
 // review), so pinning it once keeps it open wherever you cull.
 const FILTER_PIN_KEY = "pm.filterPinned";
+// Surround behind a photo shown big, in four steps from near-white to black.
+// The percentages are ink coverage, the way a print shop and Photoshop mean
+// them: 12.5% is a hair off white, 50% is the mid grey a darkroom judges
+// against. One preference for the library's photo view, the import review's
+// preview and the editor - the whole point of the setting is judging a photo
+// against a KNOWN neutral, which only works if it doesn't change when you move
+// between the three. Mid grey is the default: it biases neither the highlights
+// nor the shadows.
+const STAGE_BG_KEY = "pm.stageBg";
+export const STAGE_BACKGROUNDS = [
+  { key: "lightest", label: "12.5%", title: "Near white (12.5% grey)" },
+  { key: "light", label: "25%", title: "Light grey (25%)" },
+  { key: "medium", label: "50%", title: "Mid grey (50%) - the neutral to judge a photo against" },
+  { key: "dark", label: "Black", title: "Black" },
+] as const;
+export type StageBg = (typeof STAGE_BACKGROUNDS)[number]["key"];
+const DEFAULT_STAGE_BG: StageBg = "medium";
 const DEFAULT_THUMB: ThumbSizeKey = "m";
 
 // Minimal external store so a preference change re-renders every subscribed grid
@@ -58,6 +75,11 @@ function readAskDeletePartner(): boolean {
 
 function readFilterPinned(): boolean {
   return localStorage.getItem(FILTER_PIN_KEY) === "1";
+}
+
+function readStageBg(): StageBg {
+  const v = localStorage.getItem(STAGE_BG_KEY);
+  return STAGE_BACKGROUNDS.some((b) => b.key === v) ? (v as StageBg) : DEFAULT_STAGE_BG;
 }
 
 export function thumbPx(key: ThumbSizeKey): number {
@@ -115,6 +137,11 @@ export function setFilterPinned(on: boolean) {
   emit();
 }
 
+export function setStageBg(bg: StageBg) {
+  localStorage.setItem(STAGE_BG_KEY, bg);
+  emit();
+}
+
 export function useThumbSize(): ThumbSizeKey {
   return useSyncExternalStore(subscribe, readThumb, () => DEFAULT_THUMB);
 }
@@ -129,6 +156,10 @@ export function useAskDeletePartner(): boolean {
 
 export function useFilterPinned(): boolean {
   return useSyncExternalStore(subscribe, readFilterPinned, () => false);
+}
+
+export function useStageBg(): StageBg {
+  return useSyncExternalStore(subscribe, readStageBg, () => DEFAULT_STAGE_BG);
 }
 
 // Collapse each RAW+JPEG pair down to a single representative card (the JPEG,

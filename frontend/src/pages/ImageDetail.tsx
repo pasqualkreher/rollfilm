@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
@@ -9,12 +9,15 @@ import { TagEditor } from "../components/TagEditor";
 import { AlbumPicker } from "../components/AlbumPicker";
 import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
-import { useMergePairs } from "../state/viewPrefs";
+import { useMergePairs, useStageBg } from "../state/viewPrefs";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
 import { IconArrowLeft, IconCheck, IconPencil, IconTrash, IconX } from "../components/Icons";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
+import { useImageZoomPan } from "../utils/useImageZoomPan";
+import { ZoomReadout } from "../components/ZoomReadout";
+import { StageBackgroundToggle } from "../components/StageBackgroundToggle";
 
 // The lightbox keeps this many photos on EACH side of the current one pinned
 // in memory (see the pinned-neighbors effect) - 10 back + 10 ahead.
@@ -63,13 +66,25 @@ export function ImageDetail() {
   const [descDraft, setDescDraft] = useState("");
   const [descBusy, setDescBusy] = useState(false);
   const [descNote, setDescNote] = useTransientMessage();
-  const [bgMode, setBgMode] = useState<"light" | "dark">("light");
+  // Shared across the photo view, the import preview and the editor.
+  const bgMode = useStageBg();
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
-  // Scroll / trackpad-pinch to zoom (toward the cursor), drag to pan. scale 1 =
-  // fit; pan is a pixel translation applied before the scale.
-  const [scale, setScale] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  // Fetched up here because the zoom below needs the photo's true pixel size.
+  const { data: image } = useQuery({
+    queryKey: ["image", activeId],
+    queryFn: () => api.images.get(activeId),
+    enabled: !!activeId,
+  });
+
+  // Scroll / trackpad-pinch to zoom (toward the cursor), drag to pan, and the
+  // fit-to-frame sizing underneath it - shared with the import review's preview
+  // so a photo behaves the same wherever the app shows it big. Handed the
+  // ORIGINAL's dimensions so 100% means its pixels: the lightbox shows a
+  // downscaled preview until you zoom, and 100% of that is not 100%.
+  const zoom = useImageZoomPan(
+    image?.width && image?.height ? { w: image.width, h: image.height } : null
+  );
   // Swap the preview for the full-resolution render once the user zooms in, so
   // 100% shows true original pixels instead of an upscaled preview. If the
   // full render can't be fetched we fall back to the preview (never a broken img).
@@ -89,56 +104,8 @@ export function ImageDetail() {
   // open (from the grid): while paging through a set we keep the current frame
   // on screen and swap in place, so there's no fade-out/in wash between photos.
   const shownOnceRef = useRef(false);
-  const imageBoxRef = useRef<HTMLDivElement | null>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const dragRef = useRef<{ x: number; y: number } | null>(null);
   const selects = useSelects();
-  // Explicit on-screen size for the photo, fit to the frame. CSS max-* only
-  // ever scales down, so a preview smaller than the frame sat tiny in the
-  // middle of large screens; this scales up too. Done in JS (not object-fit)
-  // so the <img> element stays exactly the size of the visible photo - the
-  // framed shadow and the double-click zoom math depend on that.
-  const [fit, setFit] = useState<{ w: number; h: number } | null>(null);
-
-  function refitImage() {
-    const box = imageBoxRef.current;
-    const img = imgRef.current;
-    if (!box || !img || !img.naturalWidth || !img.naturalHeight) return;
-    const cs = getComputedStyle(box);
-    const availW = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-    const availH = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    if (availW <= 0 || availH <= 0) return;
-    const s = Math.min(availW / img.naturalWidth, availH / img.naturalHeight);
-    setFit({ w: img.naturalWidth * s, h: img.naturalHeight * s });
-  }
-
-  const MAX_ZOOM = 6;
-  const MIN_ZOOM = 0.2; // allow zooming out below fit
-  const zoomed = scale > 1.001;
-
-  // Whether the next transform change should ease (discrete zoom: double-click,
-  // Esc-to-fit) or snap (wheel-zoom / pan-drag, which must track the input).
-  const [zoomAnim, setZoomAnim] = useState(false);
-
-  function resetZoom(animate = false) {
-    setZoomAnim(animate);
-    setScale(1);
-    setPan({ x: 0, y: 0 });
-  }
-
-  // Clamp the pan so the view stays *inside the photo* - never past its edges into
-  // the empty frame. The max offset is how far the scaled photo overhangs the
-  // visible frame; it's 0 when the photo fits or is zoomed out, so it stays centred.
-  function clampPan(p: { x: number; y: number }, s: number) {
-    const box = imageBoxRef.current;
-    if (!box || !fit) return p;
-    const cs = getComputedStyle(box);
-    const availW = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-    const availH = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    const maxX = Math.max(0, (fit.w * s - availW) / 2);
-    const maxY = Math.max(0, (fit.h * s - availH) / 2);
-    return { x: Math.max(-maxX, Math.min(maxX, p.x)), y: Math.max(-maxY, Math.min(maxY, p.y)) };
-  }
+  const { zoomed, resetZoom } = zoom;
 
   // Passed from the Library grid so arrow keys can zap through the same
   // filtered/ordered set of photos you were browsing, not the whole library.
@@ -181,7 +148,7 @@ export function ImageDetail() {
     // until the new src is ready (neighbors are prefetched below), so paging
     // reads as a clean swap instead of a fade-out/in wash.
     if (!shownOnceRef.current) {
-      setFit(null);
+      zoom.clearFit();
       setPhotoLoaded(false);
     }
   }, [activeId]);
@@ -191,12 +158,6 @@ export function ImageDetail() {
   useEffect(() => {
     if (zoomed && !fullFailed) setHiRes(true);
   }, [zoomed, fullFailed]);
-
-  const { data: image } = useQuery({
-    queryKey: ["image", activeId],
-    queryFn: () => api.images.get(activeId),
-    enabled: !!activeId,
-  });
 
   // Adopt the server's note whenever a DIFFERENT photo comes on screen. Keyed
   // on the id rather than on image.description: re-syncing on every change of
@@ -231,51 +192,6 @@ export function ImageDetail() {
     queryFn: () => api.images.get(image!.paired_image_id!),
     enabled: !!image?.paired_image_id,
   });
-
-  // Keep the photo fit to its frame when the window or the frame itself
-  // resizes (e.g. the side panel wrapping). Keyed to image?.id because the
-  // component early-returns a loading state before the frame element mounts.
-  useEffect(() => {
-    const box = imageBoxRef.current;
-    if (!box) return;
-    const observer = new ResizeObserver(() => refitImage());
-    observer.observe(box);
-    window.addEventListener("resize", refitImage);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", refitImage);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image?.id]);
-
-  // Scroll / pinch to zoom toward the cursor. A native, non-passive listener so
-  // we can preventDefault - otherwise ctrl+wheel (trackpad pinch) would zoom the
-  // whole app and a plain wheel would scroll the page. Keyed to image?.id so it
-  // (re)attaches once the .detail-image element actually mounts - the component
-  // early-returns a loading state before the photo is ready.
-  useEffect(() => {
-    const el = imageBoxRef.current;
-    if (!el) return;
-    function onWheel(e: WheelEvent) {
-      e.preventDefault();
-      setZoomAnim(false);
-      const rect = el!.getBoundingClientRect();
-      const dx = e.clientX - (rect.left + rect.width / 2);
-      const dy = e.clientY - (rect.top + rect.height / 2);
-      setScale((prevScale) => {
-        const factor = Math.exp(-e.deltaY * 0.0015);
-        const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prevScale * factor));
-        setPan((prevPan) => {
-          if (next <= 1.001) return { x: 0, y: 0 };
-          const ratio = next / prevScale;
-          return clampPan({ x: dx - (dx - prevPan.x) * ratio, y: dy - (dy - prevPan.y) * ratio }, next);
-        });
-        return next;
-      });
-    }
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [image?.id]);
 
   // "Add to Immich" only shows when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
@@ -661,7 +577,7 @@ export function ImageDetail() {
           <IconArrowLeft size={16} />
         </button>
         <div className="detail-main">
-          <div className={`detail-image${bgMode === "dark" ? " detail-image-dark" : ""}`} ref={imageBoxRef}>
+          <div className={`detail-image detail-image-${bgMode}`} ref={zoom.setBox}>
             {previewFailed ? (
               <div className="detail-photo-error">
                 <span className="detail-photo-error-icon" aria-hidden="true">🖼️</span>
@@ -680,19 +596,14 @@ export function ImageDetail() {
             ) : (
             <img
               key={retryNonce}
-              ref={imgRef}
+              ref={zoom.setImg}
               // The photo the user is looking at must always win the connection
               // pool over similar-strip thumbs and neighbor prefetches.
               {...({ fetchpriority: "high" } as Record<string, string>)}
-              className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}${zoomAnim ? " zoom-anim" : ""}`}
-              style={{
-                ...(fit ? { width: fit.w, height: fit.h } : null),
-                transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-                cursor: zoomed ? (dragRef.current ? "grabbing" : "grab") : "default",
-                opacity: photoLoaded ? 1 : 0,
-              }}
+              className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}${zoom.zoomAnim ? " zoom-anim" : ""}`}
+              style={{ ...zoom.imageStyle, opacity: photoLoaded ? 1 : 0 }}
               onLoad={() => {
-                refitImage();
+                zoom.refit();
                 setPhotoLoaded(true);
                 shownOnceRef.current = true;
               }}
@@ -715,52 +626,13 @@ export function ImageDetail() {
                   setPreviewFailed(true);
                 }
               }}
-              onMouseDown={(e: ReactMouseEvent<HTMLImageElement>) => {
-                if (!zoomed) return;
-                e.preventDefault();
-                setZoomAnim(false);
-                dragRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-              }}
-              onMouseMove={(e: ReactMouseEvent<HTMLImageElement>) => {
-                if (!dragRef.current) return;
-                setPan(clampPan({ x: e.clientX - dragRef.current.x, y: e.clientY - dragRef.current.y }, scale));
-              }}
-              onMouseUp={() => {
-                dragRef.current = null;
-              }}
-              onMouseLeave={() => {
-                dragRef.current = null;
-              }}
-              onDoubleClick={(e: ReactMouseEvent<HTMLImageElement>) => {
-                // Lightroom-style: double-click toggles fit <-> 100% at the cursor.
-                const box = imageBoxRef.current!.getBoundingClientRect();
-                const dx = e.clientX - (box.left + box.width / 2);
-                const dy = e.clientY - (box.top + box.height / 2);
-                if (zoomed) {
-                  resetZoom(true);
-                } else {
-                  const img = e.currentTarget;
-                  const target = Math.min(MAX_ZOOM, Math.max(1.5, img.naturalWidth / img.getBoundingClientRect().width));
-                  setZoomAnim(true);
-                  setScale(target);
-                  setPan(clampPan({ x: dx * (1 - target), y: dy * (1 - target) }, target));
-                }
-              }}
+              {...zoom.imageHandlers}
             />
             )}
           </div>
           <div className="detail-image-toolbar">
-            <span className="segmented">
-              <button className={bgMode === "light" ? "active" : ""} onClick={() => setBgMode("light")}>
-                Light background
-              </button>
-              <button className={bgMode === "dark" ? "active" : ""} onClick={() => setBgMode("dark")}>
-                Black background
-              </button>
-            </span>
-            <span className="detail-zoom-hint">
-              {zoomed ? "Drag to pan · double-click or Esc to fit" : "Scroll, pinch, or double-click to zoom"}
-            </span>
+            <StageBackgroundToggle />
+            <ZoomReadout zoom={zoom} />
           </div>
         </div>
         <div className="detail-panel">

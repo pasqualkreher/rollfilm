@@ -6,6 +6,10 @@ import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "./Icons";
+import { useImageZoomPan } from "../utils/useImageZoomPan";
+import { ZoomReadout } from "./ZoomReadout";
+import { StageBackgroundToggle } from "./StageBackgroundToggle";
+import { useStageBg } from "../state/viewPrefs";
 
 interface Props {
   sessionId: string;
@@ -39,10 +43,24 @@ export function ImportLightbox({
   // state instead of the browser's broken-image icon; rating, the import
   // toggle and arrow-key navigation keep working.
   const [loadFailed, setLoadFailed] = useState(false);
-  // Light-table vs black background, same toggle as the library photo view.
-  const [bgMode, setBgMode] = useState<"light" | "dark">("light");
+  // Light / mid grey / black surround - the same shared preference (and the
+  // same control) as the library photo view and the editor.
+  const bgMode = useStageBg();
+  // Scroll/pinch zoom, drag pan, fit sizing - the same hook the library photo
+  // view uses, so culling an import inspects photos exactly like browsing the
+  // library does. The editor is deliberately NOT here: import review rates and
+  // selects, it doesn't develop. Handed the staged file's real pixel size, so
+  // 100% means the photo's pixels, not the review preview's.
+  const zoom = useImageZoomPan(
+    file?.width && file?.height ? { w: file.width, h: file.height } : null
+  );
   useEffect(() => {
     setLoadFailed(false);
+    // A new photo always opens at fit - carrying a 400% view over to the next
+    // frame would show a random corner of it.
+    zoom.resetZoom();
+    zoom.clearFit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.id]);
 
   useEffect(() => {
@@ -58,8 +76,12 @@ export function ImportLightbox({
       const tag = (e.target as HTMLElement | null)?.tagName;
       const inControl = tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
 
-      if (e.key === "Escape") onClose();
-      else if (e.key === "ArrowLeft") onIndexChange(Math.max(0, index - 1));
+      // Esc drops back to fit if zoomed in, and only closes from there - one
+      // press must not do both (same as the library photo view).
+      if (e.key === "Escape") {
+        if (zoom.zoomed) zoom.resetZoom(true);
+        else onClose();
+      } else if (e.key === "ArrowLeft") onIndexChange(Math.max(0, index - 1));
       else if (e.key === "ArrowRight") onIndexChange(Math.min(files.length - 1, index + 1));
       else if (!inControl && e.key >= "0" && e.key <= "5") {
         // Number keys set the star rating (0 clears it).
@@ -73,7 +95,8 @@ export function ImportLightbox({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [index, files.length, onIndexChange, onClose, onUpdate, file]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, files.length, onIndexChange, onClose, onUpdate, file, zoom.zoomed]);
 
   // Hold the 10 previous and 10 next staged previews pinned in memory while
   // this one is on screen (same sliding window as the library lightbox) -
@@ -122,7 +145,10 @@ export function ImportLightbox({
           <IconArrowLeft size={16} />
         </button>
         <div className="detail-main">
-          <div className={`detail-image lightbox-stage${bgMode === "dark" ? " detail-image-dark" : ""}`}>
+          <div
+            className={`detail-image lightbox-stage detail-image-${bgMode}`}
+            ref={zoom.setBox}
+          >
             <button
               className="lightbox-nav-btn lightbox-nav-prev"
               onClick={(e) => {
@@ -142,10 +168,17 @@ export function ImportLightbox({
               </div>
             ) : (
               <img
-                className={bgMode === "dark" ? "framed" : undefined}
+                ref={zoom.setImg}
+                className={`detail-photo${bgMode === "dark" ? " framed" : ""}${
+                  zoom.zoomed ? " zoomed" : ""
+                }${zoom.zoomAnim ? " zoom-anim" : ""}`}
+                style={zoom.imageStyle}
+                draggable={false}
                 src={api.import.stagedPreviewUrl(sessionId, file.id)}
                 alt={file.original_filename}
+                onLoad={() => zoom.refit()}
                 onError={() => setLoadFailed(true)}
+                {...zoom.imageHandlers}
               />
             )}
             <button
@@ -162,14 +195,8 @@ export function ImportLightbox({
             </button>
           </div>
           <div className="detail-image-toolbar">
-            <span className="segmented">
-              <button className={bgMode === "light" ? "active" : ""} onClick={() => setBgMode("light")}>
-                Light background
-              </button>
-              <button className={bgMode === "dark" ? "active" : ""} onClick={() => setBgMode("dark")}>
-                Black background
-              </button>
-            </span>
+            <StageBackgroundToggle />
+            <ZoomReadout zoom={zoom} />
           </div>
           <div className="lightbox-controls">
           <div className="lightbox-controls-meta">
