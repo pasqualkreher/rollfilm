@@ -7,7 +7,12 @@ import { IconX } from "../components/Icons";
 import { skinInfo, useAppearance, type Appearance } from "../state/theme";
 import { useCorners } from "../state/corners";
 import { useTasks } from "../state/tasks";
-import { useAskDeletePartner, setAskDeletePartner } from "../state/viewPrefs";
+import {
+  useAskDeletePartner,
+  setAskDeletePartner,
+  useAskSaveCopyOptions,
+  setAskSaveCopyOptions,
+} from "../state/viewPrefs";
 import { SettingsTour, SETTINGS_TOUR_KEY } from "../components/SettingsTour";
 import { useTransientFlag, useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import {
@@ -58,7 +63,7 @@ const SETTINGS_TABS: { id: string; label: string; sections: string[] }[] = [
     label: "Library",
     sections: ["Library folder", "Library data", "Smart albums", "Tags", "Trash"],
   },
-  { id: "photos", label: "Photos", sections: ["RAW files", "Auto develop"] },
+  { id: "photos", label: "Photos", sections: ["RAW files", "Photo editor", "Auto develop"] },
   { id: "integrations", label: "Integrations", sections: ["Immich integration"] },
   {
     id: "maintenance",
@@ -309,6 +314,9 @@ export function Settings() {
   // Whether deleting a paired photo asks "only this file or the whole pair?".
   // Client-side view preference (see viewPrefs), not a server setting.
   const askDeletePartner = useAskDeletePartner();
+  // Whether the editor's "Save copy" asks for quality and size first. Also a
+  // client-side view preference, not a server setting.
+  const askSaveCopyOptions = useAskSaveCopyOptions();
 
   // The open tab. sectionProps stays the single indirection every section call
   // site goes through, so grouping them cost no change at the call sites.
@@ -989,6 +997,21 @@ export function Settings() {
                     : ""
                 }`
           }
+        />
+      </Section>
+
+      <Section {...sectionProps("Photo editor")}>
+        <Desc>
+          <strong>Save copy</strong> in the editor bakes your edits into a new JPEG in your library
+          and leaves the original untouched. It normally does that in one click, at full JPEG
+          quality and the photo's full size.
+        </Desc>
+        <OptionRow
+          type="checkbox"
+          checked={askSaveCopyOptions}
+          onChange={setAskSaveCopyOptions}
+          title="Ask for quality and size before saving a copy"
+          desc="With this on, Save copy opens a dialog first, where you can turn the JPEG quality down or cap the long edge - useful when the copy is meant to be a small file rather than a keeper."
         />
       </Section>
 

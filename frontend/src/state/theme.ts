@@ -10,8 +10,8 @@
 import { useSyncExternalStore } from "react";
 
 export type Mode = "light" | "dark" | "auto";
-export type LightSkin = "graphite" | "slate" | "ink";
-export type DarkSkin = "graphite-dark" | "slate-dark" | "ink-dark";
+export type LightSkin = "graphite" | "slate" | "ink" | "orange";
+export type DarkSkin = "graphite-dark" | "slate-dark" | "ink-dark" | "orange-dark";
 export type Skin = LightSkin | DarkSkin;
 
 // Metadata the Settings picker renders. `bg`/`elevated`/`text`/`accent` mirror
@@ -28,19 +28,23 @@ export interface SkinInfo {
   accent: string;
 }
 
-// Three pairs, kept deliberately short: neutral surfaces and desaturated
+// Four pairs, kept deliberately short: neutral surfaces and desaturated
 // accents, because a photo is the only thing on screen that should carry
-// colour. Same order in both lists so a pair sits in the same column.
+// colour - Orange being the one that puts colour on the controls, and even
+// there only on the accent. Same order in both lists so a pair sits in the
+// same column.
 export const LIGHT_SKINS: SkinInfo[] = [
   { value: "graphite", label: "Graphite", hint: "Neutral grey", bg: "#f3f3f4", elevated: "#fafafb", text: "#2b2b2f", accent: "#55555c" },
   { value: "slate", label: "Slate", hint: "Cool grey, steel blue", bg: "#edeff2", elevated: "#f8f9fb", text: "#23272d", accent: "#4c6079" },
   { value: "ink", label: "Ink", hint: "Paper white, high contrast", bg: "#ffffff", elevated: "#f7f7f8", text: "#121214", accent: "#1c1c1f" },
+  { value: "orange", label: "Orange", hint: "Warm white, burnt orange", bg: "#f6f2ee", elevated: "#fdfbf9", text: "#2e2823", accent: "#b35a1f" },
 ];
 
 export const DARK_SKINS: SkinInfo[] = [
   { value: "graphite-dark", label: "Graphite Dark", hint: "Neutral charcoal", bg: "#2b2b2f", elevated: "#34343a", text: "#f3f3f4", accent: "#b4b4bc" },
   { value: "slate-dark", label: "Slate Dark", hint: "Cool charcoal, steel blue", bg: "#22262c", elevated: "#2a2f36", text: "#e7eaee", accent: "#8fa8c4" },
   { value: "ink-dark", label: "Ink Dark", hint: "Near-black surround", bg: "#0f0f11", elevated: "#17171a", text: "#f4f4f5", accent: "#e6e6e9" },
+  { value: "orange-dark", label: "Orange Dark", hint: "Warm charcoal, amber", bg: "#2a2421", elevated: "#332c28", text: "#f4efea", accent: "#e08a4a" },
 ];
 
 export const SKINS: SkinInfo[] = [...LIGHT_SKINS, ...DARK_SKINS];
@@ -93,7 +97,7 @@ const LEGACY_LIGHT_MAP: Record<string, LightSkin> = {
   fog: "slate",
   sky: "slate",
   light: "ink",
-  "ember-light": "ink",
+  "ember-light": "orange",
 };
 const LEGACY_DARK_MAP: Record<string, DarkSkin> = {
   "graphite-dark": "graphite-dark",
@@ -101,7 +105,7 @@ const LEGACY_DARK_MAP: Record<string, DarkSkin> = {
   nord: "slate-dark",
   midnight: "slate-dark",
   dark: "ink-dark",
-  ember: "ink-dark",
+  ember: "orange-dark",
   darkroom: "ink-dark",
 };
 

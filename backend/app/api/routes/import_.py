@@ -1,8 +1,10 @@
 import io
+import itertools
 import json
 import logging
 import os
 import shutil
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -17,6 +19,7 @@ from app.db.models import FileType, Image, ImportSessionStatus, ImportStagedFile
 from app.db.session import get_db
 from app.services.import_pipeline import (
     STAGED_PREVIEW_PX,
+    StagedFullSuperseded,
     append_uploaded_files,
     commit_import_session,
     compute_staged_pairs,
@@ -24,6 +27,7 @@ from app.services.import_pipeline import (
     ensure_session_processing,
     get_import_progress,
     render_review_derivatives,
+    render_staged_full,
     stage_uploaded_files,
     staged_demosaic_path,
     staged_preview_path,
@@ -41,6 +45,11 @@ router = APIRouter(prefix="/import", tags=["import"])
 # grid or re-zapping the lightbox never re-downloads. Not immutable: a RAW's
 # thumb can upgrade once from the embedded fallback to the demosaiced render.
 _STAGED_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
+
+# The full-resolution render, unlike the thumbnail, never changes for the life
+# of the staged file - so it may be cached hard. Without this, every re-zoom of
+# the same photo re-downloaded multiple megabytes.
+_STAGED_FULL_CACHE_HEADERS = {"Cache-Control": "private, max-age=31536000, immutable"}
 
 
 def _trashed_duplicate_ids(db: Session, files: list[ImportStagedFile]) -> set[str]:
@@ -395,6 +404,72 @@ def get_staged_file_preview(
     return Response(
         content=buf.getvalue(), media_type="image/jpeg", headers=_STAGED_CACHE_HEADERS
     )
+
+
+# Only the newest 100%-zoom request can still be on screen: the review lightbox
+# shows one photo at a time. Each uncached request marks itself newest, so an
+# older RAW render still queued behind the single render slot bails (409) for a
+# photo the user has already zapped past, instead of making them wait behind it.
+# Same mechanism as the library lightbox's /full route.
+_staged_full_zoom_seq = itertools.count(1)
+_staged_full_zoom_latest = 0
+_staged_full_zoom_lock = threading.Lock()
+
+
+@router.get("/sessions/{session_id}/files/{file_id}/full")
+def get_staged_file_full(
+    session_id: str,
+    file_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Full-resolution pixels of a staged file, for true 100% zoom in the import
+    review lightbox.
+
+    The lightbox shows the 2048px preview while the photo is at fit size and
+    asks for this only once the user zooms in - so culling an import inspects
+    real pixels (critical focus) exactly like browsing the library does, without
+    paying a full render for every photo that is merely looked at."""
+    global _staged_full_zoom_latest
+    get_owned_import_session(db, current_user.id, session_id)
+    staged = db.get(ImportStagedFile, file_id)
+    if staged is None or staged.import_session_id != session_id:
+        raise HTTPException(status_code=404, detail="Staged file not found")
+
+    source_path = settings.import_staging_root / staged.staged_path
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Staged file missing from disk")
+
+    # A staged JPEG/PNG already *is* the full resolution - hand the original
+    # bytes over rather than re-encoding them into a second copy on the staging
+    # disk (the browser applies its EXIF orientation, as it does for any image).
+    # Only a RAW has to be rendered.
+    if staged.file_type != FileType.raw:
+        return FileResponse(source_path, headers=_STAGED_FULL_CACHE_HEADERS)
+
+    # Claim "newest zoom" even for a cached serve: the user is now looking at
+    # this photo, so a render still queued for the previous one should die.
+    with _staged_full_zoom_lock:
+        seq = next(_staged_full_zoom_seq)
+        _staged_full_zoom_latest = seq
+
+    def _is_stale() -> bool:
+        with _staged_full_zoom_lock:
+            return _staged_full_zoom_latest != seq
+
+    try:
+        full_path = render_staged_full(
+            source_path, file_id, staged_thumb_dir(session_id), is_stale=_is_stale
+        )
+    except StagedFullSuperseded:
+        # The client aborted this fetch when the user moved on; the status only
+        # matters to anything that still happens to be listening.
+        raise HTTPException(status_code=409, detail="Superseded by a newer full-resolution request")
+    except Exception:
+        # A damaged file must not 500 - the lightbox falls back to the preview.
+        logger.exception("Staged full render failed for %s", staged.original_filename)
+        raise HTTPException(status_code=404, detail="Full-resolution image not available")
+    return FileResponse(full_path, headers=_STAGED_FULL_CACHE_HEADERS)
 
 
 @router.patch("/sessions/{session_id}/files/{file_id}", response_model=schemas.StagedFileOut)

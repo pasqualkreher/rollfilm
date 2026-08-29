@@ -160,6 +160,33 @@ class Image(Base):
         "Image", remote_side="Image.id", foreign_keys=[paired_image_id]
     )
 
+    @property
+    def visible_paired_image_id(self) -> str | None:
+        """The pair partner, but only while both halves sit on the same side of
+        the Trash - this is what the API reports as `paired_image_id`.
+
+        Trashing one half *suspends* the pair instead of breaking it. Without
+        that, deleting only the JPEG left the RAW in the library still badged
+        "RAW+JPG", with the trashed JPEG still on offer in its detail view (so
+        the deleted file was very much still being shown), while the Trash
+        showed that JPEG as "RAW+JPG" although its RAW was never deleted. Both
+        only sorted themselves out on the permanent delete, which is where
+        trash.hard_delete_images finally nulls the column.
+
+        The column itself is deliberately left alone: restoring from the Trash
+        puts both halves back on the same side and the pair simply reappears,
+        with nothing to recompute and no pairing rule to re-run."""
+        if self.paired_image_id is None:
+            return None
+        partner = self.paired_image
+        if partner is None:
+            return None
+        return (
+            self.paired_image_id
+            if (partner.deleted_at is None) == (self.deleted_at is None)
+            else None
+        )
+
     # Non-destructive manual edits layered on top of the auto-oriented preview
     # (see services/raw.py) - the original file on disk is never touched.
     # edit_crop_* are fractions (0..1) of the rotated image; all null means

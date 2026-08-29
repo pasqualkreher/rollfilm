@@ -20,7 +20,8 @@ export function ZoomReadout({ zoom }: { zoom: ZoomReadoutTarget }) {
   const percent = zoom.zoomPercent;
   return (
     <span className="zoom-readout">
-      <span className="segmented">
+      <span className="control-caption">Zoom</span>
+      <span className="segmented" role="group" aria-label="Zoom">
         <button className={zoom.zoomed ? "" : "active"} onClick={() => zoom.resetZoom(true)}>
           Fit
         </button>

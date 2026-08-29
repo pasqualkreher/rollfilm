@@ -7,7 +7,10 @@ import type { SubMask } from "../utils/adjustments";
 // fractional (0..1) params map straight to percent coordinates. It carries the
 // canvas zoom/pan transform (via `style`) so handles stay registered with the
 // image. Pointer-transparent - hit-testing + dragging live in PhotoEditor; this
-// only renders. Luminance/colour masks have no spatial shape, so nothing draws.
+// only renders. Luminance / colour / edge masks select by what the pixels are
+// rather than by where they are, so there is no shape to draw here: those are
+// marked by the render itself (editor-preview's `peek`, thumbnails.paint_mask_peek)
+// in the same pink zebra, so both kinds of mask read the same on the photo.
 //
 // When `mark` is set, every type paints the area it covers with the same pink
 // zebra (see ZebraPattern); its own outline and handles draw on top of that:

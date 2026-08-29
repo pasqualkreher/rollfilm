@@ -38,6 +38,15 @@ interface ImportSessionState {
   analysisPending: boolean;
   analysisProcessed: number;
   analysisTotal: number;
+  // A staging run is far enough along to be stopped *gracefully*: the session
+  // exists, so the photos copied so far can be reviewed and imported. Unlike
+  // cancelUpload (which aborts and throws the batch away), stopStaging lets the
+  // batch in flight finish and then simply stops asking for more.
+  canStopStaging: boolean;
+  // The user pressed Stop: true from the click until the next import starts, so
+  // the review screen can explain why the batch is short.
+  stagingStopped: boolean;
+  stopStaging: () => void;
   startUpload: (files: File[], label: string) => void;
   // Desktop-only: import a folder by absolute path - the backend reads the
   // files itself (no browser upload). Same progress/cancel plumbing.
@@ -75,19 +84,38 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   // clean up whatever was already staged on the backend.
   const abortRef = useRef<AbortController | null>(null);
   const uploadSessionRef = useRef<string | null>(null);
+  // Graceful stop: read between batches by both staging loops. A ref, not
+  // state, because the loops are plain async functions that would otherwise
+  // close over a stale value.
+  const stopRef = useRef(false);
+  const [stagingStopped, setStagingStopped] = useState(false);
+  const [canStopStaging, setCanStopStaging] = useState(false);
 
   function startUpload(files: File[], label: string) {
     const controller = new AbortController();
     abortRef.current = controller;
     uploadSessionRef.current = null;
+    stopRef.current = false;
+    setStagingStopped(false);
+    setCanStopStaging(false);
     setImportMode("upload");
     setIsUploading(true);
     setUploadError(null);
     setUploadProgress(0);
     api.import
-      .upload(files, label, setUploadProgress, controller.signal, (id) => {
-        uploadSessionRef.current = id;
-      })
+      .upload(
+        files,
+        label,
+        setUploadProgress,
+        controller.signal,
+        (id) => {
+          uploadSessionRef.current = id;
+          // The session now exists on the backend, so a stop leaves something
+          // reviewable behind - offer the graceful stop from here on.
+          setCanStopStaging(true);
+        },
+        () => stopRef.current
+      )
       .then((session) => {
         setSourceLabel(session.source_path);
         setSessionId(session.id);
@@ -108,6 +136,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         setIsUploading(false);
         setUploadProgress(null);
         setImportMode(null);
+        setCanStopStaging(false);
       });
   }
 
@@ -136,6 +165,9 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     const controller = new AbortController();
     abortRef.current = controller;
     uploadSessionRef.current = null;
+    stopRef.current = false;
+    setStagingStopped(false);
+    setCanStopStaging(false);
     setImportMode("folder");
     setStagingSessionId(null);
     setTotalFileCount(null);
@@ -178,6 +210,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         if (!uploadSessionRef.current) {
           uploadSessionRef.current = session.id;
           setStagingSessionId(session.id);
+          setCanStopStaging(true);
         }
         stagedBytes += batch.reduce((sum, f) => sum + f.size, 0);
         stagedFiles += batch.length;
@@ -193,6 +226,12 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
           setSourceLabel(session.source_path);
           setSessionId(session.id);
         }
+        // "Stop copying, keep these": checked here rather than at the top of
+        // the loop so the batch already on its way always lands - stopping
+        // mid-batch would leave half-copied files behind. Everything staged so
+        // far stays; the loop just never asks for the next batch, so the run
+        // ends the same way a completed one does and the review unlocks.
+        if (stopRef.current) break;
       }
       return { reviewOpened };
     })()
@@ -217,6 +256,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         setStagingSessionId(null);
         setTotalFileCount(null);
         setStagedFileCount(0);
+        setCanStopStaging(false);
       });
   }
 
@@ -265,10 +305,23 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     abortRef.current?.abort();
   }
 
+  // Stop copying but KEEP what already landed - the opposite of cancelUpload,
+  // which aborts the transfer and discards the half-staged session. Nothing is
+  // aborted here: the batch in flight finishes, the staging loop then stops,
+  // and the review screen is left holding exactly the photos that made it in.
+  function stopStaging() {
+    if (!abortRef.current) return;
+    stopRef.current = true;
+    setStagingStopped(true);
+  }
+
   function reset() {
     abortRef.current?.abort();
     abortRef.current = null;
     uploadSessionRef.current = null;
+    stopRef.current = false;
+    setStagingStopped(false);
+    setCanStopStaging(false);
     setSessionId(null);
     setSourceLabel("");
     setUploadError(null);
@@ -297,6 +350,9 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         analysisPending,
         analysisProcessed,
         analysisTotal,
+        canStopStaging,
+        stagingStopped,
+        stopStaging,
         startUpload,
         startFolderImport,
         startFilesImport,

@@ -39,6 +39,16 @@ export function IconCheck(props: IconProps) {
   );
 }
 
+// The two overlapping L-arms of a crop tool: an arm along the top-left corner
+// and one along the bottom-right, each running past the other.
+export function IconCrop(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M4.5 1.5v10h10M1.5 4.5h10v10" />
+    </svg>
+  );
+}
+
 export function IconChevronDown(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
@@ -177,6 +187,47 @@ export function IconPin({ filled = false, ...props }: IconProps & { filled?: boo
   );
 }
 
+// Statistics tiles: a picture, a camera body, a lens (aperture blades) and a
+// stack of platters for the library's size on disk.
+export function IconImage(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="1.75" y="3" width="12.5" height="10" rx="1.75" />
+      <circle cx="5.6" cy="6.4" r="1" />
+      <path d="M2.25 11.25l3.4-3.1 2.5 2.25 2.4-2.4 3.2 3.2" />
+    </svg>
+  );
+}
+
+export function IconCamera(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="1.75" y="4.5" width="12.5" height="9" rx="1.75" />
+      <path d="M5.6 4.5l.9-1.75h3l.9 1.75" />
+      <circle cx="8" cy="9" r="2.6" />
+    </svg>
+  );
+}
+
+export function IconAperture(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="8" cy="8" r="6.25" />
+      <path d="M8 1.75v5.4M13.45 11.1L8.75 8.4M2.55 11.1l4.7-2.7" />
+    </svg>
+  );
+}
+
+export function IconDisk(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <ellipse cx="8" cy="4" rx="5.25" ry="2.25" />
+      <path d="M2.75 4v8c0 1.25 2.35 2.25 5.25 2.25s5.25-1 5.25-2.25V4" />
+      <path d="M2.75 8c0 1.25 2.35 2.25 5.25 2.25S13.25 9.25 13.25 8" />
+    </svg>
+  );
+}
+
 export function IconChart(props: IconProps) {
   // Three rising bars on a baseline - the stats dashboard.
   return (
@@ -241,6 +292,26 @@ export function IconMail(props: IconProps) {
     <svg {...svgProps(props)}>
       <rect x="1.75" y="3.75" width="12.5" height="8.5" rx="1.5" />
       <path d="M2.6 4.9 8 8.9l5.4-4" />
+    </svg>
+  );
+}
+
+// Undo / redo: an arrow curving back over itself onto a hook, mirrored for the
+// other direction - the pair reads as one gesture and its reverse.
+export function IconUndo(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 6.5h7a3.5 3.5 0 0 1 0 7H6" />
+      <path d="M5.5 3.5 2.5 6.5l3 3" />
+    </svg>
+  );
+}
+
+export function IconRedo(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M13.5 6.5h-7a3.5 3.5 0 0 0 0 7H10" />
+      <path d="m10.5 3.5 3 3-3 3" />
     </svg>
   );
 }

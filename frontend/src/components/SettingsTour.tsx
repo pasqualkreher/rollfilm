@@ -22,6 +22,8 @@ const TOUR_TEXT: Record<string, string> = {
     "Optional: connect an Immich server to upload JPEGs and mirror albums, manually or automatically. Skip this if you don't use Immich.",
   "RAW files":
     "How unedited RAW photos look while browsing: automatically brightened to a normal exposure (default), or native and dark with all their headroom, like in the editor.",
+  "Photo editor":
+    "Save copy in the editor makes a new, edited JPEG at full quality in one click. Turn this on if you'd rather be asked for quality and size each time.",
   "Auto develop":
     "Adds an Auto button to the editor that suggests develop settings learned from your own saved edits. The more you edit, the better it gets.",
   "Smart albums":

@@ -49,8 +49,9 @@ export const SCALAR_SPEC = {
   clarity: { def: 0, min: -100, max: 100 },
   dehaze: { def: 0, min: -100, max: 100 },
   structure: { def: 0, min: -100, max: 100 },
-  // Master high-ISO noise reduction - drives both NR channels below.
-  denoise: { def: 0, min: 0, max: 100 },
+  // High-ISO noise reduction, one slider per half of the noise. A "Denoise"
+  // master over both used to sit here; see normalizeAdjustments() for how the
+  // edits saved while it existed are folded into these two.
   luma_noise_reduction: { def: 0, min: 0, max: 100 },
   color_noise_reduction: { def: 0, min: 0, max: 100 },
   chromatic_aberration_red_cyan: { def: 0, min: -100, max: 100 },
@@ -147,7 +148,7 @@ export interface ColorCalibration {
   blue_hue: number;
   blue_saturation: number;
 }
-export type SubMaskType = "radial" | "linear" | "brush" | "luminance" | "color" | "semantic";
+export type SubMaskType = "radial" | "linear" | "brush" | "luminance" | "color" | "edge" | "semantic";
 export type SubMaskMode = "additive" | "subtractive" | "intersect";
 // Brush stores `strokes` as [x, y, size][] (fractions of the frame); semantic
 // stores its found region as a base64 PNG in `mask` plus the `subject` it was
@@ -277,6 +278,15 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
       base[k] = spec.step ? clamp(v, spec.min, spec.max) : Math.round(clamp(v, spec.min, spec.max));
     }
   }
+  // Legacy "denoise" master (removed): it fed luma 1:1 and chroma 1.3x, and the
+  // render took the stronger of master and per-channel slider. Folded in the same
+  // way develop.normalize() does it, so an edit saved with it looks unchanged.
+  const legacyDenoise = (raw as { denoise?: unknown }).denoise;
+  if (typeof legacyDenoise === "number" && Number.isFinite(legacyDenoise) && legacyDenoise > 0) {
+    const dn = Math.round(clamp(legacyDenoise, 0, 100));
+    base.luma_noise_reduction = Math.max(base.luma_noise_reduction, dn);
+    base.color_noise_reduction = Math.max(base.color_noise_reduction, Math.min(100, Math.round(dn * 1.3)));
+  }
   if (raw.tone_mapper === "basic" || raw.tone_mapper === "agx") base.tone_mapper = raw.tone_mapper;
   if (raw.curve_mode === "point" || raw.curve_mode === "parametric") base.curve_mode = raw.curve_mode;
   if (raw.film_sim && FILM_SIMS.some((f) => f.value === raw.film_sim)) base.film_sim = raw.film_sim;
@@ -366,7 +376,6 @@ export const SECTIONS: Section[] = [
       { key: "sharpness_threshold", label: "Threshold" },
       { key: "clarity", label: "Clarity" },
       { key: "dehaze", label: "Dehaze" },
-      { key: "denoise", label: "Denoise" },
       { key: "luma_noise_reduction", label: "Luminance NR" },
       { key: "color_noise_reduction", label: "Color NR" },
       { key: "chromatic_aberration_red_cyan", label: "Red–Cyan CA" },
@@ -494,6 +503,7 @@ export const MASK_TYPES: { value: SubMaskType; label: string }[] = [
   { value: "brush", label: "Brush" },
   { value: "luminance", label: "Luminance" },
   { value: "color", label: "Color" },
+  { value: "edge", label: "Edges" },
 ];
 
 // Subjects the backend can find by name (segmentation.CLASS_GROUPS). Each one
@@ -514,6 +524,7 @@ const _MASK_LABEL: Record<SubMaskType, string> = {
   brush: "Brush",
   luminance: "Luminance",
   color: "Color",
+  edge: "Edges",
   semantic: "Subject",
 };
 const _DEFAULT_SUBMASK_PARAMS: Record<SubMaskType, SubMaskParams> = {
@@ -525,6 +536,10 @@ const _DEFAULT_SUBMASK_PARAMS: Record<SubMaskType, SubMaskParams> = {
   brush: { strokes: [] as number[][], feather: 50, size: 0.06, flow: 100, density: 100 },
   luminance: { range_min: 0, range_max: 50, feather: 35 },
   color: { target_r: 0.5, target_g: 0.5, target_b: 0.5, tolerance: 20, feather: 35 },
+  // Detail rather than tone: threshold is the edge strength that counts as an
+  // edge, spread grows the selection off the edge so a sharpening adjustment
+  // covers the whole transition instead of a hairline.
+  edge: { threshold: 25, spread: 30, feather: 50 },
   // `mask` is filled in by the segmentation call; feather defaults to 0 because
   // the found region already fades where the detection is uncertain, and that
   // edge is usually better than any blur we could add.

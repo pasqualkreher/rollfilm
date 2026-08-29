@@ -42,8 +42,8 @@ export function Selects() {
   }, [immichBusy, setBusyLabel]);
   useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
-  // One query per selected id; deleted photos simply resolve to nothing and are
-  // filtered out below so the list never shows a broken tile.
+  // One query per selected id; photos deleted for good simply resolve to
+  // nothing and are filtered out below so the list never shows a broken tile.
   const results = useQueries({
     queries: ids.map((id) => ({
       queryKey: ["image", id],
@@ -53,7 +53,23 @@ export function Selects() {
 
   const loadedImages = results
     .map((r) => r.data)
-    .filter((img): img is ImageOut => Boolean(img));
+    // A photo in the Trash still resolves - the endpoint has to serve it for
+    // the Trash itself. It has no business sitting in the working set though:
+    // deleting a photo anywhere used to leave it here, still shown and still
+    // counted, until it was deleted for good.
+    .filter((img): img is ImageOut => Boolean(img) && !img!.deleted_at);
+  // Drop those ids for real, so the header count and every toolbar action
+  // (export, Immich, develop) stop including them. Self-healing: it catches
+  // photos trashed from anywhere - another page, the retention purge - not
+  // just the ones this session deleted.
+  const trashedIds = results
+    .map((r) => r.data)
+    .filter((img): img is ImageOut => Boolean(img) && Boolean(img!.deleted_at))
+    .map((img) => img.id);
+  useEffect(() => {
+    trashedIds.forEach((id) => remove(id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trashedIds.join(",")]);
   // When merging, a selected RAW+JPEG pair shows as its single JPEG card;
   // otherwise both halves sit adjacent (JPEG first), same as the other grids.
   const images = mergePairs

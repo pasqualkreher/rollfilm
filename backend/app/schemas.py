@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.db.models import ColorLabel, FileType, ImportSessionStatus
 
@@ -35,7 +35,14 @@ class ImageOut(BaseModel):
     description: str | None = None
     # Flagged for selective Immich sync (see settings_store sync modes).
     immich_sync: bool = False
-    paired_image_id: str | None
+    # Read from Image.visible_paired_image_id, which hides a partner that is on
+    # the other side of the Trash - a pair only counts as a pair while both
+    # halves are in the same place. The plain column is the fallback so this
+    # still validates from a mapping.
+    paired_image_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("visible_paired_image_id", "paired_image_id"),
+    )
     # Set when this photo was indexed in place from an external source root
     # (e.g. a NAS) rather than imported into the managed library.
     source_root_id: str | None

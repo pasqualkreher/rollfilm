@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import type { ImageOut } from "../api/types";
+import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
+import { useMergePairs } from "../state/viewPrefs";
 import { useTransientMessage } from "../utils/transientMessage";
 import { useWait } from "../state/wait";
 
@@ -16,12 +18,38 @@ export function Trash() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
+  const mergePairs = useMergePairs();
   const { withWait } = useWait();
 
-  const { data: images, isLoading } = useQuery({
+  const { data: trashed, isLoading } = useQuery({
     queryKey: ["trash"],
     queryFn: () => api.images.listTrash(),
   });
+
+  // Laid out like every other grid. The backend only reports a pair here when
+  // BOTH halves are in the Trash, so a shot whose JPEG alone was deleted shows
+  // as the single JPEG it is - it used to claim "RAW+JPG" while its RAW was
+  // still sitting in the library, untouched.
+  const images = useMemo(() => {
+    const list = trashed ?? [];
+    return mergePairs
+      ? collapsePairsBy(list, (im) => im.file_type, (im) => im.paired_image_id)
+      : groupPairsAdjacent(list, (im) => im.file_type, (im) => im.paired_image_id);
+  }, [trashed, mergePairs]);
+
+  // Merged view hides the RAW behind its JPEG card, so restoring or deleting
+  // one has to take the hidden half with it - otherwise a pair that went into
+  // the Trash together would come back out of it split.
+  function withPairedIds(ids: string[]): string[] {
+    if (!mergePairs) return ids;
+    const byId = new Map((trashed ?? []).map((im) => [im.id, im]));
+    const out = new Set(ids);
+    for (const id of ids) {
+      const partner = byId.get(id)?.paired_image_id;
+      if (partner) out.add(partner);
+    }
+    return Array.from(out);
+  }
   const { data: trashSettings } = useQuery({
     queryKey: ["trash-settings"],
     queryFn: () => api.settings.getTrash(),
@@ -30,7 +58,7 @@ export function Trash() {
   function toggleSelect(id: string, index: number, shiftKey: boolean) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (shiftKey && lastIndex !== null && images) {
+      if (shiftKey && lastIndex !== null) {
         const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
         for (let i = start; i <= end; i++) next.add(images[i].id);
       } else if (next.has(id)) {
@@ -64,11 +92,13 @@ export function Trash() {
     queryClient.setQueryData<ImageOut[]>(["trash"], (old) =>
       old?.filter((im) => !ids.includes(im.id))
     );
+    // The working set can't hold a photo that no longer exists.
+    queryClient.invalidateQueries({ queryKey: ["image"] });
   }
 
   async function restoreSelected() {
     if (selected.size === 0) return;
-    const ids = Array.from(selected);
+    const ids = withPairedIds(Array.from(selected));
     setActionError(null);
     try {
       await withWait(`Restoring ${ids.length} photo${ids.length === 1 ? "" : "s"}…`, () =>
@@ -87,9 +117,12 @@ export function Trash() {
 
   async function deleteSelectedForever() {
     if (selected.size === 0) return;
+    // Counted after the hidden pair halves are folded in, so the number in the
+    // question is the number of files that actually get erased.
+    const ids = withPairedIds(Array.from(selected));
     if (
       !(await dialogs.confirm({
-        title: `Permanently delete ${selected.size} photo(s)?`,
+        title: `Permanently delete ${ids.length} photo(s)?`,
         message: "This removes the original files from your library - it cannot be undone.",
         confirmLabel: "Delete forever",
         danger: true,
@@ -97,7 +130,6 @@ export function Trash() {
     ) {
       return;
     }
-    const ids = Array.from(selected);
     setActionError(null);
     try {
       await withWait(`Deleting ${ids.length} photo${ids.length === 1 ? "" : "s"}…`, () =>
@@ -125,8 +157,8 @@ export function Trash() {
         <div className="control-group" style={{ flexWrap: "nowrap" }}>
           <button
             className="btn"
-            onClick={() => setSelected(new Set((images ?? []).map((im) => im.id)))}
-            disabled={!images || images.length === 0}
+            onClick={() => setSelected(new Set(images.map((im) => im.id)))}
+            disabled={images.length === 0}
           >
             Select all
           </button>
@@ -150,7 +182,7 @@ export function Trash() {
         )}
         {isLoading ? (
           <div className="empty-state">Loading...</div>
-        ) : !images || images.length === 0 ? (
+        ) : images.length === 0 ? (
           <div className="empty-state">
             The Trash is empty. Deleted library photos land here and can be restored.
           </div>

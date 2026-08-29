@@ -54,10 +54,11 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     "clarity": (0, -100, 100, False),
     "dehaze": (0, -100, 100, False),
     "structure": (0, -100, 100, False),
-    # One-slider high-ISO noise reduction: a master that drives both NR channels
-    # below (see thumbnails.apply_adjustments). The per-channel sliders stay for
-    # fine control - the render takes the stronger of the two per channel.
-    "denoise": (0, 0, 100, False),
+    # High-ISO noise reduction, split the way the pass itself is (see
+    # thumbnails._denoise_stage). A single "Denoise" master over both used to sit
+    # here; it did nothing these two can't and its max() coupling made the
+    # per-channel sliders look dead below its value. See normalize() for how
+    # edits saved while it existed are folded in.
     "luma_noise_reduction": (0, 0, 100, False),
     "color_noise_reduction": (0, 0, 100, False),
     "chromatic_aberration_red_cyan": (0, -100, 100, False),
@@ -231,7 +232,7 @@ def _norm_calibration(raw: Any) -> dict[str, int]:
 
 
 # --- Masks (local adjustments) ----------------------------------------------
-_SUBMASK_TYPES = ("radial", "linear", "brush", "luminance", "color", "semantic", "all")
+_SUBMASK_TYPES = ("radial", "linear", "brush", "luminance", "color", "edge", "semantic", "all")
 _SUBMASK_MODES = ("additive", "subtractive", "intersect")
 
 
@@ -295,6 +296,16 @@ def normalize(raw: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, (default, lo, hi, is_float) in SCALAR_SPEC.items():
         out[k] = _clampf(src.get(k, default), lo, hi, default, is_float)
+    # Legacy "denoise" master (removed): it fed luma 1:1 and chroma 1.3x, and the
+    # render took the stronger of master and per-channel slider. Folding it into
+    # the two channels here reproduces exactly what it rendered, so every stored
+    # edit, preset and backup migrates on read - no data migration needed.
+    legacy_denoise = _clampf(src.get("denoise", 0), 0, 100, 0, False)
+    if legacy_denoise > 0:
+        out["luma_noise_reduction"] = max(out["luma_noise_reduction"], legacy_denoise)
+        out["color_noise_reduction"] = max(
+            out["color_noise_reduction"], min(100, int(round(legacy_denoise * 1.3)))
+        )
     for k, (default, allowed) in ENUM_SPEC.items():
         v = src.get(k, default)
         out[k] = v if v in allowed else default

@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
 import { TagFilter } from "../components/TagFilter";
-import { IconChevronDown } from "../components/Icons";
+import { IconChevronDown, IconPencil } from "../components/Icons";
+import { AlbumNameField } from "../components/AlbumNameField";
 import type { AlbumOut, SmartAlbumOut } from "../api/types";
 
 // Cover thumbnail that fades in once decoded (see .smart-card img in CSS)
@@ -197,6 +198,9 @@ export function Albums() {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
 
+  // Which album card currently has its name open for editing (one at a time).
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
   const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
 
@@ -315,43 +319,88 @@ export function Albums() {
       {albums && albums.length === 0 && <div className="empty-state">No albums yet - create one above.</div>}
 
       <div className="thumbnail-grid">
-        {albums?.map((album) => (
-          <Link
-            key={album.id}
-            to={`/albums/${album.id}`}
-            className="thumb-card has-remove"
-            style={{ display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}
-          >
-            {/* A peek inside the album: mini mosaic of its first photos with
-                the name overlaid, like the smart cards. Empty albums keep the
-                plain centered text. */}
-            {album.cover_image_ids.length > 0 ? (
-              <>
-                <CoverMosaic imageIds={album.cover_image_ids} />
-                <div className="smart-card-caption">
-                  <div className="smart-card-name">{album.name}</div>
-                  <div className="smart-card-count">{albumCount(album)}</div>
+        {albums?.map((album) => {
+          const renaming = renamingId === album.id;
+          // Over a cover mosaic the box is white-on-dark like the caption it
+          // replaces; on a bare card it follows the normal theme colours.
+          const nameField = (inputClassName: string) => (
+            <AlbumNameField
+              albumId={album.id}
+              name={album.name}
+              editing={renaming}
+              onEditingChange={(on) => setRenamingId(on ? album.id : null)}
+              inputClassName={inputClassName}
+            />
+          );
+          const body = (
+            <>
+              {/* A peek inside the album: mini mosaic of its first photos with
+                  the name overlaid, like the smart cards. Empty albums keep the
+                  plain centered text. */}
+              {album.cover_image_ids.length > 0 ? (
+                <>
+                  <CoverMosaic imageIds={album.cover_image_ids} />
+                  <div className="smart-card-caption">
+                    <div className="smart-card-name">{nameField("album-card-input")}</div>
+                    <div className="smart-card-count">{albumCount(album)}</div>
+                  </div>
+                </>
+              ) : (
+                <div style={{ textAlign: "center", color: "var(--text)" }}>
+                  <div style={{ fontWeight: 600 }}>{nameField("album-card-input album-card-input--plain")}</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{albumCount(album)}</div>
                 </div>
-              </>
-            ) : (
-              <div style={{ textAlign: "center", color: "var(--text)" }}>
-                <div style={{ fontWeight: 600 }}>{album.name}</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{albumCount(album)}</div>
-              </div>
-            )}
-            <button
-              className="card-remove"
-              title="Delete album (photos stay in the library)"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                deleteAlbum(album.id, album.name, album.image_count);
-              }}
+              )}
+              {!renaming && (
+                <button
+                  className="card-rename"
+                  title="Rename album"
+                  aria-label={`Rename album ${album.name}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setRenamingId(album.id);
+                  }}
+                >
+                  <IconPencil size={13} />
+                </button>
+              )}
+              <button
+                className="card-remove"
+                title="Delete album (photos stay in the library)"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  deleteAlbum(album.id, album.name, album.image_count);
+                }}
+              >
+                ×
+              </button>
+            </>
+          );
+          const cardStyle = {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            textDecoration: "none",
+          } as const;
+          // While the name is being edited the tile stops being a link - a
+          // click in the text box would otherwise open the album.
+          return renaming ? (
+            <div key={album.id} className="thumb-card has-remove" style={cardStyle}>
+              {body}
+            </div>
+          ) : (
+            <Link
+              key={album.id}
+              to={`/albums/${album.id}`}
+              className="thumb-card has-remove"
+              style={cardStyle}
             >
-              ×
-            </button>
-          </Link>
-        ))}
+              {body}
+            </Link>
+          );
+        })}
         {/* Same trailing spacer as the photo grids: soaks up final-row slack so
             a lone album card keeps its normal size instead of stretching huge. */}
         <i className="grid-filler" aria-hidden />

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
@@ -9,9 +9,10 @@ import { TagFilter } from "../components/TagFilter";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { AlbumPicker } from "../components/AlbumPicker";
+import { AlbumNameField } from "../components/AlbumNameField";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
-import { IconTrash } from "../components/Icons";
+import { IconArrowLeft, IconPencil, IconTrash } from "../components/Icons";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { Dropdown } from "../components/Dropdown";
 import { loadPresets } from "../utils/presets";
@@ -44,6 +45,7 @@ export function AlbumDetail() {
   // below must treat the shown JPEG as standing for its hidden RAW partner.
   const mergePairs = viewMode === "combined";
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
+  const [renaming, setRenaming] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const q = (searchParams.get("q") ?? "").trim();
 
@@ -348,7 +350,38 @@ export function AlbumDetail() {
     <div className="page page-timeline">
       {pairDeleteDialog}
       <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {album?.name ?? "Album"}
+        {/* Same Back button as the photo view, the import review and the
+            editor - one look for leaving any view. */}
+        <Link to="/albums" className="btn btn-sm back-btn" title="Back to albums">
+          <IconArrowLeft size={13} /> Back
+        </Link>
+        {album ? (
+          /* The album's name is the user's own - click it (or the pencil) to
+             rename it right here. */
+          <>
+            <AlbumNameField
+              albumId={album.id}
+              name={album.name}
+              editing={renaming}
+              onEditingChange={setRenaming}
+              className="album-title-name"
+              inputClassName="album-title-input"
+              clickToEdit
+            />
+            {!renaming && (
+              <button
+                className="btn ghost btn-sm album-rename-btn"
+                title="Rename this album"
+                aria-label="Rename this album"
+                onClick={() => setRenaming(true)}
+              >
+                <IconPencil size={14} />
+              </button>
+            )}
+          </>
+        ) : (
+          "Album"
+        )}
         {album && <span className="count-pill">{album.image_count} photos</span>}
         {album && (
           /* Always visible - with no tags in the library yet the picker just

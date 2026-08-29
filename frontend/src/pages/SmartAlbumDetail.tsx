@@ -57,8 +57,10 @@ export function SmartAlbumDetail() {
   return (
     <div className="page page-timeline">
       <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <Link to="/albums" className="btn ghost">
-          <IconArrowLeft size={13} /> Albums
+        {/* Same Back button as the photo view, the import review and the
+            editor - one look for leaving any view. */}
+        <Link to="/albums" className="btn btn-sm back-btn" title="Back to albums">
+          <IconArrowLeft size={13} /> Back
         </Link>
         {meta?.name ?? "Smart album"}
         {meta && <span className="count-pill">{meta.image_count} photos</span>}

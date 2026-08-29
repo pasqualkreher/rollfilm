@@ -34,10 +34,9 @@
      bias neither the highlights nor the shadows the way a panel-coloured
      surround does. Deliberately NOT themed: a photo has to look the same in
      all three views AND under every skin, so no theme block overrides these.
-     Percentages are ink coverage (12.5% is nearly white, 50% is mid grey). */
-  --stage-lightest: #dfdfdf; /* 12.5% */
-  --stage-light: #bfbfbf; /* 25% */
-  --stage-medium: #808080; /* 50% */
+     Percentages are ink coverage (6% is paper white, 50% is mid grey). */
+  --stage-lightest: #f0f0f0; /* 6% - "Paper": off-white, not screen white */
+  --stage-light: #bfbfbf; /* 25% - "Gray", the default surround */
   --stage-dark: #000000;
   /* Corner style (Settings → Appearance): every radius in this file is a
      multiple of --corner-scale, so data-corners="square" (state/corners.ts)
@@ -79,13 +78,15 @@
 
 
 /* ---- Skins ---------------------------------------------------------------
-   Three pairs, each a light and a dark cut of the same idea:
+   Four pairs, each a light and a dark cut of the same idea:
 
    Graphite - neutral greys with a light-black accent; the quietest of the
-              three and the default pair.
+              four and the default pair.
    Slate    - the same restraint pulled cool, steel blue instead of grey.
    Ink      - high contrast: paper white against near-black, so the surround
               drops away and only the photo carries colour.
+   Orange   - the warm one: barely-tinted surfaces and a burnt-orange accent,
+              the only skin whose colour you notice on the controls.
 
    data-theme="graphite" needs no block of its own - :root above already is
    that palette. */
@@ -174,6 +175,44 @@
   --danger: #e5675a;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+/* Orange - warm off-white surfaces (a trace of ochre, well short of sepia) with
+   burnt orange doing the work of the accent. The one skin with visible colour
+   in the chrome, kept dark and unsaturated enough that white sits legibly on
+   it and it never reads as part of the photo. --danger is pushed towards red
+   so a destructive button still separates from the accent. */
+:root[data-theme="orange"] {
+  --bg: #f6f2ee;
+  --bg-elevated: #fdfbf9;
+  --hover: #ece4dc;
+  --border: #e0d6cc;
+  --text: #2e2823;
+  --text-muted: #7b7169;
+  --accent: #b35a1f;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(179, 90, 31, 0.13);
+  --danger: #b03027;
+  color-scheme: light;
+}
+
+/* Orange Dark - the same warmth at night: charcoal warmed just off neutral,
+   and the accent lifted to a soft amber, because burnt orange goes muddy
+   against a dark surround. */
+:root[data-theme="orange-dark"] {
+  --bg: #2a2421;
+  --bg-elevated: #332c28;
+  --hover: #3d3530;
+  --border: #473d37;
+  --text: #f4efea;
+  --text-muted: #a09389;
+  --accent: #e08a4a;
+  --accent-contrast: #241c17;
+  --accent-soft: rgba(224, 138, 74, 0.16);
+  --danger: #e4574a;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
 }
 
@@ -618,6 +657,8 @@ button {
    wheel/trackpad/drag. Settings and Albums have no scrubber, so they keep the
    app's slim always-visible scrollbar (the global ::-webkit-scrollbar style)
    whenever their content actually overflows.
+   Help is a long text page with a sticky chapter bar, no scrubber either, so
+   it keeps the scrollbar too - same as Settings.
    Search results and other flat grids have no scrubber either - they're ranked
    or curated, not a timeline - so hiding the scrollbar there left the right
    edge empty: no way to grab the view, and no sense of how far down the
@@ -625,12 +666,12 @@ button {
    marker the timeline roots (VirtualTimeline / ThumbnailGrid) carry; matching
    it as a direct child keeps the :has() cheap on a grid of thousands of
    tiles. */
-.page:not(.settings-page):not(.albums-page):not(.stats-page),
+.page:not(.settings-page):not(.albums-page):not(.stats-page):not(.help-page),
 .page-scroll:has(> .has-scrubber) {
   scrollbar-width: none;
 }
 
-.page:not(.settings-page):not(.albums-page):not(.stats-page)::-webkit-scrollbar,
+.page:not(.settings-page):not(.albums-page):not(.stats-page):not(.help-page)::-webkit-scrollbar,
 .page-scroll:has(> .has-scrubber)::-webkit-scrollbar {
   width: 0;
   height: 0;
@@ -1791,6 +1832,53 @@ textarea:focus-visible {
   color: var(--text-muted);
 }
 
+/* Whole-day tick in an import day heading (select mode only). Baseline
+   alignment is what the rest of the pill uses; a checkbox has no useful
+   baseline, so it centres itself instead. */
+.timeline-header .section-select-checkbox {
+  align-self: center;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* "June" / "2026" - take a whole month or year at once. Only rendered when the
+   batch actually spans more than one, so they stay rare enough to be quiet. */
+.timeline-header-scopes {
+  display: flex;
+  align-self: center;
+  gap: 4px;
+}
+
+.section-scope-btn {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: calc(6px * var(--corner-scale));
+  cursor: pointer;
+}
+
+.section-scope-btn:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.section-scope-btn.partial {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.section-scope-btn.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 /* Reserve a right gutter on the whole page so every row - the filter bar
    included, not just the photo grid - ends before the fixed scrubber and can't
    sit underneath it. */
@@ -2194,6 +2282,92 @@ textarea:focus-visible {
   opacity: 1;
 }
 
+/* Rename (pencil) sits left of the delete x on an album card, appearing on
+   hover the same way. */
+.card-rename {
+  position: absolute;
+  top: 6px;
+  right: 38px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: calc(8px * var(--corner-scale));
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease;
+}
+
+.thumb-card:hover .card-rename,
+.card-rename:focus-visible {
+  opacity: 1;
+}
+
+.card-rename:hover {
+  background: var(--accent);
+}
+
+/* Renaming in place: the box takes the slot the name text had, on the card
+   and in the album page's title, so nothing around it shifts. */
+.album-card-input {
+  width: 100%;
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.album-card-input--plain {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* The album page's own title: text and box share the heading's type, so
+   clicking the name doesn't make the header jump. */
+.album-title-name {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: text;
+}
+
+.album-title-input {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  letter-spacing: inherit;
+  min-width: 12ch;
+}
+
+/* The pencil next to the album title stays quiet until the header is hovered
+   or it is tabbed to. */
+.album-rename-btn {
+  padding: 2px 5px;
+  line-height: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.section-title:hover .album-rename-btn,
+.album-rename-btn:focus-visible {
+  opacity: 1;
+}
+
 /* When a remove button occupies the top-right, drop the RAW+JPG badge below it
    so the two don't overlap. */
 .thumb-card.has-remove .badge {
@@ -2399,21 +2573,28 @@ textarea:focus-visible {
   background: var(--stage-light);
 }
 
-.editor-stage-medium .editor-stage-main {
-  background: var(--stage-medium);
-}
-
 /* Light/Black background switch in its own row under the image (like the
    lightbox toolbar), not floating over the photo. */
 .editor-bg-toggle {
   display: flex;
   justify-content: center;
   align-items: center;
-  /* Background steps, the zoom control and hold-to-compare share this row; on
-     a narrow window it wraps rather than pushing the compare button off. */
+  /* Background steps, the zoom control, hold-to-compare and the two compare
+     modes share this row. It stays ONE line for as long as it can (see the
+     container queries by .zoom-readout-hint - the row sheds the hint, then
+     tightens, before it wraps) and only wraps once even that won't fit. */
   flex-wrap: wrap;
   gap: 10px;
-  padding-top: 14px;
+  /* Measured by the row itself, not the window: the editor's stage is a side
+     panel narrower than the viewport, so a viewport breakpoint kept the hint
+     on a "wide" window and wrapped the row anyway. */
+  container-type: inline-size;
+  container-name: stage-toolbar;
+  margin-top: 14px;
+  /* As on the photo view: anchors the left-flush Back button, side padding
+     keeps the centred controls clear of it. */
+  position: relative;
+  padding: 0 96px;
 }
 
 /* Hold-to-compare button; highlights while the original is being shown. */
@@ -2588,14 +2769,22 @@ textarea:focus-visible {
 .editor-histogram-pinned {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 3;
   background: var(--bg-elevated);
   /* Pulled out to the panel's edges and padded back in, so the strip that
      covers the scrolling sliders spans the full width - inside the body's
-     padding, they would slide past in the gutters either side. */
+     padding, they would slide past in the gutters either side. Nothing may
+     show through above it either, hence the top padding rather than a margin
+     on the plot, and the scroll container's own top padding being zero. */
   margin: 0 -20px 2px;
-  padding: 0 20px 6px;
+  padding: 10px 20px 8px;
   border-bottom: 1px solid var(--border);
+}
+
+/* Inside the pinned block the plot carries no margin of its own - the block's
+   padding is the whole spacing, and nothing may show through it. */
+.editor-histogram-pinned .editor-histogram {
+  margin: 0;
 }
 
 /* Live RGB histogram at the top of the edit panel (always a dark plot, like
@@ -2862,7 +3051,16 @@ input.editor-preset-select {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 20px 20px 18px;
+  /* No padding at the TOP: this element is the scroll container, and a sticky
+     child (the histogram) comes to rest below its top padding - leaving a band
+     the width of that padding in which the group headers could be seen sliding
+     past behind it. The space is carried by the first child instead, where it
+     scrolls away like any other content. */
+  padding: 0 20px 18px;
+}
+
+.editor-panel-body > :first-child {
+  margin-top: 20px;
 }
 
 .editor-sliders {
@@ -2929,6 +3127,20 @@ input.editor-preset-select {
   justify-content: space-between;
 }
 
+/* Undo / redo sit at the left end of the secondary row, opposite Reset all -
+   the three are the same kind of action (they move the edit around) and none of
+   them is what the footer is primarily for. Sized down from the standard 36px
+   icon button so they match the small ghost buttons beside them. */
+.editor-history-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.editor-history-btns .icon-btn {
+  width: 30px;
+  height: 30px;
+}
+
 .editor-footer-primary {
   display: flex;
   gap: 8px;
@@ -2965,8 +3177,16 @@ input.editor-preset-select {
     padding: 0;
   }
 
-  .editor-back-btn {
-    margin-top: 0;
+  /* No room for a reserved gutter here - Back rejoins the row as its first
+     item and wraps with the rest. */
+  .editor-bg-toggle {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .editor-bg-toggle .stage-back-btn {
+    position: static;
+    transform: none;
   }
 
   .editor-panel {
@@ -3453,17 +3673,30 @@ input.editor-preset-select {
 }
 
 .lightbox-nav-btn {
-  /* Pinned to the viewport edges (not laid out inline next to the image) so
+  /* Pinned to the stage edges (not laid out inline next to the image) so
      they're never pushed off-screen on narrower windows, regardless of how
-     wide the image itself renders. */
+     wide the image itself renders. The stage reserves a side gutter this wide
+     (.detail-image padding), so they sit beside the photo, never on it. */
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  background: rgba(255, 255, 255, 0.1);
-  border: none;
-  color: #fff;
-  width: 56px;
-  height: 56px;
+  /* Above the photo. The zoom hands the <img> a transform, which makes it
+     paint in the same layer as positioned elements - so DOM order decided,
+     and the prev arrow (written before the <img>) disappeared underneath it
+     while the next arrow stayed on top. */
+  z-index: 2;
+  /* Opaque, not a translucent glass disc. Whenever the photo doesn't fill the
+     stage the arrow straddles its edge, and a see-through fill read as a
+     circle over the photo but as almost nothing over the black surround - the
+     button looked cut in half. The app's own elevated surface looks identical
+     on any backdrop and under every stage shade; the shadow lifts it off the
+     photo. Same chip as .icon-btn elsewhere, just round and a size up. */
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   cursor: pointer;
   flex-shrink: 0;
@@ -3476,6 +3709,20 @@ input.editor-preset-select {
   justify-content: center;
   padding: 0;
   line-height: 0;
+  /* It sits in the stage's side gutter next to the photo - quiet until the
+     pointer wants it. */
+  opacity: 0.72;
+  transition: opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.lightbox-nav-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--hover);
+  border-color: var(--text-muted);
+}
+
+.lightbox-nav-btn:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.94);
 }
 
 .lightbox-nav-prev {
@@ -3487,7 +3734,7 @@ input.editor-preset-select {
 }
 
 .lightbox-nav-btn:disabled {
-  opacity: 0.2;
+  opacity: 0.25;
   cursor: not-allowed;
 }
 
@@ -3617,13 +3864,26 @@ input.editor-preset-select {
   cursor: not-allowed;
 }
 
-/* Back/exit arrow in its own slim column to the left of the image area, top
-   aligned. The negative margin tightens the layout's 40px column gap to a
-   comfortable distance without affecting the other columns. */
-.detail-back-btn {
-  align-self: flex-start;
+/* The app's way out of a view: an arrow and a word, not a bare glyph. One
+   look everywhere it appears - the photo view, the import review, the editor
+   and the album pages - so leaving a screen always looks the same. */
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex-shrink: 0;
-  margin-right: -24px;
+}
+
+/* Placement for the three photo stages, whose Back rides in the control row
+   under the picture: flush with the left edge of the photo above it, while the
+   background/zoom controls stay centred - so it's taken out of the row's flow
+   rather than pushing that group off-centre. The row reserves side padding for
+   it (below), so the two can't collide. */
+.stage-back-btn {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 /* An on/off toggle that reads as "enabled" via a soft accent tint, not a heavy
@@ -3749,16 +4009,19 @@ input.editor-preset-select {
   justify-content: center;
   /* Same three steps as the editor's stage (below): the photo must not change
      appearance between browsing it, reviewing it in the import and developing
-     it. Mid grey is the default; the modifier classes carry the other two. */
-  background: var(--stage-medium);
+     it. Gray is the default; the modifier classes carry the other two. */
+  background: var(--stage-light);
   border-radius: calc(12px * var(--corner-scale));
   /* Clips the zoomed-in photo to the frame (the loupe effect). */
   overflow: hidden;
   min-height: 0;
   /* Bigger top/bottom inset than the sides so the light-table background shows
      as a clear band above and below the photo instead of the image sitting
-     flush to the frame edges. */
-  padding: 40px 16px;
+     flush to the frame edges. The side inset also reserves the columns the
+     prev/next arrows live in (20px inset + 44px button + a little air), so a
+     wide photo fits BESIDE the arrows instead of running underneath them -
+     the fit maths subtracts this padding (see useImageZoomPan). */
+  padding: 40px 72px;
 }
 
 .detail-image-lightest {
@@ -3767,10 +4030,6 @@ input.editor-preset-select {
 
 .detail-image-light {
   background: var(--stage-light);
-}
-
-.detail-image-medium {
-  background: var(--stage-medium);
 }
 
 .detail-image-dark {
@@ -3855,12 +4114,36 @@ input.editor-preset-select {
   align-items: center;
   justify-content: center;
   gap: 16px;
+  /* One line while it fits - the hint drops out first, then the gaps tighten;
+     wrapping is the last resort. Same ladder as the editor's row. */
   flex-wrap: wrap;
+  container-type: inline-size;
+  container-name: stage-toolbar;
+  /* Anchors the left-flush Back button; the side padding keeps the centred
+     controls clear of it. */
+  position: relative;
+  padding: 0 96px;
 }
 
 .detail-zoom-hint {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* Caption in front of a segmented control ("Background", "Zoom"). Two of these
+   sit side by side under a photo, and the steps of both are bare numbers -
+   without the caption "12.5%" and "100%" read as the same kind of setting. */
+.control-caption {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* A caption plus its segmented control, kept together when the toolbar wraps. */
+.labeled-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps, the
@@ -3886,11 +4169,31 @@ input.editor-preset-select {
   color: var(--text-muted);
 }
 
-/* Narrow windows: the hint is the first thing to go - the buttons and the
-   number carry the same information in less space. */
-@media (max-width: 1100px) {
+/* How the stage toolbars stay on one line. Both rows are size containers, so
+   these steps fire on the ROW's width, which is what actually runs out - the
+   window can be wide while the stage is not (side panel), and the panel can be
+   collapsed without the window changing at all.
+   The hint goes first: it is the widest piece and the only one whose content
+   is also carried by the buttons and the percentage beside it. */
+@container stage-toolbar (max-width: 980px) {
   .zoom-readout-hint {
     display: none;
+  }
+}
+
+/* Then the breathing room between the controls, which buys another step
+   before the row has to break. */
+@container stage-toolbar (max-width: 760px) {
+  .zoom-readout {
+    gap: 6px;
+  }
+
+  .labeled-control {
+    gap: 6px;
+  }
+
+  .zoom-readout-value {
+    min-width: 36px;
   }
 }
 
@@ -4221,6 +4524,32 @@ input.editor-preset-select {
   white-space: nowrap;
 }
 
+/* Collapsed: the panel is out of the layout entirely (not just narrowed), so
+   the photo column takes the freed width and the 40px gap goes with it. Kept
+   mounted rather than unmounted so its scroll position - and a half-typed
+   description - survive a hide/show. The doubled class keeps this ahead of
+   the plain .detail-panel rule below, which sets display: flex and would
+   otherwise win on source order. */
+.detail-panel.detail-panel--collapsed {
+  display: none;
+}
+
+/* The handle that does it. Mirror of .stage-back-btn: flush with the right
+   edge of the photo above it, taken out of the row's flow so the centred
+   background/zoom group stays centred (the row reserves 96px on both sides).
+   In its own slim column right of the panel it cost a strip of width in both
+   states - here it costs none. */
+.detail-panel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .detail-panel {
   flex: 1 1 280px;
   max-width: 320px;
@@ -4296,9 +4625,37 @@ input.editor-preset-select {
     flex-wrap: wrap;
   }
 
-  /* Tighter band around the photo - 40px insets waste space on small screens. */
+  /* Tighter band around the photo - 40px insets waste space on small screens.
+     The sides still keep a gutter for the prev/next arrows (shrunk below), so
+     the photo never runs underneath them. */
   .detail-image {
-    padding: 16px 10px;
+    padding: 16px 52px;
+  }
+
+  .lightbox-nav-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .lightbox-nav-prev {
+    left: 8px;
+  }
+
+  .lightbox-nav-next {
+    right: 8px;
+  }
+
+  /* Same on the stacked photo view: no reserved gutter, Back wraps with the
+     rest of the row. */
+  .detail-image-toolbar {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .detail-image-toolbar .stage-back-btn,
+  .detail-image-toolbar .detail-panel-toggle {
+    position: static;
+    transform: none;
   }
 
   .detail-image {
@@ -4444,6 +4801,14 @@ input.editor-preset-select {
   color: var(--text);
   font-size: 13px;
   width: fit-content;
+}
+
+/* Inline action inside a banner - "Stop copying & keep these". Sized down so
+   the banner stays a sentence with a button in it, not a toolbar. */
+.import-staging-banner .btn-slim {
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .import-staging-banner--error {
@@ -4989,38 +5354,169 @@ input.editor-preset-select {
   max-width: 820px;
 }
 
-.help-toc {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 2px 18px;
-  padding: 14px 16px;
-  margin: 8px 0;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+/* Exactly what Settings does (see .settings-page): the page's own 20px top
+   padding is the sticky chapter bar's containing-block edge, and a sticky box
+   can't rise past it — so a strip of scrolled text kept running past above the
+   tabs. The padding moves onto the title, which lets the bar stick flush with
+   the top of the scroller and cover everything that passes under it. */
+.help-page {
+  padding-top: 0;
 }
 
-.help-toc-link {
+.help-page .section-title {
+  padding-top: 20px;
+}
+
+.help-sub {
+  color: var(--text-muted);
+  margin: 0 0 4px;
+}
+
+/* Chapter switcher. Same shape as the Settings tabs — one visual language for
+   "this page has more than fits on a screen". */
+.help-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  /* Seven chapters on one row. They only just fit at the page width, so the
+     row scrolls sideways - with the app's slim scrollbar visible, so a
+     narrow window shows there is more to reach - rather than wrapping to a
+     ragged second line. (No scrollbar-width here: setting the standard
+     property makes Chromium drop the ::-webkit-scrollbar styling.) */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  /* Explicitly hidden: `overflow-x: auto` alone makes the vertical axis `auto`
+     too, and the tabs' 1px underline overhang (margin-bottom: -1px) counts as
+     overflow - which put a stubby vertical scrollbar at the end of the row. */
+  overflow-y: hidden;
+  gap: 0;
+  margin: 12px 0 16px;
+  padding: 4px 0 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.help-tab {
+  appearance: none;
   border: none;
-  background: transparent;
-  color: var(--accent);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
   font-size: 14px;
-  text-align: left;
-  padding: 3px 0;
+  padding: 8px 8px 10px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  cursor: pointer;
+  /* Always-present underline, transparent until active, so nothing shifts by a
+     pixel when a chapter is selected. */
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.help-tab:hover {
+  color: var(--text);
+}
+
+.help-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* One line under the tabs saying what the chapter covers. */
+.help-blurb {
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Jump list for the topics inside the open chapter. */
+.help-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.help-jump-link {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 12px;
   cursor: pointer;
 }
 
-.help-toc-link:hover {
-  text-decoration: underline;
+.help-jump-link:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Every topic has the same shape: rule, heading, where-line, lead, detail. */
+.help-topic {
+  border-top: 1px solid var(--border);
+  margin-top: 30px;
+  padding-top: 22px;
 }
 
 .help-page h3 {
-  margin-top: 32px;
-  scroll-margin-top: 12px;
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  /* Cleared by the sticky tab row when a jump link scrolls to it. */
+  scroll-margin-top: 52px;
+}
+
+/* Where to find the thing being described. */
+.help-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.help-where-label {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The one sentence that says what this topic is. Set slightly larger than the
+   detail below it, so a chapter can be skimmed by reading only these. */
+.help-lead {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+/* The single thing worth remembering about the topic above it. */
+.help-tip {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .help-page h4 {
-  margin: 18px 0 6px;
+  margin: 20px 0 6px;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
 }
 
 .help-page p,
@@ -5031,6 +5527,10 @@ input.editor-preset-select {
 .help-page ul,
 .help-page ol {
   padding-left: 22px;
+}
+
+.help-page li + li {
+  margin-top: 5px;
 }
 
 kbd {
@@ -5584,16 +6084,6 @@ kbd {
   padding-block: 4px 8px;
 }
 
-/* Editor: back button in its own slim column left of the stage (matches the
-   detail lightbox's back arrow placement). */
-.editor-back-btn {
-  align-self: flex-start;
-  flex-shrink: 0;
-  /* Its own top inset, now that .editor-body has none - keeps the arrow level
-     with the top of the image box. */
-  margin-top: 16px;
-}
-
 /* ---- Settings: appearance picker ----------------------------------------- */
 
 /* Light / Dark / Auto, above the two skin grids. Same shape as the Corners row
@@ -5840,7 +6330,21 @@ kbd {
 /* ---- Settings: flat sections, separated by a divider -------------------- */
 
 /* Tabs across the top of Settings. Sticky, so switching group is possible from
-   anywhere down a long section without scrolling back up first. */
+   anywhere down a long section without scrolling back up first.
+
+   The page's own 20px top padding is the bar's containing block edge, and a
+   sticky box can't rise past it - so a strip of scrolled text kept running
+   past above the tabs. The padding moves onto the title instead, which lets
+   the bar stick flush with the top of the scroller and cover everything that
+   passes under it. */
+.settings-page {
+  padding-top: 0;
+}
+
+.settings-page > .section-title {
+  padding-top: 20px;
+}
+
 .settings-tabs {
   position: sticky;
   top: 0;
@@ -6349,8 +6853,29 @@ button.smart-card {
    .page scrollbar rules), so only the content blocks are width-capped. */
 .stats-tiles,
 .stats-card--wide,
-.stats-cards {
+.stats-cards,
+.stats-page-sub,
+.stats-section-label {
   max-width: 1080px;
+}
+
+/* One line under the page title saying what the dashboard is about, so the
+   numbers below don't start cold. */
+.stats-page-sub {
+  margin: -6px 0 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Group headings between the blocks ("Timeline", "Gear & library") - quiet
+   uppercase labels, not competing with the page title or the card titles. */
+.stats-section-label {
+  margin: 22px 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .stats-tiles {
@@ -6361,6 +6886,7 @@ button.smart-card {
 }
 
 .stat-tile {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -6368,6 +6894,39 @@ button.smart-card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  /* A hairline of accent along the top edge: enough to tie the tiles to the
+     charts' single accent series without tinting the whole card. */
+  background-image: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--accent) 55%, transparent),
+    color-mix(in srgb, var(--accent) 12%, transparent)
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 2px;
+  background-position: top left;
+  transition: border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.stat-tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-pop);
+}
+
+/* The tile's subject, top right in an accent-tinted chip - names the number
+   at a glance while the value keeps the reading order. */
+.stat-tile-icon {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .stat-tile-value {
@@ -6375,6 +6934,9 @@ button.smart-card {
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+  /* Clear of the icon chip, so a long value (a size like "12.34 TB") wraps
+     instead of running under it. */
+  padding-right: 28px;
 }
 
 .stat-tile-label {
@@ -6382,16 +6944,37 @@ button.smart-card {
   color: var(--text-muted);
 }
 
+/* Share of the library as a bar, for the tiles that have one (edited, rated,
+   with location): comparable at a glance, with the exact percentage still
+   written underneath. */
+.stat-tile-meter {
+  display: block;
+  height: 4px;
+  margin-top: 7px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  overflow: hidden;
+}
+
+.stat-tile-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: stats-grow-x 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transform-origin: left center;
+}
+
 .stat-tile-sub {
   font-size: 11px;
   color: var(--text-muted);
+  margin-top: 3px;
 }
 
 .stats-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 10px;
-  margin-top: 10px;
   align-items: start;
 }
 
@@ -6400,6 +6983,32 @@ button.smart-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 14px 16px 16px;
+  transition: border-color 0.14s ease;
+}
+
+.stats-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+/* Title on the left, a one-line takeaway on the right (the year chart's
+   busiest year) - wraps under the title when there isn't room. */
+.stats-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.stats-card-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stats-card-note strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .stats-card-title {
@@ -6421,10 +7030,15 @@ button.smart-card {
 
 .stats-bar-row {
   display: grid;
-  grid-template-columns: minmax(90px, 42%) 1fr auto;
+  grid-template-columns: minmax(90px, 38%) 1fr auto;
   align-items: center;
   gap: 10px;
   font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+
+.stats-bar-row:hover .stats-bar-fill {
+  opacity: 1 !important;
 }
 
 .stats-bar-label {
@@ -6435,32 +7049,103 @@ button.smart-card {
 
 .stats-bar-track {
   display: block;
-  height: 8px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  height: 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  overflow: hidden;
 }
 
 .stats-bar-fill {
   display: block;
   height: 100%;
-  min-width: 2px;
-  border-radius: 4px;
-  background: var(--accent);
+  min-width: 3px;
+  border-radius: 5px;
+  /* Single accent series, lit slightly along its length so a wide bar isn't a
+     flat slab. The per-row opacity (set inline) fades the ranking downwards. */
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--accent) 82%, transparent),
+    var(--accent)
+  );
+  animation: stats-grow-x 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transform-origin: left center;
+  transition: opacity 0.14s ease;
 }
 
 .stats-bar-count {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
-/* Photos-per-year column chart: thin accent columns with rounded data ends on
-   a hairline baseline; counts sit above the columns while they fit. */
+/* The row's share of its own list, behind the count - a second, comparable
+   reading of the same bar. */
+.stats-bar-share {
+  min-width: 30px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+/* Photos-per-year column chart: a scale column of ticks, gridlines behind the
+   plot, and thin accent columns with rounded data ends. */
+.stats-chart {
+  display: flex;
+  gap: 10px;
+  height: 200px;
+  margin-top: 10px;
+}
+
+.stats-chart-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  /* Matches the year-label row under the plot (16px label + 4px gap) so the
+     ticks sit level with the gridlines. */
+  margin-bottom: 20px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.stats-chart-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Max / half / zero, drawn behind the columns. The bottom one is the chart's
+   baseline, so it gets the solid border the columns used to carry. */
+.stats-chart-lines {
+  position: absolute;
+  inset: 0 0 20px 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.stats-chart-lines span {
+  display: block;
+  height: 1px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+.stats-chart-lines span:last-child {
+  background: var(--border);
+}
+
 .stats-cols {
+  position: relative;
   display: flex;
   align-items: stretch;
   gap: 6px;
-  height: 180px;
-  margin-top: 8px;
+  height: 100%;
 }
 
 .stats-col {
@@ -6479,29 +7164,89 @@ button.smart-card {
   align-items: center;
   justify-content: flex-end;
   gap: 3px;
-  border-bottom: 1px solid var(--border);
 }
 
 .stats-col-count {
   font-size: 10px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+  transition: color 0.14s ease;
 }
 
 .stats-col-bar {
   display: block;
   width: min(28px, 100%);
   border-radius: 4px 4px 0 0;
-  background: var(--accent);
+  /* Denser at the base, lighter towards the data end - reads as a column
+     standing on the baseline rather than a floating block. */
+  background: linear-gradient(
+    to top,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 62%, transparent)
+  );
+  opacity: 0.85;
+  animation: stats-grow-y 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transform-origin: bottom center;
+  transition: opacity 0.14s ease;
+}
+
+/* The busiest year (called out in the card's header) stands at full strength,
+   and any column lights up under the pointer. */
+.stats-col.is-peak .stats-col-bar,
+.stats-col:hover .stats-col-bar {
+  opacity: 1;
+}
+
+.stats-col.is-peak .stats-col-count,
+.stats-col:hover .stats-col-count {
+  color: var(--text);
 }
 
 .stats-col-label {
+  height: 16px;
+  line-height: 16px;
   font-size: 11px;
   color: var(--text-muted);
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.stats-col.is-peak .stats-col-label {
+  color: var(--text);
+}
+
+/* Bars and columns grow in once, from their own baseline, so the page reads
+   as data arriving rather than as a static table. */
+@keyframes stats-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes stats-grow-y {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stats-bar-fill,
+  .stat-tile-meter-fill,
+  .stats-col-bar {
+    animation: none;
+  }
+
+  .stat-tile:hover {
+    transform: none;
+  }
 }
 
 /* Import review only: skip layout+paint for sections far from the viewport.
@@ -6555,25 +7300,16 @@ button.smart-card {
   z-index: 2;
 }
 
-/* Nav arrows anchor to the image box (nearest positioned ancestor). On the
-   light box the old white-glass arrows vanished - use text-tinted fills. */
-.lightbox-stage .lightbox-nav-btn {
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-  color: var(--text);
-}
+/* Nav arrows anchor to the image box (nearest positioned ancestor); the chip
+   itself is opaque, so no per-stage-shade tinting is needed. */
 
-.lightbox-stage .lightbox-nav-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text) 18%, transparent);
-}
-
-.lightbox-stage.detail-image-dark .lightbox-nav-btn {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-}
-
+/* The review bar is a band above the photo - it never covers image pixels,
+   and the stage keeps its full height below it. */
 .lightbox-overlay--page .lightbox-controls {
   width: auto;
   align-self: stretch;
+  padding: 9px 16px;
+  gap: 10px 20px;
   color: var(--text);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -6588,4 +7324,38 @@ button.smart-card {
 
 .lightbox-overlay--page .lightbox-counter {
   color: var(--text-muted);
+}
+
+/* Nothing in the bar may shift as the photo changes: every item whose text
+   varies in length gets a fixed slot, so the filename, the counter and the
+   rating stars stay on the same pixel column all the way through a review.
+   Longest values sized in: "RAW+JPG", "Already in library", "999 / 999". */
+.lightbox-overlay--page .lightbox-filename {
+  flex: 0 0 auto;
+  width: 24ch;
+  max-width: 24ch;
+}
+
+.lightbox-overlay--page .lightbox-controls-meta .badge-inline {
+  flex: 0 0 auto;
+  min-width: 58px;
+  text-align: center;
+}
+
+.lightbox-overlay--page .lightbox-controls-meta .lightbox-counter {
+  flex: 0 0 auto;
+  /* Digits of equal width - "6 / 50" and "19 / 50" occupy the same box. */
+  font-variant-numeric: tabular-nums;
+}
+
+.lightbox-overlay--page .lightbox-counter--index {
+  min-width: 9ch;
+}
+
+.lightbox-overlay--page .lightbox-import-toggle {
+  flex: 0 0 auto;
+  /* Wide enough for the longest label ("Already in library"), so swapping to
+     the short one doesn't drag the stars sideways. */
+  min-width: 172px;
+  justify-content: center;
 }

@@ -87,6 +87,9 @@ export function ImportWizard() {
     startFolderImport,
     startFilesImport,
     cancelUpload,
+    canStopStaging,
+    stagingStopped,
+    stopStaging,
     reset,
   } = useImportSession();
   // Review is open (sessionId set) but the remaining batches are still copying
@@ -95,6 +98,10 @@ export function ImportWizard() {
   // Copying is done but the background analysis (thumbnails, EXIF, duplicate
   // detection) hasn't caught up yet - reviewing works, committing is blocked.
   const analyzingInBackground = !!sessionId && !isUploading && analysisPending;
+  // The user pressed "Stop copying" and the staging loop has since wound down:
+  // the batch is deliberately short, so say so instead of leaving them to
+  // wonder where the rest of the card went.
+  const stoppedEarly = !!sessionId && stagingStopped && !isUploading;
   const [hideDuplicates, setHideDuplicates] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("combined");
   const [ratingMin, setRatingMin] = useState(0);
@@ -546,23 +553,132 @@ export function ImportWizard() {
   }
 
   // Library-style selection: in select mode, click a card to toggle whether
-  // it's imported, shift-click to select the whole range since the last click.
-  // (Exact duplicates can't be imported, so they're skipped.) Outside select
-  // mode a plain click opens the lightbox preview instead - the per-card
-  // checkbox still toggles import selection in either mode.
+  // it's imported, shift-click to apply that toggle to the whole range since
+  // the last click. (Exact duplicates can't be imported, so they're skipped.)
+  // Outside select mode a plain click opens the lightbox preview instead - the
+  // per-card checkbox still toggles import selection in either mode.
   async function toggleStagedSelect(index: number, shiftKey: boolean) {
     const target = visibleFiles[index];
     if (!target || isDuplicate(target)) return;
     if (shiftKey && lastIndex !== null) {
+      // The range takes whatever the clicked card itself is about to become:
+      // shift-clicking an unticked card selects the run, shift-clicking a
+      // ticked one clears it again. A shift-range used to be one-way - only
+      // ever selecting - so undoing one meant clicking every card a second
+      // time.
+      const selected = !target.selected;
       const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
       const range = withPartners(visibleFiles.slice(start, end + 1)).filter((f) => !isDuplicate(f));
-      await api.import.bulkUpdateStagedFiles(sessionId!, range.map((f) => f.id), { selected: true });
+      await api.import.bulkUpdateStagedFiles(sessionId!, range.map((f) => f.id), { selected });
       queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
     } else {
       updateStaged.mutate({ fileId: target.id, patch: { selected: !target.selected } });
     }
     setLastIndex(index);
   }
+
+  // Selection state per day / month / year of the review grid, counted once per
+  // render pass instead of per section header: the grid keeps a header mounted
+  // for every day in the batch, and re-deriving three counts inside each of
+  // them would walk the whole batch dozens of times on every poll of a running
+  // import. Duplicates are left out entirely - they can never be selected, so
+  // counting them would pin every section at "partly selected" forever.
+  const sectionCounts = useMemo(() => {
+    const days = new Map<string, { monthKey: string; yearKey: string; monthLabel: string; yearLabel: string }>();
+    const counts = new Map<string, { total: number; selected: number }>();
+    const months = new Set<string>();
+    const years = new Set<string>();
+    const bump = (key: string, selected: boolean) => {
+      const c = counts.get(key) ?? { total: 0, selected: 0 };
+      c.total += 1;
+      if (selected) c.selected += 1;
+      counts.set(key, c);
+    };
+    for (const f of visibleFiles) {
+      if (isDuplicate(f)) continue;
+      const iso = effectiveTakenAt(f);
+      if (!iso) continue;
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) continue;
+      const label = dayLabel(iso);
+      const yearKey = `y:${d.getFullYear()}`;
+      const monthKey = `m:${d.getFullYear()}-${d.getMonth()}`;
+      months.add(monthKey);
+      years.add(yearKey);
+      if (!days.has(label)) {
+        days.set(label, {
+          monthKey,
+          yearKey,
+          monthLabel: d.toLocaleDateString(undefined, { month: "long" }),
+          yearLabel: String(d.getFullYear()),
+        });
+      }
+      bump(`d:${label}`, f.selected);
+      bump(monthKey, f.selected);
+      bump(yearKey, f.selected);
+    }
+    // A batch shot on one day has exactly one month and one year, where those
+    // buttons would just be a second and third "Select all" - only offer a
+    // wider scope when the batch actually spans one.
+    return { days, counts, hasMonths: months.size > 1, hasYears: years.size > 1 };
+  }, [visibleFiles, effectiveTakenAt]);
+
+  // Which bucket a file belongs to, in the same keys sectionCounts uses.
+  const scopeKeysOf = useCallback(
+    (f: StagedFileOut): { day: string; month: string; year: string } | null => {
+      const iso = effectiveTakenAt(f);
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return null;
+      return {
+        day: `d:${dayLabel(iso)}`,
+        month: `m:${d.getFullYear()}-${d.getMonth()}`,
+        year: `y:${d.getFullYear()}`,
+      };
+    },
+    [effectiveTakenAt]
+  );
+
+  // Tick a whole day, month or year from its section header. Toggles: a scope
+  // that is already fully selected clears instead, so the same control both
+  // adds and removes - matching what shift-click now does.
+  async function toggleSectionSelect(label: string, scope: "day" | "month" | "year") {
+    const meta = sectionCounts.days.get(label);
+    if (!meta || !sessionId) return;
+    const key = scope === "day" ? `d:${label}` : scope === "month" ? meta.monthKey : meta.yearKey;
+    const counted = sectionCounts.counts.get(key);
+    if (!counted || counted.total === 0) return;
+    const selected = counted.selected < counted.total;
+    const inScope = visibleFiles.filter((f) => scopeKeysOf(f)?.[scope] === key);
+    const ids = withPartners(inScope)
+      .filter((f) => !isDuplicate(f))
+      .map((f) => f.id);
+    if (ids.length === 0) return;
+    await api.import.bulkUpdateStagedFiles(sessionId, ids, { selected });
+    queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+  }
+
+  // Handed to the grid so each day header can draw its own tri-state checkbox
+  // (and, for a batch spanning more than one, the wider month/year toggles).
+  const sectionSelect = {
+    infoOf(label: string) {
+      const meta = sectionCounts.days.get(label);
+      if (!meta) return null;
+      const stateOf = (key: string): "none" | "some" | "all" => {
+        const c = sectionCounts.counts.get(key);
+        if (!c || c.total === 0) return "none";
+        return c.selected === 0 ? "none" : c.selected === c.total ? "all" : "some";
+      };
+      return {
+        day: stateOf(`d:${label}`),
+        month: sectionCounts.hasMonths ? stateOf(meta.monthKey) : null,
+        year: sectionCounts.hasYears ? stateOf(meta.yearKey) : null,
+        monthLabel: meta.monthLabel,
+        yearLabel: meta.yearLabel,
+      };
+    },
+    onToggle: toggleSectionSelect,
+  };
 
   async function selectAll(selected: boolean) {
     // Selecting acts on the filtered view (select exactly what you see);
@@ -733,8 +849,27 @@ export function ImportWizard() {
                   Hidden once the server is past receiving bytes ("Processing"),
                   since at that point the batch is already staging server-side. */}
               {isUploading && (uploadProgress ?? 0) < 100 && (
-                <button className="btn" style={{ marginLeft: 8 }} onClick={cancelUpload}>
+                <button
+                  className="btn"
+                  style={{ marginLeft: 8 }}
+                  onClick={cancelUpload}
+                  title="Stop and throw away everything copied so far"
+                >
                   Cancel
+                </button>
+              )}
+              {/* The other way out of a long copy: stop asking for more photos
+                  but keep the ones already staged, so a card you only wanted
+                  the first part of can go straight to review. */}
+              {isUploading && canStopStaging && (
+                <button
+                  className="btn"
+                  style={{ marginLeft: 8 }}
+                  onClick={stopStaging}
+                  disabled={stagingStopped}
+                  title="Stop copying and review the photos that already made it in"
+                >
+                  {stagingStopped ? "Stopping…" : "Stop & keep copied"}
                 </button>
               )}
               {importMenuOpen && !isUploading && (
@@ -838,6 +973,24 @@ export function ImportWizard() {
                 }`
               : ""}{" "}
             — you can start reviewing now.
+            <button
+              className="btn btn-slim"
+              onClick={stopStaging}
+              disabled={stagingStopped}
+              title="Stop copying and import just the photos that already made it in"
+            >
+              {stagingStopped ? "Finishing this batch…" : "Stop copying & keep these"}
+            </button>
+          </p>
+        )}
+        {/* Stopped on purpose: the batch is short because the user said so.
+            Without this the review just looks like an import that lost half
+            the card. */}
+        {stoppedEarly && (
+          <p className="import-staging-banner" role="status">
+            Copying stopped — the {(files?.length ?? 0).toLocaleString()} photo(s) that made it in
+            are below. The rest were left where they are; import these, then import the source
+            again to pick up the others.
           </p>
         )}
         {/* Copying done, background analysis (thumbnails/EXIF/duplicates)
@@ -993,8 +1146,9 @@ export function ImportWizard() {
 
       {selectMode && (
         <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
-          Click photos to select them for import - shift-click to select a range. Or open a photo
-          and press Space to toggle it, 0-5 to rate.
+          Click photos to select them for import - shift-click to tick or clear a whole range, or
+          use the tick box on a day heading to take that day at once. Or open a photo and press
+          Space to toggle it, 0-5 to rate.
         </p>
       )}
 
@@ -1012,6 +1166,7 @@ export function ImportWizard() {
           mergePairs={mergePairs}
           viewMode={viewMode}
           onToggleSelect={toggleStagedSelect}
+          sectionSelect={sectionSelect}
           onOpen={openLightboxAt}
           onPatch={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
           warmPreviews={previewsAreCheap}

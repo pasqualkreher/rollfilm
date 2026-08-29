@@ -89,7 +89,13 @@ def library_stats(db: Session = Depends(get_db), current_user: User = Depends(ge
         total_bytes=int(total_bytes),
         raw_count=type_rows.get(FileType.raw, 0),
         jpeg_count=type_rows.get(FileType.jpeg, 0),
-        pair_count=visible.filter(Image.paired_image_id.isnot(None)).count() // 2,
+        # Only shots whose *other* half is also in the library: a photo whose
+        # partner sits in the Trash is a single file right now, and counting it
+        # made the pair total drift up by one for every second such photo.
+        pair_count=visible.filter(
+            Image.paired_image_id.in_(visible.with_entities(Image.id))
+        ).count()
+        // 2,
         edited_count=visible.filter(Image.edit_rev > 0).count(),
         with_gps_count=visible.filter(Image.gps_lat.isnot(None)).count(),
         rated_count=visible.filter(Image.rating > 0).count(),

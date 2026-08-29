@@ -3,6 +3,12 @@ import { useTransientMessage } from "../utils/transientMessage";
 import { Dropdown } from "./Dropdown";
 import { SIZE_OPTIONS } from "./ExportDialog";
 
+// The quality a copy is baked at when nobody picks one: the maximum JPEG
+// quality, which is also this dialog's starting point. A copy is a photo you
+// keep, not a file you send somewhere, so it should cost detail only when you
+// deliberately ask it to.
+export const FULL_COPY_QUALITY = 100;
+
 // The editor's Save-copy options, styled after the export dialog: pick the
 // JPEG quality and long-edge size the copy is baked at, then wait out the
 // full-resolution render right here (spinner + note instead of a progress
@@ -16,7 +22,7 @@ export function SaveCopyDialog({
   // navigates to the new photo on success, which unmounts this dialog.
   onSave: (opts: { quality: number; maxSize: number | null }) => Promise<unknown>;
 }) {
-  const [quality, setQuality] = useState(95);
+  const [quality, setQuality] = useState(FULL_COPY_QUALITY);
   const [maxSize, setMaxSize] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useTransientMessage();

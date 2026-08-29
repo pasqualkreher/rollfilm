@@ -49,6 +49,26 @@ export function dayLabel(iso: string | null | undefined): string {
   });
 }
 
+// Whole-section selection for the day headers. The wizard owns the counting
+// (it has the unfiltered batch and the pair partners); the grid only draws the
+// controls and reports clicks back.
+export interface SectionSelect {
+  // null when the section has nothing selectable in it (e.g. an all-duplicate
+  // day) - the header then draws no controls at all. `month`/`year` are null
+  // when the batch doesn't span more than one, where they'd duplicate
+  // "Select all".
+  infoOf: (label: string) => {
+    day: SectionSelectState;
+    month: SectionSelectState | null;
+    year: SectionSelectState | null;
+    monthLabel: string;
+    yearLabel: string;
+  } | null;
+  onToggle: (label: string, scope: "day" | "month" | "year") => void;
+}
+
+export type SectionSelectState = "none" | "some" | "all";
+
 interface Props {
   sessionId: string;
   // Already filtered and ordered - the flat list every index refers to.
@@ -60,6 +80,7 @@ interface Props {
   mergePairs: boolean;
   viewMode: ViewMode;
   onToggleSelect: (index: number, shiftKey: boolean) => void;
+  sectionSelect?: SectionSelect;
   onOpen: (index: number) => void;
   onPatch: (fileId: string, patch: { rating?: number; color_label?: ColorLabel }) => void;
   // Previews are only worth warming once the import has finished copying and
@@ -94,6 +115,7 @@ export function ImportReviewGrid({
   mergePairs,
   viewMode,
   onToggleSelect,
+  sectionSelect,
   onOpen,
   onPatch,
   warmPreviews,
@@ -171,6 +193,72 @@ export function ImportReviewGrid({
   const winTop = window_.top - overscan;
   const winBottom = window_.bottom + overscan;
 
+  // Tri-state tick in the day header: whole day selected, partly, or not at
+  // all. Selecting a trip day at a time is the granularity an import batch
+  // actually has - clicking through 300 cards to keep one afternoon was the
+  // slow path this replaces.
+  function renderSectionSelect(label: string) {
+    if (!selectMode || !sectionSelect) return null;
+    const info = sectionSelect.infoOf(label);
+    if (!info) return null;
+    return (
+      <input
+        className="section-select-checkbox"
+        type="checkbox"
+        checked={info.day === "all"}
+        // "Partly selected" has no JSX attribute - it's a DOM property only.
+        ref={(el) => {
+          if (el) el.indeterminate = info.day === "some";
+        }}
+        onChange={() => sectionSelect.onToggle(label, "day")}
+        title={`Select or clear every photo from ${label}`}
+        aria-label={`Select or clear every photo from ${label}`}
+      />
+    );
+  }
+
+  // Wider scopes, shown only when the batch spans more than one month/year -
+  // an archive folder holding several years, where ticking day by day would be
+  // hopeless.
+  function renderScopeButtons(label: string) {
+    if (!selectMode || !sectionSelect) return null;
+    const info = sectionSelect.infoOf(label);
+    if (!info || (info.month === null && info.year === null)) return null;
+    const button = (
+      scope: "month" | "year",
+      state: SectionSelectState,
+      text: string,
+      title: string
+    ) => (
+      <button
+        type="button"
+        className={`section-scope-btn${state === "all" ? " on" : state === "some" ? " partial" : ""}`}
+        onClick={() => sectionSelect.onToggle(label, scope)}
+        title={title}
+      >
+        {text}
+      </button>
+    );
+    return (
+      <span className="timeline-header-scopes">
+        {info.month !== null &&
+          button(
+            "month",
+            info.month,
+            info.monthLabel,
+            `Select or clear every photo from ${info.monthLabel} ${info.yearLabel}`
+          )}
+        {info.year !== null &&
+          button(
+            "year",
+            info.year,
+            info.yearLabel,
+            `Select or clear every photo from ${info.yearLabel}`
+          )}
+      </span>
+    );
+  }
+
   function renderTile(tile: LayoutTile<StagedFileOut>, row: LayoutRow<StagedFileOut>) {
     const f = tile.item;
     const i = tile.index;
@@ -201,7 +289,7 @@ export function ImportReviewGrid({
                 ? "Already in your library - can't be imported"
                 : f.duplicate_in_trash
                   ? "This photo is in the Trash - importing it restores it"
-                  : "Click to select, shift-click for a range"
+                  : "Click to tick, shift-click to tick or clear a whole range"
               : "Click to preview"
           }
         >
@@ -286,8 +374,10 @@ export function ImportReviewGrid({
           >
             {section.label && (
               <h3 className="timeline-header">
+                {renderSectionSelect(section.label)}
                 {section.label}
                 <span className="timeline-header-count">{section.count}</span>
+                {renderScopeButtons(section.label)}
               </h3>
             )}
             {/* flatMap, not a nested map: the visible tiles have to be ONE flat

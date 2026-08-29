@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
@@ -9,11 +9,11 @@ import { TagEditor } from "../components/TagEditor";
 import { AlbumPicker } from "../components/AlbumPicker";
 import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
-import { useMergePairs, useStageBg } from "../state/viewPrefs";
+import { setDetailPanelOpen, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
-import { IconArrowLeft, IconCheck, IconPencil, IconTrash, IconX } from "../components/Icons";
+import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconPencil, IconTrash, IconX } from "../components/Icons";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { ZoomReadout } from "../components/ZoomReadout";
@@ -68,6 +68,7 @@ export function ImageDetail() {
   const [descNote, setDescNote] = useTransientMessage();
   // Shared across the photo view, the import preview and the editor.
   const bgMode = useStageBg();
+  const panelOpen = useDetailPanelOpen();
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
   // Fetched up here because the zoom below needs the photo's true pixel size.
@@ -118,6 +119,23 @@ export function ImageDetail() {
     if (backTo) navigate(backTo);
     else navigate(-1);
   }
+
+  // Where this photo sits in the browsed set, and the one step through it that
+  // both the arrow keys and the on-stage arrows go through - so clicking and
+  // keying can never drift apart.
+  const currentIndex = imageIds ? imageIds.indexOf(id!) : -1;
+  const canPage = currentIndex !== -1 && (imageIds?.length ?? 0) > 1;
+  const goToOffset = useCallback(
+    (delta: number) => {
+      if (!imageIds) return;
+      const from = imageIds.indexOf(id!);
+      if (from === -1) return;
+      const next = imageIds[from + delta];
+      if (!next) return;
+      navigate(`/image/${next}`, { replace: true, state: { imageIds } });
+    },
+    [imageIds, id, navigate]
+  );
 
   // The route param changes on arrow-key navigation (same component instance,
   // React Router just re-renders it) - activeId must follow it, or the RAW/JPEG
@@ -239,18 +257,29 @@ export function ImageDetail() {
         return;
       }
 
-      if (!imageIds || imageIds.length === 0) return;
-      const currentIndex = imageIds.indexOf(id!);
-      if (currentIndex === -1) return;
-      if (e.key === "ArrowLeft" && currentIndex > 0) {
-        navigate(`/image/${imageIds[currentIndex - 1]}`, { replace: true, state: { imageIds } });
-      } else if (e.key === "ArrowRight" && currentIndex < imageIds.length - 1) {
-        navigate(`/image/${imageIds[currentIndex + 1]}`, { replace: true, state: { imageIds } });
+      // E opens the editor on the photo you're looking at - the same thing the
+      // Edit button does, without going for the mouse. (The handler returns
+      // early while the editor is open, so it can't re-trigger itself; Esc and
+      // Back close it.)
+      if (!inControl && image && (e.key === "e" || e.key === "E")) {
+        setAdjustOpen(true);
+        return;
       }
+
+      // P hides/shows the side panel - the one key you want while looking at a
+      // photo full width, without going for the mouse. I stays wired up as
+      // well: it was the original key, and fingers that learned it keep working.
+      if (e.key === "p" || e.key === "P" || e.key === "i" || e.key === "I") {
+        setDetailPanelOpen(!panelOpen);
+        return;
+      }
+
+      if (e.key === "ArrowLeft") goToOffset(-1);
+      else if (e.key === "ArrowRight") goToOffset(1);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [imageIds, id, navigate, adjustOpen, image, paired, activeId, zoomed, renaming]);
+  }, [goToOffset, adjustOpen, image, paired, activeId, zoomed, renaming, panelOpen]);
 
   // The photo the user has actually SETTLED on: follows activeId only after a
   // short pause without further navigation. Holding an arrow key changes
@@ -567,17 +596,24 @@ export function ImageDetail() {
     <div className="page detail-page">
       {pairDeleteDialog}
       <div className="detail-layout" style={{ marginTop: 16 }}>
-        {/* Back/exit arrow in its own slim column left of the image area. */}
-        <button
-          className="icon-btn detail-back-btn"
-          onClick={goBack}
-          title="Back (Esc)"
-          aria-label="Back"
-        >
-          <IconArrowLeft size={16} />
-        </button>
         <div className="detail-main">
-          <div className={`detail-image detail-image-${bgMode}`} ref={zoom.setBox}>
+          <div className={`detail-image lightbox-stage detail-image-${bgMode}`} ref={zoom.setBox}>
+            {canPage && (
+              <button
+                className="lightbox-nav-btn lightbox-nav-prev"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.currentTarget.blur(); // Space/Enter must never re-trigger the arrow
+                  goToOffset(-1);
+                }}
+                disabled={currentIndex === 0}
+                title="Previous photo (Left arrow)"
+                aria-label="Previous photo"
+                tabIndex={-1}
+              >
+                <IconChevronLeft size={20} />
+              </button>
+            )}
             {previewFailed ? (
               <div className="detail-photo-error">
                 <span className="detail-photo-error-icon" aria-hidden="true">🖼️</span>
@@ -629,13 +665,50 @@ export function ImageDetail() {
               {...zoom.imageHandlers}
             />
             )}
+            {canPage && (
+              <button
+                className="lightbox-nav-btn lightbox-nav-next"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.currentTarget.blur(); // Space/Enter must never re-trigger the arrow
+                  goToOffset(1);
+                }}
+                disabled={currentIndex === (imageIds?.length ?? 0) - 1}
+                title="Next photo (Right arrow)"
+                aria-label="Next photo"
+                tabIndex={-1}
+              >
+                <IconChevronRight size={20} />
+              </button>
+            )}
           </div>
           <div className="detail-image-toolbar">
+            {/* Back sits with the other stage controls under the photo rather
+                than as a bare arrow in a column of its own - labelled, so it
+                reads as the way out. */}
+            <button className="btn btn-sm back-btn stage-back-btn" onClick={goBack} title="Back (Esc)">
+              <IconArrowLeft size={13} /> Back
+            </button>
             <StageBackgroundToggle />
             <ZoomReadout zoom={zoom} />
+            {/* Mirror of Back on the other end of the row: the collapse handle
+                used to sit in a slim column right of the panel, which cost a
+                strip of width in BOTH states. Riding in the stage's control
+                row it costs none, and it stays reachable with the panel
+                hidden - which a control inside the panel could not. */}
+            <button
+              className="btn btn-sm detail-panel-toggle"
+              onClick={() => setDetailPanelOpen(!panelOpen)}
+              title={panelOpen ? "Hide the side panel (P)" : "Show the side panel (P)"}
+              aria-label={panelOpen ? "Hide the side panel" : "Show the side panel"}
+              aria-expanded={panelOpen}
+              aria-controls="detail-side-panel"
+            >
+              Panel {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
+            </button>
           </div>
         </div>
-        <div className="detail-panel">
+        <div id="detail-side-panel" className={`detail-panel${panelOpen ? "" : " detail-panel--collapsed"}`}>
           <div className="detail-title-row">
             {renaming ? (
               <form
@@ -726,7 +799,11 @@ export function ImageDetail() {
           {renameNote && <p className="status-note detail-rename-hint">{renameNote}</p>}
 
           <div className="detail-action-row">
-            <button className="btn primary" onClick={() => setAdjustOpen(true)}>
+            <button
+              className="btn primary"
+              onClick={() => setAdjustOpen(true)}
+              title="Edit this photo (E)"
+            >
               Edit
             </button>
             <button

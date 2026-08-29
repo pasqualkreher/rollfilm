@@ -733,38 +733,169 @@ def _apply_chrome(arr: np.ndarray, chrome: int, chrome_blue: int) -> np.ndarray:
     return np.clip(arr * factor[..., None], 0.0, 1.0)
 
 
+# A wide Gaussian is expensive in a way that scales with its own radius: the
+# widest lobe below has a sigma of a seventh of the field, and computed honestly
+# it costs more than the rest of this pass put together. Three box blurs in
+# succession converge on a Gaussian (central limit; the result is a cubic
+# B-spline), and a box blur is a sliding sum - the same cost per pixel whatever
+# its width. Measured against cv2.GaussianBlur on the radii this pass uses, the
+# worst-case error is under 1% of full scale on random noise and far below that
+# on the smooth field it actually runs on, and the three lobes together cost 6ms
+# instead of 83ms. Widths follow the standard integer fit (Kovesi): pick the odd
+# width whose n-fold convolution has the wanted variance, splitting between two
+# adjacent widths to land on it exactly.
+#
+# Three boxes is a coarse fit at small sigma - 2% by the time the width is down
+# to five pixels, 3% at three - and there is nothing to win there anyway, since
+# a Gaussian that narrow is already cheap (a few ms on the field this runs on,
+# against ~6ms for the whole box chain). Below eight pixels the real thing runs
+# instead, which is why the error above holds for every radius, not just the
+# wide ones where boxes happen to be accurate.
+_BOX_GAUSS_MIN_SIGMA = 8.0
+
+
+def _box_gauss(img: np.ndarray, sigma: float, passes: int = 3) -> np.ndarray:
+    if sigma < 0.6:
+        return img
+    if sigma < _BOX_GAUSS_MIN_SIGMA:
+        return cv2.GaussianBlur(img, (0, 0), sigma)
+    ideal = math.sqrt(12.0 * sigma * sigma / passes + 1.0)
+    lo = max(1, int(math.floor(ideal)) | 1)  # nearest odd width at or below
+    n_lo = round(
+        (12.0 * sigma * sigma - passes * lo * lo - 4.0 * passes * lo - 3.0 * passes)
+        / (-4.0 * lo - 4.0)
+    )
+    out = img
+    for i in range(passes):
+        w = lo if i < n_lo else lo + 2
+        if w > 1:
+            out = cv2.boxFilter(out, -1, (w, w))
+    return out
+
+
+# --- Diffusion (Pro-Mist) ----------------------------------------------------
+# A diffusion filter is a sheet of glass with something in it - suspended
+# particles, an etched surface - that scatters part of the light passing through
+# instead of focusing it. Two facts about that separate an optical look from a
+# pasted-on glow, and neither of them is a Gaussian blur:
+#
+# 1. The point spread function is HEAVY-TAILED. A point light seen through real
+#    diffusion has a bright core hugging the source *and* a wide, shallow veil
+#    reaching far past it (roughly 1/r^2). One Gaussian can only ever be one of
+#    the two - narrow gives a tight blob with a visible edge, wide gives the
+#    featureless grey wash - which is why a single blur always reads as "blur".
+#    A few Gaussians at geometrically spaced radii, weighted down as they widen,
+#    fit that tail closely enough (the standard cheap PSF fit) and are what make
+#    the halo read as glass: bloom right at the light, glow around it, and a
+#    faint bloom-off across the whole frame.
+# 2. Scattering MOVES light, it does not create it. A screen blend only ever
+#    adds, so the frame gets brighter overall while the highlights keep their
+#    full punch and merely wear a halo - the tell of a digital glow. Taking the
+#    halo's energy back out of the highlight that emitted it is what trades
+#    sharpness for bloom: specular points soften and bleed instead of sitting
+#    there sharp with a ring around them, and a large blown area stays put (its
+#    neighbours scatter into it as fast as it scatters out) rather than
+#    inflating into white mush.
+#
+# Radii are fractions of the long edge, so the look is resolution-independent.
+_MIST_PSF = ((1.0, 0.50), (2.7, 0.31), (7.5, 0.19))  # (radius x base, weight)
+_MIST_BASE_DIV = 60.0  # base sigma = long_edge / this
+
+# The halo carries the scattered light back with a surplus: a real filter's
+# near-source output measures brighter than pure conservation predicts, because
+# light reflected around inside the glass adds to what passes straight through.
+# That surplus IS the veiling that lifts the blacks around a light source - the
+# half of the Pro-Mist look a Black Pro-Mist trades away - so it is what keeps
+# the effect additive-feeling at moderate settings without washing the frame.
+_MIST_VEIL_GAIN = 1.25
+
+# Scattered light comes back slightly warm: glass and coatings pass long
+# wavelengths a touch more freely than short ones. Barely a percent either way -
+# luminance-neutral to three decimals - but it is the difference between a halo
+# that looks like glass and one that looks like a grey blur. (The Halation
+# slider is the strong, deliberately red version of this; Mist stays subtle so
+# the two stack instead of fighting.)
+_MIST_TINT = np.array([1.03, 1.00, 0.95], dtype=np.float32)
+
+# The scatter field is built at a reduced resolution. The narrowest PSF lobe is
+# already ~1/60 of the frame, so no detail finer than that survives the blur and
+# computing the field at full size is pure waste. INTER_AREA averages, which
+# conserves energy on the way down - a one-pixel specular highlight keeps all of
+# its light instead of being sampled away - and the field is low-frequency
+# enough that bilinear interpolation puts it back without a seam. Three blurs at
+# this size cost a fraction of the single full-resolution blur they replace,
+# which is what pays for the heavy tail.
+_MIST_FIELD_PX = 512
+
+
 def _mist(arr: np.ndarray, amount: int, light_sources: bool = True) -> np.ndarray:
-    """Pro-Mist-style diffusion / halation, screen-blended over the sharp image.
+    """Pro-Mist-style optical diffusion: light scattered *out of* the highlights
+    and spread back across the frame through a heavy-tailed PSF, in linear light.
 
     `light_sources=True` (the Mist slider): only genuinely bright highlights and
-    light sources bloom. A steep brightness mask isolates them, *that masked light*
-    is blurred so it halates into its surroundings, and it's screen-blended back.
-    Midtones and merely-light areas (skin, pale walls, overcast sky) stay clean, so
-    it reads as light blooming out of the frame rather than a flat global haze.
+    light sources scatter. A smooth, steep brightness gate isolates them, so
+    midtones and merely-light areas (skin, pale walls, overcast sky) stay clean
+    and it reads as light blooming out of the frame rather than a flat haze.
 
     `light_sources=False` (the negative-clarity diffusion): the softer
     whole-highlight glow - weighted toward the brights but not isolated to point
-    sources. Runs on the *toned* image, like a filter in front of the lens."""
+    sources.
+
+    Both run on the *toned* image, like a filter in front of the lens, and both
+    scatter in LINEAR light. Blurring the gamma-encoded values instead averages
+    perceptual numbers rather than photons: a lamp a hundred times brighter than
+    the wall behind it counts as only about six times brighter once encoded, so
+    its core never dominates the halo and the result comes out as an even grey
+    veil with no centre. Decoding first is what gives the bloom a bright core
+    and a clean falloff - see _MIST_PSF above for the rest of the model."""
     f = min(100, max(0, amount)) / 100.0
     if f <= 0:
         return arr
-    long_edge = max(arr.shape[:2])
-    radius = max(8.0, long_edge / 22.0)
+    luma = np.clip(arr @ _LUMA, 0.0, 1.0)
     if light_sources:
-        luma = np.clip(arr @ _LUMA, 0.0, 1.0)
-        # Steep ramp from ~0.72 (squared): only real light sources / near-clipping
-        # highlights pass; everything dimmer contributes essentially nothing.
-        mask = np.clip((luma - 0.72) / 0.28, 0.0, 1.0) ** 2
-        if float(mask.max()) <= 0.0:
-            return arr
-        bright = np.clip(arr * mask[..., None], 0.0, 1.0).astype(np.float32)
-        glow = cv2.GaussianBlur(bright, (0, 0), radius)
-        glow = np.clip(glow * (1.15 * f), 0.0, 1.0)
-        return 1.0 - (1.0 - arr) * (1.0 - glow)
-    blur = cv2.GaussianBlur(np.clip(arr, 0.0, 1.0).astype(np.float32), (0, 0), radius)
-    luma_b = np.clip(blur @ _LUMA, 0.0, 1.0)
-    glow = np.clip(blur * (np.power(luma_b, 1.2) * 0.85 * f)[..., None], 0.0, 1.0)
-    return 1.0 - (1.0 - arr) * (1.0 - glow)
+        # Smoothstep over display 0.62..1.0, squared: the same "light sources
+        # only" character the old linear ramp had, but with no corner at the
+        # foot of it. A hard knee draws a visible contour line through a smooth
+        # gradient - a sky, a softbox falloff - exactly where the effect is
+        # meant to be least noticeable.
+        t = np.clip((luma - 0.62) * (1.0 / 0.38), 0.0, 1.0)
+        mask = np.square(t * t * (3.0 - 2.0 * t))
+        # `k` is the fraction of a fully-gated pixel's light the filter diverts.
+        k = 0.42 * f
+    else:
+        # Whole-highlight: everything above the deep shadows scatters a little,
+        # the brights most. No isolation - this is the soft overall diffusion
+        # that goes with Fuji's negative clarity, not a light-source bloom.
+        mask = np.power(np.clip((luma - 0.10) * (1.0 / 0.90), 0.0, 1.0), 1.6)
+        k = 0.30 * f
+    if float(mask.max()) <= 0.0:
+        return arr
+    lin = _srgb_to_linear(arr).astype(np.float32)
+    src = lin * mask[..., None]
+
+    h, w = lin.shape[:2]
+    scale = min(1.0, _MIST_FIELD_PX / max(h, w))
+    if scale < 1.0:
+        small = cv2.resize(
+            src,
+            (max(8, int(round(w * scale))), max(8, int(round(h * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        small = src
+    base = max(1.5, max(small.shape[:2]) / _MIST_BASE_DIV)
+    halo = np.zeros_like(small)
+    for radius_scale, weight in _MIST_PSF:
+        halo += _box_gauss(small, base * radius_scale) * weight
+    halo *= _MIST_TINT * (k * _MIST_VEIL_GAIN)
+    if scale < 1.0:
+        halo = cv2.resize(halo, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    # Scatter: the gated light leaves the direct path (-k*src) and arrives
+    # spread out (+halo). The PSF weights sum to 1, so away from the veil
+    # surplus this moves light around rather than manufacturing it.
+    out = lin - src * k + halo
+    return _linear_to_srgb(np.clip(out, 0.0, 1.0)).astype(np.float32)
 
 
 def _apply_vignette(arr: np.ndarray, amount: int) -> np.ndarray:
@@ -1369,30 +1500,69 @@ def _apply_local_adjustments(arr: np.ndarray, madj: dict) -> np.ndarray:
     return _adjust_array(arr, full)
 
 
-def apply_masks(arr: np.ndarray, adj: dict) -> np.ndarray:
+def apply_masks(arr: np.ndarray, adj: dict, peek: str | None = None) -> tuple[np.ndarray, np.ndarray | None]:
     """Blend each mask's local adjustments into the image, weighted by the mask's
     generated field * opacity (inverted if the mask is inverted). Masks with no
-    region or no non-default adjustment are skipped."""
+    region or no non-default adjustment are skipped.
+
+    `peek` names one mask whose *field* is handed back alongside the render (see
+    paint_mask_peek). It is taken at the point that mask would be applied, so it
+    is the selection the render actually used - not a re-derivation from the
+    finished pixels, which for a luminance mask would be a different selection
+    the moment the mask's own Exposure moved the tones it selects on. A peeked
+    mask has its field computed even when it is hidden or carries no adjustment
+    yet: a mask you are still setting up is exactly the one you need to see."""
     mask_list = adj.get("masks") or []
     if not mask_list:
-        return arr
+        return arr, None
+    peek_field: np.ndarray | None = None
     for mask in mask_list:
-        if not mask.get("visible", True) or not mask.get("sub_masks"):
+        if not mask.get("sub_masks"):
             continue
+        wanted = peek is not None and str(mask.get("id") or "") == peek
         madj = mask.get("adjustments") or {}
-        if develop.is_neutral(madj):
+        renders = mask.get("visible", True) and not develop.is_neutral(madj)
+        if not renders and not wanted:
             continue
         field = masks.generate_mask_field(mask, arr)
         m = field * (mask.get("opacity", 100) / 100.0)
         if mask.get("invert"):
             m = 1.0 - m
         m = np.clip(m, 0.0, 1.0)
-        if float(m.max()) <= 0.0:
+        if wanted:
+            peek_field = m
+        if not renders or float(m.max()) <= 0.0:
             continue
         adjusted = _apply_local_adjustments(arr.copy(), madj)
         m3 = m[..., None]
         arr = arr * (1.0 - m3) + adjusted * m3
-    return np.clip(arr, 0.0, 1.0)
+    return np.clip(arr, 0.0, 1.0), peek_field
+
+
+# The marking is the same pink candy-stripe the editor draws over a radial or a
+# brush mask (MaskOverlay's zebra, #ff2d95 at 0.55 / 0.12): one visual language
+# for "this is what the mask covers", whether the shape can be drawn as an
+# outline or - luminance, colour, edges - only exists as pixels. Stripes rather
+# than a wash because a flat pink over a pink sunset reads as part of the photo,
+# and seeing the picture between the bars is what lets the boundary be judged.
+_PEEK_RGB = np.array([1.0, 0.176, 0.584], dtype=np.float32)
+_PEEK_BAR = 0.55
+_PEEK_GAP = 0.12
+# Stripe period as a fraction of the long edge, so the bars look the same width
+# on screen whether the frame came from the scrub tier or a native render.
+_PEEK_PERIOD_FRAC = 1 / 110
+
+
+def paint_mask_peek(arr: np.ndarray, field: np.ndarray) -> np.ndarray:
+    """Paint the zebra over the area `field` covers, its alpha following the
+    field - so a feathered edge marks as a fade, not as a hard border."""
+    h, w = field.shape
+    period = max(4.0, max(h, w) * _PEEK_PERIOD_FRAC)
+    xs = np.arange(w, dtype=np.float32)[None, :]
+    ys = np.arange(h, dtype=np.float32)[:, None]
+    bar = ((xs + ys) % period) < (period * 0.5)  # 45 degrees, half bar / half gap
+    a = (field * np.where(bar, _PEEK_BAR, _PEEK_GAP).astype(np.float32))[..., None]
+    return np.clip(arr * (1.0 - a) + _PEEK_RGB * a, 0.0, 1.0)
 
 
 # --- The editor preview's tone/denoise stage cache ---------------------------
@@ -1494,12 +1664,11 @@ def apply_adjustments(
 
 
 def _denoise_stage(arr: np.ndarray, adj: dict, fast: bool) -> np.ndarray:
-    """Denoise (spatial), split into Luminance + Colour like RapidRAW. The single
-    "Denoise" slider is a master over both: it feeds luma 1:1 and chroma a bit
-    harder (colour blotching is the ugly part of high-ISO noise and the eye
-    barely resolves chroma detail, so it can take more without going soft).
-    Per-channel sliders still win where they're set higher. cv2's NLM needs
-    8-bit input, so this one pass round-trips through uint8.
+    """Denoise (spatial), split into Luminance + Colour like RapidRAW - the two
+    halves of high-ISO noise are removed by different amounts of smoothing
+    (colour blotching is the ugly part and the eye barely resolves chroma
+    detail, so chroma takes more without going soft), so they get a slider each.
+    cv2's NLM needs 8-bit input, so this one pass round-trips through uint8.
 
     The one pass a drag never gets: the luma NLM alone is ~147ms on a 1100px
     scrub frame, which would drop the preview to under 7 frames a second. It's
@@ -1507,9 +1676,8 @@ def _denoise_stage(arr: np.ndarray, adj: dict, fast: bool) -> np.ndarray:
     raw has had its sensor noise averaged away, so what a live frame would show
     is smoothing applied to already-smooth data. Denoise is judged at 100%
     zoom, where the ladder renders natively and the pixels are real."""
-    dn = adj.get("denoise", 0)
-    ln = max(adj.get("luma_noise_reduction", 0), dn)
-    cn = max(adj.get("color_noise_reduction", 0), min(100, int(round(dn * 1.3))))
+    ln = adj.get("luma_noise_reduction", 0)
+    cn = adj.get("color_noise_reduction", 0)
     if fast or (ln <= 0 and cn <= 0):
         return arr
     denoised = _denoise_image(
@@ -1520,7 +1688,7 @@ def _denoise_stage(arr: np.ndarray, adj: dict, fast: bool) -> np.ndarray:
 
 def apply_adjustments_linear(
     lin: np.ndarray, base_gain: float, adj: dict, include_grain: bool = True, fast: bool = False,
-    tone_cache_key: str | None = None,
+    tone_cache_key: str | None = None, peek: str | None = None,
 ) -> PILImage.Image:
     """The develop pipeline on a scene-referred linear float base (the RAW
     demosaic, values may exceed 1.0 after the gain).
@@ -1551,13 +1719,17 @@ def apply_adjustments_linear(
     25ms tone-only floor:
 
         grain +4   sharpness +5   chromatic aberration +5   vignette +6
-        clarity +28   structure +29   halation +39   dehaze +42
+        clarity +28   structure +29   mist +34   halation +39   dehaze +42
         ----------------------------------------------------- runs while dragging
-        flare +84   glow +143   mist +145   denoise +147
+        flare +84   glow +143   denoise +147
 
-    Negative clarity straddles that line: its band softening is the cheap half
-    (+17), but the Pro-Mist diffusion that completes the look IS the +145 mist
-    pass, so only the softening runs while dragging.
+    Mist used to sit below that line at +145, back when the diffusion pass was
+    one wide full-resolution Gaussian. Rebuilt as a reduced-resolution box-blur
+    PSF (see _MIST_PSF) it costs about a fifth of that: measured on one frame
+    against halation, which is in the table above and does run during a drag,
+    mist lands just under it - hence the +34 here, scaled into the same units
+    rather than re-measured in them. It is a slider you have to *see* to set,
+    so being able to afford it live matters more for it than for most.
 
     Everything above the line runs during a drag. It used to be skipped wholesale
     for being "a convolution", which meant dragging Clarity or Structure changed
@@ -1571,7 +1743,7 @@ def apply_adjustments_linear(
     come back on the accurate render at pointer-up, so the settled preview - and
     the save - are unchanged either way."""
     long_edge = max(lin.shape[:2])
-    if develop.is_neutral(adj):
+    if develop.is_neutral(adj) and peek is None:
         # Nothing but the neutral rendering (gain + shoulder) to do. Checked
         # before the cache so a neutral edit can never take a cached stage and
         # fall through the rest of the pipeline instead of returning here.
@@ -1597,21 +1769,20 @@ def apply_adjustments_linear(
     cl = adj.get("clarity", 0)
     if cl:
         arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
-        if cl < 0 and not fast:
+        if cl < 0:
             # Fuji's negative clarity doesn't just flatten - it diffuses like a
             # Pro-Mist filter (soft halation around brights). Layer a gentle
             # whole-highlight glow (not the light-source-only Mist) on top of the
             # band softening; strength follows the slider.
             #
-            # `not fast` for the same reason the Mist slider itself sits out a
-            # drag (see the finishing block below): this is literally that pass,
-            # and it is the most expensive one in the pipeline - 143ms on a
-            # 1100px scrub frame, against 17ms for the band softening it
-            # accompanies. Without the gate, dragging Clarity leftward dropped
-            # the preview from ~28 frames a second to ~5 while every other
-            # slider stayed fluid. The softening (the part the slider is *for*)
-            # still tracks the pointer live; the glow rejoins on the pointer-up
-            # render, so the settled preview and the save are unchanged.
+            # This ran only on the pointer-up render while the diffusion pass was
+            # the most expensive thing in the pipeline: dragging Clarity leftward
+            # dropped the preview from ~28 frames a second to ~5 while every
+            # other slider stayed fluid, so the softening tracked the pointer and
+            # the glow arrived afterwards. The rebuilt pass (see _MIST_PSF) is
+            # cheap enough to keep up, so the two halves of the look now move
+            # together - which is the point, since the softening on its own
+            # doesn't look like what the slider is going to settle at.
             arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False)
     st = adj.get("structure", 0)
     if st:
@@ -1637,12 +1808,12 @@ def apply_adjustments_linear(
     arr = _display_color_block(arr, adj)
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
-    arr = apply_masks(arr, adj)
+    arr, peek_field = apply_masks(arr, adj, peek=peek)
     # Highlight-bloom / diffusion effects run on the *toned* image (like a filter
-    # in front of the lens), after the tonal pass. Halation is affordable at
-    # scrub size (+39ms); mist, glow and flare are not (+145/+143/+84), so those
-    # three sit out a drag and are restored on the pointer-up render.
-    if not fast and adj.get("mist", 0) > 0:
+    # in front of the lens), after the tonal pass. Mist and halation are
+    # affordable at scrub size (+34/+39ms); glow and flare are not (+143/+84),
+    # so those two sit out a drag and are restored on the pointer-up render.
+    if adj.get("mist", 0) > 0:
         arr = _mist(arr, adj["mist"])
     if not fast and adj.get("glow_amount", 0) > 0:
         arr = develop_effects.apply_glow(arr, adj["glow_amount"])
@@ -1660,6 +1831,10 @@ def apply_adjustments_linear(
         )
     if include_grain and adj.get("grain_amount", 0) > 0:
         arr = _apply_grain(arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50))
+    # Last of all, so the marking is the flat pink it was meant to be rather than
+    # something the vignette darkened and the grain crawled over.
+    if peek_field is not None:
+        arr = paint_mask_peek(arr, peek_field)
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     return PILImage.fromarray(out, "RGB")
 
@@ -2021,6 +2196,7 @@ def render_editor_preview_bytes(
     persp_h: int = 0,
     persp_v: int = 0,
     browse: bool = False,
+    peek: str | None = None,
     is_stale: Callable[[], bool] | None = None,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
@@ -2047,7 +2223,13 @@ def render_editor_preview_bytes(
       fetches it in the background once edits rest while zoomed in, exactly like
       the lightbox swaps in full.jpg. Serialised like the full tier; the decoded
       full-res base is kept for one image (_cached_native_base) so only the
-      first zoomed render of an image pays the demosaic."""
+      first zoomed render of an image pays the demosaic.
+
+    `peek` names a mask to mark in the returned frame (see paint_mask_peek) -
+    the editor's "show me what this mask covers" for the masks that have no
+    shape to outline. It rides along on the render instead of being a call of
+    its own, so the marking tracks the sliders on the very frames the preview
+    is already drawing."""
     from app.services.filesystem import resolve_image_path
 
     # Drop superseded renders instead of running them: the client aborts its
@@ -2068,7 +2250,7 @@ def render_editor_preview_bytes(
             return _render_editor_bytes(
                 image, path, 0, rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=90, fast=False, native=True,
-                browse=browse,
+                browse=browse, peek=peek,
             )
     if full_quality or ultra:
         # Serialise + bound resolution so a burst of settle-renders can't stack
@@ -2079,15 +2261,18 @@ def render_editor_preview_bytes(
                 image, path, ULTRA_EDITOR_PREVIEW_PX if ultra else FULL_EDITOR_PREVIEW_PX,
                 rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=95, fast=False, browse=browse,
+                peek=peek,
             )
     if scrub:
         return _render_editor_bytes(
             image, path, SCRUB_PREVIEW_PX, rotation, crop, adjustments, distortion,
             flip_h, flip_v, straighten, persp_h, persp_v, quality=82, fast=True, browse=browse,
+            peek=peek,
         )
     return _render_editor_bytes(
         image, path, max_px, rotation, crop, adjustments, distortion,
         flip_h, flip_v, straighten, persp_h, persp_v, quality=88, fast=False, browse=browse,
+        peek=peek,
     )
 
 
@@ -2108,6 +2293,7 @@ def _render_editor_bytes(
     fast: bool = False,
     native: bool = False,
     browse: bool = False,
+    peek: str | None = None,
 ) -> bytes:
     mtime_ns = path.stat().st_mtime_ns
     if native:
@@ -2140,7 +2326,7 @@ def _render_editor_bytes(
     # would only ever say "the edit is brighter" - the honest before/after is
     # against the auto-exposed picture the user actually saw before opening it.
     img = apply_adjustments_linear(
-        arr, gain if browse else 1.0, adjustments, fast=fast, tone_cache_key=tone_key
+        arr, gain if browse else 1.0, adjustments, fast=fast, tone_cache_key=tone_key, peek=peek
     )
     img = add_frame(img, adjustments)
     buf = io.BytesIO()

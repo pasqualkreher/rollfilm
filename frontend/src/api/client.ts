@@ -525,12 +525,16 @@ export const api = {
     // `browse` renders a raw with the library's auto-exposure instead of the
     // editor's native (dark) base - only the split view's "Original" half wants
     // that; every other render must stay native so edits are made on real data.
+    // `peek` marks one mask's covered area in the returned frame with the
+    // editor's zebra - what the Show-mask toggle uses for the masks that have no
+    // shape to draw over the photo (luminance / colour / edges).
     async editorPreview(
       id: string,
       edits: ImageEdits,
       signal?: AbortSignal,
       mode: "scrub" | "fast" | "full" | "ultra" | "native" = "fast",
-      browse = false
+      browse = false,
+      peek: string | null = null
     ): Promise<Blob> {
       const tier =
         mode === "native"
@@ -542,7 +546,9 @@ export const api = {
               : mode === "scrub"
                 ? "scrub=1"
                 : "";
-      const params = [tier, browse ? "browse=1" : ""].filter(Boolean).join("&");
+      const params = [tier, browse ? "browse=1" : "", peek ? `peek=${encodeURIComponent(peek)}` : ""]
+        .filter(Boolean)
+        .join("&");
       const q = params ? `?${params}` : "";
       const res = await fetch(`${BASE_URL}/images/${id}/editor-preview${q}`, {
         method: "POST",
@@ -672,13 +678,17 @@ export const api = {
     // Batches well under the cap keep each request's memory bounded too.
     // `signal` cancels an in-flight upload (see startUpload's Cancel button);
     // `onSession` fires as soon as the staging session exists so the caller can
-    // clean it up if the user then cancels mid-upload.
+    // clean it up if the user then cancels mid-upload. `shouldStop` is the
+    // graceful counterpart to `signal`: asked between batches, it ends the
+    // upload *successfully* with whatever is already staged instead of
+    // throwing the session away.
     async upload(
       files: File[],
       sourceLabel: string,
       onProgress?: (pct: number) => void,
       signal?: AbortSignal,
-      onSession?: (id: string) => void
+      onSession?: (id: string) => void,
+      shouldStop?: () => boolean
     ): Promise<ImportSessionOut> {
       const BATCH_FILES = 250;
       const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1;
@@ -733,6 +743,11 @@ export const api = {
       // previous one - upload and analysis overlap instead of alternating.
       let pending: Promise<ImportSessionOut> | null = null;
       for (let i = 1; i < batches.length; i++) {
+        // Graceful stop: let the batches already in flight finish, then return
+        // the session as if the upload had run out of files. The progress
+        // percentage stops short of 100% - that's the point, the rest of the
+        // photos were deliberately left behind.
+        if (shouldStop?.()) break;
         const next = send(i, session.id);
         // If an earlier batch fails the whole upload aborts; this handler only
         // keeps the still-running one from surfacing as an unhandled rejection.
@@ -785,6 +800,12 @@ export const api = {
     },
     stagedPreviewUrl(sessionId: string, fileId: string): string {
       return assetUrl(`/import/sessions/${sessionId}/files/${fileId}/preview`);
+    },
+    // Full-resolution pixels of a staged file - fetched only once the review
+    // lightbox is zoomed in, so 100% shows the photo's own pixels instead of an
+    // upscaled preview.
+    stagedFullUrl(sessionId: string, fileId: string): string {
+      return assetUrl(`/import/sessions/${sessionId}/files/${fileId}/full`);
     },
     updateStagedFile(sessionId: string, fileId: string, patch: StagedFileUpdatePatch): Promise<StagedFileOut> {
       return request(`/import/sessions/${sessionId}/files/${fileId}`, {

@@ -4,6 +4,8 @@ ratio, Reinhard shoulder). Synthetic arrays only - no RAW decode, no fixtures.
 conftest.py sets PM_DATA_DIR before these imports, so importing app modules at
 module level is safe."""
 
+import io
+
 import numpy as np
 from PIL import Image as PILImage
 import pytest
@@ -314,6 +316,110 @@ def test_neutral_jpeg_passthrough_uint8():
     assert out is img
 
 
+# --- marking what a mask covers ("peek") --------------------------------------
+
+def _lum_mask(mask_id="m1", visible=True, adjustments=None) -> dict:
+    return {
+        "id": mask_id,
+        "name": "Shadows",
+        "visible": visible,
+        "opacity": 100,
+        "invert": False,
+        "sub_masks": [
+            {"id": "s1", "type": "luminance", "mode": "additive", "visible": True,
+             "invert": False, "parameters": {"range_min": 0, "range_max": 50, "feather": 0}},
+        ],
+        "adjustments": adjustments or {},
+    }
+
+
+def _dark_left_half() -> np.ndarray:
+    arr = np.full((16, 16, 3), 0.9, dtype=np.float32)
+    arr[:, :8] = 0.05
+    return arr
+
+
+def test_peek_returns_the_field_of_a_mask_that_renders_nothing():
+    """A mask being set up has no adjustment on it yet - which is exactly when
+    you need to see what it covers, so the field must be produced even though
+    the mask changes no pixels."""
+    adj = develop.normalize({**develop.defaults(), "masks": [_lum_mask()]})
+    arr = _dark_left_half()
+    out, field = thumbnails.apply_masks(arr.copy(), adj, peek="m1")
+    assert np.array_equal(out, arr)  # nothing to apply, so nothing changed
+    assert field is not None
+    assert field[:, :8].mean() > 0.95 and field[:, 8:].mean() < 0.05
+
+
+def test_peek_is_the_selection_the_render_used_not_one_read_back_off_it():
+    """The mask's own Exposure moves the very tones a luminance mask selects on.
+    The marking has to be the field the render applied - taken before the mask's
+    adjustment - or lifting the shadows would appear to shrink the selection."""
+    adj = develop.normalize({**develop.defaults(), "masks": [_lum_mask(adjustments={"exposure": 2.0})]})
+    arr = _dark_left_half()
+    out, field = thumbnails.apply_masks(arr.copy(), adj, peek="m1")
+    assert out[:, :8].mean() > arr[:, :8].mean() + 0.05  # the adjustment did land
+    assert field[:, :8].mean() > 0.95                    # and the marking still covers it
+
+
+def test_peek_names_one_mask_and_nothing_else_is_marked():
+    masks_ = [_lum_mask("m1"), _lum_mask("m2")]
+    adj = develop.normalize({**develop.defaults(), "masks": masks_})
+    _, none = thumbnails.apply_masks(_dark_left_half(), adj)
+    assert none is None
+    _, one = thumbnails.apply_masks(_dark_left_half(), adj, peek="m2")
+    assert one is not None
+
+
+def test_peek_paint_marks_only_inside_the_field_and_stripes():
+    """Candy-stripes, not a wash: the picture has to stay visible between the
+    bars, and nothing outside the mask may be touched at all."""
+    arr = np.full((64, 64, 3), 0.5, dtype=np.float32)
+    field = np.zeros((64, 64), dtype=np.float32)
+    field[:, :32] = 1.0
+    out = thumbnails.paint_mask_peek(arr, field)
+    assert np.array_equal(out[:, 32:], arr[:, 32:])
+    marked = np.abs(out[:, :32] - arr[:, :32]).max(axis=-1)
+    assert marked.min() > 0.0 and marked.max() > 0.2  # bars and gaps, both pink
+    assert marked.std() > 0.05  # ...at visibly different strengths - it's striped
+
+
+def test_peek_survives_the_preview_tier_plumbing(tmp_path, monkeypatch):
+    """The marking is asked for on the render request, so it has to reach the
+    pipeline through every tier the editor uses - a scrub frame during a drag,
+    the accurate one on release. Half the frame is dark, and the mask selects
+    exactly that half."""
+    from PIL import Image as PILImage
+
+    from app.services import filesystem
+
+    src = tmp_path / "peek.png"
+    arr = np.full((200, 400, 3), 230, dtype=np.uint8)
+    arr[:, :200] = 10
+    PILImage.fromarray(arr).save(src)
+
+    class _FakeImage:
+        id = "peek-tiers"
+
+    monkeypatch.setattr(filesystem, "resolve_image_path", lambda image: src)
+    thumbnails._cached_editor_base.cache_clear()
+    adj = develop.normalize({**develop.defaults(), "masks": [_lum_mask()]})
+
+    def rendered(**tier):
+        data = thumbnails.render_editor_preview_bytes(
+            _FakeImage(), 0, None, adj, **tier
+        )
+        return np.asarray(PILImage.open(io.BytesIO(data)).convert("RGB"), dtype=np.int16)
+
+    for tier in ({"scrub": True}, {}):
+        clean = rendered(**tier)
+        marked = rendered(**tier, peek="m1")
+        w = clean.shape[1]
+        # Pink over the dark half only; the bright half comes back untouched.
+        assert np.abs(marked[:, : w // 2 - 8] - clean[:, : w // 2 - 8]).mean() > 8
+        assert np.abs(marked[:, w // 2 + 8 :] - clean[:, w // 2 + 8 :]).mean() < 2
+
+
 # --- the frame a mask lives in ------------------------------------------------
 
 def test_framed_base_applies_geometry_but_not_the_develop_settings(tmp_path, monkeypatch):
@@ -375,12 +481,12 @@ def _editor_render(lin, adj, *, fast=False, key=None) -> np.ndarray:
         {},                                                  # neutral: never cached
         {"clarity": 60},
         {"clarity": -70},                                    # pulls in the mist pass
-        {"denoise": 55},
-        {"denoise": 55, "clarity": -40},                     # the pairing this exists for
+        {"luma_noise_reduction": 55},
+        {"luma_noise_reduction": 55, "clarity": -40},                     # the pairing this exists for
         {"exposure": 0.8, "contrast": 30, "highlights": -40, "blacks": 15},
-        {"tone_mapper": "agx", "exposure": 0.5, "denoise": 40},
-        {"structure": 40, "sharpness": 50, "dehaze": 35, "denoise": 20},
-        {"saturation": 30, "hue": 12, "mist": 20, "grain_amount": 30, "denoise": 25},
+        {"tone_mapper": "agx", "exposure": 0.5, "luma_noise_reduction": 40},
+        {"structure": 40, "sharpness": 50, "dehaze": 35, "color_noise_reduction": 20},
+        {"saturation": 30, "hue": 12, "mist": 20, "grain_amount": 30, "luma_noise_reduction": 25},
     ],
 )
 def test_tone_stage_cache_is_bit_identical(fast, edit):
@@ -398,7 +504,7 @@ def test_tone_stage_cache_key_splits_at_the_denoise_cut():
     A key missing from _POST_DENOISE_KEYS would silently serve a stale stage,
     so every field the pipeline has is checked, not a hand-picked few."""
     lin = _rng(3).random((40, 60, 3)).astype(np.float32)
-    base = develop.defaults() | {"denoise": 50, "clarity": 20}
+    base = develop.defaults() | {"luma_noise_reduction": 50, "clarity": 20}
 
     def stage_key(adj) -> str:
         thumbnails.invalidate_tone_stage()
@@ -408,7 +514,7 @@ def test_tone_stage_cache_key_splits_at_the_denoise_cut():
     reference = stage_key(base)
     assert stage_key(base | {"clarity": -80}) == reference       # below the cut
     assert stage_key(base | {"grain_amount": 40}) == reference
-    assert stage_key(base | {"denoise": 10}) != reference        # the cut itself
+    assert stage_key(base | {"luma_noise_reduction": 10}) != reference  # the cut itself
     assert stage_key(base | {"exposure": 1.0}) != reference      # above it
 
     probes = {"tone_mapper": "agx", "film_sim": "provia", "curve_mode": "parametric"}
@@ -425,7 +531,7 @@ def test_tone_stage_cache_is_opt_in():
     frame once, so caching a stage for them would be pure memory."""
     lin = _rng(1).random((40, 60, 3)).astype(np.float32)
     thumbnails.invalidate_tone_stage()
-    thumbnails.apply_adjustments_linear(lin, 1.0, develop.defaults() | {"denoise": 30})
+    thumbnails.apply_adjustments_linear(lin, 1.0, develop.defaults() | {"luma_noise_reduction": 30})
     assert thumbnails._tone_stage is None
 
 
@@ -434,7 +540,7 @@ def test_tone_stage_cache_refuses_oversized_frames():
     hold for a second of denoise, so it renders uncached like it always did."""
     lin = _rng(1).random((40, 60, 3)).astype(np.float32)
     thumbnails.invalidate_tone_stage()
-    adj = develop.defaults() | {"denoise": 30}
+    adj = develop.defaults() | {"luma_noise_reduction": 30}
     monkey = thumbnails._TONE_STAGE_MAX_BYTES
     try:
         thumbnails._TONE_STAGE_MAX_BYTES = 1
@@ -532,6 +638,26 @@ def test_denoise_still_removes_chroma_noise():
 
     out = thumbnails._denoise_image(PILImage.fromarray(noisy, "RGB"), 50, 65)
     assert chroma_err(np.asarray(out)) < chroma_err(noisy) * 0.95
+
+
+def test_legacy_denoise_master_folds_into_the_two_channels():
+    """The removed "Denoise" master fed luma 1:1 and chroma 1.3x, and the render
+    took the stronger of master and per-channel slider. An edit saved with it has
+    to keep rendering the same, so normalize() folds it in on read - which is what
+    migrates every stored edit, preset and backup without a data migration."""
+    assert "denoise" not in develop.defaults()
+
+    folded = develop.normalize({"denoise": 50})
+    assert (folded["luma_noise_reduction"], folded["color_noise_reduction"]) == (50, 65)
+
+    # The per-channel sliders still win where they were set higher, exactly as
+    # the old max() in the pipeline did.
+    mixed = develop.normalize({"denoise": 50, "luma_noise_reduction": 80, "color_noise_reduction": 10})
+    assert (mixed["luma_noise_reduction"], mixed["color_noise_reduction"]) == (80, 65)
+
+    # A photo edited only with the master is still "edited" after the fold.
+    assert not develop.is_neutral({"denoise": 30})
+    assert develop.is_neutral({"denoise": 0})
 
 
 def test_clarity_keeps_colour_on_fully_saturated_content():

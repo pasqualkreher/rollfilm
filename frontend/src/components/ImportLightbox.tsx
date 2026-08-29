@@ -43,6 +43,12 @@ export function ImportLightbox({
   // state instead of the browser's broken-image icon; rating, the import
   // toggle and arrow-key navigation keep working.
   const [loadFailed, setLoadFailed] = useState(false);
+  // Swap the review preview for the full-resolution render once the user zooms
+  // in, so 100% shows the photo's own pixels (which is what judging critical
+  // focus needs) instead of an upscaled 2048px preview. If that render can't be
+  // fetched we stay on the preview - never a broken image.
+  const [hiRes, setHiRes] = useState(false);
+  const [fullFailed, setFullFailed] = useState(false);
   // Light / mid grey / black surround - the same shared preference (and the
   // same control) as the library photo view and the editor.
   const bgMode = useStageBg();
@@ -56,12 +62,21 @@ export function ImportLightbox({
   );
   useEffect(() => {
     setLoadFailed(false);
+    setHiRes(false);
+    setFullFailed(false);
     // A new photo always opens at fit - carrying a 400% view over to the next
     // frame would show a random corner of it.
     zoom.resetZoom();
     zoom.clearFit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.id]);
+
+  // Once zoomed in, upgrade to the full-resolution render (fetched lazily)
+  // unless it already failed for this photo. Latches: zooming back out keeps
+  // the pixels we already paid for rather than flipping back to the preview.
+  useEffect(() => {
+    if (zoom.zoomed && !fullFailed) setHiRes(true);
+  }, [zoom.zoomed, fullFailed]);
 
   useEffect(() => {
     if (!file) return;
@@ -130,21 +145,66 @@ export function ImportLightbox({
   const isDuplicate = Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id);
 
   return (
-    // Styled like the library's photo view (opaque app surface, back-arrow
-    // column, the same elevated image box with the light/black background
-    // toggle) - just without the library's info panel; the review controls
-    // bar below stays.
+    // Styled like the library's photo view (opaque app surface, the same
+    // elevated image box with the light/black background toggle and the Back
+    // button in the stage toolbar) - just without the library's info panel;
+    // the review controls bar below stays.
     <div className="lightbox-overlay lightbox-overlay--page" onClick={onClose}>
       <div className="detail-layout lightbox-detail-layout" onClick={(e) => e.stopPropagation()}>
-        <button
-          className="icon-btn detail-back-btn"
-          onClick={onClose}
-          title="Back (Esc)"
-          aria-label="Back"
-        >
-          <IconArrowLeft size={16} />
-        </button>
         <div className="detail-main">
+          {/* The review bar sits above the photo, in a band of its own - it
+              never covers image pixels, and rating/import stay in one place
+              while the eye moves across the frame below. */}
+          <div className="lightbox-controls">
+            <div className="lightbox-controls-meta">
+              <span className="lightbox-filename">{file.original_filename}</span>
+              <span
+                className={fileTypeBadgeClass(
+                  file.file_type,
+                  pairsMerged && Boolean(file.paired_staged_file_id),
+                  "badge-inline"
+                )}
+              >
+                {fileTypeBadge(file.file_type, pairsMerged && Boolean(file.paired_staged_file_id))}
+              </span>
+              <span className="lightbox-counter lightbox-counter--index">
+                {index + 1} / {files.length}
+              </span>
+              <span className="lightbox-counter" title="Keyboard shortcuts">
+                0-5 rate · Space import · ←/→ navigate
+              </span>
+            </div>
+            <div className="lightbox-controls-actions">
+              {/* Selective sync replaces the import checkbox with the sync one -
+                  two checkboxes crowded the bar, and import is still toggled by
+                  Space (or Select mode in the grid). */}
+              {showImmichSync && !isDuplicate ? (
+                <label
+                  className="lightbox-import-toggle"
+                  title="Flag this photo for Immich sync — it uploads right after import (JPG only; RAW is skipped)"
+                >
+                  <input
+                    type="checkbox"
+                    checked={file.immich_sync}
+                    onChange={(e) => onUpdate(file.id, { immich_sync: e.target.checked })}
+                  />{" "}
+                  Sync to Immich
+                </label>
+              ) : (
+                <label className={`lightbox-import-toggle${isDuplicate ? " disabled" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={file.selected}
+                    disabled={isDuplicate}
+                    onChange={(e) => onUpdate(file.id, { selected: e.target.checked })}
+                  />{" "}
+                  {isDuplicate ? "Already in library" : "Import this file"}
+                </label>
+              )}
+              <RatingStars rating={file.rating} onChange={(rating) => onUpdate(file.id, { rating })} />
+              <ColorLabelPicker value={file.color_label} onChange={(color_label) => onUpdate(file.id, { color_label })} />
+            </div>
+          </div>
           <div
             className={`detail-image lightbox-stage detail-image-${bgMode}`}
             ref={zoom.setBox}
@@ -159,7 +219,7 @@ export function ImportLightbox({
               disabled={index === 0}
               tabIndex={-1}
             >
-              <IconChevronLeft size={24} />
+              <IconChevronLeft size={20} />
             </button>
             {loadFailed ? (
               <div className="detail-photo-error">
@@ -174,10 +234,25 @@ export function ImportLightbox({
                 }${zoom.zoomAnim ? " zoom-anim" : ""}`}
                 style={zoom.imageStyle}
                 draggable={false}
-                src={api.import.stagedPreviewUrl(sessionId, file.id)}
+                src={
+                  hiRes
+                    ? api.import.stagedFullUrl(sessionId, file.id)
+                    : api.import.stagedPreviewUrl(sessionId, file.id)
+                }
                 alt={file.original_filename}
                 onLoad={() => zoom.refit()}
-                onError={() => setLoadFailed(true)}
+                onError={() => {
+                  // The full render is unavailable (or was superseded because
+                  // the user zapped on): drop back to the preview so the photo
+                  // never shows as a broken image. Only a failing PREVIEW is a
+                  // real "can't display this file".
+                  if (hiRes) {
+                    setFullFailed(true);
+                    setHiRes(false);
+                  } else {
+                    setLoadFailed(true);
+                  }
+                }}
                 {...zoom.imageHandlers}
               />
             )}
@@ -191,62 +266,21 @@ export function ImportLightbox({
               disabled={index === files.length - 1}
               tabIndex={-1}
             >
-              <IconChevronRight size={24} />
+              <IconChevronRight size={20} />
             </button>
           </div>
           <div className="detail-image-toolbar">
+            {/* Back sits with the other stage controls under the photo (same as
+                the library's photo view), labelled rather than a bare arrow. */}
+            <button
+              className="btn btn-sm back-btn stage-back-btn"
+              onClick={onClose}
+              title="Back (Esc)"
+            >
+              <IconArrowLeft size={13} /> Back
+            </button>
             <StageBackgroundToggle />
             <ZoomReadout zoom={zoom} />
-          </div>
-          <div className="lightbox-controls">
-          <div className="lightbox-controls-meta">
-            <span className="lightbox-filename">{file.original_filename}</span>
-            <span
-              className={fileTypeBadgeClass(
-                file.file_type,
-                pairsMerged && Boolean(file.paired_staged_file_id),
-                "badge-inline"
-              )}
-            >
-              {fileTypeBadge(file.file_type, pairsMerged && Boolean(file.paired_staged_file_id))}
-            </span>
-            <span className="lightbox-counter">
-              {index + 1} / {files.length}
-            </span>
-            <span className="lightbox-counter" title="Keyboard shortcuts">
-              0-5 rate · Space import · ←/→ navigate
-            </span>
-          </div>
-          <div className="lightbox-controls-actions">
-            {/* Selective sync replaces the import checkbox with the sync one -
-                two checkboxes crowded the bar, and import is still toggled by
-                Space (or Select mode in the grid). */}
-            {showImmichSync && !isDuplicate ? (
-              <label
-                className="lightbox-import-toggle"
-                title="Flag this photo for Immich sync — it uploads right after import (JPG only; RAW is skipped)"
-              >
-                <input
-                  type="checkbox"
-                  checked={file.immich_sync}
-                  onChange={(e) => onUpdate(file.id, { immich_sync: e.target.checked })}
-                />{" "}
-                Sync to Immich
-              </label>
-            ) : (
-              <label className={`lightbox-import-toggle${isDuplicate ? " disabled" : ""}`}>
-                <input
-                  type="checkbox"
-                  checked={file.selected}
-                  disabled={isDuplicate}
-                  onChange={(e) => onUpdate(file.id, { selected: e.target.checked })}
-                />{" "}
-                {isDuplicate ? "Already in library" : "Import this file"}
-              </label>
-            )}
-            <RatingStars rating={file.rating} onChange={(rating) => onUpdate(file.id, { rating })} />
-            <ColorLabelPicker value={file.color_label} onChange={(color_label) => onUpdate(file.id, { color_label })} />
-          </div>
           </div>
         </div>
       </div>

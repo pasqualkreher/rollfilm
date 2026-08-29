@@ -396,12 +396,17 @@ def _compute_clusters(sig: tuple) -> None:
             # never shows the same shot twice - or, worse, renders the dark RAW
             # when only the RAW landed in the cluster. Lone RAWs (no JPEG
             # sibling) keep their embedding and still cluster.
+            # The partner has to still be in the library: with the JPEG in the
+            # Trash the RAW is the only file left of that shot, and dropping it
+            # as "the RAW half of a pair" made the shot vanish from smart
+            # albums entirely.
+            live_ids = db.query(Image.id).filter(Image.deleted_at.is_(None))
             paired_raw_ids = {
                 row[0]
                 for row in db.query(Image.id).filter(
                     Image.deleted_at.is_(None),
                     Image.file_type == FileType.raw,
-                    Image.paired_image_id.isnot(None),
+                    Image.paired_image_id.in_(live_ids),
                 )
             }
             # Capture year + country per photo: fallback qualifiers when two

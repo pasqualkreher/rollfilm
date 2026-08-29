@@ -53,7 +53,7 @@ export interface ZoomPan {
   resetZoom: (animate?: boolean) => void;
   /** Zoom to a multiple of ACTUAL pixels (1 = 100%), centred on the frame. */
   zoomToNative: (factor: number) => void;
-  /** Ready-made handlers for the <img>: pan drag and the double-click cycle. */
+  /** Ready-made handlers for the <img>: pan drag and the fit<->100% double-click. */
   imageHandlers: {
     onMouseDown: (e: React.MouseEvent<HTMLImageElement>) => void;
     onMouseMove: (e: React.MouseEvent<HTMLImageElement>) => void;
@@ -246,25 +246,22 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
       setDragging(false);
     },
     onDoubleClick: (e: React.MouseEvent<HTMLImageElement>) => {
-      // Lightroom-style, but with one step past 1:1: fit -> 100% -> 200% ->
-      // fit. The old two-state toggle was where "can't zoom past 100%" came
-      // from for anyone who reaches for double-click rather than the wheel.
+      // A plain toggle: anything above fit goes back to fit, fit goes to 100%.
+      // It used to cycle fit -> 100% -> 200% -> 400% -> fit, which meant a
+      // double-click after zooming in with the wheel magnified further when
+      // the obvious thing to expect was "put it back". Zooming past 1:1 is
+      // what the wheel and the readout's buttons are for.
       const box = boxRef.current;
       if (!box) return;
       const rect = box.getBoundingClientRect();
       const dx = e.clientX - (rect.left + rect.width / 2);
       const dy = e.clientY - (rect.top + rect.height / 2);
       const { nativeScale: native, maxZoom: ceiling } = liveRef.current;
-      // fit -> 100% -> 200% -> 400% -> fit. The old two-state toggle (fit <->
-      // 100%) was where "can't zoom past 100%" came from for anyone who reaches
-      // for double-click rather than the wheel. A photo smaller than its frame
-      // is already past 1:1 at fit, so its steps are magnifications instead.
-      const steps = [
-        Math.min(ceiling, Math.max(1.5, native)),
-        Math.min(ceiling, Math.max(3, native * 2)),
-        ceiling,
-      ];
-      const target = steps.find((step) => scale < step - 0.001) ?? 1;
+      // A photo smaller than its frame is already past 1:1 at fit, so 100%
+      // would zoom it *out*; magnify a little instead. Zoomed *below* fit
+      // counts as "not at fit" too, so the first double-click recentres.
+      const target =
+        Math.abs(scale - 1) > 0.001 ? 1 : Math.min(ceiling, Math.max(1.5, native));
       setZoomAnim(true);
       setScale(target);
       setPan(

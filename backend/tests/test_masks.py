@@ -315,6 +315,63 @@ def test_missing_region_selects_nothing():
         assert masks._submask_field({"type": "semantic", "parameters": params}, 16, 16, arr).max() == 0.0
 
 
+# --- edge ("detail") masks ----------------------------------------------------
+
+def _detail_scene(h: int, w: int) -> np.ndarray:
+    """Flat left half, finely striped right half - the two things an edge mask
+    has to tell apart, at any size (the stripe period is a fraction of the
+    frame, so the same scene exists at every resolution)."""
+    arr = np.full((h, w, 3), 0.5, dtype=np.float32)
+    period = max(4, w // 40)
+    xs = np.arange(w)
+    stripes = ((xs // (period // 2)) % 2 == 0) & (xs > w // 2)
+    arr[:, stripes] = 0.85
+    return arr
+
+
+def test_edge_selects_detail_and_leaves_flat_areas_alone():
+    """The whole point of the mask: sharpening lands on the textured half and
+    not on the flat one. A luminance mask can't make this distinction - the two
+    halves here sit at the same brightness."""
+    arr = _detail_scene(240, 480)
+    f = masks._edge_field(arr, {"threshold": 25, "spread": 30, "feather": 50})
+    assert f[:, :200].mean() < 0.02
+    assert f[:, 280:].mean() > 0.3
+
+
+def test_edge_threshold_drops_the_weaker_edges():
+    """A faint step and a hard border, with the threshold set between them:
+    only the border survives. Sized like a real preview frame, which is what the
+    threshold's range is calibrated against."""
+    arr = np.full((400, 1600, 3), 0.5, dtype=np.float32)
+    arr[:, 800:] = 0.56  # a low-contrast step - skin, a gradient in the sky
+    arr[:, 1400:] = 0.0  # and a hard one
+    low = masks._edge_field(arr, {"threshold": 5, "spread": 0, "feather": 50})
+    high = masks._edge_field(arr, {"threshold": 40, "spread": 0, "feather": 50})
+    assert low[:, 790:815].max() > 0.9   # faint step caught when little is excluded
+    assert high[:, 790:815].max() < 0.1  # and dropped once the threshold is up
+    assert high[:, 1390:1415].max() > 0.9  # the real border survives either way
+
+
+def test_edge_spread_widens_the_band():
+    arr = np.full((400, 1600, 3), 0.2, dtype=np.float32)
+    arr[:, 800:] = 0.9
+    width = lambda sp: int(
+        (masks._edge_field(arr, {"threshold": 20, "spread": sp, "feather": 0})[200] > 0.5).sum()
+    )
+    assert width(100) > width(0) * 2
+
+
+def test_edge_selection_is_the_same_at_preview_and_export_size():
+    """The mask is set up on a small preview and saved from a big render - if
+    the two saw different amounts of detail per pixel, the saved sharpening
+    would land somewhere other than where it was judged."""
+    p = {"threshold": 25, "spread": 30, "feather": 50}
+    small = masks._edge_field(_detail_scene(200, 400), p)
+    big = masks._edge_field(_detail_scene(1000, 2000), p)
+    assert abs(float(small.mean()) - float(big.mean())) < 0.08
+
+
 # --- container combination ----------------------------------------------------
 
 def test_sub_masks_combine_and_invert():

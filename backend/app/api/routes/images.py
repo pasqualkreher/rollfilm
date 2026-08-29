@@ -19,8 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from PIL import Image as PILImage
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
-from sqlalchemy import String, case, func, or_, type_coerce
-from sqlalchemy.orm import Session
+from sqlalchemy import String, case, func, or_, select, type_coerce
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app import schemas
 from app.api.deps import get_owned_image
@@ -90,11 +90,15 @@ def _apply_to_pair(
 ) -> None:
     """Mirror a rating/color change onto this image's RAW+JPEG partner, so users
     can cull the merged pair by only touching the JPEG. No-op when the image has
-    no partner (or it isn't owned by the caller)."""
+    no partner (or it isn't owned by the caller), and no-op across the Trash:
+    while one half is deleted the pair is suspended everywhere else too, so
+    rating the survivor must not reach into a photo the user threw away."""
     if not image.paired_image_id:
         return
     partner = db.get(Image, image.paired_image_id)
     if partner is None or partner.owner_id != owner_id:
+        return
+    if (partner.deleted_at is None) != (image.deleted_at is None):
         return
     if rating is not None:
         partner.rating = rating
@@ -286,7 +290,15 @@ def list_images(
     query = query.order_by(
         Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc()
     )
-    return query.offset(offset).limit(limit).all()
+    # The response's paired_image_id is Image.visible_paired_image_id, which
+    # reads the partner's deleted_at - one extra query for the page instead of
+    # one lazy load per row.
+    return (
+        query.options(selectinload(Image.paired_image))
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
 
 # The per-image thumbnail cache-buster is the server-owned `edit_rev` counter,
@@ -338,13 +350,27 @@ def library_index(
     # type_coerce, not literal_column: it reuses the real column expression, so
     # this cannot come apart if the filter chain ever aliases the table - it
     # only overrides how the RESULT is read back.
+    # A pair only counts as a pair while both halves are in the library: with
+    # one of them in the Trash the survivor must stop badging itself "RAW+JPG"
+    # and stop standing in for a file the user just deleted (see
+    # Image.visible_paired_image_id, the same rule the ImageOut routes apply).
+    # Asked for as a correlated subquery rather than a join so it can't disturb
+    # the filter chain above - every row here is already deleted_at IS NULL, so
+    # the partner's own deleted_at being null is the whole test.
+    partner = aliased(Image)
+    partner_deleted = (
+        select(type_coerce(partner.deleted_at, String))
+        .where(partner.id == Image.paired_image_id)
+        .correlate(Image)
+        .scalar_subquery()
+    )
     rows = (
         query.with_entities(
             Image.id, Image.original_filename, type_coerce(Image.file_type, String),
             Image.width, Image.height, type_coerce(Image.taken_at, String),
             Image.rating, type_coerce(Image.color_label, String),
             Image.immich_sync, Image.paired_image_id, Image.source_root_id,
-            Image.edit_rev,
+            Image.edit_rev, partner_deleted,
         )
         .order_by(Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc())
         .all()
@@ -368,13 +394,13 @@ def library_index(
             "rating": rating,
             "color_label": color_label,
             "immich_sync": bool(immich_sync),
-            "paired_image_id": paired_image_id,
+            "paired_image_id": paired_image_id if partner_deleted_at is None else None,
             "source_root_id": source_root_id,
             "thumb_version": str(edit_rev) if edit_rev else "",
         }
         for (
             id_, filename, file_type, width, height, taken_at, rating, color_label,
-            immich_sync, paired_image_id, source_root_id, edit_rev,
+            immich_sync, paired_image_id, source_root_id, edit_rev, partner_deleted_at,
         ) in rows
     ]
     return Response(
@@ -561,6 +587,7 @@ def list_trash(db: Session = Depends(get_db), current_user: User = Depends(get_c
     # entries (there is no file of ours to delete or bring back).
     return (
         db.query(Image)
+        .options(selectinload(Image.paired_image))
         .filter(
             Image.owner_id == current_user.id,
             Image.deleted_at.isnot(None),
@@ -1343,7 +1370,14 @@ def rename_image(
     pair_error: str | None = None
     if payload.rename_pair and image.paired_image_id:
         candidate = db.get(Image, image.paired_image_id)
-        if candidate is not None and candidate.owner_id == current_user.id:
+        # Not across the Trash: a half sitting in the Trash isn't part of the
+        # pair right now (the client isn't even told about it), and renaming it
+        # along would quietly touch a file the user deleted.
+        if (
+            candidate is not None
+            and candidate.owner_id == current_user.id
+            and (candidate.deleted_at is None) == (image.deleted_at is None)
+        ):
             partner_source = resolve_image_path(candidate)
             if not partner_source.exists():
                 pair_error = f"{candidate.original_filename} isn't reachable - it kept its name."
@@ -1580,6 +1614,7 @@ def editor_preview(
     ultra: bool = False,
     native: bool = False,
     browse: bool = False,
+    peek: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1595,7 +1630,12 @@ def editor_preview(
 
     `?browse=1` renders a raw with the browsing auto-exposure instead of the
     editor's native (dark) base - the "Original" half of the split view, which
-    has to be the photo as the library showed it, not the unlifted sensor data."""
+    has to be the photo as the library showed it, not the unlifted sensor data.
+
+    `?peek=<mask id>` marks that mask's covered area in the frame with the
+    editor's zebra, so a luminance / colour / edge mask - none of which has an
+    outline that could be drawn over the photo - can be seen while it is being
+    set up."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
@@ -1630,6 +1670,7 @@ def editor_preview(
             persp_h=_clamp100(payload.persp_h),
             persp_v=_clamp100(payload.persp_v),
             browse=browse,
+            peek=(peek or None),
             is_stale=_is_stale,
         )
     except thumbnails.PreviewSuperseded:
@@ -1826,7 +1867,13 @@ def save_copy(
     if max_size and max(edited.size) > max_size:
         edited.thumbnail((max_size, max_size), PILImage.LANCZOS)
     buf = io.BytesIO()
-    edited.save(buf, "JPEG", quality=quality)
+    # At the top of the quality range the copy is meant as a keeper, so drop
+    # chroma subsampling too (4:4:4): quality=100 alone still throws away half
+    # the colour resolution at libjpeg's default, which shows on saturated
+    # edges. Below 95 the copy is deliberately a smaller file - leave the
+    # default subsampling there, where it buys most of the size saving.
+    subsampling = 0 if quality >= 95 else -1
+    edited.save(buf, "JPEG", quality=quality, subsampling=subsampling)
     data = buf.getvalue()
 
     # Name edited copies "<stem>_edit-1.jpg", "_edit-2", ... - the first free

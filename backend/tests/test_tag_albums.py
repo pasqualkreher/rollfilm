@@ -13,6 +13,7 @@ from datetime import datetime
 
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -127,6 +128,23 @@ def test_create_and_update_normalize_the_rule(db: Session):
     update_album(out.id, schemas.AlbumUpdate(tag_filter=["beach"]), db=db, current_user=user)
     out = update_album(out.id, schemas.AlbumUpdate(name="Renamed"), db=db, current_user=user)
     assert out.tag_filter == ["beach"]
+
+
+def test_rename_trims_and_refuses_a_blank_name(db: Session):
+    """Album names are the user's to edit, so a rename has to survive stray
+    whitespace - and must never leave the album nameless (the Immich mirror
+    maps albums by name, and a blank card is unopenable)."""
+    user = db.get(User, 1)
+    out = create_album(schemas.AlbumCreate(name="Trips"), db=db, current_user=user)
+
+    out = update_album(out.id, schemas.AlbumUpdate(name="  Summer 2026 "), db=db, current_user=user)
+    assert out.name == "Summer 2026"
+
+    for blank in ("", "   "):
+        with pytest.raises(HTTPException) as err:
+            update_album(out.id, schemas.AlbumUpdate(name=blank), db=db, current_user=user)
+        assert err.value.status_code == 400
+    assert db.get(Album, out.id).name == "Summer 2026"
 
 
 def test_tags_smart_album_section(db: Session):

@@ -22,7 +22,7 @@ import numpy as np
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 
 # Cache for the purely geometric sub-mask fields (radial / linear / brush -
-# NOT luminance/color, which depend on the image pixels). The editor re-renders
+# NOT luminance/color/edge, which depend on the image pixels). The editor re-renders
 # the whole pipeline on every slider tick, and re-rasterising an unchanged
 # brush mask (thousands of capsule stamps) per frame dominated those renders.
 # Keyed by the sub-mask's parameter JSON + the field size; a small LRU because
@@ -297,6 +297,99 @@ def _color_field(arr: np.ndarray, p: dict) -> np.ndarray:
     return _smoothstep((tol - dist) / fw + 0.5).astype(np.float32)
 
 
+# --- Edge ("detail") masks ----------------------------------------------------
+# Selects where the picture has detail rather than where it is bright: the local
+# gradient magnitude, thresholded. This is the mask a sharpening or clarity
+# adjustment wants - a luminance mask can only say "the dark half of the
+# picture", which on a portrait is hair AND the shadow on the cheek, and
+# sharpening flat skin is exactly what you were trying to avoid.
+#
+# The gradient is measured at a FIXED working size, not at the render's own
+# resolution. A scrub preview (1100px), the settled render and a 40MP export
+# would otherwise each see a different amount of fine detail per pixel and so
+# select a different set of edges - the mask you set up on the preview would not
+# be the one that gets saved. Everything below is in luma-per-pixel at this size.
+_EDGE_WORK_PX = 1600
+# ...with one limit: a thumbnail is not blown up more than this to be measured,
+# which would cost more than the whole thumbnail render for detail that isn't in
+# the pixels anyway. The leftover scale difference is corrected arithmetically
+# instead (exact for a ramp, close enough for everything else).
+_EDGE_MAX_UPSCALE = 2.0
+# A hard black/white border reaches ~0.5 in these units, a crisp branch against
+# sky ~0.1, and film grain or skin texture stays well under 0.02 - so the slider
+# is squared to spread the interesting bottom of that range over most of its
+# travel.
+_EDGE_MAX_THRESHOLD = 0.30
+_EDGE_MIN_THRESHOLD = 0.004
+# Spread 100 grows the selection this many working-size pixels around each edge,
+# so a sharpening mask can cover the whole transition instead of a hairline.
+_EDGE_MAX_SPREAD_PX = 10.0
+
+
+def _luma_gradient(luma: np.ndarray) -> np.ndarray:
+    """|grad| of a lightly smoothed luma plane, in luma units per pixel. The
+    pre-blur is what keeps sensor noise and grain out of the selection - without
+    it the "edges" of a high-ISO frame are mostly noise."""
+    try:
+        import cv2
+
+        sm = cv2.GaussianBlur(luma, (0, 0), sigmaX=1.0, sigmaY=1.0)
+        gx = cv2.Sobel(sm, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(sm, cv2.CV_32F, 0, 1, ksize=3)
+        # A 3x3 Sobel sums to 8x the per-pixel difference it measures.
+        return (np.sqrt(gx * gx + gy * gy) / 8.0).astype(np.float32)
+    except Exception:
+        gy, gx = np.gradient(luma)
+        return np.sqrt(gx * gx + gy * gy).astype(np.float32)
+
+
+def _edge_field(arr: np.ndarray, p: dict) -> np.ndarray:
+    """Select detail: edges stronger than `threshold`, grown by `spread` so the
+    band covers the whole transition, with `feather` softening the threshold
+    crossing exactly like the luminance mask's does."""
+    h, w = arr.shape[:2]
+    t = np.clip(float(p.get("threshold", 25)) / 100.0, 0.0, 1.0)
+    feather = np.clip(float(p.get("feather", 50)) / 100.0, 0.0, 1.0)
+    spread = np.clip(float(p.get("spread", 30)) / 100.0, 0.0, 1.0)
+    long_edge = max(h, w, 1)
+    scale = min(_EDGE_WORK_PX / long_edge, _EDGE_MAX_UPSCALE)
+    gh, gw = (max(2, round(h * scale)), max(2, round(w * scale)))
+    luma = np.clip(arr @ _LUMA, 0.0, 1.0)
+    if (gh, gw) != (h, w):
+        luma = _resize_field(luma, gh, gw)
+    mag = _luma_gradient(np.ascontiguousarray(luma, dtype=np.float32))
+    # Into reference units: a frame k times smaller than the reference crams the
+    # same edge into k times fewer pixels, so its gradients read k times steeper.
+    work_long = max(gh, gw)
+    if work_long != _EDGE_WORK_PX:
+        mag = mag * (work_long / _EDGE_WORK_PX)
+    thr = _EDGE_MIN_THRESHOLD + t * t * _EDGE_MAX_THRESHOLD
+    fw = thr * feather + 1e-4
+    field = _smoothstep((mag - thr) / fw + 0.5).astype(np.float32)
+    if spread > 0:
+        field = _grow(field, spread * _EDGE_MAX_SPREAD_PX * (work_long / _EDGE_WORK_PX))
+    if (gh, gw) != (h, w):
+        field = _resize_field(field, h, w)
+    return np.clip(field, 0.0, 1.0).astype(np.float32)
+
+
+def _grow(field: np.ndarray, radius: float) -> np.ndarray:
+    """Dilate then blur by the same radius: the dilation is what actually widens
+    the band (a blur alone only fades a hairline out), the blur puts a soft
+    shoulder back on the widened edge."""
+    if radius < 0.5:
+        return field
+    try:
+        import cv2
+
+        k = int(radius) * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        grown = cv2.dilate(field, kernel)
+        return cv2.GaussianBlur(grown, (0, 0), sigmaX=radius * 0.6, sigmaY=radius * 0.6)
+    except Exception:
+        return field
+
+
 # --- Semantic ("select the sky") masks ---------------------------------------
 # The field is computed once by app.services.segmentation and stored in the
 # sub-mask as a small PNG (see STORED_MASK_PX), so no model runs in the render
@@ -409,6 +502,8 @@ def _submask_field(sm: dict, h: int, w: int, arr: np.ndarray) -> np.ndarray:
         f = _luminance_field(arr, p)
     elif t == "color":
         f = _color_field(arr, p)
+    elif t == "edge":
+        f = _edge_field(arr, p)
     elif t == "semantic":
         # Decoding + refining costs enough to be worth the spatial cache, and the
         # stored PNG is a pure function of the parameters like any other shape.

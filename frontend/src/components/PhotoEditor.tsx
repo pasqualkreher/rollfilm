@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconCheck, IconFlipH, IconFlipV, IconRotate, IconSideBySide, IconSplit, IconTarget, IconX } from "./Icons";
+import { IconArrowLeft, IconCheck, IconCrop, IconFlipH, IconFlipV, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
-import { SaveCopyDialog } from "./SaveCopyDialog";
+import { SaveCopyDialog, FULL_COPY_QUALITY } from "./SaveCopyDialog";
 import {
   adjustmentsFromImage,
   BAND_SWATCH,
@@ -52,12 +52,14 @@ import {
   pointsToParametric,
 } from "../utils/curveConvert";
 import { loadPresets, savePreset, deletePreset, type EditPreset } from "../utils/presets";
+import { useEditHistory } from "../utils/editHistory";
+import { useTransientMessage } from "../utils/transientMessage";
 import { CurveEditor, MAX_CURVE_POINTS } from "./CurveEditor";
 import { ColorWheel } from "./ColorWheel";
 import { MaskOverlay } from "./MaskOverlay";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
-import { useStageBg } from "../state/viewPrefs";
+import { useStageBg, useAskSaveCopyOptions } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
 import { useWait } from "../state/wait";
 
@@ -122,6 +124,11 @@ const GRADE_RANGES: { key: GradeRange; label: string }[] = [
 const MASK_MIN_R = 0.02;
 const MASK_HANDLE_PX = 13;
 const MASK_ROT_OFF = 0.07;
+// How long a mask stays marked after the slider that selects with it last
+// moved. Long enough that the marking is still there when you let go and look,
+// short enough that it clears itself out of the way of the picture - the
+// marking is pink stripes over the very area you are about to judge.
+const MASK_FLASH_MS = 1500;
 // Flags on a brush stroke sample ([x, y, size, flags]); must match
 // masks._PEN_DOWN / masks._ERASE on the backend, which uses them to recover
 // stroke boundaries and erase strokes from the flat sample list.
@@ -383,6 +390,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   const dialogs = useAppDialogs();
   const { withWait } = useWait();
   const navigate = useNavigate();
+  const location = useLocation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const stageMainRef = useRef<HTMLDivElement | null>(null);
@@ -553,8 +561,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Inline preset naming (Electron has no window.prompt).
   const [namingPreset, setNamingPreset] = useState(false);
   // Save-copy options dialog (quality/size, export-style) - the render runs
-  // while it's open, so it doubles as the progress popup.
+  // while it's open, so it doubles as the progress popup. It is only reached
+  // when the user asked for it in Settings; by default Save copy is one click
+  // at full quality (see viewPrefs).
   const [saveCopyOpen, setSaveCopyOpen] = useState(false);
+  const askSaveCopyOptions = useAskSaveCopyOptions();
   const [presetName, setPresetName] = useState("");
   const [cropMode, setCropMode] = useState(false);
   const [drag, setDrag] = useState<DragRect | null>(null);
@@ -587,7 +598,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [brushErase, setBrushErase] = useState(false);
   const [cropCursor, setCropCursor] = useState("crosshair");
   // Crop aspect-ratio lock (key into ASPECT_OPTIONS; "free" = unconstrained).
-  const [aspectKey, setAspectKey] = useState("free");
+  // Starts on the photo's own aspect: a crop that keeps the shape it was shot in
+  // is the one almost every crop wants, and it's the only lock you cannot pick
+  // back up by eye once you've dragged away from it. Freeform stays one pick
+  // away in the same select.
+  const [aspectKey, setAspectKey] = useState("orig");
   // Masks (local adjustments). One mask is selected at a time; drawing a
   // radial/linear/brush sub-mask happens on the canvas in mask-draw mode
   // (mutually exclusive with crop mode). The colour eyedropper samples the next
@@ -595,10 +610,34 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [selectedMaskId, setSelectedMaskId] = useState<string | null>(null);
   const [maskDrawMode, setMaskDrawMode] = useState(false);
   const [colorPickMode, setColorPickMode] = useState(false);
+  // "Show mask": keep the selected mask's area marked while it is being set up.
+  // Pointing at a mask in the list marks it too, but that can't help the case
+  // this exists for - a luminance or edge mask is judged while you drag its own
+  // sliders, and your pointer is on the slider then, not on the list.
+  const [showMaskArea, setShowMaskArea] = useState(false);
+  // A slider that decides what a mask SELECTS is unreadable without seeing the
+  // selection - a Threshold's whole job is which edges are in - so moving one
+  // marks the mask by itself and drops the marking again shortly after you
+  // stop. That way it is there for the decision and gone for the judgement,
+  // without the toggle having to be found first.
+  const [flashMaskArea, setFlashMaskArea] = useState(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const flashMask = useCallback(() => {
+    setFlashMaskArea(true);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashMaskArea(false), MASK_FLASH_MS);
+  }, []);
+  const clearFlash = useCallback(() => {
+    clearTimeout(flashTimer.current);
+    setFlashMaskArea(false);
+  }, []);
   // Subject detection ("Sky", "Water", ...): which subject is being looked for
-  // right now (null = idle), and the last failure to show under the buttons.
+  // right now (null = idle), and the failure to show under the buttons. The
+  // failure is transient - it answers the click you just made, and once it has
+  // been read there is nothing to do about it, so left standing it starts
+  // reading as a state the photo is in rather than an answer to a click.
   const [segmenting, setSegmenting] = useState<string | null>(null);
-  const [segmentError, setSegmentError] = useState<string | null>(null);
+  const [segmentError, setSegmentError] = useTransientMessage();
   // Which mask row in the panel the pointer is over. The marking showing what a
   // mask covers is exactly what's in the way once you start adjusting - it sits
   // on top of the change you're trying to judge - so it isn't a mode: point at a
@@ -623,6 +662,9 @@ export function PhotoEditor({ image, onClose }: Props) {
     if (openGroup !== "masks") {
       setMaskDrawMode(false);
       setColorPickMode(false);
+      setShowMaskArea(false);
+      setFlashMaskArea(false);
+      clearTimeout(flashTimer.current);
       setSegmentError(null);
     } else {
       // Opening the panel is the earliest honest sign that a subject mask might
@@ -645,13 +687,17 @@ export function PhotoEditor({ image, onClose }: Props) {
       setCurvePickMode(false);
       setCurveMarker(null);
     }
-    // Same idea for Transform: the group *is* the crop tool, so opening it arms
-    // the crop box (seeded from the crop already applied) rather than hiding it
-    // behind a mode button - ratio, Apply and Clear then sit in the panel with
-    // the rest of the geometry instead of appearing and reflowing it. Leaving
-    // the group puts the box away; the canvas pointer goes back to zoom/pan.
+    // Same idea for Transform: the group *is* the crop tool, so opening it with
+    // nothing cropped yet arms the box rather than hiding it behind a mode
+    // button - ratio, Apply and Clear then sit in the panel with the rest of the
+    // geometry instead of appearing and reflowing it. With a crop already taken
+    // it opens on the CROPPED picture instead: that is the photo now, and the
+    // straighten/tilt sliders sitting right below belong to it, so re-framing
+    // has to be asked for (the crop button) rather than being where you land.
+    // Leaving the group puts the box away; the canvas pointer goes back to
+    // zoom/pan.
     if (openGroup === "transform") {
-      setCropMode(true);
+      setCropMode(!crop);
       setMaskDrawMode(false);
       setColorPickMode(false);
       setDrag(crop ? { x0: crop.x, y0: crop.y, x1: crop.x + crop.width, y1: crop.y + crop.height } : null);
@@ -758,6 +804,35 @@ export function PhotoEditor({ image, onClose }: Props) {
     [rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion, adj]
   );
 
+  // One stringify per actual edit change (not per render). Two things read it:
+  // the dirty check (against the pre-computed saved-state key) and the undo
+  // history, which uses it as the identity of an edit state.
+  const editsKey = useMemo(() => JSON.stringify(edits), [edits]);
+
+  // Undo/redo. The history keeps whole edit snapshots, so putting one back is
+  // just writing every piece of edit state at once - see utils/editHistory for
+  // why it works that way and how a drag is coalesced into one step.
+  const applyEditSnapshot = useCallback((e: ImageEdits) => {
+    setRotation(e.rotation);
+    setCrop(e.crop);
+    setFlipH(e.flipH);
+    setFlipV(e.flipV);
+    setStraighten(e.straighten);
+    setPerspH(e.perspH);
+    setPerspV(e.perspV);
+    setDistortion(e.distortion);
+    setAdj(e.adjustments);
+    // The crop box on the photo is drawn from `drag`, not from `crop`, so it has
+    // to follow the restored crop or undoing one leaves the old box behind.
+    setDrag(e.crop ? { x0: e.crop.x, y0: e.crop.y, x1: e.crop.x + e.crop.width, y1: e.crop.y + e.crop.height } : null);
+    // Undoing past a mask's creation would otherwise leave the panel bound to a
+    // mask that no longer exists.
+    setSelectedMaskId((id) => (id && e.adjustments.masks.some((m) => m.id === id) ? id : null));
+    setMaskDrawMode((on) => on && e.adjustments.masks.length > 0);
+  }, []);
+  const history = useEditHistory(edits, editsKey, applyEditSnapshot, image.id);
+  const { undo, redo } = history;
+
   const drawn = drag ? normalizeRect(drag) : null;
   const hasDrawnCrop = drawn && drawn.width > 0.02 && drawn.height > 0.02;
 
@@ -775,7 +850,21 @@ export function PhotoEditor({ image, onClose }: Props) {
   // you left for another section. With no crop box drawn there is no overlay to
   // misalign, which is the state the slider is normally reached in.
   const cropRectVisible = cropMode && !!hasDrawnCrop;
-  const maskOverlayVisible = openGroup === "masks" && (maskDrawMode || hoveredMaskId !== null);
+  const maskOverlayVisible =
+    openGroup === "masks" && (maskDrawMode || showMaskArea || hoveredMaskId !== null);
+  // Luminance / colour / edge masks select by what the pixels ARE, so there is
+  // no shape MaskOverlay could draw over the photo - the marking for those has
+  // to come from the render, which is the only place their field exists (see
+  // the editor-preview `peek` param). Spatial masks keep the SVG zebra: it's
+  // instant and follows zoom/pan as vector, no round trip.
+  const peekMaskId = useMemo(() => {
+    if (openGroup !== "masks" || colorPickMode) return null; // the eyedropper must sample the photo, not the zebra
+    const id = hoveredMaskId ?? (showMaskArea || flashMaskArea ? selectedMaskId : null);
+    const type = id ? adj.masks.find((m) => m.id === id)?.sub_masks[0]?.type : undefined;
+    return type === "luminance" || type === "color" || type === "edge" ? id : null;
+  }, [openGroup, colorPickMode, hoveredMaskId, showMaskArea, flashMaskArea, selectedMaskId, adj.masks]);
+  const peekRef = useRef<string | null>(null);
+  peekRef.current = peekMaskId;
   const overlayActive = cropRectVisible || maskOverlayVisible || compareMode !== "off";
   const previewEdits: ImageEdits = useMemo(() => {
     if (compare) {
@@ -918,7 +1007,9 @@ export function PhotoEditor({ image, onClose }: Props) {
         // rest of the climb, and the seq guard drops a rung whose frame was
         // superseded while it rendered.
         for (const tier of ["full", "ultra", "native"] as const) {
-          const blob = await api.images.editorPreview(image.id, previewEditsLatest.current!, fctrl.signal, tier);
+          const blob = await api.images.editorPreview(
+            image.id, previewEditsLatest.current!, fctrl.signal, tier, false, peekRef.current
+          );
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
           await drawBlob(blob, seq, false, previewEditsLatest.current!.crop);
           if (!isUpscaled()) break;
@@ -987,8 +1078,10 @@ export function PhotoEditor({ image, onClose }: Props) {
           // render replace it. Costs one cheap extra render; turns "the editor
           // is stuck" into "instant preview, sharpens a moment later".
           if (!scrub && slowAccurate.current) {
-            const quick = await api.images.editorPreview(image.id, edits, ctrl.signal, "scrub");
-            await drawBlob(quick, seq, true, edits.crop);
+            const quick = await api.images.editorPreview(
+              image.id, edits, ctrl.signal, "scrub", false, peekRef.current
+            );
+            await drawBlob(quick, seq, !peekRef.current, edits.crop);
             setLoading(false);
             setReady(true);
           }
@@ -996,9 +1089,14 @@ export function PhotoEditor({ image, onClose }: Props) {
           // tracks the sliders live - cheap now that it reads a downscaled
           // scratch canvas instead of the full preview canvas.
           const t0 = performance.now();
-          const blob = await api.images.editorPreview(image.id, edits, ctrl.signal, scrub ? "scrub" : "fast");
+          const blob = await api.images.editorPreview(
+            image.id, edits, ctrl.signal, scrub ? "scrub" : "fast", false, peekRef.current
+          );
           if (!scrub) slowAccurate.current = performance.now() - t0 > 300;
-          await drawBlob(blob, seq, true, edits.crop);
+          // A marked frame is pink candy-stripes over the photo, so it must not
+          // be what the histogram reads - it keeps the last clean frame's bins
+          // until the marking goes away, rather than showing the zebra's colour.
+          await drawBlob(blob, seq, !peekRef.current, edits.crop);
           setError(null);
           setLoading(false);
           setReady(true);
@@ -1028,7 +1126,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     dirtyToken.current++;
     void pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image.id, previewEdits]);
+  }, [image.id, previewEdits, peekMaskId]);
 
   // Geometry moved, so the compare view's original no longer matches the frame
   // it's shown against; entering a compare mode wants it rendered in the first
@@ -1104,6 +1202,7 @@ export function PhotoEditor({ image, onClose }: Props) {
       abortRef.current?.abort();
       fullAbortRef.current?.abort();
       clearTimeout(settleTimer.current);
+      clearTimeout(flashTimer.current);
     };
   }, [image.id]);
 
@@ -1187,19 +1286,32 @@ export function PhotoEditor({ image, onClose }: Props) {
     },
   });
 
-  // No withWait here: the Save-copy dialog itself blocks the editor and shows
-  // the busy state while the full-resolution render runs.
+  // `blocking` is set on the one-click path, where nothing else covers the
+  // editor while the full-resolution render runs. The dialog path leaves it
+  // off: that dialog already blocks the editor and shows its own busy state.
   const saveCopy = useMutation({
-    mutationFn: (opts: { quality: number; maxSize: number | null }) =>
-      api.images.saveCopy(image.id, edits, opts),
+    mutationFn: ({ blocking, ...opts }: { quality: number; maxSize: number | null; blocking?: boolean }) => {
+      const run = () => api.images.saveCopy(image.id, edits, opts);
+      return blocking ? withWait("Saving a copy…", run) : run();
+    },
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       onClose();
       // Jump to the freshly created edited photo rather than staying on the
       // original - and make its back arrow lead to the Library, not back
-      // through the editing history.
-      navigate(`/image/${created.id}`, { state: { backTo: "/" } });
+      // through the editing history. The set being browsed comes along, with
+      // the copy slotted in right after its original: without it the new photo
+      // lands with no neighbours and the arrow keys stay dead until you step
+      // back out to the grid and re-enter.
+      const browsed = (location.state as { imageIds?: string[] } | null)?.imageIds;
+      const at = browsed ? browsed.indexOf(image.id) : -1;
+      const imageIds = browsed
+        ? at === -1
+          ? [...browsed, created.id]
+          : [...browsed.slice(0, at + 1), created.id, ...browsed.slice(at + 1)]
+        : undefined;
+      navigate(`/image/${created.id}`, { state: { backTo: "/", imageIds } });
     },
   });
 
@@ -1270,6 +1382,19 @@ export function PhotoEditor({ image, onClose }: Props) {
         return;
       }
 
+      // Undo/redo. Cmd/Ctrl+Z steps back, Cmd/Ctrl+Shift+Z (or Ctrl+Y) forward -
+      // except inside a text field, which keeps its own undo stack.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && ["z", "y"].includes(e.key.toLowerCase())) {
+        const el = e.target as HTMLElement | null;
+        const t = el?.tagName;
+        if (t === "TEXTAREA") return;
+        if (t === "INPUT" && !["range", "checkbox"].includes((el as HTMLInputElement).type)) return;
+        e.preventDefault();
+        if (e.shiftKey || e.key.toLowerCase() === "y") redo();
+        else undo();
+        return;
+      }
+
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
@@ -1301,7 +1426,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending]);
+  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, undo, redo]);
 
   function fractionAt(clientX: number, clientY: number) {
     const box = canvasRef.current!.getBoundingClientRect();
@@ -1320,14 +1445,15 @@ export function PhotoEditor({ image, onClose }: Props) {
   }
 
   // Current aspect lock as a fraction-space ratio (fw/fh), or null when free.
-  // In crop mode the canvas holds the full framed image, so its pixels give the
-  // image aspect A; a target ratio R becomes k = R / A in fraction space.
+  // The box is a fraction of the UNCROPPED frame, so the aspect A it is measured
+  // against is that frame's - which frameBase holds whether or not the canvas is
+  // currently showing the cropped picture. A target ratio R becomes k = R / A.
   function aspectK(): number | null {
     const ratio = ASPECT_OPTIONS.find((o) => o.value === aspectKey)?.ratio ?? null;
     if (ratio == null) return null;
-    const cv = canvasRef.current;
-    if (!cv || !cv.width || !cv.height) return null;
-    const A = cv.width / cv.height;
+    const base = frameBaseRef.current;
+    if (!base || !base.width || !base.height) return null;
+    const A = base.width / base.height;
     const R = ratio === "orig" ? A : ratio;
     return R / A;
   }
@@ -1348,15 +1474,37 @@ export function PhotoEditor({ image, onClose }: Props) {
     setCrop(next);
   }
 
+  // Take the drawn box and step out of the crop tool: from here on the preview
+  // is the CROPPED picture, and everything downstream - straighten, tilt,
+  // distortion, the white frame, every tonal slider, the histogram - is judged
+  // on the photo as it will be saved, not on the wider frame it was cut from.
+  // Staying in the box would have left the crop invisible until you closed the
+  // group, which is the one moment it stops mattering.
+  function takeCrop() {
+    applyCrop(normalizeRect(drag!));
+    setCropMode(false);
+  }
+
+  // Back into the crop tool: the preview widens to the uncropped frame with the
+  // committed box on it, so a crop can be re-framed instead of only cleared.
+  function armCrop() {
+    setCropMode(true);
+    if (crop) setDrag({ x0: crop.x, y0: crop.y, x1: crop.x + crop.width, y1: crop.y + crop.height });
+  }
+
   // Picking a preset drops a centred crop of that ratio; picking Freeform just
   // releases the lock and keeps whatever box is drawn.
   function pickAspect(key: string) {
     setAspectKey(key);
+    // Choosing a ratio is asking for a box of that shape, so it also opens the
+    // crop tool back up when the picture is currently shown cropped - otherwise
+    // the box it drops would be under a preview that never widens to show it.
+    armCrop();
     const ratio = ASPECT_OPTIONS.find((o) => o.value === key)?.ratio ?? null;
     if (ratio == null) return;
-    const cv = canvasRef.current;
-    if (!cv || !cv.width || !cv.height) return;
-    const A = cv.width / cv.height;
+    const base = frameBaseRef.current;
+    if (!base || !base.width || !base.height) return;
+    const A = base.width / base.height;
     const R = ratio === "orig" ? A : ratio;
     setDrag(centeredDragForK(R / A));
   }
@@ -1503,6 +1651,25 @@ export function PhotoEditor({ image, onClose }: Props) {
   // object identity changes and the server preview re-renders live.
   function updateMask(id: string, patch: Partial<MaskDef>) {
     setAdj((a) => ({ ...a, masks: a.masks.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
+  }
+  // Every slider in the panel that shapes what a mask SELECTS - a threshold, a
+  // feather, a tolerance - marks the mask on the photo while it moves, then lets
+  // the marking go (see flashMask). Without it those sliders are set blind: the
+  // masks that need it most have nothing on the photo to look at, and even a
+  // brush's Feather is a number until you see the edge it makes.
+  function setSubParams(id: string, patch: SubMaskParams) {
+    flashMask();
+    updateSubMaskParams(id, patch);
+  }
+  // Feather is the exception, on every mask type. It doesn't decide WHAT is
+  // selected, it decides how softly the selection lands - and that is judged on
+  // the photo, in the transition itself. Marking it would put stripes over the
+  // one thing being looked at, so Feather never raises the marking and takes a
+  // marking that is still up from another slider back down. (The Show mask
+  // toggle is untouched: that one is asked for.)
+  function setSubFeather(id: string, feather: number) {
+    clearFlash();
+    updateSubMaskParams(id, { feather });
   }
   function updateSubMaskParams(id: string, patch: SubMaskParams) {
     setAdj((a) => ({
@@ -2158,9 +2325,6 @@ export function PhotoEditor({ image, onClose }: Props) {
       Math.abs(drawn!.y - crop.y) > 1e-4 ||
       Math.abs(drawn!.width - crop.width) > 1e-4 ||
       Math.abs(drawn!.height - crop.height) > 1e-4);
-  // One stringify per actual edit change (not per render), compared against the
-  // pre-computed saved-state key.
-  const editsKey = useMemo(() => JSON.stringify(edits), [edits]);
   const dirty = editsKey !== savedKey;
   const allNeutral = useMemo(() => editsAreNeutral(edits), [edits]);
 
@@ -2179,7 +2343,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   // the one being drawn on the image. Pointing at a row is the explicit request,
   // so it wins.
   const hoveredMask = hoveredMaskId ? adj.masks.find((m) => m.id === hoveredMaskId) ?? null : null;
-  const overlayMask = hoveredMask ?? (maskDrawMode ? selectedMask : null);
+  const overlayMask = hoveredMask ?? (maskDrawMode || showMaskArea || flashMaskArea ? selectedMask : null);
   const overlaySub = overlayMask?.sub_masks[0] ?? null;
   // Sub-masks that draw something over the image: the editable shapes, plus a
   // semantic mask, which shows the region it found rather than a shape.
@@ -2193,23 +2357,14 @@ export function PhotoEditor({ image, onClose }: Props) {
   const overlayIsHovered = hoveredMask != null;
   const overlayIsSelected = overlayMask != null && overlayMask.id === selectedMaskId;
   const overlayMark =
-    overlayIsHovered || (maskDrawMode && overlayIsSelected && overlaySpatialSub?.type === "brush");
+    overlayIsHovered ||
+    ((showMaskArea || flashMaskArea) && overlayIsSelected) ||
+    (maskDrawMode && overlayIsSelected && overlaySpatialSub?.type === "brush");
   const maskLabel = (m: MaskDef) => MASK_TYPES.find((t) => t.value === m.sub_masks[0]?.type)?.label ?? "Mask";
 
   return (
     <div className="editor-overlay">
       <div className="editor-body">
-        {/* Back button in its own slim column left of the stage, top aligned -
-            same placement as the detail lightbox's back arrow. */}
-        <button
-          className="icon-btn editor-back-btn"
-          onClick={onClose}
-          disabled={busy}
-          title={busy ? "Saving…" : "Back (Esc)"}
-          aria-label="Back"
-        >
-          <IconArrowLeft size={16} />
-        </button>
         <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
         <div className={`editor-stage-main${pair ? " editor-stage-main--pair" : ""}`} ref={stageMainRef}>
         {loading && <div className="editor-hint">Loading…</div>}
@@ -2343,8 +2498,10 @@ export function PhotoEditor({ image, onClose }: Props) {
             }}
             onDoubleClick={(e) => {
               if (cropMode) return;
-              // Lightroom-style, cycling fit -> 100% -> 200% -> 400% -> fit at
-              // the cursor - the same steps as the lightbox.
+              // A plain fit <-> 100% toggle at the cursor - the same as the
+              // lightbox. It used to cycle up through 200% and 400%, so a
+              // double-click after zooming in with the wheel magnified further
+              // instead of putting the photo back.
               const wrap = wrapRef.current!;
               // The wrap is the canvas's UNTRANSFORMED box (the transform sits
               // on the canvas itself), so its centre is the fixed point the
@@ -2354,12 +2511,10 @@ export function PhotoEditor({ image, onClose }: Props) {
               const dy = e.clientY - (rect.top + rect.height / 2);
               const native = nativeScale();
               const ceiling = maxZoom();
-              const steps = [
-                Math.min(ceiling, Math.max(1.5, native)),
-                Math.min(ceiling, Math.max(3, native * 2)),
-                ceiling,
-              ];
-              const target = steps.find((step) => scale < step - 0.001) ?? 1;
+              // A photo smaller than its frame is already past 1:1 at fit, so
+              // 100% would zoom it *out*; magnify a little instead.
+              const target =
+                Math.abs(scale - 1) > 0.001 ? 1 : Math.min(ceiling, Math.max(1.5, native));
               setScale(target);
               // Keep whatever is under the cursor under the cursor: the point
               // sits at dx from the centre, so it must stay there after the
@@ -2472,8 +2627,21 @@ export function PhotoEditor({ image, onClose }: Props) {
           )}
         </div>
         </div>
-        {!loading && !error && (
-          <div className="editor-bg-toggle">
+        {/* The stage's control row. Back leads it - labelled, with the other
+            stage controls, the same as the photo view's toolbar - and the row
+            is rendered even while the photo is still loading or failed to
+            load, so there's always a visible way out. */}
+        <div className="editor-bg-toggle">
+          <button
+            className="btn btn-sm back-btn stage-back-btn"
+            onClick={onClose}
+            disabled={busy}
+            title={busy ? "Saving…" : "Back (Esc)"}
+          >
+            <IconArrowLeft size={13} /> Back
+          </button>
+          {!loading && !error && (
+            <>
             <StageBackgroundToggle />
             <ZoomReadout
               zoom={{
@@ -2519,8 +2687,9 @@ export function PhotoEditor({ image, onClose }: Props) {
                 <IconSideBySide size={14} />
               </button>
             </span>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
 
       <div className="editor-panel">
@@ -2580,22 +2749,42 @@ export function PhotoEditor({ image, onClose }: Props) {
                 ariaLabel="Crop aspect ratio"
                 options={ASPECT_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
               />
-              <button
-                className="btn btn-sm editor-field-btn editor-field-btn--confirm"
-                disabled={!cropPending}
-                onClick={() => applyCrop(normalizeRect(drag!))}
-                title="Apply this crop"
-                aria-label="Apply this crop"
-              >
-                <IconCheck size={14} />
-              </button>
+              {/* One button, two states. With the box open it takes the crop -
+                  and the preview then shows the cropped photo, which is what the
+                  sliders underneath are for. With the crop already taken it
+                  re-opens the box on the full frame, so a crop can be re-framed
+                  and not only cleared. */}
+              {cropMode ? (
+                <button
+                  className="btn btn-sm editor-field-btn editor-field-btn--confirm"
+                  disabled={!cropPending}
+                  onClick={takeCrop}
+                  title="Apply this crop"
+                  aria-label="Apply this crop"
+                >
+                  <IconCheck size={14} />
+                </button>
+              ) : (
+                <button
+                  className="btn btn-sm editor-field-btn"
+                  onClick={armCrop}
+                  title="Change the crop"
+                  aria-label="Change the crop"
+                >
+                  <IconCrop size={13} />
+                </button>
+              )}
               <button
                 className="btn btn-sm editor-field-btn"
                 disabled={!crop && !drawn}
                 onClick={() => {
                   applyCrop(null);
                   setDrag(null);
-                  setAspectKey("free");
+                  setAspectKey("orig");
+                  // Nothing is cropped any more, so the full frame is what the
+                  // preview shows either way - and the box is the useful thing
+                  // to land on there.
+                  setCropMode(true);
                 }}
                 title="Clear the crop"
                 aria-label="Clear the crop"
@@ -3018,10 +3207,21 @@ export function PhotoEditor({ image, onClose }: Props) {
             <div className="mask-btn-row">
               <button
                 className={`btn btn-sm${selectedMask.invert ? " primary" : ""}`}
-                onClick={() => updateMask(selectedMask.id, { invert: !selectedMask.invert })}
+                onClick={() => {
+                  flashMask();
+                  updateMask(selectedMask.id, { invert: !selectedMask.invert });
+                }}
                 title="Invert this mask"
               >
                 Invert
+              </button>
+              <button
+                className={`btn btn-sm${showMaskArea ? " primary" : ""}`}
+                aria-pressed={showMaskArea}
+                onClick={() => setShowMaskArea((v) => !v)}
+                title="Mark what this mask covers on the photo while you set it up"
+              >
+                Show mask
               </button>
               {isSpatial(selSub.type) && (
                 <button
@@ -3042,7 +3242,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                 min={1}
                 max={40}
                 resetValue={30}
-                onChange={(v) => updateSubMaskParams(selectedMask.id, { size: v / 500 })}
+                onChange={(v) => setSubParams(selectedMask.id, { size: v / 500 })}
               />
             )}
             {(selSub.type === "radial" || selSub.type === "brush") && (
@@ -3052,7 +3252,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                 min={0}
                 max={100}
                 resetValue={50}
-                onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
+                onChange={(v) => setSubFeather(selectedMask.id, v)}
               />
             )}
             {selSub.type === "brush" && (
@@ -3063,7 +3263,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={1}
                   max={100}
                   resetValue={100}
-                  onChange={(v) => updateSubMaskParams(selectedMask.id, { flow: v })}
+                  onChange={(v) => setSubParams(selectedMask.id, { flow: v })}
                 />
                 <Slider
                   label="Density"
@@ -3071,7 +3271,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={0}
                   max={100}
                   resetValue={100}
-                  onChange={(v) => updateSubMaskParams(selectedMask.id, { density: v })}
+                  onChange={(v) => setSubParams(selectedMask.id, { density: v })}
                 />
                 <button
                   className={`btn btn-sm${brushErase ? " primary" : " ghost"}`}
@@ -3103,7 +3303,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={0}
                   max={100}
                   resetValue={0}
-                  onChange={(v) => updateSubMaskParams(selectedMask.id, { range_min: v })}
+                  onChange={(v) => setSubParams(selectedMask.id, { range_min: v })}
                 />
                 <Slider
                   label="Range max"
@@ -3111,7 +3311,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={0}
                   max={100}
                   resetValue={50}
-                  onChange={(v) => updateSubMaskParams(selectedMask.id, { range_max: v })}
+                  onChange={(v) => setSubParams(selectedMask.id, { range_max: v })}
                 />
                 <Slider
                   label="Feather"
@@ -3119,7 +3319,39 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={0}
                   max={100}
                   resetValue={35}
-                  onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
+                  onChange={(v) => setSubFeather(selectedMask.id, v)}
+                />
+              </>
+            )}
+
+            {selSub.type === "edge" && (
+              <>
+                <p className="mask-hint">
+                  Selects detail rather than tone — hair, branches and fabric, not skin or sky.
+                </p>
+                <Slider
+                  label="Threshold"
+                  value={subNum(selSub, "threshold", 25)}
+                  min={0}
+                  max={100}
+                  resetValue={25}
+                  onChange={(v) => setSubParams(selectedMask.id, { threshold: v })}
+                />
+                <Slider
+                  label="Spread"
+                  value={subNum(selSub, "spread", 30)}
+                  min={0}
+                  max={100}
+                  resetValue={30}
+                  onChange={(v) => setSubParams(selectedMask.id, { spread: v })}
+                />
+                <Slider
+                  label="Feather"
+                  value={subNum(selSub, "feather", 50)}
+                  min={0}
+                  max={100}
+                  resetValue={50}
+                  onChange={(v) => setSubFeather(selectedMask.id, v)}
                 />
               </>
             )}
@@ -3147,7 +3379,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={0}
                   max={100}
                   resetValue={0}
-                  onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
+                  onChange={(v) => setSubFeather(selectedMask.id, v)}
                 />
               </>
             )}
@@ -3177,7 +3409,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={1}
                   max={100}
                   resetValue={20}
-                  onChange={(v) => updateSubMaskParams(selectedMask.id, { tolerance: v })}
+                  onChange={(v) => setSubParams(selectedMask.id, { tolerance: v })}
                 />
                 <Slider
                   label="Feather"
@@ -3185,7 +3417,7 @@ export function PhotoEditor({ image, onClose }: Props) {
                   min={0}
                   max={100}
                   resetValue={35}
-                  onChange={(v) => updateSubMaskParams(selectedMask.id, { feather: v })}
+                  onChange={(v) => setSubFeather(selectedMask.id, v)}
                 />
               </>
             )}
@@ -3306,6 +3538,26 @@ export function PhotoEditor({ image, onClose }: Props) {
           )}
           {autoAdjust.isError && <p className="editor-footer-error">{autoErrorText(autoAdjust.error)}</p>}
           <div className="editor-footer-secondary">
+            <div className="editor-history-btns">
+              <button
+                className="icon-btn"
+                onClick={undo}
+                disabled={!history.canUndo}
+                title="Undo (⌘Z)"
+                aria-label="Undo"
+              >
+                <IconUndo size={15} />
+              </button>
+              <button
+                className="icon-btn"
+                onClick={redo}
+                disabled={!history.canRedo}
+                title="Redo (⇧⌘Z)"
+                aria-label="Redo"
+              >
+                <IconRedo size={15} />
+              </button>
+            </div>
             {autoDevelopSettings.data?.enabled && (
               <button
                 className="btn ghost btn-sm"
@@ -3340,9 +3592,17 @@ export function PhotoEditor({ image, onClose }: Props) {
           <div className="editor-footer-primary">
             <button
               className="btn"
-              onClick={() => setSaveCopyOpen(true)}
+              onClick={() =>
+                askSaveCopyOptions
+                  ? setSaveCopyOpen(true)
+                  : saveCopy.mutate({ quality: FULL_COPY_QUALITY, maxSize: null, blocking: true })
+              }
               disabled={busy}
-              title="Create a new edited photo in your library, tagged “edit copy”"
+              title={
+                askSaveCopyOptions
+                  ? "Create a new edited photo in your library, tagged “edit copy” - pick quality and size first"
+                  : "Create a new edited photo in your library, tagged “edit copy”, at full quality and full size"
+              }
             >
               {saveCopy.isPending ? "Saving…" : "Save copy"}
             </button>

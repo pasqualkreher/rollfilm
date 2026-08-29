@@ -30,23 +30,38 @@ const ASK_DELETE_KEY = "pm.askDeletePartner";
 // Shared by every screen with a filter bar (Library, Album detail, Import
 // review), so pinning it once keeps it open wherever you cull.
 const FILTER_PIN_KEY = "pm.filterPinned";
+// When on, the editor's "Save copy" button opens the options dialog (JPEG
+// quality slider + size cap) first. Off (default) is one click: the copy is
+// baked at full quality and full size, which is what a copy you keep in the
+// library should be - the dialog exists for the rarer case of deliberately
+// making a smaller or lighter copy.
+const ASK_SAVE_COPY_KEY = "pm.askSaveCopyOptions";
 // Surround behind a photo shown big, in four steps from near-white to black.
-// The percentages are ink coverage, the way a print shop and Photoshop mean
-// them: 12.5% is a hair off white, 50% is the mid grey a darkroom judges
-// against. One preference for the library's photo view, the import review's
-// preview and the editor - the whole point of the setting is judging a photo
-// against a KNOWN neutral, which only works if it doesn't change when you move
-// between the three. Mid grey is the default: it biases neither the highlights
-// nor the shadows.
+// The steps are named rather than numbered - a row of percentages beside the
+// zoom control's percentages reads as the same kind of setting, and nobody
+// picks a surround by its ink coverage. The exact value (6%, 25% ink, the way
+// a print shop and Photoshop mean it) stays in the tooltip. One preference for
+// the library's photo view, the import review's preview and the editor - the
+// whole point of the setting is judging a photo against a KNOWN neutral, which
+// only works if it doesn't change when you move between the three. Gray is the
+// default: it sits between the two extremes without pulling the photo either
+// way. A key that is no longer offered (an older build's "medium") simply
+// fails the check in readStageBg and falls back to it.
+// Whether the lightbox shows its side panel (title, rating, tags, info,
+// similar). Collapsing it gives the photo the whole window, which is what you
+// want while actually LOOKING at pictures - so it is a preference, not a
+// per-photo toggle: paging to the next photo must not bring the panel back.
+// Stored inverted (only the closed state is written) so the default stays open
+// for anyone who has never touched it.
+const DETAIL_PANEL_KEY = "pm.detailPanel";
 const STAGE_BG_KEY = "pm.stageBg";
 export const STAGE_BACKGROUNDS = [
-  { key: "lightest", label: "12.5%", title: "Near white (12.5% grey)" },
-  { key: "light", label: "25%", title: "Light grey (25%)" },
-  { key: "medium", label: "50%", title: "Mid grey (50%) - the neutral to judge a photo against" },
+  { key: "lightest", label: "Paper", title: "Paper white (6% grey)" },
+  { key: "light", label: "Gray", title: "Gray (25%) - the neutral to judge a photo against" },
   { key: "dark", label: "Black", title: "Black" },
 ] as const;
 export type StageBg = (typeof STAGE_BACKGROUNDS)[number]["key"];
-const DEFAULT_STAGE_BG: StageBg = "medium";
+const DEFAULT_STAGE_BG: StageBg = "light";
 const DEFAULT_THUMB: ThumbSizeKey = "m";
 
 // Minimal external store so a preference change re-renders every subscribed grid
@@ -75,6 +90,14 @@ function readAskDeletePartner(): boolean {
 
 function readFilterPinned(): boolean {
   return localStorage.getItem(FILTER_PIN_KEY) === "1";
+}
+
+function readAskSaveCopyOptions(): boolean {
+  return localStorage.getItem(ASK_SAVE_COPY_KEY) === "1";
+}
+
+function readDetailPanel(): boolean {
+  return localStorage.getItem(DETAIL_PANEL_KEY) !== "0";
 }
 
 function readStageBg(): StageBg {
@@ -137,6 +160,16 @@ export function setFilterPinned(on: boolean) {
   emit();
 }
 
+export function setAskSaveCopyOptions(on: boolean) {
+  localStorage.setItem(ASK_SAVE_COPY_KEY, on ? "1" : "0");
+  emit();
+}
+
+export function setDetailPanelOpen(on: boolean) {
+  localStorage.setItem(DETAIL_PANEL_KEY, on ? "1" : "0");
+  emit();
+}
+
 export function setStageBg(bg: StageBg) {
   localStorage.setItem(STAGE_BG_KEY, bg);
   emit();
@@ -156,6 +189,14 @@ export function useAskDeletePartner(): boolean {
 
 export function useFilterPinned(): boolean {
   return useSyncExternalStore(subscribe, readFilterPinned, () => false);
+}
+
+export function useAskSaveCopyOptions(): boolean {
+  return useSyncExternalStore(subscribe, readAskSaveCopyOptions, () => false);
+}
+
+export function useDetailPanelOpen(): boolean {
+  return useSyncExternalStore(subscribe, readDetailPanel, () => true);
 }
 
 export function useStageBg(): StageBg {

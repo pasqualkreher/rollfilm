@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import BinaryIO, Callable, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -39,7 +39,13 @@ from app.services.exif import (
 from app.services.filesystem import library_relative_path
 from app.services.hashing import perceptual_hash, sha256_file
 from app.services.pairing import pair_library, pair_siblings
-from app.services.raw import classify_file_type, extract_full_preview, extract_preview_with_size
+from app.services.raw import (
+    classify_file_type,
+    default_tone_to_srgb,
+    extract_full_preview,
+    extract_preview_with_size,
+    load_linear_base,
+)
 from app.services.settings_store import (
     IMMICH_MODE_FULL,
     IMMICH_MODE_MANUAL,
@@ -142,6 +148,10 @@ def staged_preview_path(thumb_dir: Path, staged_id: str) -> Path:
     return thumb_dir / f"{staged_id}.preview.jpg"
 
 
+def staged_full_render_path(thumb_dir: Path, staged_id: str) -> Path:
+    return thumb_dir / f"{staged_id}.full.jpg"
+
+
 def staged_tmp_path(dest: Path) -> Path:
     """A private scratch name next to `dest`. Unique per writer: the background
     pass and a request handler can legitimately render the same derivative at
@@ -150,12 +160,12 @@ def staged_tmp_path(dest: Path) -> Path:
     return dest.with_suffix(f".{uuid.uuid4().hex}.tmp")
 
 
-def _save_atomic(image: PILImage.Image, dest: Path) -> None:
+def _save_atomic(image: PILImage.Image, dest: Path, quality: int = 88) -> None:
     """Write via a temp file so a reader never sees a half-written JPEG - the
     review grid may request exactly this file while it is being produced."""
     tmp = staged_tmp_path(dest)
     try:
-        image.save(tmp, "JPEG", quality=88)
+        image.save(tmp, "JPEG", quality=quality)
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
@@ -206,6 +216,65 @@ def render_review_derivatives(
             th = min(max(1, round(rendered.height * 0.5)), THUMBNAIL_MAX_PX)
             rendered.thumbnail((tw, th), PILImage.LANCZOS)
             _save_atomic(rendered, demosaic_path)
+
+
+# Only one full-resolution staged render at a time. It is by far the memory-
+# heaviest thing the import does - a full-size demosaic of a 40MP sensor is half
+# a gigabyte of float32 before it is even encoded - so a user zooming their way
+# through a review must not be able to stack them. Deliberately NOT the
+# RAW_RENDER_SLOTS gate: those slots are what keeps the review grid filling in,
+# and one 100% zoom must not be able to occupy them all.
+_staged_full_render_lock = threading.Lock()
+
+
+class StagedFullSuperseded(Exception):
+    """A newer 100%-zoom request arrived while this one waited for the render
+    lock. The user has moved on to another photo, so rendering this one would
+    only burn the slot - the route turns this into a 409."""
+
+
+def render_staged_full(
+    read_path: Path,
+    staged_id: str,
+    thumb_dir: Path,
+    is_stale: Callable[[], bool] | None = None,
+) -> Path:
+    """Render + cache the full-resolution JPEG of a staged RAW, for true 100%
+    zoom in the import review lightbox, and return its path.
+
+    The review's preview tops out at STAGED_PREVIEW_PX, so zooming past fit was
+    magnifying 2048px of it. This is the same neutral rendering as that preview
+    (load_linear_base + default_tone_to_srgb) but from the FULL-size demosaic
+    rather than the half-size one, so the upgrade only sharpens - it can't shift
+    brightness or colour under the user.
+
+    `is_stale` is the caller's "is this photo still on screen?" probe, checked
+    before and after the queue on the render lock: a zoom the user has already
+    zapped past raises StagedFullSuperseded instead of holding the single slot
+    for a frame nobody is looking at. An already-cached file is served
+    regardless."""
+    out = staged_full_render_path(thumb_dir, staged_id)
+    if out.exists():
+        return out
+
+    def _bail_if_stale() -> None:
+        if is_stale is not None and is_stale():
+            raise StagedFullSuperseded()
+
+    _bail_if_stale()
+    with _staged_full_render_lock:
+        # While queuing, another request for the same photo may have finished it.
+        if out.exists():
+            return out
+        _bail_if_stale()
+        lin, gain = load_linear_base(read_path, half_size=False)
+        rendered = PILImage.fromarray(default_tone_to_srgb(lin, gain))
+        # The linear base is the big allocation; drop it before the encode so
+        # the two peaks don't overlap.
+        del lin
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        _save_atomic(rendered, out, quality=90)
+    return out
 
 
 def adopt_staged_derivatives(session_id: str, staged_id: str, image_id: str) -> bool:

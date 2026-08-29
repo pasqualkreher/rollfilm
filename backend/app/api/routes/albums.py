@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -175,7 +175,12 @@ def update_album(
     old_name = album.name
     old_tags = album.tag_filter_list
     if payload.name is not None:
-        album.name = payload.name
+        # An album with a blank name is unopenable in the UI, and the Immich
+        # mirror maps albums by name - so a rename must actually carry one.
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="An album needs a name")
+        album.name = name
     if payload.description is not None:
         album.description = payload.description
     if payload.tag_filter is not None:
