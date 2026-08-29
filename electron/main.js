@@ -6,7 +6,9 @@
 //   2. Point the backend at the user-chosen library folder; its database,
 //      thumbnails and staging live inside that folder (see libraryDataDir) so
 //      each library is self-contained. Only the model cache and logs stay in
-//      Electron's userData (the standard app-data location).
+//      Electron's userData (the standard app-data location) - plus the
+//      database of a library that sits on a network share, which cannot run
+//      SQLite at all (see networkVolume.js and dbPathFor).
 //   3. Wait for /health, then open the window with the built React renderer.
 //   4. Expose a native folder picker over IPC (the whole reason for going
 //      desktop: any host path is directly readable by the native backend).
@@ -88,7 +90,8 @@ if (!app.requestSingleInstanceLock()) {
 // Absolute path to the user's photo library, chosen on first run (see
 // ensureLibraryRoot). The database, thumbnails and import staging live inside
 // this folder (see libraryDataDir); only the model cache and logs stay in
-// userData.
+// userData - and the database too when the library is on a network share
+// (dbPathFor).
 let libraryRoot = "";
 // True when this launch is a genuine first run (no library folder was
 // configured yet). The renderer reads it (pm:is-first-run) to decide whether to
@@ -245,12 +248,60 @@ async function ensureLibraryRoot() {
 // live SQLite file can hold locks or evict it mid-write, which hangs the
 // backend and can corrupt the database. The first-run dialog says so too.
 const crypto = require("crypto");
+const { isNetworkPath } = require("./networkVolume");
 
 function libraryDataDir(lib) {
   return path.join(lib, ".photomanager");
 }
-function dbPathFor(lib) {
+function inLibraryDbPathFor(lib) {
   return path.join(libraryDataDir(lib), "db", "library.db");
+}
+// A library on a network share keeps its database on the local disk instead -
+// SQLite cannot run on a network filesystem (see networkVolume.js), and a NAS
+// library that dies with "database is locked" is worse than a library folder
+// that needs its database carried alongside. Everything else - photos,
+// thumbnails, staging - stays in the library.
+function localDbPathFor(lib) {
+  return path.join(
+    app.getPath("userData"), "network-libraries", libraryKey(lib), "db", "library.db"
+  );
+}
+// Detection shells out to the mount table, and dbPathFor is called on every
+// backend launch and library switch, so remember the answer per library.
+const networkLibraryCache = new Map();
+function isNetworkLibrary(lib) {
+  if (!networkLibraryCache.has(lib)) {
+    const network = isNetworkPath(lib);
+    if (network) console.log(`[main] library is on a network volume, database kept locally: ${lib}`);
+    networkLibraryCache.set(lib, network);
+  }
+  return networkLibraryCache.get(lib);
+}
+function dbPathFor(lib) {
+  return isNetworkLibrary(lib) ? localDbPathFor(lib) : inLibraryDbPathFor(lib);
+}
+
+// Keep the database wherever it belongs *now*. A library that moves from a
+// local disk onto a NAS - or back - brings its database with it instead of
+// coming up empty, and a user who never hears the words "network filesystem"
+// gets a working app either way.
+function ensureDatabaseLocation(lib) {
+  const wanted = dbPathFor(lib);
+  const previous =
+    wanted === inLibraryDbPathFor(lib) ? localDbPathFor(lib) : inLibraryDbPathFor(lib);
+  if (fs.existsSync(wanted) || !fs.existsSync(previous)) return;
+  console.log(`[main] moving the library database: ${previous} -> ${wanted}`);
+  try {
+    fs.mkdirSync(path.dirname(wanted), { recursive: true });
+    // The -wal sidecar can hold committed transactions, so it travels with the
+    // database rather than being left behind.
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const src = previous + suffix;
+      if (fs.existsSync(src)) movePath(src, wanted + suffix);
+    }
+  } catch (err) {
+    console.error("[main] moving the library database failed:", err);
+  }
 }
 function thumbnailRootFor(lib) {
   return path.join(libraryDataDir(lib), "thumbnails");
@@ -417,9 +468,10 @@ async function serveDerivative(request) {
   }
 }
 
-// Older builds kept each library's data in userData under a per-library key
-// (hash of the library's absolute path). Still used to *find* that legacy
-// folder so its database/thumbnails can be moved into the library once.
+// Per-library key: a hash of the library's absolute path. Used to find the
+// legacy userData folder of older builds (so its database/thumbnails can be
+// moved into the library once), and to name the local database folder of a
+// library that lives on a network share.
 function libraryKey(lib) {
   // Normalise so the same folder always hashes the same regardless of trailing
   // slash or symlink spelling; prefix with a readable basename for debuggability.
@@ -1214,6 +1266,7 @@ ipcMain.handle("pm:setup-library", async () => {
   // Bring an older userData-based database across so existing metadata isn't
   // lost when an upgrader points at a folder used by a legacy build.
   migrateLegacyLibraryData(chosen);
+  ensureDatabaseLocation(chosen);
 
   const healthy = await startBackendAndWait(true);
   if (!healthy) {
@@ -1351,6 +1404,7 @@ app.whenReady().then(async () => {
   // ".photomanager" subfolder (see libraryDataDir). Bring an older userData-based
   // database across on first run after the upgrade so existing metadata isn't lost.
   migrateLegacyLibraryData(libraryRoot);
+  ensureDatabaseLocation(libraryRoot);
 
   const healthy = await startBackendAndWait(false);
   if (!healthy) {

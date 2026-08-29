@@ -38,6 +38,7 @@
     ],
     "files": [
       "main.js",
+      "networkVolume.js",
       "preload.js",
       "updater.js",
       "splash.html",
