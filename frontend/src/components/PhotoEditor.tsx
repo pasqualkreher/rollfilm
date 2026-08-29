@@ -15,9 +15,12 @@ import {
   editsFromImage,
   FILM_SIMS,
   MASK_ADJUST_FIELDS,
+  MASK_LIMIT_TYPES,
   MASK_SUBJECTS,
   MASK_TYPES,
+  maskLimit,
   neutralEdits,
+  newLimitSubMask,
   newMask,
   normalizeAdjustments,
   remapMasksForCrop,
@@ -585,6 +588,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   const maskGesture = useRef<{
     type: SubMaskType;
     maskId: string;
+    // Which sub-mask of that mask is being dragged: 0 = the mask's own
+    // selection, 1 = the shape it is limited to.
+    idx: number;
     mode: string;
     start: { x: number; y: number };
     orig: Record<string, number>;
@@ -609,6 +615,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   // canvas click for a colour sub-mask's target.
   const [selectedMaskId, setSelectedMaskId] = useState<string | null>(null);
   const [maskDrawMode, setMaskDrawMode] = useState(false);
+  // Drawing the LIMIT shape (sub-mask 1) rather than the mask's own selection.
+  // Both use the same canvas gestures; this only says which sub-mask they write.
+  const [limitEdit, setLimitEdit] = useState(false);
   const [colorPickMode, setColorPickMode] = useState(false);
   // "Show mask": keep the selected mask's area marked while it is being set up.
   // Pointing at a mask in the list marks it too, but that can't help the case
@@ -662,6 +671,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     if (openGroup !== "masks") {
       setMaskDrawMode(false);
       setColorPickMode(false);
+      setLimitEdit(false);
       setShowMaskArea(false);
       setFlashMaskArea(false);
       clearTimeout(flashTimer.current);
@@ -860,8 +870,13 @@ export function PhotoEditor({ image, onClose }: Props) {
   const peekMaskId = useMemo(() => {
     if (openGroup !== "masks" || colorPickMode) return null; // the eyedropper must sample the photo, not the zebra
     const id = hoveredMaskId ?? (showMaskArea || flashMaskArea ? selectedMaskId : null);
-    const type = id ? adj.masks.find((m) => m.id === id)?.sub_masks[0]?.type : undefined;
-    return type === "luminance" || type === "color" || type === "edge" ? id : null;
+    const mask = id ? adj.masks.find((m) => m.id === id) : undefined;
+    if (!mask) return null;
+    const type = mask.sub_masks[0]?.type;
+    // A limited mask covers the INTERSECTION of two shapes, which no single SVG
+    // outline states - so it goes to the render too, whatever its own type is.
+    const pixelBased = type === "luminance" || type === "color" || type === "edge";
+    return pixelBased || mask.sub_masks.length > 1 ? mask.id : null;
   }, [openGroup, colorPickMode, hoveredMaskId, showMaskArea, flashMaskArea, selectedMaskId, adj.masks]);
   const peekRef = useRef<string | null>(null);
   peekRef.current = peekMaskId;
@@ -1657,9 +1672,9 @@ export function PhotoEditor({ image, onClose }: Props) {
   // the marking go (see flashMask). Without it those sliders are set blind: the
   // masks that need it most have nothing on the photo to look at, and even a
   // brush's Feather is a number until you see the edge it makes.
-  function setSubParams(id: string, patch: SubMaskParams) {
+  function setSubParams(id: string, patch: SubMaskParams, idx = 0) {
     flashMask();
-    updateSubMaskParams(id, patch);
+    updateSubMaskParams(id, patch, idx);
   }
   // Feather is the exception, on every mask type. It doesn't decide WHAT is
   // selected, it decides how softly the selection lands - and that is judged on
@@ -1667,19 +1682,20 @@ export function PhotoEditor({ image, onClose }: Props) {
   // one thing being looked at, so Feather never raises the marking and takes a
   // marking that is still up from another slider back down. (The Show mask
   // toggle is untouched: that one is asked for.)
-  function setSubFeather(id: string, feather: number) {
+  function setSubFeather(id: string, feather: number, idx = 0) {
     clearFlash();
-    updateSubMaskParams(id, { feather });
+    updateSubMaskParams(id, { feather }, idx);
   }
-  function updateSubMaskParams(id: string, patch: SubMaskParams) {
+  function updateSubMaskParams(id: string, patch: SubMaskParams, idx = 0) {
     setAdj((a) => ({
       ...a,
       masks: a.masks.map((m) => {
         if (m.id !== id) return m;
-        const sub = m.sub_masks[0];
+        const sub = m.sub_masks[idx];
         if (!sub) return m;
-        const nextSub: SubMask = { ...sub, parameters: { ...sub.parameters, ...patch } };
-        return { ...m, sub_masks: [nextSub, ...m.sub_masks.slice(1)] };
+        const subs = m.sub_masks.slice();
+        subs[idx] = { ...sub, parameters: { ...sub.parameters, ...patch } };
+        return { ...m, sub_masks: subs };
       }),
     }));
   }
@@ -1693,22 +1709,23 @@ export function PhotoEditor({ image, onClose }: Props) {
   // pointer-down sample and whether this is an erase stroke - the renderer needs
   // the stroke boundaries to sweep each one as a continuous segment run (and to
   // avoid drawing a line from where one stroke ended to where the next began).
-  function appendStroke(id: string, x: number, y: number, size: number, flags: number) {
-    appendStrokes(id, [[x, y, size, flags]]);
+  function appendStroke(id: string, x: number, y: number, size: number, flags: number, idx = 0) {
+    appendStrokes(id, [[x, y, size, flags]], idx);
   }
   // Append several stroke points at once (a fast drag interpolates a run of
   // evenly-spaced points) in a single immutable update.
-  function appendStrokes(id: string, pts: number[][]) {
+  function appendStrokes(id: string, pts: number[][], idx = 0) {
     if (pts.length === 0) return;
     setAdj((a) => ({
       ...a,
       masks: a.masks.map((m) => {
         if (m.id !== id) return m;
-        const sub = m.sub_masks[0];
+        const sub = m.sub_masks[idx];
         if (!sub || sub.type !== "brush") return m;
         const strokes = Array.isArray(sub.parameters.strokes) ? (sub.parameters.strokes as number[][]) : [];
-        const nextSub: SubMask = { ...sub, parameters: { ...sub.parameters, strokes: [...strokes, ...pts] } };
-        return { ...m, sub_masks: [nextSub, ...m.sub_masks.slice(1)] };
+        const subs = m.sub_masks.slice();
+        subs[idx] = { ...sub, parameters: { ...sub.parameters, strokes: [...strokes, ...pts] } };
+        return { ...m, sub_masks: subs };
       }),
     }));
   }
@@ -1792,6 +1809,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     setAdj((a) => ({ ...a, masks: [...a.masks, mask] }));
     setSelectedMaskId(mask.id);
     setColorPickMode(false);
+    setLimitEdit(false);
     setOpenGroup("masks");
     if (isSpatial(type)) {
       // Radial/linear/brush are drawn on the image - drop into draw mode (and
@@ -1802,12 +1820,70 @@ export function PhotoEditor({ image, onClose }: Props) {
       setMaskDrawMode(false);
     }
   }
+  // The sub-mask the canvas gestures read and write. Kept as a plain derived
+  // value rather than state: it only ever mirrors which of the two shapes the
+  // panel says you are editing.
+  const canvasSubIdx = limitEdit ? 1 : 0;
+
+  // "Limit to area": give the mask a second, intersected sub-mask (see
+  // adjustments.newLimitSubMask). This is what makes the selections that have no
+  // place of their own usable - an edge mask finds every edge in the frame, so
+  // sharpening through it lands on the whole picture until it can be confined to
+  // the part you meant. Adding one drops straight into drawing it, exactly like
+  // adding a radial mask does.
+  function addLimit(type: SubMaskType) {
+    if (!selectedMaskId) return;
+    setAdj((a) => ({
+      ...a,
+      masks: a.masks.map((m) =>
+        m.id === selectedMaskId && m.sub_masks.length < 2
+          ? { ...m, sub_masks: [...m.sub_masks, newLimitSubMask(type)] }
+          : m
+      ),
+    }));
+    setCropMode(false);
+    setColorPickMode(false);
+    setLimitEdit(true);
+    setMaskDrawMode(true);
+  }
+  function removeLimit() {
+    if (!selectedMaskId) return;
+    setAdj((a) => ({
+      ...a,
+      masks: a.masks.map((m) => (m.id === selectedMaskId ? { ...m, sub_masks: m.sub_masks.slice(0, 1) } : m)),
+    }));
+    setLimitEdit(false);
+    // The shape that was being drawn no longer exists, so the canvas has nothing
+    // left to edit - leaving draw mode armed would just swallow clicks.
+    setMaskDrawMode(false);
+  }
+  function updateLimit(patch: Partial<SubMask>) {
+    if (!selectedMaskId) return;
+    setAdj((a) => ({
+      ...a,
+      masks: a.masks.map((m) => {
+        const limit = m.id === selectedMaskId ? maskLimit(m) : null;
+        if (!limit) return m;
+        return { ...m, sub_masks: [m.sub_masks[0], { ...limit, ...patch }] };
+      }),
+    }));
+  }
+  // Which of the two shapes the canvas edits. Switching also enters draw mode:
+  // asking to edit a shape and then having to arm the canvas separately is a
+  // step that never means anything else.
+  function editShape(limit: boolean) {
+    setLimitEdit(limit);
+    setCropMode(false);
+    setColorPickMode(false);
+    setMaskDrawMode(true);
+  }
   function deleteMask(id: string) {
     setAdj((a) => ({ ...a, masks: a.masks.filter((m) => m.id !== id) }));
     if (selectedMaskId === id) {
       setSelectedMaskId(null);
       setMaskDrawMode(false);
       setColorPickMode(false);
+      setLimitEdit(false);
     }
   }
   // Selecting a mask ends any active draw/pick so the pointer doesn't keep
@@ -1816,6 +1892,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     setSelectedMaskId(id);
     setMaskDrawMode(false);
     setColorPickMode(false);
+    setLimitEdit(false);
     setOpenGroup("masks");
   }
   function toggleMaskDraw() {
@@ -2107,7 +2184,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Hover (no active gesture): reflect the handle/body under the pointer in the
   // cursor, and track the pointer for the brush-size ring.
   function updateMaskHover(p: Pt) {
-    const sub = adj.masks.find((m) => m.id === selectedMaskId)?.sub_masks[0];
+    const sub = adj.masks.find((m) => m.id === selectedMaskId)?.sub_masks[canvasSubIdx];
     if (!sub || !isSpatial(sub.type)) {
       setMaskCursorPos(null);
       setMaskCursor("crosshair");
@@ -2128,32 +2205,33 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Stroke sample flags, mirroring masks._PEN_DOWN / masks._ERASE.
   function maskPointerDown(clientX: number, clientY: number, altKey = false) {
     const mask = adj.masks.find((m) => m.id === selectedMaskId);
-    const sub = mask?.sub_masks[0];
+    const idx = canvasSubIdx;
+    const sub = mask?.sub_masks[idx];
     if (!mask || !sub || !isSpatial(sub.type)) return;
     const p = fractionAt(clientX, clientY);
     if (sub.type === "radial") {
       const prm = radialParams(sub);
       const mode = radialHitTest(p, prm);
-      maskGesture.current = { type: "radial", maskId: mask.id, mode, start: p, orig: prm };
+      maskGesture.current = { type: "radial", maskId: mask.id, idx, mode, start: p, orig: prm };
       setMaskCursor(maskCursorFor("radial", mode));
       if (mode === "create") {
-        updateSubMaskParams(mask.id, { center_x: p.x, center_y: p.y, radius_x: MASK_MIN_R, radius_y: MASK_MIN_R, rotation: 0 });
+        updateSubMaskParams(mask.id, { center_x: p.x, center_y: p.y, radius_x: MASK_MIN_R, radius_y: MASK_MIN_R, rotation: 0 }, idx);
       }
     } else if (sub.type === "linear") {
       const prm = linearParams(sub);
       const mode = linearHitTest(p, prm);
-      maskGesture.current = { type: "linear", maskId: mask.id, mode, start: p, orig: prm };
+      maskGesture.current = { type: "linear", maskId: mask.id, idx, mode, start: p, orig: prm };
       setMaskCursor(maskCursorFor("linear", mode));
       if (mode === "create") {
-        updateSubMaskParams(mask.id, { start_x: p.x, start_y: p.y, end_x: p.x, end_y: p.y });
+        updateSubMaskParams(mask.id, { start_x: p.x, start_y: p.y, end_x: p.x, end_y: p.y }, idx);
       }
     } else {
       // Alt is the standard momentary eraser, on top of the panel's toggle.
       const erasing = brushErase !== altKey;
-      maskGesture.current = { type: "brush", maskId: mask.id, mode: "paint", start: p, orig: {}, erase: erasing };
+      maskGesture.current = { type: "brush", maskId: mask.id, idx, mode: "paint", start: p, orig: {}, erase: erasing };
       brushLast.current = p;
       setMaskCursorPos(p);
-      appendStroke(mask.id, p.x, p.y, subNum(sub, "size", 0.06), BRUSH_PEN_DOWN | (erasing ? BRUSH_ERASE : 0));
+      appendStroke(mask.id, p.x, p.y, subNum(sub, "size", 0.06), BRUSH_PEN_DOWN | (erasing ? BRUSH_ERASE : 0), idx);
     }
   }
   function maskPointerMove(clientX: number, clientY: number) {
@@ -2163,23 +2241,26 @@ export function PhotoEditor({ image, onClose }: Props) {
       updateMaskHover(p);
       return;
     }
+    // Every branch below writes through this, so a gesture always lands on the
+    // sub-mask it was started on - the mask's own shape or the limit shape.
+    const setP = (patch: SubMaskParams) => updateSubMaskParams(g.maskId, patch, g.idx);
     if (g.type === "radial") {
       const o = g.orig;
       if (g.mode === "create") {
-        updateSubMaskParams(g.maskId, {
+        setP({
           center_x: g.start.x,
           center_y: g.start.y,
           radius_x: Math.max(MASK_MIN_R, Math.abs(p.x - g.start.x)),
           radius_y: Math.max(MASK_MIN_R, Math.abs(p.y - g.start.y)),
         });
       } else if (g.mode === "move") {
-        updateSubMaskParams(g.maskId, {
+        setP({
           center_x: clamp01(o.center_x + (p.x - g.start.x)),
           center_y: clamp01(o.center_y + (p.y - g.start.y)),
         });
       } else if (g.mode === "rotate") {
         const deg = (Math.atan2(p.x - o.center_x, -(p.y - o.center_y)) * 180) / Math.PI;
-        updateSubMaskParams(g.maskId, { rotation: Math.round(deg) });
+        setP({ rotation: Math.round(deg) });
       } else {
         // Resize from an edge/corner: project the pointer onto the ellipse's
         // (possibly rotated) axes and set the half-extent(s) - symmetric about
@@ -2192,7 +2273,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         const patch: SubMaskParams = {};
         if (g.mode.includes("e") || g.mode.includes("w")) patch.radius_x = Math.max(MASK_MIN_R, Math.abs(dx * cos + dy * sin));
         if (g.mode.includes("n") || g.mode.includes("s")) patch.radius_y = Math.max(MASK_MIN_R, Math.abs(-dx * sin + dy * cos));
-        updateSubMaskParams(g.maskId, patch);
+        setP(patch);
       }
     } else if (g.type === "linear") {
       const o = g.orig;
@@ -2202,7 +2283,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         const clampD = (d: number, a: number, b: number) => Math.max(Math.max(-a, -b), Math.min(Math.min(1 - a, 1 - b), d));
         const ddx = clampD(p.x - g.start.x, o.start_x, o.end_x);
         const ddy = clampD(p.y - g.start.y, o.start_y, o.end_y);
-        updateSubMaskParams(g.maskId, {
+        setP({
           start_x: o.start_x + ddx,
           start_y: o.start_y + ddy,
           end_x: o.end_x + ddx,
@@ -2212,17 +2293,17 @@ export function PhotoEditor({ image, onClose }: Props) {
         // Band edge: drag `start` freely (end fixed). Its distance from `end` sets
         // the width (= softness) and its angle sets the gradient's rotation - so no
         // separate rotation handle is needed.
-        updateSubMaskParams(g.maskId, { start_x: clamp01(p.x), start_y: clamp01(p.y) });
+        setP({ start_x: clamp01(p.x), start_y: clamp01(p.y) });
       } else if (g.mode === "end") {
-        updateSubMaskParams(g.maskId, { end_x: clamp01(p.x), end_y: clamp01(p.y) });
+        setP({ end_x: clamp01(p.x), end_y: clamp01(p.y) });
       } else {
-        updateSubMaskParams(g.maskId, { start_x: g.start.x, start_y: g.start.y, end_x: p.x, end_y: p.y });
+        setP({ start_x: g.start.x, start_y: g.start.y, end_x: p.x, end_y: p.y });
       }
     } else {
       // Brush: sample evenly along the segment since the last stamp. The
       // renderer sweeps the samples as capsules, so this only has to be dense
       // enough to follow the curve of the gesture, not dense enough to hide gaps.
-      const sub = adj.masks.find((m) => m.id === g.maskId)?.sub_masks[0];
+      const sub = adj.masks.find((m) => m.id === g.maskId)?.sub_masks[g.idx];
       const size = sub ? subNum(sub, "size", 0.06) : 0.06;
       setMaskCursorPos(p);
       // x and y are fractions of *different* edges, so hypot() on them is not a
@@ -2245,7 +2326,7 @@ export function PhotoEditor({ image, onClose }: Props) {
           const t = (i * step) / dist;
           pts.push([last.x + (p.x - last.x) * t, last.y + (p.y - last.y) * t, size, flags]);
         }
-        appendStrokes(g.maskId, pts);
+        appendStrokes(g.maskId, pts, g.idx);
         const lastPt = pts[pts.length - 1];
         brushLast.current = { x: lastPt[0], y: lastPt[1] };
       }
@@ -2254,6 +2335,76 @@ export function PhotoEditor({ image, onClose }: Props) {
   function endMaskGesture() {
     maskGesture.current = null;
     brushLast.current = null;
+  }
+
+  // The controls a drawn shape needs, bound to one sub-mask of one mask. The
+  // same set serves the mask's own shape (index 0) and the shape it is limited
+  // to (index 1) - one block, two callers, so the two can't drift apart.
+  function shapeControls(maskId: string, sub: SubMask, idx: number) {
+    const strokes = Array.isArray(sub.parameters.strokes) ? (sub.parameters.strokes as number[][]) : [];
+    return (
+      <>
+        {sub.type === "brush" && (
+          <Slider
+            label="Brush size"
+            value={Math.round(subNum(sub, "size", 0.06) * 500)}
+            min={1}
+            max={40}
+            resetValue={30}
+            onChange={(v) => setSubParams(maskId, { size: v / 500 }, idx)}
+          />
+        )}
+        {(sub.type === "radial" || sub.type === "brush") && (
+          <Slider
+            label="Feather"
+            value={subNum(sub, "feather", 50)}
+            min={0}
+            max={100}
+            resetValue={50}
+            onChange={(v) => setSubFeather(maskId, v, idx)}
+          />
+        )}
+        {sub.type === "brush" && (
+          <>
+            <Slider
+              label="Flow"
+              value={subNum(sub, "flow", 100)}
+              min={1}
+              max={100}
+              resetValue={100}
+              onChange={(v) => setSubParams(maskId, { flow: v }, idx)}
+            />
+            <Slider
+              label="Density"
+              value={subNum(sub, "density", 100)}
+              min={0}
+              max={100}
+              resetValue={100}
+              onChange={(v) => setSubParams(maskId, { density: v }, idx)}
+            />
+            <button
+              className={`btn btn-sm${brushErase ? " primary" : " ghost"}`}
+              onClick={() => setBrushErase((v) => !v)}
+              title="Paint to remove from this mask instead of adding — hold Alt for a single erase stroke"
+            >
+              {brushErase ? "Erasing" : "Erase"}
+            </button>
+          </>
+        )}
+        {/* Linear has no Feather: the band width (start->end distance) IS the
+            softness, so the edge lines set it directly on the image. */}
+        {sub.type === "linear" && <p className="mask-hint">Drag the outer lines to set the gradient width.</p>}
+        {sub.type === "brush" && (
+          <button
+            className="btn btn-sm ghost"
+            disabled={strokes.length === 0}
+            onClick={() => updateSubMaskParams(maskId, { strokes: [] }, idx)}
+          >
+            Clear strokes
+          </button>
+        )}
+      </>
+    );
   }
 
   // ---- Panel accordion. Groups collapse to a single open one at a time: each
@@ -2339,6 +2490,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   // editor is bound to.
   const selectedMask = selectedMaskId ? adj.masks.find((m) => m.id === selectedMaskId) ?? null : null;
   const selSub = selectedMask?.sub_masks[0] ?? null;
+  const selLimit = selectedMask ? maskLimit(selectedMask) : null;
   // Which mask the overlay is about: the one being pointed at in the list, else
   // the one being drawn on the image. Pointing at a row is the explicit request,
   // so it wins.
@@ -2348,6 +2500,12 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Sub-masks that draw something over the image: the editable shapes, plus a
   // semantic mask, which shows the region it found rather than a shape.
   const overlaySpatialSub = overlaySub && (isSpatial(overlaySub.type) || overlaySub.type === "semantic") ? overlaySub : null;
+  // The limit shape shows whenever its mask's overlay is up - including for a
+  // luminance / colour / edge mask, whose own selection draws nothing: seeing
+  // where the limit sits is most of the point of having drawn one.
+  const overlayLimitSub = overlayMask ? maskLimit(overlayMask) : null;
+  const canvasAspectForOverlay = () =>
+    canvasRef.current && canvasRef.current.height ? canvasRef.current.width / canvasRef.current.height : 1;
   // Two separate things over the photo. The zebra MARKING - what does this mask
   // cover? - is asked for by pointing at the mask in the list, and goes the
   // moment you point elsewhere, because it covers the very change you're trying
@@ -2357,9 +2515,10 @@ export function PhotoEditor({ image, onClose }: Props) {
   const overlayIsHovered = hoveredMask != null;
   const overlayIsSelected = overlayMask != null && overlayMask.id === selectedMaskId;
   const overlayMark =
-    overlayIsHovered ||
-    ((showMaskArea || flashMaskArea) && overlayIsSelected) ||
-    (maskDrawMode && overlayIsSelected && overlaySpatialSub?.type === "brush");
+    !overlayLimitSub &&
+    (overlayIsHovered ||
+      ((showMaskArea || flashMaskArea) && overlayIsSelected) ||
+      (maskDrawMode && overlayIsSelected && overlaySpatialSub?.type === "brush"));
   const maskLabel = (m: MaskDef) => MASK_TYPES.find((t) => t.value === m.sub_masks[0]?.type)?.label ?? "Mask";
 
   return (
@@ -2611,15 +2770,35 @@ export function PhotoEditor({ image, onClose }: Props) {
           {/* Selected-mask guide + editable handles, transformed to track the
               canvas under zoom/pan. aspect keeps the round handles round on
               non-square images; cursor draws the brush-size ring. */}
-          {overlaySpatialSub && openGroup === "masks" && (
+          {openGroup === "masks" && overlaySpatialSub && (
             <MaskOverlay
               sub={overlaySpatialSub}
               mark={overlayMark}
-              handles={maskDrawMode && overlayIsSelected}
-              aspect={canvasRef.current && canvasRef.current.height ? canvasRef.current.width / canvasRef.current.height : 1}
+              handles={maskDrawMode && overlayIsSelected && !limitEdit}
+              aspect={canvasAspectForOverlay()}
               cursor={
-                overlaySpatialSub.type === "brush" && maskDrawMode && overlayIsSelected && maskCursorPos
+                overlaySpatialSub.type === "brush" && maskDrawMode && overlayIsSelected && !limitEdit && maskCursorPos
                   ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlaySpatialSub, "size", 0.06) }
+                  : null
+              }
+              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: "center center" }}
+            />
+          )}
+          {/* The shape the mask is limited to, drawn as a second, dashed outline:
+              it is a boundary, not a selection, and the two must not be mistaken
+              for each other. Never zebra-marked - what the mask covers is the
+              INTERSECTION of the two, which only the render knows, so a limited
+              mask is marked by the render's peek instead (see peekMaskId). */}
+          {openGroup === "masks" && overlayLimitSub && (
+            <MaskOverlay
+              sub={overlayLimitSub}
+              mark={false}
+              dashed
+              handles={maskDrawMode && overlayIsSelected && limitEdit}
+              aspect={canvasAspectForOverlay()}
+              cursor={
+                overlayLimitSub.type === "brush" && maskDrawMode && overlayIsSelected && limitEdit && maskCursorPos
+                  ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlayLimitSub, "size", 0.06) }
                   : null
               }
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: "center center" }}
@@ -3225,75 +3404,17 @@ export function PhotoEditor({ image, onClose }: Props) {
               </button>
               {isSpatial(selSub.type) && (
                 <button
-                  className={`btn btn-sm${maskDrawMode ? " primary" : ""}`}
-                  onClick={toggleMaskDraw}
+                  className={`btn btn-sm${maskDrawMode && !limitEdit ? " primary" : ""}`}
+                  onClick={() => (maskDrawMode && !limitEdit ? toggleMaskDraw() : editShape(false))}
                   title="Draw this mask directly on the image"
                 >
-                  {maskDrawMode ? "Drawing on image…" : "Edit on image"}
+                  {maskDrawMode && !limitEdit ? "Drawing on image…" : "Edit on image"}
                 </button>
               )}
             </div>
 
-            {/* Sub-mask (index 0) controls, by type. */}
-            {selSub.type === "brush" && (
-              <Slider
-                label="Brush size"
-                value={Math.round(subNum(selSub, "size", 0.06) * 500)}
-                min={1}
-                max={40}
-                resetValue={30}
-                onChange={(v) => setSubParams(selectedMask.id, { size: v / 500 })}
-              />
-            )}
-            {(selSub.type === "radial" || selSub.type === "brush") && (
-              <Slider
-                label="Feather"
-                value={subNum(selSub, "feather", 50)}
-                min={0}
-                max={100}
-                resetValue={50}
-                onChange={(v) => setSubFeather(selectedMask.id, v)}
-              />
-            )}
-            {selSub.type === "brush" && (
-              <>
-                <Slider
-                  label="Flow"
-                  value={subNum(selSub, "flow", 100)}
-                  min={1}
-                  max={100}
-                  resetValue={100}
-                  onChange={(v) => setSubParams(selectedMask.id, { flow: v })}
-                />
-                <Slider
-                  label="Density"
-                  value={subNum(selSub, "density", 100)}
-                  min={0}
-                  max={100}
-                  resetValue={100}
-                  onChange={(v) => setSubParams(selectedMask.id, { density: v })}
-                />
-                <button
-                  className={`btn btn-sm${brushErase ? " primary" : " ghost"}`}
-                  onClick={() => setBrushErase((v) => !v)}
-                  title="Paint to remove from this mask instead of adding — hold Alt for a single erase stroke"
-                >
-                  {brushErase ? "Erasing" : "Erase"}
-                </button>
-              </>
-            )}
-            {/* Linear has no Feather: the band width (start->end distance) IS the
-                softness, so the edge lines set it directly on the image. */}
-            {selSub.type === "linear" && <p className="mask-hint">Drag the outer lines to set the gradient width.</p>}
-            {selSub.type === "brush" && (
-              <button
-                className="btn btn-sm ghost"
-                disabled={!Array.isArray(selSub.parameters.strokes) || (selSub.parameters.strokes as number[][]).length === 0}
-                onClick={() => updateSubMaskParams(selectedMask.id, { strokes: [] })}
-              >
-                Clear strokes
-              </button>
-            )}
+            {/* The mask's own shape (sub-mask 0), when it has one to draw. */}
+            {isSpatial(selSub.type) && shapeControls(selectedMask.id, selSub, 0)}
 
             {selSub.type === "luminance" && (
               <>
@@ -3419,6 +3540,43 @@ export function PhotoEditor({ image, onClose }: Props) {
                   resetValue={35}
                   onChange={(v) => setSubFeather(selectedMask.id, v)}
                 />
+              </>
+            )}
+
+            {/* "This selection, but only here." The second sub-mask, intersected. */}
+            <div className="mask-subhead">Limit to area</div>
+            {!selLimit ? (
+              <div className="mask-add-row">
+                <div className="mask-add-btns">
+                  {MASK_LIMIT_TYPES.map((t) => (
+                    <button key={t.value} className="btn btn-sm" onClick={() => addLimit(t.value)}>
+                      + {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="mask-btn-row">
+                  <button
+                    className={`btn btn-sm${maskDrawMode && limitEdit ? " primary" : ""}`}
+                    onClick={() => editShape(true)}
+                    title="Draw the area this mask is limited to"
+                  >
+                    {maskDrawMode && limitEdit ? "Drawing on image…" : "Edit on image"}
+                  </button>
+                  <button
+                    className={`btn btn-sm${selLimit.invert ? " primary" : ""}`}
+                    onClick={() => updateLimit({ invert: !selLimit.invert })}
+                    title="Limit to everything OUTSIDE the shape instead"
+                  >
+                    Outside
+                  </button>
+                  <button className="btn btn-sm ghost" onClick={removeLimit} title="Drop the limit — the mask applies everywhere it selects again">
+                    Remove
+                  </button>
+                </div>
+                {shapeControls(selectedMask.id, selLimit, 1)}
               </>
             )}
 

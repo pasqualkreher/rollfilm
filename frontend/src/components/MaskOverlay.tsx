@@ -69,6 +69,7 @@ export function MaskOverlay({
   cursor = null,
   handles = false,
   mark = true,
+  dashed = false,
 }: {
   sub: SubMask;
   style?: CSSProperties;
@@ -81,6 +82,9 @@ export function MaskOverlay({
   // the marking answers "what does this cover?" and is asked for by pointing at
   // the mask in the list, while the outline and handles are the editing tools.
   mark?: boolean;
+  // Draw the outline dashed - what a "limit to area" shape is drawn as, so a
+  // boundary the mask is confined to never reads as the selection itself.
+  dashed?: boolean;
 }) {
   const p = sub.parameters;
   const num = (k: string, d: number) => (typeof p[k] === "number" ? (p[k] as number) : d);
@@ -290,7 +294,12 @@ export function MaskOverlay({
   }
 
   return (
-    <svg className="mask-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" style={style}>
+    <svg
+      className={`mask-overlay${dashed ? " mask-overlay-dashed" : ""}`}
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      style={style}
+    >
       <defs>
         <ZebraPattern />
       </defs>

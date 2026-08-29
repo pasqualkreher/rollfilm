@@ -316,6 +316,69 @@ def test_neutral_jpeg_passthrough_uint8():
     assert out is img
 
 
+# --- a mask limited to an area ------------------------------------------------
+
+def test_sharpening_stays_inside_a_mask_and_inside_its_limit():
+    """Two claims at once, on the mask type that makes both matter. An edge mask
+    selects every edge in the FRAME, so sharpening through it lands all over the
+    picture - correctly, but rarely what was meant. Intersecting it with a shape
+    ("limit to area", the editor's second sub-mask) confines it, and nothing
+    outside the combined field may move by a single bit."""
+    rng = _rng(7)
+    h, w = 200, 400
+    # Left half finely textured (edges everywhere), right half smooth.
+    arr = np.full((h, w, 3), 0.5, dtype=np.float32)
+    arr[:, :w // 2:6] = 0.8
+    arr[:, w // 2:] = np.linspace(0.35, 0.65, w - w // 2, dtype=np.float32)[None, :, None]
+    arr = np.clip(arr + 0.01 * rng.standard_normal(arr.shape), 0, 1).astype(np.float32)
+
+    edge_sub = {"id": "s0", "type": "edge", "mode": "additive", "visible": True, "invert": False,
+                "parameters": {"threshold": 25, "spread": 30, "feather": 50}}
+    limit_sub = {"id": "s1", "type": "radial", "mode": "intersect", "visible": True, "invert": False,
+                 "parameters": {"center_x": 0.15, "center_y": 0.5, "radius_x": 0.1, "radius_y": 0.4,
+                                "feather": 20}}
+
+    def render(subs):
+        adj = develop.normalize({**develop.defaults(), "masks": [{
+            "id": "m", "name": "E", "visible": True, "opacity": 100, "invert": False,
+            "sub_masks": subs, "adjustments": {"sharpness": 100}}]})
+        out, _ = thumbnails.apply_masks(arr.copy(), adj)
+        return np.abs(out - arr).max(axis=-1)
+
+    # Unlimited: sharpening lands across the whole textured half...
+    unlimited = render([edge_sub])
+    assert (unlimited[:, : w // 2] > 1e-4).mean() > 0.3
+    # ...and never on the smooth half, which the mask does not select.
+    assert unlimited[:, w // 2 + 20 :].max() == 0.0
+
+    # Limited to a shape on the far left: the textured area outside it is left
+    # alone, the part inside it is still sharpened.
+    limited = render([edge_sub, limit_sub])
+    assert limited[:, int(0.30 * w) :].max() == 0.0
+    assert (limited[:, : int(0.20 * w)] > 1e-4).mean() > 0.3
+
+
+def test_peek_marks_the_intersection_not_the_whole_selection():
+    """With a limit in play the marking has to show what the mask actually
+    covers - otherwise it would promise an edit everywhere the selection reaches
+    and deliver it only inside the shape."""
+    arr = _dark_left_half()
+    subs = [
+        {"id": "s0", "type": "luminance", "mode": "additive", "visible": True, "invert": False,
+         "parameters": {"range_min": 0, "range_max": 50, "feather": 0}},
+        {"id": "s1", "type": "radial", "mode": "intersect", "visible": True, "invert": False,
+         "parameters": {"center_x": 0.2, "center_y": 0.2, "radius_x": 0.15, "radius_y": 0.15,
+                        "feather": 10}},
+    ]
+    adj = develop.normalize({**develop.defaults(), "masks": [{
+        "id": "m1", "name": "S", "visible": True, "opacity": 100, "invert": False,
+        "sub_masks": subs, "adjustments": {}}]})
+    _, field = thumbnails.apply_masks(arr.copy(), adj, peek="m1")
+    assert field[3, 3] > 0.9            # dark half AND inside the shape
+    assert field[14, 3] < 0.05          # dark half, outside the shape
+    assert field[:, 8:].max() < 0.05    # bright half, never selected either way
+
+
 # --- marking what a mask covers ("peek") --------------------------------------
 
 def _lum_mask(mask_id="m1", visible=True, adjustments=None) -> dict:

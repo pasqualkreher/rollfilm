@@ -5827,6 +5827,14 @@ kbd {
   stroke-width: 1.5;
 }
 
+/* "Limit to area": a boundary the mask is confined to, not a selection of its
+   own - dashed, so the two outlines on the photo can never be read as the same
+   kind of thing. Its dashes stay the same length at any zoom, like the strokes
+   themselves (vectorEffect="non-scaling-stroke" on every shape). */
+.mask-overlay-dashed .mask-overlay-shape {
+  stroke-dasharray: 4 3;
+}
+
 /* Pink zebra: the shared marking for the area every mask covers. The accent is
    a theme colour that can easily be the colour of the photo underneath, so the
    marking uses a fixed hot pink nothing photographic lands on, in diagonal

@@ -553,6 +553,24 @@ function _uid(): string {
 export function newSubMask(type: SubMaskType): SubMask {
   return { id: _uid(), type, mode: "additive", visible: true, invert: false, parameters: { ..._DEFAULT_SUBMASK_PARAMS[type] } };
 }
+// A mask's optional second sub-mask: a drawn shape that the mask is INTERSECTED
+// with, i.e. "this selection, but only here". It's what makes the selections
+// that have no place of their own usable - an edge mask finds every edge in the
+// frame, which is the whole picture's worth of detail unless it can be confined
+// to the hair, the eyes, the fabric you actually meant. Index 1 by convention;
+// index 0 stays the mask's own selection (masks.generate_mask_field takes the
+// first sub-mask as the base and folds the rest in by their mode).
+export const MASK_LIMIT_TYPES: { value: SubMaskType; label: string }[] = [
+  { value: "radial", label: "Radial" },
+  { value: "linear", label: "Linear" },
+  { value: "brush", label: "Brush" },
+];
+export function newLimitSubMask(type: SubMaskType): SubMask {
+  return { ...newSubMask(type), mode: "intersect" };
+}
+export function maskLimit(mask: MaskDef): SubMask | null {
+  return mask.sub_masks[1] ?? null;
+}
 export function newMask(type: SubMaskType): MaskDef {
   return { id: _uid(), name: _MASK_LABEL[type], visible: true, opacity: 100, invert: false, sub_masks: [newSubMask(type)], adjustments: {} };
 }
