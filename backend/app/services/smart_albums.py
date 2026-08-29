@@ -5,8 +5,9 @@ library itself, so they track imports and deletions on their own:
 
 * Similarity clusters ("Moments"): the CLIP image embeddings that already
   power semantic search are grouped by cosine similarity, and each cluster is
-  named by comparing its centroid against a small English label vocabulary
-  encoded with the same CLIP model (zero-shot, no extra model needed).
+  named by comparing its centroid against a small vocabulary of broad English
+  subjects ("Nature", "City", "Sports") encoded with the same CLIP model
+  (zero-shot, no extra model needed) - see _BUCKETS.
 * Time albums: one album per year and per month, plus "big days" - single
   days with unusually many photos (a trip, a party), found by comparing each
   day's count against the library's median shooting day.
@@ -64,8 +65,12 @@ MIN_CLUSTER_SIZE = 5
 # product per cluster, so the higher cap is not what the build spends its time
 # on - the clustering passes over every embedding are, and those are unchanged.
 MAX_CLUSTERS = 40
-# Minimum centroid/label cosine similarity to trust a name. CLIP image/text
-# similarities are much lower than image/image ones; a good match is ~0.2-0.3.
+# Minimum centroid/bucket score to trust a name; below it a cluster is called
+# "Moments" rather than something the photos may not be about. CLIP image/text
+# similarities are much lower than image/image ones - measured over a real
+# 8.8k-photo library the surviving clusters score 0.20-0.32 against their
+# bucket, so this sits below anything that clustered cleanly and only catches
+# the genuinely unrecognisable.
 LABEL_MIN_SIMILARITY = 0.17
 
 # A day must have at least this many photos to count as a "big day", and also
@@ -84,101 +89,204 @@ MAX_PLACES = 30
 MIN_COUNTRY_YEAR_PHOTOS = 3
 MAX_COUNTRY_YEARS = 60
 
-# English album titles and the CLIP prompt each one is scored with. The prompt
-# is a full phrase ("a photo of ...") because CLIP was trained on captions -
-# bare nouns match noticeably worse.
-_LABELS: list[tuple[str, str]] = [
-    ("Portraits", "a portrait photo of a person"),
-    ("Group Photos", "a group photo of several people posing together"),
-    ("Kids", "a photo of children playing"),
-    ("Babies", "a photo of a baby"),
-    ("Weddings", "a photo of a wedding"),
-    ("Beach & Sea", "a photo of a beach and the sea"),
-    ("Mountains", "a photo of mountains"),
-    ("Hiking", "a photo of people hiking on a trail"),
-    ("Forests", "a photo of a forest"),
-    ("Lakes & Rivers", "a photo of a lake or a river"),
-    ("Waterfalls", "a photo of a waterfall"),
-    ("Sunsets", "a photo of a sunset sky"),
-    ("Night Sky", "a photo of the night sky with stars"),
-    ("Snow & Winter", "a photo of a snowy winter landscape"),
-    ("Autumn Colors", "a photo of colorful autumn foliage"),
-    ("Flowers", "a close-up photo of flowers"),
-    ("Gardens & Parks", "a photo of a garden or a park"),
-    ("Cityscapes", "a photo of a city skyline"),
-    ("Street Life", "a street photography shot of people in a city"),
-    ("Architecture", "a photo of a building facade"),
-    ("Churches & Temples", "a photo of a church or a temple"),
-    ("Bridges", "a photo of a bridge"),
-    ("Interiors", "a photo of a room interior"),
-    ("Food", "a photo of a plate of food"),
-    ("Cafés & Drinks", "a photo of drinks in a café or a bar"),
-    ("Parties", "a photo of a party celebration"),
-    ("Concerts", "a photo of a concert with stage lights"),
-    ("Fireworks", "a photo of fireworks in the sky"),
-    ("Christmas", "a photo of christmas decorations"),
-    ("Sports", "a photo of people doing sports"),
-    ("Cycling", "a photo of bicycles or people cycling"),
-    ("Skiing", "a photo of skiing on a snowy slope"),
-    ("Pools & Swimming", "a photo of a swimming pool"),
-    ("Boats & Sailing", "a photo of boats on the water"),
-    ("Cars", "a photo of a car"),
-    ("Motorcycles", "a photo of a motorcycle"),
-    ("Trains", "a photo of a train or a railway station"),
-    ("Airplanes", "a photo of an airplane"),
-    ("Dogs", "a photo of a dog"),
-    ("Cats", "a photo of a cat"),
-    ("Birds", "a photo of a bird"),
-    ("Wildlife", "a photo of wild animals in nature"),
-    ("Horses", "a photo of horses"),
-    ("Macro", "a macro close-up photo of a small object or insect"),
-    ("Camping", "a photo of a campsite with tents"),
-    ("Museums & Art", "a photo of artwork in a museum"),
-    ("Markets", "a photo of a street market with stalls"),
-    ("Screenshots", "a screenshot of a computer or phone screen"),
-    ("Documents", "a photo of a document or a receipt"),
-    # Built places, beyond the bare "building facade" of Architecture.
-    ("Houses", "a photo of a house"),
-    ("Old Towns", "a photo of a narrow street in an old historic town"),
-    ("Castles", "a photo of a castle"),
-    ("Ruins", "a photo of ancient stone ruins"),
-    ("Monuments", "a photo of a statue or a monument"),
-    ("Street Art", "a photo of graffiti or a mural painted on a wall"),
-    ("Neon Lights", "a photo of glowing neon signs at night"),
-    ("Harbours", "a photo of a harbour with docked boats"),
-    ("Lighthouses", "a photo of a lighthouse on the coast"),
-    ("Windmills", "a photo of wind turbines in a field"),
-    ("Airports", "a photo inside an airport terminal"),
-    # Landscapes the existing five (mountains, forest, lake, beach, snow)
-    # cannot stand in for.
-    ("Countryside", "a photo of farmland and fields in the countryside"),
-    ("Coast & Cliffs", "a photo of a rocky coastline with steep cliffs"),
-    ("Islands", "a photo of an island surrounded by sea"),
-    ("Deserts", "a photo of a desert with sand dunes"),
-    ("Caves", "a photo taken inside a cave"),
-    ("Roads", "a photo of an empty road stretching into the distance"),
-    ("Trees", "a photo of a single tree in a field"),
-    # Light and weather, which turn the same place into a different photo.
-    ("Sunrise", "a photo of a sunrise at dawn"),
-    ("Fog & Mist", "a photo of a landscape covered in fog and mist"),
-    ("Storms", "a photo of dark storm clouds over a landscape"),
-    ("Reflections", "a photo of a mirror reflection in still water"),
-    ("Aerial Views", "an aerial drone photo looking straight down"),
-    # Doing things: Sports is one bucket for what people actually shoot as
-    # separate days out.
-    ("Running", "a photo of people running a race"),
-    ("Climbing", "a photo of a climber on a rock wall"),
-    ("Surfing", "a photo of a surfer riding a wave"),
-    ("Fishing", "a photo of a person fishing at the water"),
-    ("Picnics", "a photo of a picnic on a blanket outdoors"),
-    ("Birthdays", "a photo of a birthday cake with candles"),
-    ("Selfies", "a selfie photo taken at arm's length"),
-    # Nature close up, past Flowers and the generic Macro.
-    ("Mushrooms", "a close-up photo of mushrooms on the forest floor"),
-    ("Farm Animals", "a photo of cows and sheep in a pasture"),
-    ("Underwater", "an underwater photo of fish and coral"),
-    ("Books", "a photo of a stack of books"),
+# The album titles a moment can be named after, and the CLIP prompts each one
+# is scored with. The titles are deliberately BROAD - "Nature", "City",
+# "Sports" - while the prompts behind them stay specific.
+#
+# The vocabulary used to be one specific title per prompt ("Waterfalls",
+# "Bridges", "Museums & Art", ~85 of them), which asked zero-shot CLIP for a
+# precision it does not have: a cluster is named from one centroid, so a lake
+# with a footbridge became "Bridges" and a park bench became "Gardens & Parks",
+# and every such near-miss reads to the user as a wrong album. Broad titles
+# make those misses invisible, because the neighbouring prompts that compete
+# for a cluster now nearly all sit in the SAME bucket - mistaking a waterfall
+# for a river no longer changes the name.
+#
+# Prompts stay specific because that is what CLIP was trained on: a full
+# caption ("a photo of a waterfall") matches far better than the bare bucket
+# noun ("a photo of nature"), which is vague enough to score middlingly on
+# everything. So each bucket is scored through its own concrete examples - see
+# _bucket_scores.
+_BUCKETS: list[tuple[str, list[str]]] = [
+    (
+        "People",
+        [
+            "a portrait photo of a person",
+            "a group photo of several people posing together",
+            "a photo of children playing",
+            "a photo of a baby",
+            "a selfie photo taken at arm's length",
+            "a candid photo of someone's face up close",
+        ],
+    ),
+    (
+        "Celebrations",
+        [
+            "a photo of a wedding",
+            "a photo of a party celebration",
+            "a photo of a birthday cake with candles",
+            "a photo of christmas decorations",
+            "a photo of a concert with stage lights",
+            "a photo of fireworks in the sky",
+        ],
+    ),
+    (
+        "Beach & Sea",
+        [
+            "a photo of a beach and the sea",
+            "a photo of a rocky coastline with steep cliffs",
+            "a photo of an island surrounded by sea",
+            "a photo of a surfer riding a wave",
+            "a photo of boats on the water",
+            "a photo of a harbour with docked boats",
+            "an underwater photo of fish and coral",
+            "a photo of a swimming pool",
+        ],
+    ),
+    (
+        "Mountains",
+        [
+            "a photo of mountains",
+            "a photo of an alpine valley below rocky peaks",
+            "a photo of people hiking on a mountain trail",
+            "a photo of a climber on a rock wall",
+            "a photo of skiing on a snowy slope",
+        ],
+    ),
+    (
+        "Nature",
+        [
+            "a photo of a forest",
+            "a photo of a single tree in a field",
+            "a close-up photo of flowers",
+            "a photo of a waterfall",
+            "a photo of a lake or a river",
+            "a photo of farmland and fields in the countryside",
+            "a photo of a garden or a park",
+            "a photo of a desert with sand dunes",
+            "a macro close-up photo of a plant or an insect",
+            "a photo of colorful autumn foliage",
+        ],
+    ),
+    (
+        "Winter",
+        [
+            "a photo of a snowy winter landscape",
+            "a photo of snow covered trees",
+            "a photo of a frozen lake in winter",
+            "a photo of a village under fresh snow",
+        ],
+    ),
+    (
+        "City",
+        [
+            "a photo of a city skyline",
+            "a street photography shot of people in a city",
+            "a photo of a building facade",
+            "a photo of a narrow street in an old historic town",
+            "a photo of a bridge",
+            "a photo of glowing neon signs at night",
+            "a photo of graffiti or a mural painted on a wall",
+            "a photo of a street market with stalls",
+            "an aerial photo of city rooftops",
+        ],
+    ),
+    (
+        "Landmarks",
+        [
+            "a photo of a church or a temple",
+            "a photo of a castle",
+            "a photo of ancient stone ruins",
+            "a photo of a statue or a monument",
+            "a photo of a lighthouse on the coast",
+            "a photo of a famous tourist landmark",
+        ],
+    ),
+    (
+        "Animals",
+        [
+            "a photo of a dog",
+            "a photo of a cat",
+            "a photo of a bird",
+            "a photo of wild animals in nature",
+            "a photo of horses",
+            "a photo of cows and sheep in a pasture",
+        ],
+    ),
+    (
+        "Food & Drink",
+        [
+            "a photo of a plate of food",
+            "a photo of drinks in a café or a bar",
+            "a photo of a picnic on a blanket outdoors",
+            "a photo of a cup of coffee on a table",
+        ],
+    ),
+    (
+        "Sports",
+        [
+            "a photo of people doing sports",
+            "a photo of people running a race",
+            "a photo of bicycles or people cycling",
+            "a photo of a person fishing at the water",
+            "a photo of a sports match in a stadium",
+        ],
+    ),
+    (
+        "Travel",
+        [
+            "a photo inside an airport terminal",
+            "a photo of a train or a railway station",
+            "a photo of an airplane",
+            "a photo of an empty road stretching into the distance",
+            "a photo of a campsite with tents",
+            "a photo taken through an airplane window",
+        ],
+    ),
+    (
+        "Vehicles",
+        [
+            "a photo of a car",
+            "a photo of a motorcycle",
+            "a photo of a classic vintage car",
+        ],
+    ),
+    (
+        "Indoors",
+        [
+            "a photo of a room interior",
+            "a photo of artwork on a museum wall",
+            "a photo of a stack of books",
+            "a photo of objects on a table indoors",
+        ],
+    ),
+    (
+        "Sky & Weather",
+        [
+            "a photo of a sunset sky",
+            "a photo of a sunrise at dawn",
+            "a photo of the night sky with stars",
+            "a photo of dark storm clouds over a landscape",
+            "a photo of a landscape covered in fog and mist",
+            "a photo of clouds in a blue sky",
+        ],
+    ),
+    (
+        "Screenshots & Documents",
+        [
+            "a screenshot of a computer or phone screen",
+            "a photo of a document or a receipt",
+            "a scan of a printed page",
+        ],
+    ),
 ]
+
+# How many of a bucket's prompts decide its score. One alone made the score a
+# lottery between near-synonymous prompts and let a bucket with many prompts
+# win on sheer number of tickets; averaging the two best asks for a bucket to
+# be right about a cluster twice, which is exactly the "is this really what
+# the album is about" question the single best prompt cannot answer.
+_BUCKET_TOP_K = 2
 
 # Qualifiers used to tell same-label clusters apart ("Mountains · Sunny" vs
 # "Mountains · Snow") instead of numbering them. Scored zero-shot against the
@@ -248,7 +356,15 @@ _label_lock = threading.Lock()
 # Part of the cache signature: bumping it makes every stored cache stale, so
 # an algorithm/naming change reaches users on their next visit instead of
 # waiting for the library to change.
-_ALGO_VERSION = 7
+# 8: 0.1.49 shipped a build that clustered nothing (the live-id set was
+#    shadowed by a query object), and it cached that empty result under a
+#    signature that still looked current - the bump threw those caches away.
+# 9: the label vocabulary went coarse (see _BUCKETS), so every moment is
+#    named differently from the same photos. A naming change needs its own
+#    bump even when it ships alongside another one: a build that ran in
+#    between wrote a version-8 cache full of the OLD names, and without this
+#    the signature still matched and those names would never be recomputed.
+_ALGO_VERSION = 9
 
 
 def _library_signature(db: Session) -> tuple:
@@ -364,12 +480,42 @@ def _save_cache(sig: tuple, clusters: list[SmartCluster]) -> None:
 
 
 def _get_label_matrix() -> np.ndarray:
+    """One row per bucket PROMPT (all buckets flattened, in order) - see
+    _bucket_scores for how the rows are folded back into per-bucket scores."""
     global _label_matrix
     if _label_matrix is None:
         with _label_lock:
             if _label_matrix is None:
-                _label_matrix = embeddings.encode_texts([phrase for _, phrase in _LABELS])
+                _label_matrix = embeddings.encode_texts(
+                    [prompt for _, prompts in _BUCKETS for prompt in prompts]
+                )
     return _label_matrix
+
+
+def _bucket_scores(prompt_sims: np.ndarray) -> np.ndarray:
+    """Fold per-prompt similarities (n_clusters x n_prompts, prompts in
+    _BUCKETS order) into per-bucket scores (n_clusters x n_buckets).
+
+    A bucket scores as the mean of its _BUCKET_TOP_K best prompts, which keeps
+    buckets comparable no matter how many prompts they carry: taking the best
+    prompt alone would hand "Nature" (ten prompts) an advantage over
+    "Vehicles" (three) that has nothing to do with the photos."""
+    n_prompts = sum(len(prompts) for _, prompts in _BUCKETS)
+    if prompt_sims.shape[1] != n_prompts:
+        # Would otherwise slice past the end and average nothing into a NaN.
+        raise ValueError(
+            f"label matrix has {prompt_sims.shape[1]} rows, _BUCKETS wants {n_prompts}"
+        )
+    scores = np.empty((prompt_sims.shape[0], len(_BUCKETS)), dtype=prompt_sims.dtype)
+    start = 0
+    for b, (_, prompts) in enumerate(_BUCKETS):
+        block = prompt_sims[:, start : start + len(prompts)]
+        k = min(_BUCKET_TOP_K, block.shape[1])
+        # -k partition puts the k largest last; their mean is the score.
+        top = np.partition(block, -k, axis=1)[:, -k:] if block.shape[1] > k else block
+        scores[:, b] = top.mean(axis=1)
+        start += len(prompts)
+    return scores
 
 
 def _get_qualifier_matrix() -> np.ndarray:
@@ -383,40 +529,49 @@ def _get_qualifier_matrix() -> np.ndarray:
     return _qualifier_matrix
 
 
+def _cluster_inputs(
+    db: Session,
+) -> tuple[set[str], set[str], dict[str, tuple[int | None, str | None]]]:
+    """Everything the build needs from the database: which photos are live,
+    which of them are the RAW half of a pair (excluded from clustering), and
+    the per-photo year/country used for fallback qualifiers."""
+    live_ids = {
+        row[0] for row in db.query(Image.id).filter(Image.deleted_at.is_(None)).all()
+    }
+    # A RAW+JPEG pair carries two near-identical embeddings. Cluster on
+    # the JPEG alone (what we display) and drop the RAW half, so a moment
+    # never shows the same shot twice - or, worse, renders the dark RAW
+    # when only the RAW landed in the cluster. Lone RAWs (no JPEG
+    # sibling) keep their embedding and still cluster.
+    # The partner has to still be in the library: with the JPEG in the
+    # Trash the RAW is the only file left of that shot, and dropping it
+    # as "the RAW half of a pair" made the shot vanish from smart
+    # albums entirely.
+    paired_raw_ids = {
+        row[0]
+        for row in db.query(Image.id, Image.paired_image_id).filter(
+            Image.deleted_at.is_(None),
+            Image.file_type == FileType.raw,
+            Image.paired_image_id.isnot(None),
+        )
+        if row[1] in live_ids
+    }
+    # Capture year + country per photo: fallback qualifiers when two
+    # same-label clusters can't be told apart by scene alone.
+    meta = {
+        row[0]: (row[1].year if row[1] else None, row[2])
+        for row in db.query(Image.id, Image.taken_at, Image.gps_country).filter(
+            Image.deleted_at.is_(None)
+        )
+    }
+    return live_ids, paired_raw_ids, meta
+
+
 def _compute_clusters(sig: tuple) -> None:
     try:
         db = SessionLocal()
         try:
-            live_ids = {
-                row[0]
-                for row in db.query(Image.id).filter(Image.deleted_at.is_(None)).all()
-            }
-            # A RAW+JPEG pair carries two near-identical embeddings. Cluster on
-            # the JPEG alone (what we display) and drop the RAW half, so a moment
-            # never shows the same shot twice - or, worse, renders the dark RAW
-            # when only the RAW landed in the cluster. Lone RAWs (no JPEG
-            # sibling) keep their embedding and still cluster.
-            # The partner has to still be in the library: with the JPEG in the
-            # Trash the RAW is the only file left of that shot, and dropping it
-            # as "the RAW half of a pair" made the shot vanish from smart
-            # albums entirely.
-            live_ids = db.query(Image.id).filter(Image.deleted_at.is_(None))
-            paired_raw_ids = {
-                row[0]
-                for row in db.query(Image.id).filter(
-                    Image.deleted_at.is_(None),
-                    Image.file_type == FileType.raw,
-                    Image.paired_image_id.in_(live_ids),
-                )
-            }
-            # Capture year + country per photo: fallback qualifiers when two
-            # same-label clusters can't be told apart by scene alone.
-            meta = {
-                row[0]: (row[1].year if row[1] else None, row[2])
-                for row in db.query(
-                    Image.id, Image.taken_at, Image.gps_country
-                ).filter(Image.deleted_at.is_(None))
-            }
+            live_ids, paired_raw_ids, meta = _cluster_inputs(db)
         finally:
             db.close()
 
@@ -509,13 +664,13 @@ def _build_clusters(
     # now be hundreds of candidates, and only the selection below decides which
     # of them the user ever sees.
     label_matrix = _get_label_matrix()
-    titles = [title for title, _ in _LABELS]
+    titles = [title for title, _ in _BUCKETS]
     cluster_centroids = []
     for member_idx in kept:
         centroid = vecs[member_idx].mean(axis=0)
         cluster_centroids.append(centroid / (np.linalg.norm(centroid) or 1.0))
     cluster_centroids = np.stack(cluster_centroids)
-    all_label_sims = cluster_centroids @ label_matrix.T
+    all_label_sims = _bucket_scores(cluster_centroids @ label_matrix.T)
 
     candidates: list[dict] = []  # still in size order
     for pos, member_idx in enumerate(kept):
@@ -616,6 +771,11 @@ def _sibling_names(
             if sims[int(j)] < QUALIFIER_MIN_SIMILARITY:
                 break
             title = qualifier_titles[int(j)]
+            # The broad bucket titles overlap the qualifier words ("Winter",
+            # "People"), and "Winter · Winter" says nothing - let the next
+            # qualifier down have it.
+            if title.lower() in base.lower():
+                continue
             if title not in used:
                 used.add(title)
                 names[k] = f"{base} · {title}"

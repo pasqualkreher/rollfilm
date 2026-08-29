@@ -478,7 +478,8 @@ const CHAPTERS: Chapter[] = [
             <ul>
               <li>
                 <strong>Moments</strong> — groups of visually similar photos, found and named
-                automatically (beaches, portraits, food…).
+                automatically with broad subjects (Nature, City, People, Sports…). Several moments
+                of the same subject stack under one card.
               </li>
               <li>
                 <strong>Tags</strong> — one album per tag you have given out.
@@ -659,11 +660,15 @@ const CHAPTERS: Chapter[] = [
             <h4>8 · Masks — editing part of the photo</h4>
             <p>
               Radial, linear, brush, luminance, color and edge masks, each with its own set of
-              sliders, combined by adding, subtracting or intersecting. An <strong>edge</strong>
-              mask selects where the picture has detail instead of where it is bright — the one to
-              put sharpness or clarity on, since it catches hair, branches and fabric while leaving
-              skin and sky alone (a luminance mask cannot tell those apart: it only knows how dark
-              they are). <strong>Select subject</strong> finds
+              sliders. Any of them can be <strong>limited to an area</strong>: add a radial,
+              linear or brush shape to a mask and it applies only where the two overlap (or, with
+              Outside, only where they don't). That is what makes the selections with no place of
+              their own usable — an <strong>edge</strong>
+              mask selects where the picture has detail instead of where it is bright — the one
+              to put sharpness or clarity on, since it catches hair, branches and fabric while
+              leaving skin and sky alone (a luminance mask cannot tell those apart: it only knows
+              how dark they are) — but it finds every edge in the frame, so limit it to the part of
+              the picture you meant. <strong>Select subject</strong> finds
               a region for you — sky, water, greenery, people, buildings or ground — and drops it in
               as a mask you can then refine like any other. The first subject on a photo takes a few
               seconds (the detection model downloads itself once, on first use); any further one on

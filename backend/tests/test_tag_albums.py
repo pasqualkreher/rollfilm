@@ -218,13 +218,14 @@ def test_build_clusters_groups_same_label_siblings(monkeypatch):
     vecs = np.stack([e1] * size + [e2] * size)
     label = ((e1 + e2) / np.linalg.norm(e1 + e2)).reshape(1, -1)
     monkeypatch.setattr(smart_albums, "_get_label_matrix", lambda: label)
+    monkeypatch.setattr(smart_albums, "_BUCKETS", [("Alpha", ["a photo of alpha"])])
     _no_qualifier_hits(monkeypatch)
 
     meta = {f"a{i}": (2023, "Italy") for i in range(size)}
     meta.update({f"b{i}": (2024, "Austria") for i in range(size)})
     clusters = smart_albums._build_clusters(ids, vecs, meta)
 
-    base = smart_albums._LABELS[0][0]  # argmax over the single label row
+    base = "Alpha"  # the only bucket, so both clusters score it
     assert [c.group for c in clusters] == [base, base]
     assert {c.name for c in clusters} == {f"{base} · Italy", f"{base} · Austria"}
     for cluster in clusters:
@@ -269,8 +270,8 @@ def test_the_moments_cut_gives_every_subject_a_slot_before_seconds(monkeypatch):
     )
     monkeypatch.setattr(
         smart_albums,
-        "_LABELS",
-        [("Alpha", "a photo of alpha"), ("Beta", "a photo of beta")],
+        "_BUCKETS",
+        [("Alpha", ["a photo of alpha"]), ("Beta", ["a photo of beta"])],
     )
     monkeypatch.setattr(
         smart_albums,
