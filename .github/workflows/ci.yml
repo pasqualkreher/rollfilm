@@ -1,0 +1,73 @@
+# The gate before "press play": runs the tests that already exist, so a broken
+# commit is caught here instead of in a 60-minute installer build.
+#
+#   backend  -> pytest (337-ish tests, ~15s once the deps are installed)
+#   frontend -> tsc -b && vite build, i.e. exactly `npm run build`
+#
+# Both jobs run on ubuntu only. The installers are what needs three platforms;
+# the test suite does not, and the macOS runner costs 10x the minutes.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      # PyExifTool shells out to the real exiftool binary; the metadata tests
+      # skip or fail without it.
+      - name: Install exiftool
+        run: sudo apt-get update && sudo apt-get install -y libimage-exiftool-perl
+
+      # Same reason the installer build checks this: every DB connection loads
+      # sqlite-vec as an extension, so a Python without extension loading makes
+      # the whole suite fail in a way that looks like a code bug.
+      - name: Check sqlite extension loading
+        run: python -c "import sqlite3; sqlite3.connect(':memory:').enable_load_extension(True)"
+
+      - name: Install backend
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          # CPU-only torch: the CUDA default is several GB of wheel for a test
+          # run that never touches a GPU.
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+
+      - name: pytest
+        run: cd backend && pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: cd frontend && npm ci
+
+      # `npm run build` is `tsc -b && vite build`, so this is the typecheck too.
+      - run: cd frontend && npm run build
