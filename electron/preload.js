@@ -31,4 +31,7 @@ contextBridge.exposeInMainWorld("photoManager", {
   scanLegacyData: () => ipcRenderer.invoke("pm:scan-legacy-data"),
   // Deletes those leftover folders; resolves with { removed, failed }.
   removeLegacyData: () => ipcRenderer.invoke("pm:remove-legacy-data"),
+  // Prints a finished HTML document (the album canvas) to a PDF the user
+  // picks a place for. Resolves { ok, path } / { ok: false, canceled | error }.
+  exportPdf: (payload) => ipcRenderer.invoke("pm:export-pdf", payload),
 });

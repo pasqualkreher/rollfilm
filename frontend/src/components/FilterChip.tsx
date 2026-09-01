@@ -8,14 +8,19 @@ interface Props {
   // Tints the chip with the accent-soft "filter engaged" look.
   active?: boolean;
   title?: string;
-  // Popover content.
-  children: ReactNode;
+  // Which edge the panel hangs from. A chip parked at the right end of a
+  // toolbar needs its panel to grow leftwards, or it is simply cut off by the
+  // window.
+  align?: "left" | "right";
+  // Popover content. A function gets `close`, for a panel whose job is done
+  // once something in it has been chosen or finished.
+  children: ReactNode | ((close: () => void) => ReactNode);
 }
 
 // A quiet toolbar chip that opens a small popover - the shared pattern for
 // filters whose control is too loud to sit inline in the bar (color swatch
 // row, date-range pickers). Same look and behaviour as the TagFilter button.
-export function FilterChip({ label, active = false, title, children }: Props) {
+export function FilterChip({ label, active = false, title, align = "left", children }: Props) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -57,7 +62,11 @@ export function FilterChip({ label, active = false, title, children }: Props) {
           <IconChevronDown size={11} />
         </span>
       </button>
-      {open && <div className="filter-chip-pop">{children}</div>}
+      {open && (
+        <div className={`filter-chip-pop${align === "right" ? " filter-chip-pop--right" : ""}`}>
+          {typeof children === "function" ? children(() => setOpen(false)) : children}
+        </div>
+      )}
     </div>
   );
 }

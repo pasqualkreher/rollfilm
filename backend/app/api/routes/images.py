@@ -1600,6 +1600,36 @@ def _payload_adjustments(payload: schemas.ImageEdits) -> dict:
 # incoming preview request marks itself the newest for its image; older ones
 # still pending see that and bail (PreviewSuperseded -> 409) instead of
 # rendering frames nobody will ever look at.
+def _parse_region(raw: str | None) -> tuple[float, float, float, float] | None:
+    """"x,y,w,h" as fractions of the finished frame, or None.
+
+    A malformed or empty region is not an error: it means "render the frame the
+    way you always did", which is always a correct answer to give.
+    """
+    if not raw:
+        return None
+    try:
+        x, y, w, h = (float(part) for part in raw.split(","))
+    except ValueError:
+        return None
+    if not (w > 0 and h > 0):
+        return None
+    x = min(max(x, 0.0), 1.0)
+    y = min(max(y, 0.0), 1.0)
+    w = min(w, 1.0 - x)
+    h = min(h, 1.0 - y)
+    if w <= 0 or h <= 0:
+        return None
+    # A tile that is nearly the whole frame saves nothing and costs the padding.
+    if w * h > 0.85:
+        return None
+    return (x, y, w, h)
+
+
+# Above this a settled render is something the user waits for, so it is worth a
+# line in the log saying which tier spent it.
+_SLOW_PREVIEW_MS = 300
+
 _editor_preview_seq = itertools.count(1)
 _editor_preview_latest: dict[str, int] = {}
 _editor_preview_state_lock = threading.Lock()
@@ -1615,6 +1645,8 @@ def editor_preview(
     native: bool = False,
     browse: bool = False,
     peek: str | None = None,
+    region: str | None = None,
+    zoomed: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1622,7 +1654,9 @@ def editor_preview(
     saves - so what you see while editing is exactly what you get. The decoded
     base image is cached, so only the edit pipeline re-runs per request.
     `?scrub=1` renders the fast, small-base tier drawn while a control is being
-    dragged; the default renders the accurate tier on release; `?full=1` renders
+    dragged (`&zoomed=1` sizes it up to the accurate tier's base - dragging a
+    slider at 100% zoom is judged on detail, and the small base upscaled that
+    far is blocks); the default renders the accurate tier on release; `?full=1` renders
     on the larger settled base once the sliders come to rest; `?ultra=1` is one
     step above that, for when the settled render is still shown upscaled (it
     costs no extra decode - see ULTRA_EDITOR_PREVIEW_PX); `?native=1` renders at
@@ -1632,6 +1666,12 @@ def editor_preview(
     editor's native (dark) base - the "Original" half of the split view, which
     has to be the photo as the library showed it, not the unlifted sensor data.
 
+    `?region=x,y,w,h` (fractions of the finished frame) renders only that part
+    of it, for the native tier: zoomed in, the rest of a full-resolution frame
+    is seconds of work for pixels that are off screen. Ignored by every other
+    tier, and by edits whose finishing effects need the whole frame (see
+    thumbnails.region_is_supported).
+
     `?peek=<mask id>` marks that mask's covered area in the frame with the
     editor's zebra, so a luminance / colour / edge mask - none of which has an
     outline that could be drawn over the photo - can be seen while it is being
@@ -1640,6 +1680,7 @@ def editor_preview(
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
     image = get_owned_image(db, current_user.id, image_id)
+    view_region = _parse_region(region)
     crop = None
     if payload.crop is not None:
         crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
@@ -1653,6 +1694,8 @@ def editor_preview(
         with _editor_preview_state_lock:
             return _editor_preview_latest.get(image_id) != seq
 
+    started = time.perf_counter()
+    render_meta: dict = {}
     try:
         data = thumbnails.render_editor_preview_bytes(
             image,
@@ -1671,8 +1714,31 @@ def editor_preview(
             persp_v=_clamp100(payload.persp_v),
             browse=browse,
             peek=(peek or None),
+            region=view_region,
+            meta=render_meta,
+            zoomed=zoomed,
             is_stale=_is_stale,
         )
+        if native and not thumbnails.native_base_ready(
+            image.id, thumbnails.editor_mtime_ns(image)
+        ):
+            # The service answered from the preview tier while the base decodes.
+            native, ultra = False, True
+        # A settled render that takes this long is felt, and which tier asked
+        # for it is the first thing anyone debugging "the editor is sluggish"
+        # needs to know. Below the threshold it says nothing: the interactive
+        # frames are tens of milliseconds and would drown the log.
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if elapsed_ms >= _SLOW_PREVIEW_MS:
+            tier = ("native" if native else "ultra" if ultra else "full" if full
+                    else "scrub" if scrub else "accurate")
+            logger.info(
+                "editor preview %s%s took %.0f ms (%s)",
+                tier,
+                " region" if view_region else " whole frame",
+                elapsed_ms,
+                image_id,
+            )
     except thumbnails.PreviewSuperseded:
         # The client has already aborted this fetch; the status only matters to
         # anything that still happens to be listening.
@@ -1686,7 +1752,21 @@ def editor_preview(
         with _editor_preview_state_lock:
             if _editor_preview_latest.get(image_id) == seq:
                 del _editor_preview_latest[image_id]
-    return Response(content=data, media_type="image/jpeg")
+    # What was actually rendered, which is not always what was asked for: a
+    # native request whose full-resolution base is still decoding is answered
+    # from the tier below (see thumbnails.warm_native_base). The editor reads
+    # this to know it should come back for the sharp one.
+    served = "native" if native else "ultra" if ultra else "full" if full else "scrub" if scrub else "accurate"
+    headers = {"X-Rollfilm-Tier": served}
+    if render_meta.get("frame"):
+        # A region render: the tile plus exactly where it belongs. The client
+        # composites it into its copy of the frame - one canvas, no overlay to
+        # mis-register against the picture underneath.
+        fw, fh = render_meta["frame"]
+        bx, by = render_meta["box"]
+        headers["X-Rollfilm-Frame"] = f"{fw}x{fh}"
+        headers["X-Rollfilm-Box"] = f"{bx},{by}"
+    return Response(content=data, media_type="image/jpeg", headers=headers)
 
 
 # One segmentation at a time per process: the model is a shared object and each
@@ -2091,6 +2171,40 @@ def get_original(image_id: str, db: Session = Depends(get_db), current_user: Use
     if not path.exists():
         raise HTTPException(status_code=404, detail="Original file missing from library")
     return FileResponse(path, filename=image.original_filename)
+
+
+@router.get("/{image_id}/export")
+def get_export(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """The photo's pixels for the album layout exports (PDF / HTML), with
+    nothing lost on the way out. A photo without non-destructive edits - which
+    includes every flattened edited copy - goes out as the very bytes it was
+    saved as. One that carries edits is rendered at full resolution from them
+    (the same render as the 100%-zoom full.jpg) and encoded as PNG, so the
+    export holds the pipeline's pixels exactly instead of a second JPEG
+    generation of them. A RAW is always rendered: no browser shows the sensor
+    file itself.
+
+    Rendered per request, not cached: a full-resolution PNG of a 40MP photo is
+    ~100MB, which is too much to keep on disk per photo for an export that is
+    made once. Serialised on the full render lock like every full render."""
+    image = get_owned_image(db, current_user.id, image_id)
+    path: Path = resolve_image_path(image)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Original file missing from library")
+    headers = {"Cache-Control": "private, max-age=31536000, immutable"}
+    if not _has_any_edit(image) and image.file_type in (FileType.jpeg, FileType.png):
+        return FileResponse(path, headers=headers)
+    try:
+        rendered = thumbnails.render_full_from_stored_edits(image)
+    except Exception:
+        logger.exception("Lossless export render failed for image %s", image.id)
+        raise HTTPException(status_code=404, detail="Photo could not be rendered")
+    buf = io.BytesIO()
+    # The lowest deflate level: lossless either way, and on a 40MP frame the
+    # default level spends another ten seconds per photo on a ~10% smaller file
+    # that goes straight into a print PDF.
+    rendered.save(buf, "PNG", compress_level=1)
+    return Response(buf.getvalue(), media_type="image/png", headers=headers)
 
 
 def _embedding_for_image(image: Image):

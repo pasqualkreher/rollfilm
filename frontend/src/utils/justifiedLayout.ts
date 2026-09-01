@@ -24,6 +24,15 @@ export const HEADER_H = 34;
 export const HEADER_MB = 12;
 export const SECTION_MB = 8;
 
+// How far a row may be stretched past the target height to justify it. A row is
+// filled until the NEXT tile would overflow, so a full row is at most one tile
+// short of the container and the stretch is slight - but a row holding a single
+// wide photo (a panorama, or any photo at all once the window is narrower than
+// two tiles) has nothing to share the slack with and would be blown up to the
+// full width, several times the size the Size control asked for. Past this it
+// keeps the target height and left-aligns, like an underfull last row.
+const MAX_ROW_STRETCH = 1.5;
+
 // How far beyond the viewport tiles are mounted. Two rows wider than the band
 // in which a thumbnail may load (utils/preload.ts), and derived from it rather
 // than tuned alongside it: a virtualized grid can only load a tile it has
@@ -123,9 +132,14 @@ export function buildJustifiedLayout<T>(
       if (pending.length === 0) return;
       const avail = width - GAP * (pending.length - 1);
       const natural = sumAr * rowHeight;
-      // Underfull last row: keep the target height, left-aligned. Every other
-      // row is justified to span the container exactly.
-      const height = last && natural <= avail ? rowHeight : avail / sumAr;
+      const justified = avail / sumAr;
+      // Underfull last row, or a row too empty to justify without blowing its
+      // tiles up: keep the target height, left-aligned. Every other row is
+      // justified to span the container exactly.
+      const height =
+        (last && natural <= avail) || justified > rowHeight * MAX_ROW_STRETCH
+          ? rowHeight
+          : justified;
       let x = 0;
       const tiles: LayoutTile<T>[] = pending.map((p) => {
         const w = p.ar * height;

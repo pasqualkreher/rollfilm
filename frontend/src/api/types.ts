@@ -163,6 +163,119 @@ export interface AlbumOut {
   tag_filter: string[];
 }
 
+// --- The creative canvas layout of an album --------------------------------
+//
+// Every measurement is in MILLIMETRES, never pixels: a layout is a page design
+// that has to survive being printed, and the canvas zoom is only a way of
+// looking at it. The renderer draws 1mm as one CSS unit inside a scaled
+// container, so nothing in the component has to convert.
+
+export interface LayoutTextStyle {
+  // Cap height of the text, in mm, like a type size on a printed page.
+  size_mm?: number;
+  color?: string;
+  weight?: number;
+  italic?: boolean;
+  align?: "left" | "center" | "right" | "justify";
+  // Where the text sits in a box taller than it needs; omitted = top.
+  valign?: "top" | "middle" | "bottom";
+  // A CSS font-family stack; omitted = the app's own UI face.
+  font?: string;
+  // Line height as a multiple of the size; omitted = 1.25.
+  line_height?: number;
+  // Tracking in em, so it scales with the size; omitted = 0.
+  letter_spacing?: number;
+  // Photo frames only: a matte border ADDED around the frame, like the
+  // editor's white frame - its width as a % of the frame's shorter edge, so
+  // it scales with the picture, and its colour. Omitted = no border.
+  frame_pct?: number;
+  frame_color?: string;
+}
+
+export interface LayoutItem {
+  id: string;
+  kind: "photo" | "text";
+  image_id: string | null;
+  // Which sheet the item sits on; always 0 on an infinite canvas.
+  page: number;
+  // The frame: position of its top-left corner on the page, and its size.
+  x_mm: number;
+  y_mm: number;
+  width_mm: number;
+  height_mm: number;
+  // Clockwise degrees around the frame's centre.
+  rotation: number;
+  z: number;
+  // How the photo sits inside its frame. The photo always COVERS the frame
+  // (so it can never be squashed); content_scale zooms it further and
+  // content_dx/dy shift it, both as a fraction of the frame's own size.
+  content_scale: number;
+  content_dx: number;
+  content_dy: number;
+  text: string | null;
+  style: LayoutTextStyle | null;
+  // False when the photo behind the frame is in the Trash or on an unplugged
+  // drive: the item stays (and is saved back untouched) but has nothing to
+  // draw, so the page returns intact once the photo does.
+  available?: boolean;
+}
+
+// One kept snapshot of a canvas, as the version list shows it. The document
+// itself stays on the server - it only travels when restored.
+export interface LayoutVersion {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface AlbumLayout {
+  album_id: string;
+  // "pages" = a run of fixed-size sheets, like a photo book;
+  // "infinite" = one unbounded plane, like a pinboard.
+  page_mode: "pages" | "infinite";
+  page_width_mm: number;
+  page_height_mm: number;
+  page_count: number;
+  background: string;
+  show_grid: boolean;
+  grid_mm: number;
+  snap: boolean;
+  // Free canvas only: draw the outline of the sheets this design would be cut
+  // into, so laying out against them makes a later switch to Pages a
+  // relabelling rather than a redesign.
+  show_page_guide: boolean;
+  // Whether this canvas appears on the Canvases shelf of the Albums page.
+  show_in_canvases: boolean;
+  // The version the shelf shows (last kept or last loaded), and the kept
+  // versions themselves, newest first. Server-owned: never sent back on save.
+  active_version_id?: string | null;
+  versions?: LayoutVersion[];
+  updated_at?: string | null;
+  items: LayoutItem[];
+}
+
+// One card on the Canvases shelf: an album's chosen version, with just enough
+// of its document to draw the print-style preview.
+export interface AlbumCanvasOut {
+  album_id: string;
+  album_name: string;
+  version_id: string;
+  version_name: string;
+  version_count: number;
+  created_at: string;
+  page_mode: "pages" | "infinite";
+  page_width_mm: number;
+  page_height_mm: number;
+  page_count: number;
+  background: string;
+  // A free canvas with the page guide on prints as the guide's sheets - the
+  // shelf's print view and export cut the same way.
+  show_page_guide: boolean;
+  items: LayoutItem[];
+  // Per-photo cache-buster for thumbnail URLs (image id -> ?v value).
+  thumb_versions: Record<string, string>;
+}
+
 // A virtual, auto-computed album (similarity cluster, place or time group).
 // The id is self-describing ("cluster:2", "year:2024", "month:2024-07",
 // "day:2024-07-12", "place:48.1374,11.5755") and is what

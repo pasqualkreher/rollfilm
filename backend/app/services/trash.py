@@ -14,7 +14,13 @@ from pathlib import Path
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
-from app.db.models import FileType, Image, ImmichPendingDeletion, ImportStagedFile
+from app.db.models import (
+    FileType,
+    Image,
+    ImmichPendingDeletion,
+    ImportStagedFile,
+    LayoutItem,
+)
 from app.db.session import SessionLocal
 from app.services import thumbnails
 from app.services.hashing import sha1_file
@@ -123,6 +129,12 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
         db.query(ImportStagedFile).filter(
             ImportStagedFile.duplicate_of_image_id.in_(image_ids)
         ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
+        # A frame on an album's canvas points at the photo too. Unlike album
+        # membership there is nothing to restore it to, so the frame goes with
+        # the photo - one query for the whole batch, like the loads below.
+        db.query(LayoutItem).filter(LayoutItem.image_id.in_(image_ids)).delete(
+            synchronize_session=False
+        )
         # Album memberships and tag links are cascade="all, delete-orphan", so
         # db.delete() below needs both collections loaded - and lazily that is
         # two SELECTs per photo, which is what made emptying a full Trash crawl

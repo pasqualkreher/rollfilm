@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconCheck, IconCrop, IconFlipH, IconFlipV, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
+import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconFlipH, IconFlipV, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, FULL_COPY_QUALITY } from "./SaveCopyDialog";
 import {
@@ -98,6 +98,12 @@ const MIX_CHANNELS: [number, string][] = [
 ];
 
 // Accordion groups in panel render order; keys 1..9 jump straight to them.
+// The server's preview tiers, in pixels of the long edge (see thumbnails.py:
+// FULL_EDITOR_PREVIEW_PX / ULTRA_EDITOR_PREVIEW_PX). Kept here so the editor can
+// ask for the right one straight away instead of finding out by rendering.
+const FULL_TIER_PX = 2600;
+const ULTRA_TIER_PX = 3900;
+
 const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "presets"];
 const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String(i + 1));
 
@@ -278,6 +284,26 @@ function Slider({
   const uiValue = value / uiScale;
   // Saved edits can hold odd internal values (uiValue x.5) - display rounded.
   const uiShown = Math.round(uiValue);
+  // A drag fires change events as fast as the pointer moves - under load
+  // several per displayed frame - and every single one is a state write that
+  // re-renders the whole editor (plus its JSON.stringify-heavy memos).
+  // Coalesce to at most one onChange per animation frame, last value wins;
+  // the preview pipeline can't consume frames faster than the display anyway.
+  const pendingRef = useRef<number | null>(null);
+  const rafRef = useRef(0);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
+  const queueChange = (v: number) => {
+    pendingRef.current = v;
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      const pending = pendingRef.current;
+      pendingRef.current = null;
+      if (pending !== null) onChangeRef.current(pending);
+    });
+  };
   return (
     <label className="editor-slider">
       <span className="editor-slider-head">
@@ -290,8 +316,11 @@ function Slider({
         max={max / uiScale}
         step={step}
         value={uiValue}
-        onChange={(e) => onChange(Number(e.target.value) * uiScale)}
-        onDoubleClick={() => onChange(resetValue)}
+        onChange={(e) => queueChange(Number(e.target.value) * uiScale)}
+        onDoubleClick={() => {
+          pendingRef.current = null; // the reset must not be overwritten by a queued drag value
+          onChange(resetValue);
+        }}
         onKeyDown={(e) => {
           // Up/down walk the slider list; left/right keep the native "nudge
           // the value" behaviour of a focused range input.
@@ -402,6 +431,8 @@ export function PhotoEditor({ image, onClose }: Props) {
   // RGB histogram bins of the latest preview; the <Histogram> components (in the
   // Basic and Curves groups) draw from this and redraw when it changes or on mount.
   const [histBins, setHistBins] = useState<Uint32Array[] | null>(null);
+  // When the histogram last updated - scrub frames throttle it (see drawBlob).
+  const histAtRef = useRef(0);
   // Downscaled copy of the current preview for the curve picker. Reading a
   // pixel straight off the display canvas per pointer-move would force a GPU
   // readback of the whole (multi-megapixel) surface each time; this is copied
@@ -436,26 +467,121 @@ export function PhotoEditor({ image, onClose }: Props) {
   // true-resolution render.
   const scaleRef = useRef(1);
 
+  // The long edge, in bitmap pixels, of the last WHOLE frame painted. This -
+  // not the canvas's bitmap size - is what "is the picture sharp enough" must
+  // be judged against: compositing a zoomed tile grows the bitmap to native
+  // size with the old frame stretched underneath, so the bitmap being large
+  // says nothing about the pixels being real. Judging against the bitmap made
+  // the editor stop rendering the moment the first tile landed, and panning to
+  // an unsharpened area then stayed soft forever.
+  const paintedPxRef = useRef(0);
+  // The same for the compare view's other half (original / snapshot): reset on
+  // every whole-frame paint of that canvas, left alone by a native tile.
+  const origPaintedPxRef = useRef(0);
+
   // Is the frame currently on the canvas being stretched past its own pixels?
   // Compares the canvas's on-screen size in DEVICE pixels (layout size x zoom x
   // devicePixelRatio) against the bitmap actually painted into it. This is the
   // question "is the photo soft right now", which is what decides whether a
   // full-resolution render is worth its seconds of CPU - a plain `scale > 1`
   // test misses a hi-dpi screen, where the photo is already upscaled at fit.
+  // Judged by the softer of the two halves while a compare is up: the original
+  // beside the edit is shown at the same size, and it is a render behind.
   function isUpscaled(): boolean {
     const cv = canvasRef.current;
-    if (!cv || !cv.width || !cv.height) return false;
+    if (!cv || !paintedPxRef.current) return false;
     const dpr = window.devicePixelRatio || 1;
-    const shownW = (parseFloat(cv.style.width) || 0) * scaleRef.current * dpr;
-    const shownH = (parseFloat(cv.style.height) || 0) * scaleRef.current * dpr;
+    const shown = Math.max(
+      (parseFloat(cv.style.width) || 0) * scaleRef.current * dpr,
+      (parseFloat(cv.style.height) || 0) * scaleRef.current * dpr
+    );
+    const painted =
+      wantOrigRef.current && origPaintedPxRef.current
+        ? Math.min(paintedPxRef.current, origPaintedPxRef.current)
+        : paintedPxRef.current;
     // A pixel of slack: rounding in fitCanvasToStage shouldn't trigger a render.
-    return shownW > cv.width + 1 || shownH > cv.height + 1;
+    return shown > painted + 1;
   }
+  // The part of the frame the user can actually see, as fractions of it - what
+  // the native render is asked for while zoomed in.
+  //
+  // Both rectangles come from the browser: the canvas's on-screen box is the
+  // TRANSFORMED one (pan and zoom are a CSS transform on the canvas itself), so
+  // intersecting it with the stage's box and expressing the result in the
+  // canvas's own coordinates needs no transform maths, and cannot drift from
+  // whatever the transform actually did.
+  //
+  // Null means "render the frame whole": either nothing is cropped away by the
+  // viewport, or so little is that a tile would save nothing - the un-zoomed
+  // path stays exactly as it was.
+  function visibleRegion(): { x: number; y: number; w: number; h: number } | null {
+    const cv = canvasRef.current;
+    const box = stageMainRef.current;
+    if (!cv || !box) return null;
+    const cr = cv.getBoundingClientRect();
+    const sr = box.getBoundingClientRect();
+    if (cr.width < 1 || cr.height < 1) return null;
+    const x0 = (Math.max(cr.left, sr.left) - cr.left) / cr.width;
+    const y0 = (Math.max(cr.top, sr.top) - cr.top) / cr.height;
+    const x1 = (Math.min(cr.right, sr.right) - cr.left) / cr.width;
+    const y1 = (Math.min(cr.bottom, sr.bottom) - cr.top) / cr.height;
+    const x = Math.max(0, Math.min(1, x0));
+    const y = Math.max(0, Math.min(1, y0));
+    const w = Math.max(0, Math.min(1, x1) - x);
+    const h = Math.max(0, Math.min(1, y1) - y);
+    if (w <= 0 || h <= 0) return null;
+    // A little margin, so a small pan doesn't immediately fall off the tile.
+    const mx = Math.min(w * 0.08, (1 - w) / 2);
+    const my = Math.min(h * 0.08, (1 - h) / 2);
+    const out = { x: x - mx, y: y - my, w: w + 2 * mx, h: h + 2 * my };
+    // Nearly the whole frame: not worth a tile (and the server refuses it too).
+    if (out.w * out.h > 0.8) return null;
+    return out;
+  }
+
+  // Which render tier the picture on screen actually needs, or null when what is
+  // already drawn covers it.
+  //
+  // The canvas's on-screen size in DEVICE pixels is the whole question: a tier
+  // that is smaller than that is soft, one that is bigger is work nobody can
+  // see. Answering it once, before rendering, is what replaced the old climb
+  // through every rung - see the settle below.
+  //
+  // `paintedPx` is the long edge of the whole frame on the canvas in question.
+  // The compare view's other half is shown at the edited canvas's size (CSS in
+  // split, the same fit in pair), so it is judged against the same on-screen
+  // size - only against its OWN painted frame, which can lag the edit's.
+  function targetTier(paintedPx = paintedPxRef.current): "full" | "ultra" | "native" | null {
+    const cv = canvasRef.current;
+    if (!cv || !paintedPx) return null;
+    const dpr = window.devicePixelRatio || 1;
+    const shown = Math.max(
+      (parseFloat(cv.style.width) || 0) * scaleRef.current * dpr,
+      (parseFloat(cv.style.height) || 0) * scaleRef.current * dpr
+    );
+    // A pixel of slack: rounding in fitCanvasToStage must not trigger a render.
+    if (shown <= paintedPx + 1) return null;
+    if (shown <= FULL_TIER_PX) return "full";
+    if (shown <= ULTRA_TIER_PX) return "ultra";
+    // Past ultra, but only worth the native tier when the user is actually
+    // zoomed IN. At fit view on a big hi-dpi screen the canvas can be shown
+    // wider than the ultra tier while the whole frame is still on screen -
+    // and then there is no region to cut the render down to, so "native" means
+    // the entire full-resolution frame: seconds of decode and pipeline for
+    // detail at a size nobody is inspecting. Ultra is the ceiling there.
+    return scaleRef.current > 1.001 ? "native" : "ultra";
+  }
+
   // The dirty-token at the moment the pointer went down, so pointer-up can tell a
   // real drag (edits changed → snap to the accurate render) from a plain click
   // that happened to land in the editor (nothing changed → skip the re-render).
   const dragBaseToken = useRef(0);
   const previewEditsLatest = useRef<ImageEdits | null>(null);
+  // The edit state whose scrub frame is currently on the canvas (null when the
+  // canvas shows an accurate/settled frame). Lets the pointer-up render skip
+  // the "quick scrub first" step when the drag's own last frame already shows
+  // exactly this state - one less fetch and one less resolution swap.
+  const lastScrubEditsRef = useRef<ImageEdits | null>(null);
   const dirtyToken = useRef(0);
   const renderedToken = useRef(-1);
   const pumping = useRef(false);
@@ -732,6 +858,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   //  - "pair":  the two as separate pictures side by side. Half the size, but
   //    nothing is hidden - which is what you want for framing and colour.
   const [compareMode, setCompareMode] = useState<"off" | "split" | "pair">("off");
+  // What every compare shows against. By default the untouched original; Capture
+  // pins the edit as it stands, so a later tweak can be judged against THAT
+  // rather than against the bare photo - Reset goes back to the original.
+  const [snapshot, setSnapshot] = useState<ImageEdits | null>(null);
+  useEffect(() => setSnapshot(null), [image.id]);
   const split = compareMode === "split";
   const pair = compareMode === "pair";
   const [splitPos, setSplitPos] = useState(0.5);
@@ -748,6 +879,16 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Scroll/pinch to zoom (toward cursor), drag to pan - same as the lightbox.
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panRef = useRef(pan);
+  // The pan a wheel-zoom gesture WANTS, before clampPan trims it for display.
+  // Anchoring each tick on the clamped pan compounds: once the clamp bites
+  // (early in a zoom, before the photo overhangs the viewport), the point
+  // under the cursor slips, and every further tick multiplies that slip by its
+  // zoom ratio - by 6x the aimed detail sat a hundred pixels from the cursor.
+  // Tracking the unclamped ideal keeps the anchor exact, and the moment the
+  // clamp has room the view converges back onto it.
+  const idealPanRef = useRef({ x: 0, y: 0 });
+  const lastWheelAtRef = useRef(0);
   const MIN_ZOOM = 0.2; // allow zooming out below fit
   const MAX_NATIVE_ZOOM = 4; // 400% of actual pixels, as in the lightbox
   const zoomed = scale > 1.001;
@@ -818,6 +959,7 @@ export function PhotoEditor({ image, onClose }: Props) {
   // the dirty check (against the pre-computed saved-state key) and the undo
   // history, which uses it as the identity of an edit state.
   const editsKey = useMemo(() => JSON.stringify(edits), [edits]);
+  const dirty = editsKey !== savedKey;
 
   // Undo/redo. The history keeps whole edit snapshots, so putting one back is
   // just writing every piece of edit state at once - see utils/editHistory for
@@ -881,10 +1023,28 @@ export function PhotoEditor({ image, onClose }: Props) {
   const peekRef = useRef<string | null>(null);
   peekRef.current = peekMaskId;
   const overlayActive = cropRectVisible || maskOverlayVisible || compareMode !== "off";
-  const previewEdits: ImageEdits = useMemo(() => {
-    if (compare) {
-      return neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion);
+  // The picture every compare is judged against, in the same frame as the
+  // preview: the CURRENT geometry with either neutral adjustments (the
+  // original) or the captured ones. Keeping the geometry current is what lets
+  // the split view lay the two over each other - and it means a crop or
+  // rotation made after capturing shows on both sides, never as a difference.
+  const baselineEdits: ImageEdits = useMemo(() => {
+    const shownCrop = cropMode ? null : crop;
+    const neutral = neutralEdits(rotation, shownCrop, flipH, flipV, straighten, perspH, perspV, distortion);
+    if (!snapshot) return neutral;
+    let adjustments = snapshot.adjustments;
+    // Masks are fractions of the cropped frame; the crop may have moved since
+    // the capture, so re-express them for the frame shown now.
+    if (adjustments.masks.length && JSON.stringify(snapshot.crop ?? null) !== JSON.stringify(shownCrop)) {
+      adjustments = { ...adjustments, masks: remapMasksForCrop(adjustments.masks, snapshot.crop, shownCrop, frameBase()) };
     }
+    // Same rule as the edit below: no white frame under an overlay.
+    if (overlayActive && adjustments.frame_width) adjustments = { ...adjustments, frame_width: 0 };
+    return { ...neutral, adjustments };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot, rotation, crop, cropMode, flipH, flipV, straighten, perspH, perspV, distortion, overlayActive]);
+  const previewEdits: ImageEdits = useMemo(() => {
+    if (compare) return baselineEdits;
     let adjustments = overlayActive && adj.frame_width ? { ...adj, frame_width: 0 } : adj;
     // Crop mode shows the UNCROPPED frame, and mask coordinates are fractions of
     // the cropped one - so re-express them for this preview or every mask's
@@ -895,23 +1055,22 @@ export function PhotoEditor({ image, onClose }: Props) {
     }
     return { ...edits, crop: cropMode ? null : crop, adjustments };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [edits, compare, cropMode, overlayActive]);
-  // The untouched photo in the same frame as the preview above it, which is what
-  // the split view's left half shows.
-  const origEdits: ImageEdits = useMemo(
-    () => neutralEdits(rotation, cropMode ? null : crop, flipH, flipV, straighten, perspH, perspV, distortion),
-    [rotation, crop, cropMode, flipH, flipV, straighten, perspH, perspV, distortion]
-  );
+  }, [edits, compare, cropMode, overlayActive, baselineEdits]);
 
   // Always hand the pump the newest edit state (read from a ref so the pump and
   // the pointer-up handler don't close over a stale value).
   previewEditsLatest.current = previewEdits;
   compareRef.current = compare;
   scaleRef.current = scale;
+  panRef.current = pan;
   wantOrigRef.current = compareMode !== "off";
   pairRef.current = pair;
-  const origEditsLatest = useRef(origEdits);
-  origEditsLatest.current = origEdits;
+  const baselineLatest = useRef(baselineEdits);
+  baselineLatest.current = baselineEdits;
+  // browse=1 (auto-exposed raw) is only right for the true original: a captured
+  // state is shown as the editor showed it when it was captured.
+  const baselineBrowseRef = useRef(true);
+  baselineBrowseRef.current = !snapshot;
 
   // Paint a rendered JPEG onto the canvas, sizing it to the bitmap and
   // (optionally) refreshing the histogram. `seq` guards against a late or
@@ -942,10 +1101,20 @@ export function PhotoEditor({ image, onClose }: Props) {
       }
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
+      paintedPxRef.current = Math.max(bmp.width, bmp.height);
       pickSnapRef.current = null; // a new frame - the picker's copy is stale
       if (withHistogram) {
-        const bins = computeHistBinsFromBitmap(bmp);
-        if (bins) setHistBins(bins);
+        // The readback itself is cheap (downscaled scratch canvas), but the
+        // setHistBins state write re-renders the whole editor - per scrub
+        // frame that stacked onto the per-pointer-move renders and read as a
+        // jerky drag. Track the sliders at ~7 updates/s while the pointer is
+        // down; every settled frame still refreshes it immediately.
+        const now = performance.now();
+        if (!scrubbing.current || now - histAtRef.current >= 150) {
+          histAtRef.current = now;
+          const bins = computeHistBinsFromBitmap(bmp);
+          if (bins) setHistBins(bins);
+        }
       }
     } finally {
       // Release the decoded bitmap immediately - relying on GC leaked dozens of
@@ -954,6 +1123,58 @@ export function PhotoEditor({ image, onClose }: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Composite a native region render INTO the frame on the canvas. One canvas,
+  // one transform: the zoomed sharpness becomes part of the picture itself, so
+  // panning, zooming and every overlay keep working on it with nothing to
+  // mis-register. (The previous design laid the tile over the canvas as its own
+  // transformed element, and every disagreement between the two showed up as
+  // the image jumping around.)
+  //
+  // The canvas bitmap is grown to the native frame's size the first time a tile
+  // arrives: the old frame is stretched up as the soft ground, and each tile is
+  // then blitted at the exact pixel box the server named (X-Rollfilm-Frame /
+  // X-Rollfilm-Box) - the parts you look at sharpen, the rest stays the soft
+  // upscale until you look there.
+  // `token` is dirtyToken at the moment the tile's fetch STARTED. A tile only
+  // ever patches part of the picture, so unlike a whole frame (which a newer
+  // render simply replaces) a stale one leaves a rectangle of another edit or
+  // peek state embedded in the photo. The seq guard alone has windows - the
+  // settle doesn't own a seq, and a state change can land between a fetch
+  // resolving and the pump's next iteration claiming a new one - so a tile is
+  // additionally dropped whenever ANY edit or peek change happened since it
+  // was asked for.
+  const drawRegionIntoFrame = useCallback(
+    async (blob: ServedBlob, seq: number, token: number) => {
+      if (!blob.frame || !blob.box) return;
+      const bmp = await createImageBitmap(blob);
+      try {
+        if (seq !== renderSeq.current || token !== dirtyToken.current) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d")!;
+        if (canvas.width !== blob.frame.w || canvas.height !== blob.frame.h) {
+          // Keep the current picture as the ground: snapshot, grow, stretch.
+          const ground = await createImageBitmap(canvas);
+          if (seq !== renderSeq.current || token !== dirtyToken.current) {
+            ground.close();
+            return;
+          }
+          canvas.width = blob.frame.w;
+          canvas.height = blob.frame.h;
+          ctx.drawImage(ground, 0, 0, blob.frame.w, blob.frame.h);
+          ground.close();
+          fitCanvasToStage();
+        }
+        ctx.drawImage(bmp, blob.box.x, blob.box.y);
+        pickSnapRef.current = null;
+      } finally {
+        bmp.close();
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
 
   // Paint the compare view's original onto its own canvas, and keep the frame
   // that was rendered: switching between split and side-by-side moves that
@@ -972,7 +1193,39 @@ export function PhotoEditor({ image, onClose }: Props) {
       cv.width = bmp.width;
       cv.height = bmp.height;
       cv.getContext("2d")!.drawImage(bmp, 0, 0);
+      origPaintedPxRef.current = Math.max(bmp.width, bmp.height);
       fitCanvasToStage();
+    } finally {
+      bmp.close();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // The original's counterpart to drawRegionIntoFrame: a native tile composited
+  // into the frame on ITS canvas, grown to the native size with the soft frame
+  // stretched underneath. Guarded by origToken, since that half only changes
+  // when the baseline does - and by the canvas's identity, since a switch
+  // between split and pair hands React a fresh element mid-fetch.
+  const drawRegionIntoOriginal = useCallback(async (blob: ServedBlob, token: number) => {
+    if (!blob.frame || !blob.box) return;
+    const cv = origCanvasRef.current;
+    if (!cv) return;
+    const bmp = await createImageBitmap(blob);
+    try {
+      if (token !== origToken.current || origCanvasRef.current !== cv) return;
+      const ctx = cv.getContext("2d")!;
+      if (cv.width !== blob.frame.w || cv.height !== blob.frame.h) {
+        const ground = await createImageBitmap(cv);
+        if (token !== origToken.current || origCanvasRef.current !== cv) {
+          ground.close();
+          return;
+        }
+        cv.width = blob.frame.w;
+        cv.height = blob.frame.h;
+        ctx.drawImage(ground, 0, 0, blob.frame.w, blob.frame.h);
+        ground.close();
+        fitCanvasToStage();
+      }
+      ctx.drawImage(bmp, blob.box.x, blob.box.y);
     } finally {
       bmp.close();
     }
@@ -1006,34 +1259,71 @@ export function PhotoEditor({ image, onClose }: Props) {
       const fctrl = new AbortController();
       fullAbortRef.current = fctrl;
       try {
-        // Climb the quality ladder one rung at a time, re-checking after each
-        // painted frame whether the photo is STILL being shown upscaled - so it
-        // stops the moment the picture on screen covers its own pixels, and each
-        // rung is a visible improvement rather than one long stall.
+        // ONE render, at the size the picture is actually being shown at.
         //
-        // On the test file (40MP Fuji raw): "full" is ~1.0s, "ultra" ~2.2s for
-        // no extra decode at all (it's the size the half-size demosaic already
-        // hands back - the old ladder threw those pixels away), and "native" is
-        // 13.6s of decode plus 18.4s of pipeline. So a hi-dpi fit view now
-        // settles at "ultra" and never pays for native; only a real zoom, where
-        // nothing else can supply the detail, goes the whole way.
-        //
-        // Same abort controller throughout: any new edit or drag cancels the
-        // rest of the climb, and the seq guard drops a rung whose frame was
-        // superseded while it rendered.
-        for (const tier of ["full", "ultra", "native"] as const) {
+        // This used to climb full -> ultra -> native, re-checking after each
+        // painted frame whether the photo was still upscaled. Every rung
+        // repainted the whole canvas, so a single settle could swap the picture
+        // three times - visible as the image "breathing" after every edit, and
+        // the two lower rungs were thrown away by the one above seconds later.
+        // The size that is needed is known up front from the canvas's own
+        // on-screen size, so it is asked for directly and painted once.
+        const tier = targetTier();
+        // Which of the two halves still needs work: the settle is worth
+        // running for the original alone, e.g. when a compare mode is entered
+        // over an edit that is already sharp.
+        const otier = wantOrigRef.current ? targetTier(origPaintedPxRef.current) : null;
+        let rearm = false;
+        if (tier) {
+          // Native is the only tier the user can be zoomed far enough into for
+          // most of the frame to be off screen, and the only one where that
+          // matters: it renders at true resolution, where the whole frame of a
+          // 40MP raw is ~14s of decode plus ~18s of pipeline. Cut to what is
+          // visible it is a fraction of that. At fit view the region is null and
+          // nothing about the render changes.
+          const region = tier === "native" ? visibleRegion() : null;
+          const dtoken = dirtyToken.current;
           const blob = await api.images.editorPreview(
-            image.id, previewEditsLatest.current!, fctrl.signal, tier, false, peekRef.current
+            image.id, previewEditsLatest.current!, fctrl.signal, tier, false, peekRef.current,
+            region
           );
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
-          await drawBlob(blob, seq, false, previewEditsLatest.current!.crop);
-          if (!isUpscaled()) break;
+          // The server answers a native request from the tier below while the
+          // full-resolution base is still decoding - nobody is made to wait out
+          // a 20s decode. What came back is a whole frame, so it goes on the
+          // canvas, and the sharp tile is fetched once the base has landed.
+          const downgraded = tier === "native" && blob.servedTier !== "native";
+          if (region && !downgraded && blob.frame) await drawRegionIntoFrame(blob, seq, dtoken);
+          else await drawBlob(blob, seq, false, previewEditsLatest.current!.crop);
+          rearm ||= downgraded;
+        }
+        // The compare view's other half is held to the same standard: whatever
+        // the edit is shown at, the original / snapshot beside it is refined to
+        // as well - a comparison against a soft picture judges the sharpening,
+        // grain and noise of the edit against nothing. Rendered AFTER the edit
+        // rather than alongside it: the server keeps one render per image, and
+        // two in flight would cancel each other (see the pump).
+        if (otier && wantOrigRef.current) {
+          const oregion = otier === "native" ? visibleRegion() : null;
+          const otoken = origToken.current;
+          const oblob = await api.images.editorPreview(
+            image.id, baselineLatest.current, fctrl.signal, otier, baselineBrowseRef.current, null, oregion
+          );
+          if ((scrubbing.current && !compareRef.current) || otoken !== origToken.current) return;
+          const odowngraded = otier === "native" && oblob.servedTier !== "native";
+          if (oregion && !odowngraded && oblob.frame) await drawRegionIntoOriginal(oblob, otoken);
+          else await drawOriginal(oblob);
+          rearm ||= odowngraded;
+        }
+        if (rearm) {
+          clearTimeout(settleTimer.current);
+          settleTimer.current = window.setTimeout(() => scheduleSettleRef.current(), 2500);
         }
       } catch {
         // Non-fatal: the accurate preview is already on screen.
       }
     }, 350);
-  }, [image.id, drawBlob]);
+  }, [image.id, drawBlob, drawOriginal, drawRegionIntoOriginal]);
   // Re-entry point for the re-arm above (scheduleSettle can't name itself).
   const scheduleSettleRef = useRef<() => void>(() => {});
   scheduleSettleRef.current = scheduleSettle;
@@ -1068,7 +1358,13 @@ export function PhotoEditor({ image, onClose }: Props) {
           try {
             // browse=1: a raw's "original" is the auto-exposed picture the
             // library shows, not the editor's deliberately dark native base.
-            const blob = await api.images.editorPreview(image.id, origEditsLatest.current, octrl.signal, "fast", true);
+            const blob = await api.images.editorPreview(
+              image.id,
+              baselineLatest.current,
+              octrl.signal,
+              "fast",
+              baselineBrowseRef.current
+            );
             await drawOriginal(blob);
           } catch {
             // Non-fatal - the original half keeps whatever it had. Marked
@@ -1087,31 +1383,50 @@ export function PhotoEditor({ image, onClose }: Props) {
         fullAbortRef.current?.abort();
         const ctrl = new AbortController();
         abortRef.current = ctrl;
+        // Zoomed in, the live frames render only the visible part of the
+        // frame, cut from the native base (once the settle has warmed it) -
+        // sharp where the user is actually looking instead of a whole 1600px
+        // frame stretched across the viewport. The server answers with a whole
+        // frame when a tile isn't possible (base still decoding, geometry op
+        // active), and `frame` on the blob says which one came back. Peek rides
+        // along: the zebra is computed against the whole frame server-side, so
+        // a peeked tile matches the peeked frame it lands in.
+        const region = scaleRef.current > 1.001 ? visibleRegion() : null;
         try {
           // Progressive feedback: when the accurate tier has been slow, show a
           // scrub frame of this edit state right away, then let the accurate
           // render replace it. Costs one cheap extra render; turns "the editor
-          // is stuck" into "instant preview, sharpens a moment later".
-          if (!scrub && slowAccurate.current) {
+          // is stuck" into "instant preview, sharpens a moment later". Skipped
+          // when the canvas already shows this exact state's scrub frame (the
+          // normal case right after a slider drag) - re-fetching it would only
+          // add a round trip and a visible swap.
+          if (!scrub && slowAccurate.current && lastScrubEditsRef.current !== edits) {
             const quick = await api.images.editorPreview(
-              image.id, edits, ctrl.signal, "scrub", false, peekRef.current
+              image.id, edits, ctrl.signal, "scrub", false, peekRef.current,
+              region, scaleRef.current > 1.001
             );
-            await drawBlob(quick, seq, !peekRef.current, edits.crop);
+            if (region && quick.frame) await drawRegionIntoFrame(quick, seq, token);
+            else await drawBlob(quick, seq, !peekRef.current, edits.crop);
             setLoading(false);
             setReady(true);
           }
-          // The histogram updates on every frame, scrub frames included, so it
-          // tracks the sliders live - cheap now that it reads a downscaled
-          // scratch canvas instead of the full preview canvas.
+          // The histogram tracks the sliders live - throttled during a drag
+          // (see drawBlob) so the readback + re-render never outrun the frames.
           const t0 = performance.now();
           const blob = await api.images.editorPreview(
-            image.id, edits, ctrl.signal, scrub ? "scrub" : "fast", false, peekRef.current
+            // Zoomed in, whole-frame scrub renders size up to the accurate
+            // base (see ?zoomed=1) - the fallback while a tile isn't possible.
+            image.id, edits, ctrl.signal, scrub ? "scrub" : "fast", false, peekRef.current,
+            region, scaleRef.current > 1.001
           );
           if (!scrub) slowAccurate.current = performance.now() - t0 > 300;
           // A marked frame is pink candy-stripes over the photo, so it must not
           // be what the histogram reads - it keeps the last clean frame's bins
           // until the marking goes away, rather than showing the zebra's colour.
-          await drawBlob(blob, seq, !peekRef.current, edits.crop);
+          // A tile isn't the whole frame either, so it keeps them too.
+          if (region && blob.frame) await drawRegionIntoFrame(blob, seq, token);
+          else await drawBlob(blob, seq, !peekRef.current, edits.crop);
+          lastScrubEditsRef.current = scrub ? edits : null;
           setError(null);
           setLoading(false);
           setReady(true);
@@ -1131,7 +1446,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     // full-quality one is on its way. Called mid-drag it costs nothing, because
     // the settle re-arms itself while a pointer is down instead of rendering.
     scheduleSettle();
-  }, [image.id, drawBlob, drawOriginal, scheduleSettle]);
+  }, [image.id, drawBlob, drawRegionIntoFrame, drawOriginal, scheduleSettle]);
   pumpRef.current = () => void pump();
 
   // Kick the pump whenever the edit state changes (or the image switches).
@@ -1148,18 +1463,22 @@ export function PhotoEditor({ image, onClose }: Props) {
   // place. Either way the pump does the work (see its original branch).
   useEffect(() => {
     origToken.current++;
-  }, [origEdits, image.id]);
+  }, [baselineEdits, image.id]);
 
   useEffect(() => {
     if (compareMode !== "off") void pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compareMode, origEdits, image.id]);
+  }, [compareMode, baselineEdits, image.id]);
 
   // Switching between split and side-by-side moves the original's canvas in the
   // DOM (overlay vs. its own pane), so the frame has to be put back on the new
   // element - and both panes re-fitted, since "pair" halves the room each gets.
   useEffect(() => {
-    void paintOriginal();
+    void paintOriginal().then(() => {
+      // The frame put back is the whole-frame render; any native tiles it had
+      // are gone with the old element, so the settle fetches them again.
+      if (compareMode !== "off") scheduleSettleRef.current();
+    });
     fitCanvasToStage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compareMode]);
@@ -1169,10 +1488,13 @@ export function PhotoEditor({ image, onClose }: Props) {
   // stretched. Keyed on `scale` rather than a zoomed/not flag, so going 2x -> 6x
   // fetches the resolution that step now needs; the settle's own delay coalesces
   // a continuous wheel-zoom into one render.
+  // Keyed on the pan as well: with zoomed sharpness composited into the frame
+  // region by region, dragging the picture brings soft ground into view, and
+  // that view is a render nobody has asked for yet.
   useEffect(() => {
     if (isUpscaled()) scheduleSettle();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scale, scheduleSettle]);
+  }, [scale, pan.x, pan.y, scheduleSettle]);
 
   // A pointer held down anywhere over the editor means a control is being
   // dragged (slider/curve/wheel/crop/mask handle) - render the scrub tier until
@@ -1221,12 +1543,31 @@ export function PhotoEditor({ image, onClose }: Props) {
     };
   }, [image.id]);
 
-  // The framed image changes size on geometry changes / crop mode, so drop back
-  // to fit then to keep zoom/pan sane.
+  // The framed image really does change size when the geometry changes, so fit
+  // is the only sane place to land.
   useEffect(() => {
     resetZoom();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, rotation, crop, cropMode]);
+  }, [ready, rotation, crop]);
+
+  // Opening Transform re-frames the canvas for the crop box, so it starts at
+  // fit. LEAVING it must not - and neither must any other group change: a zoom
+  // is a place in the photo you are working at, and it survived the move
+  // between every other group already. This used to hang off cropMode, which
+  // turns off on the way out of Transform as well as on the way in, so a zoom
+  // set while framing was thrown away the moment you clicked Colour or Details.
+  useEffect(() => {
+    if (openGroup === "transform") resetZoom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openGroup]);
+
+  // Arming the crop box on a photo that is already cropped swaps the cropped
+  // picture for the whole one, which is a genuine change of what is on the
+  // canvas.
+  useEffect(() => {
+    if (cropMode) resetZoom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cropMode]);
 
   // The wheel listener below is attached once and would otherwise close over
   // the first render's ceiling.
@@ -1242,19 +1583,37 @@ export function PhotoEditor({ image, onClose }: Props) {
       e.preventDefault();
       const wrap = wrapRef.current;
       if (!wrap) return;
-      const rect = wrap.getBoundingClientRect();
+      // Side by side: a wheel over the original pane must anchor the point
+      // under the cursor THERE. Both panes are the same shrink-wrapped box, so
+      // only the centre the offsets are measured from changes.
+      let rect = wrap.getBoundingClientRect();
+      const origPane = origCanvasRef.current?.parentElement;
+      if (pairRef.current && origPane) {
+        const or = origPane.getBoundingClientRect();
+        if (e.clientX >= or.left && e.clientX <= or.right) rect = or;
+      }
       const dx = e.clientX - (rect.left + rect.width / 2);
       const dy = e.clientY - (rect.top + rect.height / 2);
-      setScale((prev) => {
-        const factor = Math.exp(-e.deltaY * 0.0015);
-        const next = Math.min(zoomLimitRef.current(), Math.max(MIN_ZOOM, prev * factor));
-        setPan((pp) =>
-          next <= 1.001
-            ? { x: 0, y: 0 }
-            : clampPan({ x: dx - (dx - pp.x) * (next / prev), y: dy - (dy - pp.y) * (next / prev) }, next)
-        );
-        return next;
-      });
+      // A pause long enough to be a new gesture (or a pan-drag in between):
+      // re-seed the ideal from wherever the view actually is now.
+      const now = performance.now();
+      if (now - lastWheelAtRef.current > 250) idealPanRef.current = { ...panRef.current };
+      lastWheelAtRef.current = now;
+      const prev = scaleRef.current;
+      const next = Math.min(zoomLimitRef.current(), Math.max(MIN_ZOOM, prev * Math.exp(-e.deltaY * 0.0015)));
+      const ratio = next / prev;
+      const ideal =
+        next <= 1.001
+          ? { x: 0, y: 0 }
+          : { x: dx - (dx - idealPanRef.current.x) * ratio, y: dy - (dy - idealPanRef.current.y) * ratio };
+      idealPanRef.current = ideal;
+      const shown = next <= 1.001 ? ideal : clampPan(ideal, next);
+      // The refs lead, state follows: the next wheel event may arrive before
+      // React re-renders, and it must compute from THIS tick's values.
+      scaleRef.current = next;
+      panRef.current = shown;
+      setScale(next);
+      setPan(shown);
     }
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -1378,6 +1737,23 @@ export function PhotoEditor({ image, onClose }: Props) {
 
   const busy = saveEdits.isPending || saveCopy.isPending;
 
+  // Leaving with unsaved edits asks first. Escape and the Back button both
+  // route through here; the save paths call onClose directly once the write
+  // has landed, so they never see the prompt.
+  async function requestClose() {
+    if (dirty) {
+      const leave = await dialogs.confirm({
+        title: "Discard unsaved edits?",
+        message: "Your changes haven't been saved. Leave the editor without saving?",
+        confirmLabel: "Discard edits",
+        cancelLabel: "Keep editing",
+        danger: true,
+      });
+      if (!leave) return;
+    }
+    onClose();
+  }
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -1393,7 +1769,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         else if (cropMode) setOpenGroup("");
         else if (saveCopyOpen) {
           if (!saveCopy.isPending) setSaveCopyOpen(false);
-        } else if (!busy) onClose();
+        } else if (!busy) void requestClose();
         return;
       }
 
@@ -1441,7 +1817,7 @@ export function PhotoEditor({ image, onClose }: Props) {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, undo, redo]);
+  }, [onClose, busy, dirty, cropMode, maskDrawMode, colorPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, undo, redo]);
 
   function fractionAt(clientX: number, clientY: number) {
     const box = canvasRef.current!.getBoundingClientRect();
@@ -2476,15 +2852,21 @@ export function PhotoEditor({ image, onClose }: Props) {
       Math.abs(drawn!.y - crop.y) > 1e-4 ||
       Math.abs(drawn!.width - crop.width) > 1e-4 ||
       Math.abs(drawn!.height - crop.height) > 1e-4);
-  const dirty = editsKey !== savedKey;
   const allNeutral = useMemo(() => editsAreNeutral(edits), [edits]);
+  // Both sides of a compare would be the same picture: neutral edits against
+  // the original, or adjustments unchanged since they were captured (the
+  // geometry is shared by both sides, so it can't differ - see baselineEdits).
+  const nothingToCompare = useMemo(
+    () => (snapshot ? JSON.stringify(adj) === JSON.stringify(snapshot.adjustments) : allNeutral),
+    [snapshot, adj, allNeutral]
+  );
 
-  // Nothing left to compare once the edits are back to neutral - both sides
-  // would be the same picture, and the toggles disable themselves there, so the
-  // mode has to step out on its own rather than leave the user stuck inside it.
+  // Nothing left to compare - the toggles disable themselves there, so the mode
+  // has to step out on its own rather than leave the user stuck inside it.
   useEffect(() => {
-    if (allNeutral) setCompareMode("off");
-  }, [allNeutral]);
+    if (nothingToCompare) setCompareMode("off");
+  }, [nothingToCompare]);
+  const baselineLabel = snapshot ? "Snapshot" : "Original";
 
   // The selected mask (if any) and its index-0 sub-mask - what the panel's mask
   // editor is bound to.
@@ -2541,7 +2923,7 @@ export function PhotoEditor({ image, onClose }: Props) {
               aria-hidden
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}
             />
-            <span className="split-tag split-tag-left">Original</span>
+            <span className="split-tag split-tag-left">{baselineLabel}</span>
           </div>
         )}
         <div
@@ -2686,6 +3068,11 @@ export function PhotoEditor({ image, onClose }: Props) {
               );
             }}
           />
+          {/* The zoomed detail tile. Positioned in fractions of the canvas and
+              carrying the canvas transform, so it lands on exactly the part of
+              the photo it was rendered for. Purely a display layer: it never
+              takes the pointer, and every interaction still talks to the canvas
+              underneath. */}
           {/* Split view: the original, drawn over the left of the edited canvas
               up to the divider. It carries the canvas transform so the two
               halves stay registered under zoom/pan, and the clip is applied
@@ -2731,7 +3118,7 @@ export function PhotoEditor({ image, onClose }: Props) {
             <>
               {/* In "pair" the original has its own pane and its own label, so
                   this side is only ever the edit. */}
-              {split && <span className="split-tag split-tag-left">Original</span>}
+              {split && <span className="split-tag split-tag-left">{baselineLabel}</span>}
               <span className="split-tag split-tag-right">Edited</span>
             </>
           )}
@@ -2813,7 +3200,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         <div className="editor-bg-toggle">
           <button
             className="btn btn-sm back-btn stage-back-btn"
-            onClick={onClose}
+            onClick={() => void requestClose()}
             disabled={busy}
             title={busy ? "Saving…" : "Back (Esc)"}
           >
@@ -2830,41 +3217,75 @@ export function PhotoEditor({ image, onClose }: Props) {
                 zoomToNative,
               }}
             />
-            <button
-              className={`btn btn-sm editor-compare-btn${compare ? " active" : ""}`}
-              onMouseDown={() => setCompare(true)}
-              onMouseUp={() => setCompare(false)}
-              onMouseLeave={() => setCompare(false)}
-              // A compare mode already shows the original; swapping the whole
-              // canvas under it would only make both sides the same picture.
-              disabled={allNeutral || compareMode !== "off"}
-              title="Hold to compare with the original"
-            >
-              {compare ? "Showing original" : "Compare"}
-            </button>
-            {/* The two ways to keep the original on screen. Each button toggles
-                its own mode, so clicking the lit one goes back to just the edit. */}
-            <span className="segmented editor-compare-modes">
+            {/* Kept as one group so the row never wraps between the baseline
+                switch and the compares it feeds. */}
+            <span className="editor-compare-group">
+              {/* What the compares show against. Captioned like Background and
+                  Zoom beside it - two bare buttons here read as edit actions.
+                  "Snapshot" pins the edit as it stands (clicking it again pins
+                  the newer state); "Original" lets the snapshot go. */}
+              <span className="labeled-control">
+                <span className="control-caption">Compare with</span>
+                <span className="segmented editor-baseline" role="group" aria-label="Compare with">
+                  <button
+                    className={snapshot ? "" : "active"}
+                    aria-pressed={!snapshot}
+                    onClick={() => setSnapshot(null)}
+                    title="Compare with the untouched photo"
+                  >
+                    Original
+                  </button>
+                  <button
+                    className={snapshot ? "active" : ""}
+                    aria-pressed={!!snapshot}
+                    onClick={() => setSnapshot(edits)}
+                    title={
+                      snapshot
+                        ? "Comparing with the edit as it was when you took the snapshot - click again to snapshot the edit as it is now"
+                        : "Take a snapshot of the edit as it is now, and compare later changes with it instead of the original"
+                    }
+                  >
+                    <IconCamera size={13} /> Snapshot
+                  </button>
+                </span>
+              </span>
+              <span className="editor-toolbar-sep" aria-hidden />
               <button
-                className={split ? "active" : ""}
-                aria-pressed={split}
-                aria-label="Compare split by a draggable line"
-                disabled={allNeutral}
-                onClick={() => setCompareMode((m) => (m === "split" ? "off" : "split"))}
-                title="Split: original and edit on the same picture, divided by a line you can drag"
+                className={`btn btn-sm editor-compare-btn${compare ? " active" : ""}`}
+                onMouseDown={() => setCompare(true)}
+                onMouseUp={() => setCompare(false)}
+                onMouseLeave={() => setCompare(false)}
+                // A compare mode already shows the baseline; swapping the whole
+                // canvas under it would only make both sides the same picture.
+                disabled={nothingToCompare || compareMode !== "off"}
+                title={snapshot ? "Hold to compare with the snapshot" : "Hold to compare with the original"}
               >
-                <IconSplit size={14} />
+                {compare ? `Showing ${baselineLabel.toLowerCase()}` : "Compare"}
               </button>
-              <button
-                className={pair ? "active" : ""}
-                aria-pressed={pair}
-                aria-label="Compare side by side"
-                disabled={allNeutral}
-                onClick={() => setCompareMode((m) => (m === "pair" ? "off" : "pair"))}
-                title="Side by side: original and edit as two pictures, nothing hidden"
-              >
-                <IconSideBySide size={14} />
-              </button>
+              {/* The two ways to keep the baseline on screen. Each button toggles
+                  its own mode, so clicking the lit one goes back to just the edit. */}
+              <span className="segmented editor-compare-modes">
+                <button
+                  className={split ? "active" : ""}
+                  aria-pressed={split}
+                  aria-label="Compare split by a draggable line"
+                  disabled={nothingToCompare}
+                  onClick={() => setCompareMode((m) => (m === "split" ? "off" : "split"))}
+                  title={`Split: ${baselineLabel.toLowerCase()} and edit on the same picture, divided by a line you can drag`}
+                >
+                  <IconSplit size={14} />
+                </button>
+                <button
+                  className={pair ? "active" : ""}
+                  aria-pressed={pair}
+                  aria-label="Compare side by side"
+                  disabled={nothingToCompare}
+                  onClick={() => setCompareMode((m) => (m === "pair" ? "off" : "pair"))}
+                  title={`Side by side: ${baselineLabel.toLowerCase()} and edit as two pictures, nothing hidden`}
+                >
+                  <IconSideBySide size={14} />
+                </button>
+              </span>
             </span>
             </>
           )}

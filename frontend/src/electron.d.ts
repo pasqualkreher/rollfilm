@@ -35,6 +35,16 @@ declare global {
         removed: string[];
         failed: { path: string; error: string }[];
       }>;
+      /**
+       * Prints a finished HTML document (the album canvas) to a PDF at a
+       * location the user picks. Absent in builds that predate the export.
+       */
+      exportPdf?: (payload: {
+        html: string;
+        suggestedName: string;
+        widthMm: number;
+        heightMm: number;
+      }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
     };
   }
 }

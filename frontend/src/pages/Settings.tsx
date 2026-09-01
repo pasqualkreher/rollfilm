@@ -4,6 +4,7 @@ import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { BorgTestResult, ImmichSyncMode, ImmichTestResult } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
 import { IconX } from "../components/Icons";
+import { useAppDialogs } from "../components/AppDialogs";
 import { skinInfo, useAppearance, type Appearance } from "../state/theme";
 import { useCorners } from "../state/corners";
 import { useTasks } from "../state/tasks";
@@ -310,6 +311,7 @@ const SMART_ALBUM_SECTIONS: { key: string; label: string; desc: string }[] = [
 
 export function Settings() {
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
   const { setBusyLabel } = useTasks();
   // Whether deleting a paired photo asks "only this file or the whole pair?".
   // Client-side view preference (see viewPrefs), not a server setting.
@@ -658,12 +660,27 @@ export function Settings() {
   });
   const setRawDecode = useMutation({
     mutationFn: (native: boolean) => api.settings.updateRawDecode(native),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       queryClient.setQueryData(["raw-decode-settings"], result);
-      // On-disk thumbnails/previews were baked under the old mode - rebuild them
-      // so the whole library reflects the change (the editor's in-memory base is
-      // already dropped server-side).
-      rebuildThumbnails.mutate();
+      // The saved setting already governs every RAW imported from now on and
+      // the editor (its in-memory base is dropped server-side). Thumbnails and
+      // previews on disk were baked under the old mode, and rebuilding them
+      // for a big library takes an hour or more - so offer that rather than
+      // forcing it on every flip of the switch.
+      const est = estimateText(photoCount, REBUILD_EST_KEY);
+      const rebuild = await dialogs.confirm({
+        title: "Apply to already-imported photos too?",
+        message:
+          "The setting is saved: RAWs you import from now on, and the photo editor, use it " +
+          "right away. Thumbnails and previews of the photos already in your library were " +
+          "made with the old setting, so they keep their current look until they are " +
+          "rebuilt. You can do that now" +
+          (est ? ` (${est})` : "") +
+          ' or any time later with "Rebuild all thumbnails" under Library maintenance.',
+        confirmLabel: "Rebuild thumbnails now",
+        cancelLabel: "Only new imports",
+      });
+      if (rebuild) rebuildThumbnails.mutate();
     },
   });
 
@@ -991,11 +1008,9 @@ export function Settings() {
           desc={
             rebuildThumbnails.isPending
               ? `Rebuilding thumbnails so the change applies to your library… ${rebuildProgressLine()}`
-              : `Changing this rebuilds thumbnails/previews so it applies to already-imported photos.${
-                  estimateText(photoCount, REBUILD_EST_KEY)
-                    ? ` ${estimateText(photoCount, REBUILD_EST_KEY)}`
-                    : ""
-                }`
+              : "Applies to RAWs you import from now on and to the editor right away. For " +
+                "photos already in your library you'll be asked whether to rebuild their " +
+                "thumbnails/previews, which can take a while."
           }
         />
       </Section>

@@ -4,9 +4,10 @@ import { api } from "../api/client";
 import { useAppDialogs } from "./AppDialogs";
 
 // Inline rename for one of the user's own albums: the name reads as plain text
-// until the parent switches `editing` on, then it becomes an input. Enter or
-// blur saves, Escape reverts. Smart albums are computed from the photos
-// themselves, so only these hand-made albums get a name to edit.
+// until the parent switches `editing` on - always from a rename control, never
+// from a click on the name itself - then it becomes an input. Enter or blur
+// saves, Escape reverts. Smart albums are computed from the photos themselves,
+// so only these hand-made albums get a name to edit.
 export function AlbumNameField({
   albumId,
   name,
@@ -14,7 +15,6 @@ export function AlbumNameField({
   onEditingChange,
   className,
   inputClassName,
-  clickToEdit = false,
 }: {
   albumId: string;
   name: string;
@@ -22,9 +22,6 @@ export function AlbumNameField({
   onEditingChange: (editing: boolean) => void;
   className?: string;
   inputClassName?: string;
-  // Whether the name itself starts a rename. Off inside an album card, where
-  // a click on the tile has to open the album instead.
-  clickToEdit?: boolean;
 }) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
@@ -55,6 +52,8 @@ export function AlbumNameField({
       await api.albums.update(albumId, { name: next });
       queryClient.invalidateQueries({ queryKey: ["albums"] });
       queryClient.invalidateQueries({ queryKey: ["album", albumId] });
+      // The Canvas Shelf card carries the album's name too.
+      queryClient.invalidateQueries({ queryKey: ["canvases"] });
       onEditingChange(false);
     } catch (e) {
       // Keep the box open with what was typed, so the name isn't lost.
@@ -65,14 +64,7 @@ export function AlbumNameField({
     }
   }
 
-  if (!editing) {
-    if (!clickToEdit) return <span className={className}>{name}</span>;
-    return (
-      <button type="button" className={className} title="Rename this album" onClick={() => onEditingChange(true)}>
-        {name}
-      </button>
-    );
-  }
+  if (!editing) return <span className={className}>{name}</span>;
 
   return (
     <input

@@ -1175,6 +1175,64 @@ ipcMain.handle("pm:pick-files", async () => {
 // Settings page: current library location, read-only.
 ipcMain.handle("pm:get-library-root", () => libraryRoot);
 
+// --- Canvas export ------------------------------------------------------------
+// The renderer hands over a finished HTML document (see canvasExport.ts) and
+// this prints it to a PDF in a window nobody sees. Chromium's own print engine
+// is what makes the PDF good: real page sizes, vector text with the fonts
+// embedded, the photos at full resolution. The page asks the app for those
+// photos one at a time and flags itself ready when the last one is in; that
+// can take a while for RAW files, so the wait is generous.
+const EXPORT_READY_TIMEOUT_MS = 30 * 60 * 1000;
+
+ipcMain.handle("pm:export-pdf", async (_event, payload) => {
+  const { html, suggestedName, widthMm, heightMm } = payload || {};
+  if (typeof html !== "string" || !html) return { ok: false, error: "Nothing to export" };
+  const picked = await dialog.showSaveDialog(mainWindow, {
+    title: "Save the layout as PDF",
+    defaultPath: suggestedName || "layout.pdf",
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
+
+  const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "rollfilm-export-"));
+  const file = path.join(dir, "layout.html");
+  fs.writeFileSync(file, html, "utf8");
+  const win = new BrowserWindow({
+    show: false,
+    width: 1200,
+    height: 900,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  try {
+    await win.loadFile(file);
+    const deadline = Date.now() + EXPORT_READY_TIMEOUT_MS;
+    for (;;) {
+      const ready = await win.webContents
+        .executeJavaScript("window.__rollfilmExportReady === true", true)
+        .catch(() => false);
+      if (ready) break;
+      if (Date.now() > deadline) throw new Error("Timed out waiting for the photos to render");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    const pdf = await win.webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: true,
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+      // Inches, in this Electron; the CSS @page rule above takes precedence
+      // anyway and this is the fallback should it ever be ignored.
+      pageSize: { width: Number(widthMm) / 25.4 || 8.27, height: Number(heightMm) / 25.4 || 11.69 },
+    });
+    fs.writeFileSync(picked.filePath, pdf);
+    return { ok: true, path: picked.filePath };
+  } catch (err) {
+    console.warn(`[main] canvas PDF export failed: ${err.message}`);
+    return { ok: false, error: err.message };
+  } finally {
+    if (!win.isDestroyed()) win.destroy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // Settings page: pick a new library folder. The backend only reads
 // LIBRARY_ROOT at launch, so after saving the new path the app relaunches
 // itself (the user confirms this first).

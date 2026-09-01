@@ -4,8 +4,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
 import type { BulkResetOptions, ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
+import { AlbumCanvas } from "../components/AlbumCanvas";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
-import { TagFilter } from "../components/TagFilter";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { AlbumPicker } from "../components/AlbumPicker";
@@ -48,6 +49,14 @@ export function AlbumDetail() {
   const [renaming, setRenaming] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const q = (searchParams.get("q") ?? "").trim();
+  // Canvas or grid. The grid is the album's front door - an album is first of
+  // all its photos; the canvas is entered deliberately via the toolbar (or a
+  // "layout=canvas" link). In the URL like the filters, so leaving for a photo
+  // and coming back doesn't drop the user out of the mode they were in. An
+  // active search always means the grid: its results and banner live there,
+  // and a search whose results stay invisible behind the canvas is a search
+  // box that looks broken.
+  const canvasMode = searchParams.get("layout") === "canvas" && !q;
 
   const { data: album } = useQuery({
     queryKey: ["album", id],
@@ -80,6 +89,47 @@ export function AlbumDetail() {
   }, [immichBusy, setBusyLabel]);
   useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
+  // Switching to the canvas leaves grid-only modes behind: a selection made for
+  // a bulk edit has no meaning on a page you are designing.
+  function setLayoutMode(mode: "grid" | "canvas") {
+    const next = new URLSearchParams(searchParams);
+    if (mode === "canvas") next.set("layout", "canvas");
+    else next.delete("layout");
+    // A search is a grid-only mode too (see canvasMode): stepping onto the
+    // canvas with one active would silently show the whole album instead of
+    // the results, so it is cleared rather than carried.
+    if (mode === "canvas") next.delete("q");
+    setSearchParams(next, { replace: true });
+    if (mode === "canvas") {
+      setSelectMode(false);
+      clearSelection();
+    }
+  }
+
+  // Escape walks back to the albums, the same as it leaves the lightbox and
+  // the editor - one key out of any view. In select mode it first ends the
+  // selection (one step per press, like the canvas's own Escape ladder); in
+  // canvas mode the canvas runs that ladder itself and calls onExit at the
+  // end. A dialog on top captures Escape before this sees it.
+  useEffect(() => {
+    if (canvasMode) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const target = e.target as HTMLElement | null;
+      // A text box keeps its own Escape (backing out of a rename or search).
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      if (selectMode) {
+        setSelectMode(false);
+        setSelected(new Set());
+        setLastIndex(null);
+      } else {
+        navigate("/albums");
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canvasMode, selectMode, navigate]);
+
   const filters: LibraryFilters = {
     view_mode: viewMode,
     album_id: id,
@@ -107,6 +157,18 @@ export function AlbumDetail() {
   // lone RAW only when it has no JPEG sibling. The JPEG/RAW view-mode buttons
   // still give a flat, type-filtered list when the user wants just one kind.
   const orderedImages = viewMode === "combined" ? collapsePairs(images ?? []) : images ?? [];
+
+  // The canvas's own set: EVERY file in the album, with none of the bar's
+  // filters applied and nothing folded away. The filters narrow the strip of
+  // photos you pick FROM (see orderedImages, handed to the canvas separately);
+  // they must never narrow this one, because it is also what the canvas
+  // resolves its already-placed frames against - a filter that turned half the
+  // page into "Photo unavailable" would be a filter editing the design.
+  const { data: canvasFiles } = useQuery({
+    queryKey: ["images", { view_mode: "combined", album_id: id }],
+    queryFn: () => api.images.list({ view_mode: "combined", album_id: id }, { limit: 5000, offset: 0 }),
+    enabled: !!id && canvasMode,
+  });
 
   const sharedMeta = selectionSharedMeta(images ?? [], selected);
 
@@ -322,16 +384,6 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
-  // The album's tag rule: photos carrying any of these tags are members
-  // automatically. Saving refreshes the grid, the header count and the cards.
-  async function saveTagFilter(tags: string[]) {
-    if (!id) return;
-    await api.albums.update(id, { tag_filter: tags });
-    queryClient.invalidateQueries({ queryKey: ["album", id] });
-    queryClient.invalidateQueries({ queryKey: ["albums"] });
-    queryClient.invalidateQueries({ queryKey: ["images"] });
-  }
-
   async function addSelectedToImmich() {
     if (selected.size === 0) return;
     setImmichBusy(true);
@@ -346,100 +398,93 @@ export function AlbumDetail() {
     }
   }
 
+  /* The album's own row - Back, name, delete - lives UNDER the content in
+     both modes, the same as the editor's and the photo view's stage rows: the
+     name centred, Back flush left and the destructive action flush right,
+     both out of the row's flow so the centre stays centred. */
+  const albumBar = (
+    <h2 className="section-title album-bottom-bar">
+      {/* Same Back button as the photo view, the import review and the
+          editor - one look for leaving any view. */}
+      <Link to="/albums" className="btn btn-sm back-btn stage-back-btn" title="Back to albums">
+        <IconArrowLeft size={13} /> Back
+      </Link>
+      {album ? (
+        /* The album's name is the user's own - the pencil next to it renames
+           it right here. */
+        <>
+          <AlbumNameField
+            albumId={album.id}
+            name={album.name}
+            editing={renaming}
+            onEditingChange={setRenaming}
+            inputClassName="album-title-input"
+          />
+          {!renaming && (
+            <button
+              className="btn ghost btn-sm album-rename-btn"
+              title="Rename this album"
+              aria-label="Rename this album"
+              onClick={() => setRenaming(true)}
+            >
+              <IconPencil size={14} />
+            </button>
+          )}
+        </>
+      ) : (
+        "Album"
+      )}
+      {album && <span className="count-pill">{album.image_count} photos</span>}
+      {album && immichConfigured && immich?.sync_mode === "selective" && (
+        <label
+          className="filter-field filter-field-inline"
+          style={{ fontSize: 13, fontWeight: 400 }}
+          title="Mirror this album to Immich and upload its JPEGs"
+        >
+          <input
+            type="checkbox"
+            checked={album.immich_sync}
+            onChange={(e) => toggleAlbumImmichSync(e.target.checked)}
+          />{" "}
+          Sync to Immich
+        </label>
+      )}
+      {album && (
+        <button
+          className="btn quiet-danger btn-sm album-bottom-delete"
+          title="Delete this album - its photos stay in the library"
+          onClick={async () => {
+            // The canvas dies with the album - if it has one, the dialog says so.
+            const layout = await api.albums.getLayout(album.id).catch(() => null);
+            const hasCanvas = !!layout?.updated_at;
+            if (
+              !(await dialogs.confirm({
+                title: `Delete album “${album.name}”?`,
+                message: `Its ${album.image_count} photo(s) stay in your library.${
+                  hasCanvas ? " Its canvas and all kept canvas versions are deleted with it." : ""
+                }`,
+                confirmLabel: "Delete album",
+                danger: true,
+              }))
+            ) {
+              return;
+            }
+            await api.albums.remove(album.id);
+            queryClient.invalidateQueries({ queryKey: ["albums"] });
+            // Its Canvas Shelf card (if it had one) goes with it, right away.
+            queryClient.invalidateQueries({ queryKey: ["canvases"] });
+            navigate("/albums");
+          }}
+        >
+          Delete album
+        </button>
+      )}
+    </h2>
+  );
+
   return (
     <div className="page page-timeline">
       {pairDeleteDialog}
-      <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {/* Same Back button as the photo view, the import review and the
-            editor - one look for leaving any view. */}
-        <Link to="/albums" className="btn btn-sm back-btn" title="Back to albums">
-          <IconArrowLeft size={13} /> Back
-        </Link>
-        {album ? (
-          /* The album's name is the user's own - click it (or the pencil) to
-             rename it right here. */
-          <>
-            <AlbumNameField
-              albumId={album.id}
-              name={album.name}
-              editing={renaming}
-              onEditingChange={setRenaming}
-              className="album-title-name"
-              inputClassName="album-title-input"
-              clickToEdit
-            />
-            {!renaming && (
-              <button
-                className="btn ghost btn-sm album-rename-btn"
-                title="Rename this album"
-                aria-label="Rename this album"
-                onClick={() => setRenaming(true)}
-              >
-                <IconPencil size={14} />
-              </button>
-            )}
-          </>
-        ) : (
-          "Album"
-        )}
-        {album && <span className="count-pill">{album.image_count} photos</span>}
-        {album && (
-          /* Always visible - with no tags in the library yet the picker just
-             renders disabled ("No tags"), so the feature stays discoverable. */
-          <span
-            className="filter-field filter-field-inline"
-            style={{ fontSize: 13, fontWeight: 400, display: "inline-flex", alignItems: "center", gap: 6 }}
-            title="Photos carrying any of these tags belong to this album automatically"
-          >
-            Auto-include
-            <TagFilter
-              options={allTags ?? []}
-              value={album.tag_filter ?? []}
-              onChange={saveTagFilter}
-              emptyLabel="No tags"
-              title="Build this album from tags: photos with any selected tag are included automatically"
-            />
-          </span>
-        )}
-        {album && immichConfigured && immich?.sync_mode === "selective" && (
-          <label
-            className="filter-field filter-field-inline"
-            style={{ fontSize: 13, fontWeight: 400 }}
-            title="Mirror this album to Immich and upload its JPEGs"
-          >
-            <input
-              type="checkbox"
-              checked={album.immich_sync}
-              onChange={(e) => toggleAlbumImmichSync(e.target.checked)}
-            />{" "}
-            Sync to Immich
-          </label>
-        )}
-        <span style={{ flex: 1 }} />
-        {album && (
-          <button
-            className="btn quiet-danger btn-sm"
-            title="Delete this album - its photos stay in the library"
-            onClick={async () => {
-              if (
-                !(await dialogs.confirm({
-                  title: `Delete album “${album.name}”?`,
-                  message: `Its ${album.image_count} photo(s) stay in your library.`,
-                  confirmLabel: "Delete album",
-                  danger: true,
-                }))
-              ) {
-                return;
-              }
-              await api.albums.remove(album.id);
-              queryClient.invalidateQueries({ queryKey: ["albums"] });
-              navigate("/albums");
-            }}
-          >
-            Delete album
-          </button>
-        )}
-      </h2>
       <PhotoFilters
         viewMode={viewMode}
         onViewMode={setViewMode}
@@ -455,17 +500,41 @@ export function AlbumDetail() {
         dateTo={dateTo}
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
+        /* Two ways to look at the same album: the grid it is browsed in, and
+           the canvas it is laid out on. Parked at the far right of the bar -
+           it switches the whole page, so it doesn't belong among the filters
+           that narrow what the page shows. */
+        trailing={
+          <span className="segmented" role="group" aria-label="Album layout">
+            <button
+              className={canvasMode ? "" : "active"}
+              onClick={() => setLayoutMode("grid")}
+              title="The usual grid of photos"
+            >
+              Grid
+            </button>
+            <button
+              className={canvasMode ? "active" : ""}
+              onClick={() => setLayoutMode("canvas")}
+              title="Lay the photos out by hand on pages or a free canvas"
+            >
+              Canvas
+            </button>
+          </span>
+        }
       >
-        <button
-          className={`btn${selectMode ? " primary" : ""}`}
-          onClick={() => {
-            setSelectMode((v) => !v);
-            if (selectMode) clearSelection();
-          }}
-        >
-          {selectMode ? "Done selecting" : "Select"}
-        </button>
-        {selectMode && (
+        {!canvasMode && (
+          <button
+            className={`btn${selectMode ? " primary" : ""}`}
+            onClick={() => {
+              setSelectMode((v) => !v);
+              if (selectMode) clearSelection();
+            }}
+          >
+            {selectMode ? "Done selecting" : "Select"}
+          </button>
+        )}
+        {selectMode && !canvasMode && (
           <>
             <button className="btn" onClick={selectAll}>
               Select all
@@ -476,6 +545,22 @@ export function AlbumDetail() {
           </>
         )}
       </PhotoFilters>
+      {canvasMode ? (
+        // The canvas owns its whole region: it pans and zooms inside itself,
+        // so the page must not scroll underneath it.
+        <div className="page-scroll page-scroll--canvas">
+          <ErrorBoundary what="The canvas">
+            <AlbumCanvas
+              albumId={id!}
+              title={album?.name ?? "Album"}
+              onExit={() => navigate("/albums")}
+              files={canvasFiles ?? []}
+              stripImages={orderedImages}
+              imagesLoading={isLoading || !canvasFiles}
+            />
+          </ErrorBoundary>
+        </div>
+      ) : (
       <div className="page-scroll">
       {q && (
         <div className="search-scope-banner">
@@ -593,6 +678,8 @@ export function AlbumDetail() {
         />
       )}
       </div>
+      )}
+      {albumBar}
     </div>
   );
 }

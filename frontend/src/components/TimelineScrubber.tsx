@@ -227,8 +227,14 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     // it the SAME gap at the bottom, so its top and bottom breathing room match.
     // A caller with a fixed bottom bar (the import review) grows the bottom gap
     // so the rail ends above the bar instead of running underneath it.
+    // The rail also never runs past the scroll area's own bottom edge: the
+    // album pages hang their Back/name/delete row UNDER the scroller, and the
+    // row's right-anchored Delete must not sit beneath the rail's tail.
     const top = scrollerTop + RAIL_GAP;
-    const bottom = RAIL_GAP + (getBottomInset?.() ?? 0);
+    const bottom = Math.max(
+      RAIL_GAP + (getBottomInset?.() ?? 0),
+      window.innerHeight - scrollerRect.bottom + RAIL_GAP
+    );
     setRailTop(top);
     setRailBottom(bottom);
     setRailHeight(Math.max(0, window.innerHeight - bottom - top));

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import threading
 from collections import OrderedDict
+from typing import NamedTuple
 
 import numpy as np
 
@@ -28,16 +29,18 @@ _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 # Keyed by the sub-mask's parameter JSON + the field size; a small LRU because
 # a 2600px float32 field is ~18MB. Fields at native resolution (tens of MP) are
 # deliberately never cached - one entry would dwarf the whole budget.
-_FIELD_CACHE: OrderedDict[tuple[str, str, int, int], np.ndarray] = OrderedDict()
+_FIELD_CACHE: OrderedDict[tuple[str, str, int, int, "FieldView"], np.ndarray] = OrderedDict()
 _FIELD_CACHE_MAX = 8
 _FIELD_CACHE_MAX_PX = 8_000_000
 _field_cache_lock = threading.Lock()
 
 
-def _cached_spatial_field(t: str, p: dict, h: int, w: int, compute) -> np.ndarray:
+def _cached_spatial_field(t: str, p: dict, h: int, w: int, view: FieldView, compute) -> np.ndarray:
     if h * w > _FIELD_CACHE_MAX_PX:
         return compute()
-    key = (t, json.dumps(p, sort_keys=True, separators=(",", ":")), h, w)
+    # The view is part of the identity: the same parameters at the same tile
+    # size are a different field when the tile sits somewhere else in the frame.
+    key = (t, json.dumps(p, sort_keys=True, separators=(",", ":")), h, w, view)
     with _field_cache_lock:
         hit = _FIELD_CACHE.get(key)
         if hit is not None:
@@ -53,24 +56,69 @@ def _cached_spatial_field(t: str, p: dict, h: int, w: int, compute) -> np.ndarra
     return f
 
 
+class FieldView(NamedTuple):
+    """Which part of the finished frame a field is being rasterised for.
+
+    Every mask is defined in fractions of the WHOLE photo, so rendering only
+    the part of it the user can currently see - the editor's zoomed viewport,
+    which is the only thing worth spending a native-resolution render on - must
+    not move the mask. The maths therefore keeps normalising against the frame's
+    full size while the pixel grid is offset and cut down to the tile: same
+    field, fewer pixels computed.
+
+    x0/y0 are the tile's top-left corner in full-frame pixels; full_w/full_h are
+    the size the frame would have if it were rendered whole. A whole-frame
+    render is the identity case (see `whole`), which is what every caller that
+    does not zoom passes.
+    """
+
+    x0: int
+    y0: int
+    full_w: int
+    full_h: int
+
+    @staticmethod
+    def whole(h: int, w: int) -> "FieldView":
+        return FieldView(0, 0, w, h)
+
+    @property
+    def at_origin(self) -> bool:
+        """Tile's top-left is the frame's - nothing needs shifting."""
+        return self.x0 == 0 and self.y0 == 0
+
+    def covers(self, h: int, w: int) -> bool:
+        """True when this view IS the whole frame at (h, w). Not the same as
+        sitting at the origin: a tile in the top-left corner also starts at
+        (0, 0) and is still only a tile."""
+        return self.at_origin and self.full_w == w and self.full_h == h
+
+
 def _smoothstep(t: np.ndarray) -> np.ndarray:
     t = np.clip(t, 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
 
 
-def _mesh(h: int, w: int):
-    ys, xs = np.meshgrid(np.arange(h, dtype=np.float32), np.arange(w, dtype=np.float32), indexing="ij")
+def _mesh(h: int, w: int, view: FieldView):
+    # The grid carries the tile's absolute position in the frame, so every
+    # formula below can be written as if the whole frame were being rasterised.
+    ys, xs = np.meshgrid(
+        np.arange(view.y0, view.y0 + h, dtype=np.float32),
+        np.arange(view.x0, view.x0 + w, dtype=np.float32),
+        indexing="ij",
+    )
     return xs, ys
 
 
-def _radial_field(h: int, w: int, p: dict) -> np.ndarray:
-    cx = float(p.get("center_x", 0.5)) * w
-    cy = float(p.get("center_y", 0.5)) * h
-    rx = max(float(p.get("radius_x", 0.3)), 1e-3) * w
-    ry = max(float(p.get("radius_y", 0.3)), 1e-3) * h
+def _radial_field(h: int, w: int, p: dict, view: FieldView | None = None) -> np.ndarray:
+    if view is None:
+        view = FieldView.whole(h, w)
+    cx = float(p.get("center_x", 0.5)) * view.full_w
+    cy = float(p.get("center_y", 0.5)) * view.full_h
+    rx = max(float(p.get("radius_x", 0.3)), 1e-3) * view.full_w
+    ry = max(float(p.get("radius_y", 0.3)), 1e-3) * view.full_h
     rot = np.radians(float(p.get("rotation", 0.0)))
     feather = np.clip(float(p.get("feather", 50)) / 100.0, 1e-3, 1.0)
-    xs, ys = _mesh(h, w)
+    xs, ys = _mesh(h, w, view)
     dx = xs - cx
     dy = ys - cy
     ca, sa = np.cos(rot), np.sin(rot)
@@ -81,15 +129,17 @@ def _radial_field(h: int, w: int, p: dict) -> np.ndarray:
     return _smoothstep((1.0 - d) / feather).astype(np.float32)
 
 
-def _linear_field(h: int, w: int, p: dict) -> np.ndarray:
-    x0 = float(p.get("start_x", 0.5)) * w
-    y0 = float(p.get("start_y", 0.0)) * h
-    x1 = float(p.get("end_x", 0.5)) * w
-    y1 = float(p.get("end_y", 1.0)) * h
+def _linear_field(h: int, w: int, p: dict, view: FieldView | None = None) -> np.ndarray:
+    if view is None:
+        view = FieldView.whole(h, w)
+    x0 = float(p.get("start_x", 0.5)) * view.full_w
+    y0 = float(p.get("start_y", 0.0)) * view.full_h
+    x1 = float(p.get("end_x", 0.5)) * view.full_w
+    y1 = float(p.get("end_y", 1.0)) * view.full_h
     dx = x1 - x0
     dy = y1 - y0
     l2 = dx * dx + dy * dy + 1e-6
-    xs, ys = _mesh(h, w)
+    xs, ys = _mesh(h, w, view)
     t = ((xs - x0) * dx + (ys - y0) * dy) / l2  # 0 at the start line, 1 at the end line
     return _smoothstep(t).astype(np.float32)
 
@@ -179,7 +229,7 @@ def _group_strokes(strokes: list, long_edge: int, w: int, h: int) -> list[tuple[
     return out
 
 
-def _brush_field(h: int, w: int, p: dict) -> np.ndarray:
+def _brush_field(h: int, w: int, p: dict, view: FieldView | None = None) -> np.ndarray:
     """Painted mask with the flow/density build-up of a real brush.
 
     Within one stroke the capsules are max-blended, so dragging back over your
@@ -187,10 +237,15 @@ def _brush_field(h: int, w: int, p: dict) -> np.ndarray:
     *new* stroke at `flow`, easing toward `density` - the standard model, and the
     reason a low flow lets you build an effect up gradually instead of it being
     all-or-nothing."""
+    if view is None:
+        view = FieldView.whole(h, w)
     feather = np.clip(float(p.get("feather", 50)) / 100.0, 1e-3, 1.0)
     flow = np.clip(float(p.get("flow", 100)) / 100.0, 1e-3, 1.0)
     density = np.clip(float(p.get("density", 100)) / 100.0, 0.0, 1.0)
-    long_edge = max(h, w)
+    # Stroke coordinates and radii are fractions of the whole frame, so they
+    # scale against it and are then shifted into tile coordinates; everything
+    # below works in tile pixels and clips to the tile as it always did.
+    long_edge = max(view.full_h, view.full_w)
     field = np.zeros((h, w), dtype=np.float32)
     # One scratch buffer for the stroke currently being swept, reused across
     # strokes. Only each stroke's own bounding box is ever touched - clearing and
@@ -198,7 +253,11 @@ def _brush_field(h: int, w: int, p: dict) -> np.ndarray:
     # stroke-count, which on an editor-sized preview reached ~1.2s for 150
     # strokes and would have stalled the live preview.
     stroke_buf = np.empty((h, w), dtype=np.float32)
-    for is_erase, pts in _group_strokes(p.get("strokes") or [], long_edge, w, h):
+    for is_erase, pts in _group_strokes(
+        p.get("strokes") or [], long_edge, view.full_w, view.full_h
+    ):
+        if not view.at_origin:
+            pts = [(x - view.x0, y - view.y0, r) for x, y, r in pts]
         rmax = max(r for _, _, r in pts)
         x0 = max(0, int(np.floor(min(x for x, _, _ in pts) - rmax)))
         x1 = min(w, int(np.ceil(max(x for x, _, _ in pts) + rmax)) + 1)
@@ -425,6 +484,19 @@ def _decode_mask_png(raw: str) -> np.ndarray | None:
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
+def _crop_or_pad(f: np.ndarray, x: int, y: int, h: int, w: int) -> np.ndarray:
+    """Take the (h, w) tile of `f` whose top-left is (x, y), zero-filling
+    anything that falls outside - rounding can put the request a pixel over the
+    edge of what was stretched."""
+    out = np.zeros((h, w), dtype=np.float32)
+    sx0, sy0 = max(0, x), max(0, y)
+    sx1, sy1 = min(f.shape[1], x + w), min(f.shape[0], y + h)
+    if sx1 <= sx0 or sy1 <= sy0:
+        return out
+    out[sy0 - y : sy1 - y, sx0 - x : sx1 - x] = f[sy0:sy1, sx0:sx1]
+    return out
+
+
 def _resize_field(f: np.ndarray, h: int, w: int) -> np.ndarray:
     if f.shape[0] == h and f.shape[1] == w:
         return f
@@ -466,11 +538,37 @@ def _refine_to_edges(f: np.ndarray, arr: np.ndarray) -> np.ndarray:
         return f
 
 
-def _semantic_field(h: int, w: int, p: dict, arr: np.ndarray) -> np.ndarray:
+def _semantic_field(
+    h: int, w: int, p: dict, arr: np.ndarray, view: FieldView | None = None
+) -> np.ndarray:
+    if view is None:
+        view = FieldView.whole(h, w)
     src = _decode_mask_png(str(p.get("mask") or ""))
     if src is None or src.size == 0:
         return np.zeros((h, w), dtype=np.float32)
-    field = _resize_field(src, h, w)
+    if view.covers(h, w):
+        field = _resize_field(src, h, w)
+    else:
+        # Cut the stored mask down to the tile's share of the frame first, so a
+        # zoomed render never has to materialise the mask at full frame size -
+        # at native resolution that array alone would be hundreds of megabytes.
+        # One pixel of margin keeps the interpolation at the tile's edges the
+        # same as it would be in a whole-frame resize.
+        sh, sw = src.shape[:2]
+        sx0 = max(0, int(np.floor(view.x0 / view.full_w * sw)) - 1)
+        sy0 = max(0, int(np.floor(view.y0 / view.full_h * sh)) - 1)
+        sx1 = min(sw, int(np.ceil((view.x0 + w) / view.full_w * sw)) + 1)
+        sy1 = min(sh, int(np.ceil((view.y0 + h) / view.full_h * sh)) + 1)
+        if sx1 <= sx0 or sy1 <= sy0:
+            return np.zeros((h, w), dtype=np.float32)
+        # Resize the cut-out to the tile plus the margin it carries, then take
+        # the tile out of it.
+        out_w = max(1, int(round((sx1 - sx0) / sw * view.full_w)))
+        out_h = max(1, int(round((sy1 - sy0) / sh * view.full_h)))
+        stretched = _resize_field(src[sy0:sy1, sx0:sx1], out_h, out_w)
+        ox = int(round(sx0 / sw * view.full_w))
+        oy = int(round(sy0 / sh * view.full_h))
+        field = _crop_or_pad(stretched, view.x0 - ox, view.y0 - oy, h, w)
     # Only worth refining when the stored mask is actually being stretched -
     # at the scrub tier it's usually being shrunk instead.
     if max(src.shape) * 1.4 < max(h, w):
@@ -489,15 +587,19 @@ def _semantic_field(h: int, w: int, p: dict, arr: np.ndarray) -> np.ndarray:
     return np.clip(field, 0.0, 1.0).astype(np.float32)
 
 
-def _submask_field(sm: dict, h: int, w: int, arr: np.ndarray) -> np.ndarray:
+def _submask_field(
+    sm: dict, h: int, w: int, arr: np.ndarray, view: FieldView | None = None
+) -> np.ndarray:
+    if view is None:
+        view = FieldView.whole(h, w)
     t = sm.get("type")
     p = sm.get("parameters") or {}
     if t == "radial":
-        f = _cached_spatial_field(t, p, h, w, lambda: _radial_field(h, w, p))
+        f = _cached_spatial_field(t, p, h, w, view, lambda: _radial_field(h, w, p, view))
     elif t == "linear":
-        f = _cached_spatial_field(t, p, h, w, lambda: _linear_field(h, w, p))
+        f = _cached_spatial_field(t, p, h, w, view, lambda: _linear_field(h, w, p, view))
     elif t == "brush":
-        f = _cached_spatial_field(t, p, h, w, lambda: _brush_field(h, w, p))
+        f = _cached_spatial_field(t, p, h, w, view, lambda: _brush_field(h, w, p, view))
     elif t == "luminance":
         f = _luminance_field(arr, p)
     elif t == "color":
@@ -509,7 +611,7 @@ def _submask_field(sm: dict, h: int, w: int, arr: np.ndarray) -> np.ndarray:
         # stored PNG is a pure function of the parameters like any other shape.
         # The guide comes from the image, but a tonal edit never moves an edge
         # far enough to be worth re-refining every frame.
-        f = _cached_spatial_field(t, p, h, w, lambda: _semantic_field(h, w, p, arr))
+        f = _cached_spatial_field(t, p, h, w, view, lambda: _semantic_field(h, w, p, arr, view))
     elif t == "all":
         f = np.ones((h, w), dtype=np.float32)
     else:
@@ -519,15 +621,23 @@ def _submask_field(sm: dict, h: int, w: int, arr: np.ndarray) -> np.ndarray:
     return np.clip(f, 0.0, 1.0)
 
 
-def generate_mask_field(mask: dict, arr: np.ndarray) -> np.ndarray:
+def generate_mask_field(
+    mask: dict, arr: np.ndarray, view: FieldView | None = None
+) -> np.ndarray:
     """Combine a mask container's sub-masks into one (H, W) 0..1 field. The first
-    visible sub-mask establishes the base; the rest add / subtract / intersect."""
+    visible sub-mask establishes the base; the rest add / subtract / intersect.
+
+    `view` says which part of the frame `arr` is (see FieldView); the default is
+    the whole frame, which is what every render but the editor's zoomed one
+    passes."""
     h, w = arr.shape[:2]
+    if view is None:
+        view = FieldView.whole(h, w)
     field: np.ndarray | None = None
     for sm in mask.get("sub_masks") or []:
         if not sm.get("visible", True):
             continue
-        f = _submask_field(sm, h, w, arr)
+        f = _submask_field(sm, h, w, arr, view)
         mode = sm.get("mode", "additive")
         if field is None:
             field = f.copy()  # first sub-mask is the base regardless of its mode

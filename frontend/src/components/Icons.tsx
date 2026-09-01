@@ -315,3 +315,94 @@ export function IconRedo(props: IconProps) {
     </svg>
   );
 }
+
+// Text alignment. The horizontal four are lines of text ragged on one side or
+// the other; the vertical three are the same lines pinned to one edge of the
+// box, with that edge drawn.
+export function IconAlignLeft(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 3.5h11M2.5 6.5h7M2.5 9.5h11M2.5 12.5h7" />
+    </svg>
+  );
+}
+
+export function IconAlignCenter(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 3.5h11M4.5 6.5h7M2.5 9.5h11M4.5 12.5h7" />
+    </svg>
+  );
+}
+
+export function IconAlignRight(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 3.5h11M6.5 6.5h7M2.5 9.5h11M6.5 12.5h7" />
+    </svg>
+  );
+}
+
+export function IconAlignJustify(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 3.5h11M2.5 6.5h11M2.5 9.5h11M2.5 12.5h11" />
+    </svg>
+  );
+}
+
+export function IconAlignTop(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 2.5h11" />
+      <path d="M4.5 6h7M4.5 9h7" />
+    </svg>
+  );
+}
+
+export function IconAlignMiddle(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 2.5h11M2.5 13.5h11" opacity="0.45" />
+      <path d="M4.5 6.5h7M4.5 9.5h7" />
+    </svg>
+  );
+}
+
+export function IconAlignBottom(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 13.5h11" />
+      <path d="M4.5 7h7M4.5 10h7" />
+    </svg>
+  );
+}
+
+// A padlock, closed and open: whether two values are tied together.
+export function IconLock(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="3.5" y="7.5" width="9" height="6.5" rx="1.2" />
+      <path d="M5.5 7.5V5.5a2.5 2.5 0 0 1 5 0v2" />
+    </svg>
+  );
+}
+
+export function IconLockOpen(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="3.5" y="7.5" width="9" height="6.5" rx="1.2" />
+      <path d="M5.5 7.5V5.5a2.5 2.5 0 0 1 4.8-1" />
+    </svg>
+  );
+}
+
+// Two sheets, one behind the other: make a copy of this.
+export function IconDuplicate(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.2" />
+      <path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" />
+    </svg>
+  );
+}

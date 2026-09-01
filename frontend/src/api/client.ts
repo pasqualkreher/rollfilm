@@ -1,4 +1,6 @@
 import type {
+  AlbumCanvasOut,
+  AlbumLayout,
   AlbumOut,
   AutoAdjustResult,
   AutoDevelopSettings,
@@ -71,6 +73,18 @@ function apiEdits(edits: ImageEdits) {
 
 // In the Electron app the backend runs on a random localhost port, injected by
 // the preload script. Fall back to the build-time env (web/Docker) or the dev default.
+/** A render Blob carrying what the server actually produced. `servedTier`: a
+ *  native request is answered from the tier below while the full-resolution
+ *  base decodes. `frame`/`box`: set on region renders - the finished frame's
+ *  pixel size and the tile's exact top-left within it, so the editor can
+ *  composite the tile into its copy of the frame without re-deriving (and
+ *  mis-rounding) either. */
+export type ServedBlob = Blob & {
+  servedTier?: string;
+  frame?: { w: number; h: number };
+  box?: { x: number; y: number };
+};
+
 const BASE_URL =
   (typeof window !== "undefined" && window.photoManager?.apiBaseUrl) ||
   import.meta.env.VITE_API_BASE_URL ||
@@ -528,14 +542,26 @@ export const api = {
     // `peek` marks one mask's covered area in the returned frame with the
     // editor's zebra - what the Show-mask toggle uses for the masks that have no
     // shape to draw over the photo (luminance / colour / edges).
+    // A preview Blob, tagged with the tier the server actually rendered.
     async editorPreview(
       id: string,
       edits: ImageEdits,
       signal?: AbortSignal,
       mode: "scrub" | "fast" | "full" | "ultra" | "native" = "fast",
       browse = false,
-      peek: string | null = null
-    ): Promise<Blob> {
+      peek: string | null = null,
+      // Fractions of the finished frame. The native tier renders that part
+      // alone (what makes editing at 100% zoom possible at all - the whole
+      // frame of a 40MP raw is half a minute of pipeline for pixels that are
+      // mostly off screen); scrub and the accurate tier honour it too once the
+      // native base is decoded, so the live frames while zoomed are sharp
+      // instead of a stretched whole-frame preview. The server answers with a
+      // whole frame when a tile isn't possible - check `frame` on the result.
+      region: { x: number; y: number; w: number; h: number } | null = null,
+      // Scrub tier only: the user is zoomed in, so the drag frames are being
+      // inspected for detail - the server sizes them up to the accurate base.
+      zoomed = false
+    ): Promise<ServedBlob> {
       const tier =
         mode === "native"
           ? "native=1"
@@ -546,7 +572,17 @@ export const api = {
               : mode === "scrub"
                 ? "scrub=1"
                 : "";
-      const params = [tier, browse ? "browse=1" : "", peek ? `peek=${encodeURIComponent(peek)}` : ""]
+      const regionParam =
+        region && (mode === "native" || mode === "scrub" || mode === "fast")
+          ? `region=${[region.x, region.y, region.w, region.h].map((n) => n.toFixed(5)).join(",")}`
+          : "";
+      const params = [
+        tier,
+        browse ? "browse=1" : "",
+        peek ? `peek=${encodeURIComponent(peek)}` : "",
+        regionParam,
+        zoomed && mode === "scrub" ? "zoomed=1" : "",
+      ]
         .filter(Boolean)
         .join("&");
       const q = params ? `?${params}` : "";
@@ -562,7 +598,25 @@ export const api = {
       // a user-visible render error.
       if (res.status === 409) throw new DOMException("preview superseded", "AbortError");
       if (!res.ok) throw new Error(`preview render failed: ${res.status}`);
-      return res.blob();
+      const blob = await res.blob();
+      // What the server actually rendered. It is not always what was asked for:
+      // a native request lands on the tier below while the full-resolution base
+      // is still decoding, and the caller needs to know so it can come back for
+      // the sharp one. Carried on the Blob so no call site has to change shape.
+      const out = blob as ServedBlob;
+      const served = res.headers.get("X-Rollfilm-Tier");
+      if (served) out.servedTier = served;
+      const frame = res.headers.get("X-Rollfilm-Frame");
+      const box = res.headers.get("X-Rollfilm-Box");
+      if (frame && box) {
+        const [fw, fh] = frame.split("x").map(Number);
+        const [bx, by] = box.split(",").map(Number);
+        if (fw > 0 && fh > 0 && Number.isFinite(bx) && Number.isFinite(by)) {
+          out.frame = { w: fw, h: fh };
+          out.box = { x: bx, y: by };
+        }
+      }
+      return out;
     },
     // Develop suggestion learned from the user's own saved edits (CLIP k-NN
     // over edited photos). Pure suggestion - nothing is stored server-side.
@@ -618,6 +672,11 @@ export const api = {
     fullUrl(id: string, version?: string): string {
       return derivativeUrl(id, "full", version);
     },
+    // The photo as the layout exports take it: the saved bytes themselves for
+    // a photo without edits, a lossless full-resolution PNG for one with.
+    exportUrl(id: string, version?: string): string {
+      return derivativeUrl(id, "export", version);
+    },
     // Geometry-only render (no tonal edits) the editor draws its live preview on.
     basePreviewUrl(id: string, version?: string): string {
       return derivativeUrl(id, "base-preview", version);
@@ -658,6 +717,53 @@ export const api = {
     // upload of every JPEG in the album into a same-named Immich album.
     setImmichSync(albumId: string, enabled: boolean): Promise<AlbumOut> {
       return request(`/albums/${albumId}/immich-sync`, {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      });
+    },
+    // The album's creative canvas. An album that has never been laid out
+    // answers with a blank default page rather than a 404 - nothing is
+    // written until the first save.
+    getLayout(albumId: string): Promise<AlbumLayout> {
+      return request(`/albums/${albumId}/layout`);
+    },
+    // The whole canvas in one request: a drag can move, restack and reshape
+    // several items at once, so the document is replaced rather than patched.
+    saveLayout(albumId: string, layout: Omit<AlbumLayout, "album_id" | "updated_at">): Promise<AlbumLayout> {
+      return request(`/albums/${albumId}/layout`, { method: "PUT", body: JSON.stringify(layout) });
+    },
+    clearLayout(albumId: string): Promise<void> {
+      return request(`/albums/${albumId}/layout`, { method: "DELETE" });
+    },
+    // Kept versions of the canvas. Every call answers with the fresh layout
+    // (including the version list), so the cache can be replaced in one go.
+    createLayoutVersion(albumId: string, name: string): Promise<AlbumLayout> {
+      return request(`/albums/${albumId}/layout/versions`, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+    },
+    restoreLayoutVersion(albumId: string, versionId: string): Promise<AlbumLayout> {
+      return request(`/albums/${albumId}/layout/versions/${versionId}/restore`, { method: "POST" });
+    },
+    renameLayoutVersion(albumId: string, versionId: string, name: string): Promise<AlbumLayout> {
+      return request(`/albums/${albumId}/layout/versions/${versionId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      });
+    },
+    deleteLayoutVersion(albumId: string, versionId: string): Promise<AlbumLayout> {
+      return request(`/albums/${albumId}/layout/versions/${versionId}`, { method: "DELETE" });
+    },
+    // The Canvas Shelf of the Albums page: every opted-in album's chosen
+    // version, ready to draw.
+    canvases(): Promise<AlbumCanvasOut[]> {
+      return request(`/albums/canvases`);
+    },
+    // On or off the Canvas Shelf - and nothing else. The shelf card's X calls
+    // this: hiding is not deleting.
+    setCanvasShelf(albumId: string, enabled: boolean): Promise<void> {
+      return request(`/albums/${albumId}/layout/shelf`, {
         method: "POST",
         body: JSON.stringify({ enabled }),
       });

@@ -103,6 +103,10 @@ function FocalRangeSlider({
 interface Props {
   viewMode: ViewMode;
   onViewMode: (v: ViewMode) => void;
+  // Whether the RAW+JPG / RAW / JPG toggle is offered at all. Screens that can
+  // only work on whole shots (the album canvas) hide it and stay on the app's
+  // default pairing rather than letting a filter split a pair under them.
+  showViewMode?: boolean;
   ratingMin: number;
   onRatingMin: (n: number) => void;
   colorLabel: ColorLabel;
@@ -155,6 +159,11 @@ interface Props {
   // shared filters, right of the divider, so every screen keeps an identical
   // filter core.
   children?: ReactNode;
+  // Pinned to the far right of the bar, past everything else. For a switch that
+  // belongs to the whole page rather than to the filters - which way of looking
+  // at these photos am I in - so it reads as the page's own control and not as
+  // one more thing to set.
+  trailing?: ReactNode;
 }
 
 // The shared filter row used by the Library, Album detail, and Import review
@@ -162,6 +171,7 @@ interface Props {
 export function PhotoFilters({
   viewMode,
   onViewMode,
+  showViewMode = true,
   ratingMin,
   onRatingMin,
   colorLabel,
@@ -189,6 +199,7 @@ export function PhotoFilters({
   showMerge = true,
   viewExtras,
   children,
+  trailing,
 }: Props) {
   // Pinned: the same menu docks as a second row of the bar instead of hanging
   // off the chip as a popover, so it survives every click while culling.
@@ -373,7 +384,7 @@ export function PhotoFilters({
     <div className="filter-bar filter-bar--sticky">
       {/* View: how the same photos are displayed (type, size, pairing). */}
       <div className="control-group control-group--view">
-        <ViewModeToggle value={viewMode} onChange={onViewMode} />
+        {showViewMode && <ViewModeToggle value={viewMode} onChange={onViewMode} />}
         <ViewPrefsControls showMerge={showMerge} />
         {viewExtras}
       </div>
@@ -413,6 +424,8 @@ export function PhotoFilters({
 
       {/* Page-specific actions (Select, Select all, ...). */}
       {children && <div className="control-group control-group--actions">{children}</div>}
+
+      {trailing && <div className="control-group control-group--trailing">{trailing}</div>}
 
       {/* Pinned: the same menu as a full-width second row of the bar. */}
       {pinned && <div className="filter-dock">{menu}</div>}

@@ -155,6 +155,7 @@ def apply_vignette(
     midpoint: int = 50,
     roundness: int = 0,
     feather: int = 50,
+    view=None,
 ) -> np.ndarray:
     """Corner shading with shape control (replaces the 1-parameter vignette).
 
@@ -174,8 +175,21 @@ def apply_vignette(
     if not amount:
         return arr
     h, w = arr.shape[:2]
-    yy = np.linspace(-1.0, 1.0, h, dtype=np.float32)[:, None]
-    xx = np.linspace(-1.0, 1.0, w, dtype=np.float32)[None, :]
+    if view is None or view.covers(h, w):
+        yy = np.linspace(-1.0, 1.0, h, dtype=np.float32)[:, None]
+        xx = np.linspace(-1.0, 1.0, w, dtype=np.float32)[None, :]
+    else:
+        # Rendering only a tile of the frame (the editor's zoomed viewport): the
+        # shading belongs to the PHOTO, so the coordinates stay those of the
+        # whole frame and the tile takes its slice out of them. Normalising
+        # against the tile instead would re-centre the vignette on whatever the
+        # user happened to be looking at.
+        yy = np.linspace(-1.0, 1.0, view.full_h, dtype=np.float32)[
+            view.y0 : view.y0 + h, None
+        ]
+        xx = np.linspace(-1.0, 1.0, view.full_w, dtype=np.float32)[
+            None, view.x0 : view.x0 + w
+        ]
     # Superellipse exponent from roundness: +100 -> 2.0 (circular/elliptical),
     # 0 -> 2.5 (natural classic vignette), -100 -> 6.0 (rectangular).
     r = max(-100, min(100, roundness)) / 100.0

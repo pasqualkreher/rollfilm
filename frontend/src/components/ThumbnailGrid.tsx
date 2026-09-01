@@ -119,6 +119,50 @@ export const THUMB_BUDGET_MS = 1500;
 // the moment the user actually cares.
 const RETRY_DELAYS_MS = [200, 400, 800, 2500, 5000, 10000, 20000, 30000];
 
+// How long an exhausted tile waits before asking once more.
+//
+// Past the ladder a tile used to stop for good, and the only thing that ever
+// re-armed it was ensureLoading - which fires when a tile ENTERS the load
+// margin, something a tile already sitting in the viewport never does again.
+// That is survivable when one derivative is missing, and not survivable when
+// the whole library is briefly unreachable: a library on a NAS whose disk has
+// spun down needs longer to wake and reconnect than the ladder lasts, so every
+// visible tile burns its attempts against a volume that is still coming back
+// and the grid stays a wall of empty cards until the app is restarted. The
+// revive below is what makes that repair itself. It is deliberately slow - the
+// case it exists for resolves in tens of seconds, and a tile with nothing to
+// show costs nothing by waiting - while the shared triggers (see onRevive) do
+// the same immediately when the user comes back to the window.
+const REVIVE_DELAY_MS = 45000;
+
+// Moments when a tile that gave up is worth waking: the window coming back to
+// the foreground, the tab becoming visible, the network returning. All three
+// mean "something about the environment changed", which is exactly when the
+// unreachable volume behind an empty grid tends to be reachable again.
+//
+// One set of listeners for the whole grid, not three per tile: a grid can hold
+// hundreds of exhausted tiles at once.
+const reviveSubscribers = new Set<() => void>();
+
+function emitRevive() {
+  for (const fn of [...reviveSubscribers]) fn();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("focus", emitRevive);
+  window.addEventListener("online", emitRevive);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") emitRevive();
+  });
+}
+
+function onRevive(fn: () => void): () => void {
+  reviveSubscribers.add(fn);
+  return () => {
+    reviveSubscribers.delete(fn);
+  };
+}
+
 // Grid thumbnail that starts loading shortly after it comes within the
 // preload margin of the viewport (see utils/preload.ts) - well before it's
 // visible. Replaces native loading="lazy", whose preload distance is
@@ -184,9 +228,31 @@ export function Thumb({
   const [retrying, setRetrying] = useState(false);
   const retryCount = useRef(0);
   const retryTimer = useRef<number | null>(null);
+  // Set once the ladder is spent. Drives the revive below - and nothing about
+  // how the tile looks, which is the same empty card either way.
+  const [exhausted, setExhausted] = useState(false);
   // Plain ref, not state: visibility changes constantly while scrolling and
   // must never itself cause a render.
   const inViewRef = useRef(false);
+
+  // Bring an exhausted tile back: on the slow timer, or the moment the
+  // environment changes under it (see onRevive). Only mounted, still-spent
+  // tiles subscribe, and a successful load clears `exhausted` through the
+  // load handler, so the loop settles by itself once the volume is back.
+  useEffect(() => {
+    if (!exhausted) return;
+    const revive = () => {
+      retryCount.current = 0;
+      setExhausted(false);
+      show(src, false);
+    };
+    const timer = window.setTimeout(revive, REVIVE_DELAY_MS);
+    const unsubscribe = onRevive(revive);
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [exhausted, src, show]);
 
   // A tile that finished loading can still end up broken later: under memory
   // pressure the browser discards decoded pixels and silently re-fetches, and
@@ -263,6 +329,7 @@ export function Thumb({
       return;
     }
     retryCount.current = 0;
+    setExhausted(false);
     show(src, isThumbLoaded(src));
     // And put it on the element directly. React state may ALREADY hold this
     // exact URL while the attribute is missing - then setting the state again
@@ -475,6 +542,7 @@ export function Thumb({
           // cached is what the element was actually pointed at.
           if (shownSrc) markThumbLoaded(shownSrc);
           setRetrying(false);
+          setExhausted(false);
           setVisible(true);
         }}
         onError={() => {
@@ -506,6 +574,8 @@ export function Thumb({
             // Out of attempts: clear the failed src too, or the browser keeps
             // rendering the broken-image glyph + alt text on the card.
             setShownSrc(undefined);
+            // Not the end of it - see REVIVE_DELAY_MS.
+            setExhausted(true);
             return;
           }
           retryCount.current += 1;
@@ -713,14 +783,9 @@ export function ThumbnailGrid({
     );
   }
 
-  // With only one or two photos in the view, the grid enlarges them to fill
-  // the visible area (no scrolling needed) instead of rendering tiny tiles -
-  // see .thumbnail-grid--few in index.css.
-  const fewClass = images.length <= 2 ? " thumbnail-grid--few" : "";
-
   if (!groupByDate) {
     return (
-      <div className={`thumbnail-grid${fewClass}${fadeClass}`}>
+      <div className={`thumbnail-grid${fadeClass}`}>
         {images.map((image, index) => renderCard(image, index))}
         <i className="grid-filler" aria-hidden />
         {infoOverlay}
@@ -746,7 +811,7 @@ export function ThumbnailGrid({
             {section.label}
             <span className="timeline-header-count">{section.items.length}</span>
           </h3>
-          <div className={`thumbnail-grid${fewClass}`}>
+          <div className="thumbnail-grid">
             {section.items.map(({ image, index }) => renderCard(image, index))}
             <i className="grid-filler" aria-hidden />
           </div>

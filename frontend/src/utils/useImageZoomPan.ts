@@ -121,8 +121,17 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
 
   // Read by the native wheel listener, which is attached once and would
   // otherwise close over the first render's values.
-  const liveRef = useRef({ nativeScale, maxZoom, fit });
-  liveRef.current = { nativeScale, maxZoom, fit };
+  const liveRef = useRef({ nativeScale, maxZoom, fit, scale, pan });
+  liveRef.current = { nativeScale, maxZoom, fit, scale, pan };
+
+  // The pan a wheel-zoom gesture WANTS, before clampPan trims it for display.
+  // Anchoring each tick on the clamped pan compounds: once the clamp bites
+  // (early in a zoom, before the photo overhangs the frame), the point under
+  // the cursor slips, and every further tick multiplies that slip by its zoom
+  // ratio. Tracking the unclamped ideal keeps the anchor exact, and the moment
+  // the clamp has room the view converges back onto it.
+  const idealPanRef = useRef({ x: 0, y: 0 });
+  const lastWheelAtRef = useRef(0);
 
   // Inner size of the frame, i.e. what the photo may occupy.
   function availableSize(box: HTMLElement): Size {
@@ -207,19 +216,29 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
       const rect = el!.getBoundingClientRect();
       const dx = e.clientX - (rect.left + rect.width / 2);
       const dy = e.clientY - (rect.top + rect.height / 2);
-      setScale((prevScale) => {
-        const factor = Math.exp(-e.deltaY * 0.0015);
-        const next = Math.min(liveRef.current.maxZoom, Math.max(MIN_ZOOM, prevScale * factor));
-        setPan((prevPan) => {
-          if (next <= 1.001) return { x: 0, y: 0 };
-          const ratio = next / prevScale;
-          return clampPan(
-            { x: dx - (dx - prevPan.x) * ratio, y: dy - (dy - prevPan.y) * ratio },
-            next
-          );
-        });
-        return next;
-      });
+      // A pause long enough to be a new gesture (or a pan-drag in between):
+      // re-seed the ideal from wherever the view actually is now.
+      const now = performance.now();
+      if (now - lastWheelAtRef.current > 250) idealPanRef.current = { ...liveRef.current.pan };
+      lastWheelAtRef.current = now;
+      const prev = liveRef.current.scale;
+      const next = Math.min(
+        liveRef.current.maxZoom,
+        Math.max(MIN_ZOOM, prev * Math.exp(-e.deltaY * 0.0015))
+      );
+      const ratio = next / prev;
+      const ideal =
+        next <= 1.001
+          ? { x: 0, y: 0 }
+          : { x: dx - (dx - idealPanRef.current.x) * ratio, y: dy - (dy - idealPanRef.current.y) * ratio };
+      idealPanRef.current = ideal;
+      const shown = next <= 1.001 ? ideal : clampPan(ideal, next);
+      // The ref leads, state follows: the next wheel event may arrive before
+      // React re-renders, and it must compute from THIS tick's values.
+      liveRef.current.scale = next;
+      liveRef.current.pan = shown;
+      setScale(next);
+      setPan(shown);
     }
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);

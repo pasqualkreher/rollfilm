@@ -315,6 +315,112 @@ class AlbumOut(BaseModel):
     tag_filter: list[str] = []
 
 
+class LayoutItemIn(BaseModel):
+    """One placed item as the canvas sends it back. Ids are minted by the
+    client (a UUID per new item), so a save is a plain replace: whatever the
+    canvas holds is what the layout is."""
+
+    id: str
+    kind: Literal["photo", "text"] = "photo"
+    image_id: str | None = None
+    page: int = 0
+    x_mm: float = 0.0
+    y_mm: float = 0.0
+    width_mm: float = 60.0
+    height_mm: float = 40.0
+    rotation: float = 0.0
+    z: int = 0
+    content_scale: float = 1.0
+    content_dx: float = 0.0
+    content_dy: float = 0.0
+    text: str | None = None
+    style: dict[str, Any] | None = None
+
+
+class LayoutItemOut(LayoutItemIn):
+    # False when the photo behind a frame is currently in the Trash or gone
+    # from an unplugged source: the canvas keeps the item (and sends it back
+    # untouched) but has nothing to draw, exactly like album membership
+    # surviving a trip through the Trash.
+    available: bool = True
+
+
+class AlbumLayoutIn(BaseModel):
+    page_mode: Literal["pages", "infinite"] = "pages"
+    page_width_mm: float = 297.0
+    page_height_mm: float = 210.0
+    page_count: int = 1
+    background: str = "#ffffff"
+    show_grid: bool = False
+    grid_mm: float = 10.0
+    snap: bool = True
+    show_page_guide: bool = False
+    # Whether this canvas appears on the Canvases shelf of the Albums page.
+    show_in_canvases: bool = False
+    items: list[LayoutItemIn] = []
+
+
+class LayoutVersionOut(BaseModel):
+    """One kept snapshot of a canvas, as the version list shows it. The
+    document itself stays on the server - it only travels when restored."""
+
+    id: str
+    name: str
+    created_at: datetime
+
+
+class LayoutVersionIn(BaseModel):
+    name: str = ""
+
+
+class CanvasShelfIn(BaseModel):
+    enabled: bool
+
+
+class AlbumLayoutOut(BaseModel):
+    album_id: str
+    page_mode: Literal["pages", "infinite"]
+    page_width_mm: float
+    page_height_mm: float
+    page_count: int
+    background: str
+    show_grid: bool
+    grid_mm: float
+    snap: bool
+    show_page_guide: bool = False
+    show_in_canvases: bool = False
+    # The version the Canvases shelf shows (last kept or last loaded), and the
+    # kept versions themselves, newest first.
+    active_version_id: str | None = None
+    versions: list[LayoutVersionOut] = []
+    updated_at: datetime | None = None
+    items: list[LayoutItemOut] = []
+
+
+class AlbumCanvasOut(BaseModel):
+    """One card on the Canvases shelf: an album's chosen version, with just
+    enough of its document to draw the print-style preview."""
+
+    album_id: str
+    album_name: str
+    version_id: str
+    version_name: str
+    version_count: int
+    created_at: datetime
+    page_mode: Literal["pages", "infinite"]
+    page_width_mm: float
+    page_height_mm: float
+    page_count: int
+    background: str
+    # A free canvas with the page guide on prints as the guide's sheets - the
+    # shelf's print view and export need to cut the same way.
+    show_page_guide: bool = False
+    items: list[LayoutItemOut] = []
+    # Per-photo cache-buster for thumbnail URLs (image id -> ?v value), since
+    # the shelf has no ImageOut rows to derive it from.
+    thumb_versions: dict[str, str] = {}
+
+
 class SmartAlbumOut(BaseModel):
     # "cluster:<index>" / "year:2024" / "month:2024-07" / "day:2024-07-12" /
     # "place:48.1374,11.5755" / "country:Italy" / "country-year:Italy:2024" -

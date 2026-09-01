@@ -1,4 +1,5 @@
-import { Link, useLocation, useParams } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { SmartAlbumOut } from "../api/types";
@@ -12,6 +13,22 @@ import { collapsePairs } from "../state/viewPrefs";
 export function SmartAlbumDetail() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Escape walks back to the albums, the same as it leaves a manual album,
+  // the lightbox and the editor - one key out of any view. A dialog on top
+  // captures Escape before this sees it.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const target = e.target as HTMLElement | null;
+      // A text box keeps its own Escape (backing out of a search).
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      navigate("/albums");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [navigate]);
   // Navigating from the Albums page passes the card's metadata along; a
   // direct/reloaded visit falls back to looking it up in the smart list.
   const fromState = (location.state as { smart?: SmartAlbumOut } | null)?.smart;
@@ -56,16 +73,6 @@ export function SmartAlbumDetail() {
 
   return (
     <div className="page page-timeline">
-      <h2 className="section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {/* Same Back button as the photo view, the import review and the
-            editor - one look for leaving any view. */}
-        <Link to="/albums" className="btn btn-sm back-btn" title="Back to albums">
-          <IconArrowLeft size={13} /> Back
-        </Link>
-        {meta?.name ?? "Smart album"}
-        {meta && <span className="count-pill">{meta.image_count} photos</span>}
-      </h2>
-
       <div className="page-scroll">
         {isError && (
           <div className="empty-state">
@@ -82,6 +89,19 @@ export function SmartAlbumDetail() {
         {images && images.length === 0 && <div className="empty-state">No photos here right now.</div>}
         {images && images.length > 0 && <ThumbnailGrid images={orderedImages} groupByDate />}
       </div>
+
+      {/* The album's row - Back and name - lives UNDER the content, like the
+          manual albums' row and the stage rows of the editor and photo view:
+          the name centred, Back flush left and out of the row's flow. */}
+      <h2 className="section-title album-bottom-bar">
+        {/* Same Back button as the photo view, the import review and the
+            editor - one look for leaving any view. */}
+        <Link to="/albums" className="btn btn-sm back-btn stage-back-btn" title="Back to albums">
+          <IconArrowLeft size={13} /> Back
+        </Link>
+        {meta?.name ?? "Smart album"}
+        {meta && <span className="count-pill">{meta.image_count} photos</span>}
+      </h2>
     </div>
   );
 }

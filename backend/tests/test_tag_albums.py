@@ -107,6 +107,53 @@ def test_album_without_rule_stays_manual_only(db: Session):
     assert _to_album_out(db, album).image_count == 1
 
 
+def test_a_raw_jpeg_pair_counts_as_one_photo(db: Session):
+    """The album grid collapses a RAW+JPEG pair to its JPEG, so the header
+    pill and the album card have to count the pair as the one shot it is."""
+    single = _image("single")
+    jpeg = _image("jpeg", paired_image_id="raw")
+    raw = _image("raw", file_type=FileType.raw, paired_image_id="jpeg")
+    lone_raw = _image("lone-raw", file_type=FileType.raw)
+    db.add_all([single, jpeg, raw, lone_raw])
+    album = Album(id="alb", owner_id=1, name="Trip")
+    db.add(album)
+    for position, image_id in enumerate(["single", "jpeg", "raw", "lone-raw"]):
+        db.add(AlbumImage(album_id="alb", image_id=image_id, position=position))
+    db.commit()
+
+    # single + the pair + the unpaired RAW = three cards, four files.
+    assert _to_album_out(db, album).image_count == 3
+
+
+def test_a_raw_counts_when_its_jpeg_is_not_in_the_album(db: Session):
+    """Only the pair's *shown* half hides the other: with the JPEG left out of
+    the album, the RAW is the album's only card and has to be counted."""
+    jpeg = _image("jpeg", paired_image_id="raw")
+    raw = _image("raw", file_type=FileType.raw, paired_image_id="jpeg")
+    db.add_all([jpeg, raw])
+    album = Album(id="alb", owner_id=1, name="Raws")
+    db.add(album)
+    db.add(AlbumImage(album_id="alb", image_id="raw", position=0))
+    db.commit()
+
+    assert _to_album_out(db, album).image_count == 1
+
+
+def test_a_trashed_pair_half_leaves_the_other_counted(db: Session):
+    """Trashing the JPEG suspends the pair - the RAW is then a card of its own
+    and must not be swallowed by a partner nobody can see."""
+    jpeg = _image("jpeg", paired_image_id="raw", deleted_at=datetime(2026, 7, 2, 9, 0, 0))
+    raw = _image("raw", file_type=FileType.raw, paired_image_id="jpeg")
+    db.add_all([jpeg, raw])
+    album = Album(id="alb", owner_id=1, name="Trip")
+    db.add(album)
+    db.add(AlbumImage(album_id="alb", image_id="jpeg", position=0))
+    db.add(AlbumImage(album_id="alb", image_id="raw", position=1))
+    db.commit()
+
+    assert _to_album_out(db, album).image_count == 1
+
+
 def test_create_and_update_normalize_the_rule(db: Session):
     user = db.get(User, 1)
     out = create_album(

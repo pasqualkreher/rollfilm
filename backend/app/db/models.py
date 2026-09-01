@@ -311,6 +311,11 @@ class Album(Base):
     tag_filter: Mapped[str | None] = mapped_column(String, nullable=True)
 
     images: Mapped[list["AlbumImage"]] = relationship(back_populates="album", cascade="all, delete-orphan")
+    # The album's hand-made canvas, if it has one. Deleting the album takes its
+    # layout with it - the design describes this album and nothing else.
+    layout: Mapped["AlbumLayout | None"] = relationship(
+        back_populates="album", cascade="all, delete-orphan", uselist=False
+    )
 
     @property
     def tag_filter_list(self) -> list[str]:
@@ -438,3 +443,130 @@ class ImmichPendingDeletion(Base):
     # Only for logging/history - the photo row is gone by the time this runs.
     filename: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class AlbumLayout(Base):
+    """The creative layout of one album: a canvas the album's photos are placed
+    on by hand, instead of the automatic grid.
+
+    Every measurement in here and in LayoutItem is in **millimetres**, not
+    pixels. A layout is a page design first and a screen view second - what it
+    is worth doing at all is printing or exporting it - and a design stored in
+    screen pixels has no honest answer to "how big is this on A4". The canvas
+    zoom is purely a viewing state and never touches the stored numbers.
+
+    One layout per album (album_id is unique), created the first time the album
+    is opened on the canvas."""
+
+    __tablename__ = "album_layouts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    album_id: Mapped[str] = mapped_column(ForeignKey("albums.id"), unique=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
+    # "pages" = a run of fixed-size sheets, like a photo book. "infinite" = one
+    # unbounded plane, like a pinboard - the same coordinates, just nothing to
+    # fall off the edge of.
+    page_mode: Mapped[str] = mapped_column(String, default="pages", server_default="pages")
+    page_width_mm: Mapped[float] = mapped_column(Float, default=297.0)
+    page_height_mm: Mapped[float] = mapped_column(Float, default=210.0)
+    # Pages mode only; the canvas adds and removes sheets at the end.
+    page_count: Mapped[int] = mapped_column(Integer, default=1)
+    # Paper colour behind the photos (any CSS colour the picker writes).
+    background: Mapped[str] = mapped_column(String, default="#ffffff")
+    # Editing aids - remembered per layout, since a scrapbook page and a strict
+    # grid page want different ones.
+    show_grid: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    grid_mm: Mapped[float] = mapped_column(Float, default=10.0)
+    snap: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # Free canvas only: draw the outline of the sheets this design WOULD be cut
+    # into, using page_width_mm/page_height_mm (which the free canvas otherwise
+    # only carries around). Laying out against them means switching to Pages
+    # later is a relabelling rather than a redesign.
+    show_page_guide: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Whether this album's canvas appears in the Canvases shelf on the Albums
+    # page. Opt-in per canvas, chosen inside the canvas itself.
+    show_in_canvases: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # The version the Canvases shelf shows: the one last kept or last loaded.
+    # A plain id rather than a ForeignKey - the two tables would otherwise
+    # point at each other, and a dangling id here only means "fall back to the
+    # newest version", never a broken page.
+    active_version_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    album: Mapped["Album"] = relationship(back_populates="layout")
+    items: Mapped[list["LayoutItem"]] = relationship(
+        back_populates="layout", cascade="all, delete-orphan"
+    )
+    versions: Mapped[list["LayoutVersion"]] = relationship(
+        back_populates="layout", cascade="all, delete-orphan"
+    )
+
+
+class LayoutItem(Base):
+    """One thing on the canvas: a photo in a frame, or a piece of text."""
+
+    __tablename__ = "layout_items"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    layout_id: Mapped[str] = mapped_column(ForeignKey("album_layouts.id"), index=True)
+    # "photo" (image_id set) or "text" (text set).
+    kind: Mapped[str] = mapped_column(String, default="photo")
+    image_id: Mapped[str | None] = mapped_column(ForeignKey("images.id"), nullable=True, index=True)
+    # Which sheet the item sits on; always 0 on an infinite canvas.
+    page: Mapped[int] = mapped_column(Integer, default=0)
+    # The frame, in mm from the top-left of its page.
+    x_mm: Mapped[float] = mapped_column(Float, default=0.0)
+    y_mm: Mapped[float] = mapped_column(Float, default=0.0)
+    width_mm: Mapped[float] = mapped_column(Float, default=60.0)
+    height_mm: Mapped[float] = mapped_column(Float, default=40.0)
+    # Clockwise degrees around the frame's centre.
+    rotation: Mapped[float] = mapped_column(Float, default=0.0)
+    z: Mapped[int] = mapped_column(Integer, default=0)
+    # How the photo sits INSIDE its frame, so a frame can be any shape without
+    # squashing the picture: the photo is scaled to cover the frame, then by
+    # `content_scale` on top, then shifted by content_dx/dy - both expressed as
+    # a fraction of the frame's own width/height so the crop survives resizing
+    # the frame.
+    content_scale: Mapped[float] = mapped_column(Float, default=1.0)
+    content_dx: Mapped[float] = mapped_column(Float, default=0.0)
+    content_dy: Mapped[float] = mapped_column(Float, default=0.0)
+    # Text items only.
+    text: Mapped[str | None] = mapped_column(String, nullable=True)
+    # JSON blob of the text look (size in mm, colour, weight, italic, align).
+    # A blob rather than columns: this is presentation nobody queries by, and
+    # every new knob would otherwise be a migration.
+    style: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    layout: Mapped["AlbumLayout"] = relationship(back_populates="items")
+
+    @property
+    def style_dict(self) -> dict:
+        if not self.style:
+            return {}
+        try:
+            value = json.loads(self.style)
+        except ValueError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+
+class LayoutVersion(Base):
+    """A named, frozen copy of one album's canvas - "the draft I liked on
+    Tuesday". The working layout (AlbumLayout + LayoutItem) keeps autosaving
+    over itself; a version is the moment the user said "keep this one".
+
+    The whole document lives in `doc` as a single JSON blob in the exact shape
+    the save endpoint accepts (schemas.AlbumLayoutIn). A blob rather than a
+    copy of the item rows: nobody queries inside a version, restoring means
+    replaying it through the normal save path anyway, and every future layout
+    field would otherwise mean migrating this table too."""
+
+    __tablename__ = "layout_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    layout_id: Mapped[str] = mapped_column(ForeignKey("album_layouts.id"), index=True)
+    name: Mapped[str] = mapped_column(String, default="")
+    doc: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    layout: Mapped["AlbumLayout"] = relationship(back_populates="versions")

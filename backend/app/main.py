@@ -35,6 +35,10 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    # The editor reads these off the preview response (which tier was actually
+    # rendered, and where a region tile belongs); without exposing them a
+    # cross-origin renderer (dev server, Electron) sees them as absent.
+    expose_headers=["X-Rollfilm-Tier", "X-Rollfilm-Frame", "X-Rollfilm-Box"],
 )
 
 app.include_router(images.router)

@@ -2,7 +2,9 @@ import io
 import json
 import math
 import os
+import logging
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable
@@ -559,7 +561,7 @@ def _box_min(dark: np.ndarray, radius: int) -> np.ndarray:
     return out
 
 
-def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
+def _dehaze(arr: np.ndarray, amount: int, ref_long_edge: float | None = None) -> np.ndarray:
     """Real dehaze (replaces the old per-pixel veil-subtract hack).
 
     Positive: dark-channel-prior haze removal - estimate the atmospheric light
@@ -600,7 +602,10 @@ def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
     # kills both block artifacts and edge halos.
     coarse = cv2.resize(dsmall.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
     gray = (arr @ _LUMA).astype(np.float32)
-    dark = cv2.ximgproc.guidedFilter(gray, coarse, int(max(8, max(h, w) / 40)), 1e-3)
+    # The filter radius belongs to the photo, not to the tile being rendered.
+    dark = cv2.ximgproc.guidedFilter(
+        gray, coarse, int(max(8, (ref_long_edge or max(h, w)) / 40)), 1e-3
+    )
     dark = np.clip(dark, 0.0, 1.0)
 
     # Floor t at 0.4 (max ~2.5x amplification): lower floors turn fine detail
@@ -627,7 +632,9 @@ def _dehaze(arr: np.ndarray, amount: int) -> np.ndarray:
 _CHROMA_NOISE_K = 4.0
 
 
-def _denoise_image(image: PILImage.Image, luma_amt: int, color_amt: int) -> PILImage.Image:
+def _denoise_image(
+    image: PILImage.Image, luma_amt: int, color_amt: int, ref_short_edge: float | None = None
+) -> PILImage.Image:
     """Camera-style NR, split by channel in YCrCb. The ugly part of high-ISO
     noise is the low-frequency colour blotching (rainbow mottling), whose blobs
     are far larger than non-local means' 7px patch / 21px search window - no
@@ -651,7 +658,7 @@ def _denoise_image(image: PILImage.Image, luma_amt: int, color_amt: int) -> PILI
         # averaging), which reads as lifted blacks / flattened contrast at
         # higher amounts. Add back the *original* image's low-frequency luma so
         # denoising only ever removes fine-grained texture, never tonality.
-        sigma = max(4.0, min(ycc.shape[:2]) / 200.0)
+        sigma = max(4.0, (ref_short_edge or min(ycc.shape[:2])) / 200.0)
         tone_shift = cv2.GaussianBlur(y.astype(np.float32), (0, 0), sigma) - cv2.GaussianBlur(
             y_dn.astype(np.float32), (0, 0), sigma
         )
@@ -828,7 +835,9 @@ _MIST_TINT = np.array([1.03, 1.00, 0.95], dtype=np.float32)
 _MIST_FIELD_PX = 512
 
 
-def _mist(arr: np.ndarray, amount: int, light_sources: bool = True) -> np.ndarray:
+def _mist(
+    arr: np.ndarray, amount: int, light_sources: bool = True, ref_long_edge: float | None = None
+) -> np.ndarray:
     """Pro-Mist-style optical diffusion: light scattered *out of* the highlights
     and spread back across the frame through a heavy-tailed PSF, in linear light.
 
@@ -874,7 +883,9 @@ def _mist(arr: np.ndarray, amount: int, light_sources: bool = True) -> np.ndarra
     src = lin * mask[..., None]
 
     h, w = lin.shape[:2]
-    scale = min(1.0, _MIST_FIELD_PX / max(h, w))
+    # Same photo-pixels per field-pixel as a whole-frame render: the field is
+    # sized for the frame, and a tile takes its share of it.
+    scale = min(1.0, _MIST_FIELD_PX / (ref_long_edge or max(h, w)))
     if scale < 1.0:
         small = cv2.resize(
             src,
@@ -883,7 +894,7 @@ def _mist(arr: np.ndarray, amount: int, light_sources: bool = True) -> np.ndarra
         )
     else:
         small = src
-    base = max(1.5, max(small.shape[:2]) / _MIST_BASE_DIV)
+    base = max(1.5, max(h, w) * scale / _MIST_BASE_DIV)
     halo = np.zeros_like(small)
     for radius_scale, weight in _MIST_PSF:
         halo += _box_gauss(small, base * radius_scale) * weight
@@ -1475,13 +1486,15 @@ def _grain_pil(image: PILImage.Image, adj: dict) -> PILImage.Image:
     return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
 
 
-def _apply_local_adjustments(arr: np.ndarray, madj: dict) -> np.ndarray:
+def _apply_local_adjustments(
+    arr: np.ndarray, madj: dict, ref_long_edge: float | None = None
+) -> np.ndarray:
     """Render a mask's local adjustments on a copy of the (already globally-toned)
     array: the spatial detail passes it can use (clarity/structure/sharpness/
     dehaze) plus the tonal/colour pass. Whole-image effects (grain, vignette,
     glow, mist) are global-only and never applied per mask."""
     full = develop.normalize(madj)
-    long_edge = max(arr.shape[:2])
+    long_edge = ref_long_edge or max(arr.shape[:2])
     cl = full.get("clarity", 0)
     if cl:
         arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
@@ -1496,11 +1509,14 @@ def _apply_local_adjustments(arr: np.ndarray, madj: dict) -> np.ndarray:
         )
     dh = full.get("dehaze", 0)
     if dh:
-        arr = _dehaze(arr, dh)
+        arr = _dehaze(arr, dh, long_edge)
     return _adjust_array(arr, full)
 
 
-def apply_masks(arr: np.ndarray, adj: dict, peek: str | None = None) -> tuple[np.ndarray, np.ndarray | None]:
+def apply_masks(
+    arr: np.ndarray, adj: dict, peek: str | None = None, view=None,
+    ref_long_edge: float | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
     """Blend each mask's local adjustments into the image, weighted by the mask's
     generated field * opacity (inverted if the mask is inverted). Masks with no
     region or no non-default adjustment are skipped.
@@ -1524,7 +1540,7 @@ def apply_masks(arr: np.ndarray, adj: dict, peek: str | None = None) -> tuple[np
         renders = mask.get("visible", True) and not develop.is_neutral(madj)
         if not renders and not wanted:
             continue
-        field = masks.generate_mask_field(mask, arr)
+        field = masks.generate_mask_field(mask, arr, view)
         m = field * (mask.get("opacity", 100) / 100.0)
         if mask.get("invert"):
             m = 1.0 - m
@@ -1533,7 +1549,7 @@ def apply_masks(arr: np.ndarray, adj: dict, peek: str | None = None) -> tuple[np
             peek_field = m
         if not renders or float(m.max()) <= 0.0:
             continue
-        adjusted = _apply_local_adjustments(arr.copy(), madj)
+        adjusted = _apply_local_adjustments(arr.copy(), madj, ref_long_edge)
         m3 = m[..., None]
         arr = arr * (1.0 - m3) + adjusted * m3
     return np.clip(arr, 0.0, 1.0), peek_field
@@ -1553,13 +1569,20 @@ _PEEK_GAP = 0.12
 _PEEK_PERIOD_FRAC = 1 / 110
 
 
-def paint_mask_peek(arr: np.ndarray, field: np.ndarray) -> np.ndarray:
+def paint_mask_peek(arr: np.ndarray, field: np.ndarray, view=None) -> np.ndarray:
     """Paint the zebra over the area `field` covers, its alpha following the
-    field - so a feathered edge marks as a fade, not as a hard border."""
+    field - so a feathered edge marks as a fade, not as a hard border.
+
+    The stripes belong to the PHOTO, not to the array being painted: a zoomed
+    tile (see masks.FieldView) sizes its period from the whole frame and phases
+    its diagonal from the frame's origin, so the zebra on a tile is pixel-for-
+    pixel the zebra the whole render would have put there."""
     h, w = field.shape
-    period = max(4.0, max(h, w) * _PEEK_PERIOD_FRAC)
-    xs = np.arange(w, dtype=np.float32)[None, :]
-    ys = np.arange(h, dtype=np.float32)[:, None]
+    x0, y0 = (view.x0, view.y0) if view is not None else (0, 0)
+    full = max(view.full_w, view.full_h) if view is not None else max(h, w)
+    period = max(4.0, full * _PEEK_PERIOD_FRAC)
+    xs = (np.arange(w, dtype=np.float32) + x0)[None, :]
+    ys = (np.arange(h, dtype=np.float32) + y0)[:, None]
     bar = ((xs + ys) % period) < (period * 0.5)  # 45 degrees, half bar / half gap
     a = (field * np.where(bar, _PEEK_BAR, _PEEK_GAP).astype(np.float32))[..., None]
     return np.clip(arr * (1.0 - a) + _PEEK_RGB * a, 0.0, 1.0)
@@ -1663,7 +1686,9 @@ def apply_adjustments(
     )
 
 
-def _denoise_stage(arr: np.ndarray, adj: dict, fast: bool) -> np.ndarray:
+def _denoise_stage(
+    arr: np.ndarray, adj: dict, fast: bool, ref_short_edge: float | None = None
+) -> np.ndarray:
     """Denoise (spatial), split into Luminance + Colour like RapidRAW - the two
     halves of high-ISO noise are removed by different amounts of smoothing
     (colour blotching is the ugly part and the eye barely resolves chroma
@@ -1681,14 +1706,15 @@ def _denoise_stage(arr: np.ndarray, adj: dict, fast: bool) -> np.ndarray:
     if fast or (ln <= 0 and cn <= 0):
         return arr
     denoised = _denoise_image(
-        PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB"), ln, cn
+        PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB"), ln, cn, ref_short_edge
     )
     return np.asarray(denoised, dtype=np.float32) / 255.0
 
 
 def apply_adjustments_linear(
     lin: np.ndarray, base_gain: float, adj: dict, include_grain: bool = True, fast: bool = False,
-    tone_cache_key: str | None = None, peek: str | None = None,
+    tone_cache_key: str | None = None, peek: str | None = None, view=None,
+    is_stale: Callable[[], bool] | None = None,
 ) -> PILImage.Image:
     """The develop pipeline on a scene-referred linear float base (the RAW
     demosaic, values may exceed 1.0 after the gain).
@@ -1705,6 +1731,11 @@ def apply_adjustments_linear(
     and thumbnails don't, since they render each frame once. It changes nothing
     about the output: the cut is at a point where the two passes above depend on
     their own sliders and nothing else (see _POST_DENOISE_KEYS).
+
+    `view` (a masks.FieldView) says which tile of the frame `lin` is, for the
+    editor's zoomed render: everything positional - the masks and the vignette -
+    then keeps computing against the whole frame while only the tile's pixels
+    are produced. The default is the whole frame, which is every other caller.
 
     `include_grain=False` skips the grain pass so the caller can add grain
     *after* downscaling to the output size (see generate_derivatives): grain
@@ -1742,7 +1773,14 @@ def apply_adjustments_linear(
     the pointer, which just trades one kind of unusable for another. Those four
     come back on the accurate render at pointer-up, so the settled preview - and
     the save - are unchanged either way."""
-    long_edge = max(lin.shape[:2])
+    # Every resolution-dependent radius below is measured against the WHOLE
+    # frame, never the array in hand. A zoomed tile IS a smaller array of the
+    # same photo: scaling clarity, sharpening or denoise to the tile would
+    # develop it differently from the frame it is standing in for, and the user
+    # would watch the look change as the native render swapped in.
+    ref_h, ref_w = (view.full_h, view.full_w) if view is not None else lin.shape[:2]
+    long_edge = max(ref_h, ref_w)
+    short_edge = min(ref_h, ref_w)
     if develop.is_neutral(adj) and peek is None:
         # Nothing but the neutral rendering (gain + shoulder) to do. Checked
         # before the cache so a neutral edit can never take a cached stage and
@@ -1755,12 +1793,23 @@ def apply_adjustments_linear(
     # one; exports and thumbnails don't) the result is reusable. That is what
     # makes a Clarity drag cheap: it re-runs the detail pass and downwards, not
     # the ~360ms denoise sitting above it. See _POST_DENOISE_KEYS for the split.
+    # `is_stale` (the editor preview passes one) lets a superseded render bail
+    # between passes instead of finishing: the client aborts its fetch the
+    # moment a newer edit state exists, but the numpy passes of an already
+    # started settle render used to run to completion anyway - 2-3s of CPU and
+    # memory bandwidth competing with the very scrub frames the user is
+    # waiting on. Checked between the expensive stages, where a bail is free.
+    def _abort_if_stale() -> None:
+        if is_stale is not None and is_stale():
+            raise PreviewSuperseded()
+
     key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
     arr = _tone_stage_get(key)
     if arr is None:
         arr = _linear_tone_block(lin, adj, base_gain)
-        arr = _denoise_stage(arr, adj, fast)
+        arr = _denoise_stage(arr, adj, fast, short_edge)
         _tone_stage_put(key, arr)
+    _abort_if_stale()
     # Detail (spatial): clarity = large-radius local contrast, structure =
     # medium-radius local contrast, sharpness = small-radius edge enhancement.
     # These run during a drag too - they're the ones you most need to see move
@@ -1783,7 +1832,8 @@ def apply_adjustments_linear(
             # cheap enough to keep up, so the two halves of the look now move
             # together - which is the point, since the softening on its own
             # doesn't look like what the slider is going to settle at.
-            arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False)
+            arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False,
+                        ref_long_edge=long_edge)
     st = adj.get("structure", 0)
     if st:
         arr = develop_effects.apply_structure(arr, st)
@@ -1800,21 +1850,24 @@ def apply_adjustments_linear(
     ca_by = adj.get("chromatic_aberration_blue_yellow", 0)
     if ca_rc or ca_by:
         arr = develop_effects.apply_chromatic_aberration(arr, ca_rc, ca_by)
+    _abort_if_stale()
     # Dehaze is spatial too (transmission map from the dark channel), so it runs
     # here rather than in the per-pixel tonal pass.
     dh = adj.get("dehaze", 0)
     if dh:
-        arr = _dehaze(arr, dh)
+        arr = _dehaze(arr, dh, long_edge)
     arr = _display_color_block(arr, adj)
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
-    arr, peek_field = apply_masks(arr, adj, peek=peek)
+    _abort_if_stale()
+    arr, peek_field = apply_masks(arr, adj, peek=peek, view=view, ref_long_edge=long_edge)
     # Highlight-bloom / diffusion effects run on the *toned* image (like a filter
     # in front of the lens), after the tonal pass. Mist and halation are
     # affordable at scrub size (+34/+39ms); glow and flare are not (+143/+84),
     # so those two sit out a drag and are restored on the pointer-up render.
+    _abort_if_stale()
     if adj.get("mist", 0) > 0:
-        arr = _mist(arr, adj["mist"])
+        arr = _mist(arr, adj["mist"], ref_long_edge=long_edge)
     if not fast and adj.get("glow_amount", 0) > 0:
         arr = develop_effects.apply_glow(arr, adj["glow_amount"])
     if adj.get("halation_amount", 0) > 0:
@@ -1828,13 +1881,15 @@ def apply_adjustments_linear(
             adj.get("vignette_midpoint", 50),
             adj.get("vignette_roundness", 0),
             adj.get("vignette_feather", 50),
+            view=view,
         )
+    _abort_if_stale()
     if include_grain and adj.get("grain_amount", 0) > 0:
         arr = _apply_grain(arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50))
     # Last of all, so the marking is the flat pink it was meant to be rather than
     # something the vignette darkened and the grain crawled over.
     if peek_field is not None:
-        arr = paint_mask_peek(arr, peek_field)
+        arr = paint_mask_peek(arr, peek_field, view=view)
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     return PILImage.fromarray(out, "RGB")
 
@@ -2092,6 +2147,8 @@ ULTRA_EDITOR_PREVIEW_PX = 3900
 # Reentrant so generate_full/export_jpeg_bytes can hold it across their
 # "did a concurrent render already land full.jpg?" recheck while the render
 # they then call (render_edited_image) re-acquires it.
+logger = logging.getLogger(__name__)
+
 _full_render_lock = threading.RLock()
 
 
@@ -2115,36 +2172,169 @@ def _downscale_linear(arr: np.ndarray, max_px: int) -> np.ndarray:
     return cv2.resize(arr.astype(np.float32), (nw, nh), interpolation=cv2.INTER_AREA)
 
 
-@lru_cache(maxsize=12)
+# The decoded bases, newest last. An explicit cache rather than lru_cache
+# because the interesting question is not "is THIS size cached" but "is a BIGGER
+# one" - see _cached_editor_base.
+_BASE_CACHE: "OrderedDict[tuple[str, str, int, int], tuple[np.ndarray, float]]" = OrderedDict()
+_BASE_CACHE_MAX = 12
+_base_cache_lock = threading.Lock()
+# Bases being computed right now, so a second asker waits instead of decoding
+# the same thing beside the first. Guarded by _base_cache_lock.
+_BASE_INFLIGHT: dict[tuple[str, str, int, int], threading.Event] = {}
+
+
+def _base_cache_clear() -> None:
+    with _base_cache_lock:
+        _BASE_CACHE.clear()
+
+
 def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int) -> tuple[np.ndarray, float]:
     """The decoded, downscaled LINEAR base (float16 array + auto-exposure gain)
     the editor preview renders on top of. Cached so slider moves only re-run the
-    edit pipeline, not the (expensive) RAW decode. Keyed by file mtime so an
-    on-disk change invalidates; the native-decode settings toggle clears the
-    whole cache (see api/routes/settings.py). float16 halves the cache RAM and
-    still beats a 16-bit-integer base for shadow precision; the array is marked
-    read-only - callers convert to float32, which copies. maxsize covers the
-    four working sizes (SCRUB_PREVIEW_PX / EDITOR_PREVIEW_PX /
-    FULL_EDITOR_PREVIEW_PX / ULTRA_EDITOR_PREVIEW_PX) for a couple of images
-    being browsed between in the editor.
+    edit pipeline, not the (expensive) decode. Keyed by file mtime so an on-disk
+    change invalidates; the native-decode settings toggle clears the whole cache
+    (see api/routes/settings.py). float16 halves the cache RAM and still beats a
+    16-bit-integer base for shadow precision; the array is marked read-only -
+    callers convert to float32, which copies.
 
-    The scrub base is downscaled from the interactive base rather than decoded
-    afresh: the RAW demosaic is the one genuinely slow step, so when the 1600px
-    entry is already warm we resize *it* down to 750px instead of paying the
-    decode again for the smaller size."""
-    if max_px == SCRUB_PREVIEW_PX:
-        base, gain = _cached_editor_base(image_id, path_str, mtime_ns, EDITOR_PREVIEW_PX)
-        small = _downscale_linear(base.astype(np.float32), max_px).astype(np.float16)
-        small.flags.writeable = False
-        return small, gain
-    # max_px is also the decode budget (see load_linear_base): the base is about
-    # to be downscaled to it anyway, so decoding a 26MP JPEG at full size first
-    # only cost memory. Keeps this base consistent with the one
-    # generate_derivatives / render_base_preview_bytes build.
-    lin, gain = raw_service.load_linear_base(Path(path_str), half_size=True, max_px=max_px)
-    out = _downscale_linear(lin, max_px).astype(np.float16)
-    out.flags.writeable = False
-    return out, gain
+    A size that is not cached is DERIVED from any larger cached base of the same
+    file rather than decoded again. That is what makes the editor's quality
+    ladder cheap: measured on a 27MP JPEG, decoding the 2600px base costs 753ms
+    and the 3900px one 2924ms, while the pipeline on top of a warm base is
+    143ms and 510ms. Climbing the ladder used to pay a fresh decode per rung -
+    seconds of nothing happening between two frames that each take a fraction of
+    that to render. Downscaling a base already in hand costs milliseconds.
+    """
+    key = (image_id, path_str, mtime_ns, max_px)
+    # Single-flight: one decode per base, however many ask for it. Without this
+    # the editor's open sequence really did the work twice - the first frame and
+    # the compare original both wanted the same base and each ran the full
+    # decode, and the background warm-up could decode the very size a settle was
+    # about to ask for. Seen in the field as two "accurate" renders of 2.3s each
+    # for a base that costs 150ms warm. Whoever registers first computes; the
+    # rest wait on the event and read the cache.
+    while True:
+        with _base_cache_lock:
+            hit = _BASE_CACHE.get(key)
+            if hit is not None:
+                _BASE_CACHE.move_to_end(key)
+                return hit
+            in_flight = _BASE_INFLIGHT.get(key)
+            if in_flight is None:
+                done = threading.Event()
+                _BASE_INFLIGHT[key] = done
+                bigger_key = min(
+                    (k for k in _BASE_CACHE if k[:3] == key[:3] and k[3] > max_px),
+                    key=lambda k: k[3],
+                    default=None,
+                )
+                source = _BASE_CACHE.get(bigger_key) if bigger_key is not None else None
+                break
+        # Outside the lock, or nobody could ever finish. A lapsed wait falls
+        # through to the loop, which re-checks the cache and, if the computer
+        # died without delivering, takes over the job itself.
+        in_flight.wait(timeout=60)
+
+    try:
+        out = _compute_editor_base(image_id, path_str, mtime_ns, max_px, source)
+        with _base_cache_lock:
+            _BASE_CACHE[key] = out
+            _BASE_CACHE.move_to_end(key)
+            while len(_BASE_CACHE) > _BASE_CACHE_MAX:
+                _BASE_CACHE.popitem(last=False)
+        return out
+    finally:
+        # On success and on failure alike: waiters must wake either way, and a
+        # failed compute leaves no in-flight entry to dangle behind it.
+        with _base_cache_lock:
+            _BASE_INFLIGHT.pop(key, None)
+        done.set()
+
+
+def _compute_editor_base(
+    image_id: str,
+    path_str: str,
+    mtime_ns: int,
+    max_px: int,
+    source: tuple[np.ndarray, float] | None,
+) -> tuple[np.ndarray, float]:
+    if source is None and max_px == SCRUB_PREVIEW_PX:
+        # Nothing bigger yet: decode the interactive size and come down from it,
+        # never the scrub size on its own. The decode is the same price either
+        # way and this one is about to be needed anyway.
+        source = _cached_editor_base(image_id, path_str, mtime_ns, EDITOR_PREVIEW_PX)
+
+    if source is not None:
+        base, gain = source
+        out_arr = _downscale_linear(base.astype(np.float32), max_px).astype(np.float16)
+    else:
+        # max_px is also the decode budget (see load_linear_base): the base is
+        # about to be downscaled to it anyway, so decoding a 26MP JPEG at full
+        # size first only cost memory. Keeps this base consistent with the one
+        # generate_derivatives / render_base_preview_bytes build.
+        lin, gain = raw_service.load_linear_base(Path(path_str), half_size=True, max_px=max_px)
+        out_arr = _downscale_linear(lin, max_px).astype(np.float16)
+    out_arr.flags.writeable = False
+    return (out_arr, gain)
+
+
+# Kept as an attribute so every existing caller (and test) that clears the cache
+# through the function still works.
+_cached_editor_base.cache_clear = _base_cache_clear
+
+
+# The editor's largest preview base, decoded ahead of being asked for.
+#
+# The quality ladder climbs to bigger bases as the user stops moving, and each
+# rung used to pay its own decode in the middle of the editing session -
+# measured on a 27MP JPEG, 753ms for the 2600px base and 2924ms for the 3900px
+# one, against 143ms and 510ms for the pipeline that runs on top of them. So the
+# decode does not belong in the ladder at all: it happens once, on a background
+# thread, from the moment the image is opened. Every rung then derives its base
+# from that one (see _cached_editor_base) and costs only its pipeline.
+_warm_lock = threading.Lock()
+_warming: set[str] = set()
+
+
+# How long the warm-up holds back before it starts decoding. The frame that was
+# just asked for is what the user is waiting on, and the decode is a CPU hog
+# that would otherwise race it: measured on a 27MP JPEG, warming during the
+# first render pushed that render from 755ms to 1425ms. Waiting until it is
+# delivered costs the warm-up nothing - it has seconds before the ladder wants
+# its result.
+_WARM_DELAY_S = 0.35
+
+
+def warm_editor_base(image_id: str, path_str: str, mtime_ns: int) -> None:
+    """Decode the biggest preview base for this image in the background.
+
+    Cheap to call on every preview request: it returns at once if the base is
+    already there or is on its way. One thread per image, and the work is the
+    decode the ladder would otherwise do while the user waits."""
+    key = f"{image_id}:{mtime_ns}"
+    top = ULTRA_EDITOR_PREVIEW_PX
+    with _base_cache_lock:
+        if (image_id, path_str, mtime_ns, top) in _BASE_CACHE:
+            return
+    with _warm_lock:
+        if key in _warming:
+            return
+        _warming.add(key)
+
+    def run() -> None:
+        try:
+            time.sleep(_WARM_DELAY_S)
+            _cached_editor_base(image_id, path_str, mtime_ns, top)
+        except Exception:
+            # A failed warm-up costs nothing: the ladder decodes as it always
+            # did. Not worth a stack trace in the log for a photo that is
+            # probably just unreadable at the moment.
+            logger.debug("editor base warm-up failed for %s", image_id, exc_info=True)
+        finally:
+            with _warm_lock:
+                _warming.discard(key)
+
+    threading.Thread(target=run, name="editor-base-warm", daemon=True).start()
 
 
 # The editor's true-100%-zoom base: the full-resolution linear decode, held for
@@ -2155,17 +2345,94 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
 _native_editor_base: tuple[str, int, np.ndarray, float] | None = None
 
 
+# Serialises the full-resolution decode itself - and nothing else. It is NOT
+# _full_render_lock on purpose: the decode runs 6-20s, and holding the render
+# lock for it meant every settled preview queued behind a background warm-up.
+# The warm-up was built so nobody waits on this decode; a lock shared with the
+# renders quietly rebuilt exactly that wait.
+_native_decode_lock = threading.Lock()
+
+
 def _cached_native_base(image_id: str, path_str: str, mtime_ns: int) -> tuple[np.ndarray, float]:
     global _native_editor_base
     hit = _native_editor_base
     if hit and hit[0] == image_id and hit[1] == mtime_ns:
         return hit[2], hit[3]
-    _native_editor_base = None  # free the old frame before decoding the next
-    lin, gain = raw_service.load_linear_base(Path(path_str), half_size=False)
-    out = lin.astype(np.float16)
-    out.flags.writeable = False
-    _native_editor_base = (image_id, mtime_ns, out, gain)
-    return out, gain
+    with _native_decode_lock:
+        # Someone else may have finished this exact decode while we waited.
+        hit = _native_editor_base
+        if hit and hit[0] == image_id and hit[1] == mtime_ns:
+            return hit[2], hit[3]
+        _native_editor_base = None  # free the old frame before decoding the next
+        lin, gain = raw_service.load_linear_base(Path(path_str), half_size=False)
+        out = lin.astype(np.float16)
+        out.flags.writeable = False
+        _native_editor_base = (image_id, mtime_ns, out, gain)
+        return out, gain
+
+
+_native_warm_lock = threading.Lock()
+_native_warming: set[str] = set()
+
+
+def editor_mtime_ns(image: "Image") -> int:
+    """The file mtime the base caches are keyed by, for callers that only want
+    to ask whether something is cached. 0 when the file cannot be reached -
+    which simply means "not cached", the safe answer everywhere it is used."""
+    from app.services.filesystem import resolve_image_path
+
+    try:
+        return resolve_image_path(image).stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def native_base_ready(image_id: str, mtime_ns: int) -> bool:
+    hit = _native_editor_base
+    return bool(hit and hit[0] == image_id and hit[1] == mtime_ns)
+
+
+def warm_native_base(image_id: str, path_str: str, mtime_ns: int) -> None:
+    """Decode the full-resolution base in the background.
+
+    Nobody may be made to wait for this decode: it is 8s on a 27MP JPEG and 20s
+    on a 40MP raw, and it used to run inside _full_render_lock - so the first
+    zoomed render blocked every other settled render behind it for that whole
+    time, which is what "the editor freezes when I zoom in" was. The render that
+    triggered it is served from the preview tier instead (see
+    render_editor_preview_bytes) and the true native tile follows once this
+    lands."""
+    key = f"{image_id}:{mtime_ns}"
+    if native_base_ready(image_id, mtime_ns):
+        return
+    with _native_warm_lock:
+        if key in _native_warming:
+            return
+        _native_warming.add(key)
+
+    def run() -> None:
+        try:
+            # The zoom that starts this warm-up is answered with an ultra render
+            # in the same breath - and a 40MP decode running beside it slowed
+            # that very answer from ~3s to ~7s (both are memory-bound). So: let
+            # the render in flight finish first. Taking the render lock and
+            # dropping it again is exactly that wait, without holding anything
+            # while the decode itself runs - the mistake this thread used to
+            # make in the other direction.
+            time.sleep(0.2)
+            with _full_render_lock:
+                pass
+            # Deliberately NOT under _full_render_lock: the whole point of this
+            # thread is that preview renders keep flowing while it decodes.
+            # _native_decode_lock inside makes concurrent decodes impossible.
+            _cached_native_base(image_id, path_str, mtime_ns)
+        except Exception:
+            logger.debug("native base warm-up failed for %s", image_id, exc_info=True)
+        finally:
+            with _native_warm_lock:
+                _native_warming.discard(key)
+
+    threading.Thread(target=run, name="native-base-warm", daemon=True).start()
 
 
 def clear_editor_base_caches() -> None:
@@ -2197,6 +2464,9 @@ def render_editor_preview_bytes(
     persp_v: int = 0,
     browse: bool = False,
     peek: str | None = None,
+    region: tuple[float, float, float, float] | None = None,
+    meta: dict | None = None,
+    zoomed: bool = False,
     is_stale: Callable[[], bool] | None = None,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
@@ -2208,6 +2478,9 @@ def render_editor_preview_bytes(
     - `scrub=True`: the frames drawn continuously while a control is dragged -
       a small SCRUB_PREVIEW_PX base with the convolution passes skipped
       (apply_adjustments(fast=True)). Cheap enough to keep the drag fluid.
+      With `zoomed=True` it renders on the accurate tier's base instead: the
+      user is inspecting detail, and the small base upscaled past 4x reads as
+      blocks.
     - default: the accurate EDITOR_PREVIEW_PX render drawn the moment a drag
       ends (full pipeline).
     - `full_quality=True`: renders on a larger (but still bounded, see
@@ -2244,14 +2517,64 @@ def render_editor_preview_bytes(
 
     _bail_if_stale()
     path = resolve_image_path(image)
+    if region is not None and not region_is_supported(adjustments):
+        region = None
+    # The interactive tiers (scrub and the accurate render) honour a region too,
+    # cut from the decoded native base: zoomed far in, a whole 1600px frame
+    # stretched across the viewport is mush, while the visible part of the
+    # native frame is a few hundred pixels a side - sharper AND cheaper. Only
+    # when it is genuinely cheap, though: the native base must already be
+    # decoded (the settle's native request warms it; these frames are being
+    # waited on and must not) and no geometry op may be active (with one,
+    # mapping the tile back into the base is not a slice and costs seconds -
+    # worse than the whole-frame tier it replaces). Peek rides along fine: the
+    # mask field and the zebra are both computed against the whole frame (see
+    # FieldView / paint_mask_peek). The full/ultra refinements are whole-frame
+    # by design.
+    if region is not None and not native:
+        geometry_moves = bool(
+            distortion or rotation or crop or flip_h or flip_v or straighten or persp_h or persp_v
+        )
+        if (
+            full_quality
+            or ultra
+            or geometry_moves
+            or not native_base_ready(image.id, path.stat().st_mtime_ns)
+        ):
+            region = None
+
+    # Asking for native before its base exists would mean waiting out the whole
+    # decode with the render lock held. Start it in the background and answer
+    # with the tier below, which is on screen in a fraction of the time; the
+    # caller is told what it actually got (see served_tier) and comes back for
+    # the real thing once the base is there.
+    if native and not native_base_ready(image.id, path.stat().st_mtime_ns):
+        warm_native_base(image.id, str(path), path.stat().st_mtime_ns)
+        native = False
+        ultra = True
+        region = None
+
+    _bail_if_stale()
     if native:
         with _full_render_lock:
             _bail_if_stale()
             return _render_editor_bytes(
                 image, path, 0, rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=90, fast=False, native=True,
-                browse=browse, peek=peek,
+                region=region, meta=meta,
+                browse=browse, peek=peek, is_stale=is_stale,
             )
+    if region is not None:
+        # The interactive tile (see the gate above): scrub or accurate quality,
+        # cut from the native base. Deliberately NOT under _full_render_lock -
+        # the tile is small, the base is shared read-only, and these frames must
+        # not queue behind a seconds-long settle render.
+        return _render_editor_bytes(
+            image, path, 0, rotation, crop, adjustments, distortion,
+            flip_h, flip_v, straighten, persp_h, persp_v,
+            quality=88 if scrub else 90, fast=scrub, native=True,
+            region=region, meta=meta, browse=browse, peek=peek, is_stale=is_stale,
+        )
     if full_quality or ultra:
         # Serialise + bound resolution so a burst of settle-renders can't stack
         # into many GB of concurrent full-frame numpy arrays.
@@ -2261,18 +2584,87 @@ def render_editor_preview_bytes(
                 image, path, ULTRA_EDITOR_PREVIEW_PX if ultra else FULL_EDITOR_PREVIEW_PX,
                 rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=95, fast=False, browse=browse,
-                peek=peek,
+                peek=peek, is_stale=is_stale,
             )
     if scrub:
+        # Zoomed in, the scrub frames are what the user is judging detail on,
+        # and the small base blown up 4-7x reads as blocks. The accurate tier's
+        # base is already cached (no extra decode), and the fast pipeline on it
+        # measures 75ms/frame on a 40MP raw - still a fluid drag, at 2.1x the
+        # pixels. At fit view the small base stays: 35ms/frame keeps the drag
+        # glued to the pointer, and the upscale there is mild.
         return _render_editor_bytes(
-            image, path, SCRUB_PREVIEW_PX, rotation, crop, adjustments, distortion,
-            flip_h, flip_v, straighten, persp_h, persp_v, quality=82, fast=True, browse=browse,
-            peek=peek,
+            image, path, EDITOR_PREVIEW_PX if zoomed else SCRUB_PREVIEW_PX,
+            rotation, crop, adjustments, distortion,
+            flip_h, flip_v, straighten, persp_h, persp_v,
+            quality=88 if zoomed else 82, fast=True, browse=browse,
+            peek=peek, is_stale=is_stale,
         )
     return _render_editor_bytes(
         image, path, max_px, rotation, crop, adjustments, distortion,
         flip_h, flip_v, straighten, persp_h, persp_v, quality=88, fast=False, browse=browse,
-        peek=peek,
+        peek=peek, is_stale=is_stale,
+    )
+
+
+# How much extra is rendered around a zoomed tile before it is trimmed away.
+# The detail passes (clarity, structure, sharpening, denoise, dehaze) each read
+# a neighbourhood around every pixel, so a tile rendered to its exact bounds
+# would carry a visible seam where those passes ran out of image. 96px at the
+# native tier is comfortably wider than any of their radii and costs a few
+# percent of a viewport-sized tile.
+REGION_PAD_PX = 96
+
+
+def region_is_supported(adj: dict) -> bool:
+    """Whether a zoomed tile can stand in for the whole-frame render.
+
+    Some effects cannot be computed from a tile at all, and for those the honest
+    answer is to render the frame whole. None of them is what anyone zooms to
+    100% to judge.
+
+    Defined by the frame's edges: film grain sizes its particles from the
+    image's long edge and draws a fresh noise field per render (a tile would
+    carry both the wrong particle size and a different texture from the frame it
+    replaces), and the frame border is drawn around the photo, which a tile from
+    the middle of it does not have.
+
+    Defined by light from outside the tile: the diffusion effects - mist, glow,
+    halation, lens flare - spread bright areas across a large fraction of the
+    picture. A light source just off the edge of the viewport lights up what IS
+    in it, so the tile would have to be rendered with most of the frame around
+    it as padding, which is the whole cost this exists to avoid. (The detail
+    passes are a different matter: their radii are a few dozen pixels, which is
+    what REGION_PAD_PX covers.)"""
+    if adj.get("grain_amount", 0):
+        return False
+    if adj.get("frame_width", 0):
+        return False
+    for spreads in ("mist", "glow_amount", "halation_amount", "flare_amount"):
+        if adj.get(spreads, 0):
+            return False
+    # Negative clarity layers the diffusion pass on top of the softening.
+    if adj.get("clarity", 0) < 0:
+        return False
+    return True
+
+
+def _region_box(
+    region: tuple[float, float, float, float], full_w: int, full_h: int
+) -> tuple[int, int, int, int]:
+    """The padded pixel box a region asks for, clamped to the frame. The padding
+    is what keeps the detail passes from running out of image at the tile's edge
+    (see REGION_PAD_PX); it is trimmed off again after the render."""
+    rx, ry, rw, rh = region
+    x0 = max(0, min(full_w - 1, int(round(rx * full_w))))
+    y0 = max(0, min(full_h - 1, int(round(ry * full_h))))
+    x1 = max(x0 + 1, min(full_w, int(round((rx + rw) * full_w))))
+    y1 = max(y0 + 1, min(full_h, int(round((ry + rh) * full_h))))
+    return (
+        max(0, x0 - REGION_PAD_PX),
+        max(0, y0 - REGION_PAD_PX),
+        min(full_w, x1 + REGION_PAD_PX),
+        min(full_h, y1 + REGION_PAD_PX),
     )
 
 
@@ -2294,16 +2686,89 @@ def _render_editor_bytes(
     native: bool = False,
     browse: bool = False,
     peek: str | None = None,
+    region: tuple[float, float, float, float] | None = None,
+    meta: dict | None = None,
+    is_stale: Callable[[], bool] | None = None,
 ) -> bytes:
+    """`region` (x, y, w, h as fractions of the finished frame) renders only
+    that part of it - the editor's viewport while zoomed in, where rendering the
+    other 90% of a 40MP frame is seconds of work for pixels nobody can see. The
+    geometry still runs on the whole frame, so what is cut out is exactly the
+    tile the caller asked for, and everything positional below keeps computing
+    against the whole frame (see masks.FieldView)."""
     mtime_ns = path.stat().st_mtime_ns
     if native:
         lin16, gain = _cached_native_base(image.id, str(path), mtime_ns)
     else:
+        # Off the request path: this frame renders on whatever base is already
+        # there while the biggest one decodes alongside, so the rungs above it
+        # never have to wait for a decode. Not while a control is being dragged
+        # (fast=True): those frames arrive by the dozen and each one is being
+        # waited on, so that is the worst possible moment to start a decode.
+        if not fast:
+            warm_editor_base(image.id, str(path), mtime_ns)
         lin16, gain = _cached_editor_base(image.id, str(path), mtime_ns, base_px)
+    # Cut to the region BEFORE anything touches the pixels, whenever the
+    # geometry leaves the frame where it is. This is what makes a zoomed render
+    # cheap rather than merely cheaper: converting a 40MP base to float32 is a
+    # ~480MB allocation and the geometry pass walks all of it, and doing that
+    # first only to throw 94% of it away cost ~5s per render, against ~300ms for
+    # the tile itself. With any geometry active (rotation, crop, straighten,
+    # perspective, flips, distortion) the mapping from the finished frame back
+    # into the base is not a plain slice, so those renders take the long way and
+    # cut afterwards - correctness first; the fast path is the common one.
+    geometry_moves_pixels = bool(
+        distortion or rotation or crop or flip_h or flip_v or straighten or persp_h or persp_v
+    )
+    early_cut: tuple[int, int, int, int] | None = None
+    if region is not None and not geometry_moves_pixels:
+        base_h, base_w = lin16.shape[:2]
+        early_cut = _region_box(region, base_w, base_h)
+        px0, py0, px1, py1 = early_cut
+        lin16 = lin16[py0:py1, px0:px1]
+
+    # Last exit before the big allocations: the float32 copy of a native base
+    # alone is ~480MB.
+    if is_stale is not None and is_stale():
+        raise PreviewSuperseded()
     arr = lin16.astype(np.float32)
     if distortion:
         arr = apply_distortion_array(arr, distortion)
     arr = apply_edits_array(arr, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
+    view = None
+    trim: tuple[int, int, int, int] | None = None
+    if early_cut is not None:
+        px0, py0, px1, py1 = early_cut
+        rx, ry, rw, rh = region
+        x0 = max(0, min(base_w - 1, int(round(rx * base_w))))
+        y0 = max(0, min(base_h - 1, int(round(ry * base_h))))
+        x1 = max(x0 + 1, min(base_w, int(round((rx + rw) * base_w))))
+        y1 = max(y0 + 1, min(base_h, int(round((ry + rh) * base_h))))
+        view = masks.FieldView(px0, py0, base_w, base_h)
+        trim = (x0 - px0, y0 - py0, x1 - x0, y1 - y0)
+        if meta is not None:
+            # Where this tile belongs, in the finished frame's own pixels. The
+            # client composites the tile INTO its copy of the frame, and "which
+            # pixel is the top-left corner" must be the server's answer, not a
+            # re-derivation that can round differently.
+            meta["frame"] = (base_w, base_h)
+            meta["box"] = (x0, y0)
+    elif region is not None:
+        full_h, full_w = arr.shape[:2]
+        rx, ry, rw, rh = region
+        x0 = max(0, min(full_w - 1, int(round(rx * full_w))))
+        y0 = max(0, min(full_h - 1, int(round(ry * full_h))))
+        x1 = max(x0 + 1, min(full_w, int(round((rx + rw) * full_w))))
+        y1 = max(y0 + 1, min(full_h, int(round((ry + rh) * full_h))))
+        # Grow by the padding, render that, and cut the padding off at the end.
+        px0, py0 = max(0, x0 - REGION_PAD_PX), max(0, y0 - REGION_PAD_PX)
+        px1, py1 = min(full_w, x1 + REGION_PAD_PX), min(full_h, y1 + REGION_PAD_PX)
+        arr = arr[py0:py1, px0:px1]
+        view = masks.FieldView(px0, py0, full_w, full_h)
+        trim = (x0 - px0, y0 - py0, x1 - x0, y1 - y0)
+        if meta is not None:
+            meta["frame"] = (full_w, full_h)
+            meta["box"] = (x0, y0)
     # Names the exact array the tone/denoise stage would be computed from, so the
     # cache can only ever be reused for it: the base (image + mtime + tier) plus
     # every geometry op applied above, plus which exposure the render is judged
@@ -2311,7 +2776,7 @@ def _render_editor_bytes(
     # ~480MB, too much of the process to hold for a second of denoise.
     tone_key = None if native else json.dumps(
         [image.id, mtime_ns, base_px, rotation, crop, distortion, flip_h, flip_v,
-         straighten, persp_h, persp_v, browse],
+         straighten, persp_h, persp_v, browse, region],
         sort_keys=True, separators=(",", ":"), default=str,
     )
     # The editor renders the raw NATIVE (base_gain=1.0), never the browsing
@@ -2326,9 +2791,15 @@ def _render_editor_bytes(
     # would only ever say "the edit is brighter" - the honest before/after is
     # against the auto-exposed picture the user actually saw before opening it.
     img = apply_adjustments_linear(
-        arr, gain if browse else 1.0, adjustments, fast=fast, tone_cache_key=tone_key, peek=peek
+        arr, gain if browse else 1.0, adjustments, fast=fast, tone_cache_key=tone_key,
+        peek=peek, view=view, is_stale=is_stale,
     )
+    if trim is not None:
+        tx, ty, tw, th = trim
+        img = img.crop((tx, ty, tx + tw, ty + th))
     img = add_frame(img, adjustments)
+    if is_stale is not None and is_stale():
+        raise PreviewSuperseded()
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=quality)
     return buf.getvalue()

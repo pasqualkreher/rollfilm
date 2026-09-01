@@ -718,8 +718,10 @@ button {
 }
 
 /* Any heading above the bar (e.g. the album title) keeps page-like insets since
-   the page padding is now zero. */
-.page:has(.filter-bar--sticky) > .section-title {
+   the page padding is now zero. The album's bottom Back/name/delete row is a
+   section-title too but NOT a header - excluded, or this higher-specificity
+   rule would override its own margins/gutters (see .album-bottom-bar). */
+.page:has(.filter-bar--sticky) > .section-title:not(.album-bottom-bar) {
   margin: 0;
   padding: 16px 20px 10px;
 }
@@ -746,6 +748,14 @@ button {
    the scrollbar instead of 40px short of it. */
 .page-timeline .page-scroll:not(:has(> .has-scrubber)) {
   padding-right: 20px;
+}
+
+/* The album's grid is followed by its own Back/name/delete bar, which already
+   keeps the 10px the other stage rows keep - the deep foot on top of that
+   pushed Back well below where it sits under a photo or in the editor. The
+   bar IS the foot here (same reasoning as .page-scroll--canvas). */
+.page-timeline .page-scroll:has(+ .album-bottom-bar) {
+  padding-bottom: 0;
 }
 
 /* Bulk-action bar (shown when photos are selected): pinned to the bottom of the
@@ -840,6 +850,20 @@ button {
 .control-group--actions {
   padding-left: 16px;
   border-left: 1px solid var(--border);
+}
+
+/* Every action in the group can be conditional (the album page hides all of
+   them on the canvas), and a divider left standing on its own reads as a
+   rendering fault. */
+.control-group--actions:empty {
+  display: none;
+}
+
+/* Pushed to the far right of the bar, past everything else. For a control that
+   switches the whole page rather than filtering it - the gap is the point, so
+   it reads as belonging to the page and not to the row of filters. */
+.control-group--trailing {
+  margin-left: auto;
 }
 
 @media (max-width: 900px) {
@@ -951,6 +975,14 @@ button {
   font-weight: 600;
 }
 
+/* Icon-only segments: square-ish cells, the glyph centred. */
+.segmented--icons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 7px;
+}
+
 /* Shared text-input styling so every input (album name, Immich, etc.) matches. */
 input[type="text"],
 input[type="password"],
@@ -1039,6 +1071,12 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* Hung from the right edge instead, for chips that sit at the end of a bar. */
+.filter-chip-pop--right {
+  left: auto;
+  right: 0;
 }
 
 /* Inside the panel, controls are ordinary boxed fields again - the flat
@@ -1752,47 +1790,6 @@ textarea:focus-visible {
   border: 0;
 }
 
-/* A view with only one or two photos: enlarge them to fill the visible app
-   area instead of rendering row-height tiles - capped by the viewport height
-   (minus top bar, filter bar and action bar) so no scrolling is ever needed
-   to see the whole photo. Width comes from height × aspect-ratio, additionally
-   capped to the grid width (cqw) so wide panoramas can't overflow sideways. */
-.thumbnail-grid--few {
-  container-type: inline-size;
-  /* Room the photo may take vertically before it would push into a scroll. */
-  --few-max-h: max(240px, calc(100vh - 290px));
-  justify-content: center;
-}
-
-/* The slack-soaking filler would push the (now fixed-size) photos back to the
-   left edge - without it they sit centered in the app area. */
-.thumbnail-grid--few > .grid-filler {
-  display: none;
-}
-
-.thumbnail-grid--few > .thumb-card,
-.thumbnail-grid--few > .import-card {
-  flex: 0 0 auto;
-  width: min(100cqw, calc(var(--few-max-h) * var(--ar, 1.5)));
-}
-
-/* Two photos share the row: each is capped to half the grid width. */
-.thumbnail-grid--few > :nth-child(1):nth-last-child(3),
-.thumbnail-grid--few > :nth-child(2):nth-last-child(2) {
-  width: min(calc((100cqw - 12px) / 2), calc(var(--few-max-h) * var(--ar, 1.5)));
-}
-
-/* Import cards carry a footer below the photo - budget its height in so the
-   card as a whole still fits without scrolling. */
-.thumbnail-grid--few > .import-card {
-  width: min(100cqw, calc((var(--few-max-h) - 56px) * var(--ar, 1.5)));
-}
-
-.thumbnail-grid--few > .import-card:nth-child(1):nth-last-child(3),
-.thumbnail-grid--few > .import-card:nth-child(2):nth-last-child(2) {
-  width: min(calc((100cqw - 12px) / 2), calc((var(--few-max-h) - 56px) * var(--ar, 1.5)));
-}
-
 /* Immich-style date timeline: month/year sections with headers that stick to
    the top of the scroll area as you pass through each month. */
 .timeline {
@@ -2331,18 +2328,6 @@ textarea:focus-visible {
   color: var(--text);
 }
 
-/* The album page's own title: text and box share the heading's type, so
-   clicking the name doesn't make the header jump. */
-.album-title-name {
-  padding: 0;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  letter-spacing: inherit;
-  cursor: text;
-}
-
 .album-title-input {
   padding: 1px 6px;
   border: 1px solid var(--border);
@@ -2361,6 +2346,62 @@ textarea:focus-visible {
   line-height: 0;
   opacity: 0;
   transition: opacity 0.12s ease;
+}
+
+/* The album's Back/name/delete row, moved under the content like the stage
+   rows of the editor and the photo view: centred, with Back and Delete taken
+   out of the flow on either end (the side padding reserves their room). */
+/* Doubled with .section-title: that rule sits later in the file and would
+   otherwise win the margin back. */
+.section-title.album-bottom-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  /* The same clearances as the photo view's stage toolbar: 10px up to the
+     content and the 96px side gutters that anchor Back and Delete - so the
+     Back button sits exactly where it does under a photo. The 20px side and
+     bottom margins ARE the page frame here (see below - the page's own
+     padding is zeroed on every album page), mirroring .page-scroll's side
+     padding so Back lines up with the grid's left edge. As margin, not
+     padding: the absolute Back/Delete anchor to the box edge, and padding
+     would leave them flush with the window. */
+  margin: 10px 20px 20px;
+  padding: 0 96px;
+}
+
+/* A page with a docked filter bar already zeroes its padding (see
+   .page:has(.filter-bar--sticky)). The smart album page has no filter bar but
+   ends in the same bottom bar - without this its .page padding would stack
+   onto .page-scroll's, indenting the grid AND Back 20px deeper than on the
+   manual album. Zeroed too: the scroll region's padding and the bar's margins
+   carry the frame, so both album pages line up exactly. */
+.page:has(> .album-bottom-bar):not(:has(.filter-bar--sticky)) {
+  padding: 0;
+}
+
+.album-bottom-delete {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Same ladder as the photo view's toolbar: on a narrow window the gutters go
+   and the end buttons wrap with the rest of the row. */
+@media (max-width: 800px) {
+  .section-title.album-bottom-bar {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .album-bottom-bar .stage-back-btn,
+  .album-bottom-bar .album-bottom-delete {
+    position: static;
+    transform: none;
+  }
 }
 
 .section-title:hover .album-rename-btn,
@@ -2595,6 +2636,28 @@ textarea:focus-visible {
      keeps the centred controls clear of it. */
   position: relative;
   padding: 0 96px;
+}
+
+/* The baseline switch, a divider, then the compares it feeds - one unit, so the
+   row wraps around it rather than through it. Same gap as the row itself. */
+.editor-compare-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The Snapshot step carries a camera icon in front of its word. */
+.editor-baseline button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.editor-toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 3px 0;
+  background: var(--border);
 }
 
 /* Hold-to-compare button; highlights while the original is being shown. */
@@ -5827,6 +5890,12 @@ kbd {
   stroke-width: 1.5;
 }
 
+/* The editor's zoomed detail tile: the visible part of the frame rendered at
+   native resolution and laid over the canvas that carries the rest. Positioned
+   in per-cent of the canvas box (see PhotoEditor), so the shared transform puts
+   it exactly over what it was rendered for. Purely a display layer - it must
+   never take the pointer, or panning and mask drawing would stop working over
+   the sharpest part of the picture. */
 /* "Limit to area": a boundary the mask is confined to, not a selection of its
    own - dashed, so the two outlines on the photo can never be read as the same
    kind of thing. Its dashes stay the same length at any zoom, like the strokes
@@ -7366,4 +7435,1323 @@ button.smart-card {
      the short one doesn't drag the stars sideways. */
   min-width: 172px;
   justify-content: center;
+}
+
+/* ---- The album canvas ----------------------------------------------------
+   An album's creative layout: its photos placed by hand instead of flowed into
+   the grid. Everything inside .canvas-world is measured in MILLIMETRES - the
+   unit the layout is stored in - and .canvas-world's transform scales those
+   millimetres to screen pixels. So no rule in here may set a pixel size on
+   anything inside the world; sizes that must stay constant on screen (handles,
+   hairlines) are divided by the zoom in the component instead. */
+.canvas-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The toolbar holds only what is ALWAYS available, so it never reshuffles
+   under the pointer; the selection's own tools live in the bar below it. The
+   two read as one header, hence no gap between them. */
+.canvas-toolbar {
+  flex-wrap: wrap;
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* The paper chip carries a sentence ("Paper: A4 landscape, 4 pages"), not a
+   filter value, so the filter chips' width cap would only cut it to "4 pa…". */
+.canvas-toolbar .filter-chip .tag-filter-btn {
+  max-width: none;
+}
+
+/* The second bar: what is selected, and what can be done with it. Always
+   present - when nothing is selected it says how to select something - so the
+   canvas below never jumps as a selection comes and goes. */
+.canvas-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  margin-bottom: 12px;
+  padding: 5px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  font-size: 13px;
+}
+
+.canvas-action-bar--hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.canvas-action-what {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.canvas-action-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 3px 4px;
+  background: var(--border);
+}
+
+/* --- The paper's own settings, behind one chip --- */
+.canvas-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 268px;
+  max-width: 300px;
+}
+
+.canvas-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.canvas-panel-row--last {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.canvas-panel-label {
+  flex: 1 0 auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* One plain sentence per setting: the difference between "Pages" and "Free
+   canvas" is not something a two-word label can carry. */
+.canvas-panel-note {
+  flex: 1 0 100%;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.canvas-help {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 300px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.canvas-help > div {
+  display: flex;
+  gap: 10px;
+}
+
+.canvas-help dt {
+  flex: 0 0 140px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.canvas-help dd {
+  flex: 1;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/* Rail and stage side by side: the rail arranges the RUN of pages, the stage
+   arranges what is on one of them. */
+.canvas-stage {
+  display: flex;
+  flex: 1;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* --- The page rail --- */
+.page-rail {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 138px;
+  gap: 8px;
+  min-height: 0;
+}
+
+.page-rail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.page-rail-hint {
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.page-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.page-rail-slot {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.page-rail.is-dragging,
+.page-rail.is-dragging .page-card {
+  cursor: grabbing;
+}
+
+.page-card {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 5px 5px 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  user-select: none;
+  /* Cards stepping aside for a carried one glide rather than jump. */
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.12s ease;
+}
+
+.page-card:hover {
+  border-color: var(--text-muted);
+}
+
+.page-card.is-current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* The card in hand rides under the pointer, lifted off the rail: no glide
+   (it must track the pointer exactly), a shadow and a touch larger. */
+.page-card.is-carrying {
+  position: relative;
+  z-index: 5;
+  transition: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--accent);
+  border-color: var(--accent);
+  opacity: 0.96;
+}
+
+/* The miniature: the same items the stage draws, at a hundredth of the size.
+   Percentages throughout, so it stays right whatever the page shape. */
+.page-card-paper {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 1px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.page-card-photo,
+.page-card-mark {
+  position: absolute;
+  object-fit: cover;
+}
+
+.page-card-mark {
+  background: rgba(120, 120, 120, 0.45);
+}
+
+/* Under the miniature: the page number, and its actions once the card is
+   hovered. A fixed height, so the row never resizes as the tools appear. */
+.page-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  margin-top: 2px;
+}
+
+.page-card-number {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Per-page actions stay out of the way until the card is wanted: a rail of
+   twenty pages should read as a book, not as a wall of buttons. They take the
+   number's place on hover rather than covering the page itself. */
+.page-card-tools {
+  display: none;
+  gap: 2px;
+}
+
+.page-card:hover .page-card-tools,
+.page-card:focus-within .page-card-tools {
+  display: inline-flex;
+}
+
+.page-card:hover .page-card-number,
+.page-card:focus-within .page-card-number {
+  display: none;
+}
+
+.page-rail.is-dragging .page-card-tools {
+  display: none;
+}
+
+.page-rail.is-dragging .page-card-number {
+  display: inline;
+}
+
+.page-card-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.page-card-tool:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.page-card-tool.is-danger:hover {
+  color: var(--danger);
+}
+
+.page-rail-add {
+  flex: 0 0 auto;
+}
+
+/* What a crashed subtree shows instead of the white nothing an uncaught render
+   error used to leave behind (see components/ErrorBoundary.tsx). */
+.crash-panel {
+  margin: 24px auto;
+  max-width: 560px;
+  padding: 22px 24px;
+  text-align: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.crash-panel h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.crash-panel p {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.crash-detail {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  text-align: left;
+  font-size: 12px;
+  color: var(--danger);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+}
+
+/* The frame does not scroll; the viewport inside it does. That split is what
+   lets a banner sit still over paper that is moving. */
+.canvas-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The stage. A darker surround than the rest of the app so a white page reads
+   as paper rather than as more window - the same reasoning as the photo view's
+   neutral backdrop. A real scroll container, so the canvas gets ordinary
+   scrollbars in both directions and every scroll gesture the platform has. */
+.canvas-viewport {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 320px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* The gutter is always reserved, so a scrollbar appearing or disappearing
+     never changes clientWidth/clientHeight. Everything on the canvas is
+     measured from those - the surface size, where millimetre zero sits - so
+     letting them jump by a scrollbar's width feeds straight back into what
+     decides whether that scrollbar is there at all. */
+  scrollbar-gutter: stable;
+  background: var(--stage-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* Scrolling by touch belongs to the browser; dragging a photo does not (see
+     .canvas-item below). */
+  touch-action: pan-x pan-y;
+  /* Nothing inside paints outside this box, so the browser never has to
+     consider the scaled world beyond what is on screen. Dropping this was what
+     let a zoomed-in canvas blank out. */
+  contain: paint;
+}
+
+/* The scroll surface: the world at its on-screen size, which is what the
+   scrollbars are measured against.
+   `margin: auto` inside the flex viewport centres it whenever it is smaller
+   than the window and does nothing when it is larger - the one centring recipe
+   that still lets a scroll container reach its own top-left corner. It is also
+   why nothing in JS has to measure the window to place the canvas, which is
+   what used to make zooming loop. */
+.canvas-scroll {
+  position: relative;
+  flex: 0 0 auto;
+  margin: auto;
+}
+
+/* The free canvas's grid: one frame-sized layer behind the (transparent)
+   viewport, sliding its PATTERN as the canvas scrolls. Outside the scroll
+   container, so it can neither enlarge the scrollable area nor be measured
+   from the window - and a grid element the size of an endless canvas would be
+   unpaintable at high zoom anyway. */
+.canvas-grid-layer {
+  position: absolute;
+  inset: 1px;
+  z-index: 0;
+  border-radius: var(--radius);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Cropping is a mode: the wheel and the drag mean something else while it is
+   on, so the whole stage is ringed to say so. */
+.canvas-frame.is-cropping .canvas-viewport {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* A mode you cannot see you are in is the fastest way for a canvas to feel
+   broken, so every mode says its name and how to leave. */
+.canvas-mode-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 7px 10px 7px 12px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  z-index: 20;
+}
+
+/* The crop mode's own control. A frame that already has its photo's shape has
+   no room to slide it, so the zoom cannot be a hidden wheel gesture - it is the
+   thing that makes the drag possible at all. */
+.canvas-crop-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.canvas-crop-zoom input[type="range"] {
+  width: 92px;
+}
+
+.canvas-mode-banner--quiet {
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+[data-theme="graphite-dark"] .canvas-viewport,
+[data-theme="dark"] .canvas-viewport {
+  background: #3a3a3d;
+}
+
+.canvas-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.canvas-page {
+  position: absolute;
+  left: 0;
+}
+
+.canvas-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.canvas-page-number {
+  position: absolute;
+  left: 0;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+/* --- Items --- */
+.canvas-item {
+  position: absolute;
+  transform-origin: center center;
+  user-select: none;
+  /* A finger on a photo moves the photo, not the view. */
+  touch-action: none;
+}
+
+.canvas-handle,
+.canvas-rotate-handle {
+  touch-action: none;
+}
+
+.canvas-item--photo {
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.06);
+  cursor: move;
+}
+
+.canvas-item--photo.is-cropping {
+  cursor: grab;
+}
+
+.canvas-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transform-origin: center center;
+  pointer-events: none;
+}
+
+.canvas-photo-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-muted);
+  text-align: center;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(120, 120, 120, 0.12),
+    rgba(120, 120, 120, 0.12) 2px,
+    transparent 2px,
+    transparent 6px
+  );
+}
+
+/* While a frame is open for cropping, say so on the frame itself - the photo
+   moves under the pointer and nothing else on the canvas does. */
+.canvas-crop-hint {
+  position: absolute;
+  inset: 0;
+  border-style: dashed;
+  border-color: var(--accent-contrast);
+  pointer-events: none;
+  mix-blend-mode: difference;
+}
+
+.canvas-item--text {
+  cursor: move;
+  display: flex;
+  align-items: flex-start;
+}
+
+/* An empty caption is still a thing on the page - showing nothing at all would
+   read as a bug rather than as a box waiting for words. */
+.canvas-text--empty {
+  color: var(--text-muted);
+  opacity: 0.65;
+  font-style: italic;
+}
+
+.canvas-text,
+.canvas-text-input {
+  width: 100%;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* Everything the app's form styling measures in screen pixels - the corner
+   radius, the border, the focus ring - is multiplied by the zoom in here,
+   which is what turned an active caption into a fat rounded slab. So the box
+   is stripped back to nothing but the text and a faint fill showing how far
+   the caption reaches. */
+.canvas-text-input {
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+  background: rgba(127, 127, 127, 0.12);
+  resize: none;
+  outline: none;
+  box-shadow: none;
+  -webkit-appearance: none;
+  appearance: none;
+  font-family: inherit;
+}
+
+.canvas-text-input:focus,
+.canvas-text-input:focus-visible {
+  border: none;
+  outline: none;
+  box-shadow: none;
+}
+
+/* --- Selection --- */
+.canvas-selection,
+.canvas-selection-outline {
+  position: absolute;
+  border-style: solid;
+  border-color: var(--accent);
+  transform-origin: center center;
+  pointer-events: none;
+}
+
+.canvas-selection-outline {
+  z-index: 4999;
+}
+
+.canvas-handle,
+.canvas-rotate-handle {
+  position: absolute;
+  background: var(--bg-elevated);
+  border-style: solid;
+  border-color: var(--accent);
+  pointer-events: auto;
+}
+
+.canvas-rotate-handle {
+  border-radius: 50%;
+  cursor: grab;
+}
+
+/* The free canvas's page guide: the outline of the sheets the design would be
+   cut into. Above the work rather than behind it - a measurement you check
+   against is no use hidden under a photo - and never in the way of the pointer.
+   Dashed and half-strength so it reads as a note about the design rather than
+   as part of it. */
+.canvas-page-guide {
+  position: absolute;
+  border-style: dashed;
+  border-color: var(--accent);
+  opacity: 0.6;
+  pointer-events: none;
+  z-index: 4000;
+}
+
+.canvas-page-guide-label {
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* --- The print view --- */
+/* The layout with everything that is not the layout taken away: one sheet on
+   a dark ground, the whole window. The sheet is a clipped box the paper's size
+   with the world drawn inside it, so anything hanging off the paper is cut the
+   way the printer would cut it. The items are the canvas's own (CanvasItem),
+   so a page here looks exactly like the page there - minus every affordance. */
+.canvas-print {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #141414;
+  color: #fff;
+  user-select: none;
+}
+
+.canvas-print-sheet {
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+  cursor: grab;
+}
+
+.canvas-print.is-panning,
+.canvas-print.is-panning .canvas-print-sheet {
+  cursor: grabbing;
+}
+
+/* Nothing on the sheet answers the pointer: it is a picture of the page. */
+.canvas-print-sheet .canvas-item {
+  cursor: default;
+  pointer-events: none;
+}
+
+/* A caption never written is a box that would print blank, so it shows blank. */
+.canvas-print-sheet .canvas-text--empty {
+  visibility: hidden;
+}
+
+.canvas-print-close {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.canvas-print-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.canvas-print-foot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  pointer-events: none;
+}
+
+.canvas-print-hint {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* The controls step out of the way once the pointer has settled - the page
+   is the point - and any movement brings them back. */
+.canvas-print-chrome {
+  transition: opacity 0.3s ease;
+}
+
+.canvas-print.is-idle,
+.canvas-print.is-idle .canvas-print-sheet {
+  cursor: none;
+}
+
+.canvas-print.is-idle .canvas-print-chrome {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Alignment guides: only ever drawn while something is being dragged, and only
+   as long as the pair of edges that actually lined up. */
+.canvas-guide {
+  position: absolute;
+  background: #e0483c;
+  pointer-events: none;
+  z-index: 6000;
+}
+
+.canvas-marquee {
+  position: absolute;
+  border-style: dashed;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+  z-index: 6000;
+}
+
+.canvas-drop-ghost {
+  position: absolute;
+  border-style: dashed;
+  border-color: var(--accent);
+  background: rgba(127, 127, 127, 0.18);
+  pointer-events: none;
+  z-index: 6000;
+}
+
+/* --- The font editor --- */
+.canvas-font-panel {
+  min-width: 300px;
+  max-width: 340px;
+}
+
+/* Every face shown in itself, at reading size, so choosing is looking rather
+   than remembering what "Didot" is. */
+.canvas-font-list {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.canvas-font-option {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+
+.canvas-font-option:hover {
+  background: var(--hover);
+}
+
+.canvas-font-option.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.canvas-font-custom {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.canvas-font-sample {
+  flex: 1 0 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+
+/* The aspect lock between the width and height boxes. */
+.canvas-lock {
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
+.canvas-lock.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* --- Colour swatches --- */
+.canvas-swatches {
+  flex: 1 0 100%;
+  display: grid;
+  grid-template-columns: repeat(7, 26px);
+  justify-content: start;
+  gap: 8px;
+}
+
+/* A dab of paint, not a button: a faint inner edge keeps white and black both
+   readable against the panel, and a light sheen from the top gives it a
+   little body. The chosen one wears a thin ring with a breath of space. */
+.canvas-swatch {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  background-clip: padding-box;
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.14),
+    inset 0 1px 1px rgba(255, 255, 255, 0.35),
+    0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.canvas-swatch:hover {
+  transform: scale(1.08);
+}
+
+.canvas-swatch.active {
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.14),
+    inset 0 1px 1px rgba(255, 255, 255, 0.35),
+    0 0 0 2px var(--bg-elevated),
+    0 0 0 3.5px var(--text);
+}
+
+/* The wheel at the end of the row: a rainbow ring with the native colour
+   input laid invisibly over it, so a click opens the system picker. */
+.canvas-swatch--custom {
+  overflow: hidden;
+  background: conic-gradient(#f33, #fc3, #3c3, #3cc, #33f, #c3c, #f33);
+}
+
+.canvas-swatch--custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.canvas-swatch-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  vertical-align: -2px;
+}
+
+.canvas-panel-value {
+  margin-left: 6px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* A labelled cluster in the action bar ("Size 67.8 × 45.2 mm", "Border 5 %"). */
+.canvas-field-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.canvas-field-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+.canvas-export-busy {
+  color: var(--text);
+}
+
+.canvas-export-error {
+  color: var(--danger);
+}
+
+/* --- Toolbar bits --- */
+.canvas-pages-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Room for three digits AND the spinner: the box is border-box, so a width in
+   ch was eaten by the toolbar input's own padding and left the value clipped. */
+.canvas-number,
+.filter-bar .canvas-number {
+  width: 74px;
+  padding: 5px 6px 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.canvas-color {
+  width: 28px;
+  height: 24px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+
+.canvas-zoom-readout {
+  min-width: 5ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Deliberately quiet and fixed-width: an autosave notice that jumps the
+   toolbar around every time it changes is worse than no notice. */
+.canvas-save-state {
+  min-width: 15ch;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.canvas-save-state.is-error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* --- Kept versions of the canvas --- */
+
+.canvas-version-keep {
+  display: flex;
+  flex: 1 0 100%;
+  gap: 6px;
+}
+
+.canvas-version-keep input {
+  flex: 1;
+  min-width: 0;
+}
+
+.canvas-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.canvas-version {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.canvas-version:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.12));
+}
+
+/* The dot marks what the Canvases shelf shows: the version last kept or last
+   loaded. */
+.canvas-version.is-active .canvas-version-name::before {
+  content: "●";
+  margin-right: 6px;
+  font-size: 8px;
+  color: var(--accent);
+  vertical-align: 1px;
+}
+
+.canvas-version-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.canvas-version-date {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.canvas-version-rename {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The two quiet per-version tools, in the spirit of .page-card-tool. */
+.canvas-version-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.canvas-version-tool:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.canvas-version-tool.is-danger:hover {
+  color: var(--danger);
+}
+
+/* --- The Canvases shelf on the Albums page --- */
+/* Print-view cards: the paper itself with the photos on it, on the page's own
+   ground - not another cover mosaic. Every card is the same height and takes
+   the width its page shape asks for, like prints laid out on a table. */
+
+.canvas-shelf-section {
+  margin-top: 26px;
+}
+
+.canvas-shelf {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+/* The card wraps two buttons: the big one opens the read-only print view,
+   the × in the corner takes the canvas off the shelf (hover to see it, like
+   the album cards' remove). */
+.canvas-shelf-card {
+  position: relative;
+  max-width: 100%;
+}
+
+.canvas-shelf-card:hover .card-remove {
+  opacity: 1;
+}
+
+.canvas-shelf-open {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* The full-screen sheet: same chrome as the canvas's print view, but drawn
+   from percent-positioned items. cqw in the text sizes measures this box. */
+.canvas-shelf-view {
+  container-type: inline-size;
+}
+
+.canvas-shelf-view > * {
+  position: absolute;
+}
+
+/* Export on the right, so it never crowds the close button on the left. */
+.canvas-shelf-export {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+}
+
+.canvas-shelf-paper {
+  position: relative;
+  overflow: hidden;
+  height: 210px;
+  max-width: 100%;
+  /* The cqw unit the text items are set in measures this box's width, so type
+     keeps its size on the page however small the page is drawn. */
+  container-type: inline-size;
+  border-radius: 2px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  transition: box-shadow 120ms ease, transform 120ms ease;
+}
+
+.canvas-shelf-card:hover .canvas-shelf-paper {
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+  transform: translateY(-1px);
+}
+
+.canvas-shelf-paper > * {
+  position: absolute;
+}
+
+.canvas-shelf-photo {
+  object-fit: cover;
+}
+
+.canvas-shelf-text {
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+/* A frame with nothing to draw (photo in the Trash / on an unplugged drive):
+   its footprint stays, quietly. */
+.canvas-shelf-mark {
+  background: rgba(128, 128, 128, 0.16);
+  border-radius: 1px;
+}
+
+.canvas-shelf-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 2px;
+}
+
+.canvas-shelf-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-shelf-meta {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* --- The album's photos, ready to drag on --- */
+/* Its own box rather than one welded to the bottom of the stage: with the page
+   rail beside the stage, the strip now runs under both of them. */
+.canvas-filmstrip {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.canvas-filmstrip-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding-right: 8px;
+}
+
+.canvas-filmstrip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.canvas-filmstrip-caret {
+  display: inline-flex;
+  transition: transform 0.15s ease;
+}
+
+.canvas-filmstrip-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 8px 8px;
+}
+
+.canvas-filmstrip-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 2px 8px;
+}
+
+.canvas-filmstrip-head .canvas-filmstrip-note {
+  padding: 0;
+}
+
+/* Sized in the component from the app's shared thumbnail Size preference, so
+   the same control that sizes the grids sizes the strip. */
+.canvas-chip {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg);
+  cursor: grab;
+}
+
+.canvas-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Already on the canvas - dimmed rather than hidden, since placing a second
+   copy of the same photo is a perfectly good thing to want. */
+.canvas-chip.is-placed img {
+  opacity: 0.45;
+}
+
+.canvas-chip-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* The canvas fills its region instead of scrolling it: panning and zooming
+   happen inside the canvas, and a page scrollbar around that would fight it. */
+/* Doubled class to outrank .page-timeline .page-scroll: the album page is a
+   timeline page, whose scroll region keeps a right gutter for the scrubber
+   and a deep foot so the last grid row clears the window edge. The canvas has
+   neither a scrubber nor a last row - the filmstrip is the foot - so that room
+   was simply empty under it. */
+.page-scroll.page-scroll--canvas {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* No bottom padding of its own: the album bar below brings the same 10px
+     gap the photo view keeps between stage and toolbar, and doubling it up
+     pushed the Back row visibly lower than in the lightbox and the editor. */
+  padding: 0 20px;
+}
+
+/* The canvas's two bars hang straight off the page's filter bar - full width,
+   no frame of their own - so the three read as one header block instead of a
+   docked bar with a floating box under it. The negative side margins undo the
+   scroll region's inset; the padding matches the sticky bar's, so the controls
+   line up with the ones above them. */
+.page-scroll--canvas .canvas-toolbar {
+  margin: 0 -20px;
+  padding: 8px 20px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.page-scroll--canvas .canvas-action-bar {
+  margin: 0 -20px 12px;
+  padding: 5px 20px;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
 }
