@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type ServedBlob } from "../api/client";
+import { api, editVersion, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
 import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconFlipH, IconFlipV, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
@@ -478,6 +478,16 @@ export function PhotoEditor({ image, onClose }: Props) {
   // The same for the compare view's other half (original / snapshot): reset on
   // every whole-frame paint of that canvas, left alone by a native tile.
   const origPaintedPxRef = useRef(0);
+  // Which edit state (dirtyToken) the canvas's whole-frame GROUND belongs to,
+  // and whether region tiles of a NEWER state have been composited onto it.
+  // Zoomed in, an edit only re-renders the visible tile - the ground outside
+  // it still shows the old edit. That is invisible until the user zooms out
+  // or pans, at which point the stale ground must be re-rendered even though
+  // its resolution still covers the screen (targetTier alone would say "sharp
+  // enough, nothing to do" - the bug where an edit made while zoomed never
+  // showed up outside the tile after zooming back out).
+  const groundTokenRef = useRef(-1);
+  const groundStaleRef = useRef(false);
 
   // Is the frame currently on the canvas being stretched past its own pixels?
   // Compares the canvas's on-screen size in DEVICE pixels (layout size x zoom x
@@ -845,6 +855,21 @@ export function PhotoEditor({ image, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  // The photo the library view already has on screen, painted the instant the
+  // editor opens so the stage never sits empty behind "Loading…" while the
+  // first server render (a cold decode can be seconds) round-trips. The bytes
+  // are warm in the browser - the detail view underneath shows this exact URL.
+  // Unedited raws skip it: their browsing preview is auto-exposed while the
+  // editor renders the native (darker) base, and that brightness snap would
+  // read as a bug. Edited photos and JPEGs match the editor's render.
+  const [placeholderFailed, setPlaceholderFailed] = useState(false);
+  const placeholderUrl = useMemo(
+    () =>
+      image.file_type !== "raw" || image.edit_rev > 0
+        ? api.images.previewUrl(image.id, editVersion(image))
+        : null,
+    [image],
+  );
   // Shared with the library photo view and the import preview.
   const bgMode = useStageBg();
   // Hold-to-compare: while true, the canvas re-renders with every tonal/colour/
@@ -1102,6 +1127,9 @@ export function PhotoEditor({ image, onClose }: Props) {
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
       paintedPxRef.current = Math.max(bmp.width, bmp.height);
+      // A whole frame replaces everything - the ground is this edit state now.
+      groundTokenRef.current = dirtyToken.current;
+      groundStaleRef.current = false;
       pickSnapRef.current = null; // a new frame - the picker's copy is stale
       if (withHistogram) {
         // The readback itself is cheap (downscaled scratch canvas), but the
@@ -1167,6 +1195,10 @@ export function PhotoEditor({ image, onClose }: Props) {
           fitCanvasToStage();
         }
         ctx.drawImage(bmp, blob.box.x, blob.box.y);
+        // The tile carries a newer edit state than the whole frame under it:
+        // outside this rectangle the picture still shows the old edit. Flag
+        // it, so zooming out / panning knows a re-render is owed.
+        if (token !== groundTokenRef.current) groundStaleRef.current = true;
         pickSnapRef.current = null;
       } finally {
         bmp.close();
@@ -1268,7 +1300,15 @@ export function PhotoEditor({ image, onClose }: Props) {
         // the two lower rungs were thrown away by the one above seconds later.
         // The size that is needed is known up front from the canvas's own
         // on-screen size, so it is asked for directly and painted once.
-        const tier = targetTier();
+        let tier = targetTier();
+        // A frame patched with region tiles still shows the OLD edit outside
+        // them. targetTier judges resolution only, so it happily says "sharp
+        // enough" about stale pixels - when the ground is flagged stale, force
+        // the render the current view size calls for (paintedPx 1 = "assume
+        // nothing usable is painted"). Zoomed out this is the whole-frame
+        // render that finally shows the edit everywhere; still zoomed native
+        // it re-tiles the visible part and the flag simply stays up.
+        if (!tier && groundStaleRef.current) tier = targetTier(1);
         // Which of the two halves still needs work: the settle is worth
         // running for the original alone, e.g. when a compare mode is entered
         // over an edit that is already sharp.
@@ -1458,6 +1498,13 @@ export function PhotoEditor({ image, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image.id, previewEdits, peekMaskId]);
 
+  // A new photo starts with a clean slate: its first whole-frame render sets
+  // the ground; nothing carried over from the previous photo's tiles.
+  useEffect(() => {
+    groundTokenRef.current = -1;
+    groundStaleRef.current = false;
+  }, [image.id]);
+
   // Geometry moved, so the compare view's original no longer matches the frame
   // it's shown against; entering a compare mode wants it rendered in the first
   // place. Either way the pump does the work (see its original branch).
@@ -1492,7 +1539,10 @@ export function PhotoEditor({ image, onClose }: Props) {
   // region by region, dragging the picture brings soft ground into view, and
   // that view is a render nobody has asked for yet.
   useEffect(() => {
-    if (isUpscaled()) scheduleSettle();
+    // Stale ground: zooming OUT is not upscaled (the painted frame is big),
+    // but it reveals the old-edit pixels outside the composited tiles - that
+    // view owes a render just the same.
+    if (isUpscaled() || groundStaleRef.current) scheduleSettle();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scale, pan.x, pan.y, scheduleSettle]);
 
@@ -2908,7 +2958,18 @@ export function PhotoEditor({ image, onClose }: Props) {
       <div className="editor-body">
         <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
         <div className={`editor-stage-main${pair ? " editor-stage-main--pair" : ""}`} ref={stageMainRef}>
-        {loading && <div className="editor-hint">Loading…</div>}
+        {loading &&
+          (placeholderUrl && !placeholderFailed ? (
+            <img
+              className="editor-placeholder"
+              src={placeholderUrl}
+              alt=""
+              draggable={false}
+              onError={() => setPlaceholderFailed(true)}
+            />
+          ) : (
+            <div className="editor-hint">Loading…</div>
+          ))}
         {error && <div className="editor-hint">{error}</div>}
         {/* Side by side: the original gets a pane of its own, left of the edited
             one. The stage is already a centred flex row, so the two just sit

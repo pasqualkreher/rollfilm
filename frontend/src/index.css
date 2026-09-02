@@ -3091,6 +3091,16 @@ input.editor-preset-select {
   font-size: 14px;
 }
 
+/* The library preview shown while the editor's first server render is on its
+   way - same centred-and-contained fit the canvas will take, so the swap to
+   the real render doesn't jump. */
+.editor-placeholder {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+
 /* The develop panel sits on the elevated chrome tone, distinct from the stage,
    so it reads as a tool panel (Lightroom's right rail) rather than more page. */
 .editor-panel {
