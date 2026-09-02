@@ -572,7 +572,7 @@ def test_tone_stage_cache_key_splits_at_the_denoise_cut():
     def stage_key(adj) -> str:
         thumbnails.invalidate_tone_stage()
         thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="base")
-        return thumbnails._tone_stage[0]
+        return next(iter(thumbnails._tone_stage))
 
     reference = stage_key(base)
     assert stage_key(base | {"clarity": -80}) == reference       # below the cut
@@ -595,7 +595,7 @@ def test_tone_stage_cache_is_opt_in():
     lin = _rng(1).random((40, 60, 3)).astype(np.float32)
     thumbnails.invalidate_tone_stage()
     thumbnails.apply_adjustments_linear(lin, 1.0, develop.defaults() | {"luma_noise_reduction": 30})
-    assert thumbnails._tone_stage is None
+    assert not thumbnails._tone_stage
 
 
 def test_tone_stage_cache_refuses_oversized_frames():
@@ -608,9 +608,69 @@ def test_tone_stage_cache_refuses_oversized_frames():
     try:
         thumbnails._TONE_STAGE_MAX_BYTES = 1
         thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="base")
-        assert thumbnails._tone_stage is None
+        assert not thumbnails._tone_stage
     finally:
         thumbnails._TONE_STAGE_MAX_BYTES = monkey
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"exposure": 0.6, "contrast": 30, "highlights": -40, "blacks": 15},
+        {"temperature": 40, "tint": -20, "brightness": 60, "shadows": 35},
+        {"whites": -60, "blacks": -30, "contrast": -25},
+        {"highlights": -140, "shadows": 120},  # extended travel: monotone guard path
+        {"tone_mapper": "agx", "exposure": 0.4, "contrast": 20, "whites": -30},
+    ],
+)
+def test_the_banded_tone_block_is_bit_identical(edit, monkeypatch):
+    """The row-band split exists because the tone block is pure per-pixel math;
+    if a future pass in it ever looks at a neighbour or an image statistic,
+    banding would show seams. This pins the contract: bands in, exactly the
+    whole-frame bytes out."""
+    monkeypatch.setattr(thumbnails, "_TONE_BAND_MIN_PX", 0)
+    monkeypatch.setattr(thumbnails, "_TONE_BAND_WORKERS", 4)
+    lin = _rng(11).random((97, 60, 3)).astype(np.float32) * 1.6  # odd height: uneven bands
+    adj = develop.defaults() | edit
+    whole = thumbnails._linear_tone_block(lin, adj, base_gain=1.3)
+    banded = thumbnails._linear_tone_block_banded(lin, adj, base_gain=1.3)
+    assert np.array_equal(whole, banded)
+
+
+def test_tiny_frames_skip_the_bands():
+    """A scrub frame must not pay the thread round-trip: below the pixel
+    threshold the banded entry point is the plain whole-frame call."""
+    lin = _rng(2).random((40, 60, 3)).astype(np.float32)
+    adj = develop.defaults() | {"exposure": 0.3}
+    out = thumbnails._linear_tone_block_banded(lin, adj)
+    assert np.array_equal(out, thumbnails._linear_tone_block(lin, adj))
+
+
+def test_tone_stage_cache_survives_a_tier_transition():
+    """The quality ladder alternates tiers (different base keys) within one
+    settle; a single-slot cache thrashed on every rung and repaid the denoise
+    each time. The shallow LRU must keep both tiers' stages warm."""
+    lin = _rng(5).random((40, 60, 3)).astype(np.float32)
+    adj = develop.defaults() | {"luma_noise_reduction": 40}
+    thumbnails.invalidate_tone_stage()
+    thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="tier-a")
+    thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="tier-b")
+    assert len(thumbnails._tone_stage) == 2
+    keys = set(thumbnails._tone_stage)
+    thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="tier-a")
+    assert set(thumbnails._tone_stage) == keys  # a hit, not a re-insert
+
+
+def test_tone_stage_cache_stays_shallow():
+    """Depth and byte budget are enforced: the oldest stage falls out first."""
+    lin = _rng(5).random((40, 60, 3)).astype(np.float32)
+    adj = develop.defaults() | {"luma_noise_reduction": 40}
+    thumbnails.invalidate_tone_stage()
+    for name in ("a", "b", "c", "d"):
+        thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key=name)
+    assert len(thumbnails._tone_stage) == thumbnails._TONE_STAGE_MAX_ENTRIES
+    oldest = thumbnails._tone_stage_key("a", 1.0, adj, False)
+    assert oldest not in thumbnails._tone_stage
 
 
 # --- Clarity and denoise are detail controls, not colour controls ------------

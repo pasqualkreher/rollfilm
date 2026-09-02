@@ -5,6 +5,7 @@ import queue
 import shutil
 import tempfile
 import threading
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -29,7 +30,7 @@ from app.services.exif import capture_date_from_filename, new_helper, read_exif
 from app.services.filesystem import resolve_image_path
 from app.services.hashing import sha256_file
 from app.services.raw import classify_file_type, raw_dimensions
-from app.services.thumbnails import derivative_dir, regenerate_for_image
+from app.services.thumbnails import derivative_dir, editor_recently_active, regenerate_for_image
 from app.services.trash import hard_delete_images
 from app.workers.queue import enqueue_post_import
 
@@ -370,6 +371,11 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
 _rebuild_progress_lock = threading.Lock()
 _rebuild_progress = {"active": False, "total": 0, "done": 0}
 
+# How long the editor must have been quiet before a rebuild worker picks up
+# its next photo. The rebuild is hours of patience; a person mid-drag is not.
+# Checked per item, so a slider move pauses the run within one photo's work.
+_REBUILD_EDITOR_IDLE_S = 5.0
+
 
 def get_rebuild_progress() -> dict:
     with _rebuild_progress_lock:
@@ -407,6 +413,12 @@ def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
 
     def build(task: tuple[Image, Path]):
         img, path = task
+        # Yield to a live editing session (the same pattern as the embedding
+        # backfill yielding to imports): every worker holds its next photo
+        # back while the editor renders, so scrub frames keep their CPU and
+        # the two working sets never share an 8GB machine at the same time.
+        while editor_recently_active(_REBUILD_EDITOR_IDLE_S):
+            time.sleep(0.5)
         try:
             regenerate_for_image(img)
         except Exception:

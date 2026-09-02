@@ -8,6 +8,7 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -1171,6 +1172,56 @@ def _linear_tone_block(lin: np.ndarray, adj: dict, base_gain: float = 1.0) -> np
     return _linear_to_srgb(np.clip(arr, 0.0, 1.0)).astype(np.float32)
 
 
+# --- Banded execution of the tone block --------------------------------------
+# _linear_tone_block is pure per-pixel math: every operation maps a pixel from
+# its own value alone (constant-matrix mixes, log/exp curves, the reference-
+# grid monotone guard - no neighbourhoods, no image statistics). That makes it
+# the one stage that can be split into row bands and run on several cores with
+# a result BIT-IDENTICAL to the whole-frame call - no halos, no seams. It is
+# also the pipeline's only big single-threaded stretch: cv2 parallelises the
+# spatial passes itself (~3 cores busy measured), but this block ran one core
+# while the others idled - 2.2s of a 13.5s 24MP settle mix. Capped at 95% of
+# the cores on purpose, so the machine keeps breathing room for the request
+# thread and the UI while a render is in flight.
+_TONE_BAND_WORKERS = max(1, int((os.cpu_count() or 1) * 0.95))
+# Below this the split costs more in thread round-trips than it saves: a scrub
+# frame (~0.8MP) stays on one core and keeps its tens-of-ms latency; the
+# accurate tier (~1.7MP) and everything above get the bands.
+_TONE_BAND_MIN_PX = 1_000_000
+_tone_band_pool: "ThreadPoolExecutor | None" = None
+_tone_band_pool_lock = threading.Lock()
+
+
+def _tone_pool() -> ThreadPoolExecutor:
+    global _tone_band_pool
+    with _tone_band_pool_lock:
+        if _tone_band_pool is None:
+            _tone_band_pool = ThreadPoolExecutor(
+                max_workers=_TONE_BAND_WORKERS, thread_name_prefix="tone-band"
+            )
+        return _tone_band_pool
+
+
+def _linear_tone_block_banded(
+    lin: np.ndarray, adj: dict, base_gain: float = 1.0
+) -> np.ndarray:
+    h, w = lin.shape[:2]
+    bands = _TONE_BAND_WORKERS
+    if bands <= 1 or h * w < _TONE_BAND_MIN_PX or h < bands:
+        return _linear_tone_block(lin, adj, base_gain)
+    out = np.empty((h, w, 3), dtype=np.float32)
+    edges = np.linspace(0, h, bands + 1).astype(int)
+
+    def run(i: int) -> None:
+        y0, y1 = int(edges[i]), int(edges[i + 1])
+        out[y0:y1] = _linear_tone_block(lin[y0:y1], adj, base_gain)
+
+    # list() drains the map so a worker's exception surfaces here instead of
+    # being swallowed by the lazy iterator.
+    list(_tone_pool().map(run, range(bands)))
+    return out
+
+
 def _display_color_block(arr: np.ndarray, adj: dict) -> np.ndarray:
     """The display-referred colour pass on sRGB float 0..1: film simulation,
     curves, colour calibration, HSL mixer + global hue, Fuji chrome, 3-way
@@ -1223,7 +1274,7 @@ def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
     Kept as the display-space entry point for mask-local adjustments
     (_apply_local_adjustments), which operate on the already-toned image."""
     lin = _srgb_to_linear(arr).astype(np.float32)
-    return _display_color_block(_linear_tone_block(lin, adj, base_gain=1.0), adj)
+    return _display_color_block(_linear_tone_block_banded(lin, adj, base_gain=1.0), adj)
 
 
 def _grain_field(h: int, w: int, particle_px: float, coarse: float, shape: float) -> np.ndarray:
@@ -1614,17 +1665,25 @@ _POST_DENOISE_KEYS = frozenset({
     "grain_amount", "grain_size", "grain_roughness", "frame_width",
 })
 
-# One entry, not an LRU: a drag is one slider on one image at one tier, which is
-# exactly the access pattern a single slot serves. An LRU of a few would multiply
-# the biggest thing in the process - a 3900px float32 RGB frame is 122MB - by its
-# depth, and this cache exists to make the editor cheaper, not fatter.
-_tone_stage: tuple[str, np.ndarray] | None = None
+# A few entries, not one: a drag is one slider at one tier, but the moment the
+# sliders rest the quality ladder climbs tiers (scrub -> accurate -> settle) and
+# the compare view alternates edited/original - with a single slot every one of
+# those transitions evicted the other's stage and repaid the ~360ms denoise.
+# Kept deliberately shallow and byte-bounded so the editor gets cheaper without
+# the process getting much fatter (see _TONE_STAGE_TOTAL_MAX_BYTES).
+_tone_stage: "OrderedDict[str, np.ndarray]" = OrderedDict()
 _tone_stage_lock = threading.Lock()
 
 # Don't store frames bigger than the ultra tier (122MB). The native 100%-zoom
 # render is ~480MB per copy, where holding one to save a second of denoise is a
 # bad trade against the rest of the process; it recomputes like it always did.
 _TONE_STAGE_MAX_BYTES = 160 * 1024 * 1024
+# Depth and total budget of the stage cache: three slots cover the tier ladder
+# of the image being edited (or edited+original in compare view) and the budget
+# keeps the worst case near two settled-tier frames on the 8GB machines this
+# has to share with the browser.
+_TONE_STAGE_MAX_ENTRIES = 3
+_TONE_STAGE_TOTAL_MAX_BYTES = 192 * 1024 * 1024
 
 
 def _tone_stage_key(base_key: str, base_gain: float, adj: dict, fast: bool) -> str:
@@ -1645,14 +1704,14 @@ def _tone_stage_get(key: str | None) -> np.ndarray | None:
     if key is None:
         return None
     with _tone_stage_lock:
-        hit = _tone_stage
-    if hit is None or hit[0] != key:
-        return None
-    return hit[1].copy()
+        hit = _tone_stage.get(key)
+        if hit is None:
+            return None
+        _tone_stage.move_to_end(key)
+    return hit.copy()
 
 
 def _tone_stage_put(key: str | None, arr: np.ndarray) -> None:
-    global _tone_stage
     if key is None or arr.nbytes > _TONE_STAGE_MAX_BYTES:
         return
     stored = arr.copy()
@@ -1660,14 +1719,19 @@ def _tone_stage_put(key: str | None, arr: np.ndarray) -> None:
     # instead of quietly poisoning every later frame that reuses this stage.
     stored.flags.writeable = False
     with _tone_stage_lock:
-        _tone_stage = (key, stored)
+        _tone_stage[key] = stored
+        _tone_stage.move_to_end(key)
+        while len(_tone_stage) > _TONE_STAGE_MAX_ENTRIES or (
+            len(_tone_stage) > 1
+            and sum(a.nbytes for a in _tone_stage.values()) > _TONE_STAGE_TOTAL_MAX_BYTES
+        ):
+            _tone_stage.popitem(last=False)
 
 
 def invalidate_tone_stage() -> None:
     """Drop the stage cache (image edited on disk, decode settings changed)."""
-    global _tone_stage
     with _tone_stage_lock:
-        _tone_stage = None
+        _tone_stage.clear()
 
 
 def apply_adjustments(
@@ -1785,7 +1849,7 @@ def apply_adjustments_linear(
         # Nothing but the neutral rendering (gain + shoulder) to do. Checked
         # before the cache so a neutral edit can never take a cached stage and
         # fall through the rest of the pipeline instead of returning here.
-        arr = _linear_tone_block(lin, adj, base_gain)
+        arr = _linear_tone_block_banded(lin, adj, base_gain)
         return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
 
     # Tone + denoise depend on their own sliders and nothing else, so when
@@ -1806,7 +1870,7 @@ def apply_adjustments_linear(
     key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
     arr = _tone_stage_get(key)
     if arr is None:
-        arr = _linear_tone_block(lin, adj, base_gain)
+        arr = _linear_tone_block_banded(lin, adj, base_gain)
         arr = _denoise_stage(arr, adj, fast, short_edge)
         _tone_stage_put(key, arr)
     _abort_if_stale()
@@ -2159,6 +2223,32 @@ class PreviewSuperseded(Exception):
     into an empty 409."""
 
 
+# When the editor last rendered a preview frame. Background bulk work (the
+# rebuild-all-thumbnails run, the post-save full.jpg warmer) consults this and
+# holds back while a session is live: those jobs are hours of patience, the
+# editor is a person waiting on a slider, and on an 8GB machine running both
+# at once ends in swap. Same idea as the embedding backfill yielding to
+# imports (workers/queue.py), just keyed on editor renders instead.
+_editor_activity_lock = threading.Lock()
+_editor_last_activity = 0.0
+
+
+def note_editor_activity() -> None:
+    global _editor_last_activity
+    with _editor_activity_lock:
+        _editor_last_activity = time.monotonic()
+
+
+def editor_recently_active(within_s: float) -> bool:
+    """True while the last editor preview render is less than within_s ago.
+    An open-but-idle editor goes quiet here on purpose: a user reading their
+    photo does not need the CPU, and the next slider move pauses the
+    background work again within one work item."""
+    with _editor_activity_lock:
+        last = _editor_last_activity
+    return last > 0.0 and (time.monotonic() - last) < within_s
+
+
 def _downscale_linear(arr: np.ndarray, max_px: int) -> np.ndarray:
     """Downscale a linear float array so its long edge is <= max_px. INTER_AREA
     in linear light is the physically correct average (LANCZOS on sRGB values
@@ -2176,7 +2266,12 @@ def _downscale_linear(arr: np.ndarray, max_px: int) -> np.ndarray:
 # because the interesting question is not "is THIS size cached" but "is a BIGGER
 # one" - see _cached_editor_base.
 _BASE_CACHE: "OrderedDict[tuple[str, str, int, int], tuple[np.ndarray, float]]" = OrderedDict()
-_BASE_CACHE_MAX = 12
+# Bounded by BYTES, not entry count: entries span 5MB (scrub) to 61MB (ultra),
+# so a fixed count either starves the cache of small bases or lets twelve ultra
+# frames add up to 730MB on a machine that may have 8GB total. The budget holds
+# roughly three images' full tier ladders, and small bases no longer get
+# evicted just to make room for a count.
+_BASE_CACHE_MAX_BYTES = 320 * 1024 * 1024
 _base_cache_lock = threading.Lock()
 # Bases being computed right now, so a second asker waits instead of decoding
 # the same thing beside the first. Guarded by _base_cache_lock.
@@ -2221,15 +2316,28 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
                 return hit
             in_flight = _BASE_INFLIGHT.get(key)
             if in_flight is None:
-                done = threading.Event()
-                _BASE_INFLIGHT[key] = done
                 bigger_key = min(
                     (k for k in _BASE_CACHE if k[:3] == key[:3] and k[3] > max_px),
                     key=lambda k: k[3],
                     default=None,
                 )
                 source = _BASE_CACHE.get(bigger_key) if bigger_key is not None else None
-                break
+                if source is None:
+                    # No bigger base cached, but one may be DECODING right now
+                    # (the ultra warm-up on a cold open). Decoding this size
+                    # beside it means two decodes of the same file fighting
+                    # for the same cores; waiting means deriving from the big
+                    # one in milliseconds once it lands. The wait falls through
+                    # to the loop, which finds the bigger base in the cache.
+                    in_flight = next(
+                        (ev for k, ev in _BASE_INFLIGHT.items()
+                         if k[:3] == key[:3] and k[3] > max_px),
+                        None,
+                    )
+                if in_flight is None:
+                    done = threading.Event()
+                    _BASE_INFLIGHT[key] = done
+                    break
         # Outside the lock, or nobody could ever finish. A lapsed wait falls
         # through to the loop, which re-checks the cache and, if the computer
         # died without delivering, takes over the job itself.
@@ -2240,8 +2348,10 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
         with _base_cache_lock:
             _BASE_CACHE[key] = out
             _BASE_CACHE.move_to_end(key)
-            while len(_BASE_CACHE) > _BASE_CACHE_MAX:
-                _BASE_CACHE.popitem(last=False)
+            total = sum(arr.nbytes for arr, _gain in _BASE_CACHE.values())
+            while total > _BASE_CACHE_MAX_BYTES and len(_BASE_CACHE) > 1:
+                _, (evicted, _gain) = _BASE_CACHE.popitem(last=False)
+                total -= evicted.nbytes
         return out
     finally:
         # On success and on failure alike: waiters must wake either way, and a
@@ -2305,6 +2415,24 @@ _warming: set[str] = set()
 _WARM_DELAY_S = 0.35
 
 
+def _wait_for_same_image_decodes(image_id: str, path_str: str, mtime_ns: int) -> None:
+    """Block until no base decode of this file is in flight. The warm-up used
+    to start its (biggest, slowest) decode while the cold-open accurate decode
+    of the same file was still running - two LibRaw/libjpeg passes fighting for
+    the same cores, and the frame the user was actually waiting on paid for
+    both. Waiting costs the warm-up nothing; it has seconds of headroom."""
+    while True:
+        with _base_cache_lock:
+            events = [
+                ev for k, ev in _BASE_INFLIGHT.items()
+                if k[:3] == (image_id, path_str, mtime_ns)
+            ]
+        if not events:
+            return
+        for ev in events:
+            ev.wait(timeout=60)
+
+
 def warm_editor_base(image_id: str, path_str: str, mtime_ns: int) -> None:
     """Decode the biggest preview base for this image in the background.
 
@@ -2324,6 +2452,7 @@ def warm_editor_base(image_id: str, path_str: str, mtime_ns: int) -> None:
     def run() -> None:
         try:
             time.sleep(_WARM_DELAY_S)
+            _wait_for_same_image_decodes(image_id, path_str, mtime_ns)
             _cached_editor_base(image_id, path_str, mtime_ns, top)
         except Exception:
             # A failed warm-up costs nothing: the ladder decodes as it always
@@ -2515,6 +2644,7 @@ def render_editor_preview_bytes(
         if is_stale is not None and is_stale():
             raise PreviewSuperseded()
 
+    note_editor_activity()
     _bail_if_stale()
     path = resolve_image_path(image)
     if region is not None and not region_is_supported(adjustments):
@@ -2953,6 +3083,14 @@ def render_full_from_stored_edits(image: "Image", max_size: int | None = None) -
 # saves coalesces into one render. The render itself serialises on
 # _full_render_lock like every other native-resolution render.
 _FULL_WARM_DELAY_S = 4.0
+# How long the editor must have been quiet before the warmer renders. The full
+# render is ~14s of CPU behind _full_render_lock and hundreds of MB of frame;
+# started "4s after every save" it ran beside the very session that triggered
+# it - the settle renders queued behind its lock and, on 8GB, the two working
+# sets together went to swap. The pending set keeps the work; only the start
+# moves to the next pause in editing.
+_FULL_WARM_EDITOR_IDLE_S = 10.0
+_FULL_WARM_POLL_S = 1.0
 _full_warm_lock = threading.Lock()
 _full_warm_pending: set[str] = set()
 _full_warm_thread: "threading.Thread | None" = None
@@ -2974,6 +3112,10 @@ def _full_warm_run() -> None:
 
     while True:
         _time.sleep(_FULL_WARM_DELAY_S)
+        # Yield to the live session: hold the render back until the editor has
+        # paused. The set keeps every queued id, so nothing is lost by waiting.
+        while editor_recently_active(_FULL_WARM_EDITOR_IDLE_S):
+            _time.sleep(_FULL_WARM_POLL_S)
         with _full_warm_lock:
             if not _full_warm_pending:
                 return
@@ -2989,9 +3131,18 @@ def _full_warm_run() -> None:
 
                 image = db.get(ImageRow, image_id)
                 if image is not None and image.deleted_at is None:
-                    generate_full(image)
+                    # The idle check races the user's next slider move; the
+                    # stale probe catches that gap so the render bails before
+                    # burning the lock, and the id goes back in the queue.
+                    generate_full(
+                        image,
+                        is_stale=lambda: editor_recently_active(_FULL_WARM_EDITOR_IDLE_S),
+                    )
             finally:
                 db.close()
+        except PreviewSuperseded:
+            with _full_warm_lock:
+                _full_warm_pending.add(image_id)
         except Exception:
             logger.exception("full.jpg warm-up failed for %s", image_id)
 
