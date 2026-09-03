@@ -1646,7 +1646,9 @@ def editor_preview(
     browse: bool = False,
     peek: str | None = None,
     region: str | None = None,
+    region_px: int | None = None,
     zoomed: bool = False,
+    native_only: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1670,7 +1672,9 @@ def editor_preview(
     of it, for the native tier: zoomed in, the rest of a full-resolution frame
     is seconds of work for pixels that are off screen. Ignored by every other
     tier, and by edits whose finishing effects need the whole frame (see
-    thumbnails.region_is_supported).
+    thumbnails.region_is_supported). `&region_px=N` (interactive region frames
+    only) caps the tile's rendered long edge to its on-screen size, so a drag
+    frame costs the pixels the screen can show rather than the native cut's.
 
     `?peek=<mask id>` marks that mask's covered area in the frame with the
     editor's zebra, so a luminance / colour / edge mask - none of which has an
@@ -1681,6 +1685,21 @@ def editor_preview(
     _validate_crop(payload.crop)
     image = get_owned_image(db, current_user.id, image_id)
     view_region = _parse_region(region)
+    # Clamped, not validated: a nonsense budget degrades to "no cap" or a
+    # sane minimum, never to an error - same stance as _parse_region.
+    view_region_px = max(256, min(8192, region_px)) if region_px else None
+    # `?native_only=1`: the caller already has this edit state painted from the
+    # fallback tier and is only waiting for the full-resolution base. Answering
+    # such a poll by re-rendering the multi-second fallback frame it already
+    # shows is the single most wasteful thing this endpoint used to do while a
+    # 40MP decode was in flight - say "not yet" instead, keep the decode warm,
+    # and let the caller come back.
+    if native and native_only:
+        path = resolve_image_path(image)
+        mtime_ns = path.stat().st_mtime_ns
+        if not thumbnails.native_base_ready(image.id, mtime_ns):
+            thumbnails.warm_native_base(image.id, str(path), mtime_ns)
+            return Response(status_code=202, headers={"X-Rollfilm-Tier": "pending"})
     crop = None
     if payload.crop is not None:
         crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
@@ -1715,6 +1734,7 @@ def editor_preview(
             browse=browse,
             peek=(peek or None),
             region=view_region,
+            region_px=view_region_px,
             meta=render_meta,
             zoomed=zoomed,
             is_stale=_is_stale,
@@ -1764,8 +1784,12 @@ def editor_preview(
         # mis-register against the picture underneath.
         fw, fh = render_meta["frame"]
         bx, by = render_meta["box"]
+        bw, bh = render_meta["box_size"]
         headers["X-Rollfilm-Frame"] = f"{fw}x{fh}"
-        headers["X-Rollfilm-Box"] = f"{bx},{by}"
+        # x,y,w,h - all in the frame's pixels. The w/h matter when region_px
+        # scaled the render: the tile's bitmap is then smaller than its box and
+        # the client stretches it to fit.
+        headers["X-Rollfilm-Box"] = f"{bx},{by},{bw},{bh}"
     return Response(content=data, media_type="image/jpeg", headers=headers)
 
 

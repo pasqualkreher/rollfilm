@@ -27,11 +27,17 @@ _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 # the whole pipeline on every slider tick, and re-rasterising an unchanged
 # brush mask (thousands of capsule stamps) per frame dominated those renders.
 # Keyed by the sub-mask's parameter JSON + the field size; a small LRU because
-# a 2600px float32 field is ~18MB. Fields at native resolution (tens of MP) are
-# deliberately never cached - one entry would dwarf the whole budget.
+# a 2600px float32 field is ~18MB. Per-entry and total byte caps rather than a
+# hard pixel bail: the editor's zoomed drag frames are viewport-sized tiles
+# (~8-12MP on a 4K display), and refusing to cache those re-rasterised an
+# unchanged brush mask (thousands of capsule stamps) on every frame of a zoomed
+# drag - the exact cost this cache exists to remove. Fields at true native
+# resolution (tens of MP) still fall over the per-entry cap and stay uncached,
+# so one entry can never dwarf the whole budget.
 _FIELD_CACHE: OrderedDict[tuple[str, str, int, int, "FieldView"], np.ndarray] = OrderedDict()
 _FIELD_CACHE_MAX = 8
-_FIELD_CACHE_MAX_PX = 8_000_000
+_FIELD_CACHE_MAX_PX = 12_000_000  # 48MB float32 per entry
+_FIELD_CACHE_TOTAL_MAX_BYTES = 128 * 1024 * 1024
 _field_cache_lock = threading.Lock()
 
 
@@ -51,7 +57,10 @@ def _cached_spatial_field(t: str, p: dict, h: int, w: int, view: FieldView, comp
     with _field_cache_lock:
         _FIELD_CACHE[key] = f
         _FIELD_CACHE.move_to_end(key)
-        while len(_FIELD_CACHE) > _FIELD_CACHE_MAX:
+        while len(_FIELD_CACHE) > _FIELD_CACHE_MAX or (
+            len(_FIELD_CACHE) > 1
+            and sum(a.nbytes for a in _FIELD_CACHE.values()) > _FIELD_CACHE_TOTAL_MAX_BYTES
+        ):
             _FIELD_CACHE.popitem(last=False)
     return f
 

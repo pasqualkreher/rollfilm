@@ -524,7 +524,11 @@ export function PhotoEditor({ image, onClose }: Props) {
   // Null means "render the frame whole": either nothing is cropped away by the
   // viewport, or so little is that a tile would save nothing - the un-zoomed
   // path stays exactly as it was.
-  function visibleRegion(): { x: number; y: number; w: number; h: number } | null {
+  // `px` rides along: the tile's on-screen long edge in device pixels - what
+  // the region covers of the TRANSFORMED canvas, times the devicePixelRatio.
+  // It is the honest ceiling on how many rendered pixels the tile can show,
+  // and what the interactive frames send as their render budget (region_px).
+  function visibleRegion(): { x: number; y: number; w: number; h: number; px: number } | null {
     const cv = canvasRef.current;
     const box = stageMainRef.current;
     if (!cv || !box) return null;
@@ -546,7 +550,9 @@ export function PhotoEditor({ image, onClose }: Props) {
     const out = { x: x - mx, y: y - my, w: w + 2 * mx, h: h + 2 * my };
     // Nearly the whole frame: not worth a tile (and the server refuses it too).
     if (out.w * out.h > 0.8) return null;
-    return out;
+    const dpr = window.devicePixelRatio || 1;
+    const px = Math.round(Math.max(out.w * cr.width, out.h * cr.height) * dpr);
+    return { ...out, px };
   }
 
   // Which render tier the picture on screen actually needs, or null when what is
@@ -602,6 +608,13 @@ export function PhotoEditor({ image, onClose }: Props) {
   // frame FIRST so there's visual feedback within ~150ms instead of the editor
   // looking stuck until the accurate frame lands seconds later.
   const slowAccurate = useRef(false);
+  // The dirty-token (resp. origToken) whose native settle came back downgraded
+  // because the full-resolution base was still decoding. While it matches the
+  // current token the canvas already shows that state from the fallback tier,
+  // so the re-armed settle only POLLS for the base (native_only) instead of
+  // having the fallback frame re-rendered - see scheduleSettle.
+  const nativePendingRef = useRef(-1);
+  const origPendingRef = useRef(-1);
 
   // The RGB histogram is drawn by the module-level <Histogram> component from the
   // bins computed after each preview render (see setHistBins below); it appears in
@@ -1194,7 +1207,10 @@ export function PhotoEditor({ image, onClose }: Props) {
           ground.close();
           fitCanvasToStage();
         }
-        ctx.drawImage(bmp, blob.box.x, blob.box.y);
+        // Stretched into its box: a budget-capped tile (region_px) arrives
+        // smaller than the frame pixels it stands for, and the stretch here is
+        // the same downsample the display was doing to the native-sized tile.
+        ctx.drawImage(bmp, blob.box.x, blob.box.y, blob.box.w ?? bmp.width, blob.box.h ?? bmp.height);
         // The tile carries a newer edit state than the whole frame under it:
         // outside this rectangle the picture still shows the old edit. Flag
         // it, so zooming out / panning knows a re-render is owed.
@@ -1257,7 +1273,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         ground.close();
         fitCanvasToStage();
       }
-      ctx.drawImage(bmp, blob.box.x, blob.box.y);
+      ctx.drawImage(bmp, blob.box.x, blob.box.y, blob.box.w ?? bmp.width, blob.box.h ?? bmp.height);
     } finally {
       bmp.close();
     }
@@ -1320,22 +1336,37 @@ export function PhotoEditor({ image, onClose }: Props) {
           // matters: it renders at true resolution, where the whole frame of a
           // 40MP raw is ~14s of decode plus ~18s of pipeline. Cut to what is
           // visible it is a fraction of that. At fit view the region is null and
-          // nothing about the render changes.
+          // nothing about the render changes. The tile also carries its
+          // on-screen size (region.px): between fit and 100% the native cut is
+          // up to ~4x the pixels the screen shows, and the settle arrives that
+          // much sooner without them; at true 100% the budget is a no-op.
           const region = tier === "native" ? visibleRegion() : null;
           const dtoken = dirtyToken.current;
+          // This exact edit state was already painted from the fallback tier
+          // and only the full-resolution base is missing: poll instead of
+          // asking for a render - the old behaviour re-rendered the very
+          // multi-second fallback frame already on the canvas, every 2.5s,
+          // for the whole life of a ~14s raw decode.
+          const nativeOnly = tier === "native" && nativePendingRef.current === dtoken;
           const blob = await api.images.editorPreview(
             image.id, previewEditsLatest.current!, fctrl.signal, tier, false, peekRef.current,
-            region
+            region, false, region ? region.px : null, nativeOnly
           );
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
-          // The server answers a native request from the tier below while the
-          // full-resolution base is still decoding - nobody is made to wait out
-          // a 20s decode. What came back is a whole frame, so it goes on the
-          // canvas, and the sharp tile is fetched once the base has landed.
-          const downgraded = tier === "native" && blob.servedTier !== "native";
-          if (region && !downgraded && blob.frame) await drawRegionIntoFrame(blob, seq, dtoken);
-          else await drawBlob(blob, seq, false, previewEditsLatest.current!.crop);
-          rearm ||= downgraded;
+          if (blob.servedTier === "pending") {
+            // Still decoding; the canvas already shows this state. Come back.
+            rearm = true;
+          } else {
+            // The server answers a native request from the tier below while the
+            // full-resolution base is still decoding - nobody is made to wait out
+            // a 20s decode. What came back is a whole frame, so it goes on the
+            // canvas, and the sharp tile is fetched once the base has landed.
+            const downgraded = tier === "native" && blob.servedTier !== "native";
+            if (region && !downgraded && blob.frame) await drawRegionIntoFrame(blob, seq, dtoken);
+            else await drawBlob(blob, seq, false, previewEditsLatest.current!.crop);
+            nativePendingRef.current = downgraded ? dtoken : -1;
+            rearm ||= downgraded;
+          }
         }
         // The compare view's other half is held to the same standard: whatever
         // the edit is shown at, the original / snapshot beside it is refined to
@@ -1346,14 +1377,21 @@ export function PhotoEditor({ image, onClose }: Props) {
         if (otier && wantOrigRef.current) {
           const oregion = otier === "native" ? visibleRegion() : null;
           const otoken = origToken.current;
+          const onativeOnly = otier === "native" && origPendingRef.current === otoken;
           const oblob = await api.images.editorPreview(
-            image.id, baselineLatest.current, fctrl.signal, otier, baselineBrowseRef.current, null, oregion
+            image.id, baselineLatest.current, fctrl.signal, otier, baselineBrowseRef.current, null,
+            oregion, false, oregion ? oregion.px : null, onativeOnly
           );
           if ((scrubbing.current && !compareRef.current) || otoken !== origToken.current) return;
-          const odowngraded = otier === "native" && oblob.servedTier !== "native";
-          if (oregion && !odowngraded && oblob.frame) await drawRegionIntoOriginal(oblob, otoken);
-          else await drawOriginal(oblob);
-          rearm ||= odowngraded;
+          if (oblob.servedTier === "pending") {
+            rearm = true;
+          } else {
+            const odowngraded = otier === "native" && oblob.servedTier !== "native";
+            if (oregion && !odowngraded && oblob.frame) await drawRegionIntoOriginal(oblob, otoken);
+            else await drawOriginal(oblob);
+            origPendingRef.current = odowngraded ? otoken : -1;
+            rearm ||= odowngraded;
+          }
         }
         if (rearm) {
           clearTimeout(settleTimer.current);
@@ -1432,6 +1470,15 @@ export function PhotoEditor({ image, onClose }: Props) {
         // along: the zebra is computed against the whole frame server-side, so
         // a peeked tile matches the peeked frame it lands in.
         const region = scaleRef.current > 1.001 ? visibleRegion() : null;
+        // The interactive frames' render budget: a tile is displayed at
+        // region.px device pixels, so rendering the native cut's (often far
+        // larger) pixel count into it is invisible work - and what made zoomed
+        // drags crawl. Drag frames render at half the on-screen size (mild 2x
+        // upscale, same trade the fit view's scrub tier makes); the pointer-up
+        // frame renders the full on-screen size; the native settle underneath
+        // stays uncapped, so what the zoom is judged on is untouched.
+        const scrubPx = region ? Math.max(1600, Math.round(region.px / 2)) : null;
+        const restPx = region ? region.px : null;
         try {
           // Progressive feedback: when the accurate tier has been slow, show a
           // scrub frame of this edit state right away, then let the accurate
@@ -1443,7 +1490,7 @@ export function PhotoEditor({ image, onClose }: Props) {
           if (!scrub && slowAccurate.current && lastScrubEditsRef.current !== edits) {
             const quick = await api.images.editorPreview(
               image.id, edits, ctrl.signal, "scrub", false, peekRef.current,
-              region, scaleRef.current > 1.001
+              region, scaleRef.current > 1.001, scrubPx
             );
             if (region && quick.frame) await drawRegionIntoFrame(quick, seq, token);
             else await drawBlob(quick, seq, !peekRef.current, edits.crop);
@@ -1457,7 +1504,7 @@ export function PhotoEditor({ image, onClose }: Props) {
             // Zoomed in, whole-frame scrub renders size up to the accurate
             // base (see ?zoomed=1) - the fallback while a tile isn't possible.
             image.id, edits, ctrl.signal, scrub ? "scrub" : "fast", false, peekRef.current,
-            region, scaleRef.current > 1.001
+            region, scaleRef.current > 1.001, scrub ? scrubPx : restPx
           );
           if (!scrub) slowAccurate.current = performance.now() - t0 > 300;
           // A marked frame is pink candy-stripes over the photo, so it must not
@@ -1503,6 +1550,8 @@ export function PhotoEditor({ image, onClose }: Props) {
   useEffect(() => {
     groundTokenRef.current = -1;
     groundStaleRef.current = false;
+    nativePendingRef.current = -1;
+    origPendingRef.current = -1;
   }, [image.id]);
 
   // Geometry moved, so the compare view's original no longer matches the frame

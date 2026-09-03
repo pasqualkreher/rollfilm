@@ -119,6 +119,108 @@ def test_the_early_cut_renders_the_same_pixels_as_the_whole_frame(photo):
     assert np.abs(expected - tile.astype(int)).mean() < 2.0
 
 
+def test_a_budgeted_tile_is_the_same_picture_smaller(photo):
+    """`region_px` caps what a zoomed interactive tile renders at - the fix for
+    drag frames costing the native cut's pixels instead of the screen's. The
+    budgeted tile must be a downscale of the very tile it replaces: same box in
+    the frame (meta), fewer pixels in the JPEG, same picture once sized back up.
+    """
+    from io import BytesIO
+
+    _warm_native(photo)
+    adj = develop.normalize({"exposure": 0.4, "contrast": 20})
+    region = (0.3, 0.25, 0.3, 0.3)
+
+    full_meta: dict = {}
+    full_tile = PILImage.open(BytesIO(
+        thumbnails.render_editor_preview_bytes(
+            photo, 0, None, adj, region=region, meta=full_meta
+        )
+    )).convert("RGB")
+    small_meta: dict = {}
+    small_tile = PILImage.open(BytesIO(
+        thumbnails.render_editor_preview_bytes(
+            photo, 0, None, adj, region=region, region_px=30,
+            meta=small_meta,
+        )
+    )).convert("RGB")
+
+    # Both name the same box in the same frame - the client composites by
+    # these, so they must not move with the render budget.
+    assert small_meta["frame"] == full_meta["frame"]
+    assert small_meta["box"] == full_meta["box"]
+    assert small_meta["box_size"] == full_meta["box_size"]
+    assert full_tile.size == tuple(full_meta["box_size"])
+    # The budget bit: fewer pixels rendered, capped at the asked-for long edge.
+    assert max(small_tile.size) <= 30
+    # Same picture: the unbudgeted tile downscaled to the budget matches it.
+    expected = np.asarray(full_tile.resize(small_tile.size), dtype=np.int16)
+    got = np.asarray(small_tile, dtype=np.int16)
+    assert np.abs(expected - got).mean() < 6.0
+
+
+def test_the_native_settle_tile_honours_the_budget_too(photo):
+    """The settle's native region render carries the same on-screen budget as
+    the interactive frames: between fit view and 100% zoom the native cut is
+    more pixels than the screen shows, and the sharp version arriving seconds
+    later was the wait for them. Same box in the frame, smaller bitmap."""
+    from io import BytesIO
+
+    _warm_native(photo)
+    adj = develop.normalize({"exposure": 0.4, "contrast": 20})
+    region = (0.3, 0.25, 0.3, 0.3)
+    meta: dict = {}
+    tile = PILImage.open(BytesIO(
+        thumbnails.render_editor_preview_bytes(
+            photo, 0, None, adj, native=True, region=region, region_px=30, meta=meta
+        )
+    ))
+    assert max(tile.size) <= 30
+    assert tuple(meta["box_size"]) != tile.size  # box named in frame pixels
+
+
+def test_a_budget_bigger_than_the_tile_changes_nothing(photo):
+    """A tile already within its on-screen budget must render exactly as it
+    would have without one - the cap is a ceiling, never an upscale."""
+    _warm_native(photo)
+    adj = develop.normalize({"exposure": 0.4, "contrast": 20})
+    region = (0.3, 0.25, 0.3, 0.3)
+    plain = thumbnails.render_editor_preview_bytes(
+        photo, 0, None, adj, region=region
+    )
+    budgeted = thumbnails.render_editor_preview_bytes(
+        photo, 0, None, adj, region=region, region_px=4096
+    )
+    assert budgeted == plain
+
+
+def test_a_region_tile_reuses_its_tone_stage(photo, monkeypatch):
+    """Dragging a post-tone slider while zoomed re-renders the same tile with
+    only stages below the tone block changed - the tone block must come from
+    the stage cache, not be recomputed per frame. (The native WHOLE frame stays
+    uncached on purpose; the tile is viewport-sized, which is the difference.)"""
+    _warm_native(photo)
+    thumbnails.invalidate_tone_stage()
+    region = (0.3, 0.25, 0.3, 0.3)
+
+    calls = 0
+    real = thumbnails._linear_tone_block_banded
+
+    def counting(*a, **k):
+        nonlocal calls
+        calls += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(thumbnails, "_linear_tone_block_banded", counting)
+    for saturation in (20, -20):
+        thumbnails.render_editor_preview_bytes(
+            photo, 0, None,
+            develop.normalize({"exposure": 0.4, "saturation": saturation}),
+            region=region,
+        )
+    assert calls == 1, "the tile's tone stage was recomputed instead of reused"
+
+
 def test_geometry_takes_the_long_way(photo):
     """With the frame rotated, the region cannot be a plain slice of the base -
     the render has to run the geometry first and cut afterwards. Same test, but

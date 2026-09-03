@@ -76,13 +76,14 @@ function apiEdits(edits: ImageEdits) {
 /** A render Blob carrying what the server actually produced. `servedTier`: a
  *  native request is answered from the tier below while the full-resolution
  *  base decodes. `frame`/`box`: set on region renders - the finished frame's
- *  pixel size and the tile's exact top-left within it, so the editor can
- *  composite the tile into its copy of the frame without re-deriving (and
- *  mis-rounding) either. */
+ *  pixel size and the tile's exact box within it (all in the frame's pixels),
+ *  so the editor can composite the tile into its copy of the frame without
+ *  re-deriving (and mis-rounding) either. The tile's bitmap can be smaller
+ *  than its box when `regionPx` capped the render - drawing stretches it. */
 export type ServedBlob = Blob & {
   servedTier?: string;
   frame?: { w: number; h: number };
-  box?: { x: number; y: number };
+  box?: { x: number; y: number; w?: number; h?: number };
 };
 
 const BASE_URL =
@@ -560,7 +561,20 @@ export const api = {
       region: { x: number; y: number; w: number; h: number } | null = null,
       // Scrub tier only: the user is zoomed in, so the drag frames are being
       // inspected for detail - the server sizes them up to the accurate base.
-      zoomed = false
+      zoomed = false,
+      // Region frames only: the tile's on-screen long edge in device pixels.
+      // Caps what the server renders - between fit view and 100% zoom the
+      // native cut holds more pixels than the screen can show, and rendering
+      // them made zoomed drags crawl and stretched the settle. At (or past)
+      // true 100% the budget equals the cut, so the zoomed-in sharpness the
+      // native tier exists for is untouched.
+      regionPx: number | null = null,
+      // Native settle polling: the caller already painted this edit state from
+      // the fallback tier and only waits for the full-resolution base. With
+      // this set the server answers "not yet" (202, servedTier "pending")
+      // instead of re-rendering the multi-second fallback frame - check
+      // servedTier before touching the blob, a pending one is empty.
+      nativeOnly = false
     ): Promise<ServedBlob> {
       const tier =
         mode === "native"
@@ -581,6 +595,8 @@ export const api = {
         browse ? "browse=1" : "",
         peek ? `peek=${encodeURIComponent(peek)}` : "",
         regionParam,
+        regionParam && regionPx ? `region_px=${Math.round(regionPx)}` : "",
+        mode === "native" && nativeOnly ? "native_only=1" : "",
         zoomed && mode === "scrub" ? "zoomed=1" : "",
       ]
         .filter(Boolean)
@@ -610,10 +626,14 @@ export const api = {
       const box = res.headers.get("X-Rollfilm-Box");
       if (frame && box) {
         const [fw, fh] = frame.split("x").map(Number);
-        const [bx, by] = box.split(",").map(Number);
+        const [bx, by, bw, bh] = box.split(",").map(Number);
         if (fw > 0 && fh > 0 && Number.isFinite(bx) && Number.isFinite(by)) {
           out.frame = { w: fw, h: fh };
           out.box = { x: bx, y: by };
+          if (bw > 0 && bh > 0) {
+            out.box.w = bw;
+            out.box.h = bh;
+          }
         }
       }
       return out;

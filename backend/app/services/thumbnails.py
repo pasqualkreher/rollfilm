@@ -2594,6 +2594,7 @@ def render_editor_preview_bytes(
     browse: bool = False,
     peek: str | None = None,
     region: tuple[float, float, float, float] | None = None,
+    region_px: int | None = None,
     meta: dict | None = None,
     zoomed: bool = False,
     is_stale: Callable[[], bool] | None = None,
@@ -2686,24 +2687,37 @@ def render_editor_preview_bytes(
 
     _bail_if_stale()
     if native:
+        # The settle tile honours the on-screen budget too: between fit view
+        # and true 100% the native cut holds up to ~4x the pixels the screen
+        # can show, and rendering them stretched the "sharp version arrives"
+        # wait for nothing visible. At (or past) 100% the budget equals the
+        # cut and nothing changes - the zoom is still judged on real pixels.
         with _full_render_lock:
             _bail_if_stale()
             return _render_editor_bytes(
                 image, path, 0, rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=90, fast=False, native=True,
-                region=region, meta=meta,
+                region=region, region_px=region_px, meta=meta,
                 browse=browse, peek=peek, is_stale=is_stale,
             )
     if region is not None:
         # The interactive tile (see the gate above): scrub or accurate quality,
         # cut from the native base. Deliberately NOT under _full_render_lock -
         # the tile is small, the base is shared read-only, and these frames must
-        # not queue behind a seconds-long settle render.
+        # not queue behind a seconds-long settle render. `region_px` (the tile's
+        # on-screen size, sent by the editor) caps how many pixels the tile is
+        # rendered at: between fit view and 100% zoom the native-resolution cut
+        # holds more pixels than the screen area it lands on - on a 4K display a
+        # mildly zoomed 40MP frame made every drag frame a 10-30MP render, which
+        # is where "scrubbing while zoomed is 1-2 fps" came from. The native
+        # settle render never passes one, so the sharpness the zoom is judged on
+        # is untouched.
         return _render_editor_bytes(
             image, path, 0, rotation, crop, adjustments, distortion,
             flip_h, flip_v, straighten, persp_h, persp_v,
             quality=88 if scrub else 90, fast=scrub, native=True,
-            region=region, meta=meta, browse=browse, peek=peek, is_stale=is_stale,
+            region=region, region_px=region_px, meta=meta, browse=browse,
+            peek=peek, is_stale=is_stale,
         )
     if full_quality or ultra:
         # Serialise + bound resolution so a burst of settle-renders can't stack
@@ -2817,6 +2831,7 @@ def _render_editor_bytes(
     browse: bool = False,
     peek: str | None = None,
     region: tuple[float, float, float, float] | None = None,
+    region_px: int | None = None,
     meta: dict | None = None,
     is_stale: Callable[[], bool] | None = None,
 ) -> bytes:
@@ -2825,7 +2840,14 @@ def _render_editor_bytes(
     other 90% of a 40MP frame is seconds of work for pixels nobody can see. The
     geometry still runs on the whole frame, so what is cut out is exactly the
     tile the caller asked for, and everything positional below keeps computing
-    against the whole frame (see masks.FieldView)."""
+    against the whole frame (see masks.FieldView).
+
+    `region_px` bounds the tile's long edge: the tile is downscaled to it right
+    after the cut, BEFORE the float conversion and the pipeline, so every pass
+    below runs on roughly the pixels the screen can show instead of the native
+    cut's. The box the client composites into stays named in the frame's own
+    pixels (meta box/box_size) - the client stretches the smaller tile into it,
+    which is the same downsample its display was doing anyway."""
     mtime_ns = path.stat().st_mtime_ns
     if native:
         lin16, gain = _cached_native_base(image.id, str(path), mtime_ns)
@@ -2851,11 +2873,34 @@ def _render_editor_bytes(
         distortion or rotation or crop or flip_h or flip_v or straighten or persp_h or persp_v
     )
     early_cut: tuple[int, int, int, int] | None = None
+    early_box: tuple[int, int, int, int] | None = None
+    tile_scale = 1.0
     if region is not None and not geometry_moves_pixels:
         base_h, base_w = lin16.shape[:2]
         early_cut = _region_box(region, base_w, base_h)
         px0, py0, px1, py1 = early_cut
+        rx, ry, rw, rh = region
+        # The unpadded box - where the tile actually lands in the frame. The
+        # padding around it exists only for the detail passes and is trimmed.
+        x0 = max(0, min(base_w - 1, int(round(rx * base_w))))
+        y0 = max(0, min(base_h - 1, int(round(ry * base_h))))
+        x1 = max(x0 + 1, min(base_w, int(round((rx + rw) * base_w))))
+        y1 = max(y0 + 1, min(base_h, int(round((ry + rh) * base_h))))
+        early_box = (x0, y0, x1, y1)
         lin16 = lin16[py0:py1, px0:px1]
+        # Downscale to the on-screen budget before anything expensive sees the
+        # pixels - INTER_AREA, same as _downscale_linear. Via float32: the base
+        # is float16, which cv2.resize can't take, and the float32 copy of the
+        # cut was about to be made anyway. The slack keeps a tile already at
+        # (or a hair over) its budget exact.
+        if region_px and max(x1 - x0, y1 - y0) > region_px * 1.05:
+            tile_scale = region_px / max(x1 - x0, y1 - y0)
+            th_, tw_ = lin16.shape[:2]
+            lin16 = cv2.resize(
+                lin16.astype(np.float32),
+                (max(1, int(round(tw_ * tile_scale))), max(1, int(round(th_ * tile_scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
 
     # Last exit before the big allocations: the float32 copy of a native base
     # alone is ~480MB.
@@ -2869,20 +2914,34 @@ def _render_editor_bytes(
     trim: tuple[int, int, int, int] | None = None
     if early_cut is not None:
         px0, py0, px1, py1 = early_cut
-        rx, ry, rw, rh = region
-        x0 = max(0, min(base_w - 1, int(round(rx * base_w))))
-        y0 = max(0, min(base_h - 1, int(round(ry * base_h))))
-        x1 = max(x0 + 1, min(base_w, int(round((rx + rw) * base_w))))
-        y1 = max(y0 + 1, min(base_h, int(round((ry + rh) * base_h))))
-        view = masks.FieldView(px0, py0, base_w, base_h)
-        trim = (x0 - px0, y0 - py0, x1 - x0, y1 - y0)
+        x0, y0, x1, y1 = early_box
+        # A downscaled tile lives in a proportionally downscaled frame: the view
+        # and the trim are named in the tile's own (scaled) pixels, so the masks
+        # and the vignette compute against the scaled frame and land exactly
+        # where the native render would put them - same fractions, fewer pixels.
+        s = tile_scale
+        view = masks.FieldView(
+            int(round(px0 * s)), int(round(py0 * s)),
+            max(1, int(round(base_w * s))), max(1, int(round(base_h * s))),
+        )
+        arr_h, arr_w = arr.shape[:2]
+        tx = min(arr_w - 1, int(round((x0 - px0) * s)))
+        ty = min(arr_h - 1, int(round((y0 - py0) * s)))
+        trim = (
+            tx, ty,
+            max(1, min(arr_w - tx, int(round((x1 - x0) * s)))),
+            max(1, min(arr_h - ty, int(round((y1 - y0) * s)))),
+        )
         if meta is not None:
             # Where this tile belongs, in the finished frame's own pixels. The
             # client composites the tile INTO its copy of the frame, and "which
             # pixel is the top-left corner" must be the server's answer, not a
-            # re-derivation that can round differently.
+            # re-derivation that can round differently. box_size is the box in
+            # those same frame pixels; the tile's bitmap is smaller than it when
+            # region_px scaled the render, and the client stretches it to fit.
             meta["frame"] = (base_w, base_h)
             meta["box"] = (x0, y0)
+            meta["box_size"] = (x1 - x0, y1 - y0)
     elif region is not None:
         full_h, full_w = arr.shape[:2]
         rx, ry, rw, rh = region
@@ -2899,14 +2958,22 @@ def _render_editor_bytes(
         if meta is not None:
             meta["frame"] = (full_w, full_h)
             meta["box"] = (x0, y0)
+            meta["box_size"] = (x1 - x0, y1 - y0)
     # Names the exact array the tone/denoise stage would be computed from, so the
     # cache can only ever be reused for it: the base (image + mtime + tier) plus
     # every geometry op applied above, plus which exposure the render is judged
-    # at. The native tier is left out on purpose - one copy of that stage is
-    # ~480MB, too much of the process to hold for a second of denoise.
-    tone_key = None if native else json.dumps(
+    # at. The native WHOLE-FRAME tier is left out on purpose - one copy of that
+    # stage is ~480MB, too much of the process to hold for a second of denoise.
+    # A native region TILE is a different trade: it is viewport-sized, the box
+    # stays put for the whole of a drag, and without the cache every zoomed drag
+    # of a post-tone slider (HSL, curves, masks, clarity...) re-ran the tone
+    # block on the tile per frame. The cut box and the tile's rendered size are
+    # part of the identity; _tone_stage_put's byte cap still refuses oversized
+    # tiles, so an uncapped (no region_px) cut can never pin half a GB.
+    tone_key = None if (native and early_cut is None) else json.dumps(
         [image.id, mtime_ns, base_px, rotation, crop, distortion, flip_h, flip_v,
-         straighten, persp_h, persp_v, browse, region],
+         straighten, persp_h, persp_v, browse, region, native, early_cut,
+         list(lin16.shape[:2]) if early_cut is not None else None],
         sort_keys=True, separators=(",", ":"), default=str,
     )
     # The editor renders the raw NATIVE (base_gain=1.0), never the browsing
