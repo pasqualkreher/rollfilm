@@ -1648,6 +1648,7 @@ def editor_preview(
     region: str | None = None,
     region_px: int | None = None,
     zoomed: bool = False,
+    px: int | None = None,
     native_only: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -1688,6 +1689,11 @@ def editor_preview(
     # Clamped, not validated: a nonsense budget degrades to "no cap" or a
     # sane minimum, never to an error - same stance as _parse_region.
     view_region_px = max(256, min(8192, region_px)) if region_px else None
+    # `?px=N` (whole-frame scrub only): the editor's adaptive drag resolution.
+    # It measures its own frame times and asks for fewer pixels when the edit
+    # has grown too expensive to track the pointer at the fixed tier - see the
+    # ladder in PhotoEditor. Clamped the same way; other tiers ignore it.
+    scrub_px = max(480, min(thumbnails.EDITOR_PREVIEW_PX, px)) if px else None
     # `?native_only=1`: the caller already has this edit state painted from the
     # fallback tier and is only waiting for the full-resolution base. Answering
     # such a poll by re-rendering the multi-second fallback frame it already
@@ -1737,6 +1743,7 @@ def editor_preview(
             region_px=view_region_px,
             meta=render_meta,
             zoomed=zoomed,
+            scrub_px=scrub_px,
             is_stale=_is_stale,
         )
         if native and not thumbnails.native_base_ready(

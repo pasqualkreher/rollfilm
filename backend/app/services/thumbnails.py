@@ -1696,42 +1696,118 @@ def _tone_stage_key(base_key: str, base_gain: float, adj: dict, fast: bool) -> s
     )
 
 
-def _tone_stage_get(key: str | None) -> np.ndarray | None:
-    """The cached stage as a fresh writeable array, or None. Callers get a copy:
+def _stage_get(cache: "OrderedDict[str, np.ndarray]", key: str | None) -> np.ndarray | None:
+    """A cached stage as a fresh writeable array, or None. Callers get a copy:
     the passes downstream are free to work in place, and the stored array has to
     survive being handed out repeatedly. The copy costs ~5ms at the settle tier
     against the ~360ms denoise it saves."""
     if key is None:
         return None
     with _tone_stage_lock:
-        hit = _tone_stage.get(key)
+        hit = cache.get(key)
         if hit is None:
             return None
-        _tone_stage.move_to_end(key)
+        cache.move_to_end(key)
     return hit.copy()
 
 
-def _tone_stage_put(key: str | None, arr: np.ndarray) -> None:
-    if key is None or arr.nbytes > _TONE_STAGE_MAX_BYTES:
+def _stage_put(
+    cache: "OrderedDict[str, np.ndarray]", key: str | None, arr: np.ndarray,
+    max_bytes: int, max_entries: int, total_max_bytes: int,
+) -> None:
+    if key is None or arr.nbytes > max_bytes:
         return
     stored = arr.copy()
     # Read-only so a future pass that starts writing in place fails loudly here
     # instead of quietly poisoning every later frame that reuses this stage.
     stored.flags.writeable = False
     with _tone_stage_lock:
-        _tone_stage[key] = stored
-        _tone_stage.move_to_end(key)
-        while len(_tone_stage) > _TONE_STAGE_MAX_ENTRIES or (
-            len(_tone_stage) > 1
-            and sum(a.nbytes for a in _tone_stage.values()) > _TONE_STAGE_TOTAL_MAX_BYTES
+        cache[key] = stored
+        cache.move_to_end(key)
+        while len(cache) > max_entries or (
+            len(cache) > 1
+            and sum(a.nbytes for a in cache.values()) > total_max_bytes
         ):
-            _tone_stage.popitem(last=False)
+            cache.popitem(last=False)
+
+
+def _tone_stage_get(key: str | None) -> np.ndarray | None:
+    return _stage_get(_tone_stage, key)
+
+
+def _tone_stage_put(key: str | None, arr: np.ndarray) -> None:
+    _stage_put(
+        _tone_stage, key, arr,
+        _TONE_STAGE_MAX_BYTES, _TONE_STAGE_MAX_ENTRIES, _TONE_STAGE_TOTAL_MAX_BYTES,
+    )
+
+
+# --- The editor preview's detail stage cache ---------------------------------
+#
+# A second checkpoint one block below the tone/denoise stage: the array as it
+# stands AFTER the detail (spatial) block - clarity, structure, sharpness,
+# chromatic aberration, dehaze - and before the display colour block. Every
+# adjustment the pipeline reads STRICTLY AFTER that point; same denylist stance
+# as _POST_DENOISE_KEYS (a key missing here costs a cache miss, never a stale
+# frame).
+#
+# This is what keeps the SECOND slider fluid: with clarity or dehaze already
+# dialled in, dragging saturation, a curve, an HSL band or a mask used to
+# re-run those spatial passes on every single drag frame - the preview got
+# slower with every slider the edit accumulated. Reusing the detail stage
+# makes such a drag cost the colour block and below, the same as it costs on
+# an untouched photo.
+_POST_DETAIL_KEYS = frozenset(_POST_DENOISE_KEYS - {
+    "clarity", "structure", "sharpness", "sharpness_threshold", "dehaze",
+    "chromatic_aberration_red_cyan", "chromatic_aberration_blue_yellow",
+})
+
+_detail_stage: "OrderedDict[str, np.ndarray]" = OrderedDict()
+
+# Sized for the interactive frames this exists for (scrub/accurate frames and
+# budget-capped zoomed tiles are ~5-25MB); the settle tier's 2600px stage still
+# fits, the ultra/native ones do not and recompute like they always did.
+_DETAIL_STAGE_MAX_BYTES = 64 * 1024 * 1024
+_DETAIL_STAGE_MAX_ENTRIES = 3
+_DETAIL_STAGE_TOTAL_MAX_BYTES = 128 * 1024 * 1024
+
+
+def _detail_stage_key(base_key: str, base_gain: float, adj: dict, fast: bool) -> str:
+    pre = {k: v for k, v in adj.items() if k not in _POST_DETAIL_KEYS}
+    return json.dumps(
+        [base_key, round(float(base_gain), 6), bool(fast), pre],
+        sort_keys=True, separators=(",", ":"), default=str,
+    )
+
+
+def _detail_block_active(adj: dict) -> bool:
+    """Whether the detail block will touch the pixels at all. When it won't,
+    the detail stage IS the tone stage and caching it again would only spend
+    a second copy of the same bytes."""
+    return bool(
+        adj.get("clarity", 0) or adj.get("structure", 0) or adj.get("sharpness", 0)
+        or adj.get("chromatic_aberration_red_cyan", 0)
+        or adj.get("chromatic_aberration_blue_yellow", 0)
+        or adj.get("dehaze", 0)
+    )
+
+
+def _detail_stage_get(key: str | None) -> np.ndarray | None:
+    return _stage_get(_detail_stage, key)
+
+
+def _detail_stage_put(key: str | None, arr: np.ndarray) -> None:
+    _stage_put(
+        _detail_stage, key, arr,
+        _DETAIL_STAGE_MAX_BYTES, _DETAIL_STAGE_MAX_ENTRIES, _DETAIL_STAGE_TOTAL_MAX_BYTES,
+    )
 
 
 def invalidate_tone_stage() -> None:
-    """Drop the stage cache (image edited on disk, decode settings changed)."""
+    """Drop the stage caches (image edited on disk, decode settings changed)."""
     with _tone_stage_lock:
         _tone_stage.clear()
+        _detail_stage.clear()
 
 
 def apply_adjustments(
@@ -1867,59 +1943,72 @@ def apply_adjustments_linear(
         if is_stale is not None and is_stale():
             raise PreviewSuperseded()
 
-    key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
-    arr = _tone_stage_get(key)
+    # The detail stage (tone + denoise + the spatial detail block) is checked
+    # first: dragging anything strictly below it (colour, curves, HSL, masks,
+    # finishing) then skips every pass above the colour block - see
+    # _POST_DETAIL_KEYS. Only consulted when the detail block would actually
+    # touch the pixels; otherwise the tone stage below already covers it.
+    detail_key = (
+        _detail_stage_key(tone_cache_key, base_gain, adj, fast)
+        if tone_cache_key and _detail_block_active(adj) else None
+    )
+    arr = _detail_stage_get(detail_key)
     if arr is None:
-        arr = _linear_tone_block_banded(lin, adj, base_gain)
-        arr = _denoise_stage(arr, adj, fast, short_edge)
-        _tone_stage_put(key, arr)
+        key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
+        arr = _tone_stage_get(key)
+        if arr is None:
+            arr = _linear_tone_block_banded(lin, adj, base_gain)
+            arr = _denoise_stage(arr, adj, fast, short_edge)
+            _tone_stage_put(key, arr)
+        _abort_if_stale()
+        # Detail (spatial): clarity = large-radius local contrast, structure =
+        # medium-radius local contrast, sharpness = small-radius edge enhancement.
+        # These run during a drag too - they're the ones you most need to see move
+        # while you set them, and at scrub size they cost tens of ms (see the
+        # `fast` note in the docstring).
+        cl = adj.get("clarity", 0)
+        if cl:
+            arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
+            if cl < 0:
+                # Fuji's negative clarity doesn't just flatten - it diffuses like a
+                # Pro-Mist filter (soft halation around brights). Layer a gentle
+                # whole-highlight glow (not the light-source-only Mist) on top of the
+                # band softening; strength follows the slider.
+                #
+                # This ran only on the pointer-up render while the diffusion pass was
+                # the most expensive thing in the pipeline: dragging Clarity leftward
+                # dropped the preview from ~28 frames a second to ~5 while every
+                # other slider stayed fluid, so the softening tracked the pointer and
+                # the glow arrived afterwards. The rebuilt pass (see _MIST_PSF) is
+                # cheap enough to keep up, so the two halves of the look now move
+                # together - which is the point, since the softening on its own
+                # doesn't look like what the slider is going to settle at.
+                arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False,
+                            ref_long_edge=long_edge)
+        st = adj.get("structure", 0)
+        if st:
+            arr = develop_effects.apply_structure(arr, st)
+        sp = adj.get("sharpness", 0)
+        if sp:
+            # +sharpen / -soften share the unsharp formula (negative amount blends
+            # toward the blur). Radius is capped so sharpening stays a fine, tight
+            # edge enhancement; Threshold gates it away from noise/smooth areas.
+            arr = _unsharp(
+                arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
+                threshold=adj.get("sharpness_threshold", 0),
+            )
+        ca_rc = adj.get("chromatic_aberration_red_cyan", 0)
+        ca_by = adj.get("chromatic_aberration_blue_yellow", 0)
+        if ca_rc or ca_by:
+            arr = develop_effects.apply_chromatic_aberration(arr, ca_rc, ca_by)
+        _abort_if_stale()
+        # Dehaze is spatial too (transmission map from the dark channel), so it runs
+        # here rather than in the per-pixel tonal pass.
+        dh = adj.get("dehaze", 0)
+        if dh:
+            arr = _dehaze(arr, dh, long_edge)
+        _detail_stage_put(detail_key, arr)
     _abort_if_stale()
-    # Detail (spatial): clarity = large-radius local contrast, structure =
-    # medium-radius local contrast, sharpness = small-radius edge enhancement.
-    # These run during a drag too - they're the ones you most need to see move
-    # while you set them, and at scrub size they cost tens of ms (see the
-    # `fast` note in the docstring).
-    cl = adj.get("clarity", 0)
-    if cl:
-        arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
-        if cl < 0:
-            # Fuji's negative clarity doesn't just flatten - it diffuses like a
-            # Pro-Mist filter (soft halation around brights). Layer a gentle
-            # whole-highlight glow (not the light-source-only Mist) on top of the
-            # band softening; strength follows the slider.
-            #
-            # This ran only on the pointer-up render while the diffusion pass was
-            # the most expensive thing in the pipeline: dragging Clarity leftward
-            # dropped the preview from ~28 frames a second to ~5 while every
-            # other slider stayed fluid, so the softening tracked the pointer and
-            # the glow arrived afterwards. The rebuilt pass (see _MIST_PSF) is
-            # cheap enough to keep up, so the two halves of the look now move
-            # together - which is the point, since the softening on its own
-            # doesn't look like what the slider is going to settle at.
-            arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False,
-                        ref_long_edge=long_edge)
-    st = adj.get("structure", 0)
-    if st:
-        arr = develop_effects.apply_structure(arr, st)
-    sp = adj.get("sharpness", 0)
-    if sp:
-        # +sharpen / -soften share the unsharp formula (negative amount blends
-        # toward the blur). Radius is capped so sharpening stays a fine, tight
-        # edge enhancement; Threshold gates it away from noise/smooth areas.
-        arr = _unsharp(
-            arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
-            threshold=adj.get("sharpness_threshold", 0),
-        )
-    ca_rc = adj.get("chromatic_aberration_red_cyan", 0)
-    ca_by = adj.get("chromatic_aberration_blue_yellow", 0)
-    if ca_rc or ca_by:
-        arr = develop_effects.apply_chromatic_aberration(arr, ca_rc, ca_by)
-    _abort_if_stale()
-    # Dehaze is spatial too (transmission map from the dark channel), so it runs
-    # here rather than in the per-pixel tonal pass.
-    dh = adj.get("dehaze", 0)
-    if dh:
-        arr = _dehaze(arr, dh, long_edge)
     arr = _display_color_block(arr, adj)
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
@@ -2597,6 +2686,7 @@ def render_editor_preview_bytes(
     region_px: int | None = None,
     meta: dict | None = None,
     zoomed: bool = False,
+    scrub_px: int | None = None,
     is_stale: Callable[[], bool] | None = None,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
@@ -2737,8 +2827,16 @@ def render_editor_preview_bytes(
         # measures 75ms/frame on a 40MP raw - still a fluid drag, at 2.1x the
         # pixels. At fit view the small base stays: 35ms/frame keeps the drag
         # glued to the pointer, and the upscale there is mild.
+        #
+        # `scrub_px` is the client's adaptive override: the editor measures how
+        # long its drag frames actually take and walks a quantised resolution
+        # ladder down (and back up) so the preview keeps tracking the pointer
+        # on edits that have accumulated expensive passes. Clamped so a nonsense
+        # value degrades to the fixed tier, never to garbage.
+        default_px = EDITOR_PREVIEW_PX if zoomed else SCRUB_PREVIEW_PX
+        base_px = max(480, min(scrub_px, EDITOR_PREVIEW_PX)) if scrub_px else default_px
         return _render_editor_bytes(
-            image, path, EDITOR_PREVIEW_PX if zoomed else SCRUB_PREVIEW_PX,
+            image, path, base_px,
             rotation, crop, adjustments, distortion,
             flip_h, flip_v, straighten, persp_h, persp_v,
             quality=88 if zoomed else 82, fast=True, browse=browse,

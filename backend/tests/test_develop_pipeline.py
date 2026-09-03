@@ -673,6 +673,99 @@ def test_tone_stage_cache_stays_shallow():
     assert oldest not in thumbnails._tone_stage
 
 
+# --- The editor preview's detail stage cache ---------------------------------
+# The second checkpoint, below the detail (spatial) block: dragging a colour /
+# curve / mask / finishing slider must not re-run clarity & friends per frame.
+# Like the tone stage, it is a pure speed optimisation - the only thing worth
+# testing is that it stays invisible.
+
+
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"clarity": 40, "saturation": 30},
+        {"clarity": -50, "vibrance": 20},                     # pulls in the mist pass
+        {"dehaze": 30, "structure": 25, "hue": 10},
+        {"sharpness": 50, "grain_amount": 30, "vignette_amount": -40},
+        {"chromatic_aberration_red_cyan": 30, "saturation": -20, "luma_noise_reduction": 25},
+        {"exposure": 0.5, "clarity": 20, "dehaze": 15, "mist": 20},
+    ],
+)
+def test_detail_stage_cache_is_bit_identical(fast, edit):
+    """A warm detail-stage cache must produce exactly the bytes the uncached
+    pipeline does (the _editor_render helper renders twice off the same key, so
+    the second run is the cache-hit path)."""
+    lin = _rng(9).random((80, 120, 3)).astype(np.float32) * 1.4
+    adj = develop.defaults() | edit
+    assert np.array_equal(
+        _editor_render(lin, adj, fast=fast, key=None),
+        _editor_render(lin, adj, fast=fast, key="base"),
+    )
+
+
+def test_detail_stage_cache_key_splits_below_the_detail_block():
+    """Adjustments strictly below the detail block reuse the stage; the detail
+    block's own sliders - and everything above them - recompute it. Every field
+    is swept, so a key missing from _POST_DETAIL_KEYS cannot silently serve a
+    stale stage."""
+    lin = _rng(3).random((40, 60, 3)).astype(np.float32)
+    base = develop.defaults() | {"clarity": 20, "dehaze": 15}
+
+    def stage_key(adj) -> str:
+        thumbnails.invalidate_tone_stage()
+        thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="base")
+        return next(iter(thumbnails._detail_stage))
+
+    reference = stage_key(base)
+    assert stage_key(base | {"saturation": 30}) == reference     # below the cut
+    assert stage_key(base | {"grain_amount": 40}) == reference
+    assert stage_key(base | {"clarity": -80}) != reference       # the block itself
+    assert stage_key(base | {"exposure": 1.0}) != reference      # above it
+
+    probes = {"tone_mapper": "agx", "film_sim": "provia", "curve_mode": "parametric"}
+    stale = [
+        key for key in develop.defaults()
+        if key not in thumbnails._POST_DETAIL_KEYS
+        and stage_key(base | {key: probes.get(key, 7)}) == reference
+    ]
+    assert not stale, f"changing these leaves a stale cached detail stage: {stale}"
+
+
+def test_detail_stage_cache_needs_a_detail_slider():
+    """With no detail slider active the detail stage IS the tone stage - caching
+    it again would only spend a second copy of the same bytes."""
+    lin = _rng(1).random((40, 60, 3)).astype(np.float32)
+    thumbnails.invalidate_tone_stage()
+    thumbnails.apply_adjustments_linear(
+        lin, 1.0, develop.defaults() | {"saturation": 30}, tone_cache_key="base"
+    )
+    assert not thumbnails._detail_stage
+    assert thumbnails._tone_stage
+
+
+def test_a_colour_drag_reuses_the_detail_stage(monkeypatch):
+    """The point of the cache: two renders differing only below the detail block
+    run the spatial passes once, not per frame."""
+    lin = _rng(4).random((40, 60, 3)).astype(np.float32)
+    calls = 0
+    real = thumbnails._clarity
+
+    def counting(*a, **k):
+        nonlocal calls
+        calls += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(thumbnails, "_clarity", counting)
+    thumbnails.invalidate_tone_stage()
+    for saturation in (20, -20):
+        thumbnails.apply_adjustments_linear(
+            lin, 1.0, develop.defaults() | {"clarity": 30, "saturation": saturation},
+            tone_cache_key="base",
+        )
+    assert calls == 1, "the detail stage was recomputed instead of reused"
+
+
 # --- Clarity and denoise are detail controls, not colour controls ------------
 
 

@@ -276,3 +276,36 @@ def test_editor_preview_threads_is_stale_into_the_pipeline(photo):
         thumbnails.render_editor_preview_bytes(
             photo, 0, None, adj, is_stale=stale_after_entry
         )
+
+
+def test_the_scrub_tier_honours_an_adaptive_budget(tmp_path, monkeypatch):
+    """`scrub_px` is the editor's adaptive drag resolution: when its measured
+    frame times say the fixed scrub tier can no longer track the pointer, it
+    asks for fewer pixels. The override must actually size the render, and a
+    nonsense value must clamp to the floor instead of erroring."""
+    from io import BytesIO
+
+    path = tmp_path / "big.jpg"
+    ys, xs = np.mgrid[0:900, 0:1200].astype(np.float32)
+    g = 0.5 + 0.3 * np.sin(xs / 17.0) * np.cos(ys / 13.0)
+    PILImage.fromarray(
+        (np.clip(np.dstack([g, g * 0.9, g * 0.8]), 0, 1) * 255).astype(np.uint8), "RGB"
+    ).save(path, "JPEG")
+    image = Image(
+        id="scrub-px", owner_id=1, file_path=str(path), original_filename="big.jpg",
+        file_hash="hash2", file_type=FileType.jpeg, file_size=path.stat().st_size,
+        taken_at=datetime(2026, 9, 3, 12, 0, 0), width=1200, height=900,
+    )
+    monkeypatch.setattr("app.services.filesystem.resolve_image_path", lambda img: path)
+    thumbnails.clear_editor_base_caches()
+    adj = develop.normalize({"exposure": 0.3, "clarity": 20})
+
+    def scrub_size(**kw) -> tuple[int, int]:
+        data = thumbnails.render_editor_preview_bytes(image, 0, None, adj, scrub=True, **kw)
+        return PILImage.open(BytesIO(data)).size
+
+    assert max(scrub_size()) == thumbnails.SCRUB_PREVIEW_PX  # the fixed tier
+    assert max(scrub_size(scrub_px=560)) == 560              # the ladder's ask
+    assert max(scrub_size(scrub_px=1)) == 480                # clamped, no error
+    # A budget past the accurate tier is a ceiling, and never an upscale.
+    assert max(scrub_size(scrub_px=99999)) == 1200

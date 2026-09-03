@@ -562,12 +562,14 @@ export const api = {
       // Scrub tier only: the user is zoomed in, so the drag frames are being
       // inspected for detail - the server sizes them up to the accurate base.
       zoomed = false,
-      // Region frames only: the tile's on-screen long edge in device pixels.
-      // Caps what the server renders - between fit view and 100% zoom the
-      // native cut holds more pixels than the screen can show, and rendering
-      // them made zoomed drags crawl and stretched the settle. At (or past)
-      // true 100% the budget equals the cut, so the zoomed-in sharpness the
-      // native tier exists for is untouched.
+      // The interactive render budget, in device pixels of the long edge.
+      // With a region it caps the tile's rendered size (between fit view and
+      // 100% zoom the native cut holds more pixels than the screen can show,
+      // and rendering them made zoomed drags crawl and stretched the settle;
+      // at true 100% the budget equals the cut, so the zoomed-in sharpness the
+      // native tier exists for is untouched). Without a region it is the
+      // whole-frame scrub tier's adaptive resolution (`px=`) - the editor
+      // walks it down when drag frames stop keeping up with the pointer.
       regionPx: number | null = null,
       // Native settle polling: the caller already painted this edit state from
       // the fallback tier and only waits for the full-resolution base. With
@@ -596,6 +598,7 @@ export const api = {
         peek ? `peek=${encodeURIComponent(peek)}` : "",
         regionParam,
         regionParam && regionPx ? `region_px=${Math.round(regionPx)}` : "",
+        !regionParam && regionPx && mode === "scrub" ? `px=${Math.round(regionPx)}` : "",
         mode === "native" && nativeOnly ? "native_only=1" : "",
         zoomed && mode === "scrub" ? "zoomed=1" : "",
       ]

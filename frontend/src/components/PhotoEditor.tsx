@@ -104,6 +104,26 @@ const MIX_CHANNELS: [number, string][] = [
 const FULL_TIER_PX = 2600;
 const ULTRA_TIER_PX = 3900;
 
+// The adaptive scrub resolution ladder (see scrubLevelRef): what a drag frame
+// renders at, per rung, for each of the three interactive frame kinds. Rung 0
+// is the fixed tier the editor always used; each rung down trades resolution
+// for frame rate (pixels ~= x0.64 per rung, so pipeline time drops about the
+// same) until the frames track the pointer again. Rungs are discrete so the
+// server's base/tone-stage caches stay warm across a drag's frames.
+const SCRUB_FIT_PX = [1100, 880, 704, 560];
+const SCRUB_ZOOM_WHOLE_PX = [1600, 1280, 1024, 800];
+const SCRUB_REGION_FRAC = [0.5, 0.4, 0.32, 0.25];
+// The zoomed tile's floor per rung: rung 0 keeps the old fixed minimum (deep
+// zoom is judged on detail, so a fast machine never drops below it); the rungs
+// below only exist for frames that measured too slow to track the pointer.
+const SCRUB_REGION_MIN_PX = [1600, 1024, 800, 640];
+// A scrub frame slower than this walks the ladder down (the drag has visibly
+// stopped being live); one faster than the floor - with some frames' patience -
+// walks it back up. The gap between the two is the hysteresis that keeps the
+// ladder from oscillating on noisy timings.
+const SCRUB_STEP_DOWN_MS = 140;
+const SCRUB_STEP_UP_MS = 45;
+
 const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "presets"];
 const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String(i + 1));
 
@@ -458,6 +478,18 @@ export function PhotoEditor({ image, onClose }: Props) {
   // state; the two tokens let the pump skip past superseded states instead of
   // rendering every one, so a fast drag never backs up a queue of stale renders.
   const scrubbing = useRef(false);
+  // Adaptive scrub resolution. The fixed scrub tier assumes a cheap frame, but
+  // an edit accumulates passes - clarity, dehaze, masks - and each one taxes
+  // EVERY later drag's frames, until the preview stops tracking the pointer.
+  // Seeing a slider move immediately matters more than the drag frames'
+  // resolution (the accurate render snaps in at pointer-up either way), so the
+  // pump measures its scrub frames and walks a quantised resolution ladder:
+  // down a rung when frames stop keeping up, back up when there is headroom.
+  // Quantised + hysteresis rather than continuous, so the server's base and
+  // tone-stage caches stay warm within a drag instead of missing per frame.
+  const scrubLevelRef = useRef(0);
+  const scrubEmaRef = useRef<number | null>(null);
+  const scrubStepFramesRef = useRef(0);
   // Hold-to-compare renders the original: it must show at the accurate/full tier,
   // never the scrub tier - even though holding the button holds the pointer down
   // (which would otherwise flip on scrub mode). Mirrors the `compare` state.
@@ -1473,11 +1505,19 @@ export function PhotoEditor({ image, onClose }: Props) {
         // The interactive frames' render budget: a tile is displayed at
         // region.px device pixels, so rendering the native cut's (often far
         // larger) pixel count into it is invisible work - and what made zoomed
-        // drags crawl. Drag frames render at half the on-screen size (mild 2x
-        // upscale, same trade the fit view's scrub tier makes); the pointer-up
-        // frame renders the full on-screen size; the native settle underneath
-        // stays uncapped, so what the zoom is judged on is untouched.
-        const scrubPx = region ? Math.max(1600, Math.round(region.px / 2)) : null;
+        // drags crawl. Drag frames render at a fraction of the on-screen size
+        // (a mild upscale, same trade the fit view's scrub tier makes); the
+        // pointer-up frame renders the full on-screen size; the native settle
+        // underneath stays uncapped, so what the zoom is judged on is
+        // untouched. Which fraction - and which fixed tier for the whole-frame
+        // scrub - comes from the adaptive ladder (see scrubLevelRef): rung 0 is
+        // the old fixed behaviour, and each measured-too-slow drag frame walks
+        // it down so the sliders keep moving on screen no matter how expensive
+        // the edit has become.
+        const level = scrubLevelRef.current;
+        const scrubPx = region
+          ? Math.max(SCRUB_REGION_MIN_PX[level], Math.round(region.px * SCRUB_REGION_FRAC[level]))
+          : (scaleRef.current > 1.001 ? SCRUB_ZOOM_WHOLE_PX : SCRUB_FIT_PX)[level];
         const restPx = region ? region.px : null;
         try {
           // Progressive feedback: when the accurate tier has been slow, show a
@@ -1506,7 +1546,28 @@ export function PhotoEditor({ image, onClose }: Props) {
             image.id, edits, ctrl.signal, scrub ? "scrub" : "fast", false, peekRef.current,
             region, scaleRef.current > 1.001, scrub ? scrubPx : restPx
           );
-          if (!scrub) slowAccurate.current = performance.now() - t0 > 300;
+          if (!scrub) {
+            slowAccurate.current = performance.now() - t0 > 300;
+          } else {
+            // Feed the adaptive ladder: an EMA of the drag frames' round-trip
+            // time, reset on every step so a rung is judged on its own frames.
+            // Down after 2 frames of evidence (a hanging drag must recover
+            // fast), up only after 8 (sharpening is worth little if it
+            // oscillates), and never past either end of the ladder.
+            const dt = performance.now() - t0;
+            const ema = scrubEmaRef.current == null ? dt : scrubEmaRef.current * 0.6 + dt * 0.4;
+            scrubEmaRef.current = ema;
+            scrubStepFramesRef.current++;
+            if (ema > SCRUB_STEP_DOWN_MS && level < SCRUB_FIT_PX.length - 1 && scrubStepFramesRef.current >= 2) {
+              scrubLevelRef.current = level + 1;
+              scrubEmaRef.current = null;
+              scrubStepFramesRef.current = 0;
+            } else if (ema < SCRUB_STEP_UP_MS && level > 0 && scrubStepFramesRef.current >= 8) {
+              scrubLevelRef.current = level - 1;
+              scrubEmaRef.current = null;
+              scrubStepFramesRef.current = 0;
+            }
+          }
           // A marked frame is pink candy-stripes over the photo, so it must not
           // be what the histogram reads - it keeps the last clean frame's bins
           // until the marking goes away, rather than showing the zebra's colour.
