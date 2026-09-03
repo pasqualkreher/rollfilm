@@ -42,7 +42,7 @@ three-line function exists, which is how the reasoning survives between sessions
 
 What that means in practice:
 
-- **It's tested where it counts.** 220+ backend tests cover the paths that could
+- **It's tested where it counts.** 350+ backend tests cover the paths that could
   lose your photos or your edits — import, trash, pairing, library sync. Your
   originals are never modified; edits live in the database beside them.
 - **It also means one person's blind spots.** Rollfilm is used daily on one
@@ -110,6 +110,7 @@ This is one of the highlights of the project: keep your library mirrored to an e
 A non-destructive editor is included, but consider it a gimmick for now — it's fun to play with, not a Lightroom replacement.
 
 - All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
+- **Built to keep up** — while a slider is being dragged, only the pixels your screen can actually show are rendered (zoomed in, only the visible tile), so editing stays fluid even on 40MP RAWs
 - Edits are stored as values in the database; originals are never touched
 - Exposure/contrast/highlights/shadows, white balance, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
 - **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives
@@ -205,7 +206,7 @@ cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 python run_server.py   # runs Alembic migrations, then starts the API on localhost
-pytest                 # 220+ tests, in-memory database, a few seconds
+pytest                 # 350+ tests, in-memory database, a few seconds
 ```
 
 Thinking about contributing? [CONTRIBUTING.md](CONTRIBUTING.md) covers what is likely to be accepted, the commit style, and what to run before opening a pull request.
