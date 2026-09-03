@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useTransientValue } from "../utils/transientMessage";
 import { Dropdown } from "./Dropdown";
+import { IconX } from "./Icons";
 
 interface Props {
   onAdd: (albumId: string) => void | Promise<unknown>;
@@ -66,8 +67,8 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult, chipsO
             <span key={a.id} className="tag-chip">
               {a.name}
               {onRemove && (
-                <button type="button" onClick={() => onRemove(a.id)} aria-label={`Remove from ${a.name}`}>
-                  ×
+                <button type="button" onClick={() => onRemove(a.id)} aria-label={`Remove from ${a.name}`} title={`Remove from ${a.name}`}>
+                  <IconX size={11} />
                 </button>
               )}
             </span>

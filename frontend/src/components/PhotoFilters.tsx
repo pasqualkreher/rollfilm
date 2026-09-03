@@ -416,7 +416,7 @@ export function PhotoFilters({
         )}
 
         {isFiltering && (
-          <button className="btn ghost btn-sm" onClick={clearAll}>
+          <button className="btn btn-sm ghost" onClick={clearAll}>
             Clear
           </button>
         )}

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { IconX } from "./Icons";
+import { IconArrowUp, IconFolder, IconX } from "./Icons";
 
 interface Props {
   onSelect: (path: string) => void;
@@ -42,7 +42,7 @@ export function DirectoryPicker({ onSelect, onClose }: Props) {
             <>
               {data.parent !== null && (
                 <button className="dir-entry dir-up" onClick={() => setPath(data.parent ?? undefined)}>
-                  ↑ Up one level
+                  <IconArrowUp size={13} /> Up one level
                 </button>
               )}
               {data.entries.length === 0 && (
@@ -53,7 +53,7 @@ export function DirectoryPicker({ onSelect, onClose }: Props) {
               )}
               {data.entries.map((e) => (
                 <button key={e.path} className="dir-entry" onClick={() => setPath(e.path)}>
-                  📁 {e.name}
+                  <IconFolder size={13} /> {e.name}
                 </button>
               ))}
             </>

@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useTransientValue } from "../utils/transientMessage";
 import { useAppDialogs } from "./AppDialogs";
 import { Dropdown } from "./Dropdown";
+import { IconPlus } from "./Icons";
 
 export interface AddToResult {
   kind: "album" | "canvas";
@@ -96,10 +97,24 @@ export function AddToPicker({ onAddToAlbum, onAddToCanvas, onResult }: Props) {
   const options = [
     { value: "h-albums", label: <span className="dropdown-group-label">Albums</span>, disabled: true },
     ...(albums ?? []).map((a) => ({ value: `album:${a.id}`, label: a.name })),
-    { value: "new-album", label: "+ New album…" },
+    {
+      value: "new-album",
+      label: (
+        <>
+          <IconPlus size={12} /> New album…
+        </>
+      ),
+    },
     { value: "h-canvas", label: <span className="dropdown-group-label">Canvases</span>, disabled: true },
     ...(canvases ?? []).map((c) => ({ value: `canvas:${c.id}`, label: c.name })),
-    { value: "new-canvas", label: "+ New canvas…" },
+    {
+      value: "new-canvas",
+      label: (
+        <>
+          <IconPlus size={12} /> New canvas…
+        </>
+      ),
+    },
   ];
 
   return (

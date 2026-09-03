@@ -1596,6 +1596,9 @@ textarea:focus-visible {
 }
 
 .dir-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   text-align: left;
   border: none;
   background: transparent;
@@ -1604,6 +1607,10 @@ textarea:focus-visible {
   border-radius: calc(8px * var(--corner-scale));
   font-size: 14px;
   cursor: pointer;
+}
+
+.dir-entry .icon {
+  color: var(--text-muted);
 }
 
 .dir-entry:hover {
@@ -4989,7 +4996,9 @@ input.editor-preset-select {
 }
 
 .import-menu-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
   padding: 9px 12px;
@@ -4999,6 +5008,10 @@ input.editor-preset-select {
   color: var(--text);
   font: inherit;
   cursor: pointer;
+}
+
+.import-menu-item .icon {
+  color: var(--text-muted);
 }
 
 .import-menu-item:hover {
@@ -8563,7 +8576,7 @@ button.smart-card {
   height: 22px;
   padding: 0;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;

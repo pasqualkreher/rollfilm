@@ -16,7 +16,7 @@ import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
 import { SaveCopyDialog, FULL_COPY_QUALITY } from "../components/SaveCopyDialog";
 import { editsFromImage } from "../utils/adjustments";
-import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconPencil, IconTrash, IconX } from "../components/Icons";
+import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconImage, IconPencil, IconPlus, IconTrash, IconX } from "../components/Icons";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { ZoomReadout } from "../components/ZoomReadout";
@@ -671,7 +671,7 @@ export function ImageDetail() {
             )}
             {previewFailed ? (
               <div className="detail-photo-error">
-                <span className="detail-photo-error-icon" aria-hidden="true">🖼️</span>
+                <span className="detail-photo-error-icon" aria-hidden="true"><IconImage size={40} /></span>
                 <p>This photo can't be displayed - the file may be damaged or unreadable.</p>
                 <p className="detail-photo-error-name">{image.original_filename}</p>
                 <button
@@ -864,8 +864,17 @@ export function ImageDetail() {
             <button
               className={`btn${selects.has(image.id) ? " primary" : ""}`}
               onClick={() => selects.toggle(image!.id)}
+              title={selects.has(image.id) ? "Remove this photo from your selects" : "Add this photo to your selects"}
             >
-              {selects.has(image.id) ? "✓ In selects" : "+ Add to selects"}
+              {selects.has(image.id) ? (
+                <>
+                  <IconCheck size={13} /> In selects
+                </>
+              ) : (
+                <>
+                  <IconPlus size={13} /> Add to selects
+                </>
+              )}
             </button>
             {immichConfigured && immich?.sync_mode === "selective" && (
               <label

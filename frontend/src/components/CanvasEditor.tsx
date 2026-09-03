@@ -16,6 +16,7 @@ import {
   IconAlignRight,
   IconAlignTop,
   IconArrowLeft,
+  IconCheck,
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
@@ -31,7 +32,9 @@ import {
   IconLock,
   IconLockOpen,
   IconMagnet,
+  IconMinus,
   IconPencil,
+  IconPlus,
   IconPrinter,
   IconRedo,
   IconRotate,
@@ -3144,8 +3147,8 @@ function PageRail({
         })}
       </div>
 
-      <button className="btn btn-sm page-rail-add" onClick={() => onAdd(pageCount - 1)}>
-        + Add a page
+      <button className="btn btn-sm page-rail-add" onClick={() => onAdd(pageCount - 1)} title="Add a page at the end">
+        <IconPlus size={12} /> Add a page
       </button>
     </div>
   );
@@ -3780,13 +3783,13 @@ function CanvasToolbar({
           <IconRedo size={14} />
         </button>
         <button className="btn btn-sm" onClick={() => onZoom(1 / 1.2)} aria-label="Zoom out" title="Zoom out (−)">
-          −
+          <IconMinus size={14} />
         </button>
         <span className="canvas-zoom-readout" title="How big the page is on screen next to its real printed size">
           {Math.round((zoom * 100) / 3.78)}%
         </span>
         <button className="btn btn-sm" onClick={() => onZoom(1.2)} aria-label="Zoom in" title="Zoom in (+)">
-          +
+          <IconPlus size={14} />
         </button>
         <button
           className="btn btn-sm canvas-tool"
@@ -4375,7 +4378,7 @@ function CanvasActionBar({
 
       <span style={{ flex: 1 }} />
       <button
-        className="btn quiet-danger btn-sm"
+        className="btn btn-sm quiet-danger"
         onClick={onDelete}
         title="Take these off the page (Delete). The photos stay in the library."
       >
@@ -4446,14 +4449,18 @@ function Filmstrip({
                 alt={image.original_filename}
                 draggable={false}
               />
-              {placed.has(image.id) && <span className="canvas-chip-badge">✓</span>}
+              {placed.has(image.id) && (
+                <span className="canvas-chip-badge" title="Already placed on the canvas">
+                  <IconCheck size={10} />
+                </span>
+              )}
             </button>
           ))}
         </div>
       )}
       <div className="canvas-filmstrip-head">
         {backButton}
-        <button className="btn ghost btn-sm canvas-filmstrip-toggle" onClick={onToggle}>
+        <button className="btn btn-sm ghost canvas-filmstrip-toggle" onClick={onToggle}>
           <span className="canvas-filmstrip-caret" style={{ transform: open ? "rotate(180deg)" : "none" }}>
             <IconChevronDown size={13} />
           </span>

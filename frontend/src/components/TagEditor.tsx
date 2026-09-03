@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { IconX } from "./Icons";
 
 interface Props {
   tags: string[];
@@ -28,8 +29,8 @@ export function TagEditor({ tags, onAdd, onRemove, datalistId = "tag-suggestions
           {tags.map((t) => (
             <span key={t} className="tag-chip">
               {t}
-              <button type="button" onClick={() => onRemove(t)} aria-label={`Remove tag ${t}`}>
-                ×
+              <button type="button" onClick={() => onRemove(t)} aria-label={`Remove tag ${t}`} title={`Remove tag ${t}`}>
+                <IconX size={11} />
               </button>
             </span>
           ))}

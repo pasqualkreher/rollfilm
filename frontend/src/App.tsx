@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
-import { IconChart, IconGear, IconHelp, IconMail, IconTrash } from "./components/Icons";
+import { IconChart, IconGear, IconHelp, IconMail, IconMenu, IconTrash } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
@@ -278,11 +278,7 @@ function TopBar() {
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((v) => !v)}
         >
-          {/* Crisp SVG hamburger instead of the ☰ glyph, whose weight varies by
-              platform font and looked out of place in the slimmed-down bar. */}
-          <svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">
-            <path d="M0 1h14M0 6h14M0 11h14" stroke="currentColor" strokeWidth="1.5" />
-          </svg>
+          <IconMenu size={14} />
           {/* Activity dot: an upload/staged batch is easy to miss while its
               nav link is hidden inside the collapsed menu. */}
           {(isUploading || sessionId) && <span className="nav-burger-dot" aria-hidden />}

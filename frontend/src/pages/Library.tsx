@@ -619,7 +619,7 @@ export function Library() {
             <ResetMenu count={selected.size} onReset={resetSelected} />
           </div>
           <button
-            className="btn quiet-danger btn-sm"
+            className="btn btn-sm quiet-danger"
             style={{ marginLeft: "auto" }}
             onClick={deleteSelected}
             title="Delete the selected photos"

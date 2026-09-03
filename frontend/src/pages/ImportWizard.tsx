@@ -16,7 +16,7 @@ import { useWait } from "../state/wait";
 import { useMergePairs } from "../state/viewPrefs";
 import { formatEta } from "../utils/duration";
 import { useTransientMessage } from "../utils/transientMessage";
-import { IconChevronDown } from "../components/Icons";
+import { IconCheck, IconChevronDown, IconFolder, IconImage } from "../components/Icons";
 
 // What a single-file edit in the review grid can change.
 type StagedPatch = {
@@ -57,7 +57,7 @@ function ImportSteps({ current }: { current: 1 | 2 }) {
         return (
           <li key={label} className={`import-step${state}`}>
             <span className="import-step-num" aria-hidden>
-              {n < current ? "✓" : n}
+              {n < current ? <IconCheck size={11} /> : n}
             </span>
             {label}
           </li>
@@ -896,7 +896,7 @@ export function ImportWizard() {
                       folderInputRef.current?.click();
                     }}
                   >
-                    Choose folder…
+                    <IconFolder size={14} /> Choose folder…
                   </button>
                   <button
                     className="import-menu-item"
@@ -925,7 +925,7 @@ export function ImportWizard() {
                       filesInputRef.current?.click();
                     }}
                   >
-                    Choose files…
+                    <IconImage size={14} /> Choose files…
                   </button>
                 </div>
               )}

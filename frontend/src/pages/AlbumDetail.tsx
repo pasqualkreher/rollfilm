@@ -400,7 +400,7 @@ export function AlbumDetail() {
           />
           {!renaming && (
             <button
-              className="btn ghost btn-sm album-rename-btn"
+              className="btn btn-sm ghost album-rename-btn"
               title="Rename this album"
               aria-label="Rename this album"
               onClick={() => setRenaming(true)}
@@ -429,7 +429,7 @@ export function AlbumDetail() {
       )}
       {album && (
         <button
-          className="btn quiet-danger btn-sm album-bottom-delete"
+          className="btn btn-sm quiet-danger album-bottom-delete"
           title="Delete this album - its photos stay in the library"
           onClick={async () => {
             if (
@@ -572,7 +572,7 @@ export function AlbumDetail() {
             </button>
           </div>
           <button
-            className="btn quiet-danger btn-sm"
+            className="btn btn-sm quiet-danger"
             style={{ marginLeft: "auto" }}
             onClick={deleteSelected}
             title="Delete the selected photos"

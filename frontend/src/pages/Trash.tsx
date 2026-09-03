@@ -168,7 +168,7 @@ export function Trash() {
           <button className="btn" onClick={restoreSelected} disabled={selected.size === 0}>
             Restore
           </button>
-          <button className="btn quiet-danger btn-sm" onClick={deleteSelectedForever} disabled={selected.size === 0}>
+          <button className="btn btn-sm quiet-danger" onClick={deleteSelectedForever} disabled={selected.size === 0}>
             Delete forever
           </button>
         </div>

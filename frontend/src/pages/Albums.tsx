@@ -11,6 +11,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconPencil,
+  IconX,
 } from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
 import { ExportChip } from "../components/CanvasExportChip";
@@ -259,7 +260,7 @@ function CanvasCard({
           onRemove();
         }}
       >
-        ×
+        <IconX size={12} />
       </button>
     </div>
   );
@@ -749,13 +750,14 @@ export function Albums() {
               <button
                 className="card-remove"
                 title="Delete album (photos stay in the library)"
+                aria-label={`Delete album ${album.name}`}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
                   deleteAlbum(album.id, album.name, album.image_count);
                 }}
               >
-                ×
+                <IconX size={12} />
               </button>
             </>
           );

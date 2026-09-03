@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { BorgTestResult, ImmichSyncMode, ImmichTestResult } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
-import { IconX } from "../components/Icons";
+import { IconCheck, IconX } from "../components/Icons";
 import { useAppDialogs } from "../components/AppDialogs";
 import { skinInfo, useAppearance, type Appearance } from "../state/theme";
 import { useCorners } from "../state/corners";
@@ -883,7 +883,7 @@ export function Settings() {
         {saveImmich.isError && <Note error>{(saveImmich.error as Error).message}</Note>}
         {immichTest && (
           <Note error={!immichTest.ok}>
-            {immichTest.ok ? "✓ " : "✗ "}
+            {immichTest.ok ? <IconCheck size={12} /> : <IconX size={12} />}{" "}
             {immichTest.message}
           </Note>
         )}
@@ -971,7 +971,10 @@ export function Settings() {
             <ul className="settings-list">
               {immichUploads.slice(0, 8).map((u) => (
                 <li key={`${u.filename}-${u.at}`}>
-                  <span className={u.ok ? "ok" : "fail"}>{u.ok ? "✓" : "✗"}</span> {u.filename}{" "}
+                  <span className={u.ok ? "ok" : "fail"}>
+                    {u.ok ? <IconCheck size={12} /> : <IconX size={12} />}
+                  </span>{" "}
+                  {u.filename}{" "}
                   <span className={u.ok ? "ok" : "fail"}>
                     — {u.ok ? u.detail : `failed after 3 attempts: ${u.detail}`}
                   </span>
@@ -1210,7 +1213,7 @@ export function Settings() {
                     aria-label={`Remove tag ${t.name}`}
                     title={`Remove “${t.name}”`}
                   >
-                    ×
+                    <IconX size={11} />
                   </button>
                 </span>
               ))}
@@ -1435,7 +1438,7 @@ export function Settings() {
             {saveBorg.isError && <Note error>{(saveBorg.error as Error).message}</Note>}
             {borgTest && (
               <Note error={!borgTest.ok}>
-                {borgTest.ok ? "✓ " : "✗ "}
+                {borgTest.ok ? <IconCheck size={12} /> : <IconX size={12} />}{" "}
                 {borgTest.message}
               </Note>
             )}
@@ -1454,15 +1457,20 @@ export function Settings() {
 
             {borg && (borg.running || borg.last_ok !== null) && (
               <Note error={borg.last_ok === false && !borg.running}>
-                {borg.running
-                  ? "Backup in progress…"
-                  : borg.last_ok
-                    ? `✓ Last backup ${
-                        borg.last_finished_at
-                          ? new Date(borg.last_finished_at).toLocaleString()
-                          : "complete"
-                      }`
-                    : `✗ ${borg.last_message}`}
+                {borg.running ? (
+                  "Backup in progress…"
+                ) : borg.last_ok ? (
+                  <>
+                    <IconCheck size={12} /> Last backup{" "}
+                    {borg.last_finished_at
+                      ? new Date(borg.last_finished_at).toLocaleString()
+                      : "complete"}
+                  </>
+                ) : (
+                  <>
+                    <IconX size={12} /> {borg.last_message}
+                  </>
+                )}
               </Note>
             )}
           </div>

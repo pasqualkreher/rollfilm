@@ -1,3 +1,4 @@
+import { IconCheck } from "./Icons";
 import {
   DARK_SKINS,
   LIGHT_SKINS,
@@ -50,7 +51,11 @@ function SkinTile({
       </span>
       <span className="theme-tile-label">
         {skin.label}
-        {active && <span className="theme-tile-check">✓</span>}
+        {active && (
+          <span className="theme-tile-check">
+            <IconCheck size={13} />
+          </span>
+        )}
       </span>
       <span className="theme-tile-hint">{skin.hint}</span>
     </button>

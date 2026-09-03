@@ -5,7 +5,7 @@ import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
-import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "./Icons";
+import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconImage } from "./Icons";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
@@ -218,12 +218,14 @@ export function ImportLightbox({
               }}
               disabled={index === 0}
               tabIndex={-1}
+              title="Previous photo (Left arrow)"
+              aria-label="Previous photo"
             >
               <IconChevronLeft size={20} />
             </button>
             {loadFailed ? (
               <div className="detail-photo-error">
-                <span className="detail-photo-error-icon" aria-hidden="true">🖼️</span>
+                <span className="detail-photo-error-icon" aria-hidden="true"><IconImage size={40} /></span>
                 <p>This photo can't be displayed - the file may be damaged or unreadable.</p>
               </div>
             ) : (
@@ -265,6 +267,8 @@ export function ImportLightbox({
               }}
               disabled={index === files.length - 1}
               tabIndex={-1}
+              title="Next photo (Right arrow)"
+              aria-label="Next photo"
             >
               <IconChevronRight size={20} />
             </button>

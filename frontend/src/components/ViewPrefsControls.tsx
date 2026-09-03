@@ -1,3 +1,4 @@
+import { IconCheck } from "./Icons";
 import {
   THUMB_SIZES,
   setMergePairs,
@@ -24,7 +25,7 @@ export function ViewPrefsControls({ showMerge = true }: { showMerge?: boolean })
           aria-pressed={merge}
           title="Show each RAW+JPEG pair as one photo. Rating or coloring it applies to the RAW too."
         >
-          {merge ? "✓ " : ""}Merge RAW+JPG
+          {merge && <IconCheck size={12} />} Merge RAW+JPG
         </button>
       )}
 

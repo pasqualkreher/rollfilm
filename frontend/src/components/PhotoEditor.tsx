@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconEye, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
+import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, FULL_COPY_QUALITY } from "./SaveCopyDialog";
 import {
@@ -3963,12 +3963,13 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
               <button
                 className="mask-eye"
                 title={m.visible ? "Hide mask" : "Show mask"}
+                aria-label={m.visible ? `Hide mask ${m.name}` : `Show mask ${m.name}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   updateMask(m.id, { visible: !m.visible });
                 }}
               >
-                {m.visible ? "◉" : "◯"}
+                {m.visible ? <IconEye size={13} /> : <IconEyeOff size={13} />}
               </button>
               <span className="mask-row-name">
                 {m.name}
@@ -3977,12 +3978,13 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
               <button
                 className="mask-del"
                 title="Delete mask"
+                aria-label={`Delete mask ${m.name}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   deleteMask(m.id);
                 }}
               >
-                ×
+                <IconX size={13} />
               </button>
             </div>
           ))}
@@ -4363,7 +4365,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
             </div>
             {autoDevelopSettings.data?.enabled && (
               <button
-                className="btn ghost btn-sm"
+                className="btn btn-sm ghost"
                 disabled={autoAdjust.isPending || busy}
                 onClick={() => autoAdjust.mutate()}
                 title="Suggest develop settings learned from your edited photos"
@@ -4372,7 +4374,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
               </button>
             )}
             <button
-              className="btn ghost btn-sm"
+              className="btn btn-sm ghost"
               disabled={allNeutral}
               onClick={() => {
                 setAdj(defaultAdjustments());

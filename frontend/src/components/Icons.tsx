@@ -31,6 +31,48 @@ export function IconX(props: IconProps) {
   );
 }
 
+export function IconPlus(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M8 2.5v11M2.5 8h11" />
+    </svg>
+  );
+}
+
+export function IconMinus(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 8h11" />
+    </svg>
+  );
+}
+
+// Three bars - the collapsed navigation menu.
+export function IconMenu(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
+    </svg>
+  );
+}
+
+// A tabbed folder - one directory in the picker list.
+export function IconFolder(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M1.75 12.25v-8.5a1 1 0 0 1 1-1h3.4l1.5 1.75h5.6a1 1 0 0 1 1 1v6.75a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z" />
+    </svg>
+  );
+}
+
+export function IconArrowUp(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M8 13.5v-11M3.5 7 8 2.5 12.5 7" />
+    </svg>
+  );
+}
+
 export function IconCheck(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
@@ -253,6 +295,16 @@ export function IconEye(props: IconProps) {
     <svg {...svgProps(props)}>
       <path d="M1.75 8S4.25 3.9 8 3.9 14.25 8 14.25 8 11.75 12.1 8 12.1 1.75 8 1.75 8z" />
       <circle cx="8" cy="8" r="1.9" />
+    </svg>
+  );
+}
+
+// The same eye struck through - this layer/mask is hidden.
+export function IconEyeOff(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M1.75 8S4.25 3.9 8 3.9 14.25 8 14.25 8 11.75 12.1 8 12.1 1.75 8 1.75 8z" opacity="0.45" />
+      <path d="M2.75 13.25l10.5-10.5" />
     </svg>
   );
 }

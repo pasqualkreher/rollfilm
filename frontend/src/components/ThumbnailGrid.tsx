@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
+import { IconX } from "./Icons";
 import { usePhotoInfoCard } from "./PhotoInfoCard";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { thumbPx, thumbTier, useMergePairs, useThumbSize } from "../state/viewPrefs";
@@ -747,12 +748,13 @@ export function ThumbnailGrid({
           <button
             className="card-remove"
             title={removeTitle}
+            aria-label={removeTitle}
             onClick={(e) => {
               e.stopPropagation();
               onRemove(image.id);
             }}
           >
-            ×
+            <IconX size={12} />
           </button>
         )}
         {selectMode && onToggleSelect && (
