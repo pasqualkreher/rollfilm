@@ -6,10 +6,10 @@
 //
 // Knows nothing about React or the DOM it runs in: it returns a string.
 
-import type { AlbumLayout, ImageOut, LayoutItem, LayoutTextStyle } from "../api/types";
+import type { CanvasLayout, ImageOut, LayoutItem, LayoutTextStyle } from "../api/types";
 import { PAGE_GAP_MM, boundsOf, pageOffsetMm, worldRect, type Rect } from "./canvasLayout";
 
-type Doc = Omit<AlbumLayout, "album_id" | "updated_at">;
+type Doc = Omit<CanvasLayout, "canvas_id" | "updated_at">;
 
 // Room left around the work when a free canvas without a page guide is
 // exported: the sheet is cut to the content, plus this much on every side.

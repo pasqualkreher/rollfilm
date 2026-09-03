@@ -15,7 +15,7 @@ import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { VirtualTimeline } from "../components/VirtualTimeline";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
-import { AlbumPicker } from "../components/AlbumPicker";
+import { AddToPicker } from "../components/AddToPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { IconTrash } from "../components/Icons";
@@ -308,6 +308,24 @@ export function Library() {
     setDevelopMsg(`Added tag “${tag}” to ${selected.size} photo(s).`);
   }
 
+  async function addSelectedToCanvas(canvasId: string) {
+    if (selected.size === 0) return;
+    // Same pair rule as albums: in merged view the RAW partner rides along,
+    // so the canvas's filmstrip holds the whole shot.
+    await api.canvases.addImages(canvasId, withPairedIds(Array.from(selected)));
+    queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+    queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
+  }
+
+  function reportAddTo({ kind, name, ok }: { kind: "album" | "canvas"; name: string; ok: boolean }) {
+    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+    setAlbumMsg(
+      ok
+        ? { text: `Added ${selected.size} photo(s) to ${what}.`, error: false }
+        : { text: `Could not add to ${what}.`, error: true }
+    );
+  }
+
   async function addSelectedToAlbum(albumId: string) {
     if (selected.size === 0) return;
     // In merged view the RAW partner is hidden behind the JPEG card - add it
@@ -530,7 +548,11 @@ export function Library() {
           </div>
           <div className="control-group">
             <BulkTagInput onAdd={addTagToSelected} />
-            <AlbumPicker onAdd={addSelectedToAlbum} onResult={reportAlbumAdd} />
+            <AddToPicker
+              onAddToAlbum={addSelectedToAlbum}
+              onAddToCanvas={addSelectedToCanvas}
+              onResult={reportAddTo}
+            />
           </div>
           {immichConfigured && (immich?.sync_mode === "selective" || immich?.sync_mode === "manual") && (
             <div className="control-group">

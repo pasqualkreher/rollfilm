@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.db.models import (
+    CanvasImage,
     FileType,
     Image,
     ImmichPendingDeletion,
@@ -79,6 +80,10 @@ def _queue_immich_removals(db: Session, images: list[Image]) -> None:
     if config is None or config.sync_mode not in (IMMICH_MODE_SELECTIVE, IMMICH_MODE_FULL):
         return
     for image in images:
+        if image.virtual_of_image_id:
+            # A virtual copy was never uploaded (and hashing "its" file would
+            # hash the source's bytes) - nothing to remove over there.
+            continue
         if config.sync_mode == IMMICH_MODE_SELECTIVE and not image.immich_sync:
             continue
         if image.immich_asset_id:
@@ -116,6 +121,14 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
     synced photos. The maintenance cleanup of vanished files (delete_files=
     False) deliberately doesn't: the file disappearing outside the app isn't
     the user asking for the photo to be gone from Immich."""
+    # A photo's virtual copies ("canvas edits") borrow its bytes - when the
+    # photo goes for good they have nothing left to show, so they go with it,
+    # through the same batch so every fallback below sees the whole picture.
+    seed_ids = {image.id for image in images}
+    if seed_ids:
+        copies = db.query(Image).filter(Image.virtual_of_image_id.in_(seed_ids)).all()
+        images = list(images) + [copy for copy in copies if copy.id not in seed_ids]
+
     if delete_files:
         # Before anything is unlinked - the checksum fallback needs the file.
         _queue_immich_removals(db, images)
@@ -129,10 +142,30 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
         db.query(ImportStagedFile).filter(
             ImportStagedFile.duplicate_of_image_id.in_(image_ids)
         ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
-        # A frame on an album's canvas points at the photo too. Unlike album
-        # membership there is nothing to restore it to, so the frame goes with
-        # the photo - one query for the whole batch, like the loads below.
-        db.query(LayoutItem).filter(LayoutItem.image_id.in_(image_ids)).delete(
+        # A frame on a canvas points at the photo too. A deleted virtual copy
+        # falls back to its source - the edit is gone, the picture stays; any
+        # other frame keeps its place as a "missing" placeholder instead of
+        # vanishing, so the design keeps its shape and the gap says what
+        # happened.
+        for image in images:
+            if image.virtual_of_image_id and image.virtual_of_image_id not in image_ids:
+                db.query(LayoutItem).filter(LayoutItem.image_id == image.id).update(
+                    {LayoutItem.image_id: image.virtual_of_image_id},
+                    synchronize_session=False,
+                )
+        db.query(LayoutItem).filter(LayoutItem.image_id.in_(image_ids)).update(
+            {LayoutItem.image_id: None, LayoutItem.missing: True},
+            synchronize_session=False,
+        )
+        # virtual_of_image_id is an FK back into images too - null it before
+        # the deletes (AFTER the frame fallback above, which reads it), or
+        # deleting a source in the same batch as its copies trips the
+        # constraint mid-flush.
+        db.query(Image).filter(Image.virtual_of_image_id.in_(image_ids)).update(
+            {Image.virtual_of_image_id: None}, synchronize_session=False
+        )
+        # Canvas membership has nothing to fall back to - the row goes.
+        db.query(CanvasImage).filter(CanvasImage.image_id.in_(image_ids)).delete(
             synchronize_session=False
         )
         # Album memberships and tag links are cascade="all, delete-orphan", so
@@ -151,8 +184,10 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
     emptied_dirs: set[Path] = set()
 
     for image in images:
-        if delete_files and image.source_root_id is None:
-            # Managed (imported) library file - ours to delete.
+        if delete_files and image.source_root_id is None and not image.virtual_of_image_id:
+            # Managed (imported) library file - ours to delete. A virtual
+            # copy's path is synthetic and its bytes are the source's: never
+            # unlink through it.
             original = settings.library_root / image.file_path
             original.unlink(missing_ok=True)
             emptied_dirs.add(original.parent)

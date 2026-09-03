@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     albums,
+    canvases,
     images,
     import_,
     maintenance,
@@ -43,6 +44,7 @@ app.add_middleware(
 
 app.include_router(images.router)
 app.include_router(albums.router)
+app.include_router(canvases.router)
 app.include_router(smart_albums.router)
 app.include_router(import_.router)
 app.include_router(search.router)

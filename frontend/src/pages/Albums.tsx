@@ -6,16 +6,16 @@ import { api, DEFAULT_EDIT_VERSION } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
 import { TagFilter } from "../components/TagFilter";
 import {
+  IconArrowLeft,
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
   IconPencil,
-  IconX,
 } from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
 import { ExportChip } from "../components/CanvasExportChip";
-import { boundsOf, PAGE_GAP_MM, worldRect } from "../utils/canvasLayout";
-import type { AlbumCanvasOut, AlbumOut, ImageOut, SmartAlbumOut } from "../api/types";
+import { shelfSheets, ShelfSheetItems } from "../components/CanvasSheet";
+import type { CanvasGalleryOut, AlbumOut, ImageOut, SmartAlbumOut } from "../api/types";
 
 // Cover thumbnail that fades in once decoded (see .smart-card img in CSS)
 // instead of popping into the card.
@@ -210,128 +210,12 @@ function albumCount(album: AlbumOut): string {
 // full-screen print view below, for LOOKING and exporting only: editing stays
 // in the album's own canvas.
 
-interface ShelfSheet {
-  // The sheet's rectangle in world millimetres, and what is drawn on it.
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  items: AlbumCanvasOut["items"];
-}
-
-// What "a sheet" is, exactly as the canvas's own print view cuts it: a page of
-// a paged design; a sheet of the page guide on a free canvas that has one; and
-// otherwise the free canvas cut to the work on it, with a little margin.
-function shelfSheets(canvas: AlbumCanvasOut): ShelfSheet[] {
-  const w = canvas.page_width_mm;
-  const h = canvas.page_height_mm;
-  if (canvas.page_mode === "pages") {
-    return Array.from({ length: Math.max(1, canvas.page_count) }, (_, page) => ({
-      x: 0,
-      y: 0,
-      w,
-      h,
-      // Item coordinates are page-relative, so each sheet reads them as is.
-      items: canvas.items.filter((item) => item.page === page),
-    }));
-  }
-  const box = boundsOf(canvas.items.map((item) => worldRect(item, canvas)));
-  if (canvas.show_page_guide) {
-    const bottom = box ? box.y + box.h : 0;
-    const count = Math.max(1, Math.ceil(bottom / (h + PAGE_GAP_MM)));
-    return Array.from({ length: count }, (_, page) => ({
-      x: 0,
-      y: page * (h + PAGE_GAP_MM),
-      w,
-      h,
-      items: canvas.items,
-    }));
-  }
-  if (!box) return [{ x: 0, y: 0, w, h, items: [] }];
-  const margin = 10;
-  return [
-    { x: box.x - margin, y: box.y - margin, w: box.w + margin * 2, h: box.h + margin * 2, items: canvas.items },
-  ];
-}
-
-// The items of one sheet, percent-positioned so the same markup draws the
-// small card and the full-screen page. `detail` picks the big derivative.
-function ShelfSheetItems({
-  canvas,
-  sheet,
-  detail,
-}: {
-  canvas: AlbumCanvasOut;
-  sheet: ShelfSheet;
-  detail?: boolean;
-}) {
-  return (
-    <>
-      {[...sheet.items]
-        .sort((a, b) => a.z - b.z)
-        .map((item) => {
-          const box: React.CSSProperties = {
-            left: `${((item.x_mm - sheet.x) / sheet.w) * 100}%`,
-            top: `${((item.y_mm - sheet.y) / sheet.h) * 100}%`,
-            width: `${(item.width_mm / sheet.w) * 100}%`,
-            height: `${(item.height_mm / sheet.h) * 100}%`,
-            transform: `rotate(${item.rotation}deg)`,
-          };
-          if (item.kind === "text" && item.text) {
-            const style = item.style ?? {};
-            return (
-              <span
-                key={item.id}
-                className="canvas-shelf-text"
-                style={{
-                  ...box,
-                  // cqw against the paper's width: the type keeps its size
-                  // ON THE PAGE however small or large the page is drawn.
-                  fontSize: `${((style.size_mm ?? 8) / sheet.w) * 100}cqw`,
-                  color: style.color ?? "#111111",
-                  fontWeight: style.weight ?? 600,
-                  fontStyle: style.italic ? "italic" : undefined,
-                  textAlign: style.align ?? "left",
-                  fontFamily: style.font,
-                  lineHeight: style.line_height ?? 1.25,
-                }}
-              >
-                {item.text}
-              </span>
-            );
-          }
-          if (item.kind === "photo" && item.image_id && item.available !== false) {
-            const version = canvas.thumb_versions[item.image_id] ?? DEFAULT_EDIT_VERSION;
-            return (
-              <img
-                key={item.id}
-                className="canvas-shelf-photo"
-                style={box}
-                src={
-                  detail
-                    ? api.images.previewUrl(item.image_id, version)
-                    : api.images.thumbnailUrl(item.image_id, version, "small")
-                }
-                alt=""
-                loading="lazy"
-                draggable={false}
-              />
-            );
-          }
-          // A frame whose photo is in the Trash or on an unplugged drive
-          // (or an empty text box): keep its footprint, quietly.
-          return <span key={item.id} className="canvas-shelf-mark" style={box} />;
-        })}
-    </>
-  );
-}
-
 function CanvasCard({
   canvas,
   onOpen,
   onRemove,
 }: {
-  canvas: AlbumCanvasOut;
+  canvas: CanvasGalleryOut;
   onOpen: () => void;
   onRemove: () => void;
 }) {
@@ -351,7 +235,7 @@ function CanvasCard({
         type="button"
         className="canvas-shelf-open"
         onClick={onOpen}
-        title={`Show “${canvas.album_name}” as it will print`}
+        title={`Show “${canvas.canvas_name}” as it will print`}
       >
         <div
           className="canvas-shelf-paper"
@@ -360,7 +244,7 @@ function CanvasCard({
           <ShelfSheetItems canvas={canvas} sheet={sheet} />
         </div>
         <div className="canvas-shelf-caption">
-          <div className="canvas-shelf-name">{canvas.album_name}</div>
+          <div className="canvas-shelf-name">{canvas.canvas_name}</div>
           <div className="canvas-shelf-meta">{caption}</div>
         </div>
       </button>
@@ -369,7 +253,7 @@ function CanvasCard({
       <button
         className="card-remove"
         title="Take off the Canvas Shelf (the canvas and its versions are kept)"
-        aria-label={`Take “${canvas.album_name}” off the Canvas Shelf`}
+        aria-label={`Take “${canvas.canvas_name}” off the Canvas Shelf`}
         onClick={(event) => {
           event.stopPropagation();
           onRemove();
@@ -391,7 +275,7 @@ const SHELF_IDLE_MS = 2200;
 // only things that work here are the print view's own moves - turn the pages,
 // zoom about the cursor, drag the sheet, Escape out - and Export. Changing the
 // design means opening the album's canvas.
-function CanvasShelfViewer({ canvas, onClose }: { canvas: AlbumCanvasOut; onClose: () => void }) {
+function CanvasShelfViewer({ canvas, onClose }: { canvas: CanvasGalleryOut; onClose: () => void }) {
   const sheets = useMemo(() => shelfSheets(canvas), [canvas]);
   const [index, setIndex] = useState(0);
   const [size, setSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
@@ -562,7 +446,7 @@ function CanvasShelfViewer({ canvas, onClose }: { canvas: AlbumCanvasOut; onClos
       className={`canvas-print${idle ? " is-idle" : ""}${panning ? " is-panning" : ""}`}
       role="dialog"
       aria-modal="true"
-      aria-label={`“${canvas.album_name}” print view`}
+      aria-label={`“${canvas.canvas_name}” print view`}
       onPointerDown={(event) => {
         wake();
         if (event.button !== 0) return;
@@ -617,19 +501,6 @@ function CanvasShelfViewer({ canvas, onClose }: { canvas: AlbumCanvasOut; onClos
         <ShelfSheetItems canvas={canvas} sheet={sheet} detail />
       </div>
 
-      <button
-        className="canvas-print-close canvas-print-chrome"
-        onClick={onClose}
-        aria-label="Back to the albums"
-        title="Back to the albums (Escape)"
-      >
-        <IconX size={18} />
-      </button>
-
-      <div className="canvas-shelf-export canvas-print-chrome">
-        <ExportChip doc={doc} byId={byId} title={canvas.album_name} />
-      </div>
-
       {sheets.length > 1 && (
         <>
           <button
@@ -653,10 +524,22 @@ function CanvasShelfViewer({ canvas, onClose }: { canvas: AlbumCanvasOut; onClos
         </>
       )}
 
+      {/* One bottom bar, like the photo stages' toolbars: the standard Back
+          flush left, the caption centred, Export flush right. */}
       <div className="canvas-print-foot canvas-print-chrome" aria-live="polite">
-        {canvas.album_name} · “{canvas.version_name}”
+        <button
+          className="btn btn-sm back-btn stage-back-btn"
+          onClick={onClose}
+          title="Back to the albums (Escape)"
+        >
+          <IconArrowLeft size={13} /> Back
+        </button>
+        {canvas.canvas_name} · “{canvas.version_name}”
         {sheets.length > 1 ? ` · Page ${index + 1} of ${sheets.length}` : ""}
         <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to come back</span>
+        <span className="canvas-print-export">
+          <ExportChip doc={doc} byId={byId} title={canvas.canvas_name} drop="up" />
+        </span>
       </div>
     </div>,
     document.body
@@ -672,7 +555,7 @@ export function Albums() {
   // Which album card currently has its name open for editing (one at a time).
   const [renamingId, setRenamingId] = useState<string | null>(null);
   // The shelf canvas currently open in the full-screen print view.
-  const [viewing, setViewing] = useState<AlbumCanvasOut | null>(null);
+  const [viewing, setViewing] = useState<CanvasGalleryOut | null>(null);
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
   const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
@@ -680,7 +563,7 @@ export function Albums() {
   // kept version (see CanvasCard above).
   const { data: canvases } = useQuery({
     queryKey: ["canvases"],
-    queryFn: () => api.albums.canvases(),
+    queryFn: () => api.canvases.gallery(),
   });
 
   // Auto-computed albums (similarity clusters + years/months/big days). The
@@ -707,17 +590,13 @@ export function Albums() {
   });
 
   // Deleting an album only removes the album itself (and its photo links) -
-  // the photos stay in the library untouched. Its canvas, though, dies with
-  // it - so if it has one, the dialog says so.
+  // the photos stay in the library untouched, and canvases are their own
+  // documents now, unaffected by album deletions.
   async function deleteAlbum(id: string, albumName: string, count: number) {
-    const layout = await api.albums.getLayout(id).catch(() => null);
-    const hasCanvas = !!layout?.updated_at;
     if (
       !(await dialogs.confirm({
         title: `Delete album “${albumName}”?`,
-        message: `Its ${count} photo(s) stay in your library.${
-          hasCanvas ? " Its canvas and all kept canvas versions are deleted with it." : ""
-        }`,
+        message: `Its ${count} photo(s) stay in your library.`,
         confirmLabel: "Delete album",
         danger: true,
       }))
@@ -725,26 +604,24 @@ export function Albums() {
       return;
     await api.albums.remove(id);
     queryClient.invalidateQueries({ queryKey: ["albums"] });
-    // Its Canvas Shelf card (if it had one) goes with it, right away.
-    queryClient.invalidateQueries({ queryKey: ["canvases"] });
   }
 
   // The shelf card's ×: off the shelf, nothing more. The canvas and its kept
   // versions stay with the album - the checkbox inside the canvas re-shows it.
-  async function removeFromShelf(canvas: AlbumCanvasOut) {
+  async function removeFromShelf(canvas: CanvasGalleryOut) {
     if (
       !(await dialogs.confirm({
-        title: `Take “${canvas.album_name}” off the Canvas Shelf?`,
+        title: `Take “${canvas.canvas_name}” off the Canvas Shelf?`,
         message:
-          "Only the card is removed - the canvas and its kept versions stay with the album. Turn it back on inside the canvas (Versions → Canvas Shelf).",
+          "Only the card is removed - the canvas and its kept versions stay untouched. Turn it back on inside the canvas (Versions → Canvas Shelf).",
         confirmLabel: "Take it off",
       }))
     )
       return;
-    await api.albums.setCanvasShelf(canvas.album_id, false);
+    await api.canvases.setShelf(canvas.canvas_id, false);
     queryClient.invalidateQueries({ queryKey: ["canvases"] });
     // The canvas's own Versions panel reads this flag from the layout query.
-    queryClient.invalidateQueries({ queryKey: ["album-layout", canvas.album_id] });
+    queryClient.invalidateQueries({ queryKey: ["canvas-layout", canvas.canvas_id] });
   }
 
   const clustersPending = smart
@@ -919,7 +796,7 @@ export function Albums() {
           <div className="canvas-shelf">
             {canvases.map((canvas) => (
               <CanvasCard
-                key={canvas.album_id}
+                key={canvas.canvas_id}
                 canvas={canvas}
                 onOpen={() => setViewing(canvas)}
                 onRemove={() => removeFromShelf(canvas)}

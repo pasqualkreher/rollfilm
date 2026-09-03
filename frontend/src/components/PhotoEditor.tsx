@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconFlipH, IconFlipV, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
+import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconEye, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, FULL_COPY_QUALITY } from "./SaveCopyDialog";
 import {
@@ -69,6 +69,15 @@ import { useWait } from "../state/wait";
 interface Props {
   image: ImageOut;
   onClose: () => void;
+  // Docked: the editor sits as a right-hand column INSIDE its parent (the
+  // canvas keeps the rest of the screen) instead of covering the window as a
+  // fixed overlay. Everything inside behaves identically - same stage, same
+  // panel, same pipeline - only the frame around it changes.
+  docked?: boolean;
+  // Every whole-frame preview the editor paints, as it paints it - so an
+  // embedder (the canvas) can show the live edit in its own frame. The stage
+  // may then even be hidden: the pipeline keeps rendering regardless.
+  onPreviewFrame?: (blob: Blob) => void;
 }
 
 interface DragRect {
@@ -383,7 +392,7 @@ function luma255(r: number, g: number, b: number): number {
 // That readback cost was why the histogram used to be skipped during drags;
 // at this size it can run on every scrub frame.
 let histScratch: HTMLCanvasElement | null = null;
-function computeHistBinsFromBitmap(bmp: ImageBitmap): Uint32Array[] | null {
+function computeHistBinsFromBitmap(bmp: ImageBitmap | HTMLCanvasElement): Uint32Array[] | null {
   const scale = Math.min(1, Math.sqrt(120000 / (bmp.width * bmp.height)));
   const w = Math.max(1, Math.round(bmp.width * scale));
   const h = Math.max(1, Math.round(bmp.height * scale));
@@ -437,7 +446,7 @@ function Histogram({ bins }: { bins: Uint32Array[] | null }) {
   return <canvas ref={ref} className="editor-histogram" width={256} height={64} />;
 }
 
-export function PhotoEditor({ image, onClose }: Props) {
+export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: Props) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const { withWait } = useWait();
@@ -451,6 +460,13 @@ export function PhotoEditor({ image, onClose }: Props) {
   // RGB histogram bins of the latest preview; the <Histogram> components (in the
   // Basic and Curves groups) draw from this and redraw when it changes or on mount.
   const [histBins, setHistBins] = useState<Uint32Array[] | null>(null);
+  // Mirror of histBins for the render paths: "is the histogram still empty?"
+  // must be readable inside drawBlob without being a dependency of it.
+  const histBinsRef = useRef<Uint32Array[] | null>(null);
+  const applyHistBins = useCallback((bins: Uint32Array[]) => {
+    histBinsRef.current = bins;
+    setHistBins(bins);
+  }, []);
   // When the histogram last updated - scrub frames throttle it (see drawBlob).
   const histAtRef = useRef(0);
   // Downscaled copy of the current preview for the curve picker. Reading a
@@ -1147,10 +1163,14 @@ export function PhotoEditor({ image, onClose }: Props) {
   // superseded render painting over a newer frame.
   // `renderCrop` is the crop this frame was rendered with - the frame's own
   // pixel size divided by it gives the uncropped frame (see frameBaseRef).
+  const onPreviewFrameRef = useRef(onPreviewFrame);
+  onPreviewFrameRef.current = onPreviewFrame;
+
   const drawBlob = useCallback(async (blob: Blob, seq: number, withHistogram: boolean, renderCrop: CropBox | null) => {
     const bmp = await createImageBitmap(blob);
     try {
       if (seq !== renderSeq.current) return;
+      onPreviewFrameRef.current?.(blob);
       const canvas = canvasRef.current;
       if (!canvas) return;
       // Only touch the size when it actually changed. Assigning canvas.width or
@@ -1176,7 +1196,12 @@ export function PhotoEditor({ image, onClose }: Props) {
       groundTokenRef.current = dirtyToken.current;
       groundStaleRef.current = false;
       pickSnapRef.current = null; // a new frame - the picker's copy is stale
-      if (withHistogram) {
+      // An empty histogram takes ANY clean frame, whatever the caller asked:
+      // the first paint after opening (or switching photos) can arrive via
+      // the settle or another withHistogram=false path, and the panel would
+      // sit on a blank histogram until the first edit. A peeked frame is
+      // still excluded - candy stripes are not the photo's tonality.
+      if (withHistogram || (histBinsRef.current == null && !peekRef.current)) {
         // The readback itself is cheap (downscaled scratch canvas), but the
         // setHistBins state write re-renders the whole editor - per scrub
         // frame that stacked onto the per-pointer-move renders and read as a
@@ -1186,7 +1211,7 @@ export function PhotoEditor({ image, onClose }: Props) {
         if (!scrubbing.current || now - histAtRef.current >= 150) {
           histAtRef.current = now;
           const bins = computeHistBinsFromBitmap(bmp);
-          if (bins) setHistBins(bins);
+          if (bins) applyHistBins(bins);
         }
       }
     } finally {
@@ -1248,6 +1273,14 @@ export function PhotoEditor({ image, onClose }: Props) {
         // it, so zooming out / panning knows a re-render is owed.
         if (token !== groundTokenRef.current) groundStaleRef.current = true;
         pickSnapRef.current = null;
+        // A tile deliberately never refreshes the histogram (it isn't the
+        // whole frame) - except when there is none at all yet: the assembled
+        // canvas (ground + tile) beats a histogram that stays blank until the
+        // first edit.
+        if (histBinsRef.current == null && !peekRef.current) {
+          const bins = computeHistBinsFromBitmap(canvas);
+          if (bins) applyHistBins(bins);
+        }
       } finally {
         bmp.close();
       }
@@ -1607,12 +1640,17 @@ export function PhotoEditor({ image, onClose }: Props) {
   }, [image.id, previewEdits, peekMaskId]);
 
   // A new photo starts with a clean slate: its first whole-frame render sets
-  // the ground; nothing carried over from the previous photo's tiles.
+  // the ground; nothing carried over from the previous photo's tiles. The
+  // histogram empties too - blank for a moment beats the previous photo's
+  // silhouette posing as this one's (its first frame refills it, whichever
+  // render path that frame arrives on).
   useEffect(() => {
     groundTokenRef.current = -1;
     groundStaleRef.current = false;
     nativePendingRef.current = -1;
     origPendingRef.current = -1;
+    histBinsRef.current = null;
+    setHistBins(null);
   }, [image.id]);
 
   // Geometry moved, so the compare view's original no longer matches the frame
@@ -3064,7 +3102,15 @@ export function PhotoEditor({ image, onClose }: Props) {
   const maskLabel = (m: MaskDef) => MASK_TYPES.find((t) => t.value === m.sub_masks[0]?.type)?.label ?? "Mask";
 
   return (
-    <div className="editor-overlay">
+    <div
+      className={`editor-overlay${docked ? " editor-overlay--docked" : ""}${
+        // Docked, the stage is normally hidden (the canvas frame shows the
+        // live edit - including geometry, so Transform stays in the canvas
+        // too). Only mask DRAWING happens on the stage, so that one group
+        // still summons it.
+        docked && openGroup === "masks" ? " editor-needs-stage" : ""
+      }`}
+    >
       <div className="editor-body">
         <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
         <div className={`editor-stage-main${pair ? " editor-stage-main--pair" : ""}`} ref={stageMainRef}>
@@ -3389,36 +3435,36 @@ export function PhotoEditor({ image, onClose }: Props) {
               }}
             />
             {/* Kept as one group so the row never wraps between the baseline
-                switch and the compares it feeds. */}
+                switch and the compares it feeds. Icon-only, like everything in
+                this row except the zoom steps: the captions and words moved
+                into the tooltips so the whole toolbar fits one line. */}
             <span className="editor-compare-group">
-              {/* What the compares show against. Captioned like Background and
-                  Zoom beside it - two bare buttons here read as edit actions.
-                  "Snapshot" pins the edit as it stands (clicking it again pins
-                  the newer state); "Original" lets the snapshot go. */}
-              <span className="labeled-control">
-                <span className="control-caption">Compare with</span>
-                <span className="segmented editor-baseline" role="group" aria-label="Compare with">
-                  <button
-                    className={snapshot ? "" : "active"}
-                    aria-pressed={!snapshot}
-                    onClick={() => setSnapshot(null)}
-                    title="Compare with the untouched photo"
-                  >
-                    Original
-                  </button>
-                  <button
-                    className={snapshot ? "active" : ""}
-                    aria-pressed={!!snapshot}
-                    onClick={() => setSnapshot(edits)}
-                    title={
-                      snapshot
-                        ? "Comparing with the edit as it was when you took the snapshot - click again to snapshot the edit as it is now"
-                        : "Take a snapshot of the edit as it is now, and compare later changes with it instead of the original"
-                    }
-                  >
-                    <IconCamera size={13} /> Snapshot
-                  </button>
-                </span>
+              {/* What the compares show against. "Snapshot" pins the edit as
+                  it stands (clicking it again pins the newer state);
+                  "Original" (the picture icon) lets the snapshot go. */}
+              <span className="segmented editor-baseline" role="group" aria-label="Compare with">
+                <button
+                  className={snapshot ? "" : "active"}
+                  aria-pressed={!snapshot}
+                  aria-label="Compare with the original"
+                  onClick={() => setSnapshot(null)}
+                  title="Compare with the untouched photo"
+                >
+                  <IconImage size={14} />
+                </button>
+                <button
+                  className={snapshot ? "active" : ""}
+                  aria-pressed={!!snapshot}
+                  aria-label="Compare with a snapshot"
+                  onClick={() => setSnapshot(edits)}
+                  title={
+                    snapshot
+                      ? "Comparing with the edit as it was when you took the snapshot - click again to snapshot the edit as it is now"
+                      : "Take a snapshot of the edit as it is now, and compare later changes with it instead of the original"
+                  }
+                >
+                  <IconCamera size={14} />
+                </button>
               </span>
               <span className="editor-toolbar-sep" aria-hidden />
               <button
@@ -3429,9 +3475,16 @@ export function PhotoEditor({ image, onClose }: Props) {
                 // A compare mode already shows the baseline; swapping the whole
                 // canvas under it would only make both sides the same picture.
                 disabled={nothingToCompare || compareMode !== "off"}
-                title={snapshot ? "Hold to compare with the snapshot" : "Hold to compare with the original"}
+                aria-label="Hold to compare"
+                title={
+                  compare
+                    ? `Showing ${baselineLabel.toLowerCase()}`
+                    : snapshot
+                      ? "Hold to compare with the snapshot"
+                      : "Hold to compare with the original"
+                }
               >
-                {compare ? `Showing ${baselineLabel.toLowerCase()}` : "Compare"}
+                <IconEye size={14} />
               </button>
               {/* The two ways to keep the baseline on screen. Each button toggles
                   its own mode, so clicking the lit one goes back to just the edit. */}

@@ -1079,6 +1079,13 @@ textarea:focus-visible {
   right: 0;
 }
 
+/* Opens upwards, for chips in a bar at the bottom of the screen (the canvas
+   print view) - hung downwards the panel would fall off the viewport. */
+.filter-chip-pop--up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
 /* Inside the panel, controls are ordinary boxed fields again - the flat
    treatment is for the bar itself, not its dropdown. */
 .filter-bar.filter-bar--sticky .filter-chip-pop select,
@@ -2621,11 +2628,11 @@ textarea:focus-visible {
   justify-content: center;
   align-items: center;
   /* Background steps, the zoom control, hold-to-compare and the two compare
-     modes share this row. It stays ONE line for as long as it can (see the
-     container queries by .zoom-readout-hint - the row sheds the hint, then
-     tightens, before it wraps) and only wraps once even that won't fit. */
+     modes share this row. Everything but the zoom steps is icon-only (the
+     words live in the tooltips), so the row fits one line even in a narrow
+     stage; the wrap stays as the last-resort fallback. */
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   /* Measured by the row itself, not the window: the editor's stage is a side
      panel narrower than the viewport, so a viewport breakpoint kept the hint
      on a "wide" window and wrapped the row anyway. */
@@ -2643,14 +2650,36 @@ textarea:focus-visible {
 .editor-compare-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
-/* The Snapshot step carries a camera icon in front of its word. */
+/* Icon-only steps (original / snapshot). */
 .editor-baseline button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+
+/* The compact background steps: each button shows a swatch of the grey it
+   sets - the swatch IS the label (names stay in the tooltips). */
+.stage-swatch {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+}
+
+.stage-swatch--lightest {
+  background: var(--stage-lightest);
+}
+
+.stage-swatch--light {
+  background: var(--stage-light);
+}
+
+.stage-swatch--dark {
+  background: var(--stage-dark);
 }
 
 .editor-toolbar-sep {
@@ -2660,9 +2689,13 @@ textarea:focus-visible {
   background: var(--border);
 }
 
-/* Hold-to-compare button; highlights while the original is being shown. */
+/* Hold-to-compare button (icon-only, the eye); highlights while the baseline
+   is being shown. */
 .editor-compare-btn {
   user-select: none;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
 }
 
 .editor-compare-btn.active {
@@ -4186,9 +4219,9 @@ input.editor-preset-select {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  /* One line while it fits - the hint drops out first, then the gaps tighten;
-     wrapping is the last resort. Same ladder as the editor's row. */
+  /* Same compact, icon-first row as the editor's toolbar; the gaps tighten on
+     narrow stages and wrapping is the last resort. */
+  gap: 8px;
   flex-wrap: wrap;
   container-type: inline-size;
   container-name: stage-toolbar;
@@ -4198,30 +4231,9 @@ input.editor-preset-select {
   padding: 0 96px;
 }
 
-.detail-zoom-hint {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* Caption in front of a segmented control ("Background", "Zoom"). Two of these
-   sit side by side under a photo, and the steps of both are bare numbers -
-   without the caption "12.5%" and "100%" read as the same kind of setting. */
-.control-caption {
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-/* A caption plus its segmented control, kept together when the toolbar wraps. */
-.labeled-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps, the
-   live percentage, and the hint. One row, same height as the background
-   toggle beside it. */
+/* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps and
+   the live percentage. One row, same height as the background toggle beside
+   it. Caption-less, like the background swatches - the steps say what it is. */
 .zoom-readout {
   display: flex;
   align-items: center;
@@ -4237,31 +4249,12 @@ input.editor-preset-select {
   text-align: right;
 }
 
-.zoom-readout-hint {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* How the stage toolbars stay on one line. Both rows are size containers, so
-   these steps fire on the ROW's width, which is what actually runs out - the
-   window can be wide while the stage is not (side panel), and the panel can be
-   collapsed without the window changing at all.
-   The hint goes first: it is the widest piece and the only one whose content
-   is also carried by the buttons and the percentage beside it. */
-@container stage-toolbar (max-width: 980px) {
-  .zoom-readout-hint {
-    display: none;
-  }
-}
-
-/* Then the breathing room between the controls, which buys another step
-   before the row has to break. */
+/* The stage toolbars are size containers, so this fires on the ROW's width,
+   which is what actually runs out - the window can be wide while the stage is
+   not (side panel). Tightening the breathing room buys a step before the row
+   has to break. */
 @container stage-toolbar (max-width: 760px) {
   .zoom-readout {
-    gap: 6px;
-  }
-
-  .labeled-control {
     gap: 6px;
   }
 
@@ -7477,6 +7470,63 @@ button.smart-card {
   max-width: none;
 }
 
+/* Icon tools: square-ish buttons, the glyph centred, the explanation in the
+   tooltip. Toggles get the segmented control's soft accent tint when on, so
+   "active" reads the same way everywhere in the bar. */
+.canvas-tool {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 8px;
+}
+
+.canvas-tool.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+}
+
+/* How many photos "Place" would add, worn on the tool's shoulder. */
+.canvas-tool-badge {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* The paper-colour well: the swatch itself is the control; the native colour
+   picker (with its eyedropper) opens on click. */
+.canvas-toolbar-swatch {
+  width: 22px;
+  height: 22px;
+  align-self: center;
+  cursor: pointer;
+}
+
+.canvas-toolbar-swatch input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.canvas-size-select {
+  max-width: 160px;
+}
+
 /* The second bar: what is selected, and what can be done with it. Always
    present - when nothing is selected it says how to select something - so the
    canvas below never jumps as a selection comes and goes. */
@@ -8136,32 +8186,15 @@ button.smart-card {
   visibility: hidden;
 }
 
-.canvas-print-close {
-  position: absolute;
-  top: 16px;
-  left: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 50%;
-  color: #fff;
-  cursor: pointer;
-  line-height: 0;
-}
-
-.canvas-print-close:hover {
-  background: rgba(255, 255, 255, 0.16);
-}
-
+/* The print view's one control bar, at the bottom like the photo stages'
+   toolbars: the standard Back flush left (.stage-back-btn anchors to this
+   box), the caption centred, Export flush right. The bar itself stays inert
+   so a drag that starts over it still pans the sheet - only its buttons
+   answer the pointer. */
 .canvas-print-foot {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: 20px;
+  right: 20px;
   bottom: 18px;
   display: flex;
   align-items: center;
@@ -8170,6 +8203,26 @@ button.smart-card {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.7);
   pointer-events: none;
+}
+
+.canvas-print-foot .stage-back-btn,
+.canvas-print-export {
+  pointer-events: auto;
+}
+
+/* ...but not while the chrome has faded out (see .is-idle below): an
+   invisible button must not swallow clicks. */
+.canvas-print.is-idle .canvas-print-foot .stage-back-btn,
+.canvas-print.is-idle .canvas-print-export {
+  pointer-events: none;
+}
+
+/* Mirror of .stage-back-btn on the other end of the bar. */
+.canvas-print-export {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .canvas-print-hint {
@@ -8577,13 +8630,6 @@ button.smart-card {
   position: absolute;
 }
 
-/* Export on the right, so it never crowds the close button on the left. */
-.canvas-shelf-export {
-  position: fixed;
-  top: 14px;
-  right: 16px;
-}
-
 .canvas-shelf-paper {
   position: relative;
   overflow: hidden;
@@ -8764,4 +8810,266 @@ button.smart-card {
   border-left: none;
   border-right: none;
   border-radius: 0;
+}
+
+/* --- The Canvas tab's overview ------------------------------------------- */
+
+.canvas-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.canvas-list-card {
+  position: relative;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.canvas-list-card:hover {
+  border-color: var(--text-muted);
+  transform: translateY(-1px);
+}
+
+/* The card's paper preview: the shelf's sheet treatment, but sized by the
+   card - the height is fixed, the aspect ratio (set inline per sheet) gives
+   the width, and very wide sheets are capped by the card. */
+.canvas-list-paper.canvas-shelf-paper {
+  height: 170px;
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto 12px;
+}
+
+.canvas-list-name {
+  font-weight: 600;
+  margin-bottom: 4px;
+  padding-right: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-list-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.canvas-list-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.canvas-list-card:hover .canvas-list-actions,
+.canvas-list-card:focus-within .canvas-list-actions {
+  opacity: 1;
+}
+
+/* --- The editor, docked beside the canvas ---------------------------------
+   Same editor, stripped to its panel: it becomes the right-hand column of
+   .canvas-stage while the photo is developed LIVE in its frame on the page
+   (the editor streams every preview it renders into the canvas). The stage
+   stays mounted but hidden - the pipeline needs its canvas, nobody needs to
+   see it twice. */
+.editor-overlay--docked {
+  /* A plain flex column on the main row's right: full height, top of the
+     row to the bottom of the window - the filmstrip lives in the left
+     column, so the dock pushes it left instead of running above it. */
+  position: relative;
+  inset: auto;
+  z-index: 30;
+  flex: 0 0 344px;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--bg);
+  animation: pm-dock-in 0.22s ease both;
+}
+
+.editor-overlay--docked .editor-stage {
+  /* Mounted but invisible: drawBlob keeps painting (and handing frames to
+     the canvas), the layout maths just never sees a viewport. */
+  display: none;
+}
+
+/* Crop and masks are worked ON the picture: while Transform or Masks is the
+   open group, the dock widens and brings the stage back so there is a photo
+   to drag the crop box or the mask over. Everything else stays panel-only. */
+.editor-overlay--docked.editor-needs-stage {
+  flex-basis: min(64vw, 1100px);
+}
+
+.editor-overlay--docked.editor-needs-stage .editor-stage {
+  display: flex;
+}
+
+
+
+.editor-overlay--docked .editor-panel {
+  border-left: none;
+  width: 344px;
+}
+
+/* Flush against the window's right edge: undo the canvas page's 20px side
+   inset, like the toolbar and filmstrip do, so the dock leaves no gap. */
+.canvas-workspace .editor-overlay--docked {
+  margin-right: -20px;
+}
+
+/* With the dock beside it, the left column's full-bleed bars must stop at the
+   dock's border instead of sliding 20px underneath it - for the toolbar and
+   action bar that also keeps their padding visible, so the rightmost buttons
+   get breathing room from the panel instead of touching its edge. */
+.canvas-main:has(> .editor-overlay--docked) .canvas-filmstrip,
+.canvas-main:has(> .editor-overlay--docked) .canvas-toolbar,
+.canvas-main:has(> .editor-overlay--docked) .canvas-action-bar {
+  margin-right: 0;
+}
+
+@keyframes pm-dock-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.editor-overlay--docked .editor-body {
+  padding-left: 0;
+  gap: 0;
+}
+
+/* Group headers inside the combined "Add to..." dropdown. */
+.dropdown-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The Canvas editor is a workspace like the photo editor: it covers the
+   window (no app chrome), the toolbar closes off flush at the top, the
+   filmstrip runs edge to edge along the bottom, and the way back sits in the
+   toolbar itself. */
+.canvas-workspace {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  animation: pm-overlay-in 0.25s ease both;
+}
+
+.canvas-workspace .page-scroll--canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+.canvas-workspace .canvas-toolbar,
+.canvas-workspace .canvas-action-bar {
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+}
+
+.canvas-workspace .canvas-toolbar {
+  border-top: none;
+}
+
+.canvas-workspace .canvas-filmstrip {
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0;
+  margin-bottom: 0;
+  /* Break out of the scroll region's 20px side inset, like the toolbar and
+     action bar above: the strip runs the full window width, edge to edge. */
+  margin-left: -20px;
+  margin-right: -20px;
+}
+
+.canvas-title {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+  align-self: center;
+  padding: 0 2px;
+}
+
+/* While the edit panel is docked it takes its own column: the WHOLE canvas
+   editor - toolbar, action bar, stage and filmstrip - is pushed left rather
+   than run underneath. (:has() keeps this a pure-CSS reaction to the dock
+   being mounted.) The dock itself anchors to the workspace wall, so the
+   pushed-away strip is exactly the panel's width. */
+.canvas-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.canvas-main-left {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.canvas-stage {
+  position: relative;
+}
+
+/* Breathing room around the work surface, like the editor's stage and the
+   import light table: the paper never touches the chrome. */
+.canvas-workspace .canvas-stage {
+  padding: 14px 16px;
+}
+
+/* In the workspace the strip breathes like the editor's and the lightbox's
+   chrome: real padding around the chips and the bottom row, comfortable gaps
+   between the thumbnails, and the two rows vertically centred. */
+.canvas-workspace .canvas-filmstrip-row {
+  gap: 10px;
+  /* Just enough side padding that the first and last chip's border isn't
+     glued to the window edge - the row uses the full width. */
+  padding: 14px 10px 10px;
+}
+
+.canvas-workspace .canvas-filmstrip-head {
+  align-items: center;
+  gap: 6px 14px;
+  /* Symmetric top/bottom so the Back row sits vertically centred in the bar. */
+  padding: 8px 10px;
+}
+
+.canvas-workspace .canvas-filmstrip-head .back-btn {
+  margin-right: 6px;
+}
+
+.canvas-workspace .canvas-filmstrip-note {
+  padding: 0;
 }

@@ -12,6 +12,9 @@ interface Props {
   // toolbar needs its panel to grow leftwards, or it is simply cut off by the
   // window.
   align?: "left" | "right";
+  // Which way the panel opens. A chip in a bar at the BOTTOM of the screen
+  // (the canvas print view's toolbar) must open upwards for the same reason.
+  drop?: "down" | "up";
   // Popover content. A function gets `close`, for a panel whose job is done
   // once something in it has been chosen or finished.
   children: ReactNode | ((close: () => void) => ReactNode);
@@ -20,7 +23,7 @@ interface Props {
 // A quiet toolbar chip that opens a small popover - the shared pattern for
 // filters whose control is too loud to sit inline in the bar (color swatch
 // row, date-range pickers). Same look and behaviour as the TagFilter button.
-export function FilterChip({ label, active = false, title, align = "left", children }: Props) {
+export function FilterChip({ label, active = false, title, align = "left", drop = "down", children }: Props) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -63,7 +66,11 @@ export function FilterChip({ label, active = false, title, align = "left", child
         </span>
       </button>
       {open && (
-        <div className={`filter-chip-pop${align === "right" ? " filter-chip-pop--right" : ""}`}>
+        <div
+          className={`filter-chip-pop${align === "right" ? " filter-chip-pop--right" : ""}${
+            drop === "up" ? " filter-chip-pop--up" : ""
+          }`}
+        >
           {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
       )}

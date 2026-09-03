@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, editVersion, saveDownload } from "../api/client";
-import type { AlbumLayout, ImageOut } from "../api/types";
+import type { CanvasLayout, ImageOut } from "../api/types";
 import { exportImages, exportSheets, renderLayoutHtml } from "../utils/canvasExport";
 import { FilterChip } from "./FilterChip";
 
@@ -11,16 +11,20 @@ import { FilterChip } from "./FilterChip";
 
 // A layout document as the exports take it: the server's fields minus the two
 // only it owns.
-export type CanvasDoc = Omit<AlbumLayout, "album_id" | "updated_at">;
+export type CanvasDoc = Omit<CanvasLayout, "canvas_id" | "updated_at">;
 
 export function ExportChip({
   doc,
   byId,
   title,
+  drop,
 }: {
   doc: CanvasDoc;
   byId: Map<string, ImageOut>;
   title: string;
+  // Forwarded to the chip: the print view parks it in a bar at the bottom of
+  // the screen, where the panel has to open upwards.
+  drop?: "down" | "up";
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +99,7 @@ export function ExportChip({
     <FilterChip
       label="Export"
       align="right"
+      drop={drop}
       title="Save the layout as a PDF for printing, or as a web page"
     >
       {(close) => (

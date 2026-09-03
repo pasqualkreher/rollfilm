@@ -46,6 +46,9 @@ class ImageOut(BaseModel):
     # Set when this photo was indexed in place from an external source root
     # (e.g. a NAS) rather than imported into the managed library.
     source_root_id: str | None
+    # Set when this row is a virtual copy ("canvas edit") of another photo:
+    # same file on disk, its own develop state. See /images/{id}/virtual-copy.
+    virtual_of_image_id: str | None = None
     edit_rotation: int
     edit_crop_x: float | None
     edit_crop_y: float | None
@@ -323,6 +326,9 @@ class LayoutItemIn(BaseModel):
     id: str
     kind: Literal["photo", "text"] = "photo"
     image_id: str | None = None
+    # A frame whose photo was permanently deleted: it stays on the page as a
+    # placeholder. Round-trips through saves so autosave never erases the gap.
+    missing: bool = False
     page: int = 0
     x_mm: float = 0.0
     y_mm: float = 0.0
@@ -345,7 +351,7 @@ class LayoutItemOut(LayoutItemIn):
     available: bool = True
 
 
-class AlbumLayoutIn(BaseModel):
+class CanvasLayoutIn(BaseModel):
     page_mode: Literal["pages", "infinite"] = "pages"
     page_width_mm: float = 297.0
     page_height_mm: float = 210.0
@@ -377,8 +383,8 @@ class CanvasShelfIn(BaseModel):
     enabled: bool
 
 
-class AlbumLayoutOut(BaseModel):
-    album_id: str
+class CanvasLayoutOut(BaseModel):
+    canvas_id: str
     page_mode: Literal["pages", "infinite"]
     page_width_mm: float
     page_height_mm: float
@@ -397,12 +403,54 @@ class AlbumLayoutOut(BaseModel):
     items: list[LayoutItemOut] = []
 
 
-class AlbumCanvasOut(BaseModel):
-    """One card on the Canvases shelf: an album's chosen version, with just
+class CanvasPreviewOut(BaseModel):
+    """Just enough of a canvas's working layout to draw the overview card's
+    paper preview - same shape the shelf's gallery cards use, minus the
+    version bookkeeping. None until the canvas has been saved once."""
+
+    page_mode: Literal["pages", "infinite"]
+    page_width_mm: float
+    page_height_mm: float
+    page_count: int
+    background: str
+    show_page_guide: bool = False
+    items: list[LayoutItemOut] = []
+    # Per-photo cache-buster for thumbnail URLs (image id -> ?v value).
+    thumb_versions: dict[str, str] = {}
+
+
+class CanvasSummaryOut(BaseModel):
+    """One canvas in the overview: name, size, when it last changed - and the
+    working layout itself, so the overview can show the design, not a label."""
+
+    id: str
+    name: str
+    created_at: datetime
+    updated_at: datetime | None = None
+    image_count: int = 0
+    item_count: int = 0
+    show_in_canvases: bool = False
+    preview: CanvasPreviewOut | None = None
+
+
+class CanvasCreateIn(BaseModel):
+    name: str = "Canvas"
+
+
+class CanvasRenameIn(BaseModel):
+    name: str
+
+
+class CanvasImagesIn(BaseModel):
+    image_ids: list[str]
+
+
+class CanvasGalleryOut(BaseModel):
+    """One card on the Canvases shelf: a canvas's chosen version, with just
     enough of its document to draw the print-style preview."""
 
-    album_id: str
-    album_name: str
+    canvas_id: str
+    canvas_name: str
     version_id: str
     version_name: str
     version_count: int

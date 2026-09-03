@@ -8,6 +8,9 @@ interface Props {
   onAdd: (albumId: string) => void | Promise<unknown>;
   currentAlbumIds?: string[];
   onRemove?: (albumId: string) => void;
+  // Chips-only mode: show the memberships (with their remove x), no dropdown -
+  // for places where the combined AddToPicker handles the adding.
+  chipsOnly?: boolean;
   // Where the caller has a better place for the outcome than under this
   // dropdown, it takes it over: the bulk action bars pass this so "added to
   // album" lands in their shared message row next to the tag and Immich notes,
@@ -20,7 +23,7 @@ interface Props {
 // Pure "add to an existing album" picker. Creating albums deliberately lives
 // only on the Albums page, so this stays a compact dropdown that fits in the
 // detail sidebar and the bulk action bar.
-export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult }: Props) {
+export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult, chipsOnly = false }: Props) {
   const { data: albums, isPending } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
   const noAlbums = !isPending && (albums ?? []).length === 0;
 
@@ -72,6 +75,7 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult }: Prop
         </div>
       )}
 
+      {!chipsOnly && (
       <Dropdown
         value=""
         placeholder="Add to album..."
@@ -88,6 +92,7 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult }: Prop
         }}
         options={(albums ?? []).map((a) => ({ value: a.id, label: a.name }))}
       />
+      )}
       {flash && (
         // Own line below the dropdown - inline it would wrap awkwardly next
         // to the select in the narrow sidebar.

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
-import { IconChart, IconGear, IconHelp, IconMail } from "./components/Icons";
+import { IconChart, IconGear, IconHelp, IconMail, IconTrash } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
@@ -35,6 +35,8 @@ const imageDetail = () => import("./pages/ImageDetail");
 const ImportWizard = page(importWizard, "ImportWizard");
 const ImageDetail = page(imageDetail, "ImageDetail");
 const Albums = page(() => import("./pages/Albums"), "Albums");
+const Canvases = page(() => import("./pages/Canvases"), "Canvases");
+const CanvasDetail = page(() => import("./pages/CanvasDetail"), "CanvasDetail");
 const AlbumDetail = page(() => import("./pages/AlbumDetail"), "AlbumDetail");
 const SmartAlbumDetail = page(() => import("./pages/SmartAlbumDetail"), "SmartAlbumDetail");
 const Settings = page(() => import("./pages/Settings"), "Settings");
@@ -168,20 +170,23 @@ function ModuleLinks({ onNavigate }: { onNavigate?: () => void }) {
         Library
       </NavLink>
       <NavLink to="/albums" onClick={onNavigate}>Albums</NavLink>
+      <NavLink to="/canvas" onClick={onNavigate}>Canvas</NavLink>
       <NavLink to="/map" onClick={onNavigate}>Map</NavLink>
       <ImportNavLink onNavigate={onNavigate} />
       <SelectsNavLink onNavigate={onNavigate} />
-      <NavLink to="/trash" onClick={onNavigate}>Trash</NavLink>
     </>
   );
 }
 
 // Full list for the burger-menu dropdown on narrow windows, where the icon
 // buttons may be the only other way to Settings/Help and text reads better.
+// Trash lives with the icon buttons on wide windows, so it has to be listed
+// here explicitly or the collapsed bar would lose it entirely.
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
       <ModuleLinks onNavigate={onNavigate} />
+      <NavLink to="/trash" onClick={onNavigate}>Trash</NavLink>
       <NavLink to="/settings" onClick={onNavigate}>Settings</NavLink>
       <NavLink to="/help" onClick={onNavigate}>Help</NavLink>
     </>
@@ -192,6 +197,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 // collapsed away on narrow windows.
 const PAGE_TITLES: Array<[string, string]> = [
   ["/albums", "Albums"],
+  ["/canvas", "Canvas"],
   ["/map", "Map"],
   ["/import", "Import"],
   ["/selects", "Selects"],
@@ -303,8 +309,19 @@ function TopBar() {
       </span>
       <nav
         className={`top-icon-links${locked ? " nav-links--locked" : ""}`}
-        aria-label="Statistics, settings, help and contact"
+        aria-label="Trash, statistics, settings, help and contact"
       >
+        {/* Trash sits with the utility icons, not in the module tab row: it's
+            housekeeping you visit occasionally, not a place you work in. First
+            of the icons, so it stays next to the photo modules it acts on. */}
+        <NavLink
+          to="/trash"
+          className={({ isActive }) => `top-icon-link${isActive ? " active" : ""}`}
+          title="Trash"
+          aria-label="Trash"
+        >
+          <IconTrash size={16} />
+        </NavLink>
         <NavLink
           to="/stats"
           className={({ isActive }) => `top-icon-link${isActive ? " active" : ""}`}
@@ -397,6 +414,8 @@ export default function App() {
             <Route path="/import" element={<ImportWizard />} />
             <Route path="/albums" element={<Albums />} />
             <Route path="/albums/:id" element={<AlbumDetail />} />
+            <Route path="/canvas" element={<Canvases />} />
+            <Route path="/canvas/:id" element={<CanvasDetail />} />
             <Route path="/smart-albums/:id" element={<SmartAlbumDetail />} />
             <Route path="/image/:id" element={<ImageDetail />} />
             <Route path="/map" element={<MapView />} />

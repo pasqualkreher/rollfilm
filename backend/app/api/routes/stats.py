@@ -4,7 +4,7 @@ distribution, activity per year. Read-only; every number comes from a handful
 of GROUP BYs over the visible (non-trashed) photos."""
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app import schemas
@@ -46,7 +46,12 @@ def library_stats(db: Session = Depends(get_db), current_user: User = Depends(ge
         return [schemas.StatCount(name=str(name), count=count) for name, count in rows]
 
     total_photos, total_bytes = visible.with_entities(
-        func.count(Image.id), func.coalesce(func.sum(Image.file_size), 0)
+        func.count(Image.id),
+        # Virtual copies ("canvas edits") share their source's bytes - counting
+        # their file_size would report the library bigger than the disk says.
+        func.coalesce(
+            func.sum(case((Image.virtual_of_image_id.is_(None), Image.file_size), else_=0)), 0
+        ),
     ).one()
 
     type_rows = dict(

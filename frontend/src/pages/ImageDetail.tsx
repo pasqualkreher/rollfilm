@@ -7,12 +7,15 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoEditor } from "../components/PhotoEditor";
 import { TagEditor } from "../components/TagEditor";
 import { AlbumPicker } from "../components/AlbumPicker";
+import { AddToPicker } from "../components/AddToPicker";
 import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
-import { setDetailPanelOpen, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
+import { setDetailPanelOpen, useAskSaveCopyOptions, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
+import { SaveCopyDialog, FULL_COPY_QUALITY } from "../components/SaveCopyDialog";
+import { editsFromImage } from "../utils/adjustments";
 import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconPencil, IconTrash, IconX } from "../components/Icons";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
@@ -54,6 +57,13 @@ export function ImageDetail() {
   const [activeId, setActiveId] = useState(id!);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  // "Save copy" from the panel - same action as the editor's button, using the
+  // edits already saved on the photo. Follows the same Settings toggle: by
+  // default one click at full quality, with the options dialog when asked for.
+  const [saveCopyOpen, setSaveCopyOpen] = useState(false);
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyNote, setCopyNote] = useTransientMessage();
+  const askSaveCopyOptions = useAskSaveCopyOptions();
   // Renaming the file on disk: the title row swaps to an input while this is
   // on. The draft holds the STEM only - the extension isn't editable.
   const [renaming, setRenaming] = useState(false);
@@ -222,6 +232,14 @@ export function ImageDetail() {
     function onKeyDown(e: KeyboardEvent) {
       if (adjustOpen) return;
 
+      // While the Save-copy dialog is up the keyboard belongs to it: Esc
+      // closes the dialog (never the lightbox behind it), everything else -
+      // paging, rating, shortcuts - stays parked until it's gone.
+      if (saveCopyOpen) {
+        if (e.key === "Escape" && !copyBusy) setSaveCopyOpen(false);
+        return;
+      }
+
       // While a text field has focus the keyboard belongs to it: arrows move
       // the caret, Esc backs out of the field. Without this, naming a photo or
       // writing its description paged to the next photo mid-word.
@@ -279,7 +297,7 @@ export function ImageDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [goToOffset, adjustOpen, image, paired, activeId, zoomed, renaming, panelOpen]);
+  }, [goToOffset, adjustOpen, saveCopyOpen, copyBusy, image, paired, activeId, zoomed, renaming, panelOpen]);
 
   // The photo the user has actually SETTLED on: follows activeId only after a
   // short pause without further navigation. Holding an arrow key changes
@@ -556,6 +574,43 @@ export function ImageDetail() {
       setImmichMsg((e as Error).message);
     } finally {
       setImmichBusy(false);
+    }
+  }
+
+  // Bake the photo's saved edits into a new library JPEG tagged "edit copy",
+  // then jump to it - mirroring the editor's Save copy, including slotting the
+  // new photo into the browsed set right after its original so the arrow keys
+  // keep working, and pointing Back at the Library instead of replaying history.
+  async function saveCopyRun(opts: { quality: number; maxSize: number | null; blocking?: boolean }) {
+    const { blocking, ...rest } = opts;
+    const run = () => api.images.saveCopy(image!.id, editsFromImage(image!), rest);
+    const created = blocking ? await withWait("Saving a copy…", run) : await run();
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
+    // Unlike the editor, this page stays mounted while the route moves to the
+    // new copy - the options dialog has to be dismissed explicitly.
+    setSaveCopyOpen(false);
+    const at = imageIds ? imageIds.indexOf(image!.id) : -1;
+    const nextIds = imageIds
+      ? at === -1
+        ? [...imageIds, created.id]
+        : [...imageIds.slice(0, at + 1), created.id, ...imageIds.slice(at + 1)]
+      : undefined;
+    navigate(`/image/${created.id}`, { state: { backTo: "/", imageIds: nextIds } });
+  }
+
+  async function saveCopyClick() {
+    if (askSaveCopyOptions) {
+      setSaveCopyOpen(true);
+      return;
+    }
+    setCopyBusy(true);
+    try {
+      await saveCopyRun({ quality: FULL_COPY_QUALITY, maxSize: null, blocking: true });
+    } catch (e) {
+      setCopyNote(errorText(e));
+    } finally {
+      setCopyBusy(false);
     }
   }
 
@@ -899,7 +954,13 @@ export function ImageDetail() {
           </div>
           <div className="detail-section">
             <div className="detail-section-label">Albums</div>
-            <AlbumPicker onAdd={addToAlbum} currentAlbumIds={image.album_ids} onRemove={removeFromAlbum} />
+            <AlbumPicker chipsOnly onAdd={addToAlbum} currentAlbumIds={image.album_ids} onRemove={removeFromAlbum} />
+            <div>
+              <AddToPicker
+                onAddToAlbum={addToAlbum}
+                onAddToCanvas={(canvasId) => api.canvases.addImages(canvasId, [image.id])}
+              />
+            </div>
           </div>
 
           <div className="detail-section">
@@ -953,6 +1014,20 @@ export function ImageDetail() {
             >
               Export…
             </button>
+            <button
+              className="btn"
+              style={{ display: "block", width: "100%", marginTop: 8, textAlign: "center" }}
+              onClick={saveCopyClick}
+              disabled={copyBusy}
+              title={
+                askSaveCopyOptions
+                  ? "Create a new photo in your library with the saved edits baked in, tagged “edit copy” - pick quality and size first"
+                  : "Create a new photo in your library with the saved edits baked in, tagged “edit copy”, at full quality and full size"
+              }
+            >
+              {copyBusy ? "Saving…" : "Save copy"}
+            </button>
+            {copyNote && <p className="status-note" style={{ marginTop: 8 }}>{copyNote}</p>}
           </div>
 
           {image.gps_lat != null && image.gps_lon != null && (
@@ -1012,6 +1087,12 @@ export function ImageDetail() {
       </div>
 
       {adjustOpen && <PhotoEditor image={image} onClose={() => setAdjustOpen(false)} />}
+      {saveCopyOpen && (
+        <SaveCopyDialog
+          onClose={() => setSaveCopyOpen(false)}
+          onSave={(opts) => saveCopyRun(opts)}
+        />
+      )}
       {exportOpen && (
         <ExportDialog
           imageIds={[image.id]}

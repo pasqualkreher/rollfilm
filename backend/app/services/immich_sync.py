@@ -204,6 +204,10 @@ def _upload_missing(db: Session, config: ImmichConfig) -> None:
         Image.deleted_at.is_(None),
         Image.file_type == FileType.jpeg,
         Image.immich_asset_id.is_(None),
+        # Virtual copies ("canvas edit") never sync: their bytes are the
+        # source's bytes, so Immich would checksum-dedupe them onto the
+        # source's asset and the id backfill would tangle the two rows.
+        Image.virtual_of_image_id.is_(None),
     )
     if config.sync_mode == IMMICH_MODE_SELECTIVE:
         # Flagged photos, plus photos matching a flagged album's tag rule -

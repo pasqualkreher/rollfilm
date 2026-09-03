@@ -21,6 +21,7 @@ from sqlalchemy.orm import Query, Session
 from app.db.models import FileType, Image, SourceRoot
 from app.db.session import SessionLocal
 from app.services.exif import capture_date_from_filename, read_exif
+from app.services import filesystem
 from app.services.filesystem import resolve_image_path
 from app.services.hashing import perceptual_hash, sha256_file
 from app.services.raw import classify_file_type, extract_preview
@@ -322,6 +323,13 @@ def _run_scan(source_root_id: str, include_excluded: bool = False) -> None:
                 excluded_by_path.pop(moved.file_path, None)
                 moved.file_path = key
                 moved.original_filename = path.name
+                # Virtual copies borrow this file's path in their synthetic
+                # file_path ("<source path>#vc-<id>") - re-anchor them too.
+                for copy in db.query(Image).filter(Image.virtual_of_image_id == moved.id):
+                    marker = copy.file_path.find(filesystem.VIRTUAL_PATH_MARKER)
+                    suffix = copy.file_path[marker:] if marker >= 0 else ""
+                    copy.file_path = f"{key}{suffix}"
+                    copy.original_filename = path.name
                 if moved.deleted_at is not None:
                     if include_excluded:
                         moved.deleted_at = None

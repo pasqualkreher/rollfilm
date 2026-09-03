@@ -2,9 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
-import type { AlbumLayout, ImageOut, LayoutItem, LayoutTextStyle, LayoutVersion } from "../api/types";
+import type { CanvasLayout, ImageOut, LayoutItem, LayoutTextStyle, LayoutVersion } from "../api/types";
 import { collapsePairs, thumbPx, useThumbSize } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
+import { PhotoEditor } from "./PhotoEditor";
 import { FilterChip } from "./FilterChip";
 import {
   IconAlignBottom,
@@ -14,17 +15,28 @@ import {
   IconAlignMiddle,
   IconAlignRight,
   IconAlignTop,
+  IconArrowLeft,
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
   IconCrop,
   IconDuplicate,
+  IconFitAll,
+  IconFitPage,
+  IconGrid,
+  IconGuide,
   IconHelp,
+  IconImage,
+  IconInfinity,
   IconLock,
   IconLockOpen,
+  IconMagnet,
   IconPencil,
+  IconPrinter,
   IconRedo,
   IconRotate,
+  IconSheets,
+  IconTextT,
   IconTrash,
   IconUndo,
   IconX,
@@ -47,7 +59,7 @@ import {
 } from "../utils/canvasLayout";
 import { ExportChip } from "./CanvasExportChip";
 
-// The creative layout of an album: its photos placed by hand on pages (or on
+// The creative layout of a canvas: its photos placed by hand on pages (or on
 // one unbounded canvas) instead of flowed into the grid.
 //
 // The whole editor works in millimetres and hands the browser a single scaled
@@ -58,7 +70,7 @@ import { ExportChip } from "./CanvasExportChip";
 // A layout as this component edits it: the server's own fields minus the ones
 // it owns (identity, timestamp, and the kept-version bookkeeping - versions
 // are managed through their own endpoints, never written by a save).
-type Doc = Omit<AlbumLayout, "album_id" | "updated_at" | "active_version_id" | "versions">;
+type Doc = Omit<CanvasLayout, "canvas_id" | "updated_at" | "active_version_id" | "versions">;
 
 // How much of a nudge counts as "meant to line up", in screen pixels. Converted
 // to mm against the current zoom, so snapping feels the same zoomed in or out.
@@ -165,7 +177,7 @@ interface ItemSettings {
 
 // The colours paper and borders usually are. Swatches, because a colour
 // wheel is the wrong tool for "make it look like old paper": these are named
-// so they can be recognised and matched across an album, and anything else is
+// so they can be recognised and matched across a canvas, and anything else is
 // one click away on the wheel at the end of the row.
 //
 // Two runs: the warm papers from pure white down to kraft, then the cool tones
@@ -321,32 +333,36 @@ function toPages(current: Doc): Doc {
   };
 }
 
-export function AlbumCanvas({
-  albumId,
+export function CanvasEditor({
+  canvasId,
   title,
   files,
   stripImages,
   imagesLoading,
   onExit,
+  onMembershipChanged,
 }: {
-  albumId: string;
-  // The album's name - what an export is called.
+  canvasId: string;
+  // The canvas's name - what an export is called.
   title: string;
-  // Every FILE in the album: unfiltered, and with RAW+JPEG pairs still both
+  // Every FILE the canvas can draw (members plus placed photos): unfiltered, with RAW+JPEG pairs still both
   // present. Nothing the filter bar does may reach this list - it is what a
   // placed frame is resolved against, so a photo that is on the page has to
   // stay resolvable whatever the bar is currently showing. Collapsing pairs
   // here would break it too: a placed RAW is folded away by the pairing and
   // would come back as "Photo unavailable".
   files: ImageOut[];
-  // The same album as the filter bar currently narrows it - the strip of
+  // The membership as the filter bar currently narrows it - the strip of
   // photos you pick from. RAW+JPG / RAW / JPG and the other filters act here
   // and nowhere else on this screen.
   stripImages: ImageOut[];
   imagesLoading: boolean;
   // Called when Escape has nothing left to step out of - the way back to the
-  // albums, same as the lightbox's and the editor's Escape.
+  // overview, same as the lightbox's and the editor's Escape.
   onExit?: () => void;
+  // The canvas edited a photo (a virtual copy appeared or changed): the owner
+  // of the `files` query refetches, so edit_rev-based thumbnail URLs bust.
+  onMembershipChanged?: () => void;
 }) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
@@ -354,8 +370,8 @@ export function AlbumCanvas({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const { data: saved, isLoading } = useQuery({
-    queryKey: ["album-layout", albumId],
-    queryFn: () => api.albums.getLayout(albumId),
+    queryKey: ["canvas-layout", canvasId],
+    queryFn: () => api.canvases.getLayout(canvasId),
   });
 
   const [doc, setDoc] = useState<Doc | null>(null);
@@ -392,31 +408,81 @@ export function AlbumCanvas({
 
   // What a placed frame is drawn from: every file, so nothing on the page can
   // be filtered out from under it.
-  const byId = useMemo(() => new Map(files.map((file) => [file.id, file])), [files]);
+  const [extraFiles, setExtraFiles] = useState<ImageOut[]>([]);
+  const byId = useMemo(() => {
+    const map = new Map(files.map((file) => [file.id, file]));
+    // Virtual copies minted in this session: the server's files list catches
+    // up once the re-pointed frame autosaves; until then these fill the gap
+    // (and afterwards the fresher server row wins).
+    for (const file of extraFiles) if (!map.has(file.id)) map.set(file.id, file);
+    return map;
+  }, [files, extraFiles]);
+  // Editing a placed photo happens on a virtual copy ("canvas edit"): the
+  // library original stays untouched, the frame follows the copy.
+  const [editingImage, setEditingImage] = useState<ImageOut | null>(null);
+  const editingOpenRef = useRef(false);
+  editingOpenRef.current = editingImage !== null;
+  // The frame being edited shows the editor's own preview frames live, so the
+  // photo is developed right there on the page. One object URL at a time.
+  const [livePreviewUrl, setLivePreviewUrl] = useState<string | null>(null);
+  const livePreviewRef = useRef<string | null>(null);
+  const onPreviewFrame = useCallback((blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    const old = livePreviewRef.current;
+    livePreviewRef.current = url;
+    setLivePreviewUrl(url);
+    if (old) URL.revokeObjectURL(old);
+  }, []);
+
+  // Coming back from the editor: the copy's pixels changed (new edit_rev), so
+  // refresh our row and let the files query refetch - both thumbnail URLs
+  // bust and the frame redraws sharp.
+  const onMembershipChangedRef = useRef(onMembershipChanged);
+  onMembershipChangedRef.current = onMembershipChanged;
+  const closeEditor = useCallback(async () => {
+
+    setEditingImage((edited) => {
+      if (edited) {
+        void api.images
+          .get(edited.id)
+          .then((fresh) =>
+            setExtraFiles((list) => [...list.filter((file) => file.id !== fresh.id), fresh])
+          )
+          .catch(() => {
+            // Non-fatal: the next files refetch carries the fresh row anyway.
+          });
+      }
+      return null;
+    });
+    if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
+    livePreviewRef.current = null;
+    setLivePreviewUrl(null);
+    onMembershipChangedRef.current?.();
+  }, []);
   // One entry per shot - what "Place N photos" counts and what a brand new
   // canvas is seeded with. Placing both halves of a pair would put the same
   // picture on the page twice.
   const images = useMemo(() => collapsePairs(files), [files]);
 
-  // Adopt the saved layout once it arrives. Keyed on the album so switching
-  // albums reloads, but a later refetch must never stomp on unsaved edits.
+  // Adopt the saved layout once it arrives. Keyed on the canvas so switching
+  // canvases reloads, but a later refetch must never stomp on unsaved edits.
   const loadedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!saved || loadedFor.current === albumId) return;
-    loadedFor.current = albumId;
+    if (!saved || loadedFor.current === canvasId) return;
+    loadedFor.current = canvasId;
     fitted.current = false;
-    const { album_id: _a, updated_at: _u, active_version_id: _v, versions: _vs, ...rest } = saved;
+    const { canvas_id: _a, updated_at: _u, active_version_id: _v, versions: _vs, ...rest } = saved;
     setDoc(rest);
     past.current = [];
     future.current = [];
-  }, [saved, albumId]);
+  }, [saved, canvasId]);
 
   // --- Saving ---------------------------------------------------------------
 
   const save = useMutation({
-    mutationFn: (next: Doc) => api.albums.saveLayout(albumId, next),
+    mutationFn: (next: Doc) => api.canvases.saveLayout(canvasId, next),
     onSuccess: (result) => {
-      queryClient.setQueryData(["album-layout", albumId], result);
+      queryClient.setQueryData(["canvas-layout", canvasId], result);
       setSaveState((state) => (state === "saving" ? "saved" : state));
     },
   });
@@ -444,9 +510,9 @@ export function AlbumCanvas({
   // reached its debounce yet.
   useEffect(() => {
     return () => {
-      if (pending.current) api.albums.saveLayout(albumId, pending.current).catch(() => {});
+      if (pending.current) api.canvases.saveLayout(canvasId, pending.current).catch(() => {});
     };
-  }, [albumId]);
+  }, [canvasId]);
 
   // True until the first write reaches the server: the GET for a canvas nobody
   // has saved yet answers with the default document and no timestamp.
@@ -455,7 +521,7 @@ export function AlbumCanvas({
   // Explicit save (the toolbar button and ⌘S): skips the debounce, and -
   // unlike the autosave, which only fires on an edit - also writes the
   // untouched starting layout. That is how a freshly opened canvas becomes the
-  // album's saved canvas without the user having to nudge a photo first.
+  // canvas's saved layout without the user having to nudge a photo first.
   const docRef = useRef(doc);
   docRef.current = doc;
   const saveNow = useCallback(() => {
@@ -534,12 +600,12 @@ export function AlbumCanvas({
   const activeVersionId = saved?.active_version_id ?? null;
 
   const adoptServerLayout = useCallback(
-    (result: AlbumLayout) => {
-      queryClient.setQueryData(["album-layout", albumId], result);
+    (result: CanvasLayout) => {
+      queryClient.setQueryData(["canvas-layout", canvasId], result);
       // The Canvases shelf on the Albums page draws from these versions.
       queryClient.invalidateQueries({ queryKey: ["canvases"] });
     },
-    [queryClient, albumId]
+    [queryClient, canvasId]
   );
 
   const keepVersion = useCallback(
@@ -550,8 +616,8 @@ export function AlbumCanvas({
       // must reach them first - autosave may still be counting down.
       pending.current = null;
       try {
-        await api.albums.saveLayout(albumId, current);
-        adoptServerLayout(await api.albums.createLayoutVersion(albumId, name));
+        await api.canvases.saveLayout(canvasId, current);
+        adoptServerLayout(await api.canvases.createLayoutVersion(canvasId, name));
         setSaveState("saved");
       } catch {
         await dialogs.alert({
@@ -560,7 +626,7 @@ export function AlbumCanvas({
         });
       }
     },
-    [albumId, adoptServerLayout, dialogs]
+    [canvasId, adoptServerLayout, dialogs]
   );
 
   const loadVersion = useCallback(
@@ -576,9 +642,9 @@ export function AlbumCanvas({
         return;
       pending.current = null;
       try {
-        const result = await api.albums.restoreLayoutVersion(albumId, versionId);
+        const result = await api.canvases.restoreLayoutVersion(canvasId, versionId);
         adoptServerLayout(result);
-        const { album_id: _a, updated_at: _u, active_version_id: _v, versions: _vs, ...rest } = result;
+        const { canvas_id: _a, updated_at: _u, active_version_id: _v, versions: _vs, ...rest } = result;
         // Through the history, so loading a version is itself undoable.
         commit(rest);
         setSaveState("saved");
@@ -589,18 +655,18 @@ export function AlbumCanvas({
         });
       }
     },
-    [albumId, adoptServerLayout, commit, dialogs]
+    [canvasId, adoptServerLayout, commit, dialogs]
   );
 
   const renameVersion = useCallback(
     async (versionId: string, name: string) => {
       try {
-        adoptServerLayout(await api.albums.renameLayoutVersion(albumId, versionId, name));
+        adoptServerLayout(await api.canvases.renameLayoutVersion(canvasId, versionId, name));
       } catch {
         // The old name stands; nothing to clean up.
       }
     },
-    [albumId, adoptServerLayout]
+    [canvasId, adoptServerLayout]
   );
 
   const removeVersion = useCallback(
@@ -615,12 +681,12 @@ export function AlbumCanvas({
       )
         return;
       try {
-        adoptServerLayout(await api.albums.deleteLayoutVersion(albumId, versionId));
+        adoptServerLayout(await api.canvases.deleteLayoutVersion(canvasId, versionId));
       } catch {
         // The version stays in the list; trying again is free.
       }
     },
-    [albumId, adoptServerLayout, dialogs]
+    [canvasId, adoptServerLayout, dialogs]
   );
 
   // --- Geometry -------------------------------------------------------------
@@ -635,6 +701,16 @@ export function AlbumCanvas({
 
   const items = doc?.items ?? [];
   const pageCount = doc?.page_mode === "pages" ? Math.max(1, doc.page_count) : 1;
+
+  // The docked editor exists only while a photo is active: deselecting (a
+  // click on empty paper, Escape's ladder, a marquee that caught nothing)
+  // takes the panel with it.
+  useEffect(() => {
+    if (!editingImage) return;
+    const activePhoto = items.some((item) => selected.has(item.id) && item.kind === "photo");
+    if (!activePhoto) void closeEditor();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, editingImage]);
 
   // Where the viewport is looking, mirrored into state so that everything
   // derived from it - the rail's highlight, the sheet a new photo lands on -
@@ -1012,14 +1088,14 @@ export function AlbumCanvas({
   //
   // Deliberately neither dirty nor undoable: until the user changes something
   // this is a starting point rather than a document, so merely opening the
-  // canvas on every album in the library still writes no rows. That is also
+  // canvas in the library still writes no rows. That is also
   // what makes starting empty possible - clearing a canvas DOES save, so a
   // layout the user emptied has been written, and is never seeded again.
   const seededFor = useRef<string | null>(null);
   useEffect(() => {
     if (!doc || !saved || saved.updated_at || imagesLoading) return;
-    if (seededFor.current === albumId || images.length === 0 || doc.items.length > 0) return;
-    seededFor.current = albumId;
+    if (seededFor.current === canvasId || images.length === 0 || doc.items.length > 0) return;
+    seededFor.current = canvasId;
     const { items: flowed, pages } = autoFlow(
       images.map((image) => ({ id: image.id, aspect: imageAspect(image.id) ?? 1.5 })),
       doc,
@@ -1035,7 +1111,7 @@ export function AlbumCanvas({
           }
         : current
     );
-  }, [albumId, doc, imageAspect, images, imagesLoading, saved]);
+  }, [canvasId, doc, imageAspect, images, imagesLoading, saved]);
 
   const addPhotos = useCallback(
     (imageIds: string[], at?: { x: number; y: number }) => {
@@ -1271,7 +1347,7 @@ export function AlbumCanvas({
     );
   }, [selected, updateItems]);
 
-  // Which of the album's photos are already on the page. A RAW+JPEG pair is
+  // Which of the canvas's photos are already on the page. A RAW+JPEG pair is
   // one shot, so placing either half settles both - otherwise "Place N photos"
   // would flow in the sibling of something already laid out, and the strip
   // would badge one half of a pair and not the other.
@@ -1290,7 +1366,7 @@ export function AlbumCanvas({
   );
 
   // Flow everything the canvas hasn't got yet into a plain grid. On an empty
-  // canvas this is the "just show me my album" button, so it doesn't ask; once
+  // canvas this is the "just show me my photos" button, so it doesn't ask; once
   // there is a layout to disturb, it does.
   const fillFromAlbum = useCallback(async () => {
     if (!doc || unplaced.length === 0) return;
@@ -1299,7 +1375,7 @@ export function AlbumCanvas({
       !(await dialogs.confirm({
         title: `Place ${unplaced.length} more photo${unplaced.length === 1 ? "" : "s"}?`,
         message:
-          "The album's photos that aren't on the canvas yet will be flowed into a grid after what you already have. Nothing you placed by hand moves.",
+          "The canvas's photos that aren't on the canvas yet will be flowed into a grid after what you already have. Nothing you placed by hand moves.",
         confirmLabel: "Place them",
       }))
     ) {
@@ -1323,7 +1399,7 @@ export function AlbumCanvas({
     if (box) revealRect(box);
   }, [commit, dialogs, doc, imageAspect, items, revealRect, topZ, unplaced]);
 
-  // The way back out of a layout that went wrong. The album's photos are
+  // The way back out of a layout that went wrong. The canvas's photos are
   // untouched - only the placing is thrown away.
   const clearCanvas = useCallback(async () => {
     if (items.length === 0) return;
@@ -1331,7 +1407,7 @@ export function AlbumCanvas({
       !(await dialogs.confirm({
         title: "Clear the canvas?",
         message:
-          "Every frame and caption you placed is removed and the page starts empty. The album keeps all of its photos.",
+          "Every frame and caption you placed is removed and the page starts empty. The photos stay in your library.",
         confirmLabel: "Clear it",
         danger: true,
       }))
@@ -1424,7 +1500,7 @@ export function AlbumCanvas({
           title: last ? "Empty this page?" : `Delete page ${page + 1}?`,
           message: `The ${onIt} thing${onIt === 1 ? "" : "s"} on it ${
             onIt === 1 ? "is" : "are"
-          } taken off the canvas. The album keeps all of its photos.`,
+          } taken off the canvas. The photos stay in your library.`,
           confirmLabel: last ? "Empty it" : "Delete the page",
           danger: true,
         }))
@@ -1836,6 +1912,10 @@ export function AlbumCanvas({
       // The print view has the keyboard while it is up: its Escape closes it,
       // and must not also drop the selection underneath.
       if (printPage !== null) return;
+      // Same for the docked photo editor: while it is open the keyboard is
+      // its (undo, arrows, Escape) - the canvas underneath must not also
+      // undo, nudge frames or step its own Escape ladder.
+      if (editingOpenRef.current) return;
       // A focused button still owns Space: hold-to-pan must not stop the
       // toolbar being driven from the keyboard.
       const onButton = target?.tagName === "BUTTON";
@@ -1894,7 +1974,7 @@ export function AlbumCanvas({
       if (event.key === "Escape") {
         // Step out one level at a time, so Escape out of a crop doesn't also
         // drop the selection the user is still working with. Only with
-        // nothing left to step out of does it leave the album - the same
+        // nothing left to step out of does it leave the canvas - the same
         // ladder the lightbox climbs (zoom first, then back).
         if (croppingId) setCroppingId(null);
         else if (editingTextId) setEditingTextId(null);
@@ -1975,6 +2055,44 @@ export function AlbumCanvas({
   const worldHeight = Math.max(1, world.y + world.h);
   const selectedItems = items.filter((item) => selected.has(item.id));
   const single = selectedItems.length === 1 ? selectedItems[0] : null;
+
+  // Open the photo editor on a frame's photo - via a virtual copy. The first
+  // edit mints the copy (tagged "canvas edit" in the library) and re-points
+  // the frame at it; editing again just reopens the same copy. The library
+  // original is never touched from here. With the editor already docked,
+  // clicking another frame switches it to that photo.
+  async function switchEditTo(frame: LayoutItem) {
+    if (frame.kind !== "photo" || !frame.image_id) return;
+    const image = byId.get(frame.image_id);
+    if (!image || (editingImage && image.id === editingImage.id)) return;
+    // The old photo's live preview must not flash on the new frame.
+    if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
+    livePreviewRef.current = null;
+    setLivePreviewUrl(null);
+    if (image.virtual_of_image_id) {
+      setEditingImage(image);
+      return;
+    }
+    try {
+      const copy = await api.images.virtualCopy(image.id);
+      setExtraFiles((list) => [...list, copy]);
+      updateItems((list) =>
+        list.map((item) => (item.id === frame.id ? { ...item, image_id: copy.id } : item))
+      );
+      onMembershipChanged?.();
+      setEditingImage(copy);
+    } catch (e) {
+      void dialogs.alert({
+        title: "Could not start the edit",
+        message: (e as Error).message || "The virtual copy could not be created.",
+      });
+    }
+  }
+
+  async function editPhoto() {
+    if (single) await switchEditTo(single);
+  }
+
   const croppingItem = croppingId ? items.find((item) => item.id === croppingId) ?? null : null;
   // Whether the photo has any room to slide at its current zoom - if it has
   // none, saying "drag it" would simply be untrue.
@@ -2010,6 +2128,8 @@ export function AlbumCanvas({
 
   return (
     <div className="canvas-shell">
+      <div className="canvas-main">
+        <div className="canvas-main-left">
       <CanvasToolbar
         doc={doc}
         commit={commit}
@@ -2026,7 +2146,9 @@ export function AlbumCanvas({
         onAddText={addText}
         onFill={fillFromAlbum}
         unplaced={unplaced.length}
-        albumSize={images.length}
+        memberCount={images.length}
+        title={title}
+        onExit={onExit}
         onClear={clearCanvas}
         canClear={items.length > 0}
         saveState={saveState}
@@ -2059,6 +2181,8 @@ export function AlbumCanvas({
         onDelete={removeSelected}
         onFitFrame={fitFrameToPhoto}
         onCrop={() => single && single.kind === "photo" && setCroppingId(single.id)}
+        onEditPhoto={() => (editingImage ? void closeEditor() : void editPhoto())}
+        editingOpen={editingImage !== null}
         onEndCrop={() => setCroppingId(null)}
         onResetCrop={resetCrop}
         aspectLock={aspectLock}
@@ -2098,6 +2222,8 @@ export function AlbumCanvas({
         )}
         <div
           className={`canvas-frame${croppingId ? " is-cropping" : ""}`}
+          data-canvas-frame
+
           // On the free canvas the paper is the whole stage, so its colour
           // lives here - behind the grid layer, which the transparent viewport
           // then lets through.
@@ -2228,6 +2354,9 @@ export function AlbumCanvas({
                       item={item}
                       doc={doc}
                       image={item.image_id ? byId.get(item.image_id) ?? null : null}
+                      livePreviewUrl={
+                        editingImage && item.image_id === editingImage.id ? livePreviewUrl : null
+                      }
                       zoom={zoom}
                       selected={selected.has(item.id)}
                       cropping={croppingId === item.id}
@@ -2242,6 +2371,9 @@ export function AlbumCanvas({
                           return;
                         }
                         beginMove(event, item.id);
+                        // The docked editor follows the click: selecting
+                        // another photo switches the edit to it.
+                        if (editingOpenRef.current && item.kind === "photo") void switchEditTo(item);
                       }}
                       onDoubleClick={() => {
                         if (item.kind === "text") setEditingTextId(item.id);
@@ -2411,6 +2543,17 @@ export function AlbumCanvas({
         images={stripImages}
         loading={imagesLoading}
         placed={placedShots}
+        backButton={
+          onExit && (
+            <button
+              className="btn btn-sm back-btn"
+              onClick={onExit}
+              title="Back to your canvases (Esc)"
+            >
+              <IconArrowLeft size={14} /> Back
+            </button>
+          )
+        }
         open={showFilmstrip}
         onToggle={() => setShowFilmstrip((open) => !open)}
         onAdd={(id) => addPhotos([id])}
@@ -2419,6 +2562,19 @@ export function AlbumCanvas({
           setDrag({ kind: "place", imageId: id, x: world.x, y: world.y });
         }}
       />
+        </div>
+        {/* Editing docks as the row's right column, top to bottom of the
+            window: it pushes everything left, the filmstrip included. */}
+        {editingImage && (
+          <PhotoEditor
+            key={editingImage.id}
+            docked
+            image={editingImage}
+            onClose={() => void closeEditor()}
+            onPreviewFrame={onPreviewFrame}
+          />
+        )}
+      </div>
 
       {printPage !== null &&
         createPortal(
@@ -2724,15 +2880,6 @@ function PrintView({
         </div>
       </div>
 
-      <button
-        className="canvas-print-close canvas-print-chrome"
-        onClick={onClose}
-        aria-label="Back to the canvas"
-        title="Back to the canvas (Escape)"
-      >
-        <IconX size={18} />
-      </button>
-
       {sheets.length > 1 && (
         <>
           <button
@@ -2756,7 +2903,16 @@ function PrintView({
         </>
       )}
 
+      {/* Same bottom bar as the shelf's print view (and the photo stages):
+          the standard Back flush left, the caption centred. */}
       <div className="canvas-print-foot canvas-print-chrome" aria-live="polite">
+        <button
+          className="btn btn-sm back-btn stage-back-btn"
+          onClick={onClose}
+          title="Back to the canvas (Escape)"
+        >
+          <IconArrowLeft size={13} /> Back
+        </button>
         {sheets.length > 1 ? `Page ${index + 1} of ${sheets.length}` : "Print view"}
         <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to come back</span>
       </div>
@@ -3001,6 +3157,7 @@ function CanvasItem({
   item,
   doc,
   image,
+  livePreviewUrl = null,
   zoom,
   selected,
   cropping,
@@ -3014,6 +3171,9 @@ function CanvasItem({
   item: LayoutItem;
   doc: Doc;
   image: ImageOut | null;
+  // While this frame's photo is open in the docked editor: the newest preview
+  // frame, shown instead of the cached thumbnail - the edit happens IN the page.
+  livePreviewUrl?: string | null;
   zoom: number;
   selected: boolean;
   cropping: boolean;
@@ -3108,14 +3268,23 @@ function CanvasItem({
       {image ? (
         <img
           className="canvas-photo"
-          src={print ? api.images.previewUrl(image.id, editVersion(image)) : api.images.thumbnailUrl(image.id, editVersion(image))}
+          src={
+            livePreviewUrl ??
+            (print
+              ? api.images.previewUrl(image.id, editVersion(image))
+              : api.images.thumbnailUrl(image.id, editVersion(image)))
+          }
           alt=""
           draggable={false}
           style={{ transform: contentTransform }}
         />
       ) : (
         <div className="canvas-photo-missing" style={{ fontSize: 4 }}>
-          {item.available === false ? "Photo in the Trash" : "Photo unavailable"}
+          {item.missing
+            ? "Photo deleted"
+            : item.available === false
+              ? "Photo in the Trash"
+              : "Photo unavailable"}
         </div>
       )}
       {cropping && <div className="canvas-crop-hint" style={{ borderWidth: 2 / zoom }} />}
@@ -3193,7 +3362,7 @@ function SelectionFrame({
 // --- Kept versions ----------------------------------------------------------
 //
 // The chip where a canvas worth keeping gets a name. It also holds the
-// "Canvases shelf" switch: the Albums page shows, per opted-in album, the one
+// "Canvases shelf" switch: the Albums page shows, per opted-in canvas, the one
 // version last kept or last loaded here - never the autosaving working draft.
 
 function versionDate(iso: string): string {
@@ -3359,8 +3528,8 @@ function VersionsChip({
           />
           <span className="canvas-panel-note">
             {versions.length === 0
-              ? "Show this album on the Canvas Shelf of the Albums page. Keep a version first - the shelf shows kept versions, never the working draft."
-              : "Show this album on the Canvas Shelf of the Albums page. The shelf shows the version marked with a dot - the one last kept or loaded."}
+              ? "Show this canvas on the Canvas Shelf of the Albums page. Keep a version first - the shelf shows kept versions, never the working draft."
+              : "Show this canvas on the Canvas Shelf of the Albums page. The shelf shows the version marked with a dot - the one last kept or loaded."}
           </span>
         </label>
       </div>
@@ -3391,7 +3560,9 @@ function CanvasToolbar({
   onAddText,
   onFill,
   unplaced,
-  albumSize,
+  memberCount,
+  title,
+  onExit,
   onClear,
   canClear,
   saveState,
@@ -3400,6 +3571,8 @@ function CanvasToolbar({
   exportChip,
   versionsChip,
 }: {
+  title: string;
+  onExit?: () => void;
   doc: Doc;
   commit: (next: Doc | ((current: Doc) => Doc), options?: { history?: boolean }) => void;
   zoom: number;
@@ -3415,7 +3588,7 @@ function CanvasToolbar({
   onAddText: () => void;
   onFill: () => void;
   unplaced: number;
-  albumSize: number;
+  memberCount: number;
   onClear: () => void;
   canClear: boolean;
   saveState: "idle" | "dirty" | "saving" | "saved";
@@ -3429,164 +3602,148 @@ function CanvasToolbar({
   const presetLabel =
     PAGE_PRESETS.find((p) => p.key === presetKey)?.label ??
     `${Math.round(doc.page_width_mm)}×${Math.round(doc.page_height_mm)} mm`;
-  // The closed chip names what it is FOR and then what the canvas currently
-  // is, so the setup panel is something you open to change an answer you can
-  // already read - "A4 landscape · 4 pa…" on its own told nobody that this is
-  // where the paper is chosen.
-  const paperLabel =
-    doc.page_mode === "infinite"
-      ? doc.show_page_guide
-        ? `Paper: free canvas, ${presetLabel} guide`
-        : "Paper: free canvas"
-      : `Paper: ${presetLabel}, ${doc.page_count} ${doc.page_count === 1 ? "page" : "pages"}`;
 
+  // Everything the old "Paper" popover held sits IN the bar now, as icons with
+  // their explanations in the tooltips: nothing to open before you can read or
+  // change what the canvas is. Toggles carry aria-pressed + the is-on tint;
+  // anything destructive keeps its confirm dialog behind the icon.
   return (
     <div className="filter-bar canvas-toolbar">
       <div className="control-group">
+        <span className="canvas-title" title={title}>
+          {title}
+        </span>
+      </div>
+
+      <div className="control-group">
         <button
-          className="btn"
+          className="btn btn-sm canvas-tool"
           onClick={onFill}
           disabled={unplaced === 0}
+          aria-label={unplaced === 0 ? "All photos placed" : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}`}
           title={
             unplaced === 0
-              ? albumSize === 0
-                ? "This album has no photos yet"
-                : "Every photo in the album is already on the canvas"
-              : "Flow the album's photos that aren't on the canvas yet into a grid after what you have"
+              ? memberCount === 0
+                ? "This canvas has no photos yet - add some from the library's Select mode"
+                : "Every photo of this canvas is already placed"
+              : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}: flow the canvas's photos that aren't placed yet into a grid after what you have`
           }
         >
-          {unplaced === 0
-            ? "All photos placed"
-            : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}`}
+          <IconImage size={15} />
+          {unplaced > 0 && <span className="canvas-tool-badge">{unplaced}</span>}
         </button>
-        <button className="btn" onClick={onAddText} title="Put a caption or a title on the page">
-          Add text
+        <button
+          className="btn btn-sm canvas-tool"
+          onClick={onAddText}
+          aria-label="Add text"
+          title="Add text: put a caption or a title on the page"
+        >
+          <IconTextT size={15} />
         </button>
       </div>
 
       <div className="control-group">
-        <FilterChip
-          label={paperLabel}
-          title="Set up the paper: pages or a free canvas, the page size, its colour and the grid"
+        <span className="segmented segmented--icons" role="group" aria-label="Canvas kind">
+          <button
+            className={doc.page_mode === "pages" ? "active" : ""}
+            onClick={() => commit(toPages)}
+            aria-label="Pages"
+            aria-pressed={doc.page_mode === "pages"}
+            title="Pages: a run of sheets of a fixed size, like a photo book. Photos stay inside the page; the rail on the left adds, copies and reorders pages."
+          >
+            <IconSheets size={15} />
+          </button>
+          <button
+            className={doc.page_mode === "infinite" ? "active" : ""}
+            onClick={() => commit(toFreeCanvas)}
+            aria-label="Free canvas"
+            aria-pressed={doc.page_mode === "infinite"}
+            title="Free canvas: one endless sheet with no edges. Every page is merged into the first."
+          >
+            <IconInfinity size={15} />
+          </button>
+        </span>
+        {/* The free canvas has no page, so a page size means nothing there -
+            the picker only appears when a sheet exists to size: real pages,
+            or the page guide drawn over the free canvas. */}
+        {(doc.page_mode === "pages" || doc.show_page_guide) && (
+          <select
+            className="canvas-size-select"
+            value={presetKey}
+            aria-label={doc.page_mode === "pages" ? "Page size" : "Guide size"}
+            title={doc.page_mode === "pages" ? "Page size" : "Size of the page guide"}
+            onChange={(event) => {
+              const next = PAGE_PRESETS.find((p) => p.key === event.target.value);
+              if (next) commit((c) => ({ ...c, page_width_mm: next.w, page_height_mm: next.h }));
+            }}
+          >
+            {presetKey === "custom" && <option value="custom">{presetLabel}</option>}
+            {PAGE_PRESETS.map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        )}
+        <label
+          className="canvas-swatch canvas-toolbar-swatch"
+          style={{ background: doc.background }}
+          title={`Paper colour: ${swatchName(doc.background)}`}
         >
-          <div className="canvas-panel">
-            <div className="canvas-panel-row">
-              <span className="canvas-panel-label">What this canvas is</span>
-              <span className="segmented" role="group" aria-label="Canvas kind">
-                <button
-                  className={doc.page_mode === "pages" ? "active" : ""}
-                  onClick={() => commit(toPages)}
-                >
-                  Pages
-                </button>
-                <button
-                  className={doc.page_mode === "infinite" ? "active" : ""}
-                  onClick={() => commit(toFreeCanvas)}
-                >
-                  Free canvas
-                </button>
-              </span>
-              <span className="canvas-panel-note">
-                {doc.page_mode === "pages"
-                  ? "A run of sheets of a fixed size, like a photo book. Photos stay inside the page."
-                  : "One endless sheet with no edges. Every page is merged into the first."}
-              </span>
-            </div>
-
-            {doc.page_mode === "infinite" && (
-              <label className="canvas-panel-row">
-                <span className="canvas-panel-label">Page guide</span>
-                <input
-                  type="checkbox"
-                  checked={doc.show_page_guide}
-                  onChange={(event) =>
-                    commit((c) => ({ ...c, show_page_guide: event.target.checked }), {
-                      history: false,
-                    })
-                  }
-                />
-                <span className="canvas-panel-note">
-                  Outlines the sheets this design would be cut into, at the size below. Keep your
-                  work inside them and switching to Pages moves nothing.
-                </span>
-              </label>
-            )}
-
-            <label className="canvas-panel-row">
-              <span className="canvas-panel-label">
-                {doc.page_mode === "pages" ? "Page size" : "Guide size"}
-              </span>
-                <select
-                  value={presetKey}
-                  onChange={(event) => {
-                    const next = PAGE_PRESETS.find((p) => p.key === event.target.value);
-                    if (next) commit((c) => ({ ...c, page_width_mm: next.w, page_height_mm: next.h }));
-                  }}
-                >
-                  {presetKey === "custom" && <option value="custom">{presetLabel}</option>}
-                  {PAGE_PRESETS.map((p) => (
-                    <option key={p.key} value={p.key}>
-                      {p.label}
-                    </option>
-                  ))}
-              </select>
-              {doc.page_mode === "pages" && (
-                <span className="canvas-panel-note">
-                  Pages themselves are added, copied, deleted and reordered in the rail on the left.
-                </span>
-              )}
-            </label>
-
-            <div className="canvas-panel-row">
-              <span className="canvas-panel-label">
-                Paper colour <span className="canvas-panel-value">{swatchName(doc.background)}</span>
-              </span>
-              <SwatchPicker
-                value={doc.background}
-                label="Paper colour"
-                onChange={(background) => commit((c) => ({ ...c, background }), { history: false })}
-              />
-            </div>
-
-            <label className="canvas-panel-row">
-              <span className="canvas-panel-label">Grid spacing</span>
-              <MmField
-                value={doc.grid_mm}
-                min={1}
-                max={100}
-                onChange={(grid_mm) => commit((c) => ({ ...c, grid_mm }), { history: false })}
-              />
-            </label>
-
-            <div className="canvas-panel-row canvas-panel-row--last">
-              <button className="btn quiet-danger btn-sm" onClick={onClear} disabled={!canClear}>
-                Clear the canvas
-              </button>
-              <span className="canvas-panel-note">
-                Removes everything you placed. The album keeps all of its photos.
-              </span>
-            </div>
-          </div>
-        </FilterChip>
-
-        <label className="filter-field filter-field-inline" title="Line edges and centres up with each other and with the page while you drag">
           <input
-            type="checkbox"
-            checked={doc.snap}
-            onChange={(event) => commit((c) => ({ ...c, snap: event.target.checked }), { history: false })}
-          />{" "}
-          Snap
+            type="color"
+            value={doc.background}
+            aria-label="Paper colour"
+            onChange={(event) => commit((c) => ({ ...c, background: event.target.value }), { history: false })}
+          />
         </label>
-        <label className="filter-field filter-field-inline" title="Show a measuring grid on the paper (it is never printed)">
-          <input
-            type="checkbox"
-            checked={doc.show_grid}
-            onChange={(event) =>
-              commit((c) => ({ ...c, show_grid: event.target.checked }), { history: false })
-            }
-          />{" "}
-          Grid
-        </label>
+        {doc.page_mode === "infinite" && (
+          <button
+            className={`btn btn-sm canvas-tool${doc.show_page_guide ? " is-on" : ""}`}
+            onClick={() => commit((c) => ({ ...c, show_page_guide: !c.show_page_guide }), { history: false })}
+            aria-label="Page guide"
+            aria-pressed={doc.show_page_guide}
+            title="Page guide: outlines the sheets this design would be cut into. Keep your work inside them and switching to Pages moves nothing."
+          >
+            <IconGuide size={15} />
+          </button>
+        )}
+        <button
+          className={`btn btn-sm canvas-tool${doc.show_grid ? " is-on" : ""}`}
+          onClick={() => commit((c) => ({ ...c, show_grid: !c.show_grid }), { history: false })}
+          aria-label="Grid"
+          aria-pressed={doc.show_grid}
+          title="Grid: show a measuring grid on the paper (it is never printed)"
+        >
+          <IconGrid size={15} />
+        </button>
+        {doc.show_grid && (
+          <MmField
+            value={doc.grid_mm}
+            min={1}
+            max={100}
+            title="Grid spacing"
+            onChange={(grid_mm) => commit((c) => ({ ...c, grid_mm }), { history: false })}
+          />
+        )}
+        <button
+          className={`btn btn-sm canvas-tool${doc.snap ? " is-on" : ""}`}
+          onClick={() => commit((c) => ({ ...c, snap: !c.snap }), { history: false })}
+          aria-label="Snap"
+          aria-pressed={doc.snap}
+          title="Snap: line edges and centres up with each other and with the page while you drag"
+        >
+          <IconMagnet size={15} />
+        </button>
+        <button
+          className="btn btn-sm canvas-tool quiet-danger"
+          onClick={onClear}
+          disabled={!canClear}
+          aria-label="Clear the canvas"
+          title="Clear the canvas: removes everything you placed. The photos stay in your library."
+        >
+          <IconTrash size={15} />
+        </button>
         {versionsChip}
       </div>
 
@@ -3631,22 +3788,29 @@ function CanvasToolbar({
         <button className="btn btn-sm" onClick={() => onZoom(1.2)} aria-label="Zoom in" title="Zoom in (+)">
           +
         </button>
-        <button className="btn btn-sm" onClick={onFit} title="Fit one page in the window (press 0)">
-          Fit
+        <button
+          className="btn btn-sm canvas-tool"
+          onClick={onFit}
+          aria-label="Fit one page"
+          title="Fit one page in the window (press 0)"
+        >
+          <IconFitPage size={15} />
         </button>
         <button
-          className="btn btn-sm"
+          className="btn btn-sm canvas-tool"
           onClick={onFitAll}
+          aria-label="Fit the whole layout"
           title="Fit the whole layout in the window - every page at once (press Shift-0)"
         >
-          Fit all
+          <IconFitAll size={15} />
         </button>
         <button
-          className="btn btn-sm"
+          className="btn btn-sm canvas-tool"
           onClick={onPrint}
-          title="See the pages as they will print: only the paper, filling the window (press P, Escape to come back)"
+          aria-label="Print view"
+          title="Print view: see the pages as they will print - only the paper, filling the window (press P, Escape to come back)"
         >
-          Print view
+          <IconPrinter size={15} />
         </button>
         {exportChip}
         <CanvasHelp />
@@ -3891,7 +4055,7 @@ function CanvasHelp() {
     ["Rotate", "Drag the round handle above it · Shift for 15° steps"],
     ["Nudge", "Arrow keys · Shift for 10 mm at a time"],
     ["Stacking order", "⌘] and ⌘[ · add Shift for all the way"],
-    ["Remove from the page", "Delete (the photo stays in the album)"],
+    ["Remove from the page", "Delete (the photo stays in the library)"],
     ["Undo", "⌘Z · ⌘⇧Z to redo"],
   ];
   return (
@@ -3926,6 +4090,8 @@ function CanvasActionBar({
   onDelete,
   onFitFrame,
   onCrop,
+  onEditPhoto,
+  editingOpen,
   onEndCrop,
   onResetCrop,
   aspectLock,
@@ -3944,6 +4110,8 @@ function CanvasActionBar({
   onDelete: () => void;
   onFitFrame: () => void;
   onCrop: () => void;
+  onEditPhoto: () => void;
+  editingOpen: boolean;
   onEndCrop: () => void;
   onResetCrop: () => void;
   aspectLock: boolean;
@@ -3986,6 +4154,20 @@ function CanvasActionBar({
     <div className="canvas-action-bar">
       <span className="canvas-action-what">{what}</span>
 
+      {photos === 1 && selection.length === 1 && !cropping && (
+        <button
+          className={`btn btn-sm${editingOpen ? " primary" : ""}`}
+          aria-pressed={editingOpen}
+          onClick={onEditPhoto}
+          title={
+            editingOpen
+              ? "Close the edit panel"
+              : "Develop this photo in the editor. Works on a virtual copy tagged 'canvas edit' in the library - the original photo is never changed."
+          }
+        >
+          <IconPencil size={13} /> Edit photo
+        </button>
+      )}
       {photos === 1 && selection.length === 1 && (
         <button
           className={`btn btn-sm${cropping ? " primary" : ""}`}
@@ -4052,7 +4234,7 @@ function CanvasActionBar({
               the shorter edge, added around the photo. */}
           <span className="canvas-field-group">
             <MmField
-              label="Border"
+              label="Frame"
               value={firstPhoto.style?.frame_pct ?? 0}
               min={0}
               max={50}
@@ -4070,14 +4252,14 @@ function CanvasActionBar({
                 {swatchName(firstPhoto.style?.frame_color ?? "#ffffff")}
               </>
             }
-            title="Border colour"
+            title="Frame colour"
           >
             <div className="canvas-panel">
               <div className="canvas-panel-row">
-                <span className="canvas-panel-label">Border colour</span>
+                <span className="canvas-panel-label">Frame colour</span>
                 <SwatchPicker
                   value={firstPhoto.style?.frame_color ?? "#ffffff"}
-                  label="Border colour"
+                  label="Frame colour"
                   onChange={(frame_color) => onPhotoStyle({ frame_color })}
                 />
               </div>
@@ -4195,7 +4377,7 @@ function CanvasActionBar({
       <button
         className="btn quiet-danger btn-sm"
         onClick={onDelete}
-        title="Take these off the page (Delete). The photos stay in the album."
+        title="Take these off the page (Delete). The photos stay in the library."
       >
         <IconTrash size={13} /> Remove from page
       </button>
@@ -4203,7 +4385,7 @@ function CanvasActionBar({
   );
 }
 
-// --- The album's photos, to drag onto the canvas ----------------------------
+// --- The canvas's photos, to drag onto the canvas ----------------------------
 
 function Filmstrip({
   images,
@@ -4213,6 +4395,7 @@ function Filmstrip({
   onToggle,
   onAdd,
   onDragStart,
+  backButton,
 }: {
   images: ImageOut[];
   loading: boolean;
@@ -4221,6 +4404,9 @@ function Filmstrip({
   onToggle: () => void;
   onAdd: (id: string) => void;
   onDragStart: (event: React.PointerEvent, id: string) => void;
+  // The workspace's Back, docked into the strip's bottom row so the way out
+  // sits bottom-left like in every other view.
+  backButton?: React.ReactNode;
 }) {
   const remaining = images.filter((image) => !placed.has(image.id)).length;
   // The strip follows the app's shared thumbnail Size, the same control that
@@ -4231,27 +4417,11 @@ function Filmstrip({
   const chipWidth = Math.round(thumbPx(thumbSize) * 0.42);
   return (
     <div className={`canvas-filmstrip${open ? "" : " is-closed"}`}>
-      <div className="canvas-filmstrip-head">
-        <button className="btn ghost btn-sm canvas-filmstrip-toggle" onClick={onToggle}>
-          <span className="canvas-filmstrip-caret" style={{ transform: open ? "none" : "rotate(180deg)" }}>
-            <IconChevronDown size={13} />
-          </span>
-          The album&rsquo;s photos ({images.length})
-        </button>
-        {open && images.length > 0 && (
-          <span className="canvas-filmstrip-note">
-            {remaining === 0
-              ? "All of them are on the canvas."
-              : `${remaining} not on the canvas yet.`}{" "}
-            Drag one onto the paper, or click it to drop it on the page you are looking at.
-          </span>
-        )}
-      </div>
       {open && (
         <div className="canvas-filmstrip-row">
           {loading && <span className="canvas-filmstrip-note">Loading…</span>}
           {!loading && images.length === 0 && (
-            <span className="canvas-filmstrip-note">This album has no photos yet.</span>
+            <span className="canvas-filmstrip-note">No photos yet - select some in the library and choose &ldquo;Add to canvas&rdquo;.</span>
           )}
           {images.map((image) => (
             <button
@@ -4281,6 +4451,23 @@ function Filmstrip({
           ))}
         </div>
       )}
+      <div className="canvas-filmstrip-head">
+        {backButton}
+        <button className="btn ghost btn-sm canvas-filmstrip-toggle" onClick={onToggle}>
+          <span className="canvas-filmstrip-caret" style={{ transform: open ? "rotate(180deg)" : "none" }}>
+            <IconChevronDown size={13} />
+          </span>
+          The canvas&rsquo;s photos ({images.length})
+        </button>
+        {open && images.length > 0 && (
+          <span className="canvas-filmstrip-note">
+            {remaining === 0
+              ? "All of them are on the canvas."
+              : `${remaining} not on the canvas yet.`}{" "}
+            Drag one onto the paper, or click it to drop it on the page you are looking at.
+          </span>
+        )}
+      </div>
     </div>
   );
 }

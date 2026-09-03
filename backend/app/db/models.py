@@ -261,6 +261,19 @@ class Image(Base):
     # so a saved copy teaches the feature just like an in-place edit does.
     applied_adjustments: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # Virtual copy ("canvas edit"): set = this row is a second library entry for
+    # ANOTHER image's file, carrying its own develop state and derivatives but
+    # owning no bytes on disk. Its file_path is synthetic ("<source path>#vc-<id>",
+    # unique by construction, resolved through filesystem.resolve_image_path) and
+    # its file_hash is synthetic too, so nothing that dedupes or renames by
+    # content ever confuses the copy with its source. Virtual copies are
+    # excluded from Immich sync, pairing, the library-sync rename follower and
+    # the backup zip (the bytes travel under the source's entry); deleting one
+    # never touches the shared file.
+    virtual_of_image_id: Mapped[str | None] = mapped_column(
+        ForeignKey("images.id"), nullable=True, index=True
+    )
+
     albums: Mapped[list["AlbumImage"]] = relationship(back_populates="image", cascade="all, delete-orphan")
     tag_links: Mapped[list["ImageTag"]] = relationship(cascade="all, delete-orphan")
 
@@ -311,11 +324,6 @@ class Album(Base):
     tag_filter: Mapped[str | None] = mapped_column(String, nullable=True)
 
     images: Mapped[list["AlbumImage"]] = relationship(back_populates="album", cascade="all, delete-orphan")
-    # The album's hand-made canvas, if it has one. Deleting the album takes its
-    # layout with it - the design describes this album and nothing else.
-    layout: Mapped["AlbumLayout | None"] = relationship(
-        back_populates="album", cascade="all, delete-orphan", uselist=False
-    )
 
     @property
     def tag_filter_list(self) -> list[str]:
@@ -445,9 +453,50 @@ class ImmichPendingDeletion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
-class AlbumLayout(Base):
-    """The creative layout of one album: a canvas the album's photos are placed
-    on by hand, instead of the automatic grid.
+class Canvas(Base):
+    """A free-standing design surface: photos from anywhere in the library,
+    placed by hand on paper. Canvases used to belong to albums; they are
+    first-class now - an album is a collection, a canvas is a document.
+
+    `images` is the canvas's own membership (what its filmstrip offers), fed
+    from the library's Select mode exactly like adding photos to an album. The
+    actual arrangement lives in the one CanvasLayout row per canvas."""
+
+    __tablename__ = "canvases"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
+    name: Mapped[str] = mapped_column(String, default="Canvas")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    images: Mapped[list["CanvasImage"]] = relationship(
+        back_populates="canvas", cascade="all, delete-orphan"
+    )
+    # Deleting the canvas takes its layout (and the layout's items + kept
+    # versions) with it - the design IS the canvas.
+    layout: Mapped["CanvasLayout | None"] = relationship(
+        back_populates="canvas", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class CanvasImage(Base):
+    """One photo's membership in a canvas - what feeds the filmstrip. Being a
+    member does not place the photo; being placed does not require membership
+    (a frame keeps working as long as its image row lives)."""
+
+    __tablename__ = "canvas_images"
+    __table_args__ = (UniqueConstraint("canvas_id", "image_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    canvas_id: Mapped[str] = mapped_column(ForeignKey("canvases.id"), index=True)
+    image_id: Mapped[str] = mapped_column(ForeignKey("images.id"), index=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    canvas: Mapped["Canvas"] = relationship(back_populates="images")
+
+
+class CanvasLayout(Base):
+    """The arrangement of one canvas: frames and captions placed on paper.
 
     Every measurement in here and in LayoutItem is in **millimetres**, not
     pixels. A layout is a page design first and a screen view second - what it
@@ -455,13 +504,12 @@ class AlbumLayout(Base):
     screen pixels has no honest answer to "how big is this on A4". The canvas
     zoom is purely a viewing state and never touches the stored numbers.
 
-    One layout per album (album_id is unique), created the first time the album
-    is opened on the canvas."""
+    One layout per canvas (canvas_id is unique), created on the first save."""
 
-    __tablename__ = "album_layouts"
+    __tablename__ = "canvas_layouts"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    album_id: Mapped[str] = mapped_column(ForeignKey("albums.id"), unique=True, index=True)
+    canvas_id: Mapped[str] = mapped_column(ForeignKey("canvases.id"), unique=True, index=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
     # "pages" = a run of fixed-size sheets, like a photo book. "infinite" = one
     # unbounded plane, like a pinboard - the same coordinates, just nothing to
@@ -483,8 +531,8 @@ class AlbumLayout(Base):
     # only carries around). Laying out against them means switching to Pages
     # later is a relabelling rather than a redesign.
     show_page_guide: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
-    # Whether this album's canvas appears in the Canvases shelf on the Albums
-    # page. Opt-in per canvas, chosen inside the canvas itself.
+    # Whether this canvas appears in the Canvases shelf on the Albums page.
+    # Opt-in per canvas, chosen inside the canvas itself.
     show_in_canvases: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # The version the Canvases shelf shows: the one last kept or last loaded.
     # A plain id rather than a ForeignKey - the two tables would otherwise
@@ -493,7 +541,7 @@ class AlbumLayout(Base):
     active_version_id: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
-    album: Mapped["Album"] = relationship(back_populates="layout")
+    canvas: Mapped["Canvas"] = relationship(back_populates="layout")
     items: Mapped[list["LayoutItem"]] = relationship(
         back_populates="layout", cascade="all, delete-orphan"
     )
@@ -508,10 +556,14 @@ class LayoutItem(Base):
     __tablename__ = "layout_items"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    layout_id: Mapped[str] = mapped_column(ForeignKey("album_layouts.id"), index=True)
+    layout_id: Mapped[str] = mapped_column(ForeignKey("canvas_layouts.id"), index=True)
     # "photo" (image_id set) or "text" (text set).
     kind: Mapped[str] = mapped_column(String, default="photo")
     image_id: Mapped[str | None] = mapped_column(ForeignKey("images.id"), nullable=True, index=True)
+    # A photo frame whose picture was permanently deleted: the frame stays on
+    # the page as an honest placeholder (image_id nulled) instead of vanishing,
+    # so the design keeps its shape and the gap says what happened.
+    missing: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # Which sheet the item sits on; always 0 on an infinite canvas.
     page: Mapped[int] = mapped_column(Integer, default=0)
     # The frame, in mm from the top-left of its page.
@@ -537,7 +589,7 @@ class LayoutItem(Base):
     # every new knob would otherwise be a migration.
     style: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    layout: Mapped["AlbumLayout"] = relationship(back_populates="items")
+    layout: Mapped["CanvasLayout"] = relationship(back_populates="items")
 
     @property
     def style_dict(self) -> dict:
@@ -551,12 +603,12 @@ class LayoutItem(Base):
 
 
 class LayoutVersion(Base):
-    """A named, frozen copy of one album's canvas - "the draft I liked on
-    Tuesday". The working layout (AlbumLayout + LayoutItem) keeps autosaving
+    """A named, frozen copy of one canvas - "the draft I liked on
+    Tuesday". The working layout (CanvasLayout + LayoutItem) keeps autosaving
     over itself; a version is the moment the user said "keep this one".
 
     The whole document lives in `doc` as a single JSON blob in the exact shape
-    the save endpoint accepts (schemas.AlbumLayoutIn). A blob rather than a
+    the save endpoint accepts (schemas.CanvasLayoutIn). A blob rather than a
     copy of the item rows: nobody queries inside a version, restoring means
     replaying it through the normal save path anyway, and every future layout
     field would otherwise mean migrating this table too."""
@@ -564,9 +616,9 @@ class LayoutVersion(Base):
     __tablename__ = "layout_versions"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    layout_id: Mapped[str] = mapped_column(ForeignKey("album_layouts.id"), index=True)
+    layout_id: Mapped[str] = mapped_column(ForeignKey("canvas_layouts.id"), index=True)
     name: Mapped[str] = mapped_column(String, default="")
     doc: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
-    layout: Mapped["AlbumLayout"] = relationship(back_populates="versions")
+    layout: Mapped["CanvasLayout"] = relationship(back_populates="versions")

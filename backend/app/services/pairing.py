@@ -76,6 +76,11 @@ def _pair_group(raws: list[Image], jpegs: list[Image]) -> int:
 def _stem_groups(images: Iterable[Image]) -> dict[str, list[Image]]:
     by_stem: dict[str, list[Image]] = defaultdict(list)
     for image in images:
+        # A virtual copy ("canvas edit") shares its source's filename but is
+        # not a shot of its own - pairing one with a RAW would steal the real
+        # JPEG's slot.
+        if image.virtual_of_image_id:
+            continue
         by_stem[Path(image.original_filename).stem.lower()].append(image)
     return by_stem
 

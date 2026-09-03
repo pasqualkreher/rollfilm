@@ -8,17 +8,35 @@ if TYPE_CHECKING:
     from app.db.models import Image
 
 
+# Separates a virtual copy's synthetic file_path ("<source path>#vc-<id>") from
+# the real path it borrows. "#" can't appear in an imported path (the importer
+# writes YYYY/YYYY-MM-DD/<filename> and the OS path joins never add one), so
+# splitting on the marker is unambiguous.
+VIRTUAL_PATH_MARKER = "#vc-"
+
+
+def strip_virtual_marker(file_path: str) -> str:
+    """The real on-disk path a (possibly virtual) file_path refers to."""
+    marker = file_path.find(VIRTUAL_PATH_MARKER)
+    return file_path if marker < 0 else file_path[:marker]
+
+
 def resolve_image_path(image: "Image") -> Path:
     """The on-disk location of an image's original file.
 
     Managed (imported) photos live under LIBRARY_ROOT with a relative
     file_path; photos indexed from an external source root store their absolute
-    path and stay wherever they are (e.g. on a NAS). This is the single place
-    that difference is resolved - callers should never join library_root by hand.
+    path and stay wherever they are (e.g. on a NAS). A virtual copy ("canvas
+    edit") owns no file: its synthetic file_path carries its source's path plus
+    a marker suffix, stripped off here - so every reader in the app renders a
+    virtual copy from the source's bytes without knowing the difference. This
+    is the single place any of that is resolved - callers should never join
+    library_root by hand.
     """
+    file_path = strip_virtual_marker(image.file_path)
     if image.source_root_id:
-        return Path(image.file_path)
-    return settings.library_root / image.file_path
+        return Path(file_path)
+    return settings.library_root / file_path
 
 
 def library_relative_path(

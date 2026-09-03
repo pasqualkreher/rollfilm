@@ -48,7 +48,11 @@ from app.services import (
     thumbnails,
     trash as trash_service,
 )
-from app.services.filesystem import library_relative_path, resolve_image_path
+from app.services.filesystem import (
+    VIRTUAL_PATH_MARKER,
+    library_relative_path,
+    resolve_image_path,
+)
 from app.services.hashing import perceptual_hash
 from app.services.immich_sync import immich_album_names as _immich_album_names
 from app.services.borg_backup import run_backup_soon
@@ -1406,6 +1410,16 @@ def rename_image(
         if partner is not None and partner_target is not None:
             partner.file_path = _stored_path(partner, partner_target)
             partner.original_filename = partner_target.name
+        # Virtual copies borrow the renamed file's path inside their synthetic
+        # file_path - re-anchor them, or their next render resolves nowhere.
+        for moved_row in (image, partner):
+            if moved_row is None:
+                continue
+            for copy in db.query(Image).filter(Image.virtual_of_image_id == moved_row.id):
+                marker = copy.file_path.find(VIRTUAL_PATH_MARKER)
+                suffix = copy.file_path[marker:] if marker >= 0 else ""
+                copy.file_path = f"{moved_row.file_path}{suffix}"
+                copy.original_filename = moved_row.original_filename
         db.commit()
     except HTTPException:
         raise
@@ -2052,6 +2066,94 @@ def save_copy(
     schedule_embedding_backfill()
     run_backup_soon()
     return new_image
+
+
+@router.post("/{image_id}/virtual-copy", response_model=schemas.ImageOut)
+def create_virtual_copy(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """A "canvas edit": a second library entry for the SAME file on disk,
+    starting from the source's current develop state but free to diverge. No
+    pixels are written anywhere - the copy borrows the source's bytes through
+    a synthetic file_path (see filesystem.resolve_image_path) and carries its
+    own edits, derivatives and edit_rev. Tagged "canvas edit" so the library
+    shows what it is; excluded from Immich sync, pairing and the backup zip
+    (the bytes travel under the source's entry).
+
+    Deleting the copy goes through the Trash like any photo; permanently
+    deleting it makes canvas frames fall back to the source. A copy of a copy
+    is grounded on the original, so every copy resolves in one hop."""
+    src = get_owned_image(db, current_user.id, image_id)
+    if src.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="This photo is in the Trash")
+    if src.virtual_of_image_id:
+        grounded = db.get(Image, src.virtual_of_image_id)
+        if grounded is None:
+            raise HTTPException(status_code=404, detail="The copy's source photo is gone")
+        source, template = grounded, src
+    else:
+        source, template = src, src
+
+    copy = Image(
+        owner_id=current_user.id,
+        file_path=f"{source.file_path}{VIRTUAL_PATH_MARKER}{uuid4().hex[:12]}",
+        source_root_id=source.source_root_id,
+        original_filename=source.original_filename,
+        # Synthetic on purpose: nothing that dedupes or follows renames by
+        # content may ever mistake the copy for its source.
+        file_hash=f"vc-{uuid4().hex}",
+        perceptual_hash=None,
+        file_type=source.file_type,
+        raw_format=source.raw_format,
+        width=source.width,
+        height=source.height,
+        file_size=source.file_size,
+        taken_at=source.taken_at,
+        camera_make=source.camera_make,
+        camera_model=source.camera_model,
+        lens_model=source.lens_model,
+        iso=source.iso,
+        aperture=source.aperture,
+        shutter_speed=source.shutter_speed,
+        focal_length=source.focal_length,
+        gps_lat=source.gps_lat,
+        gps_lon=source.gps_lon,
+        gps_country=source.gps_country,
+        rating=template.rating,
+        color_label=template.color_label,
+        description=template.description,
+        virtual_of_image_id=source.id,
+        # The copy starts as the template looks right now - geometry and
+        # develop state both - and diverges from there.
+        edit_rotation=template.edit_rotation,
+        edit_crop_x=template.edit_crop_x,
+        edit_crop_y=template.edit_crop_y,
+        edit_crop_width=template.edit_crop_width,
+        edit_crop_height=template.edit_crop_height,
+        edit_flip_h=template.edit_flip_h,
+        edit_flip_v=template.edit_flip_v,
+        edit_straighten=template.edit_straighten,
+        edit_persp_h=template.edit_persp_h,
+        edit_persp_v=template.edit_persp_v,
+        edit_distortion=template.edit_distortion,
+        edit_adjustments=template.edit_adjustments,
+        edit_rev=max(1, template.edit_rev),
+    )
+    db.add(copy)
+    db.flush()
+    _add_tag_to_image(db, current_user.id, copy, "canvas edit")
+    db.commit()
+    db.refresh(copy)
+    # Derivatives synchronously, like save-copy: the canvas swaps the frame to
+    # the copy the moment this returns, and must have pixels to draw.
+    try:
+        thumbnails.regenerate_for_image(copy)
+    except Exception:
+        logger.exception("Derivative generation failed for virtual copy %s", copy.id)
+    schedule_embedding_backfill()
+    return copy
 
 
 # How long a thumbnail/preview request waits for SOMEONE ELSE'S render before

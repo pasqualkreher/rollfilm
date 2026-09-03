@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.models import Album, Image, ImportSession
+from app.db.models import Album, Canvas, Image, ImportSession
 
 
 def get_owned_image(db: Session, owner_id: int, image_id: str) -> Image:
@@ -16,6 +16,13 @@ def get_owned_album(db: Session, owner_id: int, album_id: str) -> Album:
     if album is None or album.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="Album not found")
     return album
+
+
+def get_owned_canvas(db: Session, owner_id: int, canvas_id: str) -> Canvas:
+    canvas = db.get(Canvas, canvas_id)
+    if canvas is None or canvas.owner_id != owner_id:
+        raise HTTPException(status_code=404, detail="Canvas not found")
+    return canvas
 
 
 def get_owned_import_session(db: Session, owner_id: int, session_id: str) -> ImportSession:

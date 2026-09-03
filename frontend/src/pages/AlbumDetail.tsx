@@ -4,12 +4,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
 import type { BulkResetOptions, ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
-import { AlbumCanvas } from "../components/AlbumCanvas";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
-import { AlbumPicker } from "../components/AlbumPicker";
+import { AddToPicker } from "../components/AddToPicker";
 import { AlbumNameField } from "../components/AlbumNameField";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
@@ -49,14 +48,6 @@ export function AlbumDetail() {
   const [renaming, setRenaming] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const q = (searchParams.get("q") ?? "").trim();
-  // Canvas or grid. The grid is the album's front door - an album is first of
-  // all its photos; the canvas is entered deliberately via the toolbar (or a
-  // "layout=canvas" link). In the URL like the filters, so leaving for a photo
-  // and coming back doesn't drop the user out of the mode they were in. An
-  // active search always means the grid: its results and banner live there,
-  // and a search whose results stay invisible behind the canvas is a search
-  // box that looks broken.
-  const canvasMode = searchParams.get("layout") === "canvas" && !q;
 
   const { data: album } = useQuery({
     queryKey: ["album", id],
@@ -89,30 +80,11 @@ export function AlbumDetail() {
   }, [immichBusy, setBusyLabel]);
   useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
-  // Switching to the canvas leaves grid-only modes behind: a selection made for
-  // a bulk edit has no meaning on a page you are designing.
-  function setLayoutMode(mode: "grid" | "canvas") {
-    const next = new URLSearchParams(searchParams);
-    if (mode === "canvas") next.set("layout", "canvas");
-    else next.delete("layout");
-    // A search is a grid-only mode too (see canvasMode): stepping onto the
-    // canvas with one active would silently show the whole album instead of
-    // the results, so it is cleared rather than carried.
-    if (mode === "canvas") next.delete("q");
-    setSearchParams(next, { replace: true });
-    if (mode === "canvas") {
-      setSelectMode(false);
-      clearSelection();
-    }
-  }
 
   // Escape walks back to the albums, the same as it leaves the lightbox and
   // the editor - one key out of any view. In select mode it first ends the
-  // selection (one step per press, like the canvas's own Escape ladder); in
-  // canvas mode the canvas runs that ladder itself and calls onExit at the
   // end. A dialog on top captures Escape before this sees it.
   useEffect(() => {
-    if (canvasMode) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       const target = e.target as HTMLElement | null;
@@ -128,7 +100,7 @@ export function AlbumDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canvasMode, selectMode, navigate]);
+  }, [selectMode, navigate]);
 
   const filters: LibraryFilters = {
     view_mode: viewMode,
@@ -157,18 +129,6 @@ export function AlbumDetail() {
   // lone RAW only when it has no JPEG sibling. The JPEG/RAW view-mode buttons
   // still give a flat, type-filtered list when the user wants just one kind.
   const orderedImages = viewMode === "combined" ? collapsePairs(images ?? []) : images ?? [];
-
-  // The canvas's own set: EVERY file in the album, with none of the bar's
-  // filters applied and nothing folded away. The filters narrow the strip of
-  // photos you pick FROM (see orderedImages, handed to the canvas separately);
-  // they must never narrow this one, because it is also what the canvas
-  // resolves its already-placed frames against - a filter that turned half the
-  // page into "Photo unavailable" would be a filter editing the design.
-  const { data: canvasFiles } = useQuery({
-    queryKey: ["images", { view_mode: "combined", album_id: id }],
-    queryFn: () => api.images.list({ view_mode: "combined", album_id: id }, { limit: 5000, offset: 0 }),
-    enabled: !!id && canvasMode,
-  });
 
   const sharedMeta = selectionSharedMeta(images ?? [], selected);
 
@@ -283,6 +243,24 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });
     setDevelopMsg(`Added tag “${tag}” to ${selected.size} photo(s).`);
+  }
+
+  async function addSelectedToCanvas(canvasId: string) {
+    if (selected.size === 0) return;
+    // Same pair rule as albums: in merged view the RAW partner rides along,
+    // so the canvas's filmstrip holds the whole shot.
+    await api.canvases.addImages(canvasId, withPairedIds(Array.from(selected)));
+    queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+    queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
+  }
+
+  function reportAddTo({ kind, name, ok }: { kind: "album" | "canvas"; name: string; ok: boolean }) {
+    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+    setAlbumMsg(
+      ok
+        ? { text: `Added ${selected.size} photo(s) to ${what}.`, error: false }
+        : { text: `Could not add to ${what}.`, error: true }
+    );
   }
 
   async function addSelectedToAlbum(targetAlbumId: string) {
@@ -454,15 +432,10 @@ export function AlbumDetail() {
           className="btn quiet-danger btn-sm album-bottom-delete"
           title="Delete this album - its photos stay in the library"
           onClick={async () => {
-            // The canvas dies with the album - if it has one, the dialog says so.
-            const layout = await api.albums.getLayout(album.id).catch(() => null);
-            const hasCanvas = !!layout?.updated_at;
             if (
               !(await dialogs.confirm({
                 title: `Delete album “${album.name}”?`,
-                message: `Its ${album.image_count} photo(s) stay in your library.${
-                  hasCanvas ? " Its canvas and all kept canvas versions are deleted with it." : ""
-                }`,
+                message: `Its ${album.image_count} photo(s) stay in your library.`,
                 confirmLabel: "Delete album",
                 danger: true,
               }))
@@ -471,8 +444,6 @@ export function AlbumDetail() {
             }
             await api.albums.remove(album.id);
             queryClient.invalidateQueries({ queryKey: ["albums"] });
-            // Its Canvas Shelf card (if it had one) goes with it, right away.
-            queryClient.invalidateQueries({ queryKey: ["canvases"] });
             navigate("/albums");
           }}
         >
@@ -500,41 +471,17 @@ export function AlbumDetail() {
         dateTo={dateTo}
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
-        /* Two ways to look at the same album: the grid it is browsed in, and
-           the canvas it is laid out on. Parked at the far right of the bar -
-           it switches the whole page, so it doesn't belong among the filters
-           that narrow what the page shows. */
-        trailing={
-          <span className="segmented" role="group" aria-label="Album layout">
-            <button
-              className={canvasMode ? "" : "active"}
-              onClick={() => setLayoutMode("grid")}
-              title="The usual grid of photos"
-            >
-              Grid
-            </button>
-            <button
-              className={canvasMode ? "active" : ""}
-              onClick={() => setLayoutMode("canvas")}
-              title="Lay the photos out by hand on pages or a free canvas"
-            >
-              Canvas
-            </button>
-          </span>
-        }
       >
-        {!canvasMode && (
-          <button
-            className={`btn${selectMode ? " primary" : ""}`}
-            onClick={() => {
-              setSelectMode((v) => !v);
-              if (selectMode) clearSelection();
-            }}
-          >
-            {selectMode ? "Done selecting" : "Select"}
-          </button>
-        )}
-        {selectMode && !canvasMode && (
+        <button
+          className={`btn${selectMode ? " primary" : ""}`}
+          onClick={() => {
+            setSelectMode((v) => !v);
+            if (selectMode) clearSelection();
+          }}
+        >
+          {selectMode ? "Done selecting" : "Select"}
+        </button>
+        {selectMode && (
           <>
             <button className="btn" onClick={selectAll}>
               Select all
@@ -545,23 +492,7 @@ export function AlbumDetail() {
           </>
         )}
       </PhotoFilters>
-      {canvasMode ? (
-        // The canvas owns its whole region: it pans and zooms inside itself,
-        // so the page must not scroll underneath it.
-        <div className="page-scroll page-scroll--canvas">
-          <ErrorBoundary what="The canvas">
-            <AlbumCanvas
-              albumId={id!}
-              title={album?.name ?? "Album"}
-              onExit={() => navigate("/albums")}
-              files={canvasFiles ?? []}
-              stripImages={orderedImages}
-              imagesLoading={isLoading || !canvasFiles}
-            />
-          </ErrorBoundary>
-        </div>
-      ) : (
-      <div className="page-scroll">
+            <div className="page-scroll">
       {q && (
         <div className="search-scope-banner">
           <span>
@@ -591,7 +522,11 @@ export function AlbumDetail() {
           </div>
           <div className="control-group">
             <BulkTagInput onAdd={addTagToSelected} />
-            <AlbumPicker onAdd={addSelectedToAlbum} onResult={reportAlbumAdd} />
+            <AddToPicker
+              onAddToAlbum={addSelectedToAlbum}
+              onAddToCanvas={addSelectedToCanvas}
+              onResult={reportAddTo}
+            />
           </div>
           <div className="control-group">
             <button className="btn" onClick={() => selects.add(Array.from(selected))}>
@@ -678,7 +613,6 @@ export function AlbumDetail() {
         />
       )}
       </div>
-      )}
       {albumBar}
     </div>
   );

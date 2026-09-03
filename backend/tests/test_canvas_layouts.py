@@ -1,4 +1,4 @@
-"""An album's creative layout: the hand-placed canvas that sits beside its grid.
+"""A canvas's layout: the hand-placed design document of a standalone canvas.
 
 Covers the whole-document save (what the canvas holds is what the layout is),
 what happens to a frame whose photo goes to the Trash or is deleted for good,
@@ -13,14 +13,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import schemas
-from app.api.routes.albums import (
-    clear_album_layout,
-    delete_album,
-    get_album_layout,
-    save_album_layout,
+from app.api.routes.canvases import (
+    clear_canvas_layout,
+    delete_canvas,
+    get_canvas_layout,
+    save_canvas_layout,
 )
 from app.db.base import Base
-from app.db.models import Album, AlbumLayout, FileType, Image, LayoutItem, User
+from app.db.models import Canvas, CanvasLayout, FileType, Image, LayoutItem, User
 from app.services.trash import hard_delete_images
 
 
@@ -50,40 +50,40 @@ def _image(db: Session, id: str, owner_id: int = 1) -> Image:
     return image
 
 
-def _album(db: Session) -> Album:
-    album = Album(id="alb", owner_id=1, name="Trip")
-    db.add(album)
+def _canvas(db: Session) -> Canvas:
+    canvas = Canvas(id="cv", owner_id=1, name="Trip")
+    db.add(canvas)
     db.commit()
-    return album
+    return canvas
 
 
 def _photo(id: str, image_id: str, **extra) -> schemas.LayoutItemIn:
     return schemas.LayoutItemIn(id=id, kind="photo", image_id=image_id, **extra)
 
 
-def test_an_album_without_a_canvas_reads_as_a_blank_page(db: Session):
-    """Opening the canvas must not write anything - otherwise browsing every
-    album on the canvas tab would leave an empty layout behind for each."""
-    album = _album(db)
+def test_a_canvas_without_a_saved_layout_reads_as_a_blank_page(db: Session):
+    """Opening a canvas must not write anything - otherwise merely browsing
+    canvases would leave an empty layout row behind for each."""
+    canvas = _canvas(db)
     user = db.get(User, 1)
 
-    out = get_album_layout(album.id, db=db, current_user=user)
+    out = get_canvas_layout(canvas.id, db=db, current_user=user)
     assert out.items == []
     assert out.page_mode == "pages"
     assert (out.page_width_mm, out.page_height_mm) == (297.0, 210.0)
-    assert db.query(AlbumLayout).count() == 0
+    assert db.query(CanvasLayout).count() == 0
 
 
 def test_saving_replaces_the_whole_canvas(db: Session):
-    album = _album(db)
+    canvas = _canvas(db)
     user = db.get(User, 1)
     _image(db, "a")
     _image(db, "b")
     db.commit()
 
-    save_album_layout(
-        album.id,
-        schemas.AlbumLayoutIn(
+    save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(
             page_mode="infinite",
             background="#101010",
             items=[
@@ -97,9 +97,9 @@ def test_saving_replaces_the_whole_canvas(db: Session):
     )
 
     # A second save with fewer items removes what is gone - no orphans left.
-    out = save_album_layout(
-        album.id,
-        schemas.AlbumLayoutIn(
+    out = save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(
             page_mode="infinite",
             background="#101010",
             items=[_photo("i1", "a", x_mm=15, y_mm=20, width_mm=80, height_mm=60)],
@@ -115,14 +115,14 @@ def test_saving_replaces_the_whole_canvas(db: Session):
 
 
 def test_text_items_keep_their_style_and_photos_their_frame_crop(db: Session):
-    album = _album(db)
+    canvas = _canvas(db)
     user = db.get(User, 1)
     _image(db, "a")
     db.commit()
 
-    out = save_album_layout(
-        album.id,
-        schemas.AlbumLayoutIn(
+    out = save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(
             items=[
                 _photo("i1", "a", content_scale=1.4, content_dx=-0.1, content_dy=0.05),
                 schemas.LayoutItemIn(
@@ -143,7 +143,7 @@ def test_text_items_keep_their_style_and_photos_their_frame_crop(db: Session):
 def test_a_foreign_or_unknown_photo_is_refused(db: Session):
     """Ids come from the client, so a frame may not smuggle in a photo that
     isn't the owner's (or doesn't exist at all)."""
-    album = _album(db)
+    canvas = _canvas(db)
     user = db.get(User, 1)
     db.add(User(id=2, username="someone-else"))
     db.commit()
@@ -151,9 +151,9 @@ def test_a_foreign_or_unknown_photo_is_refused(db: Session):
     _image(db, "theirs", owner_id=2)
     db.commit()
 
-    out = save_album_layout(
-        album.id,
-        schemas.AlbumLayoutIn(
+    out = save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(
             items=[
                 _photo("i1", "mine"),
                 _photo("i2", "theirs"),
@@ -169,33 +169,33 @@ def test_a_foreign_or_unknown_photo_is_refused(db: Session):
 def test_a_trashed_photo_leaves_its_frame_in_place_but_unavailable(db: Session):
     """Same deal as album membership: the Trash is reversible, so the page has
     to come back intact when the photo does."""
-    album = _album(db)
+    canvas = _canvas(db)
     user = db.get(User, 1)
     image = _image(db, "a")
     db.commit()
-    save_album_layout(
-        album.id, schemas.AlbumLayoutIn(items=[_photo("i1", "a")]), db=db, current_user=user
+    save_canvas_layout(
+        canvas.id, schemas.CanvasLayoutIn(items=[_photo("i1", "a")]), db=db, current_user=user
     )
 
     image.deleted_at = datetime(2026, 8, 1, 9, 0, 0)
     db.commit()
-    out = get_album_layout(album.id, db=db, current_user=user)
+    out = get_canvas_layout(canvas.id, db=db, current_user=user)
     assert [(i.id, i.available) for i in out.items] == [("i1", False)]
 
     image.deleted_at = None
     db.commit()
-    assert get_album_layout(album.id, db=db, current_user=user).items[0].available is True
+    assert get_canvas_layout(canvas.id, db=db, current_user=user).items[0].available is True
 
 
-def test_deleting_a_photo_for_good_takes_its_frame_with_it(db: Session):
-    album = _album(db)
+def test_deleting_a_photo_for_good_leaves_a_missing_placeholder(db: Session):
+    canvas = _canvas(db)
     user = db.get(User, 1)
     image = _image(db, "a")
     _image(db, "b")
     db.commit()
-    save_album_layout(
-        album.id,
-        schemas.AlbumLayoutIn(items=[_photo("i1", "a"), _photo("i2", "b")]),
+    save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(items=[_photo("i1", "a"), _photo("i2", "b")]),
         db=db,
         current_user=user,
     )
@@ -205,37 +205,50 @@ def test_deleting_a_photo_for_good_takes_its_frame_with_it(db: Session):
     hard_delete_images(db, [image], delete_files=False)
     db.commit()
 
-    assert [item.id for item in get_album_layout(album.id, db=db, current_user=user).items] == ["i2"]
+    out = get_canvas_layout(canvas.id, db=db, current_user=user)
+    # The frame stays on the page as an honest gap - the design keeps its
+    # shape - and the placeholder survives a round-trip through a save.
+    assert [(i.id, i.missing, i.image_id) for i in out.items] == [
+        ("i1", True, None),
+        ("i2", False, "b"),
+    ]
+    saved = save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(items=[schemas.LayoutItemIn(**i.model_dump(exclude={"available"})) for i in out.items]),
+        db=db,
+        current_user=user,
+    )
+    assert [(i.id, i.missing) for i in saved.items] == [("i1", True), ("i2", False)]
 
 
-def test_deleting_the_album_deletes_its_canvas(db: Session):
-    album = _album(db)
+def test_deleting_the_canvas_deletes_its_layout(db: Session):
+    canvas = _canvas(db)
     user = db.get(User, 1)
     _image(db, "a")
     db.commit()
-    save_album_layout(
-        album.id, schemas.AlbumLayoutIn(items=[_photo("i1", "a")]), db=db, current_user=user
+    save_canvas_layout(
+        canvas.id, schemas.CanvasLayoutIn(items=[_photo("i1", "a")]), db=db, current_user=user
     )
 
-    delete_album(album.id, db=db, current_user=user)
-    assert db.query(AlbumLayout).count() == 0
+    delete_canvas(canvas.id, db=db, current_user=user)
+    assert db.query(CanvasLayout).count() == 0
     assert db.query(LayoutItem).count() == 0
 
 
 def test_clearing_starts_the_canvas_over(db: Session):
-    album = _album(db)
+    canvas = _canvas(db)
     user = db.get(User, 1)
     _image(db, "a")
     db.commit()
-    save_album_layout(
-        album.id,
-        schemas.AlbumLayoutIn(page_mode="infinite", items=[_photo("i1", "a")]),
+    save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(page_mode="infinite", items=[_photo("i1", "a")]),
         db=db,
         current_user=user,
     )
 
-    clear_album_layout(album.id, db=db, current_user=user)
-    out = get_album_layout(album.id, db=db, current_user=user)
+    clear_canvas_layout(canvas.id, db=db, current_user=user)
+    out = get_canvas_layout(canvas.id, db=db, current_user=user)
     assert out.items == []
     assert out.page_mode == "pages"  # back to the default page
 
@@ -243,14 +256,14 @@ def test_clearing_starts_the_canvas_over(db: Session):
 def test_a_page_or_frame_can_never_be_saved_with_no_area(db: Session):
     """Zero-sized anything is unrecoverable in the UI: there is nothing left to
     grab and drag back out."""
-    album = _album(db)
+    canvas = _canvas(db)
     user = db.get(User, 1)
     _image(db, "a")
     db.commit()
 
-    out = save_album_layout(
-        album.id,
-        schemas.AlbumLayoutIn(
+    out = save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(
             page_width_mm=0,
             page_height_mm=-5,
             page_count=0,
@@ -267,16 +280,16 @@ def test_a_page_or_frame_can_never_be_saved_with_no_area(db: Session):
     assert out.items[0].content_scale == 0.01
 
 
-def test_another_owners_album_is_not_reachable(db: Session):
+def test_another_owners_canvas_is_not_reachable(db: Session):
     db.add(User(id=2, username="someone-else"))
     db.commit()
-    db.add(Album(id="theirs", owner_id=2, name="Private"))
+    db.add(Canvas(id="theirs", owner_id=2, name="Private"))
     db.commit()
     user = db.get(User, 1)
 
     with pytest.raises(HTTPException) as excinfo:
-        get_album_layout("theirs", db=db, current_user=user)
+        get_canvas_layout("theirs", db=db, current_user=user)
     assert excinfo.value.status_code == 404
 
     with pytest.raises(HTTPException):
-        save_album_layout("theirs", schemas.AlbumLayoutIn(), db=db, current_user=user)
+        save_canvas_layout("theirs", schemas.CanvasLayoutIn(), db=db, current_user=user)

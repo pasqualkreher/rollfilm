@@ -1,6 +1,7 @@
 import type {
-  AlbumCanvasOut,
-  AlbumLayout,
+  CanvasGalleryOut,
+  CanvasLayout,
+  CanvasSummary,
   AlbumOut,
   AutoAdjustResult,
   AutoDevelopSettings,
@@ -683,6 +684,13 @@ export const api = {
         body: JSON.stringify(apiEdits(edits)),
       });
     },
+    // A "canvas edit": a second library entry for the SAME file on disk,
+    // starting from the source's current develop state, tagged "canvas edit".
+    // No pixels are written; deleting the copy later falls canvas frames back
+    // to the source.
+    virtualCopy(id: string): Promise<ImageOut> {
+      return request(`/images/${id}/virtual-copy`, { method: "POST" });
+    },
     // `size: "small"` requests the 640px tier the dense grid sizes use (see
     // thumbTier in state/viewPrefs.ts); omitted = the full 1600px thumbnail.
     thumbnailUrl(id: string, version?: string, size?: "small"): string {
@@ -744,49 +752,85 @@ export const api = {
         body: JSON.stringify({ enabled }),
       });
     },
-    // The album's creative canvas. An album that has never been laid out
-    // answers with a blank default page rather than a 404 - nothing is
-    // written until the first save.
-    getLayout(albumId: string): Promise<AlbumLayout> {
-      return request(`/albums/${albumId}/layout`);
+  },
+  canvases: {
+    // The overview: every canvas, most recently worked-on first.
+    list(): Promise<CanvasSummary[]> {
+      return request(`/canvases`);
+    },
+    get(id: string): Promise<CanvasSummary> {
+      return request(`/canvases/${id}`);
+    },
+    create(name: string): Promise<CanvasSummary> {
+      return request(`/canvases`, { method: "POST", body: JSON.stringify({ name }) });
+    },
+    rename(id: string, name: string): Promise<CanvasSummary> {
+      return request(`/canvases/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+    },
+    remove(id: string): Promise<void> {
+      return request(`/canvases/${id}`, { method: "DELETE" });
+    },
+    // Membership: what the canvas's filmstrip offers. Adding photos here is
+    // the "Add to canvas" of the library's Select mode; the answer includes
+    // every photo a frame still references, so placed frames never go blind.
+    images(id: string): Promise<ImageOut[]> {
+      return request(`/canvases/${id}/images`);
+    },
+    addImages(id: string, imageIds: string[]): Promise<CanvasSummary> {
+      return request(`/canvases/${id}/images`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids: imageIds }),
+      });
+    },
+    removeImages(id: string, imageIds: string[]): Promise<CanvasSummary> {
+      return request(`/canvases/${id}/images/remove`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids: imageIds }),
+      });
+    },
+    // The working layout. A canvas that has never been laid out answers with
+    // a blank default page rather than a 404 - nothing is written until the
+    // first save.
+    getLayout(id: string): Promise<CanvasLayout> {
+      return request(`/canvases/${id}/layout`);
     },
     // The whole canvas in one request: a drag can move, restack and reshape
     // several items at once, so the document is replaced rather than patched.
-    saveLayout(albumId: string, layout: Omit<AlbumLayout, "album_id" | "updated_at">): Promise<AlbumLayout> {
-      return request(`/albums/${albumId}/layout`, { method: "PUT", body: JSON.stringify(layout) });
+    saveLayout(id: string, layout: Omit<CanvasLayout, "canvas_id" | "updated_at">): Promise<CanvasLayout> {
+      return request(`/canvases/${id}/layout`, { method: "PUT", body: JSON.stringify(layout) });
     },
-    clearLayout(albumId: string): Promise<void> {
-      return request(`/albums/${albumId}/layout`, { method: "DELETE" });
+    clearLayout(id: string): Promise<void> {
+      return request(`/canvases/${id}/layout`, { method: "DELETE" });
     },
     // Kept versions of the canvas. Every call answers with the fresh layout
     // (including the version list), so the cache can be replaced in one go.
-    createLayoutVersion(albumId: string, name: string): Promise<AlbumLayout> {
-      return request(`/albums/${albumId}/layout/versions`, {
+    createLayoutVersion(id: string, name: string): Promise<CanvasLayout> {
+      return request(`/canvases/${id}/layout/versions`, {
         method: "POST",
         body: JSON.stringify({ name }),
       });
     },
-    restoreLayoutVersion(albumId: string, versionId: string): Promise<AlbumLayout> {
-      return request(`/albums/${albumId}/layout/versions/${versionId}/restore`, { method: "POST" });
+    restoreLayoutVersion(id: string, versionId: string): Promise<CanvasLayout> {
+      return request(`/canvases/${id}/layout/versions/${versionId}/restore`, { method: "POST" });
     },
-    renameLayoutVersion(albumId: string, versionId: string, name: string): Promise<AlbumLayout> {
-      return request(`/albums/${albumId}/layout/versions/${versionId}`, {
+    renameLayoutVersion(id: string, versionId: string, name: string): Promise<CanvasLayout> {
+      return request(`/canvases/${id}/layout/versions/${versionId}`, {
         method: "PATCH",
         body: JSON.stringify({ name }),
       });
     },
-    deleteLayoutVersion(albumId: string, versionId: string): Promise<AlbumLayout> {
-      return request(`/albums/${albumId}/layout/versions/${versionId}`, { method: "DELETE" });
+    deleteLayoutVersion(id: string, versionId: string): Promise<CanvasLayout> {
+      return request(`/canvases/${id}/layout/versions/${versionId}`, { method: "DELETE" });
     },
-    // The Canvas Shelf of the Albums page: every opted-in album's chosen
+    // The Canvas Shelf (on the Albums page): every opted-in canvas's chosen
     // version, ready to draw.
-    canvases(): Promise<AlbumCanvasOut[]> {
-      return request(`/albums/canvases`);
+    gallery(): Promise<CanvasGalleryOut[]> {
+      return request(`/canvases/gallery`);
     },
     // On or off the Canvas Shelf - and nothing else. The shelf card's X calls
     // this: hiding is not deleting.
-    setCanvasShelf(albumId: string, enabled: boolean): Promise<void> {
-      return request(`/albums/${albumId}/layout/shelf`, {
+    setShelf(id: string, enabled: boolean): Promise<void> {
+      return request(`/canvases/${id}/layout/shelf`, {
         method: "POST",
         body: JSON.stringify({ enabled }),
       });

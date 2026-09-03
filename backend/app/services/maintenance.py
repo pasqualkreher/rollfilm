@@ -27,7 +27,7 @@ from app.db.models import (
     Tag,
 )
 from app.services.exif import capture_date_from_filename, new_helper, read_exif
-from app.services.filesystem import resolve_image_path
+from app.services.filesystem import VIRTUAL_PATH_MARKER, resolve_image_path
 from app.services.hashing import sha256_file
 from app.services.raw import classify_file_type, raw_dimensions
 from app.services.thumbnails import derivative_dir, editor_recently_active, regenerate_for_image
@@ -293,17 +293,23 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
             "before syncing the database to the library."
         )
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
+    # Virtual copies ("canvas edits") own no file: their synthetic path never
+    # exists on disk, so the missing-file scan must never see them - their
+    # fate is tied to their source's row, not to a path of their own (a
+    # source that is hard-deleted below takes its copies with it inside
+    # hard_delete_images).
     missing = [
         image
         for image in images
         if image.source_root_id is None
+        and image.virtual_of_image_id is None
         and not (settings.library_root / image.file_path).exists()
     ]
 
     tracked = {
         str((settings.library_root / img.file_path).resolve())
         for img in images
-        if img.source_root_id is None
+        if img.source_root_id is None and img.virtual_of_image_id is None
     }
     # The database, thumbnails and staging live in a ".photomanager" subfolder
     # of the library; skip it so its JPG thumbnails aren't counted as untracked
@@ -319,6 +325,13 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
 
     relocated, untracked_paths = _follow_renamed_files(missing, untracked_paths)
     if relocated:
+        # A moved photo's virtual copies borrow its path: keep their synthetic
+        # paths ("<source path>#vc-<id>") pointing at the new location.
+        for image in relocated:
+            for copy in db.query(Image).filter(Image.virtual_of_image_id == image.id):
+                marker = copy.file_path.find(VIRTUAL_PATH_MARKER)
+                suffix = copy.file_path[marker:] if marker >= 0 else ""
+                copy.file_path = f"{image.file_path}{suffix}"
         db.commit()
         logger.info("Library sync: followed %d renamed/moved file(s)", len(relocated))
     relocated_ids = {image.id for image in relocated}
@@ -636,6 +649,7 @@ def image_to_dict(image: Image, tags: list[str]) -> dict:
         "applied_adjustments": image.applied_adjustments,
         "immich_sync": image.immich_sync,
         "immich_asset_id": image.immich_asset_id,
+        "virtual_of_image_id": image.virtual_of_image_id,
         "tags": tags,
     }
 
@@ -695,6 +709,7 @@ def image_row_from_dict(data: dict, owner_id: int, *, keep_id: bool = True) -> I
         applied_adjustments=data.get("applied_adjustments"),
         immich_sync=data.get("immich_sync", False),
         immich_asset_id=data.get("immich_asset_id"),
+        virtual_of_image_id=data.get("virtual_of_image_id"),
     )
     if keep_id:
         fields["id"] = data["id"]

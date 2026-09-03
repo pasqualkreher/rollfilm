@@ -40,6 +40,9 @@ export interface ImageOut {
   immich_sync: boolean;
   paired_image_id: string | null;
   source_root_id: string | null;
+  // Set when this row is a virtual copy ("canvas edit") of another photo:
+  // same file on disk, its own develop state.
+  virtual_of_image_id?: string | null;
   edit_rotation: number;
   edit_crop_x: number | null;
   edit_crop_y: number | null;
@@ -163,7 +166,7 @@ export interface AlbumOut {
   tag_filter: string[];
 }
 
-// --- The creative canvas layout of an album --------------------------------
+// --- Canvases: standalone design surfaces ----------------------------------
 //
 // Every measurement is in MILLIMETRES, never pixels: a layout is a page design
 // that has to survive being printed, and the canvas zoom is only a way of
@@ -214,10 +217,41 @@ export interface LayoutItem {
   content_dy: number;
   text: string | null;
   style: LayoutTextStyle | null;
+  // A frame whose photo was permanently deleted: it stays on the page as a
+  // placeholder. Round-trips through saves so autosave never erases the gap.
+  missing?: boolean;
   // False when the photo behind the frame is in the Trash or on an unplugged
   // drive: the item stays (and is saved back untouched) but has nothing to
   // draw, so the page returns intact once the photo does.
   available?: boolean;
+}
+
+// Just enough of a canvas's working layout to draw the overview card's paper
+// preview - same shape the shelf's gallery cards use, minus the version
+// bookkeeping. Null until the canvas has been saved once.
+export interface CanvasPreview {
+  page_mode: "pages" | "infinite";
+  page_width_mm: number;
+  page_height_mm: number;
+  page_count: number;
+  background: string;
+  show_page_guide: boolean;
+  items: LayoutItem[];
+  // Per-photo cache-buster for thumbnail URLs (image id -> ?v value).
+  thumb_versions: Record<string, string>;
+}
+
+// One canvas in the overview: name, size, when it last changed - and the
+// working layout itself, so the overview shows the design, not a label.
+export interface CanvasSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string | null;
+  image_count: number;
+  item_count: number;
+  show_in_canvases: boolean;
+  preview: CanvasPreview | null;
 }
 
 // One kept snapshot of a canvas, as the version list shows it. The document
@@ -228,8 +262,8 @@ export interface LayoutVersion {
   created_at: string;
 }
 
-export interface AlbumLayout {
-  album_id: string;
+export interface CanvasLayout {
+  canvas_id: string;
   // "pages" = a run of fixed-size sheets, like a photo book;
   // "infinite" = one unbounded plane, like a pinboard.
   page_mode: "pages" | "infinite";
@@ -254,11 +288,11 @@ export interface AlbumLayout {
   items: LayoutItem[];
 }
 
-// One card on the Canvases shelf: an album's chosen version, with just enough
+// One card on the Canvases shelf: a canvas's chosen version, with just enough
 // of its document to draw the print-style preview.
-export interface AlbumCanvasOut {
-  album_id: string;
-  album_name: string;
+export interface CanvasGalleryOut {
+  canvas_id: string;
+  canvas_name: string;
   version_id: string;
   version_name: string;
   version_count: number;

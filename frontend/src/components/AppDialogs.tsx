@@ -33,19 +33,35 @@ interface AlertOptions {
   okLabel?: string;
 }
 
+interface PromptOptions {
+  title?: string;
+  message?: string;
+  placeholder?: string;
+  initial?: string;
+  confirmLabel?: string;
+}
+
 interface DialogRequest {
-  kind: "confirm" | "alert";
+  kind: "confirm" | "alert" | "prompt";
   title?: string;
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  placeholder?: string;
+  initial?: string;
   resolve: (ok: boolean) => void;
+  // Prompt only: where the typed text lands when OK resolves true.
+  resolveText?: (text: string | null) => void;
 }
 
 interface DialogApi {
   confirm: (opts: ConfirmOptions) => Promise<boolean>;
   alert: (opts: AlertOptions) => Promise<void>;
+  // App-skinned window.prompt: resolves the typed text, or null on cancel.
+  // (window.prompt is a no-op in Electron, so this is the only way to ask
+  // for a line of text outside a form.)
+  prompt: (opts: PromptOptions) => Promise<string | null>;
 }
 
 const DialogContext = createContext<DialogApi | null>(null);
@@ -109,6 +125,23 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     [request]
   );
 
+  const promptRef = useRef("");
+  const prompt = useCallback(
+    (opts: PromptOptions) =>
+      new Promise<string | null>((resolveText) =>
+        request({
+          kind: "prompt",
+          title: opts.title,
+          message: opts.message ?? "",
+          confirmLabel: opts.confirmLabel,
+          placeholder: opts.placeholder,
+          initial: opts.initial,
+          resolve: (ok) => resolveText(ok ? promptRef.current.trim() || null : null),
+        })
+      ),
+    [request]
+  );
+
   // Escape dismisses like the native dialogs do (cancel for confirm, OK for
   // alert). Captured, so an underlying lightbox/menu with its own Escape
   // handler doesn't also close while a dialog is on top of it.
@@ -125,7 +158,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [current, close]);
 
-  const api = useMemo(() => ({ confirm, alert }), [confirm, alert]);
+  const api = useMemo(() => ({ confirm, alert, prompt }), [confirm, alert, prompt]);
 
   return (
     <DialogContext.Provider value={api}>
@@ -141,17 +174,34 @@ export function DialogProvider({ children }: { children: ReactNode }) {
           >
             <div className="confirm-modal-body">
               {current.title && <h3>{current.title}</h3>}
-              <p>{current.message}</p>
+              {current.message && <p>{current.message}</p>}
+              {current.kind === "prompt" && (
+                <input
+                  type="text"
+                  className="confirm-modal-input"
+                  style={{ width: "100%", marginTop: 4 }}
+                  placeholder={current.placeholder}
+                  defaultValue={current.initial ?? ""}
+                  autoFocus
+                  onChange={(e) => (promptRef.current = e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") close(true);
+                  }}
+                  ref={(el) => {
+                    if (el) promptRef.current = el.value;
+                  }}
+                />
+              )}
             </div>
             <div className="confirm-modal-actions">
-              {current.kind === "confirm" && (
+              {current.kind !== "alert" && (
                 <button className="btn" onClick={() => close(false)}>
                   {current.cancelLabel ?? "Cancel"}
                 </button>
               )}
               <button
                 className={`btn ${current.danger ? "danger" : "primary"}`}
-                autoFocus
+                autoFocus={current.kind !== "prompt"}
                 onClick={() => close(true)}
               >
                 {current.confirmLabel ?? "OK"}

@@ -8,7 +8,7 @@
 // next is then just a move, and hit-testing never has to ask which page it is
 // looking at.
 
-import type { AlbumLayout, LayoutItem } from "../api/types";
+import type { CanvasLayout, LayoutItem } from "../api/types";
 
 // Gap between two sheets, in mm. Wide enough to read as a break between pages
 // at any zoom without wasting the screen.
@@ -46,7 +46,7 @@ export function pageAtMm(worldY: number, layout: PageBox, pageCount: number): nu
   return Math.max(0, Math.min(pageCount - 1, Math.floor(worldY / stride)));
 }
 
-export type PageBox = Pick<AlbumLayout, "page_mode" | "page_width_mm" | "page_height_mm">;
+export type PageBox = Pick<CanvasLayout, "page_mode" | "page_width_mm" | "page_height_mm">;
 
 // An item's frame in world coordinates (page offset folded in).
 export function worldRect(item: LayoutItem, layout: PageBox): Rect {

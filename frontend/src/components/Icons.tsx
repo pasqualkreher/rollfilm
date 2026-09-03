@@ -247,6 +247,16 @@ export function IconTrash(props: IconProps) {
   );
 }
 
+export function IconEye(props: IconProps) {
+  // Hold-to-compare: "look at the baseline".
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M1.75 8S4.25 3.9 8 3.9 14.25 8 14.25 8 11.75 12.1 8 12.1 1.75 8 1.75 8z" />
+      <circle cx="8" cy="8" r="1.9" />
+    </svg>
+  );
+}
+
 export function IconInfo(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
@@ -403,6 +413,96 @@ export function IconDuplicate(props: IconProps) {
     <svg {...svgProps(props)}>
       <rect x="5.5" y="5.5" width="8" height="8" rx="1.2" />
       <path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" />
+    </svg>
+  );
+}
+
+// A "T" - text placed on the page.
+export function IconTextT(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M3.5 4.5V3h9v1.5M8 3v10M6.5 13h3" />
+    </svg>
+  );
+}
+
+// A horseshoe magnet - snapping.
+export function IconMagnet(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5.2 2.5v5.3a2.8 2.8 0 0 0 5.6 0V2.5" />
+      <path d="M3.9 5.2h2.6M9.5 5.2h2.6" />
+    </svg>
+  );
+}
+
+// A 3x3 measuring grid.
+export function IconGrid(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.5" y="2.5" width="11" height="11" rx="1" />
+      <path d="M2.5 6.17h11M2.5 9.83h11M6.17 2.5v11M9.83 2.5v11" />
+    </svg>
+  );
+}
+
+// Two offset sheets - the paged canvas.
+export function IconSheets(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5.5 4.5h7v9h-7z" />
+      <path d="M3.5 11.5v-9h7" />
+    </svg>
+  );
+}
+
+// A lemniscate - the free (endless) canvas.
+export function IconInfinity(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5 10.5C3.2 10.5 2 9.4 2 8s1.2-2.5 3-2.5c2.6 0 5.4 5 8 5 1.8 0 3-1.1 3-2.5s-1.2-2.5-3-2.5c-2.6 0-5.4 5-8 5Z" />
+    </svg>
+  );
+}
+
+// A dashed sheet outline - the page guide on the free canvas.
+export function IconGuide(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.5" y="3.5" width="11" height="9" rx="1" strokeDasharray="2.6 2.2" />
+    </svg>
+  );
+}
+
+// Corner brackets closing in - fit one page in the window.
+export function IconFitPage(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 5.5v-2a1 1 0 0 1 1-1h2M13.5 5.5v-2a1 1 0 0 0-1-1h-2M2.5 10.5v2a1 1 0 0 0 1 1h2M13.5 10.5v2a1 1 0 0 1-1 1h-2" />
+      <rect x="6" y="6.4" width="4" height="3.2" rx="0.6" />
+    </svg>
+  );
+}
+
+// Four sheets at once - fit the whole layout.
+export function IconFitAll(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.5" y="2.5" width="4.6" height="4.6" rx="0.8" />
+      <rect x="8.9" y="2.5" width="4.6" height="4.6" rx="0.8" />
+      <rect x="2.5" y="8.9" width="4.6" height="4.6" rx="0.8" />
+      <rect x="8.9" y="8.9" width="4.6" height="4.6" rx="0.8" />
+    </svg>
+  );
+}
+
+// A printer - the print view.
+export function IconPrinter(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M4.5 6V2.5h7V6" />
+      <path d="M4.5 11H3.5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1" />
+      <path d="M4.5 9.5h7v4h-7z" />
     </svg>
   );
 }
