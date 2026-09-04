@@ -642,3 +642,15 @@ export function IconEraser(props: IconProps) {
     </svg>
   );
 }
+
+// An anchor - snap: edges and centres catch on each other and on the page.
+export function IconAnchor(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="8" cy="3.25" r="1.5" />
+      <path d="M8 4.75v9" />
+      <path d="M5.25 7h5.5" />
+      <path d="M3.5 9.25a4.5 4.5 0 0 0 9 0" />
+    </svg>
+  );
+}

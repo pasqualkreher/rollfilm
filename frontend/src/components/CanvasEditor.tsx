@@ -34,7 +34,7 @@ import {
   IconInfinity,
   IconLock,
   IconLockOpen,
-  IconMagnet,
+  IconAnchor,
   IconMinus,
   IconPencil,
   IconPlus,
@@ -3851,43 +3851,25 @@ function CanvasToolbar({
         </span>
       </div>
 
+      {/* File first, then page, then what goes on it, then (far right) how
+          it is viewed: Save and its versions sit by the title. */}
       <div className="control-group">
+        {/* Nothing saves by itself: the button lights up while there are
+            unsaved changes, and Save asks for the version's name. */}
         <button
-          className="btn btn-sm canvas-tool"
-          onClick={onFill}
-          disabled={unplaced === 0}
-          aria-label={unplaced === 0 ? "All photos placed" : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}`}
+          className={`btn btn-sm canvas-tool${dirty ? " primary" : ""}`}
+          onClick={onSave}
+          disabled={saving}
+          aria-label="Save canvas"
           title={
-            unplaced === 0
-              ? memberCount === 0
-                ? "This canvas has no photos yet - add some from the library's Select mode"
-                : "Every photo of this canvas is already placed"
-              : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}: flow the canvas's photos that aren't placed yet into a grid after what you have`
+            dirty
+              ? "Save the canvas as a named version (⌘S) - there are unsaved changes"
+              : "Save the canvas as a named version (⌘S)"
           }
         >
-          <IconImage size={15} />
-          {unplaced > 0 && <span className="canvas-tool-badge">{unplaced}</span>}
+          <IconSave size={15} />
         </button>
-        <button
-          className="btn btn-sm canvas-tool"
-          onClick={onAddText}
-          aria-label="Add text"
-          title="Add text: put a caption or a title on the page"
-        >
-          <IconTextT size={15} />
-        </button>
-        {/* Next to the two ways of putting things on the page - what it
-            undoes - and well away from Save, which it has nothing to do
-            with. An eraser rather than a trash can: nothing is deleted. */}
-        <button
-          className="btn btn-sm canvas-tool quiet-danger"
-          onClick={onClear}
-          disabled={!canClear}
-          aria-label="Clear the canvas"
-          title="Clear the canvas: wipes everything you placed off the page. The photos stay in your library."
-        >
-          <IconEraser size={15} />
-        </button>
+        {versionsChip}
       </div>
 
       <div className="control-group">
@@ -4030,24 +4012,47 @@ function CanvasToolbar({
           aria-pressed={doc.snap}
           title="Snap: line edges and centres up with each other and with the page while you drag"
         >
-          <IconMagnet size={15} />
+          <IconAnchor size={15} />
         </button>
-        {/* Nothing saves by itself: the button lights up while there are
-            unsaved changes, and Save asks for the version's name. */}
+      </div>
+
+      <div className="control-group">
         <button
-          className={`btn btn-sm canvas-tool${dirty ? " primary" : ""}`}
-          onClick={onSave}
-          disabled={saving}
-          aria-label="Save canvas"
+          className="btn btn-sm canvas-tool"
+          onClick={onFill}
+          disabled={unplaced === 0}
+          aria-label={unplaced === 0 ? "All photos placed" : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}`}
           title={
-            dirty
-              ? "Save the canvas as a named version (⌘S) - there are unsaved changes"
-              : "Save the canvas as a named version (⌘S)"
+            unplaced === 0
+              ? memberCount === 0
+                ? "This canvas has no photos yet - add some from the library's Select mode"
+                : "Every photo of this canvas is already placed"
+              : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}: flow the canvas's photos that aren't placed yet into a grid after what you have`
           }
         >
-          <IconSave size={15} />
+          <IconImage size={15} />
+          {unplaced > 0 && <span className="canvas-tool-badge">{unplaced}</span>}
         </button>
-        {versionsChip}
+        <button
+          className="btn btn-sm canvas-tool"
+          onClick={onAddText}
+          aria-label="Add text"
+          title="Add text: put a caption or a title on the page"
+        >
+          <IconTextT size={15} />
+        </button>
+        {/* Next to the two ways of putting things on the page - what it
+            undoes - and well away from Save, which it has nothing to do
+            with. An eraser rather than a trash can: nothing is deleted. */}
+        <button
+          className="btn btn-sm canvas-tool quiet-danger"
+          onClick={onClear}
+          disabled={!canClear}
+          aria-label="Clear the canvas"
+          title="Clear the canvas: wipes everything you placed off the page. The photos stay in your library."
+        >
+          <IconEraser size={15} />
+        </button>
       </div>
 
       <span style={{ flex: 1 }} />
