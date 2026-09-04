@@ -14,15 +14,23 @@ import type { CanvasLayout, LayoutItem } from "../api/types";
 // at any zoom without wasting the screen.
 export const PAGE_GAP_MM = 20;
 
-// The page shapes on offer. Free sizes are typed in as numbers, so this is a
-// starting point rather than a limit.
+// The page shapes on offer. "Custom" in the toolbar frees the numbers
+// entirely, so this is a starting point rather than a limit.
 export const PAGE_PRESETS = [
   { key: "a4-landscape", label: "A4 landscape", w: 297, h: 210 },
   { key: "a4-portrait", label: "A4 portrait", w: 210, h: 297 },
   { key: "a3-landscape", label: "A3 landscape", w: 420, h: 297 },
+  { key: "a3-portrait", label: "A3 portrait", w: 297, h: 420 },
+  { key: "a5-landscape", label: "A5 landscape", w: 210, h: 148 },
+  { key: "a5-portrait", label: "A5 portrait", w: 148, h: 210 },
+  { key: "letter-landscape", label: "US Letter landscape", w: 279.4, h: 215.9 },
+  { key: "letter-portrait", label: "US Letter portrait", w: 215.9, h: 279.4 },
   { key: "square-300", label: "Square 30cm", w: 300, h: 300 },
   { key: "square-210", label: "Square 21cm", w: 210, h: 210 },
   { key: "photo-book", label: "Photo book 28×21", w: 280, h: 210 },
+  { key: "photo-book-portrait", label: "Photo book 21×28", w: 210, h: 280 },
+  { key: "photo-15x10", label: "Photo 15×10cm", w: 152, h: 102 },
+  { key: "photo-18x13", label: "Photo 18×13cm", w: 178, h: 127 },
 ] as const;
 
 export interface Rect {
@@ -46,7 +54,11 @@ export function pageAtMm(worldY: number, layout: PageBox, pageCount: number): nu
   return Math.max(0, Math.min(pageCount - 1, Math.floor(worldY / stride)));
 }
 
-export type PageBox = Pick<CanvasLayout, "page_mode" | "page_width_mm" | "page_height_mm">;
+// margin_mm is optional because read-only consumers (the shelf's gallery
+// docs) don't carry it - only the editor, which snaps and flows, does.
+export type PageBox = Pick<CanvasLayout, "page_mode" | "page_width_mm" | "page_height_mm"> & {
+  margin_mm?: number;
+};
 
 // An item's frame in world coordinates (page offset folded in).
 export function worldRect(item: LayoutItem, layout: PageBox): Rect {
@@ -147,6 +159,10 @@ export function snapTargets(
   if (layout.page_mode === "pages") {
     const first = pageAtMm(moving.y, layout, pageCount);
     const last = pageAtMm(moving.y + moving.h, layout, pageCount);
+    // The page margin is a line you lay things out AGAINST, so it snaps like
+    // the page edges do. Only a real margin: at 0 the lines would double the
+    // edges.
+    const margin = Math.max(0, layout.margin_mm ?? 0);
     for (let page = first; page <= last; page++) {
       const top = pageOffsetMm(page, layout);
       const bottom = top + layout.page_height_mm;
@@ -160,6 +176,16 @@ export function snapTargets(
         { at: (top + bottom) / 2, from: 0, to: layout.page_width_mm },
         { at: bottom, from: 0, to: layout.page_width_mm }
       );
+      if (margin > 0 && margin < layout.page_width_mm / 2 && margin < layout.page_height_mm / 2) {
+        x.push(
+          { at: margin, from: top, to: bottom },
+          { at: layout.page_width_mm - margin, from: top, to: bottom }
+        );
+        y.push(
+          { at: top + margin, from: 0, to: layout.page_width_mm },
+          { at: bottom - margin, from: 0, to: layout.page_width_mm }
+        );
+      }
     }
   }
   for (const rect of others) {

@@ -360,6 +360,8 @@ class CanvasLayoutIn(BaseModel):
     show_grid: bool = False
     grid_mm: float = 10.0
     snap: bool = True
+    # Page margin (guide, snap target, auto-layout inset), in mm.
+    margin_mm: float = 12.0
     show_page_guide: bool = False
     # Whether this canvas appears on the Canvases shelf of the Albums page.
     show_in_canvases: bool = False
@@ -393,6 +395,7 @@ class CanvasLayoutOut(BaseModel):
     show_grid: bool
     grid_mm: float
     snap: bool
+    margin_mm: float = 12.0
     show_page_guide: bool = False
     show_in_canvases: bool = False
     # The version the Canvases shelf shows (last kept or last loaded), and the

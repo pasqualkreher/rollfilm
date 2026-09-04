@@ -81,7 +81,16 @@ type Doc = Omit<CanvasLayout, "canvas_id" | "updated_at" | "active_version_id" |
 // a generous threshold means a drag is forever being caught by something, which
 // reads as the canvas fighting back rather than helping.
 const SNAP_PX = 5;
+// The margin a document without one falls back to (docs saved before the
+// per-canvas margin existed).
 const MARGIN_MM = 12;
+
+// The document's page margin, guarded: never negative, never past the middle
+// of the sheet (the two sides would cross and every inset flips sign).
+function marginOf(doc: { margin_mm?: number; page_width_mm: number; page_height_mm: number }): number {
+  const margin = doc.margin_mm ?? MARGIN_MM;
+  return Math.max(0, Math.min(margin, doc.page_width_mm / 2, doc.page_height_mm / 2));
+}
 // Frames are drawn with handles this big on screen, whatever the zoom.
 const HANDLE_PX = 9;
 const MIN_SIZE_MM = 5;
@@ -1218,7 +1227,7 @@ export function CanvasEditor({
     const { items: flowed, pages } = autoFlow(
       images.map((image) => ({ id: image.id, aspect: imageAspect(image.id) ?? 1.5 })),
       doc,
-      { columns: 3, marginMm: MARGIN_MM, gapMm: 6, startZ: 1 }
+      { columns: 3, marginMm: marginOf(doc), gapMm: 6, startZ: 1 }
     );
     setDoc((current) =>
       current
@@ -1255,7 +1264,7 @@ export function CanvasEditor({
                 .map((item) => ({ x: item.x_mm, y: item.y_mm, w: item.width_mm, h: item.height_mm })),
               doc,
               { w: width, h: height },
-              MARGIN_MM
+              marginOf(doc)
             );
         added.push({
           id: uuid(),
@@ -1289,7 +1298,8 @@ export function CanvasEditor({
     if (!doc) return;
     const id = uuid();
     const page = visiblePage();
-    const width = Math.min(120, doc.page_width_mm - MARGIN_MM * 2);
+    const margin = marginOf(doc);
+    const width = Math.max(20, Math.min(120, doc.page_width_mm - margin * 2));
     // Below whatever is already on this sheet, so a new caption never lands on
     // top of a photo and reads as a glitch.
     const spot = nextFreeSpot(
@@ -1298,14 +1308,14 @@ export function CanvasEditor({
         .map((item) => ({ x: item.x_mm, y: item.y_mm, w: item.width_mm, h: item.height_mm })),
       doc,
       { w: width, h: 16 },
-      MARGIN_MM
+      margin
     );
     const item: LayoutItem = {
       id,
       kind: "text",
       image_id: null,
       page,
-      x_mm: MARGIN_MM,
+      x_mm: margin,
       y_mm: spot.y,
       width_mm: width,
       height_mm: 16,
@@ -1492,7 +1502,7 @@ export function CanvasEditor({
     const { items: flowed, pages } = autoFlow(
       unplaced.map((image) => ({ id: image.id, aspect: imageAspect(image.id) ?? 1.5 })),
       doc,
-      { columns: 3, marginMm: MARGIN_MM, gapMm: 6, startZ: topZ + 1 }
+      { columns: 3, marginMm: marginOf(doc), gapMm: 6, startZ: topZ + 1 }
     );
     const added = flowed.map((item) => ({ ...item, id: uuid(), page: item.page + startPage }));
     commit((current) => ({
@@ -2429,6 +2439,15 @@ export function CanvasEditor({
                               `linear-gradient(to right, rgba(120,120,120,0.35) ${1 / zoom}px, transparent ${1 / zoom}px),` +
                               `linear-gradient(to bottom, rgba(120,120,120,0.35) ${1 / zoom}px, transparent ${1 / zoom}px)`,
                           }}
+                        />
+                      )}
+                      {/* The page margin, as a hairline you lay out against.
+                          An editing aid like the grid: never printed, never
+                          exported, and gone when the margin is 0. */}
+                      {marginOf(doc) > 0 && (
+                        <div
+                          className="canvas-margin-guide"
+                          style={{ inset: marginOf(doc), borderWidth: 1 / zoom }}
                         />
                       )}
                       <span className="canvas-page-number" style={{ fontSize: 5, bottom: -8 }}>
@@ -3803,24 +3822,73 @@ function CanvasToolbar({
         {/* The free canvas has no page, so a page size means nothing there -
             the picker only appears when a sheet exists to size: real pages,
             or the page guide drawn over the free canvas. */}
+        {/* One chip for everything the page IS - preset, exact size, margin -
+            so the bar carries a single readable label instead of a run of
+            fields. The closed chip names the current size. */}
         {(doc.page_mode === "pages" || doc.show_page_guide) && (
-          <select
-            className="canvas-size-select"
-            value={presetKey}
-            aria-label={doc.page_mode === "pages" ? "Page size" : "Guide size"}
-            title={doc.page_mode === "pages" ? "Page size" : "Size of the page guide"}
-            onChange={(event) => {
-              const next = PAGE_PRESETS.find((p) => p.key === event.target.value);
-              if (next) commit((c) => ({ ...c, page_width_mm: next.w, page_height_mm: next.h }));
-            }}
+          <FilterChip
+            label={presetLabel}
+            title={
+              doc.page_mode === "pages"
+                ? "Page setup: size and margin"
+                : "Page guide setup: size and margin"
+            }
           >
-            {presetKey === "custom" && <option value="custom">{presetLabel}</option>}
-            {PAGE_PRESETS.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+            <div className="canvas-panel">
+              <div className="canvas-panel-row">
+                <span className="canvas-panel-label">Size</span>
+                <select
+                  className="canvas-size-select"
+                  value={presetKey}
+                  aria-label={doc.page_mode === "pages" ? "Page size" : "Guide size"}
+                  onChange={(event) => {
+                    const next = PAGE_PRESETS.find((p) => p.key === event.target.value);
+                    if (next) commit((c) => ({ ...c, page_width_mm: next.w, page_height_mm: next.h }));
+                  }}
+                >
+                  {presetKey === "custom" && <option value="custom">Custom ({presetLabel})</option>}
+                  {PAGE_PRESETS.map((p) => (
+                    <option key={p.key} value={p.key}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {/* Typing a size IS choosing custom - no mode to switch first;
+                  the select above simply reads "Custom" while the numbers
+                  match no preset. */}
+              <div className="canvas-panel-row">
+                <span className="canvas-panel-label">Custom</span>
+                <span className="canvas-field-group" title="Page size in millimetres">
+                  <MmField
+                    value={round1(doc.page_width_mm)}
+                    min={10}
+                    max={2000}
+                    unit="×"
+                    title="Page width in millimetres"
+                    onChange={(page_width_mm) => commit((c) => ({ ...c, page_width_mm }))}
+                  />
+                  <MmField
+                    value={round1(doc.page_height_mm)}
+                    min={10}
+                    max={2000}
+                    title="Page height in millimetres"
+                    onChange={(page_height_mm) => commit((c) => ({ ...c, page_height_mm }))}
+                  />
+                </span>
+              </div>
+              <div className="canvas-panel-row">
+                <span className="canvas-panel-label">Margin</span>
+                <MmField
+                  value={round1(marginOf(doc))}
+                  min={0}
+                  max={100}
+                  title="Page margin: a hairline guide on every sheet that photos snap to, and where placed photos flow. 0 hides it."
+                  onChange={(margin_mm) => commit((c) => ({ ...c, margin_mm }))}
+                />
+              </div>
+            </div>
+          </FilterChip>
         )}
         <label
           className="canvas-swatch canvas-toolbar-swatch"

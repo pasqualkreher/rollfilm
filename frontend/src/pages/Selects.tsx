@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { ImageOut } from "../api/types";
 import { useSelects } from "../state/selects";
@@ -8,16 +8,19 @@ import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 import { groupPairsAdjacent } from "../utils/pairing";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { ExportDialog } from "../components/ExportDialog";
+import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { useTransientMessage } from "../utils/transientMessage";
 
 export function Selects() {
   const { ids, count, remove } = useSelects();
   const mergePairs = useMergePairs();
+  const queryClient = useQueryClient();
   const [exportOpen, setExportOpen] = useState(false);
-  // Both flash messages auto-dismiss after a moment.
+  // The flash messages all auto-dismiss after a moment.
   const [error, setError] = useTransientMessage();
   const [immichBusy, setImmichBusy] = useState(false);
   const [immichMsg, setImmichMsg] = useTransientMessage();
+  const [addMsg, setAddMsg] = useTransientMessage();
   // Same select mode as the Library / Album / Import grids, but ON by default
   // here with everything pre-selected: the set is already curated, so the
   // common move is unticking a few photos and downloading the rest. No
@@ -140,6 +143,31 @@ export function Selects() {
     clearSelection();
   }
 
+  // Add-to targets act on the selection while one exists, otherwise on the
+  // whole working set - same rule as Export and Immich. Merged view sends
+  // each shot's hidden RAW partner along, like the Library's bulk add.
+  async function addToAlbum(albumId: string) {
+    if (actionIds.length === 0) return;
+    await api.albums.addImages(albumId, withPairedIds(actionIds));
+    queryClient.invalidateQueries({ queryKey: ["albums"] });
+  }
+
+  async function addToCanvas(canvasId: string) {
+    if (actionIds.length === 0) return;
+    await api.canvases.addImages(canvasId, withPairedIds(actionIds));
+    queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+    queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
+  }
+
+  // Counts the photos the user acted on, not the ids actually sent - merged
+  // view silently adds RAW partners, and the larger number would read as a bug.
+  function reportAddTo({ kind, name, ok }: AddToResult) {
+    const what = kind === "canvas" ? `canvas “${name}”` : `album “${name}”`;
+    const acted = hasSelection ? selected.size : count;
+    if (ok) setAddMsg(`Added ${acted} photo${acted === 1 ? "" : "s"} to ${what}.`);
+    else setError(`Could not add to ${what}.`);
+  }
+
   async function addToImmich(imageIds: string[]) {
     if (imageIds.length === 0) return;
     setImmichBusy(true);
@@ -165,7 +193,7 @@ export function Selects() {
       {count === 0 ? (
         <div className="empty-state">
           No selects yet. Gather photos from the library, an album, or a photo's page to collect the shots you want to
-          export or download.
+          export - or to add to an album or a canvas in one go.
         </div>
       ) : (
         <>
@@ -200,6 +228,7 @@ export function Selects() {
                       : "Add to Immich"}
                 </button>
               )}
+              <AddToPicker onAddToAlbum={addToAlbum} onAddToCanvas={addToCanvas} onResult={reportAddTo} />
             </div>
             <div className="control-group control-group--actions">
               <button
@@ -231,13 +260,14 @@ export function Selects() {
               )}
             </div>
             {immichMsg && <span className="status-note">{immichMsg}</span>}
+            {addMsg && <span className="status-note">{addMsg}</span>}
             {error && <span className="status-note status-note--error">{error}</span>}
           </div>
 
           {selectMode && (
             <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
-              Click photos to select them - shift-click to select a range. Export/Immich act on
-              your selection while one exists.
+              Click photos to select them - shift-click to select a range. Export, Immich and
+              Add to… act on your selection while one exists.
             </p>
           )}
 

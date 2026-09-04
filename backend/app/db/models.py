@@ -526,6 +526,9 @@ class CanvasLayout(Base):
     show_grid: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     grid_mm: Mapped[float] = mapped_column(Float, default=10.0)
     snap: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # Page margin: drawn as a guide on each sheet, a snap target, and where
+    # the auto-layout flows photos. 12mm is what the layout always used.
+    margin_mm: Mapped[float] = mapped_column(Float, default=12.0, server_default="12")
     # Free canvas only: draw the outline of the sheets this design WOULD be cut
     # into, using page_width_mm/page_height_mm (which the free canvas otherwise
     # only carries around). Laying out against them means switching to Pages

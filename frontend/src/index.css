@@ -7664,6 +7664,13 @@ button.smart-card {
   flex: 0 0 138px;
   gap: 8px;
   min-height: 0;
+  /* Centre the rail in its lane. The window side carries the shell's 20px
+     (.page-scroll--canvas) plus the stage's 16px padding = 36px, while the
+     canvas side is only the stage's 10px gap - so the column hugged the
+     paper. Move half the difference (13px) from left to right: 23px of air
+     on each side, and the paper itself doesn't shift. */
+  margin-left: -13px;
+  margin-right: 13px;
 }
 
 .page-rail-head {
@@ -7675,6 +7682,9 @@ button.smart-card {
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--text-muted);
+  /* Centred like everything under it - the page numbers and the Add button
+     already are, so a left-hugging header was the one thing off axis. */
+  text-align: center;
 }
 
 .page-rail-hint {
@@ -8158,6 +8168,18 @@ button.smart-card {
   opacity: 0.6;
   pointer-events: none;
   z-index: 4000;
+}
+
+/* The page margin: a quiet dashed inset on every sheet - an editing aid like
+   the grid, never printed. The same fixed mid-grey as the grid's hairlines
+   (not a theme token: it sits on the user-coloured paper, not on the app),
+   and muted where the page guide is accent-coloured, so the two read as
+   different kinds of line when both are on screen. */
+.canvas-margin-guide {
+  position: absolute;
+  border-style: dashed;
+  border-color: rgba(120, 120, 120, 0.5);
+  pointer-events: none;
 }
 
 .canvas-page-guide-label {
@@ -9067,9 +9089,12 @@ button.smart-card {
 }
 
 /* Breathing room around the work surface, like the editor's stage and the
-   import light table: the paper never touches the chrome. */
+   import light table: the paper never touches the chrome. The right side
+   keeps only a sliver of its own - the shell's 20px is already there, and
+   trimming the stage's share lets the work surface run further towards the
+   window edge. */
 .canvas-workspace .canvas-stage {
-  padding: 14px 16px;
+  padding: 14px 4px 14px 16px;
 }
 
 /* In the workspace the strip breathes like the editor's and the lightbox's

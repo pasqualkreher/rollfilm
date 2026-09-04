@@ -47,6 +47,7 @@ _DEFAULT_LAYOUT = dict(
     show_grid=False,
     grid_mm=10.0,
     snap=True,
+    margin_mm=12.0,
     show_page_guide=False,
 )
 
@@ -352,6 +353,7 @@ def _layout_out(db: Session, canvas: Canvas, layout: CanvasLayout | None) -> sch
         show_grid=layout.show_grid,
         grid_mm=layout.grid_mm,
         snap=layout.snap,
+        margin_mm=layout.margin_mm,
         show_page_guide=layout.show_page_guide,
         show_in_canvases=layout.show_in_canvases,
         active_version_id=layout.active_version_id,
@@ -379,6 +381,12 @@ def _apply_layout_doc(
     layout.show_grid = payload.show_grid
     layout.grid_mm = max(1.0, payload.grid_mm)
     layout.snap = payload.snap
+    # A margin past the middle of the sheet is no margin any more - the two
+    # sides would cross and every inset computation flips sign.
+    layout.margin_mm = max(
+        0.0,
+        min(payload.margin_mm, layout.page_width_mm / 2, layout.page_height_mm / 2),
+    )
     layout.show_page_guide = payload.show_page_guide
     layout.show_in_canvases = payload.show_in_canvases
     layout.updated_at = _utcnow()
@@ -520,6 +528,7 @@ def _snapshot_doc(layout: CanvasLayout) -> dict:
         show_grid=layout.show_grid,
         grid_mm=layout.grid_mm,
         snap=layout.snap,
+        margin_mm=layout.margin_mm,
         show_page_guide=layout.show_page_guide,
         items=[
             dict(
