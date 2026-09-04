@@ -163,8 +163,9 @@ def create_canvas(
 @router.get("/gallery", response_model=list[schemas.CanvasGalleryOut])
 def canvases_gallery(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Every canvas that opted onto the shelf (show_in_canvases), showing its
-    chosen version - the one last kept or last loaded. Only kept versions are
-    shown: the autosaving working layout is a draft, not a publication."""
+    chosen version - the one last saved or last loaded. Only saved versions
+    are shown: the working layout is whatever the editor last wrote, not a
+    publication."""
     rows = (
         db.query(CanvasLayout, Canvas)
         .join(Canvas, CanvasLayout.canvas_id == Canvas.id)
@@ -506,13 +507,15 @@ def set_canvas_shelf(
     db.commit()
 
 
-# --- Kept versions -----------------------------------------------------------
+# --- Saved versions ----------------------------------------------------------
 #
-# The working layout autosaves over itself; a version is the user saying "keep
-# this one", under a name. Restoring replays the snapshot through the same
-# code path as a save, so every guard above applies to old documents too.
-# Whichever version was kept or loaded last is the "active" one - the face the
-# shelf shows for this canvas.
+# Saving a canvas is naming it: the editor writes the working layout and then
+# keeps it as a version under the name the user gave. Saving under a name that
+# already exists replaces that version, so "Save" on an unchanged name is an
+# ordinary overwrite and a new name is a new branch. Restoring replays the
+# snapshot through the same code path as a save, so every guard above applies
+# to old documents too. Whichever version was saved or loaded last is the
+# "active" one - the face the shelf shows for this canvas.
 
 
 def _snapshot_doc(layout: CanvasLayout) -> dict:
@@ -581,19 +584,25 @@ def create_layout_version(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Keep the canvas as it stands now, under a name. The client saves first
-    (the canvas autosaves anyway), so the stored rows ARE the current state."""
+    """Keep the canvas as it stands now, under a name. The client writes the
+    working layout first, so the stored rows ARE the current state. A name
+    that matches an existing version (case-insensitively) replaces that
+    version's snapshot instead of adding a second one with the same name."""
     canvas = get_owned_canvas(db, current_user.id, canvas_id)
     layout = db.query(CanvasLayout).filter(CanvasLayout.canvas_id == canvas.id).first()
     if layout is None:
         raise HTTPException(status_code=404, detail="This canvas has not been saved yet")
     name = payload.name.strip()[:120] or f"Version {len(layout.versions) + 1}"
-    version = LayoutVersion(
-        layout_id=layout.id, name=name, doc=json.dumps(_snapshot_doc(layout)), created_at=_utcnow()
-    )
-    db.add(version)
-    db.flush()
-    # What was just kept is what the shelf should show.
+    snapshot = json.dumps(_snapshot_doc(layout))
+    version = next((v for v in layout.versions if v.name.casefold() == name.casefold()), None)
+    if version is None:
+        version = LayoutVersion(layout_id=layout.id, name=name, doc=snapshot, created_at=_utcnow())
+        db.add(version)
+        db.flush()
+    else:
+        version.doc = snapshot
+        version.created_at = _utcnow()
+    # What was just saved is what the shelf should show.
     layout.active_version_id = version.id
     db.commit()
     db.refresh(layout)

@@ -8805,32 +8805,7 @@ button.smart-card {
   color: var(--text-muted);
 }
 
-/* Deliberately quiet and fixed-width: an autosave notice that jumps the
-   toolbar around every time it changes is worse than no notice. */
-.canvas-save-state {
-  min-width: 15ch;
-  text-align: right;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.canvas-save-state.is-error {
-  color: var(--danger);
-  font-weight: 600;
-}
-
-/* --- Kept versions of the canvas --- */
-
-.canvas-version-keep {
-  display: flex;
-  flex: 1 0 100%;
-  gap: 6px;
-}
-
-.canvas-version-keep input {
-  flex: 1;
-  min-width: 0;
-}
+/* --- Saved versions of the canvas --- */
 
 .canvas-version-list {
   display: flex;

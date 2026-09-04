@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
 import type { CanvasLayout, ImageOut, LayoutItem, LayoutTextStyle, LayoutVersion } from "../api/types";
 import { collapsePairs, thumbPx, useThumbSize } from "../state/viewPrefs";
@@ -41,6 +41,7 @@ import {
   IconRedo,
   IconRestore,
   IconRotate,
+  IconSave,
   IconSendBack,
   IconSheets,
   IconTextT,
@@ -408,7 +409,13 @@ export function CanvasEditor({
   // ref (it is not rendered) with a tick so the Paste button can wake up.
   const settingsClipboard = useRef<ItemSettings | null>(null);
   const [clipboardTick, setClipboardTick] = useState(0);
-  const [saveState, setSaveState] = useState<"idle" | "dirty" | "saving" | "saved">("idle");
+  // True while the canvas differs from what was last saved. Nothing saves on
+  // its own: Save (⌘S) writes the canvas as a named version, and leaving with
+  // this set asks first.
+  const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+  const [saving, setSaving] = useState(false);
   const [showFilmstrip, setShowFilmstrip] = useState(true);
   // Holding Space turns any drag into a pan. Every canvas editor works this
   // way, and once the paper is covered in photos it is the only place left to
@@ -638,62 +645,120 @@ export function CanvasEditor({
   }, [saved, canvasId]);
 
   // --- Saving ---------------------------------------------------------------
+  //
+  // Nothing here is automatic. Save (the toolbar button and ⌘S) asks for a
+  // name, writes the working layout and keeps it as a version under that
+  // name - the same name again replaces that version, a new name starts
+  // another. The dialog opens on the name of the version the canvas came
+  // from, so plain "save my work" is one Enter away.
 
-  const save = useMutation({
-    mutationFn: (next: Doc) => api.canvases.saveLayout(canvasId, next),
-    onSuccess: (result) => {
-      queryClient.setQueryData(["canvas-layout", canvasId], result);
-      setSaveState((state) => (state === "saving" ? "saved" : state));
-    },
-  });
-
-  // Autosave: a layout is a thing you fiddle with, and fiddling that can be
-  // lost isn't fiddling. Debounced so a drag writes once when it settles, not
-  // on every frame. The explicit Save below covers the two cases autosave
-  // deliberately leaves alone: keeping a brand new canvas exactly as seeded,
-  // and retrying after a failed write.
-  const pending = useRef<Doc | null>(null);
-  const saveRef = useRef(save);
-  saveRef.current = save;
-  useEffect(() => {
-    if (!doc || saveState !== "dirty") return;
-    pending.current = doc;
-    const timer = setTimeout(() => {
-      setSaveState("saving");
-      saveRef.current.mutate(doc);
-      pending.current = null;
-    }, 700);
-    return () => clearTimeout(timer);
-  }, [doc, saveState]);
-
-  // Leaving the canvas (or the page) must not drop the last edit that hadn't
-  // reached its debounce yet.
-  useEffect(() => {
-    return () => {
-      if (pending.current) api.canvases.saveLayout(canvasId, pending.current).catch(() => {});
-    };
-  }, [canvasId]);
-
-  // True until the first write reaches the server: the GET for a canvas nobody
-  // has saved yet answers with the default document and no timestamp.
-  const neverSaved = !!saved && !saved.updated_at;
-
-  // Explicit save (the toolbar button and ⌘S): skips the debounce, and -
-  // unlike the autosave, which only fires on an edit - also writes the
-  // untouched starting layout. That is how a freshly opened canvas becomes the
-  // canvas's saved layout without the user having to nudge a photo first.
   const docRef = useRef(doc);
   docRef.current = doc;
-  const saveNow = useCallback(() => {
-    const current = docRef.current;
-    if (!current) return;
-    pending.current = null;
-    setSaveState("saving");
-    saveRef.current.mutate(current);
-  }, []);
+  const savingRef = useRef(false);
 
-  // Every edit goes through here: it records history, marks the document dirty
-  // and hands the autosave something to write.
+  const adoptServerLayout = useCallback(
+    (result: CanvasLayout) => {
+      queryClient.setQueryData(["canvas-layout", canvasId], result);
+      // The Canvases shelf on the Albums page draws from these versions.
+      queryClient.invalidateQueries({ queryKey: ["canvases"] });
+    },
+    [queryClient, canvasId]
+  );
+
+  // Resolves true once the canvas is saved, false when the user backed out
+  // or the write failed.
+  const saveCanvas = useCallback(async (): Promise<boolean> => {
+    const current = docRef.current;
+    if (!current || savingRef.current) return false;
+    const layout = queryClient.getQueryData<CanvasLayout>(["canvas-layout", canvasId]);
+    const existing = layout?.versions ?? [];
+    const active = existing.find((v) => v.id === layout?.active_version_id);
+    const name = await dialogs.prompt({
+      title: "Save canvas",
+      message:
+        "The canvas is kept as a version under this name. The same name replaces that version; a new name keeps the old one as well.",
+      initial: active?.name ?? `Version ${existing.length + 1}`,
+      placeholder: "Version name",
+      confirmLabel: "Save",
+    });
+    if (name === null) return false;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await api.canvases.saveLayout(canvasId, current);
+      adoptServerLayout(await api.canvases.createLayoutVersion(canvasId, name));
+      // An edit made while the dialog was up is not on the server yet.
+      if (docRef.current === current) setDirty(false);
+      return true;
+    } catch {
+      await dialogs.alert({
+        title: "The canvas could not be saved",
+        message: "Check that the app is still connected, then try again.",
+      });
+      return false;
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }, [canvasId, queryClient, dialogs, adoptServerLayout]);
+
+  // Leaving with unsaved changes asks first. Escape's last rung and the Back
+  // button route through here; so does any link out of the page (below),
+  // since the app's navigation cannot be halted any other way.
+  const confirmLeave = useCallback(async (): Promise<boolean> => {
+    if (!dirtyRef.current) return true;
+    const leave = await dialogs.confirm({
+      title: "Discard unsaved changes?",
+      message: "The canvas hasn't been saved since you last changed it. Leave without saving?",
+      confirmLabel: "Discard changes",
+      cancelLabel: "Keep editing",
+      danger: true,
+    });
+    if (leave) {
+      dirtyRef.current = false;
+      setDirty(false);
+    }
+    return leave;
+  }, [dialogs]);
+
+  const requestExit = useCallback(async () => {
+    if (!onExit) return;
+    if (await confirmLeave()) onExit();
+  }, [onExit, confirmLeave]);
+
+  // The app's own links (the module row, a card on another page) would
+  // unmount the editor with the draft still unsaved. The router cannot be
+  // asked to wait, so the click is caught on its way there: stopped, asked
+  // about, and re-issued by hand if the user lets it go. Closing or
+  // reloading the window gets the browser's own question.
+  useEffect(() => {
+    if (!dirty) return;
+    function onClick(event: MouseEvent) {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey) return;
+      const anchor = (event.target as Element | null)?.closest?.("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      const href = anchor.getAttribute("href") ?? "";
+      if (!href.startsWith("#/")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void confirmLeave().then((leave) => {
+        if (leave) window.location.hash = href.slice(1);
+      });
+    }
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    document.addEventListener("click", onClick, true);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      document.removeEventListener("click", onClick, true);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [dirty, confirmLeave]);
+
+  // Every edit goes through here: it records history and marks the document
+  // as unsaved.
   const commit = useCallback(
     (next: Doc | ((current: Doc) => Doc), options: { history?: boolean } = {}) => {
       setDoc((current) => {
@@ -707,7 +772,7 @@ export function CanvasEditor({
         }
         return value;
       });
-      setSaveState("dirty");
+      setDirty(true);
     },
     []
   );
@@ -731,7 +796,7 @@ export function CanvasEditor({
       past.current = past.current.slice(0, -1);
       future.current = [current, ...future.current];
       setHistoryTick((tick) => tick + 1);
-      setSaveState("dirty");
+      setDirty(true);
       return previous;
     });
   }, []);
@@ -743,71 +808,41 @@ export function CanvasEditor({
       future.current = future.current.slice(1);
       past.current = [...past.current, current];
       setHistoryTick((tick) => tick + 1);
-      setSaveState("dirty");
+      setDirty(true);
       return next;
     });
   }, []);
 
-  // --- Kept versions --------------------------------------------------------
+  // --- Saved versions -------------------------------------------------------
   //
-  // The autosave above means the working layout is a draft that forever
-  // overwrites itself; a version is the user saying "keep this one", under a
-  // name. The version list lives on the layout query (the server sends it
-  // with every layout response), and every version call answers with the
-  // fresh layout, so the cache is simply replaced.
+  // Every Save keeps the canvas as a named version. The list lives on the
+  // layout query (the server sends it with every layout response), and every
+  // version call answers with the fresh layout, so the cache is simply
+  // replaced.
 
   const versions = saved?.versions ?? [];
   const activeVersionId = saved?.active_version_id ?? null;
-
-  const adoptServerLayout = useCallback(
-    (result: CanvasLayout) => {
-      queryClient.setQueryData(["canvas-layout", canvasId], result);
-      // The Canvases shelf on the Albums page draws from these versions.
-      queryClient.invalidateQueries({ queryKey: ["canvases"] });
-    },
-    [queryClient, canvasId]
-  );
-
-  const keepVersion = useCallback(
-    async (name: string) => {
-      const current = docRef.current;
-      if (!current) return;
-      // The snapshot is taken from the server's rows, so what is on screen
-      // must reach them first - autosave may still be counting down.
-      pending.current = null;
-      try {
-        await api.canvases.saveLayout(canvasId, current);
-        adoptServerLayout(await api.canvases.createLayoutVersion(canvasId, name));
-        setSaveState("saved");
-      } catch {
-        await dialogs.alert({
-          title: "The version could not be kept",
-          message: "Check that the app is still connected, then try again.",
-        });
-      }
-    },
-    [canvasId, adoptServerLayout, dialogs]
-  );
 
   const loadVersion = useCallback(
     async (versionId: string, name: string) => {
       if (
         !(await dialogs.confirm({
           title: `Load “${name}”?`,
-          message:
-            "The canvas becomes this version. Keep the current state as a version first if you want a way back - or undo right after.",
+          message: dirtyRef.current
+            ? "The canvas becomes this version. Changes you haven't saved are lost - undo right after brings them back."
+            : "The canvas becomes this version. Undo right after brings the current state back.",
           confirmLabel: "Load it",
         }))
       )
         return;
-      pending.current = null;
       try {
         const result = await api.canvases.restoreLayoutVersion(canvasId, versionId);
         adoptServerLayout(result);
         const { canvas_id: _a, updated_at: _u, active_version_id: _v, versions: _vs, ...rest } = result;
         // Through the history, so loading a version is itself undoable.
         commit(rest);
-        setSaveState("saved");
+        // What is on the canvas now is exactly what the server holds.
+        setDirty(false);
       } catch {
         await dialogs.alert({
           title: "The version could not be loaded",
@@ -829,12 +864,30 @@ export function CanvasEditor({
     [canvasId, adoptServerLayout]
   );
 
+  // On or off the Canvas Shelf. Part of the layout row rather than of the
+  // design, so it flips on the server right away and never counts as
+  // unsaved - the document carries it along so a later Save agrees.
+  const setShelf = useCallback(
+    async (enabled: boolean) => {
+      setDoc((current) => (current ? { ...current, show_in_canvases: enabled } : current));
+      try {
+        await api.canvases.setShelf(canvasId, enabled);
+        const layout = queryClient.getQueryData<CanvasLayout>(["canvas-layout", canvasId]);
+        if (layout) adoptServerLayout({ ...layout, show_in_canvases: enabled });
+      } catch {
+        // Not on the server yet: the next Save carries it.
+        setDirty(true);
+      }
+    },
+    [canvasId, queryClient, adoptServerLayout]
+  );
+
   const removeVersion = useCallback(
     async (versionId: string, name: string) => {
       if (
         !(await dialogs.confirm({
           title: `Forget version “${name}”?`,
-          message: "Only this kept copy is forgotten - the canvas itself is untouched.",
+          message: "Only this saved copy is forgotten - the canvas itself is untouched.",
           confirmLabel: "Forget it",
           danger: true,
         }))
@@ -2069,10 +2122,8 @@ export function CanvasEditor({
       const onButton = target?.tagName === "BUTTON";
       const meta = event.metaKey || event.ctrlKey;
       if (meta && !event.shiftKey && event.key.toLowerCase() === "s") {
-        // Mostly a comfort blanket next to the autosave - but on a brand new
-        // canvas it is what keeps the seeded layout as it stands.
         event.preventDefault();
-        saveNow();
+        void saveCanvas();
         return;
       }
       if (meta && event.key.toLowerCase() === "z") {
@@ -2127,7 +2178,7 @@ export function CanvasEditor({
         if (croppingId) setCroppingId(null);
         else if (editingTextId) setEditingTextId(null);
         else if (selected.size > 0) setSelected(new Set());
-        else onExit?.();
+        else void requestExit();
         return;
       }
       if (selected.size === 0) return;
@@ -2181,7 +2232,7 @@ export function CanvasEditor({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [croppingId, editingTextId, fitToView, onExit, openPrint, printPage, redo, removeSelected, restack, saveNow, selected, undo, updateItems, zoomAt]);
+  }, [croppingId, editingTextId, fitToView, requestExit, openPrint, printPage, redo, removeSelected, restack, saveCanvas, selected, undo, updateItems, zoomAt]);
 
   // --- Render ---------------------------------------------------------------
 
@@ -2299,20 +2350,19 @@ export function CanvasEditor({
         unplaced={unplaced.length}
         memberCount={images.length}
         title={title}
-        onExit={onExit}
+        onExit={onExit && requestExit}
         onClear={clearCanvas}
         canClear={items.length > 0}
-        saveState={saveState}
-        saveFailed={save.isError}
-        neverSaved={neverSaved}
+        onSave={() => void saveCanvas()}
+        dirty={dirty}
+        saving={saving}
         exportChip={<ExportChip doc={doc} byId={byId} title={title} />}
         versionsChip={
           <VersionsChip
             doc={doc}
-            commit={commit}
             versions={versions}
             activeVersionId={activeVersionId}
-            onKeep={keepVersion}
+            onShelf={setShelf}
             onLoad={loadVersion}
             onRename={renameVersion}
             onRemove={removeVersion}
@@ -2723,7 +2773,7 @@ export function CanvasEditor({
           onExit && (
             <button
               className="btn btn-sm back-btn"
-              onClick={onExit}
+              onClick={() => void requestExit()}
               title="Back to your canvases (Esc)"
             >
               <IconArrowLeft size={14} /> Back
@@ -3574,7 +3624,7 @@ function SelectionFrame({
   );
 }
 
-// --- Kept versions ----------------------------------------------------------
+// --- Saved versions ---------------------------------------------------------
 //
 // The chip where a canvas worth keeping gets a name. It also holds the
 // "Canvases shelf" switch: the Albums page shows, per opted-in canvas, the one
@@ -3587,36 +3637,24 @@ function versionDate(iso: string): string {
 
 function VersionsChip({
   doc,
-  commit,
   versions,
   activeVersionId,
-  onKeep,
+  onShelf,
   onLoad,
   onRename,
   onRemove,
 }: {
   doc: Doc;
-  commit: (next: Doc | ((current: Doc) => Doc), options?: { history?: boolean }) => void;
   versions: LayoutVersion[];
   activeVersionId: string | null;
-  onKeep: (name: string) => Promise<void>;
+  onShelf: (enabled: boolean) => Promise<void>;
   onLoad: (id: string, name: string) => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onRemove: (id: string, name: string) => Promise<void>;
 }) {
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
   // The one version whose name is open for editing, and the text in the box.
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-
-  async function keep() {
-    if (busy) return;
-    setBusy(true);
-    await onKeep(name.trim());
-    setBusy(false);
-    setName("");
-  }
 
   async function finishRename(id: string) {
     const next = draft.trim();
@@ -3626,34 +3664,18 @@ function VersionsChip({
 
   return (
     <FilterChip
-      label={versions.length ? `Versions: ${versions.length}` : "Versions"}
+      label={versions.length ? `Versions (${versions.length})` : "Versions"}
       active={doc.show_in_canvases}
-      title="Keep the canvas as a named version, load one back, and choose what the Canvas Shelf shows"
+      title="The saved versions of this canvas: load one back, rename it, and choose what the Canvas Shelf shows"
     >
       <div className="canvas-panel">
-        <form
-          className="canvas-panel-row"
-          onSubmit={(event) => {
-            event.preventDefault();
-            keep();
-          }}
-        >
-          <span className="canvas-panel-label">Keep the canvas as it is now</span>
-          <div className="canvas-version-keep">
-            <input
-              type="text"
-              placeholder={`Version ${versions.length + 1}`}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-            <button className="btn btn-sm primary" type="submit" disabled={busy}>
-              Keep version
-            </button>
-          </div>
+        <div className="canvas-panel-row">
           <span className="canvas-panel-note">
-            A version is a frozen copy - keep editing and it stays as it was.
+            {versions.length
+              ? "Every Save keeps the canvas as a version under the name you give it. Load one to put it back on the canvas."
+              : "Nothing saved yet. Save (⌘S) keeps the canvas as a version under a name of your choice."}
           </span>
-        </form>
+        </div>
 
         {versions.length > 0 && (
           <div className="canvas-panel-row canvas-version-list" role="list">
@@ -3737,14 +3759,12 @@ function VersionsChip({
             type="checkbox"
             checked={doc.show_in_canvases}
             disabled={versions.length === 0 && !doc.show_in_canvases}
-            onChange={(event) =>
-              commit((c) => ({ ...c, show_in_canvases: event.target.checked }), { history: false })
-            }
+            onChange={(event) => void onShelf(event.target.checked)}
           />
           <span className="canvas-panel-note">
             {versions.length === 0
-              ? "Show this canvas on the Canvas Shelf of the Albums page. Keep a version first - the shelf shows kept versions, never the working draft."
-              : "Show this canvas on the Canvas Shelf of the Albums page. The shelf shows the version marked with a dot - the one last kept or loaded."}
+              ? "Show this canvas on the Canvas Shelf of the Albums page. Save it first - the shelf shows saved versions."
+              : "Show this canvas on the Canvas Shelf of the Albums page. The shelf shows the version marked with a dot - the one last saved or loaded."}
           </span>
         </label>
       </div>
@@ -3780,9 +3800,9 @@ function CanvasToolbar({
   onExit,
   onClear,
   canClear,
-  saveState,
-  saveFailed,
-  neverSaved,
+  onSave,
+  dirty,
+  saving,
   exportChip,
   versionsChip,
 }: {
@@ -3806,9 +3826,9 @@ function CanvasToolbar({
   memberCount: number;
   onClear: () => void;
   canClear: boolean;
-  saveState: "idle" | "dirty" | "saving" | "saved";
-  saveFailed: boolean;
-  neverSaved: boolean;
+  onSave: () => void;
+  dirty: boolean;
+  saving: boolean;
   exportChip: React.ReactNode;
   versionsChip: React.ReactNode;
 }) {
@@ -4008,33 +4028,25 @@ function CanvasToolbar({
         >
           <IconTrash size={15} />
         </button>
+        {/* Nothing saves by itself: the button lights up while there are
+            unsaved changes, and Save asks for the version's name. */}
+        <button
+          className={`btn btn-sm canvas-tool${dirty ? " primary" : ""}`}
+          onClick={onSave}
+          disabled={saving}
+          aria-label="Save canvas"
+          title={
+            dirty
+              ? "Save the canvas as a named version (⌘S) - there are unsaved changes"
+              : "Save the canvas as a named version (⌘S)"
+          }
+        >
+          <IconSave size={15} />
+        </button>
         {versionsChip}
       </div>
 
       <span style={{ flex: 1 }} />
-
-      {/* Ahead of the buttons, not after them: its width is reserved so the
-          notice never jolts the toolbar, and a reserved-but-empty box at the
-          end would hold the buttons off the right edge. */}
-      <span
-        className={`canvas-save-state${saveFailed ? " is-error" : ""}`}
-        aria-live="polite"
-        title={
-          saveFailed
-            ? "The last change could not be saved - check that the app is still connected (⌘S retries)"
-            : "The canvas saves itself as you work (⌘S saves right away)"
-        }
-      >
-        {saveFailed
-          ? "Not saved"
-          : saveState === "saved"
-            ? "All changes saved"
-            : saveState === "idle"
-              ? neverSaved
-                ? "Not saved yet"
-                : ""
-              : "Saving…"}
-      </span>
 
       <div className="control-group">
         <button className="btn btn-sm" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">

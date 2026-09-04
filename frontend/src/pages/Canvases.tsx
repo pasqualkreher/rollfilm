@@ -90,7 +90,7 @@ export function Canvases() {
       !(await dialogs.confirm({
         title: `Delete canvas “${canvas.name}”?`,
         message:
-          "The design and all its kept versions are deleted. The photos stay in your library - including any virtual copies.",
+          "The design and all its saved versions are deleted. The photos stay in your library - including any virtual copies.",
         confirmLabel: "Delete canvas",
         danger: true,
       }))
@@ -105,7 +105,7 @@ export function Canvases() {
     <div className="page">
       <h2 className="section-title">Canvas</h2>
       <p className="page-subtitle" style={{ color: "var(--text-muted)", marginTop: -8 }}>
-        Free design surfaces: place photos by hand on pages or an endless sheet, keep versions,
+        Free design surfaces: place photos by hand on pages or an endless sheet, save versions,
         print or export. Add photos from the library&rsquo;s Select mode.
       </p>
 

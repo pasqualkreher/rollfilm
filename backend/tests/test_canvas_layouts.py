@@ -15,12 +15,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import schemas
 from app.api.routes.canvases import (
     clear_canvas_layout,
+    create_layout_version,
     delete_canvas,
     get_canvas_layout,
+    restore_layout_version,
     save_canvas_layout,
 )
 from app.db.base import Base
-from app.db.models import Canvas, CanvasLayout, FileType, Image, LayoutItem, User
+from app.db.models import Canvas, CanvasLayout, FileType, Image, LayoutItem, LayoutVersion, User
 from app.services.trash import hard_delete_images
 
 
@@ -293,3 +295,43 @@ def test_another_owners_canvas_is_not_reachable(db: Session):
 
     with pytest.raises(HTTPException):
         save_canvas_layout("theirs", schemas.CanvasLayoutIn(), db=db, current_user=user)
+
+
+def test_saving_under_an_existing_name_replaces_that_version(db: Session):
+    """Save is "keep the canvas under this name": the same name again is an
+    overwrite of that version, a new name is a new one. Either way the version
+    just written is the active one, and loading it brings back what it holds."""
+    canvas = _canvas(db)
+    user = db.get(User, 1)
+    _image(db, "a")
+    db.commit()
+
+    def save(x_mm: float) -> None:
+        save_canvas_layout(
+            canvas.id,
+            schemas.CanvasLayoutIn(items=[_photo("i1", "a", x_mm=x_mm, y_mm=20, width_mm=80, height_mm=60)]),
+            db=db,
+            current_user=user,
+        )
+
+    save(10)
+    out = create_layout_version(canvas.id, schemas.LayoutVersionIn(name="Draft"), db=db, current_user=user)
+    first_id = out.versions[0].id
+    assert [v.name for v in out.versions] == ["Draft"]
+
+    save(50)
+    out = create_layout_version(canvas.id, schemas.LayoutVersionIn(name="draft"), db=db, current_user=user)
+    assert [v.name for v in out.versions] == ["Draft"]
+    assert out.versions[0].id == first_id
+    assert out.active_version_id == first_id
+    assert db.query(LayoutVersion).count() == 1
+
+    save(90)
+    out = create_layout_version(canvas.id, schemas.LayoutVersionIn(name="Final"), db=db, current_user=user)
+    assert sorted(v.name for v in out.versions) == ["Draft", "Final"]
+    assert out.active_version_id != first_id
+
+    # "Draft" now holds the 50mm layout, not the 10mm one it was first kept with.
+    out = restore_layout_version(canvas.id, first_id, db=db, current_user=user)
+    assert out.items[0].x_mm == 50
+    assert out.active_version_id == first_id

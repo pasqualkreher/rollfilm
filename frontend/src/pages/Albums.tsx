@@ -207,7 +207,7 @@ function albumCount(album: AlbumOut): string {
 //
 // Albums whose canvas opted in ("Canvas Shelf", chosen inside the canvas)
 // appear here as a print-style preview: the paper itself with the photos on
-// it, drawn from the album's chosen VERSION - the one last kept or last
+// it, drawn from the album's chosen VERSION - the one last saved or last
 // loaded - never from the autosaving working draft. A card opens the
 // full-screen print view below, for LOOKING and exporting only: editing stays
 // in the album's own canvas.
@@ -642,7 +642,7 @@ export function Albums() {
       !(await dialogs.confirm({
         title: `Take “${canvas.canvas_name}” off the Canvas Shelf?`,
         message:
-          "Only the card is removed - the canvas and its kept versions stay untouched. Turn it back on inside the canvas (Versions → Canvas Shelf).",
+          "Only the card is removed - the canvas and its saved versions stay untouched. Turn it back on inside the canvas (Versions → Canvas Shelf).",
         confirmLabel: "Take it off",
       }))
     )
@@ -822,7 +822,7 @@ export function Albums() {
         <section className="canvas-shelf-section">
           <h3 className="smart-row-title">
             Canvas Shelf
-            <span className="smart-row-hint">The kept version of each album’s canvas - click to see it as it will print</span>
+            <span className="smart-row-hint">The saved version of each album’s canvas - click to see it as it will print</span>
           </h3>
           <div className="canvas-shelf">
             {canvases.map((canvas) => (
