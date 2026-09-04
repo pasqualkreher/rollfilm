@@ -8971,8 +8971,8 @@ button.smart-card {
 }
 
 /* The card wraps two buttons: the big one opens the read-only print view,
-   the × in the corner takes the canvas off the shelf (hover to see it, like
-   the album cards' remove). */
+   the trash in the corner takes the canvas off the shelf (hover to see it,
+   like the album cards' remove). */
 .canvas-shelf-card {
   position: relative;
   max-width: 100%;
@@ -8980,11 +8980,6 @@ button.smart-card {
 
 .canvas-shelf-card:hover .card-remove {
   opacity: 1;
-}
-
-/* The trash sits left of the ×, where the album cards keep their pencil. */
-.canvas-shelf-card .canvas-shelf-delete {
-  right: 38px;
 }
 
 .canvas-shelf-open {

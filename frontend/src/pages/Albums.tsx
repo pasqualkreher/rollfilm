@@ -13,7 +13,6 @@ import {
   IconChevronRight,
   IconPencil,
   IconTrash,
-  IconX,
 } from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
 import { ExportChip } from "../components/CanvasExportChip";
@@ -217,12 +216,10 @@ function CanvasCard({
   canvas,
   onOpen,
   onRemove,
-  onDelete,
 }: {
   canvas: CanvasGalleryOut;
   onOpen: () => void;
   onRemove: () => void;
-  onDelete: () => void;
 }) {
   const sheet = useMemo(() => shelfSheets(canvas)[0], [canvas]);
 
@@ -253,21 +250,8 @@ function CanvasCard({
           <div className="canvas-shelf-meta">{caption}</div>
         </div>
       </button>
-      {/* The trash left of the ×: deletes the canvas itself, as the Canvas
-          page's list does. */}
-      <button
-        className="card-remove canvas-shelf-delete"
-        title="Delete this canvas - the photos stay in the library"
-        aria-label={`Delete canvas “${canvas.canvas_name}”`}
-        onClick={(event) => {
-          event.stopPropagation();
-          onDelete();
-        }}
-      >
-        <IconTrash size={12} />
-      </button>
-      {/* Same × as the album cards - but this one only takes the canvas off
-          the shelf. */}
+      {/* Same corner button as the album cards - but this one only takes the
+          canvas off the shelf; the canvas itself is deleted on the Canvas page. */}
       <button
         className="card-remove"
         title="Take off the Canvas Shelf (the canvas and its versions are kept)"
@@ -277,7 +261,7 @@ function CanvasCard({
           onRemove();
         }}
       >
-        <IconX size={12} />
+        <IconTrash size={12} />
       </button>
     </div>
   );
@@ -673,25 +657,6 @@ export function Albums() {
     return true;
   }
 
-  // The shelf card's trash: the canvas itself goes, with all its versions -
-  // the same ask as on the Canvas page. The photos stay in the library.
-  async function deleteCanvas(canvas: CanvasGalleryOut) {
-    if (
-      !(await dialogs.confirm({
-        title: `Delete canvas “${canvas.canvas_name}”?`,
-        message:
-          "The design and all its saved versions are deleted. The photos stay in your library - including any virtual copies.",
-        confirmLabel: "Delete canvas",
-        danger: true,
-      }))
-    )
-      return;
-    await api.canvases.remove(canvas.canvas_id);
-    if (viewing?.canvas_id === canvas.canvas_id) setViewing(null);
-    queryClient.invalidateQueries({ queryKey: ["canvases"] });
-    queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
-  }
-
   const clustersPending = smart
     ? smart.clusters_status !== "ready" && smart.clusters.length === 0
     : false;
@@ -869,7 +834,6 @@ export function Albums() {
                 canvas={canvas}
                 onOpen={() => setViewing(canvas)}
                 onRemove={() => removeFromShelf(canvas)}
-                onDelete={() => void deleteCanvas(canvas)}
               />
             ))}
           </div>
