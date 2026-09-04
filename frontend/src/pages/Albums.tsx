@@ -11,6 +11,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconPencil,
+  IconTrash,
   IconX,
 } from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
@@ -276,7 +277,18 @@ const SHELF_IDLE_MS = 2200;
 // only things that work here are the print view's own moves - turn the pages,
 // zoom about the cursor, drag the sheet, Escape out - and Export. Changing the
 // design means opening the album's canvas.
-function CanvasShelfViewer({ canvas, onClose }: { canvas: CanvasGalleryOut; onClose: () => void }) {
+function CanvasShelfViewer({
+  canvas,
+  onClose,
+  onRemove,
+}: {
+  canvas: CanvasGalleryOut;
+  onClose: () => void;
+  // Take the canvas off the shelf from in here (the canvas itself is kept).
+  // Resolves true once it is off, so the viewer can close over a card that
+  // no longer exists.
+  onRemove: () => Promise<boolean>;
+}) {
   const sheets = useMemo(() => shelfSheets(canvas), [canvas]);
   const [index, setIndex] = useState(0);
   const [size, setSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
@@ -543,6 +555,18 @@ function CanvasShelfViewer({ canvas, onClose }: { canvas: CanvasGalleryOut; onCl
         <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to come back</span>
         <span className="canvas-print-export">
           <ExportChip doc={doc} byId={byId} title={canvas.canvas_name} drop="up" />
+          {/* The card's × from inside the view: off the shelf, nothing more.
+              Deleting a canvas stays inside the canvas itself. */}
+          <button
+            className="btn btn-sm canvas-tool quiet-danger canvas-print-shelf-off"
+            onClick={async () => {
+              if (await onRemove()) onClose();
+            }}
+            aria-label={`Take “${canvas.canvas_name}” off the Canvas Shelf`}
+            title="Take off the Canvas Shelf (the canvas and its versions are kept)"
+          >
+            <IconTrash size={14} />
+          </button>
         </span>
       </div>
     </div>,
@@ -612,7 +636,8 @@ export function Albums() {
 
   // The shelf card's ×: off the shelf, nothing more. The canvas and its kept
   // versions stay with the album - the checkbox inside the canvas re-shows it.
-  async function removeFromShelf(canvas: CanvasGalleryOut) {
+  // Also offered inside the full-screen view; true means it came off.
+  async function removeFromShelf(canvas: CanvasGalleryOut): Promise<boolean> {
     if (
       !(await dialogs.confirm({
         title: `Take “${canvas.canvas_name}” off the Canvas Shelf?`,
@@ -621,11 +646,12 @@ export function Albums() {
         confirmLabel: "Take it off",
       }))
     )
-      return;
+      return false;
     await api.canvases.setShelf(canvas.canvas_id, false);
     queryClient.invalidateQueries({ queryKey: ["canvases"] });
     // The canvas's own Versions panel reads this flag from the layout query.
     queryClient.invalidateQueries({ queryKey: ["canvas-layout", canvas.canvas_id] });
+    return true;
   }
 
   const clustersPending = smart
@@ -760,7 +786,7 @@ export function Albums() {
                   deleteAlbum(album.id, album.name, album.image_count);
                 }}
               >
-                <IconX size={12} />
+                <IconTrash size={12} />
               </button>
             </>
           );
@@ -811,7 +837,13 @@ export function Albums() {
         </section>
       )}
 
-      {viewing && <CanvasShelfViewer canvas={viewing} onClose={() => setViewing(null)} />}
+      {viewing && (
+        <CanvasShelfViewer
+          canvas={viewing}
+          onClose={() => setViewing(null)}
+          onRemove={() => removeFromShelf(viewing)}
+        />
+      )}
     </div>
   );
 }

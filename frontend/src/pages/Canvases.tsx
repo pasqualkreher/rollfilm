@@ -90,7 +90,7 @@ export function Canvases() {
       !(await dialogs.confirm({
         title: `Delete canvas “${canvas.name}”?`,
         message:
-          "The design and all its kept versions are deleted. The photos stay in your library - including any canvas edits.",
+          "The design and all its kept versions are deleted. The photos stay in your library - including any virtual copies.",
         confirmLabel: "Delete canvas",
         danger: true,
       }))

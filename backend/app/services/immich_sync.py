@@ -204,7 +204,7 @@ def _upload_missing(db: Session, config: ImmichConfig) -> None:
         Image.deleted_at.is_(None),
         Image.file_type == FileType.jpeg,
         Image.immich_asset_id.is_(None),
-        # Virtual copies ("canvas edit") never sync: their bytes are the
+        # Virtual copies ("virtual copy") never sync: their bytes are the
         # source's bytes, so Immich would checksum-dedupe them onto the
         # source's asset and the id backfill would tangle the two rows.
         Image.virtual_of_image_id.is_(None),

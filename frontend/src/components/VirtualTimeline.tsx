@@ -4,7 +4,14 @@ import type { LibraryIndexImage } from "../api/types";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { TimelineScrubber } from "./TimelineScrubber";
-import { Thumb, fileTypeBadge, fileTypeBadgeClass, tileAspectRatio } from "./ThumbnailGrid";
+import {
+  Thumb,
+  VIRTUAL_COPY_TITLE,
+  VirtualCopyMark,
+  fileTypeBadge,
+  fileTypeBadgeClass,
+  tileAspectRatio,
+} from "./ThumbnailGrid";
 import { usePhotoInfoCard } from "./PhotoInfoCard";
 import { useMergePairs } from "../state/viewPrefs";
 import { thumbPx, thumbTier, useThumbSize } from "../state/viewPrefs";
@@ -229,7 +236,11 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
           alt={image.original_filename}
           rowHeight={rowH}
         />
-        <span className={fileTypeBadgeClass(image.file_type, merged)}>
+        <span
+          className={fileTypeBadgeClass(image.file_type, merged)}
+          title={image.virtual_of_image_id ? VIRTUAL_COPY_TITLE : undefined}
+        >
+          {image.virtual_of_image_id && <VirtualCopyMark />}
           {fileTypeBadge(image.file_type, merged)}
         </span>
         {infoButton(image.id)}

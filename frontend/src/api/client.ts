@@ -684,12 +684,17 @@ export const api = {
         body: JSON.stringify(apiEdits(edits)),
       });
     },
-    // A "canvas edit": a second library entry for the SAME file on disk,
-    // starting from the source's current develop state, tagged "canvas edit".
+    // A "virtual copy": a second library entry for the SAME file on disk,
+    // starting from the source's current develop state, tagged "virtual copy".
     // No pixels are written; deleting the copy later falls canvas frames back
     // to the source.
-    virtualCopy(id: string): Promise<ImageOut> {
-      return request(`/images/${id}/virtual-copy`, { method: "POST" });
+    // With `edits` (the editor's Save copy → virtual copy) the copy takes the
+    // editor's current, possibly unsaved state instead of the saved one.
+    virtualCopy(id: string, edits?: ImageEdits): Promise<ImageOut> {
+      return request(`/images/${id}/virtual-copy`, {
+        method: "POST",
+        ...(edits ? { body: JSON.stringify(apiEdits(edits)) } : {}),
+      });
     },
     // `size: "small"` requests the 640px tier the dense grid sizes use (see
     // thumbTier in state/viewPrefs.ts); omitted = the full 1600px thumbnail.

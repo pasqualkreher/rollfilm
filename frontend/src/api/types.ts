@@ -40,7 +40,7 @@ export interface ImageOut {
   immich_sync: boolean;
   paired_image_id: string | null;
   source_root_id: string | null;
-  // Set when this row is a virtual copy ("canvas edit") of another photo:
+  // Set when this row is a virtual copy ("virtual copy") of another photo:
   // same file on disk, its own develop state.
   virtual_of_image_id?: string | null;
   edit_rotation: number;
@@ -591,6 +591,8 @@ export interface LibraryIndexImage {
   // Server-computed equivalent of editVersion() - cache-buster for the
   // thumbnail URL that changes whenever the photo's edits change.
   thumb_version: string;
+  // Set when this row is a virtual copy of another photo (no file of its own).
+  virtual_of_image_id: string | null;
 }
 
 // One geotagged photo on the map, slim like the library index.

@@ -46,7 +46,7 @@ class ImageOut(BaseModel):
     # Set when this photo was indexed in place from an external source root
     # (e.g. a NAS) rather than imported into the managed library.
     source_root_id: str | None
-    # Set when this row is a virtual copy ("canvas edit") of another photo:
+    # Set when this row is a virtual copy ("virtual copy") of another photo:
     # same file on disk, its own develop state. See /images/{id}/virtual-copy.
     virtual_of_image_id: str | None = None
     edit_rotation: int

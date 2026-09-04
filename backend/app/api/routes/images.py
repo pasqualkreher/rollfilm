@@ -48,6 +48,7 @@ from app.services import (
     thumbnails,
     trash as trash_service,
 )
+from app.services.auto_tags import AUTO_TAGS, auto_tag_error, is_auto_tag
 from app.services.filesystem import (
     VIRTUAL_PATH_MARKER,
     library_relative_path,
@@ -379,7 +380,7 @@ def library_index(
             Image.width, Image.height, type_coerce(Image.taken_at, String),
             Image.rating, type_coerce(Image.color_label, String),
             Image.immich_sync, Image.paired_image_id, Image.source_root_id,
-            Image.edit_rev, partner_deleted,
+            Image.edit_rev, partner_deleted, Image.virtual_of_image_id,
         )
         .order_by(Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc())
         .all()
@@ -406,10 +407,14 @@ def library_index(
             "paired_image_id": paired_image_id if partner_deleted_at is None else None,
             "source_root_id": source_root_id,
             "thumb_version": str(edit_rev) if edit_rev else "",
+            # The grid badges virtual copies ("virtual copy") - rows that share
+            # their file with another photo - so they read as non-physical.
+            "virtual_of_image_id": virtual_of_image_id,
         }
         for (
             id_, filename, file_type, width, height, taken_at, rating, color_label,
             immich_sync, paired_image_id, source_root_id, edit_rev, partner_deleted_at,
+            virtual_of_image_id,
         ) in rows
     ]
     return Response(
@@ -1130,6 +1135,9 @@ def bulk_add_tags(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    for name in payload.tag_names:
+        if is_auto_tag(name):
+            raise HTTPException(status_code=400, detail=auto_tag_error(name))
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     for image in images:
         for name in payload.tag_names:
@@ -1154,7 +1162,16 @@ def bulk_reset_metadata(
     image_ids = [image.id for image in images]
 
     if payload.tags:
-        db.query(ImageTag).filter(ImageTag.image_id.in_(image_ids)).delete(synchronize_session=False)
+        # Auto-managed tags describe what the photo is (an edit copy, a canvas
+        # copy) and survive a reset; "edit" is re-derived below anyway.
+        auto_ids = [
+            t.id
+            for t in db.query(Tag).filter(Tag.owner_id == current_user.id, Tag.name.in_(AUTO_TAGS)).all()
+        ]
+        query = db.query(ImageTag).filter(ImageTag.image_id.in_(image_ids))
+        if auto_ids:
+            query = query.filter(ImageTag.tag_id.notin_(auto_ids))
+        query.delete(synchronize_session=False)
     if payload.albums:
         db.query(AlbumImage).filter(AlbumImage.image_id.in_(image_ids)).delete(synchronize_session=False)
 
@@ -1459,6 +1476,8 @@ def add_tag(
     image = get_owned_image(db, current_user.id, image_id)
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Tag name can't be empty")
+    if is_auto_tag(payload.name):
+        raise HTTPException(status_code=400, detail=auto_tag_error(payload.name))
     _add_tag_to_image(db, current_user.id, image, payload.name)
     db.commit()
     db.refresh(image)
@@ -1473,6 +1492,8 @@ def remove_tag(
     current_user: User = Depends(get_current_user),
 ):
     image = get_owned_image(db, current_user.id, image_id)
+    if is_auto_tag(tag_name):
+        raise HTTPException(status_code=400, detail=auto_tag_error(tag_name))
     tag = db.query(Tag).filter(Tag.owner_id == current_user.id, Tag.name == tag_name).first()
     if tag:
         db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
@@ -1551,20 +1572,16 @@ def _validate_crop(crop: schemas.CropBox | None) -> None:
         raise HTTPException(status_code=400, detail="Crop box must be within the image bounds")
 
 
-@router.patch("/{image_id}/edits", response_model=schemas.ImageOut)
-def save_edits(
-    image_id: str,
-    payload: schemas.ImageEdits,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Save the full non-destructive edit (rotation + crop + tonal sliders) in
-    place and re-render this photo's derivatives. The original file on disk is
-    never modified - resetting everything restores the original look."""
+def _validate_edits(payload: schemas.ImageEdits) -> None:
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
-    image = get_owned_image(db, current_user.id, image_id)
+
+
+def _apply_edits(image: Image, payload: schemas.ImageEdits) -> None:
+    """Write an edits payload onto a row: geometry plus the normalized develop
+    state. Shared by save-in-place and the virtual copy made from unsaved
+    editor state; callers decide what happens to edit_rev and the "edit" tag."""
     image.edit_rotation = payload.rotation % 360
     if payload.crop is None:
         image.edit_crop_x = image.edit_crop_y = image.edit_crop_width = image.edit_crop_height = None
@@ -1578,22 +1595,26 @@ def save_edits(
     image.edit_persp_h = _clamp100(payload.persp_h)
     image.edit_persp_v = _clamp100(payload.persp_v)
     image.edit_distortion = _clamp100(payload.distortion)
-    adj = develop.normalize(payload.adjustments)
-    image.edit_adjustments = develop.dumps(adj)
+    image.edit_adjustments = develop.dumps(develop.normalize(payload.adjustments))
+
+
+@router.patch("/{image_id}/edits", response_model=schemas.ImageOut)
+def save_edits(
+    image_id: str,
+    payload: schemas.ImageEdits,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Save the full non-destructive edit (rotation + crop + tonal sliders) in
+    place and re-render this photo's derivatives. The original file on disk is
+    never modified - resetting everything restores the original look."""
+    _validate_edits(payload)
+    image = get_owned_image(db, current_user.id, image_id)
+    _apply_edits(image, payload)
     # Tag edited photos "edit" so they're easy to find; drop the tag if the edit
     # was reset back to the original look. Bump the per-image cache-buster so the
     # thumbnail/preview URLs refresh; a reset back to neutral drops it to 0 (no ?v=).
-    has_edit = bool(
-        payload.rotation % 360
-        or payload.crop is not None
-        or payload.flip_h
-        or payload.flip_v
-        or image.edit_straighten
-        or payload.persp_h
-        or payload.persp_v
-        or payload.distortion
-        or image.edit_adjustments is not None
-    )
+    has_edit = _has_any_edit(image)
     image.edit_rev = (image.edit_rev or 0) + 1 if has_edit else 0
     if has_edit:
         _add_tag_to_image(db, current_user.id, image, "edit")
@@ -2076,16 +2097,21 @@ def save_copy(
 @router.post("/{image_id}/virtual-copy", response_model=schemas.ImageOut)
 def create_virtual_copy(
     image_id: str,
+    payload: schemas.ImageEdits | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """A "canvas edit": a second library entry for the SAME file on disk,
+    """A "virtual copy": a second library entry for the SAME file on disk,
     starting from the source's current develop state but free to diverge. No
     pixels are written anywhere - the copy borrows the source's bytes through
     a synthetic file_path (see filesystem.resolve_image_path) and carries its
-    own edits, derivatives and edit_rev. Tagged "canvas edit" so the library
-    shows what it is; excluded from Immich sync, pairing and the backup zip
+    own edits, derivatives and edit_rev. Tagged "virtual copy" (plus "edit"
+    when it carries edits) so the library shows what it is; excluded from Immich sync, pairing and the backup zip
     (the bytes travel under the source's entry).
+
+    With an edits `payload` (the editor's Save copy → virtual copy, where the
+    sliders may hold unsaved work) the copy takes THAT state instead of the
+    template's saved one - the source itself is left exactly as it was.
 
     Deleting the copy goes through the Trash like any photo; permanently
     deleting it makes canvas frames fall back to the source. A copy of a copy
@@ -2093,6 +2119,8 @@ def create_virtual_copy(
     src = get_owned_image(db, current_user.id, image_id)
     if src.deleted_at is not None:
         raise HTTPException(status_code=400, detail="This photo is in the Trash")
+    if payload is not None:
+        _validate_edits(payload)
     if src.virtual_of_image_id:
         grounded = db.get(Image, src.virtual_of_image_id)
         if grounded is None:
@@ -2146,9 +2174,16 @@ def create_virtual_copy(
         edit_adjustments=template.edit_adjustments,
         edit_rev=max(1, template.edit_rev),
     )
+    if payload is not None:
+        _apply_edits(copy, payload)
+        copy.edit_rev = max(1, template.edit_rev) + 1
     db.add(copy)
     db.flush()
-    _add_tag_to_image(db, current_user.id, copy, "canvas edit")
+    _add_tag_to_image(db, current_user.id, copy, "virtual copy")
+    # Like any photo, a copy that carries develop or geometry work is "edit"
+    # too (save_edits keeps that in step from here on).
+    if _has_any_edit(copy):
+        _add_tag_to_image(db, current_user.id, copy, "edit")
     db.commit()
     db.refresh(copy)
     # Derivatives synchronously, like save-copy: the canvas swaps the frame to

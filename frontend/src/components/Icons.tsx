@@ -558,3 +558,75 @@ export function IconPrinter(props: IconProps) {
     </svg>
   );
 }
+
+// IconRotate's mirror: an anticlockwise circle-arrow - restore / reset back to
+// how it was (Trash restore, canvas crop/rotation resets).
+export function IconRestore(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9" />
+      <path d="M2.5 1.5v3h3" />
+    </svg>
+  );
+}
+
+// A clipboard - paste settings.
+export function IconClipboard(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5.5 3.25H4.25a1 1 0 0 0-1 1v8.25a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1V4.25a1 1 0 0 0-1-1H10.5" />
+      <rect x="5.5" y="1.75" width="5" height="2.75" rx="0.8" />
+    </svg>
+  );
+}
+
+// A floppy disk - save (IconDisk is already taken by the database cylinder).
+export function IconSave(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.75 3.75a1 1 0 0 1 1-1h6.9l2.6 2.6v6.9a1 1 0 0 1-1 1h-8.5a1 1 0 0 1-1-1z" />
+      <path d="M5.25 13.25V9.5h5.5v3.75" />
+      <path d="M5.25 2.75V5.5h3.5" />
+    </svg>
+  );
+}
+
+// An arrow up to the top line - bring to the front of the stacking order.
+export function IconBringFront(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M3.25 2.5h9.5" />
+      <path d="M8 13.5V5.75" />
+      <path d="M4.9 8.85 8 5.75l3.1 3.1" />
+    </svg>
+  );
+}
+
+// An arrow down to the bottom line - send to the back of the stacking order.
+export function IconSendBack(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M3.25 13.5h9.5" />
+      <path d="M8 2.5v7.75" />
+      <path d="M4.9 7.15 8 10.25l3.1-3.1" />
+    </svg>
+  );
+}
+
+// A play triangle - starts the slideshow / resumes it while paused.
+export function IconPlay(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5.25 3.5v9l7-4.5z" />
+    </svg>
+  );
+}
+
+// Two bars - pauses the running slideshow.
+export function IconPause(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5.75 3.5v9M10.25 3.5v9" />
+    </svg>
+  );
+}

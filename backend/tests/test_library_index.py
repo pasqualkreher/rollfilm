@@ -90,6 +90,7 @@ def test_a_photo_serialises_every_field_the_grid_needs(db):
         "paired_image_id": "b",
         "source_root_id": None,
         "thumb_version": "",
+        "virtual_of_image_id": None,
     }
 
 

@@ -431,6 +431,7 @@ export function AlbumDetail() {
         <button
           className="btn btn-sm quiet-danger album-bottom-delete"
           title="Delete this album - its photos stay in the library"
+          aria-label="Delete this album - its photos stay in the library"
           onClick={async () => {
             if (
               !(await dialogs.confirm({
@@ -447,7 +448,7 @@ export function AlbumDetail() {
             navigate("/albums");
           }}
         >
-          Delete album
+          <IconTrash size={14} />
         </button>
       )}
     </h2>

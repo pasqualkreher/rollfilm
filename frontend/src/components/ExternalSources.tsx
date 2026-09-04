@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { DirectoryPicker } from "./DirectoryPicker";
+import { IconRotate, IconTrash } from "./Icons";
 import { useAppDialogs } from "./AppDialogs";
 
 function formatScanned(iso: string | null): string {
@@ -91,8 +92,8 @@ export function ExternalSources() {
       <h3 className="section-title">External photo sources</h3>
       <p className="import-panel-desc">
         Show photos from a folder — like a NAS or an archive — without copying them in. The files
-        stay where they are, and each source is re-scanned at startup and when you press{" "}
-        <em>Scan now</em>.
+        stay where they are, and each source is re-scanned at startup and when you press its
+        scan button.
       </p>
       <div className="import-toolbar" style={{ flexWrap: "wrap" }}>
         <input
@@ -156,19 +157,22 @@ export function ExternalSources() {
               </div>
               <div className="source-row-actions">
                 <button
-                  className="btn"
+                  className="btn btn-sm"
                   onClick={() => scan.mutate(s.id)}
                   disabled={s.scanning || !s.available}
+                  aria-label={`Scan "${s.name}" now`}
                   title={
                     !s.available
                       ? "Reconnect the drive/folder to scan it"
-                      : "Re-index the whole folder - new files are added and photos you deleted from this source come back"
+                      : "Scan now: re-index the whole folder - new files are added and photos you deleted from this source come back"
                   }
                 >
-                  {s.scanning ? "Scanning…" : "Scan now"}
+                  <IconRotate size={14} />
                 </button>
                 <button
-                  className="btn danger"
+                  className="btn btn-sm quiet-danger"
+                  aria-label={`Remove source "${s.name}"`}
+                  title="Remove this source - its files stay on disk"
                   onClick={async () => {
                     if (
                       await dialogs.confirm({
@@ -185,7 +189,7 @@ export function ExternalSources() {
                   }}
                   disabled={remove.isPending}
                 >
-                  Remove
+                  <IconTrash size={14} />
                 </button>
               </div>
             </div>

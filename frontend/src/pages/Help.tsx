@@ -570,6 +570,13 @@ const CHAPTERS: Chapter[] = [
                 <kbd>↓</kbd> switch between the RAW and the JPEG of a pair, and <kbd>Esc</kbd> goes
                 back — first out of the zoom, then out of the photo.
               </li>
+              <li>
+                <strong>Slideshow:</strong> the toolbar's <strong>Slideshow</strong> button (or{" "}
+                <kbd>S</kbd>) plays the set you're browsing fullscreen, advancing automatically and
+                wrapping around at the end. <kbd>Space</kbd> pauses, <kbd>←</kbd> / <kbd>→</kbd> step
+                by hand, the control bar picks the pace (3, 5 or 10 seconds per photo), and{" "}
+                <kbd>Esc</kbd> ends the show on the photo it reached.
+              </li>
             </ul>
           </>
         ),
@@ -716,10 +723,12 @@ const CHAPTERS: Chapter[] = [
                 stays as it was.
               </li>
               <li>
-                <strong>Save copy</strong> makes a new photo (auto-tagged "edited") at full quality
-                and size in one click, leaving the original untouched. Turn on{" "}
-                <em>Settings → Photos → Photo editor</em> if you would rather be asked for quality
-                and size each time.
+                <strong>Save copy</strong> makes a new photo and leaves the original untouched. It
+                asks which kind: a physical copy (a new JPEG with the edits baked in, tagged "edit
+                copy") or a virtual copy (no new file - a second entry sharing the original's file
+                with its own edits, tagged "virtual copy"). Turn on{" "}
+                <em>Settings → Photos → Photo editor</em> if you would also like to pick quality
+                and size for physical copies.
               </li>
               <li>
                 <strong>Reset all</strong> clears every adjustment and gives you the photo as it was
@@ -1096,6 +1105,16 @@ const CHAPTERS: Chapter[] = [
                   <kbd>P</kbd>
                 </td>
                 <td>Show / hide the side panel, so the photo gets the whole window</td>
+              </tr>
+              <tr>
+                <td>Photo view</td>
+                <td>
+                  <kbd>S</kbd>
+                </td>
+                <td>
+                  Start a fullscreen slideshow of the set you're browsing (Space pauses, Esc ends
+                  it)
+                </td>
               </tr>
               <tr>
                 <td>Photo view</td>

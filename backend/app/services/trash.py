@@ -121,7 +121,7 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
     synced photos. The maintenance cleanup of vanished files (delete_files=
     False) deliberately doesn't: the file disappearing outside the app isn't
     the user asking for the photo to be gone from Immich."""
-    # A photo's virtual copies ("canvas edits") borrow its bytes - when the
+    # A photo's virtual copies ("virtual copies") borrow its bytes - when the
     # photo goes for good they have nothing left to show, so they go with it,
     # through the same batch so every fallback below sees the whole picture.
     seed_ids = {image.id for image in images}

@@ -14,9 +14,16 @@ import { setDetailPanelOpen, useAskSaveCopyOptions, useDetailPanelOpen, useMerge
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
-import { SaveCopyDialog, FULL_COPY_QUALITY } from "../components/SaveCopyDialog";
+import { SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
+import {
+  VIRTUAL_COPY_TITLE,
+  VirtualCopyMark,
+  fileTypeBadge,
+  fileTypeBadgeClass,
+} from "../components/ThumbnailGrid";
 import { editsFromImage } from "../utils/adjustments";
-import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconImage, IconPencil, IconPlus, IconTrash, IconX } from "../components/Icons";
+import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconImage, IconPencil, IconPlay, IconPlus, IconTrash, IconX } from "../components/Icons";
+import { Slideshow } from "../components/Slideshow";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { ZoomReadout } from "../components/ZoomReadout";
@@ -57,12 +64,13 @@ export function ImageDetail() {
   const [activeId, setActiveId] = useState(id!);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  // Fullscreen slideshow over the browsed set (falls back to just this photo
+  // when the view was opened without one).
+  const [slideshowOpen, setSlideshowOpen] = useState(false);
   // "Save copy" from the panel - same action as the editor's button, using the
-  // edits already saved on the photo. Follows the same Settings toggle: by
-  // default one click at full quality, with the options dialog when asked for.
+  // edits already saved on the photo. The dialog asks physical vs virtual;
+  // the Settings toggle adds the physical copy's quality/size controls.
   const [saveCopyOpen, setSaveCopyOpen] = useState(false);
-  const [copyBusy, setCopyBusy] = useState(false);
-  const [copyNote, setCopyNote] = useTransientMessage();
   const askSaveCopyOptions = useAskSaveCopyOptions();
   // Renaming the file on disk: the title row swaps to an input while this is
   // on. The draft holds the STEM only - the extension isn't editable.
@@ -230,13 +238,16 @@ export function ImageDetail() {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (adjustOpen) return;
+      // The editor and the slideshow own the keyboard while they're up (the
+      // slideshow pages, pauses and closes with its own listener).
+      if (adjustOpen || slideshowOpen) return;
 
       // While the Save-copy dialog is up the keyboard belongs to it: Esc
       // closes the dialog (never the lightbox behind it), everything else -
       // paging, rating, shortcuts - stays parked until it's gone.
       if (saveCopyOpen) {
-        if (e.key === "Escape" && !copyBusy) setSaveCopyOpen(false);
+        // Escape is ignored while the dialog is busy - it disables its own Cancel.
+        if (e.key === "Escape") setSaveCopyOpen(false);
         return;
       }
 
@@ -284,6 +295,12 @@ export function ImageDetail() {
         return;
       }
 
+      // S starts the slideshow - the same thing the toolbar's button does.
+      if (!inControl && image && (e.key === "s" || e.key === "S")) {
+        setSlideshowOpen(true);
+        return;
+      }
+
       // P hides/shows the side panel - the one key you want while looking at a
       // photo full width, without going for the mouse. I stays wired up as
       // well: it was the original key, and fingers that learned it keep working.
@@ -297,7 +314,7 @@ export function ImageDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [goToOffset, adjustOpen, saveCopyOpen, copyBusy, image, paired, activeId, zoomed, renaming, panelOpen]);
+  }, [goToOffset, adjustOpen, slideshowOpen, saveCopyOpen, image, paired, activeId, zoomed, renaming, panelOpen]);
 
   // The photo the user has actually SETTLED on: follows activeId only after a
   // short pause without further navigation. Holding an arrow key changes
@@ -581,10 +598,14 @@ export function ImageDetail() {
   // then jump to it - mirroring the editor's Save copy, including slotting the
   // new photo into the browsed set right after its original so the arrow keys
   // keep working, and pointing Back at the Library instead of replaying history.
-  async function saveCopyRun(opts: { quality: number; maxSize: number | null; blocking?: boolean }) {
-    const { blocking, ...rest } = opts;
-    const run = () => api.images.saveCopy(image!.id, editsFromImage(image!), rest);
-    const created = blocking ? await withWait("Saving a copy…", run) : await run();
+  async function saveCopyRun(req: SaveCopyRequest) {
+    const created =
+      req.kind === "virtual"
+        ? await api.images.virtualCopy(image!.id)
+        : await api.images.saveCopy(image!.id, editsFromImage(image!), {
+            quality: req.quality,
+            maxSize: req.maxSize,
+          });
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });
     // Unlike the editor, this page stays mounted while the route moves to the
@@ -597,21 +618,6 @@ export function ImageDetail() {
         : [...imageIds.slice(0, at + 1), created.id, ...imageIds.slice(at + 1)]
       : undefined;
     navigate(`/image/${created.id}`, { state: { backTo: "/", imageIds: nextIds } });
-  }
-
-  async function saveCopyClick() {
-    if (askSaveCopyOptions) {
-      setSaveCopyOpen(true);
-      return;
-    }
-    setCopyBusy(true);
-    try {
-      await saveCopyRun({ quality: FULL_COPY_QUALITY, maxSize: null, blocking: true });
-    } catch (e) {
-      setCopyNote(errorText(e));
-    } finally {
-      setCopyBusy(false);
-    }
   }
 
   async function deletePhoto() {
@@ -746,6 +752,16 @@ export function ImageDetail() {
             </button>
             <StageBackgroundToggle />
             <ZoomReadout zoom={zoom} />
+            {/* Hairline between the look-at-it controls (background, zoom) and
+                the slideshow - same divider as the editor's toolbar. */}
+            <span className="editor-toolbar-sep" aria-hidden />
+            <button
+              className="btn btn-sm slideshow-btn"
+              onClick={() => setSlideshowOpen(true)}
+              title="Play a fullscreen slideshow of the photos you're browsing (S)"
+            >
+              <IconPlay size={13} /> Slideshow
+            </button>
             {/* Mirror of Back on the other end of the row: the collapse handle
                 used to sit in a slim column right of the panel, which cost a
                 strip of width in BOTH states. Riding in the stage's control
@@ -816,6 +832,19 @@ export function ImageDetail() {
             ) : (
               <>
                 <h3 className="section-title">{image.original_filename}</h3>
+                {/* The same file-kind chip as the grid tile, virtual-copy mark
+                    included, so the panel says what this entry is. */}
+                <span
+                  className={fileTypeBadgeClass(
+                    image.file_type,
+                    mergePairs && Boolean(image.paired_image_id),
+                    "badge-inline"
+                  )}
+                  title={image.virtual_of_image_id ? VIRTUAL_COPY_TITLE : undefined}
+                >
+                  {image.virtual_of_image_id && <VirtualCopyMark />}
+                  {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
+                </span>
                 <button
                   className="detail-rename-btn"
                   onClick={startRename}
@@ -1026,17 +1055,11 @@ export function ImageDetail() {
             <button
               className="btn"
               style={{ display: "block", width: "100%", marginTop: 8, textAlign: "center" }}
-              onClick={saveCopyClick}
-              disabled={copyBusy}
-              title={
-                askSaveCopyOptions
-                  ? "Create a new photo in your library with the saved edits baked in, tagged “edit copy” - pick quality and size first"
-                  : "Create a new photo in your library with the saved edits baked in, tagged “edit copy”, at full quality and full size"
-              }
+              onClick={() => setSaveCopyOpen(true)}
+              title="Create a new photo in your library from the saved edits - a baked JPEG (“edit copy”) or a virtual copy that shares the original's file (“virtual copy”)"
             >
-              {copyBusy ? "Saving…" : "Save copy"}
+              Save copy
             </button>
-            {copyNote && <p className="status-note" style={{ marginTop: 8 }}>{copyNote}</p>}
           </div>
 
           {image.gps_lat != null && image.gps_lon != null && (
@@ -1096,10 +1119,26 @@ export function ImageDetail() {
       </div>
 
       {adjustOpen && <PhotoEditor image={image} onClose={() => setAdjustOpen(false)} />}
+      {slideshowOpen && (
+        <Slideshow
+          // Play the browsed set from the photo on screen; opened without one
+          // (a direct link), the show is just this photo.
+          imageIds={canPage ? imageIds! : [image.id]}
+          startId={id!}
+          onClose={(lastId) => {
+            setSlideshowOpen(false);
+            // Land on the photo the show ended on, exactly like paging there.
+            if (lastId !== id && imageIds?.includes(lastId)) {
+              navigate(`/image/${lastId}`, { replace: true, state: { imageIds } });
+            }
+          }}
+        />
+      )}
       {saveCopyOpen && (
         <SaveCopyDialog
           onClose={() => setSaveCopyOpen(false)}
-          onSave={(opts) => saveCopyRun(opts)}
+          onSave={(req) => saveCopyRun(req)}
+          askOptions={askSaveCopyOptions}
         />
       )}
       {exportOpen && (

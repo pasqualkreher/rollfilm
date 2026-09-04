@@ -3,9 +3,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSideBySide, IconSplit, IconTarget, IconUndo, IconX } from "./Icons";
+import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSideBySide, IconSplit, IconTarget, IconTrash, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
-import { SaveCopyDialog, FULL_COPY_QUALITY } from "./SaveCopyDialog";
+import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import {
   adjustmentsFromImage,
   BAND_SWATCH,
@@ -82,9 +82,13 @@ interface Props {
   // canvas frame in the same paint, not one decode later).
   onPreviewFrame?: (blob: Blob, size: { width: number; height: number }) => void;
   // Docked mode saves by itself on the way out (there are no Save buttons).
-  // Called after an UNMOUNT-path save has landed - the embedder was already
-  // told to close by then and needs to re-fetch the row the save just wrote.
-  onAutoSaved?: (imageId: string) => void;
+  // Called once the closing editor's edits are settled on the server - after
+  // an unmount-path save has landed, or right away when there was nothing
+  // left to write (and even when the write failed: settled means "the server
+  // row is what it is going to be"). The embedder re-fetches the row then, so
+  // its held preview frame and thumbnail URL always resolve against the
+  // post-save state, never a mid-save one.
+  onEditsSettled?: (imageId: string) => void;
 }
 
 interface DragRect {
@@ -453,7 +457,7 @@ function Histogram({ bins }: { bins: Uint32Array[] | null }) {
   return <canvas ref={ref} className="editor-histogram" width={256} height={64} />;
 }
 
-export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, onAutoSaved }: Props) {
+export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, onEditsSettled }: Props) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const { withWait } = useWait();
@@ -767,10 +771,10 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   const [selectedPreset, setSelectedPreset] = useState("");
   // Inline preset naming (Electron has no window.prompt).
   const [namingPreset, setNamingPreset] = useState(false);
-  // Save-copy options dialog (quality/size, export-style) - the render runs
-  // while it's open, so it doubles as the progress popup. It is only reached
-  // when the user asked for it in Settings; by default Save copy is one click
-  // at full quality (see viewPrefs).
+  // Save-copy dialog: asks for a physical (baked JPEG) or virtual copy, and -
+  // when the user asked for it in Settings (see viewPrefs) - the physical
+  // copy's quality/size. The render runs while it's open, so it doubles as
+  // the progress popup.
   const [saveCopyOpen, setSaveCopyOpen] = useState(false);
   const askSaveCopyOptions = useAskSaveCopyOptions();
   const [presetName, setPresetName] = useState("");
@@ -1880,33 +1884,40 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   const lastWrittenKeyRef = useRef(savedKey);
   const autosaveRef = useRef({ editsKey, edits });
   autosaveRef.current = { editsKey, edits };
-  const onAutoSavedRef = useRef(onAutoSaved);
-  onAutoSavedRef.current = onAutoSaved;
+  const onEditsSettledRef = useRef(onEditsSettled);
+  onEditsSettledRef.current = onEditsSettled;
   useEffect(() => {
     if (!docked) return;
     const imageId = image.id;
     return () => {
       const pending = autosaveRef.current;
-      if (pending.editsKey === lastWrittenKeyRef.current) return;
+      if (pending.editsKey === lastWrittenKeyRef.current) {
+        // Nothing left to write (requestClose saved already, or nothing
+        // changed) - the row is settled as it stands.
+        onEditsSettledRef.current?.(imageId);
+        return;
+      }
       lastWrittenKeyRef.current = pending.editsKey;
       void api.images
         .saveEdits(imageId, pending.edits)
-        .then(() => onAutoSavedRef.current?.(imageId))
+        .then(() => onEditsSettledRef.current?.(imageId))
         .catch(() => {
-          // Nothing left to show it in - the editor is gone. The frame keeps
-          // the previous saved state, which is also what the canvas refetches.
+          // Nothing left to show the error in - the editor is gone. The row
+          // keeps the previous saved state; settle so the canvas falls back
+          // to it honestly instead of holding the unsaved preview.
+          onEditsSettledRef.current?.(imageId);
         });
     };
   }, [docked, image.id]);
 
-  // `blocking` is set on the one-click path, where nothing else covers the
-  // editor while the full-resolution render runs. The dialog path leaves it
-  // off: that dialog already blocks the editor and shows its own busy state.
+  // Always reached through the dialog, which blocks the editor and shows its
+  // own busy state. A virtual copy takes the editor's current (possibly
+  // unsaved) state, exactly like the baked one would.
   const saveCopy = useMutation({
-    mutationFn: ({ blocking, ...opts }: { quality: number; maxSize: number | null; blocking?: boolean }) => {
-      const run = () => api.images.saveCopy(image.id, edits, opts);
-      return blocking ? withWait("Saving a copy…", run) : run();
-    },
+    mutationFn: (req: SaveCopyRequest) =>
+      req.kind === "virtual"
+        ? api.images.virtualCopy(image.id, edits)
+        : api.images.saveCopy(image.id, edits, { quality: req.quality, maxSize: req.maxSize }),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
@@ -3572,7 +3583,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
         </h3>
         <p style={{ color: "var(--text-muted)", fontSize: 12, margin: "0 0 4px" }}>
           {docked
-            ? "Non-destructive. The canvas edit keeps itself - the state you leave is the state that's saved."
+            ? "Non-destructive. The virtual copy keeps itself - the state you leave is the state that's saved."
             : "Non-destructive. Save updates this photo; Save copy makes a new edited photo."}
         </p>
 
@@ -4043,7 +4054,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                   deleteMask(m.id);
                 }}
               >
-                <IconX size={13} />
+                <IconTrash size={13} />
               </button>
             </div>
           ))}
@@ -4308,8 +4319,13 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
               })}
             </div>
 
-            <button className="btn btn-sm ghost" onClick={() => deleteMask(selectedMask.id)}>
-              Delete mask
+            <button
+              className="btn btn-sm quiet-danger"
+              onClick={() => deleteMask(selectedMask.id)}
+              title="Delete this mask"
+              aria-label="Delete this mask"
+            >
+              <IconTrash size={14} />
             </button>
           </div>
         )}
@@ -4378,16 +4394,18 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                 setNamingPreset(true);
               }}
               title="Save the current look as a preset"
+              aria-label="Save the current look as a preset"
             >
-              Save…
+              <IconSave size={14} />
             </button>
             <button
-              className="btn btn-sm ghost"
+              className="btn btn-sm quiet-danger"
               onClick={handleDeletePreset}
               disabled={!selectedPreset}
               title="Delete the selected preset"
+              aria-label="Delete the selected preset"
             >
-              Delete
+              <IconTrash size={14} />
             </button>
           </div>
         )}
@@ -4458,7 +4476,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                dock (or clicking another frame) saves the current state, so
                Save and Save copy would only be two extra questions. */
             <div className="editor-footer-primary">
-              <span className="editor-autosave-note" title="The canvas edit keeps itself - closing the editor saves the current state">
+              <span className="editor-autosave-note" title="The virtual copy keeps itself - closing the editor saves the current state">
                 {saveEdits.isPending ? "Saving…" : "Saved when you close"}
               </span>
             </div>
@@ -4466,17 +4484,9 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
           <div className="editor-footer-primary">
             <button
               className="btn"
-              onClick={() =>
-                askSaveCopyOptions
-                  ? setSaveCopyOpen(true)
-                  : saveCopy.mutate({ quality: FULL_COPY_QUALITY, maxSize: null, blocking: true })
-              }
+              onClick={() => setSaveCopyOpen(true)}
               disabled={busy}
-              title={
-                askSaveCopyOptions
-                  ? "Create a new edited photo in your library, tagged “edit copy” - pick quality and size first"
-                  : "Create a new edited photo in your library, tagged “edit copy”, at full quality and full size"
-              }
+              title="Create a new photo in your library from these edits - a baked JPEG (“edit copy”) or a virtual copy that shares the original's file (“virtual copy”)"
             >
               {saveCopy.isPending ? "Saving…" : "Save copy"}
             </button>
@@ -4491,7 +4501,8 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
       {saveCopyOpen && (
         <SaveCopyDialog
           onClose={() => setSaveCopyOpen(false)}
-          onSave={(opts) => saveCopy.mutateAsync(opts)}
+          onSave={(req) => saveCopy.mutateAsync(req)}
+          askOptions={askSaveCopyOptions}
         />
       )}
     </div>

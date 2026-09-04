@@ -105,7 +105,7 @@ export function AddToPicker({ onAddToAlbum, onAddToCanvas, onResult }: Props) {
         </>
       ),
     },
-    { value: "h-canvas", label: <span className="dropdown-group-label">Canvases</span>, disabled: true },
+    { value: "h-canvas", label: <span className="dropdown-group-label">Canvas</span>, disabled: true },
     ...(canvases ?? []).map((c) => ({ value: `canvas:${c.id}`, label: c.name })),
     {
       value: "new-canvas",

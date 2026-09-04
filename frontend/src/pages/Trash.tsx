@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAppDialogs } from "../components/AppDialogs";
+import { IconRestore, IconTrash } from "../components/Icons";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import type { ImageOut } from "../api/types";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
@@ -165,11 +166,23 @@ export function Trash() {
           <button className="btn" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
             Clear selection
           </button>
-          <button className="btn" onClick={restoreSelected} disabled={selected.size === 0}>
-            Restore
+          <button
+            className="btn btn-sm"
+            onClick={restoreSelected}
+            disabled={selected.size === 0}
+            title="Restore the selected photos to the library"
+            aria-label="Restore the selected photos to the library"
+          >
+            <IconRestore size={15} />
           </button>
-          <button className="btn btn-sm quiet-danger" onClick={deleteSelectedForever} disabled={selected.size === 0}>
-            Delete forever
+          <button
+            className="btn btn-sm quiet-danger"
+            onClick={deleteSelectedForever}
+            disabled={selected.size === 0}
+            title="Delete the selected photos forever"
+            aria-label="Delete the selected photos forever"
+          >
+            <IconTrash size={15} />
           </button>
         </div>
       </div>

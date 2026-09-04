@@ -1,4 +1,4 @@
-"""Virtual copies ("canvas edits"): a second library row for the same file.
+"""Virtual copies ("virtual copies"): a second library row for the same file.
 
 The copy owns no bytes - its synthetic file_path resolves to the source's file -
 and carries its own develop state. These tests pin the lifecycle the canvas
@@ -8,6 +8,7 @@ placeholders and takes its copies along), and the library sync never mistaking
 a virtual copy for a vanished file.
 """
 
+import json
 from datetime import datetime
 
 import pytest
@@ -75,7 +76,42 @@ def test_a_virtual_copy_borrows_the_file_and_starts_from_the_current_edit(db: Se
     assert copy.edit_adjustments == '{"exposure": 1.0}'
     assert copy.edit_rotation == 90
     assert copy.rating == 4
-    assert "canvas edit" in copy.tags
+    # Auto-tagged for what it is, and "edit" because it carries edits.
+    assert copy.tags == ["edit", "virtual copy"]
+
+
+def test_a_virtual_copy_can_take_the_editors_unsaved_state(db: Session):
+    """Save copy -> virtual copy from inside the editor: the copy gets the
+    sliders as they are right now, the source keeps its saved edit."""
+    src = _image(db, "a", edit_adjustments='{"exposure": 1.0}', edit_rotation=90, edit_rev=3)
+    db.commit()
+
+    copy = create_virtual_copy(
+        "a",
+        payload=schemas.ImageEdits(rotation=180, flip_h=True, adjustments={"contrast": 20}),
+        db=db,
+        current_user=db.get(User, 1),
+    )
+
+    assert copy.virtual_of_image_id == "a"
+    assert copy.edit_rotation == 180
+    assert copy.edit_flip_h is True
+    adj = json.loads(copy.edit_adjustments or "{}")
+    assert adj["contrast"] == 20
+    assert adj["exposure"] == 0.0
+    assert copy.edit_rev > src.edit_rev
+    assert "virtual copy" in copy.tags
+    # The source is exactly as it was.
+    db.refresh(src)
+    assert src.edit_rotation == 90
+    assert src.edit_adjustments == '{"exposure": 1.0}'
+    assert src.edit_rev == 3
+
+
+def test_a_copy_of_an_unedited_photo_is_not_tagged_edit(db: Session):
+    _image(db, "plain")
+    db.commit()
+    assert _copy(db, "plain").tags == ["virtual copy"]
 
 
 def test_a_copy_of_a_copy_grounds_on_the_original(db: Session):
@@ -159,7 +195,7 @@ def test_deleting_a_copy_never_touches_the_shared_file(db: Session, tmp_path, mo
 
 def test_the_library_sync_never_reaps_virtual_copies(db: Session, tmp_path, monkeypatch):
     """A virtual copy's synthetic path never exists on disk. The missing-file
-    scan treating that as 'file gone' would silently destroy every canvas edit
+    scan treating that as 'file gone' would silently destroy every virtual copy
     on every startup."""
     from app.config import settings
     from app.services import maintenance
@@ -193,7 +229,7 @@ def test_backup_manifest_round_trips_the_virtual_link(db: Session):
     db.commit()
     copy = _copy(db, "a")
 
-    data = image_to_dict(copy, tags=["canvas edit"])
+    data = image_to_dict(copy, tags=["virtual copy"])
     restored = image_row_from_dict(data, owner_id=1)
     assert restored.virtual_of_image_id == "a"
     assert restored.file_path == copy.file_path

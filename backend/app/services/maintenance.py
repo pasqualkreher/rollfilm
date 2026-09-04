@@ -293,7 +293,7 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
             "before syncing the database to the library."
         )
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
-    # Virtual copies ("canvas edits") own no file: their synthetic path never
+    # Virtual copies ("virtual copies") own no file: their synthetic path never
     # exists on disk, so the missing-file scan must never see them - their
     # fate is tied to their source's row, not to a path of their own (a
     # source that is hard-deleted below takes its copies with it inside

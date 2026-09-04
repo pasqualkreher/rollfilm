@@ -10,7 +10,7 @@ import { useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
-import { IconX } from "./Icons";
+import { IconX, IconDuplicate } from "./Icons";
 import { usePhotoInfoCard } from "./PhotoInfoCard";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { thumbPx, thumbTier, useMergePairs, useThumbSize } from "../state/viewPrefs";
@@ -53,6 +53,21 @@ export function fileTypeBadge(fileType: string, merged: boolean): string {
 export function fileTypeBadgeClass(fileType: string, merged: boolean, base = "badge"): string {
   if (merged) return `${base} badge-pair`;
   return fileType === "raw" ? `${base} badge-raw` : base;
+}
+
+// A virtual copy ("virtual copy") has no file of its own - it borrows the
+// original's bytes and only carries its own develop state. The grid marks such
+// tiles with a small copy glyph inside the file-type badge, so a row of
+// look-alike thumbnails still tells the physical photo from its copies.
+export const VIRTUAL_COPY_TITLE =
+  "Virtual copy — shares its file with the original photo and only carries its own edits";
+
+export function VirtualCopyMark() {
+  return (
+    <span className="badge-virtual" aria-label="Virtual copy">
+      <IconDuplicate size={9} />
+    </span>
+  );
 }
 
 // Aspect ratio (width/height) used to size a justified grid tile. Clamped so a
@@ -740,7 +755,11 @@ export function ThumbnailGrid({
           alt={image.original_filename}
           rowHeight={rowH}
         />
-        <span className={fileTypeBadgeClass(image.file_type, mergePairs && Boolean(image.paired_image_id))}>
+        <span
+          className={fileTypeBadgeClass(image.file_type, mergePairs && Boolean(image.paired_image_id))}
+          title={image.virtual_of_image_id ? VIRTUAL_COPY_TITLE : undefined}
+        >
+          {image.virtual_of_image_id && <VirtualCopyMark />}
           {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
         </span>
         {infoButton(image.id)}

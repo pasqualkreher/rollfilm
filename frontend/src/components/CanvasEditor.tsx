@@ -17,9 +17,11 @@ import {
   IconAlignTop,
   IconArrowLeft,
   IconCheck,
+  IconBringFront,
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
+  IconClipboard,
   IconCrop,
   IconDuplicate,
   IconFitAll,
@@ -37,7 +39,9 @@ import {
   IconPlus,
   IconPrinter,
   IconRedo,
+  IconRestore,
   IconRotate,
+  IconSendBack,
   IconSheets,
   IconTextT,
   IconTrash,
@@ -435,7 +439,7 @@ export function CanvasEditor({
   }, [files, extraFiles]);
   const byIdRef = useRef(byId);
   byIdRef.current = byId;
-  // Editing a placed photo happens on a virtual copy ("canvas edit"): the
+  // Editing a placed photo happens on a virtual copy ("virtual copy"): the
   // library original stays untouched, the frame follows the copy.
   const [editingImage, setEditingImage] = useState<ImageOut | null>(null);
   const editingOpenRef = useRef(false);
@@ -446,6 +450,11 @@ export function CanvasEditor({
   // photo is developed right there on the page. One object URL at a time.
   const [livePreviewUrl, setLivePreviewUrl] = useState<string | null>(null);
   const livePreviewRef = useRef<string | null>(null);
+  // After the dock closes, the tile whose photo was edited keeps showing the
+  // last live preview frame until the closing save has settled and the fresh
+  // row is in place - the cached thumbnail still has the PRE-edit pixels
+  // until then, and falling back to it read as "my edit was thrown away".
+  const [heldPreviewId, setHeldPreviewId] = useState<string | null>(null);
   const onPreviewFrame = useCallback((blob: Blob, size: { width: number; height: number }) => {
     const url = URL.createObjectURL(blob);
     const old = livePreviewRef.current;
@@ -540,9 +549,22 @@ export function CanvasEditor({
   const adoptLiveAspectRef = useRef(adoptLiveAspect);
   adoptLiveAspectRef.current = adoptLiveAspect;
 
-  // Fetch a photo's row again after the docked editor wrote its edits (its
-  // unmount-path save can land AFTER closeEditor's refetch read the pre-save
-  // row) and make the page agree with the new pixels: a crop or turn reshapes
+  // Once the closed edit's fresh row is in place (or its refresh failed), the
+  // tile's own thumbnail URL is the right thing to show: drop the held
+  // preview frame and give the object URL back - unless a new editing
+  // session has already taken the preview over.
+  const releaseHeldPreview = useCallback((imageId: string) => {
+    setHeldPreviewId((held) => (held === imageId ? null : held));
+    if (!editingOpenRef.current && livePreviewRef.current) {
+      URL.revokeObjectURL(livePreviewRef.current);
+      livePreviewRef.current = null;
+      setLivePreviewUrl(null);
+    }
+  }, []);
+
+  // Fetch a photo's row again after the docked editor's edits have settled
+  // (it reports back through onEditsSettled once its closing save has landed)
+  // and make the page agree with the new pixels: a crop or turn reshapes
   // the picture, so a frame that still had the photo's previous proportions
   // follows it - keeping its centre and its area, the same trade
   // fitFrameToPhoto makes. A frame the user shaped deliberately keeps its
@@ -574,20 +596,29 @@ export function CanvasEditor({
       })
       .catch(() => {
         // Non-fatal: the next files refetch carries the fresh row anyway.
-      });
-  }, []);
+      })
+      .finally(() => releaseHeldPreview(imageId));
+  }, [releaseHeldPreview]);
 
   const closeEditor = useCallback(async () => {
-    setEditingImage((edited) => {
-      if (edited) refreshEditedFile(edited.id);
-      return null;
-    });
+    const closingId = editingImageIdRef.current;
+    setEditingImage(null);
     liveAspectRef.current = null;
-    if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
-    livePreviewRef.current = null;
-    setLivePreviewUrl(null);
+    if (closingId && livePreviewRef.current) {
+      // Keep the last preview frame on the tile: the closing save (and the
+      // synchronous thumbnail re-render behind it - seconds for a raw) is
+      // still in flight, and the cached thumbnail would show the pre-edit
+      // look. The editor's unmount always reports back via onEditsSettled;
+      // the refreshEditedFile that follows swaps the tile straight from the
+      // preview to the freshly busted thumbnail URL and releases the hold.
+      setHeldPreviewId(closingId);
+    } else {
+      if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
+      livePreviewRef.current = null;
+      setLivePreviewUrl(null);
+    }
     onMembershipChangedRef.current?.();
-  }, [refreshEditedFile]);
+  }, []);
   // One entry per shot - what "Place N photos" counts and what a brand new
   // canvas is seeded with. Placing both halves of a pair would put the same
   // picture on the page twice.
@@ -2174,7 +2205,7 @@ export function CanvasEditor({
   const single = selectedItems.length === 1 ? selectedItems[0] : null;
 
   // Open the photo editor on a frame's photo - via a virtual copy. The first
-  // edit mints the copy (tagged "canvas edit" in the library) and re-points
+  // edit mints the copy (tagged "virtual copy" in the library) and re-points
   // the frame at it; editing again just reopens the same copy. The library
   // original is never touched from here. With the editor already docked,
   // clicking another frame switches it to that photo.
@@ -2188,6 +2219,7 @@ export function CanvasEditor({
     if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
     livePreviewRef.current = null;
     setLivePreviewUrl(null);
+    setHeldPreviewId(null);
     if (image.virtual_of_image_id) {
       setEditingImage(image);
       return;
@@ -2488,7 +2520,11 @@ export function CanvasEditor({
                       doc={doc}
                       image={item.image_id ? byId.get(item.image_id) ?? null : null}
                       livePreviewUrl={
-                        editingImage && item.image_id === editingImage.id ? livePreviewUrl : null
+                        (editingImage
+                          ? item.image_id === editingImage.id
+                          : item.image_id != null && item.image_id === heldPreviewId)
+                          ? livePreviewUrl
+                          : null
                       }
                       zoom={zoom}
                       selected={selected.has(item.id)}
@@ -2712,7 +2748,7 @@ export function CanvasEditor({
             image={editingImage}
             onClose={() => void closeEditor()}
             onPreviewFrame={onPreviewFrame}
-            onAutoSaved={refreshEditedFile}
+            onEditsSettled={refreshEditedFile}
           />
         )}
       </div>
@@ -3334,6 +3370,27 @@ function CanvasItem({
   print?: boolean;
 }) {
   const rect = worldRect(item, doc);
+
+  // Zoomed far in, the 1600px thumbnail runs out of pixels and the photo goes
+  // soft right where fine crop-in-frame work happens. Once the frame asks for
+  // more device pixels than the loaded bitmap has, upgrade to the 2048px
+  // preview - latched, so zooming back out doesn't flip the tile between
+  // files, and the <img> keeps showing the old bitmap until the sharper one
+  // has decoded, so the swap never flashes.
+  const [hiRes, setHiRes] = useState(false);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const maybeUpgrade = () => {
+    if (hiRes || print || livePreviewUrl || item.kind !== "photo") return;
+    const img = imgRef.current;
+    if (!img || !img.naturalWidth) return;
+    const dpr = window.devicePixelRatio || 1;
+    const need = Math.max(rect.w, rect.h) * zoom * (item.content_scale || 1) * dpr;
+    if (need > Math.max(img.naturalWidth, img.naturalHeight) * 1.15) setHiRes(true);
+  };
+  // No deps on purpose: the check is a couple of number compares and must
+  // re-run on every zoom/resize/content-scale render anyway.
+  useEffect(maybeUpgrade);
+
   const style: React.CSSProperties = {
     left: rect.x,
     top: rect.y,
@@ -3414,15 +3471,17 @@ function CanvasItem({
     >
       {image ? (
         <img
+          ref={imgRef}
           className="canvas-photo"
           src={
             livePreviewUrl ??
-            (print
+            (print || hiRes
               ? api.images.previewUrl(image.id, editVersion(image))
               : api.images.thumbnailUrl(image.id, editVersion(image)))
           }
           alt=""
           draggable={false}
+          onLoad={maybeUpgrade}
           style={{ transform: contentTransform }}
         />
       ) : (
@@ -3664,7 +3723,7 @@ function VersionsChip({
                     aria-label={`Delete version ${version.name}`}
                     onClick={() => onRemove(version.id, version.name)}
                   >
-                    <IconX size={12} />
+                    <IconTrash size={12} />
                   </button>
                 </div>
               )
@@ -4361,58 +4420,63 @@ function CanvasActionBar({
     <div className="canvas-action-bar">
       <span className="canvas-action-what">{what}</span>
 
-      {photos === 1 && selection.length === 1 && !cropping && (
-        <button
-          className={`btn btn-sm${editingOpen ? " primary" : ""}`}
-          aria-pressed={editingOpen}
-          onClick={onEditPhoto}
-          title={
-            editingOpen
-              ? "Close the edit panel"
-              : "Develop this photo in the editor. Works on a virtual copy tagged 'canvas edit' in the library - the original photo is never changed."
-          }
-        >
-          <IconPencil size={13} /> Edit photo
-        </button>
-      )}
-      {photos === 1 && selection.length === 1 && (
-        <button
-          className={`btn btn-sm${cropping ? " primary" : ""}`}
-          onClick={cropping ? onEndCrop : onCrop}
-          title="Move and zoom the photo inside its frame without moving the frame"
-        >
-          <IconCrop size={13} /> {cropping ? "Done cropping" : "Crop in frame"}
-        </button>
-      )}
-      {cropping && (
-        <button className="btn btn-sm" onClick={onResetCrop} title="Centre the photo again at full size">
-          Reset crop
-        </button>
-      )}
-      {photos > 0 && !cropping && (
-        <button
-          className="btn btn-sm"
-          onClick={onFitFrame}
-          title="Reshape the frame to the photo's own proportions, undoing any crop"
-        >
-          <IconRotate size={13} /> Fit frame to photo
-        </button>
-      )}
-      {/* Only offered while something is actually turned: a rotation is set by
-          the drag handle, and getting back to exactly 0° by hand is the one
-          angle the handle is bad at. */}
-      {!cropping && selection.some((item) => item.rotation !== 0) && (
-        <button
-          className="btn btn-sm"
-          onClick={onResetRotation}
-          title="Set the selected items straight again (0°)"
-        >
-          Reset rotation
-        </button>
+      {(photos > 0 || selection.some((item) => item.rotation !== 0)) && (
+        <span className="canvas-action-group">
+          {photos === 1 && selection.length === 1 && !cropping && (
+            <button
+              className={`btn btn-sm${editingOpen ? " primary" : ""}`}
+              aria-pressed={editingOpen}
+              onClick={onEditPhoto}
+              title={
+                editingOpen
+                  ? "Close the edit panel"
+                  : "Develop this photo in the editor. Works on a virtual copy tagged 'virtual copy' in the library - the original photo is never changed."
+              }
+            >
+              <IconPencil size={13} /> <span className="canvas-action-label">Edit photo</span>
+            </button>
+          )}
+          {photos === 1 && selection.length === 1 && (
+            <button
+              className={`btn btn-sm${cropping ? " primary" : ""}`}
+              onClick={cropping ? onEndCrop : onCrop}
+              title="Move and zoom the photo inside its frame without moving the frame"
+            >
+              <IconCrop size={13} /> <span className="canvas-action-label">{cropping ? "Done cropping" : "Crop in frame"}</span>
+            </button>
+          )}
+          {cropping && (
+            <button className="btn btn-sm" onClick={onResetCrop} title="Centre the photo again at full size">
+              <IconRestore size={13} /> <span className="canvas-action-label">Reset crop</span>
+            </button>
+          )}
+          {photos > 0 && !cropping && (
+            <button
+              className="btn btn-sm"
+              onClick={onFitFrame}
+              title="Reshape the frame to the photo's own proportions, undoing any crop"
+            >
+              <IconRotate size={13} /> <span className="canvas-action-label">Fit frame to photo</span>
+            </button>
+          )}
+          {/* Only offered while something is actually turned: a rotation is set by
+              the drag handle, and getting back to exactly 0° by hand is the one
+              angle the handle is bad at. */}
+          {!cropping && selection.some((item) => item.rotation !== 0) && (
+            <button
+              className="btn btn-sm"
+              onClick={onResetRotation}
+              title="Set the selected items straight again (0°)"
+            >
+              <IconRestore size={13} /> <span className="canvas-action-label">Reset rotation</span>
+            </button>
+          )}
+        </span>
       )}
 
       {photos > 0 && !cropping && firstPhoto && (
         <>
+          <span className="canvas-action-group">
           <span className="canvas-action-divider" />
           {/* Typed size, with the lock tying width and height together. With
               several photos selected the box shows the first one's numbers and
@@ -4447,7 +4511,9 @@ function CanvasActionBar({
               {aspectLock ? <IconLock size={13} /> : <IconLockOpen size={13} />}
             </button>
           </span>
+          </span>
 
+          <span className="canvas-action-group">
           <span className="canvas-action-divider" />
           {/* The border, measured like the editor's white frame: a share of
               the shorter edge, added around the photo. */}
@@ -4485,11 +4551,12 @@ function CanvasActionBar({
             </div>
           </FilterChip>
           </span>
+          </span>
         </>
       )}
 
       {!cropping && (
-        <>
+        <span className="canvas-action-group">
           <span className="canvas-action-divider" />
           <button
             className="btn btn-sm"
@@ -4501,7 +4568,7 @@ function CanvasActionBar({
                 : "Select one item to copy its settings"
             }
           >
-            Copy settings
+            <IconDuplicate size={13} /> <span className="canvas-action-label">Copy settings</span>
           </button>
           <button
             className="btn btn-sm"
@@ -4513,25 +4580,25 @@ function CanvasActionBar({
                 : "Copy an item's settings first"
             }
           >
-            Paste settings
+            <IconClipboard size={13} /> <span className="canvas-action-label">Paste settings</span>
           </button>
-        </>
+        </span>
       )}
 
       {!cropping && (
-        <>
+        <span className="canvas-action-group">
           <span className="canvas-action-divider" />
           <button className="btn btn-sm" onClick={() => onRestack("front")} title="Bring to front (⌘⇧])">
-            Bring to front
+            <IconBringFront size={13} /> <span className="canvas-action-label">Bring to front</span>
           </button>
           <button className="btn btn-sm" onClick={() => onRestack("back")} title="Send to back (⌘⇧[)">
-            Send to back
+            <IconSendBack size={13} /> <span className="canvas-action-label">Send to back</span>
           </button>
-        </>
+        </span>
       )}
 
       {texts > 0 && !cropping && (
-        <>
+        <span className="canvas-action-group">
           <span className="canvas-action-divider" />
           <FontEditor style={textStyle} onStyle={onStyle} />
           <MmField
@@ -4589,7 +4656,7 @@ function CanvasActionBar({
               </button>
             ))}
           </span>
-        </>
+        </span>
       )}
 
       <span style={{ flex: 1 }} />
@@ -4598,7 +4665,7 @@ function CanvasActionBar({
         onClick={onDelete}
         title="Take these off the page (Delete). The photos stay in the library."
       >
-        <IconTrash size={13} /> Remove from page
+        <IconTrash size={13} /> <span className="canvas-action-label">Remove from page</span>
       </button>
     </div>
   );

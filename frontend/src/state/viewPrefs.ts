@@ -54,6 +54,13 @@ const ASK_SAVE_COPY_KEY = "pm.askSaveCopyOptions";
 // Stored inverted (only the closed state is written) so the default stays open
 // for anyone who has never touched it.
 const DETAIL_PANEL_KEY = "pm.detailPanel";
+// How long the slideshow rests on each photo before moving on. A preference,
+// not per-run state: the pace that suits someone's photos suits their next
+// slideshow too, so the picker in the slideshow's control bar writes it here.
+const SLIDESHOW_KEY = "pm.slideshowSeconds";
+export const SLIDESHOW_SPEEDS = [3, 5, 10] as const;
+export type SlideshowSeconds = (typeof SLIDESHOW_SPEEDS)[number];
+const DEFAULT_SLIDESHOW_SECONDS: SlideshowSeconds = 5;
 const STAGE_BG_KEY = "pm.stageBg";
 export const STAGE_BACKGROUNDS = [
   { key: "lightest", label: "Paper", title: "Paper white (6% grey)" },
@@ -98,6 +105,13 @@ function readAskSaveCopyOptions(): boolean {
 
 function readDetailPanel(): boolean {
   return localStorage.getItem(DETAIL_PANEL_KEY) !== "0";
+}
+
+function readSlideshowSeconds(): SlideshowSeconds {
+  const v = Number(localStorage.getItem(SLIDESHOW_KEY));
+  return (SLIDESHOW_SPEEDS as readonly number[]).includes(v)
+    ? (v as SlideshowSeconds)
+    : DEFAULT_SLIDESHOW_SECONDS;
 }
 
 function readStageBg(): StageBg {
@@ -175,6 +189,11 @@ export function setStageBg(bg: StageBg) {
   emit();
 }
 
+export function setSlideshowSeconds(seconds: SlideshowSeconds) {
+  localStorage.setItem(SLIDESHOW_KEY, String(seconds));
+  emit();
+}
+
 export function useThumbSize(): ThumbSizeKey {
   return useSyncExternalStore(subscribe, readThumb, () => DEFAULT_THUMB);
 }
@@ -201,6 +220,10 @@ export function useDetailPanelOpen(): boolean {
 
 export function useStageBg(): StageBg {
   return useSyncExternalStore(subscribe, readStageBg, () => DEFAULT_STAGE_BG);
+}
+
+export function useSlideshowSeconds(): SlideshowSeconds {
+  return useSyncExternalStore(subscribe, readSlideshowSeconds, () => DEFAULT_SLIDESHOW_SECONDS);
 }
 
 // Collapse each RAW+JPEG pair down to a single representative card (the JPEG,

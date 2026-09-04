@@ -47,7 +47,7 @@ def library_stats(db: Session = Depends(get_db), current_user: User = Depends(ge
 
     total_photos, total_bytes = visible.with_entities(
         func.count(Image.id),
-        # Virtual copies ("canvas edits") share their source's bytes - counting
+        # Virtual copies ("virtual copies") share their source's bytes - counting
         # their file_size would report the library bigger than the disk says.
         func.coalesce(
             func.sum(case((Image.virtual_of_image_id.is_(None), Image.file_size), else_=0)), 0

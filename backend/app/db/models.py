@@ -261,7 +261,7 @@ class Image(Base):
     # so a saved copy teaches the feature just like an in-place edit does.
     applied_adjustments: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # Virtual copy ("canvas edit"): set = this row is a second library entry for
+    # Virtual copy ("virtual copy"): set = this row is a second library entry for
     # ANOTHER image's file, carrying its own develop state and derivatives but
     # owning no bytes on disk. Its file_path is synthetic ("<source path>#vc-<id>",
     # unique by construction, resolved through filesystem.resolve_image_path) and

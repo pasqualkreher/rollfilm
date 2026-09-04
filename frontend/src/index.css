@@ -1398,12 +1398,14 @@ textarea:focus-visible {
   color: var(--text);
 }
 
-/* Generic centered modal (used by the folder picker). */
+/* Generic centered modal (used by the folder picker and the app's confirm
+   dialogs). Above the full-screen stages (editor, lightbox, print view at
+   1000): a question asked from inside one of them must show over it. */
 .modal-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  z-index: 1000;
+  z-index: 1200;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2203,6 +2205,21 @@ textarea:focus-visible {
   background: var(--bg-elevated);
   color: var(--text);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+/* Virtual copy marker: a small "two frames" glyph in front of the file-type
+   text, inside the same chip, so it never collides with the corner controls.
+   Inherits the chip's colour for every kind (JPG / RAW / RAW+JPG). */
+.thumb-card .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.badge-virtual {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.9;
 }
 
 .thumb-card .duplicate-badge {
@@ -3784,6 +3801,79 @@ input.editor-preset-select {
   cursor: pointer;
 }
 
+/* Auto-managed tags ("edit", "edit copy", "canvas edit"): no remove button,
+   so the chip gets even padding and a quieter look to read as a badge. */
+.tag-chip.tag-chip-auto {
+  padding: 3px 10px;
+  color: var(--text-muted);
+  border-style: dashed;
+  cursor: default;
+}
+
+/* Save copy: the physical-vs-virtual choice, two radio-like cards. */
+.copy-kind-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.copy-kind {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: calc(8px * var(--corner-scale));
+  cursor: pointer;
+  font: inherit;
+}
+
+.copy-kind:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.copy-kind.is-selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.copy-kind:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.copy-kind-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.copy-kind.is-selected .copy-kind-icon {
+  color: var(--accent);
+}
+
+.copy-kind-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.copy-kind-text > span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tag-input-error {
+  color: var(--danger, #d33);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
 .lightbox-close {
   position: absolute;
   top: 16px;
@@ -4280,6 +4370,137 @@ input.editor-preset-select {
   }
 }
 
+/* ---- Slideshow ------------------------------------------------------------
+   Fullscreen show over the browsed set (see components/Slideshow.tsx). Always
+   on black - a slideshow is for LOOKING, and black is the surround that
+   disappears - so none of the stage-background machinery applies here. */
+.slideshow {
+  position: fixed;
+  inset: 0;
+  /* Above every dialog and toast - nothing of the app shows through a show. */
+  z-index: 6000;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* While the show runs untouched even the cursor gets out of the way. */
+.slideshow--idle {
+  cursor: none;
+}
+
+.slideshow-photo {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  animation: slideshow-fade 0.45s ease-out;
+}
+
+@keyframes slideshow-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Thin countdown along the bottom edge: fills over exactly one photo's turn
+   (the duration is set inline from the pace preference). Dim on purpose -
+   a status whisper, not a chrome element. */
+.slideshow-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 0;
+  background: rgba(255, 255, 255, 0.35);
+  animation-name: slideshow-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes slideshow-progress {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+/* The control pill, floating bottom-centre. Deliberately its own dark styling
+   rather than the themed .btn/.segmented: the show is black in both themes, so
+   its chrome has to be too. Fades with the cursor; pausing keeps it up. */
+.slideshow-controls {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(18, 18, 18, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.9);
+  transition: opacity 0.25s ease;
+}
+
+.slideshow--idle .slideshow-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.slideshow-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 8px;
+}
+
+.slideshow-controls button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.slideshow-counter {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.7);
+  min-width: 56px;
+  text-align: center;
+}
+
+/* The 3s/5s/10s pace steps - a miniature segmented control in the pill's own
+   dark idiom (the themed .segmented would go light-on-light in light mode). */
+.slideshow-speeds {
+  display: inline-flex;
+  gap: 2px;
+  margin: 0 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.slideshow-speeds button {
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.slideshow-speeds button.active {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
 /* The detail view fills the viewport and doesn't scroll itself - the side panel
    scrolls internally instead (see .detail-panel max-height). */
 .detail-page {
@@ -4303,6 +4524,14 @@ input.editor-preset-select {
   white-space: nowrap;
   /* The row carries the spacing so the trash icon stays vertically centered. */
   margin-bottom: 0;
+}
+
+/* File-kind chip next to the name: never shrinks or wraps, the name does. */
+.detail-title-row .badge-inline {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 .detail-trash-btn {
@@ -7586,6 +7815,46 @@ button.smart-card {
   background: var(--border);
 }
 
+/* The action bar is always ONE row. When it is too narrow for the full
+   labels it goes compact: the buttons keep their icons and tooltips and drop
+   their words, and the gaps tighten. Measured against the BAR's own width (a
+   container query), not the window - the bar sits beside rails and panels,
+   so the window is no guide to how much room it has. The threshold is about
+   what a single-photo selection needs with every label showing. */
+.canvas-action-bar {
+  container-type: inline-size;
+  flex-wrap: nowrap;
+  /* Safety net for bars narrower than even the compact row can manage:
+     scroll sideways rather than push the layout around. */
+  overflow-x: auto;
+}
+
+.canvas-action-bar .btn {
+  white-space: nowrap;
+}
+
+@container (max-width: 1720px) {
+  .canvas-action-bar {
+    gap: 6px;
+  }
+  .canvas-action-bar .canvas-action-group {
+    gap: 6px;
+  }
+  .canvas-action-bar .canvas-action-label {
+    display: none;
+  }
+}
+
+/* A cluster of related actions (crop tools, size fields, copy/paste, …)
+   together with its leading divider. Kept on one line so that when the bar
+   wraps, whole groups move to the next row instead of splitting mid-pair. */
+.canvas-action-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
 /* --- The paper's own settings, behind one chip --- */
 .canvas-panel {
   display: flex;
@@ -8268,6 +8537,21 @@ button.smart-card {
   right: 0;
   top: 50%;
   transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The shelf view's "take off the shelf", rightmost in the bar. The view is
+   always dark, whatever the theme, so its colours are spelled out rather than
+   taken from the tokens the quiet-danger button normally wears. */
+.btn.canvas-print-shelf-off {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.btn.canvas-print-shelf-off:hover:not(:disabled) {
+  color: #ff6b5e;
+  background: rgba(255, 107, 94, 0.16);
 }
 
 .canvas-print-hint {

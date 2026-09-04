@@ -16,6 +16,7 @@ import {
 } from "../state/viewPrefs";
 import { SettingsTour, SETTINGS_TOUR_KEY } from "../components/SettingsTour";
 import { useTransientFlag, useTransientMessage, useTransientValue } from "../utils/transientMessage";
+import { isAutoTag } from "../utils/autoTags";
 import {
   estimateText,
   estimateSeconds,
@@ -709,7 +710,9 @@ export function Settings() {
   });
 
   const { data: tagUsage } = useQuery({ queryKey: ["tag-usage"], queryFn: () => api.tags.usage() });
-  const unusedTags = (tagUsage ?? []).filter((t) => t.count === 0);
+  // Idle auto-managed tags ("edit", "edit copy", "virtual copy") aren't clutter
+  // - the app hands them out again - so they never show up as removable.
+  const unusedTags = (tagUsage ?? []).filter((t) => t.count === 0 && !isAutoTag(t.name));
 
   function invalidateTags() {
     queryClient.invalidateQueries({ queryKey: ["tag-usage"] });
@@ -1020,16 +1023,17 @@ export function Settings() {
 
       <Section {...sectionProps("Photo editor")}>
         <Desc>
-          <strong>Save copy</strong> in the editor bakes your edits into a new JPEG in your library
-          and leaves the original untouched. It normally does that in one click, at full JPEG
-          quality and the photo's full size.
+          <strong>Save copy</strong> asks whether you want a physical copy (your edits baked into
+          a new JPEG in your library) or a virtual copy (a second entry that shares the original's
+          file and keeps its own edits). The original is left untouched either way. A physical copy
+          is normally made at full JPEG quality and the photo's full size.
         </Desc>
         <OptionRow
           type="checkbox"
           checked={askSaveCopyOptions}
           onChange={setAskSaveCopyOptions}
           title="Ask for quality and size before saving a copy"
-          desc="With this on, Save copy opens a dialog first, where you can turn the JPEG quality down or cap the long edge - useful when the copy is meant to be a small file rather than a keeper."
+          desc="With this on, choosing the physical copy also shows JPEG quality and size controls, so you can turn the quality down or cap the long edge - useful when the copy is meant to be a small file rather than a keeper."
         />
       </Section>
 
