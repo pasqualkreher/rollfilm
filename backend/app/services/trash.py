@@ -25,6 +25,7 @@ from app.db.models import (
 from app.db.session import SessionLocal
 from app.services import thumbnails
 from app.services.hashing import sha1_file
+from app.services.membership_tags import sync_membership_tags
 from app.services.settings_store import (
     IMMICH_MODE_FULL,
     IMMICH_MODE_SELECTIVE,
@@ -196,6 +197,11 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
         # and it conjured a directory for photos that never had derivatives.
         shutil.rmtree(thumbnails.derivative_path(image.id), ignore_errors=True)
         db.delete(image)
+    db.flush()
+    # The photos' own tag links went with them; an album or canvas tag they
+    # were the last members of would otherwise linger empty.
+    for owner_id in {image.owner_id for image in images}:
+        sync_membership_tags(db, owner_id)
 
     # Tidy the date folders the app created once they're empty, so deleting the
     # last shot of a day (or year) doesn't leave hollow dirs behind.

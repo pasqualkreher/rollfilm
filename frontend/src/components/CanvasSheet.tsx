@@ -3,7 +3,9 @@
 // overview's preview cards. Both draw "the paper itself with the photos on
 // it" - only where the document comes from differs (a kept version there,
 // the working layout here).
+import { useRef } from "react";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
+import { tierUrl, usePhotoTier } from "../utils/photoQuality";
 import { boundsOf, PAGE_GAP_MM, worldRect } from "../utils/canvasLayout";
 import type { LayoutItem } from "../api/types";
 
@@ -113,16 +115,13 @@ export function ShelfSheetItems({
           }
           if (item.kind === "photo" && item.image_id && item.available !== false) {
             const version = canvas.thumb_versions[item.image_id] ?? DEFAULT_EDIT_VERSION;
+            if (detail) return <ShelfPhoto key={item.id} id={item.image_id} version={version} style={box} />;
             return (
               <img
                 key={item.id}
                 className="canvas-shelf-photo"
                 style={box}
-                src={
-                  detail
-                    ? api.images.previewUrl(item.image_id, version)
-                    : api.images.thumbnailUrl(item.image_id, version, "small")
-                }
+                src={api.images.thumbnailUrl(item.image_id, version, "small")}
                 alt=""
                 loading="lazy"
                 draggable={false}
@@ -134,5 +133,25 @@ export function ShelfSheetItems({
           return <span key={item.id} className="canvas-shelf-mark" style={box} />;
         })}
     </>
+  );
+}
+
+// A photo on the full-screen page: it opens on the 2048px preview and climbs
+// to the full-resolution render in the background (see utils/photoQuality.ts),
+// so zooming into the page finds real pixels.
+function ShelfPhoto({ id, version, style }: { id: string; version: string; style: React.CSSProperties }) {
+  const ref = useRef<HTMLImageElement | null>(null);
+  const tier = usePhotoTier(id, version, 1, ref);
+  return (
+    <img
+      ref={ref}
+      className="canvas-shelf-photo"
+      style={style}
+      src={tierUrl(id, version, tier)}
+      alt=""
+      // No decoding="async": it paints blank between src swaps (see the same
+      // note on the editor's frame); the climb pre-decodes each step anyway.
+      draggable={false}
+    />
   );
 }

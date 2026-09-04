@@ -3,7 +3,7 @@
 // guide point at).
 //
 // Structure mirrors Settings: nineteen headings in one scroll was a page you
-// had to read to search. The same material now sits in seven chapters, one
+// had to read to search. The same material now sits in eight chapters, one
 // visible at a time, and every topic in a chapter has the same shape - where
 // to find it, one sentence saying what it is, then the detail. That way a
 // question can be answered by picking a chapter and skimming lead sentences,
@@ -132,7 +132,8 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Hand them out.</strong> Collect the ones you want in <strong>Selects</strong>
                 , then <strong>Export…</strong> — as JPEGs with your edits baked in, or as the
-                original files 1:1.
+                original files 1:1. Or lay them out by hand on a <strong>Canvas</strong> and print
+                the pages.
               </li>
             </ol>
             <Tip title="Want a tour instead?">
@@ -370,7 +371,27 @@ const CHAPTERS: Chapter[] = [
                 must carry <em>all</em> the tags you pick), camera, lens, a focal-length range and a
                 capture-date range. They <strong>cross-filter</strong> each other: pick a camera and
                 the lens and focal-length choices narrow to what that camera actually shot. "Clear"
-                resets everything.
+                resets everything. The pin in the menu's top-right corner{" "}
+                <strong>docks the filters</strong> as a row of the bar, so they stay open while you
+                cull instead of closing on the next click — in the Library, an album and the import
+                review alike.
+              </li>
+              <li>
+                <strong>Where a photo is used:</strong> every photo in an album carries the tags{" "}
+                <strong>album</strong> and <strong>album: &lt;name&gt;</strong>, every photo a
+                canvas holds <strong>canvas</strong> and <strong>canvas: &lt;name&gt;</strong> —
+                so the tag filter finds them. Rollfilm keeps these tags itself (album and canvas
+                names are unique for that reason); you can't add or remove them by hand.
+              </li>
+              <li>
+                <strong>A look without opening:</strong> point at a tile and an{" "}
+                <strong>i</strong> appears; click it for the photo's details — camera, lens,
+                exposure, size, tags, albums — beside the tile, without leaving the grid.
+              </li>
+              <li>
+                <strong>Badges:</strong> a small copy glyph marks a <strong>virtual copy</strong>, a
+                second entry that shares another photo's file (see <em>Editing → Physical and
+                virtual copies</em>).
               </li>
               <li>
                 <strong>File types:</strong> show RAW + JPEG, only JPEGs, or only RAWs. With{" "}
@@ -383,12 +404,14 @@ const CHAPTERS: Chapter[] = [
             </ul>
             <h4>Working on many photos at once</h4>
             <p>
-              Press <strong>Select</strong>, click photos (<kbd>Shift</kbd>-click for a range), and
-              the bar at the bottom acts on all of them: set stars or a color label, add a tag, add
-              to an album, add to Selects, send to Immich, <strong>Auto develop</strong> the whole
-              selection, <strong>apply a saved preset</strong>, delete — or{" "}
-              <strong>Reset…</strong> chosen aspects back to the just-imported state (any of stars,
-              colors, tags, albums, edits, crop &amp; geometry).
+              Press <strong>Select</strong>, click photos (<kbd>Shift</kbd>-click for a range — it
+              ticks the run, or clears it if the photo you clicked was already ticked), and the bar
+              at the bottom acts on all of them: set stars or a color label, add a tag,{" "}
+              <strong>Add to…</strong> an album or a canvas (with "+ New" right in the list), add to
+              Selects, send to Immich, <strong>Auto develop</strong> the whole selection,{" "}
+              <strong>apply a saved preset</strong>, delete — or <strong>Reset…</strong> chosen
+              aspects back to the just-imported state (any of stars, colors, tags, albums, edits,
+              crop &amp; geometry).
             </p>
           </>
         ),
@@ -432,6 +455,13 @@ const CHAPTERS: Chapter[] = [
               <strong>Tags</strong> — free-form keywords with autocomplete. Add them to one photo in
               its side panel, or to a whole selection at once. Tags nothing carries anymore can be
               cleaned up under <em>Settings → Library → Tags</em>.
+            </li>
+            <li>
+              <strong>Three tags the app gives out itself:</strong> <em>edit</em> (the photo has a
+              saved edit), <em>edit copy</em> (a JPEG saved from the editor) and{" "}
+              <em>virtual copy</em>. They say what a photo <em>is</em>, so you can't add them by
+              hand, their chips have no remove button, the tag manager leaves them alone and a
+              bulk tag reset keeps them on the photo. They come and go on their own.
             </li>
           </ul>
         ),
@@ -562,6 +592,19 @@ const CHAPTERS: Chapter[] = [
                 ISO, aperture, shutter, focal length), the photo's tags and albums, a{" "}
                 <strong>Similar photos</strong> strip found by visual similarity, and{" "}
                 <strong>Export…</strong>. The trash can next to the file name deletes the photo.
+              </li>
+              <li>
+                <strong>Renaming:</strong> the pencil beside the file name renames the{" "}
+                <strong>file on disk</strong> — the one place the app writes to your original. The
+                extension is never up for editing, the RAW/JPEG partner takes the same name, a
+                name already in use is refused before anything moves, and the photo keeps its id
+                with every star, tag, album and edit. Rename or move a photo in Finder instead and
+                the next library sync matches it back by its content, so nothing is lost either way.
+              </li>
+              <li>
+                <strong>Description:</strong> a free-text box in the panel, saved when you click
+                out of it. It lives in the database like everything else; the file is not
+                rewritten. While you type in it, the keyboard belongs to the box, not to paging.
               </li>
               <li>
                 <strong>Without the mouse:</strong> <kbd>E</kbd> opens the editor, <kbd>P</kbd> hides
@@ -701,7 +744,17 @@ const CHAPTERS: Chapter[] = [
                 <strong>Double-click a slider</strong> to reset just that one.
               </li>
               <li>
-                <strong>Hold "Compare"</strong> to peek at the original, or put it side by side.
+                <strong>Compare</strong> three ways: <strong>hold</strong> the compare button to
+                peek at the original, <strong>split</strong> the picture by a line you drag, or put
+                the two <strong>side by side</strong>. A RAW's original half is shown with the
+                library's auto-exposure, so the before/after says more than "the edit is brighter".
+              </li>
+              <li>
+                <strong>Compare with a snapshot</strong> instead of the original: the camera icon
+                beside the compare button freezes the edit as it is right now, and every compare
+                from then on is judged against that state — handy for "was that last slider an
+                improvement?". Click it again to take a fresh snapshot; the picture icon goes back
+                to comparing with the untouched photo.
               </li>
               <li>
                 <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo. One slider drag or brush stroke is one
@@ -724,11 +777,9 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>Save copy</strong> makes a new photo and leaves the original untouched. It
-                asks which kind: a physical copy (a new JPEG with the edits baked in, tagged "edit
-                copy") or a virtual copy (no new file - a second entry sharing the original's file
-                with its own edits, tagged "virtual copy"). Turn on{" "}
-                <em>Settings → Photos → Photo editor</em> if you would also like to pick quality
-                and size for physical copies.
+                asks which kind — a <strong>physical copy</strong> (a new JPEG file with the edits
+                baked in) or a <strong>virtual copy</strong> (no new file, a second entry with its
+                own edits). The difference matters, so it has its own topic below.
               </li>
               <li>
                 <strong>Reset all</strong> clears every adjustment and gives you the photo as it was
@@ -739,6 +790,90 @@ const CHAPTERS: Chapter[] = [
                 saved copy — a copy is already a JPEG, and exporting it compresses it a second time.
               </li>
             </ul>
+          </>
+        ),
+      },
+      {
+        id: "copies",
+        title: "Physical and virtual copies",
+        where: <>Editor → Save copy</>,
+        lead: (
+          <>
+            Both give you a second photo with its own edit and leave the original untouched. One
+            is a real file, the other is only a second entry in the catalog — and only the real
+            file can leave the app.
+          </>
+        ),
+        body: (
+          <>
+            <table className="help-shortcuts">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Physical copy</th>
+                  <th>Virtual copy</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>What it is</td>
+                  <td>A new JPEG, rendered with your edits baked in and stored in the library folder</td>
+                  <td>A second library entry that shares the original's file and carries only its own edit</td>
+                </tr>
+                <tr>
+                  <td>Disk space</td>
+                  <td>One more JPEG</td>
+                  <td>None</td>
+                </tr>
+                <tr>
+                  <td>Editing it later</td>
+                  <td>Starts from the baked JPEG — the RAW headroom is gone</td>
+                  <td>Starts from the original file with the full headroom, like the original does</td>
+                </tr>
+                <tr>
+                  <td>Tag it carries</td>
+                  <td><em>edit copy</em></td>
+                  <td><em>virtual copy</em>, and a copy glyph on its tile</td>
+                </tr>
+                <tr>
+                  <td>Immich, export, backup</td>
+                  <td>Behaves like any other JPEG — uploads, exports, is in the backup</td>
+                  <td>
+                    Never goes to Immich. Export renders it like an edited original; a backup keeps
+                    the link
+                  </td>
+                </tr>
+                <tr>
+                  <td>Deleting it</td>
+                  <td>Trash, then "Delete forever" removes the file</td>
+                  <td>
+                    Only the entry goes; the shared file is never touched. Deleting the original for
+                    good takes its virtual copies with it
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <h4>Which one, when</h4>
+            <ul>
+              <li>
+                <strong>Virtual copy</strong> for variants you want to keep working on — a colour
+                and a black-and-white version of one RAW, or a differently framed version for a
+                canvas. Nothing is baked, nothing costs disk, and each copy edits from the original.
+              </li>
+              <li>
+                <strong>Physical copy</strong> when the edit has to exist as a file: for Immich, for
+                a folder someone else reads, or as a frozen result. Turn on{" "}
+                <em>Settings → Photos → Photo editor</em> to also pick JPEG quality and size when
+                saving one.
+              </li>
+            </ul>
+            <Tip title="Edits never reach Immich by themselves.">
+              Immich always receives the file as it lies on disk — the original JPEG, without your
+              edit; virtual copies are skipped entirely because they have no file of their own. To
+              see an edited picture on Immich, <strong>Save copy → Physical copy</strong> first:
+              the new JPEG then uploads like any other photo (its RAW original, as always, stays
+              local).
+            </Tip>
           </>
         ),
       },
@@ -801,6 +936,287 @@ const CHAPTERS: Chapter[] = [
     ],
   },
 
+  // --------------------------------------------------------------- canvas --
+  {
+    id: "canvas",
+    label: "Canvas",
+    blurb: "Photos arranged by hand on printable pages or one endless sheet — with captions, saved versions and a lossless PDF at the end.",
+    topics: [
+      {
+        id: "canvas-basics",
+        title: "What a canvas is",
+        where: <>Canvas (in the nav) · "Add to…" wherever photos are selected</>,
+        lead: (
+          <>
+            A free design surface: you place photos where you want them instead of where the grid
+            puts them, then print or export the result — a photo book, a poster, a contact sheet.
+          </>
+        ),
+        body: (
+          <>
+            <ul>
+              <li>
+                <strong>Make one</strong> on the Canvas page (a name and <em>Create canvas</em>), or
+                straight from a selection: pick photos in the Library, an album or Selects, open{" "}
+                <strong>Add to…</strong> in the bulk bar and choose a canvas or{" "}
+                <em>+ New canvas…</em>. A single photo's page has the same picker. In merged view
+                the RAW partner comes along, so the canvas holds the whole shot.
+              </li>
+              <li>
+                <strong>A canvas has its own photos.</strong> They sit in the filmstrip along the
+                bottom until you put them on the paper. Adding a photo to a canvas changes nothing
+                about the photo, and deleting a canvas leaves every photo in the library.
+              </li>
+              <li>
+                <strong>Two kinds of paper.</strong> <strong>Pages</strong> is a run of sheets of one
+                fixed size, like a photo book: photos stay inside a page and a rail on the left adds,
+                copies and reorders pages. <strong>Free canvas</strong> is one endless sheet with no
+                edges. Switching between them moves nothing; on the free canvas a{" "}
+                <strong>page guide</strong> outlines the sheets the design would be cut into, so you
+                can design for print there too.
+              </li>
+              <li>
+                <strong>The first time you open it</strong> the canvas's photos are already flowed
+                into a grid, so there is something to rearrange rather than a blank sheet.
+              </li>
+            </ul>
+            <Tip title="Everything the canvas understands is one click away.">
+              The <strong>How this works</strong> chip at the right end of the toolbar lists every
+              gesture — move, zoom, select, crop, rotate, stack — in one table.
+            </Tip>
+          </>
+        ),
+      },
+      {
+        id: "canvas-layout",
+        title: "Laying out the page",
+        where: <>Inside a canvas · the toolbar's middle group and the bar below it</>,
+        lead: (
+          <>
+            Drag photos from the filmstrip onto the paper, then move, resize, rotate, crop and
+            stack them — with snapping doing the lining up.
+          </>
+        ),
+        body: (
+          <>
+            <h4>Getting photos onto the paper</h4>
+            <ul>
+              <li>
+                <strong>Click a chip</strong> in the filmstrip and the photo lands on the page you
+                are looking at; <strong>drag it</strong> and it lands where you let go. A placed
+                chip gets a tick; click it again to place a second copy.
+              </li>
+              <li>
+                <strong>Place N photos</strong> flows everything not yet on the paper into a
+                three-column grid after what you already have — on a new page in Pages mode.
+                Nothing you placed by hand moves; it asks first if there is a layout to disturb.
+              </li>
+              <li>
+                <strong>Add text</strong> drops a caption box and starts you typing. Double-click
+                a text box to edit it later. Its font chip offers a set of typefaces or any font
+                installed on this computer, plus weight, italic, line height and letter spacing;
+                the bar also sets the type size in millimetres, the colour and the alignment in
+                the box.
+              </li>
+              <li>
+                <strong>Clear</strong> (the eraser) wipes the paper. The photos stay in the
+                filmstrip and the library.
+              </li>
+            </ul>
+            <h4>Working an item</h4>
+            <ul>
+              <li>
+                <strong>Move</strong> by dragging. <strong>Resize</strong> with a corner or side
+                handle — a photo keeps its shape while the padlock in the bar is locked,{" "}
+                <kbd>Shift</kbd> frees it — or type a width and height into the bar.{" "}
+                <strong>Rotate</strong> with the round handle above it (<kbd>Shift</kbd> for 15°
+                steps); double-click that handle, or press <em>Reset rotation</em>, to set it
+                straight again.
+              </li>
+              <li>
+                <strong>Crop in frame</strong> (or double-click the photo) moves and zooms the
+                picture inside its frame without moving the frame — scroll to zoom, drag to choose
+                what shows, <em>Reset</em> to centre it again. <strong>Fit frame to photo</strong>{" "}
+                does the opposite: reshapes the frame to the photo's own proportions.
+              </li>
+              <li>
+                <strong>Frame</strong> adds a border around the photo as a share of its shorter
+                edge, in a colour you pick — the canvas's version of the editor's white frame.
+              </li>
+              <li>
+                <strong>Copy settings / Paste settings</strong> carry one item's size, rotation and
+                border (or a text box's style) to others of the same kind. Position and the photo
+                itself are never copied.
+              </li>
+              <li>
+                <strong>Select several</strong> by dragging across empty paper or{" "}
+                <kbd>Shift</kbd>-clicking; they move and nudge together. <strong>Stack</strong>{" "}
+                with <em>Bring to front</em> / <em>Send to back</em>, or <kbd>⌘]</kbd> /{" "}
+                <kbd>⌘[</kbd> one step at a time.
+              </li>
+              <li>
+                <strong>Snap</strong> (the anchor) lines edges and centres up with other items,
+                the page edges, the page's centre lines and the margin while you drag, drawing the
+                guide it caught on. <strong>Grid</strong> shows a measuring grid at a spacing you
+                choose; it is never printed.
+              </li>
+              <li>
+                <strong>Remove from page</strong> (or <kbd>Delete</kbd>) takes items off the
+                paper. The photo stays in the library — and in the filmstrip.
+              </li>
+            </ul>
+            <h4>Getting around</h4>
+            <p>
+              <kbd>+</kbd> / <kbd>−</kbd> zoom the canvas (<kbd>⌘+</kbd> would zoom the whole app),{" "}
+              <kbd>0</kbd> fits one page, <kbd>Shift</kbd>+<kbd>0</kbd> the whole layout, and holding{" "}
+              <kbd>Space</kbd> lets you drag the view and scroll to zoom. Double-click the empty
+              free canvas to jump back to your first photo. <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd> undo
+              and redo every step, and the filmstrip's top edge is a sash — drag it to make the
+              chips bigger or smaller, double-click it to follow the shared thumbnail size again.
+            </p>
+          </>
+        ),
+      },
+      {
+        id: "canvas-pages",
+        title: "Pages, paper and versions",
+        where: <>The toolbar's left half · the pages rail</>,
+        lead: (
+          <>
+            The paper is set up once per canvas, and the canvas is saved on purpose, under a name
+            — nothing saves itself.
+          </>
+        ),
+        body: (
+          <>
+            <h4>Paper</h4>
+            <ul>
+              <li>
+                <strong>Page setup</strong> (the chip named after the current size) holds the size —
+                A3, A4 and A5 in both orientations, US Letter, 30 cm and 21 cm squares, photo book
+                28×21 and 21×28, photo 15×10 and 18×13 cm — or any width and height in millimetres:
+                typing a number <em>is</em> choosing custom. The <strong>margin</strong> is a
+                hairline guide on every sheet that photos snap to and that placed photos flow
+                inside; 0 hides it.
+              </li>
+              <li>
+                <strong>Paper colour</strong> — a swatch from gallery white to black, or any colour.
+                It prints.
+              </li>
+              <li>
+                <strong>The pages rail</strong> (Pages mode) shows a miniature of every page. Click
+                one to jump there, drag it up or down to reorder, and hover for{" "}
+                <em>Duplicate</em> and <em>Delete</em>; <em>Add a page</em> sits at the bottom.
+                Dragging an item past the bottom of a sheet moves it onto the next one.
+              </li>
+            </ul>
+            <h4>Saving</h4>
+            <ul>
+              <li>
+                <strong>Save</strong> (<kbd>⌘S</kbd>) lights up while there are unsaved changes
+                and asks for a name. The canvas is kept as a <strong>version</strong> under it: the
+                same name replaces that version, a new name keeps the old one as well — so "draft"
+                and "final" can live side by side.
+              </li>
+              <li>
+                <strong>Versions</strong> lists them: <em>Load</em> puts one back on the canvas
+                (undo brings the state before back), the pencil renames it, the trash can forgets
+                it. Forgetting a version never touches the canvas.
+              </li>
+              <li>
+                <strong>Leaving with unsaved changes</strong> — Back, <kbd>Esc</kbd>, a link
+                elsewhere in the app — asks "Discard unsaved changes?" first, like the photo
+                editor.
+              </li>
+              <li>
+                <strong>Canvas Shelf:</strong> tick it under Versions and the canvas gets a card on
+                the Albums page, showing the version last saved or loaded as it will print. Click
+                the card for a read-only print view; its × only removes the card.
+              </li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        id: "canvas-edit",
+        title: "Editing a photo on the canvas",
+        where: <>Select one photo → Edit photo</>,
+        lead: (
+          <>
+            The full editor docks beside the page and develops a <strong>virtual copy</strong> of
+            the photo — the library original is never changed, and each canvas can have its own
+            version of the same picture.
+          </>
+        ),
+        body: (
+          <>
+            <ul>
+              <li>
+                <strong>The first edit makes the copy.</strong> Pressing <em>Edit photo</em> on a
+                frame mints a virtual copy (tagged <em>virtual copy</em>, see{" "}
+                <em>Editing → Physical and virtual copies</em>) and points the frame at it. Editing
+                the same frame again reopens that copy; the photo on the page updates live while
+                you work.
+              </li>
+              <li>
+                <strong>It saves when you close.</strong> The docked editor has no Save button: the
+                state you leave — closing the panel, clicking another frame, leaving the canvas —
+                is the state that's kept. Crop and the grid overlay are not offered there, because
+                framing lives on the page (<em>Crop in frame</em>).
+              </li>
+              <li>
+                <strong>Shape follows the edit.</strong> Turn the photo a quarter and a frame that
+                still had the photo's own proportions turns with it; a frame you shaped by hand
+                keeps its shape and re-fits the picture inside.
+              </li>
+              <li>
+                <strong>If a photo goes missing</strong> — trashed, deleted for good — its frame
+                stays as an honest gap saying so. Delete a virtual copy and its frames fall back to
+                the original.
+              </li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        id: "canvas-export",
+        title: "Print view and export",
+        where: <>Toolbar → Print view (<kbd>P</kbd>) · Export</>,
+        lead: (
+          <>
+            Print view shows only the paper, as it will print. Export writes a PDF at the exact
+            page size with every photo lossless at full resolution.
+          </>
+        ),
+        body: (
+          <>
+            <ul>
+              <li>
+                <strong>Print view:</strong> <kbd>←</kbd> / <kbd>→</kbd> turn the pages, scroll to
+                zoom, drag to move, <kbd>0</kbd> fits again, <kbd>Esc</kbd> comes back. The
+                controls fade while you look and return on any movement.
+              </li>
+              <li>
+                <strong>PDF for printing</strong> — one page per sheet at the page size you set,
+                photos lossless at full resolution, text as real text. Edited photos and RAWs are
+                rendered fresh, which is why it can take a minute each.
+              </li>
+              <li>
+                <strong>Web page (HTML)</strong> — a single file with the photos inside it, lossless.
+                It opens in any browser, prints from there, and can be handed to a print shop as is
+                — but it can run to hundreds of MB.
+              </li>
+              <li>
+                There is no JPEG or PNG export and no resolution to choose: what goes in is exactly
+                what the library holds, never a re-compressed copy.
+              </li>
+            </ul>
+          </>
+        ),
+      },
+    ],
+  },
+
   // ---------------------------------------------------------------- share --
   {
     id: "share",
@@ -830,6 +1246,11 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>Export…</strong> gets them out; see the next topic.
+              </li>
+              <li>
+                <strong>Add to…</strong> puts the set into an album or onto a canvas — pick an
+                existing one, or "+ New" right in the list. In merged view the RAW partner rides
+                along, so a canvas holds the whole shot.
               </li>
               <li>
                 <strong>Add to Immich</strong> uploads the set's JPEGs to your server (shown only
@@ -876,7 +1297,8 @@ const CHAPTERS: Chapter[] = [
               Immich
             </a>{" "}
             server — to see your photos on your phone, or share them with family. Only JPEGs are
-            ever uploaded; RAW files always stay local.
+            ever uploaded, exactly as they lie on disk: RAW files always stay local, and{" "}
+            <strong>edits don't travel</strong> unless you save them as a physical copy first.
           </>
         ),
         body: (
@@ -930,6 +1352,12 @@ const CHAPTERS: Chapter[] = [
               <li>
                 Unticking "Sync to Immich" only <em>stops</em> syncing; photos already there stay.
                 Removing happens exclusively via the Trash.
+              </li>
+              <li>
+                <strong>What Immich sees is the file, not the edit.</strong> An edited JPEG arrives
+                as the untouched camera JPEG, and a virtual copy is skipped altogether — it has no
+                file of its own. Use <em>Save copy → Physical copy</em> in the editor; the new
+                JPEG (tagged <em>edit copy</em>) then uploads like any other photo.
               </li>
             </ul>
             <h4>Which API key permissions are needed?</h4>
@@ -1187,7 +1615,70 @@ const CHAPTERS: Chapter[] = [
                 <td>
                   <kbd>Shift</kbd> + click
                 </td>
-                <td>Select a range of photos (in select mode)</td>
+                <td>Select a range of photos (in select mode) — or clear the run if it was ticked</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>⌘S</kbd>
+                </td>
+                <td>Save the canvas as a named version</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd>
+                </td>
+                <td>Undo / redo</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> / <kbd>⇧0</kbd>
+                </td>
+                <td>Zoom in / out, fit one page, fit the whole layout</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>Space</kbd> + drag
+                </td>
+                <td>Move the view (scroll while holding it to zoom)</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>P</kbd>
+                </td>
+                <td>Print view — only the paper, filling the window; Esc comes back</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd>
+                </td>
+                <td>Nudge the selected items 1 mm (Shift: 10 mm)</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>⌘]</kbd> / <kbd>⌘[</kbd>
+                </td>
+                <td>One step forward / back in the stack (Shift: all the way)</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>Delete</kbd>
+                </td>
+                <td>Take the selected items off the page (the photos stay in the library)</td>
+              </tr>
+              <tr>
+                <td>Canvas</td>
+                <td>
+                  <kbd>Esc</kbd>
+                </td>
+                <td>Step out: end crop, end typing, clear the selection, leave the canvas</td>
               </tr>
             </tbody>
           </table>
@@ -1291,7 +1782,7 @@ export function Help() {
       <div className="help-inner">
         <h2 className="section-title">Help</h2>
         <p className="help-sub">
-          Everything Rollfilm can do, in the order you'll meet it. Seven chapters — pick one.
+          Everything Rollfilm can do, in the order you'll meet it. Eight chapters — pick one.
         </p>
 
         <nav className="help-tabs" role="tablist" aria-label="Help chapters">

@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app import schemas
@@ -19,6 +19,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services.filesystem import resolve_image_path
+from app.services.membership_tags import sync_membership_tags
 from app.services.settings_store import IMMICH_MODE_FULL, ImmichConfig, get_immich_config
 from app.workers.queue import (
     enqueue_immich_album_delete,
@@ -40,6 +41,24 @@ def _mirrored(immich: ImmichConfig | None, album: Album) -> bool:
     return immich is not None and (
         immich.sync_mode == IMMICH_MODE_FULL or (immich.album_sync and album.immich_sync)
     )
+
+
+def _checked_name(db: Session, owner_id: int, raw: str, *, exclude_id: str | None = None) -> str:
+    """Validate an album name: non-blank (a blank album is unopenable in the
+    UI) and unique per user, case-insensitively - the album's photos carry an
+    "album: <name>" tag and the Immich mirror maps albums by name, so two
+    albums sharing a name would be indistinguishable."""
+    name = raw.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="An album needs a name")
+    clash = db.query(Album.id).filter(
+        Album.owner_id == owner_id, func.lower(Album.name) == name.lower()
+    )
+    if exclude_id is not None:
+        clash = clash.filter(Album.id != exclude_id)
+    if clash.first() is not None:
+        raise HTTPException(status_code=409, detail=f"An album called “{name}” already exists")
+    return name
 
 
 def _clean_tag_filter(tags: list[str]) -> list[str]:
@@ -175,7 +194,7 @@ def create_album(
     tags = _clean_tag_filter(payload.tag_filter)
     album = Album(
         owner_id=current_user.id,
-        name=payload.name,
+        name=_checked_name(db, current_user.id, payload.name),
         description=payload.description,
         tag_filter=json.dumps(tags) if tags else None,
     )
@@ -202,17 +221,15 @@ def update_album(
     old_name = album.name
     old_tags = album.tag_filter_list
     if payload.name is not None:
-        # An album with a blank name is unopenable in the UI, and the Immich
-        # mirror maps albums by name - so a rename must actually carry one.
-        name = payload.name.strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="An album needs a name")
-        album.name = name
+        album.name = _checked_name(db, current_user.id, payload.name, exclude_id=album.id)
     if payload.description is not None:
         album.description = payload.description
     if payload.tag_filter is not None:
         tags = _clean_tag_filter(payload.tag_filter)
         album.tag_filter = json.dumps(tags) if tags else None
+    # A rename moves the album's photos to a new "album: <name>" tag.
+    if album.name != old_name:
+        sync_membership_tags(db, current_user.id)
     db.commit()
     db.refresh(album)
     # Renaming a mirrored album must follow through to Immich, or the by-name
@@ -235,6 +252,8 @@ def delete_album(album_id: str, db: Session = Depends(get_db), current_user: Use
     mirrored = _mirrored(immich, album)
     name = album.name
     db.delete(album)
+    db.flush()
+    sync_membership_tags(db, current_user.id)
     db.commit()
     # Deleting an app album also deletes its Immich mirror. Only the album:
     # the photos stay in the library here and the assets stay in the Immich
@@ -264,6 +283,8 @@ def add_images_to_album(
         db.add(AlbumImage(album_id=album.id, image_id=image_id, position=next_position))
         next_position += 1
         added.append(image)
+    if added:
+        sync_membership_tags(db, current_user.id)
     db.commit()
 
     # A synced album mirrors its membership to Immich: photos added later must
@@ -320,6 +341,7 @@ def remove_image_from_album(
     db.query(AlbumImage).filter(
         AlbumImage.album_id == album_id, AlbumImage.image_id == image_id
     ).delete()
+    sync_membership_tags(db, current_user.id)
     db.commit()
     # Mirror the removal: take the asset out of the Immich album too (it stays
     # in the Immich timeline). Only possible when we know its asset id - photos

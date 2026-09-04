@@ -74,6 +74,8 @@ export function Library() {
   const setColorLabel = (v: ColorLabel) => setParams({ color: v === "none" ? null : v });
   const albumId = searchParams.get("album") ?? "";
   const setAlbumId = (v: string) => setParams({ album: v || null });
+  const canvasId = searchParams.get("canvas") ?? "";
+  const setCanvasId = (v: string) => setParams({ canvas: v || null });
   const selectedTags = searchParams.getAll("tag");
   const setSelectedTags = (v: string[]) => setParams({ tag: v });
   const camera = searchParams.get("camera") ?? "";
@@ -101,6 +103,7 @@ export function Library() {
   const q = (searchParams.get("q") ?? "").trim();
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
+  const { data: canvases } = useQuery({ queryKey: ["canvas-list"], queryFn: () => api.canvases.list() });
   const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
 
   // "Add to Immich" only appears when the integration is configured in Settings.
@@ -135,6 +138,7 @@ export function Library() {
     rating_min: ratingMin || undefined,
     color_label: colorLabel !== "none" ? colorLabel : undefined,
     album_id: albumId || undefined,
+    canvas_id: canvasId || undefined,
     tags: selectedTags.length ? selectedTags : undefined,
     camera_model: camera || undefined,
     lens_model: lens || undefined,
@@ -487,6 +491,9 @@ export function Library() {
         albums={albums}
         albumId={albumId}
         onAlbumId={setAlbumId}
+        canvases={canvases}
+        canvasId={canvasId}
+        onCanvasId={setCanvasId}
         allTags={allTags}
         selectedTags={selectedTags}
         onTags={setSelectedTags}
@@ -675,6 +682,7 @@ export function Library() {
             ratingMin,
             colorLabel,
             albumId,
+            canvasId,
             selectedTags,
             camera,
             lens,

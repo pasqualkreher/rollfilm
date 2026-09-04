@@ -29,6 +29,7 @@ from app.db.models import (
 from app.services.exif import capture_date_from_filename, new_helper, read_exif
 from app.services.filesystem import VIRTUAL_PATH_MARKER, resolve_image_path
 from app.services.hashing import sha256_file
+from app.services.membership_tags import sync_membership_tags
 from app.services.raw import classify_file_type, raw_dimensions
 from app.services.thumbnails import derivative_dir, editor_recently_active, regenerate_for_image
 from app.services.trash import hard_delete_images
@@ -839,6 +840,8 @@ def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dic
         for ai in manifest["album_images"]:
             db.add(AlbumImage(album_id=ai["album_id"], image_id=ai["image_id"], position=ai["position"]))
 
+        # Restored album members get their "album" / "album: …" tags back.
+        sync_membership_tags(db, owner_id)
         db.commit()
 
         restored_images = db.query(Image).filter(Image.owner_id == owner_id).all()

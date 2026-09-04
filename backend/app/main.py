@@ -15,6 +15,7 @@ from app.api.routes import (
     tags,
 )
 from app.config import settings as app_settings
+from app.db.models import User
 from app.db.session import SessionLocal, engine, ensure_indexes
 from app.services.borg_backup import start_background_backup
 from app.services.cloudfiles import rehydrate_dirs_in_background
@@ -25,6 +26,7 @@ from app.services.geocode import warm_in_background as warm_geocoder
 from app.services.hashing import warm_phash_in_background
 from app.services.immich_sync import start_background_immich_sync
 from app.services.maintenance import start_background_sync
+from app.services.membership_tags import sync_membership_tags
 from app.services.sources import scan_all_sources
 from app.services.trash import start_background_purge
 from app.workers.queue import schedule_embedding_backfill
@@ -69,6 +71,13 @@ def on_startup() -> None:
 
     with SessionLocal() as _db:
         raw_service.set_native_decode(get_raw_native_decode(_db))
+        # The membership tags ("album", "album: …", "canvas",
+        # "canvas: …") are derived from albums and canvases: recompute them
+        # once per launch, so a library from before they existed gets them
+        # and any drift heals itself.
+        for (owner_id,) in _db.query(User.id).all():
+            sync_membership_tags(_db, owner_id)
+        _db.commit()
     # Pick up anything new under registered external source roots (NAS/folders)
     # since last run - runs in the background so startup isn't blocked, and is
     # incremental (only new files are indexed).

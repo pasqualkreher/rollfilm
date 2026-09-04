@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
+import { setQualityPaused, tierUrl, usePhotoTier } from "../utils/photoQuality";
 import type { CanvasLayout, ImageOut, LayoutItem, LayoutTextStyle, LayoutVersion } from "../api/types";
 import { CANVAS_STRIP_MAX_PX, CANVAS_STRIP_MIN_PX, collapsePairs, setCanvasStripChip, thumbPx, useCanvasStripChip, useThumbSize } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
@@ -105,7 +106,10 @@ const MIN_SIZE_MM = 5;
 // sheets, getting the WHOLE thing on screen at once is the most useful view
 // there is, and the old floor of 0.2 stopped well before that on a big layout.
 const MIN_ZOOM = 0.02;
-const MAX_ZOOM = 16;
+// The ceiling is for pixel-peeping a placed photo at its full resolution: at
+// 64 px/mm a frame 150mm wide is 9600 screen pixels across, more than a 6000px
+// photo has - the old 16 stopped at a quarter of that.
+const MAX_ZOOM = 64;
 // Slack around the world, in screen pixels: room to breathe around the paper,
 // and room to scroll to anything dragged off its left or top edge.
 const PAD = 160;
@@ -450,6 +454,12 @@ export function CanvasEditor({
   // Editing a placed photo happens on a virtual copy ("virtual copy"): the
   // library original stays untouched, the frame follows the copy.
   const [editingImage, setEditingImage] = useState<ImageOut | null>(null);
+  // The background climb to full-resolution photos waits while the editor is
+  // open: its live preview renders must never queue behind those.
+  useEffect(() => {
+    setQualityPaused(editingImage !== null);
+    return () => setQualityPaused(false);
+  }, [editingImage]);
   const editingOpenRef = useRef(false);
   editingOpenRef.current = editingImage !== null;
   const editingImageIdRef = useRef<string | null>(null);
@@ -3422,25 +3432,19 @@ function CanvasItem({
 }) {
   const rect = worldRect(item, doc);
 
-  // Zoomed far in, the 1600px thumbnail runs out of pixels and the photo goes
-  // soft right where fine crop-in-frame work happens. Once the frame asks for
-  // more device pixels than the loaded bitmap has, upgrade to the 2048px
-  // preview - latched, so zooming back out doesn't flip the tile between
-  // files, and the <img> keeps showing the old bitmap until the sharper one
-  // has decoded, so the swap never flashes.
-  const [hiRes, setHiRes] = useState(false);
+  // The photo climbs thumbnail -> preview -> full in the background (see
+  // utils/photoQuality.ts). The print view can show a frame as big as the
+  // window, so it starts on the preview rather than the thumbnail. While this
+  // frame's photo is open in the editor its live frames are what shows, and
+  // the cached derivatives are about to be replaced anyway.
   const imgRef = useRef<HTMLImageElement | null>(null);
-  const maybeUpgrade = () => {
-    if (hiRes || print || livePreviewUrl || item.kind !== "photo") return;
-    const img = imgRef.current;
-    if (!img || !img.naturalWidth) return;
-    const dpr = window.devicePixelRatio || 1;
-    const need = Math.max(rect.w, rect.h) * zoom * (item.content_scale || 1) * dpr;
-    if (need > Math.max(img.naturalWidth, img.naturalHeight) * 1.15) setHiRes(true);
-  };
-  // No deps on purpose: the check is a couple of number compares and must
-  // re-run on every zoom/resize/content-scale render anyway.
-  useEffect(maybeUpgrade);
+  const tier = usePhotoTier(
+    image && item.kind === "photo" ? image.id : null,
+    image ? editVersion(image) : undefined,
+    print ? 1 : 0,
+    imgRef,
+    Boolean(livePreviewUrl)
+  );
 
   const style: React.CSSProperties = {
     left: rect.x,
@@ -3524,15 +3528,15 @@ function CanvasItem({
         <img
           ref={imgRef}
           className="canvas-photo"
-          src={
-            livePreviewUrl ??
-            (print || hiRes
-              ? api.images.previewUrl(image.id, editVersion(image))
-              : api.images.thumbnailUrl(image.id, editVersion(image)))
-          }
+          src={livePreviewUrl ?? tierUrl(image.id, editVersion(image), tier)}
           alt=""
           draggable={false}
-          onLoad={maybeUpgrade}
+          // Deliberately NOT decoding="async": with it, every src swap paints
+          // the frame blank until the new bitmap has decoded, and the docked
+          // editor swaps this src on every slider frame - the page flickered
+          // badly while dragging. The tier climb already decodes each sharper
+          // bitmap off-DOM (photoQuality.ts) before it is ever put in here, so
+          // the synchronous path costs nothing there either.
           style={{ transform: contentTransform }}
         />
       ) : (

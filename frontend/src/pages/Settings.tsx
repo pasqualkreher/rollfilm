@@ -7,6 +7,7 @@ import { IconCheck, IconX } from "../components/Icons";
 import { useAppDialogs } from "../components/AppDialogs";
 import { skinInfo, useAppearance, type Appearance } from "../state/theme";
 import { useCorners } from "../state/corners";
+import { FONTS, useFont } from "../state/fonts";
 import { useTasks } from "../state/tasks";
 import {
   useAskDeletePartner,
@@ -193,6 +194,7 @@ function ThemeSummaryPreview({ appearance }: { appearance: Appearance }) {
 function AppearanceSetting() {
   const appearance = useAppearance();
   const [corners, setCorners] = useCorners();
+  const [font, setFont] = useFont();
   const [open, setOpen] = useState(false);
 
   const label =
@@ -250,6 +252,42 @@ function AppearanceSetting() {
             Square
           </button>
         </span>
+      </div>
+
+      <div className="settings-fonts">
+        <span className="settings-option-body">
+          <strong>Typeface</strong>
+          <span className="settings-option-desc">
+            The font the whole interface is set in. Rollfilm is the default; the others are close
+            relatives your system already has, so nothing is downloaded.
+          </span>
+        </span>
+        <div className="font-picker" role="radiogroup" aria-label="Typeface">
+          {FONTS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              role="radio"
+              className={`theme-tile${font === f.value ? " active" : ""}`}
+              aria-checked={font === f.value}
+              onClick={() => setFont(f.value)}
+            >
+              <span className="font-tile-sample" style={{ fontFamily: f.stack }}>
+                Aa
+                <small>Rollfilm 0123</small>
+              </span>
+              <span className="theme-tile-label">
+                {f.label}
+                {font === f.value && (
+                  <span className="theme-tile-check">
+                    <IconCheck size={13} />
+                  </span>
+                )}
+              </span>
+              <span className="theme-tile-hint">{f.hint}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {open && (

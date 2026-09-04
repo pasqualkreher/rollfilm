@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAppDialogs } from "./AppDialogs";
+import { errorText } from "../utils/apiError";
 
 // Inline rename for one of the user's own albums: the name reads as plain text
 // until the parent switches `editing` on - always from a rename control, never
@@ -57,7 +58,7 @@ export function AlbumNameField({
       onEditingChange(false);
     } catch (e) {
       // Keep the box open with what was typed, so the name isn't lost.
-      await dialogs.alert({ title: "Rename failed", message: (e as Error).message });
+      await dialogs.alert({ title: "Rename failed", message: errorText(e) });
       inputRef.current?.focus();
     } finally {
       saving.current = false;

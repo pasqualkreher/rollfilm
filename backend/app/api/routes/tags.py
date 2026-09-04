@@ -6,7 +6,7 @@ from app import schemas
 from app.auth import get_current_user
 from app.db.models import ImageTag, Tag, User
 from app.db.session import get_db
-from app.services.auto_tags import AUTO_TAGS, auto_tag_error, is_auto_tag
+from app.services.auto_tags import auto_tag_criterion, auto_tag_error, is_auto_tag
 
 router = APIRouter(prefix="/tags", tags=["tags"])
 
@@ -60,7 +60,7 @@ def prune_unused_tags(db: Session = Depends(get_db), current_user: User = Depend
         .filter(
             Tag.owner_id == current_user.id,
             Tag.id.notin_(used_tag_ids.select()),
-            Tag.name.notin_(AUTO_TAGS),
+            ~auto_tag_criterion(),
         )
         .all()
     )

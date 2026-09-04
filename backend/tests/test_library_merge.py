@@ -193,11 +193,12 @@ def test_tags_and_albums_merge_by_name(home, travel):
 
     merge_library(home, 1, root)
 
-    assert home.query(Tag).count() == 1
     assert home.query(Album).count() == 1
     merged = home.query(Image).one()
-    assert home.query(ImageTag).filter(ImageTag.image_id == merged.id).count() == 1
     assert home.query(AlbumImage).filter(AlbumImage.image_id == merged.id).count() == 1
+    # One "iceland" tag - plus the membership tags the merged album earns it.
+    assert merged.tags == ["album", "album: Iceland 2026", "iceland"]
+    assert home.query(Tag).count() == 3
 
 
 def test_raw_jpeg_pairs_stay_linked(home, travel):

@@ -576,6 +576,14 @@ export interface LibraryStats {
 // grid tile. The index endpoint returns the WHOLE filtered library in one
 // slim response - the virtual grid computes every tile's position up front
 // (exact scrollbar, jump anywhere) and fetches only thumbnails on demand.
+// Of a set of photos: how many sit in at least one album, how many a canvas
+// holds, and how many are in either (the two overlap). Asked before a delete.
+export interface ImageUsage {
+  in_album: number;
+  in_canvas: number;
+  in_any: number;
+}
+
 export interface LibraryIndexImage {
   id: string;
   original_filename: string;
@@ -607,6 +615,8 @@ export interface GeoImage {
 export interface LibraryFilters {
   view_mode: ViewMode;
   album_id?: string;
+  // Photos a canvas holds (filmstrip members and placed frames).
+  canvas_id?: string;
   rating_min?: number;
   color_label?: ColorLabel;
   camera_model?: string;

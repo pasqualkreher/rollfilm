@@ -28,3 +28,25 @@ export function deleteConfirmMessage(
   }
   return `Delete ${images.length - hiddenPaired} photo(s)${pairSuffix}?\n\n${parts.join("\n")}`;
 }
+
+// The line the delete confirmations add when some of the photos sit in an
+// album or a canvas. Moving to the Trash keeps the memberships (a restore puts
+// the photos back), so it only says they disappear from there for now; a
+// permanent delete really does take them out of the album and leaves an empty
+// frame on the canvas.
+export function membershipWarning(
+  usage: { in_album: number; in_canvas: number; in_any: number },
+  permanent: boolean
+): string | null {
+  if (usage.in_any === 0) return null;
+  const where =
+    usage.in_album > 0 && usage.in_canvas > 0
+      ? "an album or a canvas"
+      : usage.in_album > 0
+        ? "an album"
+        : "a canvas";
+  const count = `${usage.in_any} of them ${usage.in_any === 1 ? "is" : "are"} in ${where}`;
+  return permanent
+    ? `${count} - deleting for good removes ${usage.in_any === 1 ? "it" : "them"} from there too (a canvas keeps an empty frame).`
+    : `${count} - ${usage.in_any === 1 ? "it disappears" : "they disappear"} from there until restored from the Trash.`;
+}

@@ -120,7 +120,8 @@ def test_backup_restore_round_trip(db: Session, monkeypatch):
     assert edited.color_label == ColorLabel.blue
     assert edited.immich_sync is True
     assert edited.immich_asset_id == "immich-uuid-1"
-    assert edited.tags == ["edit", "travel"]
+    # The album it was restored into hands it the membership tags too.
+    assert edited.tags == ["album", "album: Trip", "edit", "travel"]
 
     trashed = db.get(Image, "img-trashed")
     assert trashed.deleted_at is not None
@@ -197,6 +198,6 @@ def test_restore_accepts_v1_manifest_without_new_fields(db: Session, monkeypatch
     restored = db.get(Image, "img-old")
     assert restored.rating == 2
     assert restored.edit_adjustments is None
-    assert restored.tags == []
+    assert restored.tags == ["album", "album: Old"]
     assert restored.deleted_at is None
     assert db.get(Album, "album-old").immich_sync is False

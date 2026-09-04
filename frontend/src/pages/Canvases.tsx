@@ -10,6 +10,7 @@ import type { CanvasPreview, CanvasSummary } from "../api/types";
 import { useAppDialogs } from "../components/AppDialogs";
 import { shelfSheets, ShelfSheetItems, type CanvasSheetDoc } from "../components/CanvasSheet";
 import { IconPencil, IconTrash } from "../components/Icons";
+import { errorText } from "../utils/apiError";
 
 // A blank white sheet for a canvas that has never been saved: an empty paper
 // says "nothing on it yet" better than a card with no picture at all.
@@ -71,16 +72,28 @@ export function Canvases() {
       // Straight into the new canvas - an empty overview card teaches nothing.
       navigate(`/canvas/${created.id}`);
     },
+    // Canvas names are unique - a taken name comes back as an error the user
+    // has to read (the typed name stays in the box to adjust).
+    onError: (e) => void dialogs.alert({ title: "Canvas not created", message: errorText(e) }),
   });
 
   async function renameCanvas(canvas: CanvasSummary) {
-    // Reuses the album-title pattern: a plain prompt would do, but the app has
-    // no prompt dialog - a lightweight inline rename keeps this dependency-free.
-    const next = window.prompt("Rename this canvas", canvas.name);
+    // window.prompt is a no-op in Electron - the app-skinned dialog is the
+    // only way to ask for a line of text here.
+    const next = await dialogs.prompt({
+      title: "Rename this canvas",
+      initial: canvas.name,
+      confirmLabel: "Rename",
+    });
     if (next === null) return;
     const trimmed = next.trim();
     if (!trimmed || trimmed === canvas.name) return;
-    await api.canvases.rename(canvas.id, trimmed);
+    try {
+      await api.canvases.rename(canvas.id, trimmed);
+    } catch (e) {
+      await dialogs.alert({ title: "Rename failed", message: errorText(e) });
+      return;
+    }
     queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
     queryClient.invalidateQueries({ queryKey: ["canvases"] });
   }

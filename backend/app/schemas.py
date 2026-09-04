@@ -238,6 +238,15 @@ class BulkDeleteRequest(BaseModel):
     image_ids: list[str]
 
 
+class ImageUsageOut(BaseModel):
+    """Of a set of photos: how many are in at least one album, how many a
+    canvas holds, and how many are in either (the two overlap)."""
+
+    in_album: int
+    in_canvas: int
+    in_any: int
+
+
 class BulkDownloadRequest(BaseModel):
     image_ids: list[str]
 

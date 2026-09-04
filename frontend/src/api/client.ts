@@ -1,7 +1,4 @@
 import type {
-  CanvasGalleryOut,
-  CanvasLayout,
-  CanvasSummary,
   AlbumOut,
   AutoAdjustResult,
   AutoDevelopSettings,
@@ -9,37 +6,41 @@ import type {
   BorgTestResult,
   BulkAutoDevelopResult,
   BulkResetOptions,
+  CanvasGalleryOut,
+  CanvasLayout,
+  CanvasSummary,
   CropBox,
-  LibraryStats,
+  DirListing,
   ExportJobProgress,
+  FolderScanOut,
+  GeoImage,
   ImageOut,
   ImageRenameResult,
-  SegmentResult,
-  DirListing,
+  ImageUsage,
   ImmichActivity,
+  ImmichPushResult,
   ImmichSettings,
   ImmichSyncMode,
   ImmichTestResult,
-  ImmichPushResult,
   ImmichUploadResult,
-  FolderScanOut,
   ImportProgress,
   ImportSessionOut,
-  GeoImage,
   LibraryFacets,
   LibraryFilters,
   LibraryIndexImage,
   LibraryMergeProgress,
   LibraryMergeSummary,
+  LibraryStats,
+  RawDecodeSettings,
   ScanStatus,
   SearchResultOut,
-  SmartAlbumsOut,
+  SegmentResult,
   SmartAlbumSettings,
+  SmartAlbumsOut,
   SourceRoot,
   StagedFileOut,
   StagedFileUpdatePatch,
   TagUsage,
-  RawDecodeSettings,
   TrashSettings,
 } from "./types";
 import type { ImageEdits } from "../utils/adjustments";
@@ -365,6 +366,11 @@ export const api = {
     // on disk are never touched.
     bulkDelete(image_ids: string[]): Promise<void> {
       return request(`/images/bulk-delete`, { method: "POST", body: JSON.stringify({ image_ids }) });
+    },
+    // How many of these photos are in an album or canvas - the delete
+    // confirmations warn with this before the photos vanish from there.
+    usage(image_ids: string[]): Promise<ImageUsage> {
+      return request(`/images/usage`, { method: "POST", body: JSON.stringify({ image_ids }) });
     },
     listTrash(): Promise<ImageOut[]> {
       return request(`/images/trash`);

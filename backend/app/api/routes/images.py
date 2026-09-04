@@ -29,10 +29,13 @@ from app.config import settings
 from app.db.models import (
     Album,
     AlbumImage,
+    CanvasImage,
+    CanvasLayout,
     ColorLabel,
     FileType,
     Image,
     ImageTag,
+    LayoutItem,
     Tag,
     User,
 )
@@ -48,7 +51,8 @@ from app.services import (
     thumbnails,
     trash as trash_service,
 )
-from app.services.auto_tags import AUTO_TAGS, auto_tag_error, is_auto_tag
+from app.services.auto_tags import auto_tag_criterion, auto_tag_error, is_auto_tag
+from app.services.membership_tags import sync_membership_tags
 from app.services.filesystem import (
     VIRTUAL_PATH_MARKER,
     library_relative_path,
@@ -174,6 +178,7 @@ def _filtered_images_query(
     current_user: User,
     view_mode: str,
     album_id: str | None,
+    canvas_id: str | None,
     rating_min: int | None,
     color_label: ColorLabel | None,
     camera_model: str | None,
@@ -210,6 +215,16 @@ def _filtered_images_query(
             )
         else:
             query = query.filter(Image.id.in_(manual_ids))
+    if canvas_id:
+        # What the canvas holds: its filmstrip members plus any photo placed
+        # on a page (same union as routes/canvases.canvas_images).
+        member_ids = db.query(CanvasImage.image_id).filter(CanvasImage.canvas_id == canvas_id)
+        placed_ids = (
+            db.query(LayoutItem.image_id)
+            .join(CanvasLayout, CanvasLayout.id == LayoutItem.layout_id)
+            .filter(CanvasLayout.canvas_id == canvas_id, LayoutItem.image_id.isnot(None))
+        )
+        query = query.filter(or_(Image.id.in_(member_ids), Image.id.in_(placed_ids)))
     if rating_min is not None:
         query = query.filter(Image.rating >= rating_min)
     if color_label is not None:
@@ -268,6 +283,7 @@ def _filtered_images_query(
 def list_images(
     view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
     album_id: str | None = None,
+    canvas_id: str | None = None,
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
@@ -284,7 +300,7 @@ def list_images(
     current_user: User = Depends(get_current_user),
 ):
     query = _filtered_images_query(
-        db, current_user, view_mode, album_id, rating_min, color_label,
+        db, current_user, view_mode, album_id, canvas_id, rating_min, color_label,
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
     )
     # Newest capture first. The extra keys make the order total: burst shots
@@ -321,6 +337,7 @@ def list_images(
 def library_index(
     view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
     album_id: str | None = None,
+    canvas_id: str | None = None,
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
@@ -345,7 +362,7 @@ def library_index(
     seconds. `thumb_version` is sent as "" for never-edited photos (the vast
     majority) - the client substitutes its own default-version constant."""
     query = _filtered_images_query(
-        db, current_user, view_mode, album_id, rating_min, color_label,
+        db, current_user, view_mode, album_id, canvas_id, rating_min, color_label,
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
     )
     # file_type, color_label and taken_at are asked for as plain strings rather
@@ -432,7 +449,7 @@ def geo_index(
     clusters these client-side per zoom level, so it needs the full set, not a
     page. Hand-serialized for the same reason as /images/index."""
     query = _filtered_images_query(
-        db, current_user, "combined", None, None, None, None, None, None, None, None, None, None, None
+        db, current_user, "combined", None, None, None, None, None, None, None, None, None, None, None, None
     )
     rows = (
         query.with_entities(
@@ -462,6 +479,7 @@ def geo_index(
 def count_images(
     view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
     album_id: str | None = None,
+    canvas_id: str | None = None,
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
@@ -479,7 +497,7 @@ def count_images(
     sizes its scrollbar from this - the scroll range covers the whole
     (filtered) library, not just the pages fetched so far."""
     query = _filtered_images_query(
-        db, current_user, view_mode, album_id, rating_min, color_label,
+        db, current_user, view_mode, album_id, canvas_id, rating_min, color_label,
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
     )
     return schemas.ImageCountOut(count=query.count())
@@ -489,6 +507,7 @@ def count_images(
 def list_facets(
     view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
     album_id: str | None = None,
+    canvas_id: str | None = None,
     rating_min: int | None = None,
     color_label: ColorLabel | None = None,
     camera_model: str | None = None,
@@ -524,7 +543,7 @@ def list_facets(
     def scoped(*, without: str) -> "Query":
         """The current filter set with one dimension (the facet's own) lifted."""
         return _filtered_images_query(
-            db, current_user, view_mode, album_id, rating_min, color_label,
+            db, current_user, view_mode, album_id, canvas_id, rating_min, color_label,
             None if without == "camera" else camera_model,
             None if without == "lens" else lens_model,
             None if without == "focal" else focal_min,
@@ -705,6 +724,34 @@ def bulk_update_images(
     for image in images:
         db.refresh(image)
     return images
+
+
+@router.post("/usage", response_model=schemas.ImageUsageOut)
+def image_usage(
+    payload: schemas.BulkDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """How many of the given photos sit in an album or a canvas (in its
+    filmstrip or placed on a page). The delete confirmations ask this first,
+    so the user hears "3 of these are in an album or canvas" before the
+    photos vanish from there."""
+    wanted = set(payload.image_ids)
+    if not wanted:
+        return schemas.ImageUsageOut(in_album=0, in_canvas=0, in_any=0)
+    owned = {
+        row[0]
+        for row in db.query(Image.id).filter(Image.id.in_(wanted), Image.owner_id == current_user.id)
+    }
+    in_album = {
+        row[0] for row in db.query(AlbumImage.image_id).filter(AlbumImage.image_id.in_(owned))
+    }
+    in_canvas = {
+        row[0] for row in db.query(CanvasImage.image_id).filter(CanvasImage.image_id.in_(owned))
+    } | {row[0] for row in db.query(LayoutItem.image_id).filter(LayoutItem.image_id.in_(owned))}
+    return schemas.ImageUsageOut(
+        in_album=len(in_album), in_canvas=len(in_canvas), in_any=len(in_album | in_canvas)
+    )
 
 
 @router.post("/bulk-delete", status_code=204)
@@ -1162,11 +1209,12 @@ def bulk_reset_metadata(
     image_ids = [image.id for image in images]
 
     if payload.tags:
-        # Auto-managed tags describe what the photo is (an edit copy, a canvas
-        # copy) and survive a reset; "edit" is re-derived below anyway.
+        # Auto-managed tags describe what the photo is (an edit copy, a
+        # virtual copy, an album or canvas member) and survive a reset; "edit"
+        # is re-derived below anyway.
         auto_ids = [
             t.id
-            for t in db.query(Tag).filter(Tag.owner_id == current_user.id, Tag.name.in_(AUTO_TAGS)).all()
+            for t in db.query(Tag).filter(Tag.owner_id == current_user.id, auto_tag_criterion()).all()
         ]
         query = db.query(ImageTag).filter(ImageTag.image_id.in_(image_ids))
         if auto_ids:
@@ -1174,6 +1222,8 @@ def bulk_reset_metadata(
         query.delete(synchronize_session=False)
     if payload.albums:
         db.query(AlbumImage).filter(AlbumImage.image_id.in_(image_ids)).delete(synchronize_session=False)
+        # Leaving every album drops the "album" / "album: …" tags too.
+        sync_membership_tags(db, current_user.id)
 
     for image in images:
         if payload.rating:

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { deleteConfirmMessage } from "../utils/deleteMessage";
+import { api } from "../api/client";
+import { deleteConfirmMessage, membershipWarning } from "../utils/deleteMessage";
 import { useAskDeletePartner } from "../state/viewPrefs";
 
 // Only the field deleteConfirmMessage needs, so the library's slim index
@@ -19,14 +20,32 @@ interface Request {
 
 // A plain "delete these, yes/no?" confirm, or the "only this file / the whole
 // pair?" chooser - both rendered as the same skin-styled modal.
+// `warning` is the "n of them are in an album or canvas" line, when it applies.
 type Pending =
-  | { kind: "confirm"; message: string; ids: string[]; resolve: (ids: string[] | null) => void }
+  | {
+      kind: "confirm";
+      message: string;
+      warning: string | null;
+      ids: string[];
+      resolve: (ids: string[] | null) => void;
+    }
   | {
       kind: "choose";
       baseIds: string[];
       partnerIds: string[];
+      warning: string | null;
       resolve: (ids: string[] | null) => void;
     };
+
+// Ask the server how many of these photos an album or canvas uses. A failed
+// lookup must not block the delete - the dialog simply goes without the line.
+async function usageWarning(ids: string[]): Promise<string | null> {
+  try {
+    return membershipWarning(await api.images.usage(ids), false);
+  } catch {
+    return null;
+  }
+}
 
 // Shared "which files should the delete take?" flow for every delete button.
 //
@@ -47,24 +66,31 @@ export function usePairDeleteConfirm() {
   const askRef = useRef(askPartner);
   askRef.current = askPartner;
 
-  const confirmDelete = useCallback((req: Request): Promise<string[] | null> => {
+  const confirmDelete = useCallback(async (req: Request): Promise<string[] | null> => {
     const allIds = [...req.baseIds, ...req.partnerIds];
     // Setting on with a partner in play: let the user pick only the shown
     // file(s) or the whole pair.
     if (askRef.current && req.partnerIds.length > 0) {
+      const warning = await usageWarning(allIds);
       return new Promise((resolve) =>
-        setPending({ kind: "choose", baseIds: req.baseIds, partnerIds: req.partnerIds, resolve })
+        setPending({
+          kind: "choose",
+          baseIds: req.baseIds,
+          partnerIds: req.partnerIds,
+          warning,
+          resolve,
+        })
       );
     }
     // Otherwise a single confirm. With a partner (setting off) the default is
     // still to take both halves - a pair is one shot.
     const takesPartner = req.partnerIds.length > 0;
+    const ids = takesPartner ? allIds : req.baseIds;
     const message = takesPartner
       ? deleteConfirmMessage([...req.baseItems, ...req.partnerItems], req.partnerIds.length)
       : deleteConfirmMessage(req.baseItems);
-    return new Promise((resolve) =>
-      setPending({ kind: "confirm", message, ids: takesPartner ? allIds : req.baseIds, resolve })
-    );
+    const warning = await usageWarning(ids);
+    return new Promise((resolve) => setPending({ kind: "confirm", message, warning, ids, resolve }));
   }, []);
 
   function finish(ids: string[] | null) {
@@ -79,6 +105,7 @@ export function usePairDeleteConfirm() {
         <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
           <div className="pair-delete-body">
             <p className="pair-delete-message">{pending.message}</p>
+            {pending.warning && <p className="pair-delete-warning">{pending.warning}</p>}
             <div className="pair-delete-actions">
               <button className="btn danger danger-filled" onClick={() => finish(pending.ids)}>
                 Delete
@@ -103,6 +130,7 @@ export function usePairDeleteConfirm() {
                 ? "This photo has a RAW/JPEG partner. What would you like to delete?"
                 : "Some of these photos have a RAW/JPEG partner. What would you like to delete?"}
             </p>
+            {pending.warning && <p className="pair-delete-warning">{pending.warning}</p>}
             <div className="pair-delete-actions">
               <button
                 className="btn danger danger-filled"

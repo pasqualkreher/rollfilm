@@ -43,6 +43,10 @@
      squares the whole UI by zeroing the scale. True circles (border-radius:
      50% — spinners, dots, the colour wheel) deliberately stay round. */
   --corner-scale: 1;
+  /* UI typeface (Settings → Appearance): state/fonts.ts sets this inline on
+     <html> with the chosen stack; the value here is Rollfilm, its default
+     (the OS's own UI face), for the instant before that runs. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --radius: calc(8px * var(--corner-scale));
   --radius-sm: calc(5px * var(--corner-scale));
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -222,7 +226,7 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-ui);
   /* Desktop-tool density: the browser's 16px default reads like a website;
      pro imaging apps sit around 13-14px for everything that isn't a heading. */
   font-size: 14px;
@@ -1542,6 +1546,15 @@ textarea:focus-visible {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text);
+  white-space: pre-line;
+}
+
+/* "n of them are in an album or canvas" - the one line worth reading twice. */
+.pair-delete-warning {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--danger);
   white-space: pre-line;
 }
 
@@ -3610,6 +3623,35 @@ input.editor-preset-select {
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+/* Searchable menus: the box stays put while the matches scroll under it. */
+.dropdown-search {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  width: 100%;
+  margin: -4px 0 4px;
+  padding: 7px 8px;
+  box-sizing: border-box;
+  background: var(--bg-elevated);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.dropdown-empty {
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.dropdown-option.cursor:not(.selected) {
+  background: var(--hover);
 }
 
 .dropdown-option {
@@ -5697,7 +5739,7 @@ input.editor-preset-select {
   top: 0;
   z-index: 3;
   display: flex;
-  /* Seven chapters on one row. They only just fit at the page width, so the
+  /* Eight chapters on one row. They only just fit at the page width, so the
      row scrolls sideways - with the app's slim scrollbar visible, so a
      narrow window shows there is more to reach - rather than wrapping to a
      ragged second line. (No scrollbar-width here: setting the standard
@@ -6868,6 +6910,37 @@ kbd {
   justify-content: space-between;
   padding: 4px 0;
   margin-top: 10px;
+}
+
+/* Typeface picker (Settings → Appearance): a row of tiles, each set in the
+   face it stands for so the choice can be judged before it's made. */
+.settings-fonts {
+  padding: 4px 0;
+  margin-top: 10px;
+}
+.font-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 10px;
+  max-width: 620px;
+  margin-top: 10px;
+}
+.font-tile-sample {
+  display: block;
+  padding: 10px 8px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+.font-tile-sample > small {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 .settings-option.busy {
   cursor: wait;
@@ -8907,6 +8980,11 @@ button.smart-card {
 
 .canvas-shelf-card:hover .card-remove {
   opacity: 1;
+}
+
+/* The trash sits left of the ×, where the album cards keep their pencil. */
+.canvas-shelf-card .canvas-shelf-delete {
+  right: 38px;
 }
 
 .canvas-shelf-open {

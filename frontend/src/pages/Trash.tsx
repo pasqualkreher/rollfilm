@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { membershipWarning } from "../utils/deleteMessage";
 import { useAppDialogs } from "../components/AppDialogs";
 import { IconRestore, IconTrash } from "../components/Icons";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
@@ -121,10 +122,16 @@ export function Trash() {
     // Counted after the hidden pair halves are folded in, so the number in the
     // question is the number of files that actually get erased.
     const ids = withPairedIds(Array.from(selected));
+    // Trashed photos keep their album and canvas memberships - this is the
+    // step that really takes them out of there, so say so.
+    const warning = await api.images
+      .usage(ids)
+      .then((usage) => membershipWarning(usage, true))
+      .catch(() => null);
     if (
       !(await dialogs.confirm({
         title: `Permanently delete ${ids.length} photo(s)?`,
-        message: "This removes the original files from your library - it cannot be undone.",
+        message: `This removes the original files from your library - it cannot be undone.${warning ? `\n\n${warning}` : ""}`,
         confirmLabel: "Delete forever",
         danger: true,
       }))

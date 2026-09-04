@@ -63,16 +63,16 @@ export function TagFilter({ options, value, onChange, emptyLabel = "Any", title 
 
       {open && options.length > 0 && (
         <div className="tag-filter-pop">
-          {options.length > 8 && (
-            <input
-              type="text"
-              className="tag-filter-search"
-              placeholder="Find a tag…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              autoFocus
-            />
-          )}
+          {/* Always typeable, however short the list - the fingers land on
+              the keyboard before the eye finds the row. */}
+          <input
+            type="text"
+            className="tag-filter-search"
+            placeholder="Find a tag…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            autoFocus
+          />
           <div className="tag-filter-list">
             {filtered.length === 0 ? (
               <div className="tag-filter-empty">No matching tags</div>

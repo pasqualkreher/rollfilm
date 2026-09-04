@@ -28,13 +28,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.db.models import Album, AlbumImage, Image, ImageTag, Tag
 from app.services.filesystem import library_relative_path
 from app.services.maintenance import image_row_from_dict, image_to_dict
+from app.services.membership_tags import sync_membership_tags
 from app.services.thumbnails import derivative_dir
 
 logger = logging.getLogger(__name__)
@@ -328,9 +329,13 @@ def _get_or_create_album(db: Session, owner_id: int, name: str, cache: dict[str,
     key = name.strip().lower()
     if key in cache:
         return cache[key]
-    album = db.query(Album).filter(Album.owner_id == owner_id, Album.name == name).first()
+    album = (
+        db.query(Album)
+        .filter(Album.owner_id == owner_id, func.lower(Album.name) == key)
+        .first()
+    )
     if album is None:
-        album = Album(owner_id=owner_id, name=name)
+        album = Album(owner_id=owner_id, name=name.strip())
         db.add(album)
         db.flush()
     cache[key] = album
@@ -513,6 +518,8 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
                 if image is not None and image.paired_image_id is None:
                     image.paired_image_id = partner
 
+        # Merged photos joined albums - give them their membership tags.
+        sync_membership_tags(db, owner_id)
         db.commit()
     finally:
         _set_progress(active=False)

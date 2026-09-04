@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import schemas
@@ -27,6 +28,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services import sources as sources_service
+from app.services.membership_tags import sync_membership_tags
 
 router = APIRouter(prefix="/canvases", tags=["canvases"])
 
@@ -50,6 +52,23 @@ _DEFAULT_LAYOUT = dict(
     margin_mm=12.0,
     show_page_guide=False,
 )
+
+
+def _checked_name(db: Session, owner_id: int, raw: str, *, exclude_id: str | None = None) -> str:
+    """Validate a canvas name: non-blank and unique per user, case-
+    insensitively - the canvas's photos carry an "canvas: <name>" tag, so two
+    canvases sharing a name would be indistinguishable."""
+    name = raw.strip()[:120]
+    if not name:
+        raise HTTPException(status_code=400, detail="A canvas needs a name")
+    clash = db.query(Canvas.id).filter(
+        Canvas.owner_id == owner_id, func.lower(Canvas.name) == name.lower()
+    )
+    if exclude_id is not None:
+        clash = clash.filter(Canvas.id != exclude_id)
+    if clash.first() is not None:
+        raise HTTPException(status_code=409, detail=f"A canvas called “{name}” already exists")
+    return name
 
 
 def _live_image_revs(db: Session, owner_id: int, ids: list[str]) -> dict[str, int]:
@@ -149,7 +168,7 @@ def create_canvas(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    name = payload.name.strip()[:120] or "Canvas"
+    name = _checked_name(db, current_user.id, payload.name.strip() or "Canvas")
     canvas = Canvas(owner_id=current_user.id, name=name, created_at=_utcnow())
     db.add(canvas)
     db.commit()
@@ -234,10 +253,9 @@ def rename_canvas(
     current_user: User = Depends(get_current_user),
 ):
     canvas = get_owned_canvas(db, current_user.id, canvas_id)
-    name = payload.name.strip()[:120]
-    if not name:
-        raise HTTPException(status_code=400, detail="A canvas needs a name")
-    canvas.name = name
+    canvas.name = _checked_name(db, current_user.id, payload.name, exclude_id=canvas.id)
+    # The rename moves the canvas's photos to a new "canvas: <name>" tag.
+    sync_membership_tags(db, current_user.id)
     db.commit()
     db.refresh(canvas)
     return _summary_out(db, canvas)
@@ -251,6 +269,8 @@ def delete_canvas(
     The photos themselves are untouched - they live in the library."""
     canvas = get_owned_canvas(db, current_user.id, canvas_id)
     db.delete(canvas)
+    db.flush()
+    sync_membership_tags(db, current_user.id)
     db.commit()
 
 
@@ -310,6 +330,7 @@ def add_canvas_images(
         if image_id in owned and image_id not in existing:
             db.add(CanvasImage(canvas_id=canvas.id, image_id=image_id, added_at=now))
             existing.add(image_id)
+    sync_membership_tags(db, current_user.id)
     db.commit()
     return _summary_out(db, canvas)
 
@@ -328,6 +349,7 @@ def remove_canvas_images(
     db.query(CanvasImage).filter(
         CanvasImage.canvas_id == canvas.id, CanvasImage.image_id.in_(set(payload.image_ids))
     ).delete(synchronize_session=False)
+    sync_membership_tags(db, current_user.id)
     db.commit()
     return _summary_out(db, canvas)
 
@@ -439,6 +461,8 @@ def _apply_layout_doc(
                 style=json.dumps(item.style) if item.style else None,
             )
         )
+    # Placed photos count as "canvas" alongside the filmstrip members.
+    sync_membership_tags(db, owner_id)
 
 
 @router.get("/{canvas_id}/layout", response_model=schemas.CanvasLayoutOut)
@@ -486,6 +510,8 @@ def clear_canvas_layout(
     layout = db.query(CanvasLayout).filter(CanvasLayout.canvas_id == canvas.id).first()
     if layout is not None:
         db.delete(layout)
+        db.flush()
+        sync_membership_tags(db, current_user.id)
         db.commit()
 
 

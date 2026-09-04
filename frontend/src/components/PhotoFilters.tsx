@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import type { AlbumOut, ColorLabel, Facet, ViewMode } from "../api/types";
+import type { AlbumOut, CanvasSummary, ColorLabel, Facet, ViewMode } from "../api/types";
 import { ViewModeToggle } from "./ViewModeToggle";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { ViewPrefsControls } from "./ViewPrefsControls";
@@ -116,6 +116,12 @@ interface Props {
   albums?: AlbumOut[];
   albumId?: string;
   onAlbumId?: (id: string) => void;
+  // Canvases join the same dropdown as a second group: the grid then shows
+  // what one canvas holds. Picking one clears the album and vice versa - it
+  // is one "where" filter with two kinds of place.
+  canvases?: CanvasSummary[];
+  canvasId?: string;
+  onCanvasId?: (id: string) => void;
   // When provided, a multi-select "Tag" filter is shown. `allTags` is every
   // tag name the user has ever created; `selectedTags` are the ones the grid is
   // currently filtered to (AND - a photo must have all of them). Album detail
@@ -179,6 +185,9 @@ export function PhotoFilters({
   albums,
   albumId,
   onAlbumId,
+  canvases,
+  canvasId,
+  onCanvasId,
   allTags,
   selectedTags,
   onTags,
@@ -213,7 +222,7 @@ export function PhotoFilters({
   const activeCount =
     (ratingMin > 0 ? 1 : 0) +
     (colorLabel !== "none" ? 1 : 0) +
-    ((albumId ?? "") !== "" ? 1 : 0) +
+    ((albumId ?? "") !== "" || (canvasId ?? "") !== "" ? 1 : 0) +
     ((selectedTags?.length ?? 0) > 0 ? 1 : 0) +
     ((camera ?? "") !== "" ? 1 : 0) +
     ((lens ?? "") !== "" ? 1 : 0) +
@@ -225,6 +234,7 @@ export function PhotoFilters({
     onRatingMin(0);
     onColorLabel("none");
     onAlbumId?.("");
+    onCanvasId?.("");
     onTags?.([]);
     onCamera?.("");
     onLens?.("");
@@ -266,14 +276,35 @@ export function PhotoFilters({
       </div>
       {albums && onAlbumId && (
         <div className="filter-menu-row filter-menu-row--album">
-          <span className="filter-menu-label">Album</span>
+          <span className="filter-menu-label">{canvases ? "Album / Canvas" : "Album"}</span>
           <Dropdown
-            ariaLabel="Album"
-            value={albumId ?? ""}
-            onChange={onAlbumId}
+            ariaLabel={canvases ? "Album or canvas" : "Album"}
+            searchable
+            value={albumId ? `album:${albumId}` : canvasId ? `canvas:${canvasId}` : ""}
+            onChange={(v) => {
+              if (v.startsWith("album:")) {
+                onCanvasId?.("");
+                onAlbumId(v.slice("album:".length));
+              } else if (v.startsWith("canvas:")) {
+                onAlbumId("");
+                onCanvasId?.(v.slice("canvas:".length));
+              } else {
+                onAlbumId("");
+                onCanvasId?.("");
+              }
+            }}
             options={[
               { value: "", label: "All photos" },
-              ...albums.map((a) => ({ value: a.id, label: a.name })),
+              ...(canvases && canvases.length > 0
+                ? [{ value: "h-albums", label: <span className="dropdown-group-label">Albums</span>, disabled: true }]
+                : []),
+              ...albums.map((a) => ({ value: `album:${a.id}`, label: a.name })),
+              ...(canvases && canvases.length > 0
+                ? [
+                    { value: "h-canvases", label: <span className="dropdown-group-label">Canvases</span>, disabled: true },
+                    ...canvases.map((c) => ({ value: `canvas:${c.id}`, label: c.name })),
+                  ]
+                : []),
             ]}
           />
         </div>
@@ -309,6 +340,7 @@ export function PhotoFilters({
           <span className="filter-menu-label">Camera</span>
           <Dropdown
             ariaLabel="Camera"
+            searchable
             value={camera ?? ""}
             onChange={(v) => onCamera?.(v)}
             // The selected value can drop out of the cross-filtered options
@@ -330,6 +362,7 @@ export function PhotoFilters({
           <span className="filter-menu-label">Lens</span>
           <Dropdown
             ariaLabel="Lens"
+            searchable
             value={lens ?? ""}
             onChange={(v) => onLens?.(v)}
             options={[

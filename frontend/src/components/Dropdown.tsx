@@ -6,6 +6,10 @@ export interface DropdownOption {
   value: string;
   label: ReactNode;
   disabled?: boolean;
+  // What typing in a searchable menu matches against. Defaults to the label
+  // when that is plain text; options with a richer label (icons, stars)
+  // pass the words a user would type for them.
+  search?: string;
 }
 
 interface Props {
@@ -24,6 +28,15 @@ interface Props {
   // Serves as the accessible name of the button (the visual label usually
   // sits outside, e.g. the filter row's caption).
   ariaLabel?: string;
+  // Typeable: the open menu carries a search box that narrows the options as
+  // you type, Enter picks the first match, and typing on the closed button
+  // opens the menu with that first letter already in the box.
+  searchable?: boolean;
+}
+
+function searchText(o: DropdownOption): string {
+  if (o.search !== undefined) return o.search;
+  return typeof o.label === "string" || typeof o.label === "number" ? String(o.label) : "";
 }
 
 // The app's dropdown: a quiet button that opens an anchored popover menu right
@@ -46,8 +59,14 @@ export function Dropdown({
   title,
   className,
   ariaLabel,
+  searchable = false,
 }: Props) {
   const [open, setOpen] = useState(false);
+  // Searchable menus: what has been typed, and which of the matching options
+  // the arrow keys have landed on (Enter picks it).
+  const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   // Screen position of the portalled menu; null on the measuring first frame
   // (rendered invisibly, placed by the layout effect before paint).
   const [pos, setPos] = useState<CSSProperties | null>(null);
@@ -60,6 +79,43 @@ export function Dropdown({
   function close() {
     setOpen(false);
     setPos(null);
+    setQuery("");
+    setCursor(0);
+  }
+
+  function openWith(initialQuery = "") {
+    setQuery(initialQuery);
+    setCursor(0);
+    setOpen(true);
+  }
+
+  const needle = query.trim().toLowerCase();
+  const visible =
+    searchable && needle
+      ? options.filter((o) => searchText(o).toLowerCase().includes(needle))
+      : options;
+
+  function pick(o: DropdownOption) {
+    if (o.disabled) return;
+    onChange(o.value);
+    close();
+  }
+
+  // Keys inside the search box: arrows walk the matches, Enter takes the one
+  // under the cursor (the first match by default), Escape is handled globally.
+  function onSearchKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const enabled = visible.filter((o) => !o.disabled);
+      if (enabled.length === 0) return;
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setCursor((c) => (c + step + enabled.length) % enabled.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const enabled = visible.filter((o) => !o.disabled);
+      const target = enabled[Math.min(cursor, enabled.length - 1)];
+      if (target) pick(target);
+    }
   }
 
   // The options can drain away while the menu is open (the last album deleted
@@ -118,7 +174,30 @@ export function Dropdown({
     menu
       .querySelector<HTMLElement>(".dropdown-option.selected")
       ?.scrollIntoView({ block: "nearest" });
+    // The box takes the keyboard straight away; the caret goes to the end so
+    // a letter typed on the closed button continues, not restarts, the word.
+    const box = searchRef.current;
+    if (box) {
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    }
   }, [open]);
+
+  // Keep the arrow-key cursor's option in view as it walks the list.
+  useEffect(() => {
+    if (!open || !searchable) return;
+    menuRef.current
+      ?.querySelector<HTMLElement>(".dropdown-option.cursor")
+      ?.scrollIntoView({ block: "nearest" });
+  }, [open, searchable, cursor, query]);
+
+  // Which option the keyboard cursor sits on, by value (only among the
+  // enabled matches, so it never lands on something unpickable).
+  const enabledVisible = visible.filter((o) => !o.disabled);
+  const cursorValue =
+    searchable && enabledVisible.length > 0
+      ? enabledVisible[Math.min(cursor, enabledVisible.length - 1)].value
+      : null;
 
   return (
     <div className={`dropdown${className ? ` ${className}` : ""}`} ref={wrapRef}>
@@ -130,11 +209,23 @@ export function Dropdown({
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={() => (open ? close() : openWith())}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
-            setOpen(true);
+            openWith();
+          } else if (
+            searchable &&
+            !open &&
+            e.key.length === 1 &&
+            !e.metaKey &&
+            !e.ctrlKey &&
+            !e.altKey &&
+            e.key !== " "
+          ) {
+            // Start typing on the closed button: open with that letter.
+            e.preventDefault();
+            openWith(e.key);
           }
         }}
       >
@@ -154,18 +245,33 @@ export function Dropdown({
             role="listbox"
             ref={menuRef}
           >
-            {options.map((o) => (
+            {searchable && (
+              <input
+                ref={searchRef}
+                type="text"
+                className="dropdown-search"
+                placeholder="Type to find…"
+                value={query}
+                aria-label={ariaLabel ? `Find ${ariaLabel.toLowerCase()}` : "Find"}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setCursor(0);
+                }}
+                onKeyDown={onSearchKey}
+              />
+            )}
+            {visible.length === 0 && <div className="dropdown-empty">No match</div>}
+            {visible.map((o) => (
               <button
                 key={o.value}
                 type="button"
                 role="option"
                 aria-selected={o.value === value}
-                className={`dropdown-option${o.value === value ? " selected" : ""}`}
+                className={`dropdown-option${o.value === value ? " selected" : ""}${
+                  o.value === cursorValue ? " cursor" : ""
+                }`}
                 disabled={o.disabled}
-                onClick={() => {
-                  onChange(o.value);
-                  close();
-                }}
+                onClick={() => pick(o)}
               >
                 {o.label}
               </button>
