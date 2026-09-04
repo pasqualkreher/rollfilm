@@ -24,6 +24,7 @@ import {
   IconClipboard,
   IconCrop,
   IconDuplicate,
+  IconEraser,
   IconFitAll,
   IconFitPage,
   IconGrid,
@@ -3875,6 +3876,18 @@ function CanvasToolbar({
         >
           <IconTextT size={15} />
         </button>
+        {/* Next to the two ways of putting things on the page - what it
+            undoes - and well away from Save, which it has nothing to do
+            with. An eraser rather than a trash can: nothing is deleted. */}
+        <button
+          className="btn btn-sm canvas-tool quiet-danger"
+          onClick={onClear}
+          disabled={!canClear}
+          aria-label="Clear the canvas"
+          title="Clear the canvas: wipes everything you placed off the page. The photos stay in your library."
+        >
+          <IconEraser size={15} />
+        </button>
       </div>
 
       <div className="control-group">
@@ -4018,15 +4031,6 @@ function CanvasToolbar({
           title="Snap: line edges and centres up with each other and with the page while you drag"
         >
           <IconMagnet size={15} />
-        </button>
-        <button
-          className="btn btn-sm canvas-tool quiet-danger"
-          onClick={onClear}
-          disabled={!canClear}
-          aria-label="Clear the canvas"
-          title="Clear the canvas: removes everything you placed. The photos stay in your library."
-        >
-          <IconTrash size={15} />
         </button>
         {/* Nothing saves by itself: the button lights up while there are
             unsaved changes, and Save asks for the version's name. */}

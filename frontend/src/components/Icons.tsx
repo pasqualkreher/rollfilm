@@ -630,3 +630,15 @@ export function IconPause(props: IconProps) {
     </svg>
   );
 }
+
+// An eraser on a baseline - clear the canvas, as opposed to the trash's
+// "delete": nothing is thrown away, the page is just wiped.
+export function IconEraser(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5.2 13.2 2.6 10.6a1.2 1.2 0 0 1 0-1.7l6.3-6.3a1.2 1.2 0 0 1 1.7 0l3.2 3.2a1.2 1.2 0 0 1 0 1.7l-5.7 5.7z" />
+      <path d="M6.1 6.6l4.3 4.3" />
+      <path d="M5.2 13.2h8.3" />
+    </svg>
+  );
+}
