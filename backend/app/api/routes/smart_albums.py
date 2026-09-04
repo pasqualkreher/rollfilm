@@ -214,6 +214,6 @@ def smart_album_images(
 
     # Same total order as the library grid (see images.list_images).
     query = query.order_by(
-        Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc()
+        Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc()
     )
     return query.offset(offset).limit(limit).all()

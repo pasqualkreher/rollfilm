@@ -1125,7 +1125,7 @@ def get_edits_album(db: Session, owner_id: int) -> list[GroupAlbum]:
     if not count:
         return []
     ordered = query.order_by(
-        Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc()
+        Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc()
     )
     # JPEGs only in the mosaic; RAWs only when no edited JPEG exists.
     covers = ordered.filter(Image.file_type == FileType.jpeg).limit(COVER_COUNT).all()

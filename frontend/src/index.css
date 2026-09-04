@@ -3272,6 +3272,16 @@ input.editor-preset-select {
   margin: 0;
 }
 
+/* Docked (canvas) mode has no Save buttons - this note stands where they
+   were and says why: the edit keeps itself. */
+.editor-autosave-note {
+  flex: 1;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 9px 0;
+}
+
 /* Narrow windows: the fixed 320px side panel would squeeze the photo into a
    sliver - stack the panel (with its own scroll area) below the stage instead. */
 @media (max-width: 760px) {

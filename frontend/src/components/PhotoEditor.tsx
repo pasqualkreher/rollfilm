@@ -77,7 +77,14 @@ interface Props {
   // Every whole-frame preview the editor paints, as it paints it - so an
   // embedder (the canvas) can show the live edit in its own frame. The stage
   // may then even be hidden: the pipeline keeps rendering regardless.
-  onPreviewFrame?: (blob: Blob) => void;
+  // The pixel size rides along so the embedder can adapt to the frame's
+  // SHAPE in the same breath as showing it (a quarter-turn must reshape the
+  // canvas frame in the same paint, not one decode later).
+  onPreviewFrame?: (blob: Blob, size: { width: number; height: number }) => void;
+  // Docked mode saves by itself on the way out (there are no Save buttons).
+  // Called after an UNMOUNT-path save has landed - the embedder was already
+  // told to close by then and needs to re-fetch the row the save just wrote.
+  onAutoSaved?: (imageId: string) => void;
 }
 
 interface DragRect {
@@ -446,7 +453,7 @@ function Histogram({ bins }: { bins: Uint32Array[] | null }) {
   return <canvas ref={ref} className="editor-histogram" width={256} height={64} />;
 }
 
-export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: Props) {
+export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, onAutoSaved }: Props) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const { withWait } = useWait();
@@ -903,7 +910,10 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
     // has to be asked for (the crop button) rather than being where you land.
     // Leaving the group puts the box away; the canvas pointer goes back to
     // zoom/pan.
-    if (openGroup === "transform") {
+    // Docked (canvas) mode has no crop at all: the frame on the page is the
+    // framing tool there ("Crop in frame"), and two crops fighting over one
+    // picture only confused. The group is then just rotate/flip/straighten.
+    if (openGroup === "transform" && !docked) {
       setCropMode(!crop);
       setMaskDrawMode(false);
       setColorPickMode(false);
@@ -1170,7 +1180,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
     const bmp = await createImageBitmap(blob);
     try {
       if (seq !== renderSeq.current) return;
-      onPreviewFrameRef.current?.(blob);
+      onPreviewFrameRef.current?.(blob, { width: bmp.width, height: bmp.height });
       const canvas = canvasRef.current;
       if (!canvas) return;
       // Only touch the size when it actually changed. Assigning canvas.width or
@@ -1852,11 +1862,42 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
   const saveEdits = useMutation({
     mutationFn: () => withWait("Saving edits…", () => api.images.saveEdits(image.id, edits)),
     onSuccess: () => {
+      // What this write put on the server - the unmount autosave below
+      // compares against it, so a docked save-then-close never writes twice.
+      lastWrittenKeyRef.current = editsKey;
       queryClient.invalidateQueries({ queryKey: ["image", image.id] });
       queryClient.invalidateQueries({ queryKey: ["images"] });
       onClose();
     },
   });
+
+  // Docked (canvas) mode has no Save buttons: whatever is on the sliders when
+  // the editor goes away IS the photo's state. requestClose (Esc, Back) saves
+  // through the mutation above; this cleanup catches every path that unmounts
+  // the editor directly - deselecting the frame, clicking another frame,
+  // leaving the canvas. Keys, not `dirty`: `saved` is the mount-time state,
+  // so after a requestClose save `dirty` still reads true.
+  const lastWrittenKeyRef = useRef(savedKey);
+  const autosaveRef = useRef({ editsKey, edits });
+  autosaveRef.current = { editsKey, edits };
+  const onAutoSavedRef = useRef(onAutoSaved);
+  onAutoSavedRef.current = onAutoSaved;
+  useEffect(() => {
+    if (!docked) return;
+    const imageId = image.id;
+    return () => {
+      const pending = autosaveRef.current;
+      if (pending.editsKey === lastWrittenKeyRef.current) return;
+      lastWrittenKeyRef.current = pending.editsKey;
+      void api.images
+        .saveEdits(imageId, pending.edits)
+        .then(() => onAutoSavedRef.current?.(imageId))
+        .catch(() => {
+          // Nothing left to show it in - the editor is gone. The frame keeps
+          // the previous saved state, which is also what the canvas refetches.
+        });
+    };
+  }, [docked, image.id]);
 
   // `blocking` is set on the one-click path, where nothing else covers the
   // editor while the full-resolution render runs. The dialog path leaves it
@@ -1939,6 +1980,14 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
   // route through here; the save paths call onClose directly once the write
   // has landed, so they never see the prompt.
   async function requestClose() {
+    // Docked (canvas) mode never asks - the current state is what's kept, so
+    // leaving simply saves it first (the mutation's onSuccess closes).
+    if (docked) {
+      if (busy) return;
+      if (dirty) saveEdits.mutate();
+      else onClose();
+      return;
+    }
     if (dirty) {
       const leave = await dialogs.confirm({
         title: "Discard unsaved edits?",
@@ -3522,7 +3571,9 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
           Edit
         </h3>
         <p style={{ color: "var(--text-muted)", fontSize: 12, margin: "0 0 4px" }}>
-          Non-destructive. Save updates this photo; Save copy makes a new edited photo.
+          {docked
+            ? "Non-destructive. The canvas edit keeps itself - the state you leave is the state that's saved."
+            : "Non-destructive. Save updates this photo; Save copy makes a new edited photo."}
         </p>
 
         {/* The histogram belongs to the photo, not to any one group of
@@ -3543,7 +3594,10 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
           <div className="editor-accordion-body">
             {/* The two labelled selects sit together at the top - one column,
                 one left edge - and the button rows follow underneath. The grid
-                is what you frame *against*, so it leads. */}
+                is what you frame *against*, so it leads - and it leaves with
+                the crop in docked (canvas) mode, where framing lives on the
+                page. */}
+            {!docked && (
             <div className="editor-field-row">
               <span className="editor-field-label">Grid</span>
               <Dropdown
@@ -3555,6 +3609,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
                 options={GRID_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
               />
             </div>
+            )}
 
             {/* Crop: the ratio it locks to, then take it or drop it - all on one
                 row, so the whole thing is a single line in the panel instead of
@@ -3562,7 +3617,10 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
                 cross sitting on the select need no separator to say they belong
                 to it. Taking a crop re-frames the picture, and masks are stored
                 as fractions of that frame, so they're carried across to the new
-                one or a crop would slide every mask off what it was drawn on. */}
+                one or a crop would slide every mask off what it was drawn on.
+                Not in docked (canvas) mode: the frame on the page is the
+                framing tool there. */}
+            {!docked && (
             <div className="editor-field-row">
               <span className="editor-field-label">Crop</span>
               <Dropdown
@@ -3616,6 +3674,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
                 <IconX size={13} />
               </button>
             </div>
+            )}
 
             {/* Rotate / flip: four equal buttons, one row. */}
             <div className="editor-tool-row">
@@ -4394,6 +4453,16 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
               Reset all
             </button>
           </div>
+          {docked ? (
+            /* The canvas edits a virtual copy that keeps itself: closing the
+               dock (or clicking another frame) saves the current state, so
+               Save and Save copy would only be two extra questions. */
+            <div className="editor-footer-primary">
+              <span className="editor-autosave-note" title="The canvas edit keeps itself - closing the editor saves the current state">
+                {saveEdits.isPending ? "Saving…" : "Saved when you close"}
+              </span>
+            </div>
+          ) : (
           <div className="editor-footer-primary">
             <button
               className="btn"
@@ -4415,6 +4484,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame }: 
               {saveEdits.isPending ? "Saving…" : "Save"}
             </button>
           </div>
+          )}
         </div>
       </div>
       </div>

@@ -137,14 +137,17 @@ def test_edited_photos_carry_their_cache_buster(db):
 def test_newest_first_with_deterministic_tie_breakers(db):
     """Burst shots share a capture second; without total ordering their
     relative order is whatever the planner felt like, and the grid reshuffles
-    between requests."""
+    between requests. The tie-breakers descend WITH taken_at: filenames
+    ascending inside a descending timeline made a multi-second burst zigzag
+    (forward within each second, backward across seconds) when paging
+    through it in the lightbox."""
     same = datetime(2026, 7, 1, 12, 0, 0)
     db.add(_image("c", taken_at=same, original_filename="b.jpg"))
     db.add(_image("a", taken_at=same, original_filename="a.jpg"))
     db.add(_image("b", taken_at=datetime(2026, 8, 1, 12, 0, 0), original_filename="z.jpg"))
     db.commit()
 
-    assert [row["id"] for row in _index(db)] == ["b", "a", "c"]
+    assert [row["id"] for row in _index(db)] == ["b", "c", "a"]
 
 
 def test_deleted_photos_are_not_in_the_index(db):

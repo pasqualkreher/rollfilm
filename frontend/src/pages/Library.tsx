@@ -234,15 +234,19 @@ export function Library() {
     return Array.from(out);
   }
 
-  // Click = toggle; shift-click = select the whole range since the last
-  // click, like Finder/Photos - makes selecting a long run of photos fast
-  // instead of clicking every single one.
+  // Click = toggle; shift-click = apply the toggle to the whole range since
+  // the last click, like Finder/Photos - selects a long run of photos fast,
+  // and deselects the run again when the clicked photo is already selected.
   function toggleSelect(id: string, index: number, shiftKey: boolean) {
     setSelected((prev) => {
       const next = new Set(prev);
       if (shiftKey && lastIndex !== null) {
+        const deselect = next.has(id);
         const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
-        for (let i = start; i <= end; i++) next.add(orderedImages[i].id);
+        for (let i = start; i <= end; i++) {
+          if (deselect) next.delete(orderedImages[i].id);
+          else next.add(orderedImages[i].id);
+        }
       } else if (next.has(id)) {
         next.delete(id);
       } else {

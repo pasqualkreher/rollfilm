@@ -414,27 +414,45 @@ export function CanvasEditor({
   const [extraFiles, setExtraFiles] = useState<ImageOut[]>([]);
   const byId = useMemo(() => {
     const map = new Map(files.map((file) => [file.id, file]));
-    // Virtual copies minted in this session: the server's files list catches
-    // up once the re-pointed frame autosaves; until then these fill the gap
-    // (and afterwards the fresher server row wins).
-    for (const file of extraFiles) if (!map.has(file.id)) map.set(file.id, file);
+    // Virtual copies minted in this session, and rows re-fetched right after
+    // a docked-editor save: the files query catches up on its next refetch;
+    // until then the fresher row wins the merge. By edit_rev, not blindly -
+    // a stale extra row must never shadow a newer server row.
+    for (const file of extraFiles) {
+      const known = map.get(file.id);
+      if (!known || (file.edit_rev ?? 0) >= (known.edit_rev ?? 0)) map.set(file.id, file);
+    }
     return map;
   }, [files, extraFiles]);
+  const byIdRef = useRef(byId);
+  byIdRef.current = byId;
   // Editing a placed photo happens on a virtual copy ("canvas edit"): the
   // library original stays untouched, the frame follows the copy.
   const [editingImage, setEditingImage] = useState<ImageOut | null>(null);
   const editingOpenRef = useRef(false);
   editingOpenRef.current = editingImage !== null;
+  const editingImageIdRef = useRef<string | null>(null);
+  editingImageIdRef.current = editingImage?.id ?? null;
   // The frame being edited shows the editor's own preview frames live, so the
   // photo is developed right there on the page. One object URL at a time.
   const [livePreviewUrl, setLivePreviewUrl] = useState<string | null>(null);
   const livePreviewRef = useRef<string | null>(null);
-  const onPreviewFrame = useCallback((blob: Blob) => {
+  const onPreviewFrame = useCallback((blob: Blob, size: { width: number; height: number }) => {
     const url = URL.createObjectURL(blob);
     const old = livePreviewRef.current;
     livePreviewRef.current = url;
     setLivePreviewUrl(url);
     if (old) URL.revokeObjectURL(old);
+    // The frame also follows the SHAPE of what the editor renders, live: a
+    // quarter-turn (or a legacy crop) reshapes the frame in the same paint as
+    // the turned picture appears - the editor sends the frame's pixel size
+    // along, so both state writes batch into one render and the picture is
+    // never cover-cropped into the old shape for a beat (which read as the
+    // mask lagging behind the turn). See adoptLiveAspect for who follows.
+    const imageId = editingImageIdRef.current;
+    if (imageId && size.width > 0 && size.height > 0) {
+      adoptLiveAspectRef.current(imageId, size.width / size.height);
+    }
   }, []);
 
   // Coming back from the editor: the copy's pixels changed (new edit_rev), so
@@ -442,26 +460,125 @@ export function CanvasEditor({
   // bust and the frame redraws sharp.
   const onMembershipChangedRef = useRef(onMembershipChanged);
   onMembershipChangedRef.current = onMembershipChanged;
-  const closeEditor = useCallback(async () => {
+  // What shape the editor left the picture in: the stored size is the file's,
+  // so a quarter-turn swaps the sides and the saved crop (fractions of the
+  // turned frame - the editor crops the picture as it is shown) scales them.
+  // Straighten auto-crops to the same aspect; perspective can trim a whisker
+  // off, which is close enough for a frame.
+  function editedAspect(image: ImageOut): number | null {
+    if (!image.width || !image.height) return null;
+    const turned = ((image.edit_rotation ?? 0) / 90) % 2 !== 0;
+    let w = turned ? image.height : image.width;
+    let h = turned ? image.width : image.height;
+    if (image.edit_crop_width && image.edit_crop_height) {
+      w *= image.edit_crop_width;
+      h *= image.edit_crop_height;
+    }
+    return w / h;
+  }
 
+  // Give a frame the picture's proportions, keeping its centre and its area,
+  // and start the content over (the old pan/zoom belonged to the old shape).
+  function reshapeToAspect(item: LayoutItem, aspect: number): LayoutItem {
+    const area = item.width_mm * item.height_mm;
+    const width = Math.sqrt(area * aspect);
+    const height = width / aspect;
+    return {
+      ...item,
+      x_mm: item.x_mm + (item.width_mm - width) / 2,
+      y_mm: item.y_mm + (item.height_mm - height) / 2,
+      width_mm: width,
+      height_mm: height,
+      content_scale: 1,
+      content_dx: 0,
+      content_dy: 0,
+    };
+  }
+
+  // Assigned below once updateItems exists - refreshEditedFile only runs long
+  // after the first render.
+  const updateItemsRef = useRef<
+    (fn: (items: LayoutItem[]) => LayoutItem[], options?: { history?: boolean }) => void
+  >(() => {});
+
+  // Live shape-following while the dock is open. Only frames still tracking
+  // the photo's shape follow (a deliberately shaped frame keeps its shape),
+  // and history is skipped so fiddling with the crop doesn't fill the undo
+  // stack with reshapes - the closing refreshEditedFile pass writes the
+  // durable state. Editor-stage niceties ride along by design: the crop tool
+  // previews UNCROPPED, so opening it relaxes the frame and applying the crop
+  // snaps it to the new shape.
+  const liveAspectRef = useRef<number | null>(null);
+  const adoptLiveAspect = useCallback((imageId: string, aspect: number) => {
+    const row = byIdRef.current.get(imageId);
+    const from = liveAspectRef.current ?? (row ? editedAspect(row) : null);
+    if (!from || Math.abs(aspect / from - 1) <= 0.005) {
+      liveAspectRef.current = from ?? aspect;
+      return;
+    }
+    liveAspectRef.current = aspect;
+    updateItemsRef.current(
+      (list) =>
+        list.map((item) => {
+          if (item.kind !== "photo" || item.image_id !== imageId) return item;
+          const frameAspect = item.width_mm / item.height_mm;
+          if (Math.abs(frameAspect / from - 1) > 0.02) return item;
+          return reshapeToAspect(item, aspect);
+        }),
+      { history: false }
+    );
+  }, []);
+  const adoptLiveAspectRef = useRef(adoptLiveAspect);
+  adoptLiveAspectRef.current = adoptLiveAspect;
+
+  // Fetch a photo's row again after the docked editor wrote its edits (its
+  // unmount-path save can land AFTER closeEditor's refetch read the pre-save
+  // row) and make the page agree with the new pixels: a crop or turn reshapes
+  // the picture, so a frame that still had the photo's previous proportions
+  // follows it - keeping its centre and its area, the same trade
+  // fitFrameToPhoto makes. A frame the user shaped deliberately keeps its
+  // shape and cover-crops; only its content pan is re-clamped so the new
+  // shape can't leave a gap.
+  const refreshEditedFile = useCallback((imageId: string) => {
+    const before = byIdRef.current.get(imageId);
+    void api.images
+      .get(imageId)
+      .then((fresh) => {
+        setExtraFiles((list) => [...list.filter((file) => file.id !== fresh.id), fresh]);
+        const oldAspect = before ? editedAspect(before) : null;
+        const newAspect = editedAspect(fresh);
+        if (oldAspect && newAspect && Math.abs(newAspect / oldAspect - 1) > 0.005) {
+          updateItemsRef.current((list) =>
+            list.map((item) => {
+              if (item.kind !== "photo" || item.image_id !== fresh.id) return item;
+              const frameAspect = item.width_mm / item.height_mm;
+              if (Math.abs(frameAspect / oldAspect - 1) > 0.02) {
+                return clampContent(item, newAspect);
+              }
+              return reshapeToAspect(item, newAspect);
+            })
+          );
+        }
+        // Re-announce so the files query refetches with the save now visible -
+        // closeEditor's own announcement can have raced the write.
+        onMembershipChangedRef.current?.();
+      })
+      .catch(() => {
+        // Non-fatal: the next files refetch carries the fresh row anyway.
+      });
+  }, []);
+
+  const closeEditor = useCallback(async () => {
     setEditingImage((edited) => {
-      if (edited) {
-        void api.images
-          .get(edited.id)
-          .then((fresh) =>
-            setExtraFiles((list) => [...list.filter((file) => file.id !== fresh.id), fresh])
-          )
-          .catch(() => {
-            // Non-fatal: the next files refetch carries the fresh row anyway.
-          });
-      }
+      if (edited) refreshEditedFile(edited.id);
       return null;
     });
+    liveAspectRef.current = null;
     if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
     livePreviewRef.current = null;
     setLivePreviewUrl(null);
     onMembershipChangedRef.current?.();
-  }, []);
+  }, [refreshEditedFile]);
   // One entry per shot - what "Place N photos" counts and what a brand new
   // canvas is seeded with. Placing both halves of a pair would put the same
   // picture on the page twice.
@@ -1060,6 +1177,7 @@ export function CanvasEditor({
       commit((current) => ({ ...current, items: fn(current.items) }), options),
     [commit]
   );
+  updateItemsRef.current = updateItems;
 
   const patchItem = useCallback(
     (id: string, patch: Partial<LayoutItem>, options?: { history?: boolean }) =>
@@ -1074,12 +1192,10 @@ export function CanvasEditor({
 
   const imageAspect = useCallback(
     (imageId: string | null): number | null => {
+      // A photo turned or cropped in the editor is shown that way everywhere
+      // else too, so the frame must agree - see editedAspect.
       const image = imageId ? byId.get(imageId) : null;
-      if (!image?.width || !image?.height) return null;
-      // The stored size is the file's; a photo turned on its side in the editor
-      // is shown rotated everywhere else too, so the frame must agree.
-      const turned = ((image.edit_rotation ?? 0) / 90) % 2 !== 0;
-      return turned ? image.height / image.width : image.width / image.height;
+      return image ? editedAspect(image) : null;
     },
     [byId]
   );
@@ -1258,19 +1374,7 @@ export function CanvasEditor({
         if (!selected.has(item.id) || item.kind !== "photo") return item;
         const aspect = imageAspect(item.image_id);
         if (!aspect) return item;
-        const area = item.width_mm * item.height_mm;
-        const width = Math.sqrt(area * aspect);
-        const height = width / aspect;
-        return {
-          ...item,
-          x_mm: item.x_mm + (item.width_mm - width) / 2,
-          y_mm: item.y_mm + (item.height_mm - height) / 2,
-          width_mm: width,
-          height_mm: height,
-          content_scale: 1,
-          content_dx: 0,
-          content_dy: 0,
-        };
+        return reshapeToAspect(item, aspect);
       })
     );
   }, [imageAspect, selected, updateItems]);
@@ -2068,7 +2172,9 @@ export function CanvasEditor({
     if (frame.kind !== "photo" || !frame.image_id) return;
     const image = byId.get(frame.image_id);
     if (!image || (editingImage && image.id === editingImage.id)) return;
-    // The old photo's live preview must not flash on the new frame.
+    // The old photo's live preview must not flash on the new frame - and the
+    // live shape-following starts over from the new photo's own shape.
+    liveAspectRef.current = null;
     if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
     livePreviewRef.current = null;
     setLivePreviewUrl(null);
@@ -2188,6 +2294,11 @@ export function CanvasEditor({
         editingOpen={editingImage !== null}
         onEndCrop={() => setCroppingId(null)}
         onResetCrop={resetCrop}
+        onResetRotation={() =>
+          updateItems((list) =>
+            list.map((item) => (selected.has(item.id) ? { ...item, rotation: 0 } : item))
+          )
+        }
         aspectLock={aspectLock}
         onAspectLock={setAspectLock}
         onResize={resizeSelected}
@@ -2428,6 +2539,13 @@ export function CanvasEditor({
                       (event.target as Element).setPointerCapture?.(event.pointerId);
                       pushHistory();
                     }}
+                    onResetRotation={() => {
+                      // The double-click's own pointerdowns armed rotate drags
+                      // - drop the drag so the reset isn't overwritten by a
+                      // stray pointer move.
+                      setDrag({ kind: "none" });
+                      patchItem(single.id, { rotation: 0 });
+                    }}
                   />
                 )}
 
@@ -2575,13 +2693,14 @@ export function CanvasEditor({
             image={editingImage}
             onClose={() => void closeEditor()}
             onPreviewFrame={onPreviewFrame}
+            onAutoSaved={refreshEditedFile}
           />
         )}
       </div>
 
       {printPage !== null &&
         createPortal(
-          <PrintView doc={doc} byId={byId} pageCount={pageCount} start={printPage} onClose={() => setPrintPage(null)} />,
+          <PrintView doc={doc} byId={byId} pageCount={pageCount} start={printPage} title={title} onClose={() => setPrintPage(null)} />,
           document.body
         )}
     </div>
@@ -2648,12 +2767,14 @@ function PrintView({
   byId,
   pageCount,
   start,
+  title,
   onClose,
 }: {
   doc: Doc;
   byId: Map<string, ImageOut>;
   pageCount: number;
   start: number;
+  title: string;
   onClose: () => void;
 }) {
   const sheets = useMemo(() => printSheets(doc, pageCount), [doc, pageCount]);
@@ -2907,7 +3028,8 @@ function PrintView({
       )}
 
       {/* Same bottom bar as the shelf's print view (and the photo stages):
-          the standard Back flush left, the caption centred. */}
+          the standard Back flush left, the caption centred, Export flush
+          right. */}
       <div className="canvas-print-foot canvas-print-chrome" aria-live="polite">
         <button
           className="btn btn-sm back-btn stage-back-btn"
@@ -2918,6 +3040,9 @@ function PrintView({
         </button>
         {sheets.length > 1 ? `Page ${index + 1} of ${sheets.length}` : "Print view"}
         <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to come back</span>
+        <span className="canvas-print-export">
+          <ExportChip doc={doc} byId={byId} title={title} drop="up" />
+        </span>
       </div>
     </div>
   );
@@ -3304,6 +3429,7 @@ function SelectionFrame({
   cropping,
   onHandle,
   onRotate,
+  onResetRotation,
 }: {
   item: LayoutItem;
   doc: Doc;
@@ -3311,6 +3437,7 @@ function SelectionFrame({
   cropping: boolean;
   onHandle: (event: React.PointerEvent, handle: Handle) => void;
   onRotate: (event: React.PointerEvent) => void;
+  onResetRotation: () => void;
 }) {
   const rect = worldRect(item, doc);
   const size = HANDLE_PX / zoom;
@@ -3354,7 +3481,14 @@ function SelectionFrame({
               borderWidth: 1 / zoom,
             }}
             onPointerDown={onRotate}
-            title="Drag to rotate — hold Shift for 15° steps"
+            onDoubleClick={(event) => {
+              // The handle is the one place a rotation is made, so it is also
+              // where it's unmade - dragging back to exactly 0° by hand is
+              // the one angle the handle is bad at.
+              event.stopPropagation();
+              onResetRotation();
+            }}
+            title="Drag to rotate — hold Shift for 15° steps · double-click to straighten (0°)"
           />
         </>
       )}
@@ -4097,6 +4231,7 @@ function CanvasActionBar({
   editingOpen,
   onEndCrop,
   onResetCrop,
+  onResetRotation,
   aspectLock,
   onAspectLock,
   onResize,
@@ -4117,6 +4252,7 @@ function CanvasActionBar({
   editingOpen: boolean;
   onEndCrop: () => void;
   onResetCrop: () => void;
+  onResetRotation: () => void;
   aspectLock: boolean;
   onAspectLock: (lock: boolean) => void;
   onResize: (size: { width_mm?: number; height_mm?: number }) => void;
@@ -4192,6 +4328,18 @@ function CanvasActionBar({
           title="Reshape the frame to the photo's own proportions, undoing any crop"
         >
           <IconRotate size={13} /> Fit frame to photo
+        </button>
+      )}
+      {/* Only offered while something is actually turned: a rotation is set by
+          the drag handle, and getting back to exactly 0° by hand is the one
+          angle the handle is bad at. */}
+      {!cropping && selection.some((item) => item.rotation !== 0) && (
+        <button
+          className="btn btn-sm"
+          onClick={onResetRotation}
+          title="Set the selected items straight again (0°)"
+        >
+          Reset rotation
         </button>
       )}
 

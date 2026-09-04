@@ -291,8 +291,13 @@ def list_images(
     # sort together - without deterministic tie-breakers their relative order
     # is whatever the query planner felt like, so photos jump around between
     # requests and pagination can duplicate/skip rows at page boundaries.
+    # The tie-breakers DESCEND with the primary key: with filenames ascending
+    # against taken_at descending, a burst spanning several seconds read
+    # forward within each second but jumped backward at every second boundary,
+    # so paging through it in the lightbox zigzagged instead of running
+    # straight back in time.
     query = query.order_by(
-        Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc()
+        Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc()
     )
     # The response's paired_image_id is Image.visible_paired_image_id, which
     # reads the partner's deleted_at - one extra query for the page instead of
@@ -376,7 +381,7 @@ def library_index(
             Image.immich_sync, Image.paired_image_id, Image.source_root_id,
             Image.edit_rev, partner_deleted,
         )
-        .order_by(Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc())
+        .order_by(Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc())
         .all()
     )
 
@@ -429,7 +434,7 @@ def geo_index(
             Image.id, Image.gps_lat, Image.gps_lon, Image.paired_image_id, Image.original_filename
         )
         .filter(Image.gps_lat.isnot(None), Image.gps_lon.isnot(None))
-        .order_by(Image.taken_at.desc(), Image.original_filename.asc(), Image.id.asc())
+        .order_by(Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc())
         .all()
     )
     images = [
