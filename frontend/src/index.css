@@ -9003,6 +9003,43 @@ button.smart-card {
   background: var(--bg-elevated);
 }
 
+/* The strip's top edge doubles as a resize handle. A thin invisible band
+   straddling the border, with a short pill that shows on hover and while
+   dragging - the same idea as a sash between two panes. */
+.canvas-filmstrip {
+  position: relative;
+}
+
+.canvas-filmstrip-grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -5px;
+  height: 11px;
+  cursor: ns-resize;
+  z-index: 2;
+  touch-action: none;
+}
+
+.canvas-filmstrip-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 44px;
+  height: 3px;
+  margin-left: -22px;
+  border-radius: 2px;
+  background: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.canvas-filmstrip-grip:hover::after,
+.canvas-filmstrip-grip.is-dragging::after {
+  opacity: 0.9;
+}
+
 .canvas-filmstrip-head {
   display: flex;
   flex-wrap: wrap;

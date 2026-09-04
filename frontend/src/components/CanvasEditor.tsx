@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
 import type { CanvasLayout, ImageOut, LayoutItem, LayoutTextStyle, LayoutVersion } from "../api/types";
-import { collapsePairs, thumbPx, useThumbSize } from "../state/viewPrefs";
+import { CANVAS_STRIP_MAX_PX, CANVAS_STRIP_MIN_PX, collapsePairs, setCanvasStripChip, thumbPx, useCanvasStripChip, useThumbSize } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
 import { PhotoEditor } from "./PhotoEditor";
 import { FilterChip } from "./FilterChip";
@@ -4720,10 +4720,53 @@ function Filmstrip({
   // sizes every grid - one setting for "how big do I want to see photos", not a
   // second one hidden in the canvas. Scaled down from the grid's tile width: a
   // strip is a row you skim along, not a wall you browse.
+  // ...unless the strip's top edge has been dragged: then the strip has a
+  // size of its own, until a double-click on the edge hands it back.
   const thumbSize = useThumbSize();
-  const chipWidth = Math.round(thumbPx(thumbSize) * 0.42);
+  const stripChip = useCanvasStripChip();
+  const chipWidth = stripChip ?? Math.round(thumbPx(thumbSize) * 0.42);
+  const chipHeight = Math.round(chipWidth * 0.74);
+  // The drag in progress: where it started and how wide the chips were then.
+  const resize = useRef<{ y: number; width: number } | null>(null);
+  const [resizing, setResizing] = useState(false);
   return (
     <div className={`canvas-filmstrip${open ? "" : " is-closed"}`}>
+      {open && (
+        // The strip's top edge is a handle: pull it up for bigger photos,
+        // push it down for smaller ones. Pointer capture keeps the drag
+        // alive when the pointer outruns the thin strip of the handle.
+        <div
+          className={`canvas-filmstrip-grip${resizing ? " is-dragging" : ""}`}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Filmstrip size"
+          title="Drag up or down to make the photos bigger or smaller (double-click: follow the thumbnail Size again)"
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            resize.current = { y: event.clientY, width: chipWidth };
+            setResizing(true);
+          }}
+          onPointerMove={(event) => {
+            const start = resize.current;
+            if (!start) return;
+            // Chips are 0.74 as tall as they are wide, so a pull of dy pixels
+            // is dy/0.74 of width - the edge then follows the pointer exactly.
+            const next = Math.round(start.width + (start.y - event.clientY) / 0.74);
+            setCanvasStripChip(Math.max(CANVAS_STRIP_MIN_PX, Math.min(CANVAS_STRIP_MAX_PX, next)));
+          }}
+          onPointerUp={() => {
+            resize.current = null;
+            setResizing(false);
+          }}
+          onPointerCancel={() => {
+            resize.current = null;
+            setResizing(false);
+          }}
+          onDoubleClick={() => setCanvasStripChip(null)}
+        />
+      )}
       {open && (
         <div className="canvas-filmstrip-row">
           {loading && <span className="canvas-filmstrip-note">Loading…</span>}
@@ -4734,7 +4777,7 @@ function Filmstrip({
             <button
               key={image.id}
               className={`canvas-chip${placed.has(image.id) ? " is-placed" : ""}`}
-              style={{ width: chipWidth, height: Math.round(chipWidth * 0.74) }}
+              style={{ width: chipWidth, height: chipHeight }}
               title={
                 placed.has(image.id)
                   ? `${image.original_filename} — already on the canvas. Click to place another copy.`

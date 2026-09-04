@@ -70,6 +70,12 @@ export const STAGE_BACKGROUNDS = [
 export type StageBg = (typeof STAGE_BACKGROUNDS)[number]["key"];
 const DEFAULT_STAGE_BG: StageBg = "light";
 const DEFAULT_THUMB: ThumbSizeKey = "m";
+// The canvas filmstrip's chip width in px, set by dragging the strip's top
+// edge up or down. null means "follow the shared thumbnail Size" - the
+// default, and what a double-click on the edge goes back to.
+const CANVAS_STRIP_KEY = "pm.canvasStripChip";
+export const CANVAS_STRIP_MIN_PX = 48;
+export const CANVAS_STRIP_MAX_PX = 360;
 
 // Minimal external store so a preference change re-renders every subscribed grid
 // in the same tab (the native "storage" event only fires in *other* tabs).
@@ -85,6 +91,21 @@ function subscribe(cb: () => void) {
 function readThumb(): ThumbSizeKey {
   const v = localStorage.getItem(THUMB_KEY);
   return THUMB_SIZES.some((s) => s.key === v) ? (v as ThumbSizeKey) : DEFAULT_THUMB;
+}
+
+function readCanvasStrip(): number | null {
+  const v = Number(localStorage.getItem(CANVAS_STRIP_KEY));
+  return Number.isFinite(v) && v >= CANVAS_STRIP_MIN_PX && v <= CANVAS_STRIP_MAX_PX ? Math.round(v) : null;
+}
+
+export function setCanvasStripChip(px: number | null) {
+  if (px === null) localStorage.removeItem(CANVAS_STRIP_KEY);
+  else localStorage.setItem(CANVAS_STRIP_KEY, String(Math.round(px)));
+  emit();
+}
+
+export function useCanvasStripChip(): number | null {
+  return useSyncExternalStore(subscribe, readCanvasStrip, () => null);
 }
 
 function readMerge(): boolean {
