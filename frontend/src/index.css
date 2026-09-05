@@ -224,6 +224,16 @@
   box-sizing: border-box;
 }
 
+/* Nothing in the app is a thing to drag out of it: a nav tab, a thumbnail
+   or a link picked up with the mouse would otherwise turn into the browser's
+   own ghost-image drag (with a file:// tooltip in Electron). Every drag the
+   app has - canvas frames, the filmstrip, the strip's sash - is its own
+   pointer-event gesture and unaffected. */
+a,
+img {
+  -webkit-user-drag: none;
+}
+
 body {
   margin: 0;
   font-family: var(--font-ui);
