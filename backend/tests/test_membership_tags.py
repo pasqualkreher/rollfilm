@@ -22,17 +22,19 @@ from app.api.routes.albums import (
 )
 from app.api.routes.canvases import (
     add_canvas_images,
+    canvas_images,
     clear_canvas_layout,
     create_canvas,
     delete_canvas,
     remove_canvas_images,
     rename_canvas,
+    repoint_layout_item,
     save_canvas_layout,
 )
 from app.api.routes.images import add_tag, bulk_reset_metadata, remove_tag
-from app.api.routes.tags import delete_tag, prune_unused_tags
+from app.api.routes.tags import delete_tag
 from app.db.base import Base
-from app.db.models import Album, AlbumImage, Canvas, FileType, Image, ImageTag, Tag, User
+from app.db.models import Album, AlbumImage, Canvas, CanvasImage, FileType, Image, ImageTag, LayoutItem, Tag, User
 from app.services.auto_tags import is_auto_tag
 from app.services.membership_tags import sync_membership_tags
 
@@ -41,7 +43,10 @@ from app.services.membership_tags import sync_membership_tags
 def db() -> Session:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
+    # Like the app's SessionLocal: no autoflush, so the sync sees exactly what
+    # a request handler's session would - pending rows included only if it
+    # flushes them itself.
+    session = sessionmaker(bind=engine, autoflush=False)()
     session.add(User(id=1, username="local"))
     session.commit()
     for id in ("a", "b", "c"):
@@ -199,6 +204,223 @@ def test_album_and_canvas_tags_coexist(db: Session):
     assert _tags(db, "a") == ["album", "album: Trip", "canvas", "canvas: Trip"]
 
 
+# --- Canvas artifacts ---------------------------------------------------------
+#
+# A canvas edits a placed photo on a virtual copy it mints itself. Once the
+# copy is off every canvas, its "canvas" tags are gone and "canvas artifact"
+# is what still says where it came from.
+
+
+def _virtual_copy(db: Session, id: str, of: str) -> Image:
+    copy = Image(
+        id=id,
+        owner_id=1,
+        file_path=f"2026/2026-07-01/{of}.jpg#vc-{id}",
+        original_filename=f"{of}.jpg",
+        file_hash=f"vc-{id}",
+        file_type=FileType.jpeg,
+        file_size=3,
+        taken_at=datetime(2026, 7, 1, 12, 0, 0),
+        virtual_of_image_id=of,
+    )
+    db.add(copy)
+    db.commit()
+    return copy
+
+
+def test_a_virtual_copy_taken_off_its_last_canvas_becomes_a_canvas_artifact(db: Session):
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster", "a", "v")
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+
+    remove_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["a", "v"]), db, _user(db))
+    assert _tags(db, "v") == ["canvas artifact"]
+    # A plain photo was in the library before the canvas; nothing to mark.
+    assert _tags(db, "a") == []
+
+
+def test_a_canvas_artifact_loses_the_tag_once_it_is_back_on_a_canvas(db: Session):
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster", "v")
+    remove_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert _tags(db, "v") == ["canvas artifact"]
+
+    add_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+
+
+def test_deleting_the_whole_canvas_leaves_canvas_artifacts_but_a_frame_does_not(db: Session):
+    _virtual_copy(db, "v", "a")
+    _virtual_copy(db, "w", "b")
+    canvas = _canvas(db, "Poster")
+    doc = schemas.CanvasLayoutIn(
+        items=[
+            schemas.LayoutItemIn(id="f1", kind="photo", image_id="v"),
+            schemas.LayoutItemIn(id="f2", kind="photo", image_id="w"),
+        ]
+    )
+    save_canvas_layout(canvas.id, doc, db, _user(db))
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+
+    # Frame f1 deleted: its copy stays one of the canvas's photos (on the
+    # filmstrip), so it is not stranded yet.
+    save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(items=[schemas.LayoutItemIn(id="f2", kind="photo", image_id="w")]),
+        db,
+        _user(db),
+    )
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+    assert _tags(db, "w") == ["canvas", "canvas: Poster"]
+
+    # The whole canvas gone: both copies are.
+    delete_canvas(canvas.id, db, _user(db))
+    assert _tags(db, "w") == ["canvas artifact"]
+    assert _tags(db, "v") == ["canvas artifact"]
+
+
+def test_the_copy_the_canvas_mints_joins_the_canvas_and_stays_on_the_strip(db: Session):
+    """The canvas editor mints a copy to edit a placed photo and adopts it on
+    the server right away: the copy becomes a member and the frame is
+    re-pointed, so it carries the canvas tags before any Save. Taking the
+    frame off the page later leaves it on the filmstrip (still a member, still
+    tagged); only removing it from the strip makes it an artifact."""
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster", "a")
+    save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(items=[schemas.LayoutItemIn(id="f1", kind="photo", image_id="a")]),
+        db,
+        _user(db),
+    )
+    repoint_layout_item(canvas.id, "f1", schemas.LayoutItemImageIn(image_id="v"), db, _user(db))
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+    assert _tags(db, "a") == ["canvas", "canvas: Poster"]
+    db.expire_all()
+    assert db.get(LayoutItem, "f1").image_id == "v"
+
+    # Frame off the page, saved: the copy is still on the filmstrip.
+    save_canvas_layout(canvas.id, schemas.CanvasLayoutIn(items=[]), db, _user(db))
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+
+    # Off the filmstrip: now it is an artifact.
+    remove_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert _tags(db, "v") == ["canvas artifact"]
+
+
+def test_a_copy_placed_on_a_canvas_is_adopted_as_one_of_its_photos(db: Session):
+    """A copy placed straight through a layout save (or before the adoption
+    rule existed) becomes a member on the next sync - so taking its frame off
+    the page leaves it on the filmstrip, tags and all."""
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster")
+    save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(items=[schemas.LayoutItemIn(id="f1", kind="photo", image_id="v")]),
+        db,
+        _user(db),
+    )
+    assert {row[0] for row in db.query(CanvasImage.image_id).filter(CanvasImage.canvas_id == canvas.id)} == {"v"}
+
+    save_canvas_layout(canvas.id, schemas.CanvasLayoutIn(items=[]), db, _user(db))
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+    # The filmstrip (members + placed) still offers it.
+    strip = canvas_images(canvas.id, db, _user(db))
+    assert [image.id for image in strip] == ["v"]
+
+    remove_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert _tags(db, "v") == ["canvas artifact"]
+    assert canvas_images(canvas.id, db, _user(db)) == []
+
+
+def test_removing_a_copy_from_the_strip_with_its_frame_still_saved(db: Session):
+    """The editor takes the frame off the page (unsaved) and then removes the
+    copy from the strip: the saved frame must go with it, or the sync would
+    re-adopt the placed copy as a member on the spot."""
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster")
+    save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(items=[schemas.LayoutItemIn(id="f1", kind="photo", image_id="v")]),
+        db,
+        _user(db),
+    )
+    # Without dropping the frame the copy is placed, so it stays.
+    remove_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+
+    remove_canvas_images(
+        canvas.id, schemas.CanvasImagesIn(image_ids=["v"], drop_frames=True), db, _user(db)
+    )
+    assert _tags(db, "v") == ["canvas artifact"]
+    assert canvas_images(canvas.id, db, _user(db)) == []
+    db.expire_all()
+    assert db.get(LayoutItem, "f1") is None
+
+
+def test_adopting_a_copy_for_an_unsaved_frame_still_makes_it_a_member(db: Session):
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster")
+    repoint_layout_item(canvas.id, "not-saved-yet", schemas.LayoutItemImageIn(image_id="v"), db, _user(db))
+    assert _tags(db, "v") == ["canvas", "canvas: Poster"]
+
+
+def test_adopting_a_foreign_photo_is_refused(db: Session):
+    canvas = _canvas(db, "Poster")
+    db.add(User(id=2, username="other"))
+    db.commit()
+    db.add(
+        Image(
+            id="theirs",
+            owner_id=2,
+            file_path="2026/2026-07-01/theirs.jpg",
+            original_filename="theirs.jpg",
+            file_hash="hash-theirs",
+            file_type=FileType.jpeg,
+            file_size=3,
+            taken_at=datetime(2026, 7, 1, 12, 0, 0),
+        )
+    )
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        repoint_layout_item(canvas.id, "f1", schemas.LayoutItemImageIn(image_id="theirs"), db, _user(db))
+    assert exc.value.status_code == 404
+
+
+def test_a_copy_still_on_another_canvas_is_no_artifact(db: Session):
+    _virtual_copy(db, "v", "a")
+    poster = _canvas(db, "Poster", "v")
+    _canvas(db, "Wall", "v")
+    remove_canvas_images(poster.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert _tags(db, "v") == ["canvas", "canvas: Wall"]
+
+
+def test_canvas_artifact_is_hands_off_and_survives_a_tag_reset(db: Session):
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster", "v")
+    remove_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert is_auto_tag("Canvas Artifact")
+    with pytest.raises(HTTPException):
+        remove_tag("v", "canvas artifact", db, _user(db))
+    with pytest.raises(HTTPException):
+        add_tag("a", schemas.AddTagRequest(name="canvas artifact"), db, _user(db))
+    bulk_reset_metadata(schemas.BulkResetRequest(image_ids=["v"], tags=True), db, _user(db))
+    assert _tags(db, "v") == ["canvas artifact"]
+
+
+def test_a_repeat_sync_does_not_touch_canvas_artifacts(db: Session):
+    """Startup, merge and restore all re-run the sync on an unchanged library;
+    the artifact must neither vanish nor spread."""
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster", "v")
+    remove_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    _virtual_copy(db, "w", "b")
+    sync_membership_tags(db, 1)
+    db.commit()
+    assert _tags(db, "v") == ["canvas artifact"]
+    assert _tags(db, "w") == []
+
+
 # --- Unique names -------------------------------------------------------------
 
 
@@ -255,18 +477,25 @@ def test_membership_tags_cannot_be_removed_or_deleted_by_hand(db: Session):
     assert _tags(db, "a") == ["album", "album: Trip"]
 
 
-def test_prune_leaves_idle_membership_tags_alone(db: Session):
-    """A stray empty membership tag isn't the user's to prune - the sync owns
-    it (and removes it on the next run)."""
+def test_the_sync_sweeps_idle_tags_of_every_kind(db: Session):
+    """A stray empty membership tag and a plain tag nobody carries both go on
+    the next sync - tags exist only while a photo carries them."""
     db.add(Tag(owner_id=1, name="album: Old"))
     db.add(Tag(owner_id=1, name="unused"))
     db.commit()
-    removed = prune_unused_tags(db, _user(db)).removed
-    assert removed == ["unused"]
-    assert "album: Old" in _tag_names(db)
     sync_membership_tags(db, 1)
     db.commit()
     assert "album: Old" not in _tag_names(db)
+    assert "unused" not in _tag_names(db)
+
+
+def test_a_canvas_artifact_tag_goes_when_its_last_copy_is_placed_again(db: Session):
+    _virtual_copy(db, "v", "a")
+    canvas = _canvas(db, "Poster", "v")
+    remove_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert "canvas artifact" in _tag_names(db)
+    add_canvas_images(canvas.id, schemas.CanvasImagesIn(image_ids=["v"]), db, _user(db))
+    assert "canvas artifact" not in _tag_names(db)
 
 
 def test_startup_sync_backfills_an_old_library(db: Session):

@@ -16,7 +16,7 @@ from app.api.routes.images import (
     bulk_reset_metadata,
     remove_tag,
 )
-from app.api.routes.tags import delete_tag, prune_unused_tags, tag_usage
+from app.api.routes.tags import delete_tag, list_tags, tag_usage
 from app.db.base import Base
 from app.db.models import FileType, Image, Tag, User
 from app.schemas import AddTagRequest, BulkResetRequest, BulkTagRequest
@@ -74,17 +74,53 @@ def test_auto_tags_cannot_be_removed_from_a_photo(db: Session):
     assert db.get(Image, "img").tags == ["edit copy"]
 
 
-def test_auto_tags_cannot_be_deleted_or_pruned(db: Session):
-    db.add_all([Tag(id="t-edit", owner_id=1, name="edit"), Tag(id="t-old", owner_id=1, name="old")])
+def test_auto_tags_cannot_be_deleted_by_hand(db: Session):
+    db.add(Tag(id="t-edit", owner_id=1, name="edit"))
     db.commit()
-
     with pytest.raises(HTTPException) as exc:
         delete_tag("edit", db, _User())
     assert exc.value.status_code == 400
 
-    result = prune_unused_tags(db, _User())
-    assert result.removed == ["old"]
-    assert [u.name for u in tag_usage(db, _User())] == ["edit"]
+
+def test_a_tag_disappears_with_its_last_photo(db: Session):
+    """Tags clean up after themselves: the last photo dropping one takes the
+    row with it, so the filter list never fills with tags nobody carries."""
+    image = db.get(Image, "img")
+    _add_tag_to_image(db, 1, image, "travel")
+    _add_tag_to_image(db, 1, image, "sea")
+    db.commit()
+    remove_tag("img", "travel", db, _User())
+    assert [t.name for t in db.query(Tag).order_by(Tag.name)] == ["sea"]
+
+    bulk_reset_metadata(BulkResetRequest(image_ids=["img"], tags=True), db, _User())
+    assert db.query(Tag).count() == 0
+
+
+def test_the_tag_list_offers_only_what_live_photos_carry(db: Session):
+    """A tag that only trashed photos still carry is nothing to filter for -
+    it leaves the list with the photo and comes back with a restore."""
+    image = db.get(Image, "img")
+    _add_tag_to_image(db, 1, image, "travel")
+    db.commit()
+    assert list_tags(db, _User()) == ["travel"]
+    image.deleted_at = datetime(2026, 8, 1, 9, 0, 0)
+    db.commit()
+    assert list_tags(db, _User()) == []
+    image.deleted_at = None
+    db.commit()
+    assert list_tags(db, _User()) == ["travel"]
+
+
+def test_settings_lists_only_the_users_own_tags_and_deletes_them_outright(db: Session):
+    image = db.get(Image, "img")
+    _add_tag_to_image(db, 1, image, "travel")
+    _add_tag_to_image(db, 1, image, "edit")
+    db.commit()
+    assert [(u.name, u.count) for u in tag_usage(db, _User())] == [("travel", 1)]
+
+    delete_tag("travel", db, _User())
+    assert db.get(Image, "img").tags == ["edit"]
+    assert tag_usage(db, _User()) == []
 
 
 def test_tag_reset_keeps_auto_tags(db: Session):

@@ -9176,6 +9176,45 @@ button.smart-card {
   opacity: 0.45;
 }
 
+/* The chip and its remove button side by side (a button can't hold a
+   button), the wrapper sized like the chip so the row lays out unchanged. */
+.canvas-chip-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  display: block;
+}
+
+/* Take the photo off the canvas's photos: top-right, shown on hover only, so
+   the strip stays a row of pictures. Not offered while the photo is on the
+   page (its frame would keep it there anyway). */
+.canvas-chip-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.canvas-chip-wrap:hover .canvas-chip-remove,
+.canvas-chip-remove:focus-visible {
+  opacity: 1;
+}
+
+.canvas-chip-remove:hover {
+  background: var(--danger, #c0392b);
+}
+
 .canvas-chip-badge {
   position: absolute;
   right: 3px;

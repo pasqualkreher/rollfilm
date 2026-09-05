@@ -265,6 +265,8 @@ export function ImportWizard() {
       // Trash grid right away.
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["trash"] });
+      // Trashing or restoring photos changes which tags live photos carry.
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
       // Without this, the session tracked in context (see state/importSession)
       // stays set after a successful commit, so revisiting /import re-opens
       // this same now-committed session - and Discard then 400s because it's

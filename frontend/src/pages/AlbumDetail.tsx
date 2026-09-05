@@ -219,6 +219,8 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["album", id] });
     queryClient.invalidateQueries({ queryKey: ["albums"] });
     queryClient.invalidateQueries({ queryKey: ["trash"] });
+    // Trashing or restoring photos changes which tags live photos carry.
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
   }
 
   async function removeSelectedFromAlbum() {

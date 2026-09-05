@@ -19,6 +19,13 @@ export function TagFilter({ options, value, onChange, emptyLabel = "Any", title 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  // Opening starts with an empty search: what was typed last time narrowed
+  // last time's pick, not this one.
+  useEffect(() => {
+    if (open) setQuery("");
+  }, [open]);
 
   // Close on outside click / Escape, like a native dropdown.
   useEffect(() => {
@@ -37,8 +44,13 @@ export function TagFilter({ options, value, onChange, emptyLabel = "Any", title 
     };
   }, [open]);
 
+  // Picking a tag spends the search: the box empties and takes the focus
+  // back, so the next tag is one more word away - and the full list is in
+  // view again for the eye.
   function toggle(tag: string) {
     onChange(value.includes(tag) ? value.filter((t) => t !== tag) : [...value, tag]);
+    setQuery("");
+    searchRef.current?.focus();
   }
 
   const filtered = query.trim()
@@ -71,6 +83,14 @@ export function TagFilter({ options, value, onChange, emptyLabel = "Any", title 
             placeholder="Find a tag…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter takes the first match - type, Enter, type, Enter.
+              if (e.key === "Enter" && filtered.length > 0) {
+                e.preventDefault();
+                toggle(filtered[0]);
+              }
+            }}
+            ref={searchRef}
             autoFocus
           />
           <div className="tag-filter-list">

@@ -793,10 +793,13 @@ export const api = {
         body: JSON.stringify({ image_ids: imageIds }),
       });
     },
-    removeImages(id: string, imageIds: string[]): Promise<CanvasSummary> {
+    // `dropFrames` also takes the photos' frames off the working layout -
+    // the filmstrip's remove, offered only for photos with no frame on the
+    // page (a saved frame is one the editor took off but hasn't saved yet).
+    removeImages(id: string, imageIds: string[], dropFrames = false): Promise<CanvasSummary> {
       return request(`/canvases/${id}/images/remove`, {
         method: "POST",
-        body: JSON.stringify({ image_ids: imageIds }),
+        body: JSON.stringify({ image_ids: imageIds, drop_frames: dropFrames }),
       });
     },
     // The working layout. A canvas that has never been laid out answers with
@@ -812,6 +815,15 @@ export const api = {
     },
     clearLayout(id: string): Promise<void> {
       return request(`/canvases/${id}/layout`, { method: "DELETE" });
+    },
+    // Point one saved frame at another photo right away - the editor's swap
+    // of a frame to the virtual copy it just minted. 404 for a frame the
+    // working layout doesn't hold yet (the next Save carries it).
+    repointLayoutItem(id: string, itemId: string, imageId: string): Promise<void> {
+      return request(`/canvases/${id}/layout/items/${itemId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ image_id: imageId }),
+      });
     },
     // Kept versions of the canvas. Every call answers with the fresh layout
     // (including the version list), so the cache can be replaced in one go.
@@ -1116,14 +1128,12 @@ export const api = {
     list(): Promise<string[]> {
       return request(`/tags`);
     },
+    // The user's own tags with their live photo counts (Settings → Tags).
     usage(): Promise<TagUsage[]> {
       return request(`/tags/usage`);
     },
     remove(name: string): Promise<void> {
       return request(`/tags/${encodeURIComponent(name)}`, { method: "DELETE" });
-    },
-    pruneUnused(): Promise<{ removed: string[] }> {
-      return request(`/tags/prune-unused`, { method: "POST" });
     },
   },
   settings: {

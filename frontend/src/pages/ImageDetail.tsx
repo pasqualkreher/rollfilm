@@ -620,6 +620,8 @@ export function ImageDetail() {
     ids.forEach((delId) => selects.has(delId) && selects.remove(delId));
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["trash"] });
+    // Trashing or restoring photos changes which tags live photos carry.
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
 
     // Move to the next remaining photo in the set you were browsing; if none is
     // left (or we arrived here without a set), fall back to where we came from.

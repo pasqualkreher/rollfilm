@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app import schemas
 from app.auth import get_current_user
-from app.db.models import ImageTag, Tag, User
+from app.db.models import Image, ImageTag, Tag, User
 from app.db.session import get_db
 from app.services.auto_tags import auto_tag_criterion, auto_tag_error, is_auto_tag
 
@@ -13,23 +13,39 @@ router = APIRouter(prefix="/tags", tags=["tags"])
 
 @router.get("", response_model=list[str])
 def list_tags(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """All tag names this user has ever created - used to power the "propose
-    existing tags" autocomplete when adding a tag, so near-duplicate tags
-    (e.g. "sunset" vs "Sunset") don't pile up."""
-    tags = db.query(Tag).filter(Tag.owner_id == current_user.id).order_by(Tag.name).all()
-    return [t.name for t in tags]
+    """The tags the user's photos carry right now - the Library's tag filter
+    and the "propose existing tags" autocomplete (so near-duplicates like
+    "sunset" vs "Sunset" don't pile up). A tag that only photos in the Trash
+    still carry is not offered: there is nothing to filter for and nothing to
+    complete to. Its row stays, so restoring the photos brings it back."""
+    rows = (
+        db.query(Tag.name)
+        .join(ImageTag, ImageTag.tag_id == Tag.id)
+        .join(Image, Image.id == ImageTag.image_id)
+        .filter(Tag.owner_id == current_user.id, Image.deleted_at.is_(None))
+        .distinct()
+        .order_by(Tag.name)
+        .all()
+    )
+    return [name for (name,) in rows]
 
 
 @router.get("/usage", response_model=list[schemas.TagUsage])
 def tag_usage(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Every tag with how many photos currently use it. `count == 0` marks an
-    unused tag (left behind after its photos were retagged or deleted), which
-    Settings offers to clean up."""
+    """The user's own tags (never the app's - see auto_tags) with how many
+    photos outside the Trash carry each. Settings lists them so a tag can be
+    deleted from every photo at once."""
+    live = (
+        db.query(ImageTag.tag_id, func.count(ImageTag.id).label("n"))
+        .join(Image, Image.id == ImageTag.image_id)
+        .filter(Image.deleted_at.is_(None))
+        .group_by(ImageTag.tag_id)
+        .subquery()
+    )
     rows = (
-        db.query(Tag.name, func.count(ImageTag.id))
-        .outerjoin(ImageTag, ImageTag.tag_id == Tag.id)
-        .filter(Tag.owner_id == current_user.id)
-        .group_by(Tag.id)
+        db.query(Tag.name, func.coalesce(live.c.n, 0))
+        .outerjoin(live, live.c.tag_id == Tag.id)
+        .filter(Tag.owner_id == current_user.id, ~auto_tag_criterion())
         .order_by(Tag.name)
         .all()
     )
@@ -48,24 +64,3 @@ def delete_tag(name: str, db: Session = Depends(get_db), current_user: User = De
     db.query(ImageTag).filter(ImageTag.tag_id == tag.id).delete()
     db.delete(tag)
     db.commit()
-
-
-@router.post("/prune-unused", response_model=schemas.PruneTagsResult)
-def prune_unused_tags(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Remove every tag that isn't attached to any photo, in one go. The
-    auto-managed tags are left alone even when idle - the app hands them out."""
-    used_tag_ids = db.query(ImageTag.tag_id).distinct().subquery()
-    unused = (
-        db.query(Tag)
-        .filter(
-            Tag.owner_id == current_user.id,
-            Tag.id.notin_(used_tag_ids.select()),
-            ~auto_tag_criterion(),
-        )
-        .all()
-    )
-    removed = sorted(t.name for t in unused)
-    for tag in unused:
-        db.delete(tag)
-    db.commit()
-    return schemas.PruneTagsResult(removed=removed)

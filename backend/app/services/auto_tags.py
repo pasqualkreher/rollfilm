@@ -3,6 +3,10 @@
 "edit" follows a photo's develop/geometry state, "edit copy" marks a baked
 copy saved from the editor and "virtual copy" a second library entry that
 shares another photo's file. A virtual copy that carries edits also gets "edit".
+"canvas artifact" marks a virtual copy that no canvas holds any more: canvases
+mint virtual copies to edit a placed photo, so once the frame or the canvas is
+gone the copy would sit in the library with nothing saying where it came from.
+The tag goes away again when the copy is placed on (or added to) a canvas.
 
 Membership tags say where a photo is used: every photo in at least one album
 carries "album" plus one "album: <name>" tag per album it belongs to,
@@ -19,7 +23,9 @@ from sqlalchemy import or_
 
 from app.db.models import Tag
 
-AUTO_TAGS: frozenset[str] = frozenset({"edit", "edit copy", "virtual copy"})
+CANVAS_ARTIFACT_TAG = "canvas artifact"
+
+AUTO_TAGS: frozenset[str] = frozenset({"edit", "edit copy", "virtual copy", CANVAS_ARTIFACT_TAG})
 
 IN_ALBUM_TAG = "album"
 IN_CANVAS_TAG = "canvas"

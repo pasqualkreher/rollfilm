@@ -609,14 +609,20 @@ export function CanvasEditor({
           );
         }
         // Re-announce so the files query refetches with the save now visible -
-        // closeEditor's own announcement can have raced the write.
+        // closeEditor's own announcement can have raced the write. The
+        // Library's index and the copy's own row carry the new edit_rev too;
+        // both are cached past this point, so bust them here.
         onMembershipChangedRef.current?.();
+        queryClient.invalidateQueries({ queryKey: ["images"] });
+        queryClient.invalidateQueries({ queryKey: ["image", fresh.id] });
+        queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+        queryClient.invalidateQueries({ queryKey: ["canvases"] });
       })
       .catch(() => {
         // Non-fatal: the next files refetch carries the fresh row anyway.
       })
       .finally(() => releaseHeldPreview(imageId));
-  }, [releaseHeldPreview]);
+  }, [releaseHeldPreview, queryClient]);
 
   const closeEditor = useCallback(async () => {
     const closingId = editingImageIdRef.current;
@@ -670,8 +676,16 @@ export function CanvasEditor({
   const adoptServerLayout = useCallback(
     (result: CanvasLayout) => {
       queryClient.setQueryData(["canvas-layout", canvasId], result);
-      // The Canvases shelf on the Albums page draws from these versions.
+      // The Canvases shelf on the Albums page draws from these versions, the
+      // overview card from the working layout.
       queryClient.invalidateQueries({ queryKey: ["canvases"] });
+      queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+      // A save changes what the canvas holds, and with it the membership
+      // tags (canvas, canvas: <name>, canvas artifact) the Library filters
+      // on - its index is cached for minutes.
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+      queryClient.invalidateQueries({ queryKey: ["facets"] });
     },
     [queryClient, canvasId]
   );
@@ -2292,6 +2306,23 @@ export function CanvasEditor({
       updateItems((list) =>
         list.map((item) => (item.id === frame.id ? { ...item, image_id: copy.id } : item))
       );
+      // The copy is a new library row: the Library's index (cached for
+      // minutes) must learn about it.
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      // Adopt the copy on the server right away (its edits are saved the
+      // moment the dock closes): it joins the canvas's photos and the saved
+      // frame is re-pointed, so it carries the canvas tags and sits on the
+      // filmstrip even if the user leaves without saving - and stays there
+      // when its frame is taken off the page. A frame not saved yet is
+      // skipped; the next Save carries it.
+      void api.canvases
+        .repointLayoutItem(canvasId, frame.id, copy.id)
+        .then(() => {
+          onMembershipChangedRef.current?.();
+          queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+          queryClient.invalidateQueries({ queryKey: ["images"] });
+        })
+        .catch(() => {});
       onMembershipChanged?.();
       setEditingImage(copy);
     } catch (e) {
@@ -2304,6 +2335,45 @@ export function CanvasEditor({
 
   async function editPhoto() {
     if (single) await switchEditTo(single);
+  }
+
+  // Take a photo off the filmstrip - the canvas's own photos, not the page.
+  // Offered only for photos with no frame on the page. A virtual copy the
+  // canvas made for editing has no other home: it stays in the library,
+  // tagged "canvas artifact" so it can be found again (or deleted) from
+  // there. The RAW partner of a pair leaves with it, as it came.
+  async function removeFromCanvas(id: string) {
+    const image = byId.get(id);
+    if (!image) return;
+    const copy = Boolean(image.virtual_of_image_id);
+    const ok = await dialogs.confirm({
+      title: copy ? "Remove this copy from the canvas?" : "Remove this photo from the canvas?",
+      message: copy
+        ? "The virtual copy is taken off the canvas's photos. It stays in the library, tagged “canvas artifact”, where you can keep or delete it."
+        : "The photo is taken off the canvas's photos. It stays in the library.",
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
+    const ids = image.paired_image_id ? [id, image.paired_image_id] : [id];
+    try {
+      // The chip is only offered for photos with no frame on the page, so
+      // any frame the server still holds is one already taken off here and
+      // not saved yet - drop it too, or the copy would be re-adopted.
+      await api.canvases.removeImages(canvasId, ids, true);
+    } catch (e) {
+      await dialogs.alert({
+        title: "Could not remove the photo",
+        message: (e as Error).message || "Check that the app is still connected, then try again.",
+      });
+      return;
+    }
+    setExtraFiles((list) => list.filter((file) => !ids.includes(file.id)));
+    onMembershipChangedRef.current?.();
+    queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
+    queryClient.invalidateQueries({ queryKey: ["facets"] });
   }
 
   const croppingItem = croppingId ? items.find((item) => item.id === croppingId) ?? null : null;
@@ -2794,6 +2864,7 @@ export function CanvasEditor({
         open={showFilmstrip}
         onToggle={() => setShowFilmstrip((open) => !open)}
         onAdd={(id) => addPhotos([id])}
+        onRemove={(id) => void removeFromCanvas(id)}
         onDragStart={(event, id) => {
           const world = toWorld(event.clientX, event.clientY);
           setDrag({ kind: "place", imageId: id, x: world.x, y: world.y });
@@ -4705,6 +4776,7 @@ function Filmstrip({
   open,
   onToggle,
   onAdd,
+  onRemove,
   onDragStart,
   backButton,
 }: {
@@ -4714,6 +4786,9 @@ function Filmstrip({
   open: boolean;
   onToggle: () => void;
   onAdd: (id: string) => void;
+  // Take a photo off the canvas's photos. Only shown for photos that have no
+  // frame on the page - a placed photo would just stay (frames keep it).
+  onRemove: (id: string) => void;
   onDragStart: (event: React.PointerEvent, id: string) => void;
   // The workspace's Back, docked into the strip's bottom row so the way out
   // sits bottom-left like in every other view.
@@ -4778,8 +4853,8 @@ function Filmstrip({
             <span className="canvas-filmstrip-note">No photos yet - select some in the library and choose &ldquo;Add to canvas&rdquo;.</span>
           )}
           {images.map((image) => (
+            <span key={image.id} className="canvas-chip-wrap" style={{ width: chipWidth, height: chipHeight }}>
             <button
-              key={image.id}
               className={`canvas-chip${placed.has(image.id) ? " is-placed" : ""}`}
               style={{ width: chipWidth, height: chipHeight }}
               title={
@@ -4806,6 +4881,25 @@ function Filmstrip({
                 </span>
               )}
             </button>
+            {!placed.has(image.id) && (
+              <button
+                className="canvas-chip-remove"
+                title={
+                  image.virtual_of_image_id
+                    ? "Remove this copy from the canvas (it stays in the library as a canvas artifact)"
+                    : "Remove from the canvas (the photo stays in the library)"
+                }
+                aria-label="Remove from the canvas"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemove(image.id);
+                }}
+              >
+                <IconTrash size={11} />
+              </button>
+            )}
+            </span>
           ))}
         </div>
       )}

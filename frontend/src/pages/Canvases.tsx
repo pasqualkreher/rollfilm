@@ -112,6 +112,11 @@ export function Canvases() {
     await api.canvases.remove(canvas.id);
     queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
     queryClient.invalidateQueries({ queryKey: ["canvases"] });
+    // Its photos lost their canvas tags (virtual copies gained "canvas
+    // artifact"): the Library's cached index and tag lists are stale.
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
+    queryClient.invalidateQueries({ queryKey: ["facets"] });
   }
 
   return (

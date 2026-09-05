@@ -17,7 +17,6 @@ import {
 } from "../state/viewPrefs";
 import { SettingsTour, SETTINGS_TOUR_KEY } from "../components/SettingsTour";
 import { useTransientFlag, useTransientMessage, useTransientValue } from "../utils/transientMessage";
-import { isAutoTag } from "../utils/autoTags";
 import {
   estimateText,
   estimateSeconds,
@@ -653,6 +652,8 @@ export function Settings() {
       bumpThumbnailCacheBust();
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["trash"] });
+      // Trashing or restoring photos changes which tags live photos carry.
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
     },
   });
 
@@ -747,25 +748,31 @@ export function Settings() {
     },
   });
 
+  // The user's own tags, deletable outright - the app's tags never appear
+  // here (they come and go with the photos' state) and tags nobody carries
+  // any more are gone on their own already.
   const { data: tagUsage } = useQuery({ queryKey: ["tag-usage"], queryFn: () => api.tags.usage() });
-  // Idle auto-managed tags ("edit", "edit copy", "virtual copy") aren't clutter
-  // - the app hands them out again - so they never show up as removable.
-  const unusedTags = (tagUsage ?? []).filter((t) => t.count === 0 && !isAutoTag(t.name));
-
-  function invalidateTags() {
-    queryClient.invalidateQueries({ queryKey: ["tag-usage"] });
-    queryClient.invalidateQueries({ queryKey: ["tags"] });
-  }
-
-  const removeTag = useMutation({
+  const deleteTag = useMutation({
     mutationFn: (name: string) => api.tags.remove(name),
-    onSuccess: invalidateTags,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tag-usage"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["facets"] });
+    },
   });
-
-  const pruneTags = useMutation({
-    mutationFn: () => api.tags.pruneUnused(),
-    onSuccess: invalidateTags,
-  });
+  async function confirmDeleteTag(tag: { name: string; count: number }) {
+    const ok = await dialogs.confirm({
+      title: `Delete the tag “${tag.name}”?`,
+      message:
+        tag.count === 0
+          ? "No photo outside the Trash carries it. It is removed from any trashed photos too."
+          : `It is taken off ${tag.count === 1 ? "the one photo" : `all ${tag.count} photos`} that carry it (and any in the Trash). The photos stay.`,
+      confirmLabel: "Delete tag",
+      danger: true,
+    });
+    if (ok) deleteTag.mutate(tag.name);
+  }
 
   // Surface the running maintenance task to the app shell, which locks the nav
   // (so the page can't be switched away and unmounted mid-task) and shows a
@@ -1189,6 +1196,39 @@ export function Settings() {
         {saveSmartAlbums.isError && <Note error>{(saveSmartAlbums.error as Error).message}</Note>}
       </Section>
 
+      <Section {...sectionProps("Tags")}>
+        <Desc>
+          The tags you have given your photos, with how many carry each. Deleting one takes it off
+          every photo at once. Tags the app hands out itself (edit, virtual copy, album, canvas…)
+          are not listed — they follow the photos on their own, and a tag no photo carries any more
+          disappears by itself.
+        </Desc>
+        {!tagUsage ? (
+          <Desc>Loading…</Desc>
+        ) : tagUsage.length === 0 ? (
+          <Desc>No tags of your own yet.</Desc>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
+            {tagUsage.map((t) => (
+              <span key={t.name} className="tag-chip" title={`${t.count} photo${t.count === 1 ? "" : "s"}`}>
+                {t.name}
+                <span style={{ color: "var(--text-muted)", fontSize: 11 }}>{t.count}</span>
+                <button
+                  type="button"
+                  onClick={() => void confirmDeleteTag(t)}
+                  disabled={deleteTag.isPending}
+                  aria-label={`Delete tag ${t.name}`}
+                  title={`Delete “${t.name}” from every photo`}
+                >
+                  <IconX size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {deleteTag.isError && <Note error>{(deleteTag.error as Error).message}</Note>}
+      </Section>
+
       <Section {...sectionProps("Trash")}>
         <Desc>
           Deleted library photos stay in the Trash and can be restored. On every app start, photos
@@ -1233,48 +1273,6 @@ export function Settings() {
           title="Ask what to delete for RAW + JPEG pairs"
           desc="A RAW and its matching JPEG are normally deleted together. With this on, deleting one first asks whether to remove only that file or the whole pair."
         />
-      </Section>
-
-      <Section {...sectionProps("Tags")}>
-        <Desc>
-          Unused tags are ones no photo carries anymore (left behind after retagging or deleting
-          photos). Remove them to keep the tag filter tidy.
-        </Desc>
-        {unusedTags.length === 0 ? (
-          <Desc>No unused tags — nothing to clean up.</Desc>
-        ) : (
-          <>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
-              {unusedTags.map((t) => (
-                <span key={t.name} className="tag-chip">
-                  {t.name}
-                  <button
-                    type="button"
-                    onClick={() => removeTag.mutate(t.name)}
-                    disabled={removeTag.isPending}
-                    aria-label={`Remove tag ${t.name}`}
-                    title={`Remove “${t.name}”`}
-                  >
-                    <IconX size={11} />
-                  </button>
-                </span>
-              ))}
-            </div>
-            <button className="btn" onClick={() => pruneTags.mutate()} disabled={pruneTags.isPending}>
-              {pruneTags.isPending ? (
-                <>
-                  <span className="btn-spinner" aria-hidden="true" />
-                  Removing…
-                </>
-              ) : (
-                `Remove all ${unusedTags.length} unused tag${unusedTags.length === 1 ? "" : "s"}`
-              )}
-            </button>
-          </>
-        )}
-        {(removeTag.isError || pruneTags.isError) && (
-          <Note error>{((removeTag.error || pruneTags.error) as Error).message}</Note>
-        )}
       </Section>
 
       <Section {...sectionProps("Library maintenance")}>

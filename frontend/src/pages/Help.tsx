@@ -453,15 +453,17 @@ const CHAPTERS: Chapter[] = [
             </li>
             <li>
               <strong>Tags</strong> — free-form keywords with autocomplete. Add them to one photo in
-              its side panel, or to a whole selection at once. Tags nothing carries anymore can be
-              cleaned up under <em>Settings → Library → Tags</em>.
+              its side panel, or to a whole selection at once. A tag exists only while a photo
+              carries it: the last photo dropping one takes it out of the filter list too. To take a
+              tag off every photo at once, delete it under <em>Settings → Library → Tags</em>.
             </li>
             <li>
-              <strong>Three tags the app gives out itself:</strong> <em>edit</em> (the photo has a
-              saved edit), <em>edit copy</em> (a JPEG saved from the editor) and{" "}
-              <em>virtual copy</em>. They say what a photo <em>is</em>, so you can't add them by
-              hand, their chips have no remove button, the tag manager leaves them alone and a
-              bulk tag reset keeps them on the photo. They come and go on their own.
+              <strong>Four tags the app gives out itself:</strong> <em>edit</em> (the photo has a
+              saved edit), <em>edit copy</em> (a JPEG saved from the editor), <em>virtual copy</em>{" "}
+              and <em>canvas artifact</em> (a virtual copy that a canvas made and no canvas holds
+              any more). They say what a photo <em>is</em>, so you can't add them by hand, their
+              chips have no remove button, the tag manager leaves them alone and a bulk tag reset
+              keeps them on the photo. They come and go on their own.
             </li>
           </ul>
         ),
@@ -964,8 +966,10 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>A canvas has its own photos.</strong> They sit in the filmstrip along the
-                bottom until you put them on the paper. Adding a photo to a canvas changes nothing
-                about the photo, and deleting a canvas leaves every photo in the library.
+                bottom until you put them on the paper, and stay there when you take a frame off
+                the page again. A trash button on a chip (hover it; only for photos not on the
+                page) takes the photo off the canvas for good. Adding a photo to a canvas changes
+                nothing about the photo, and deleting a canvas leaves every photo in the library.
               </li>
               <li>
                 <strong>Two kinds of paper.</strong> <strong>Pages</strong> is a run of sheets of one
@@ -1154,9 +1158,11 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>The first edit makes the copy.</strong> Pressing <em>Edit photo</em> on a
                 frame mints a virtual copy (tagged <em>virtual copy</em>, see{" "}
-                <em>Editing → Physical and virtual copies</em>) and points the frame at it. Editing
-                the same frame again reopens that copy; the photo on the page updates live while
-                you work.
+                <em>Editing → Physical and virtual copies</em>) and points the frame at it — on the
+                server too, right away, so the copy counts as on the canvas even before you save.
+                Editing the same frame again reopens that copy; the photo on the page updates live
+                while you work. The Canvas Shelf shows the version you last saved, so save the
+                canvas to see the edit there.
               </li>
               <li>
                 <strong>It saves when you close.</strong> The docked editor has no Save button: the
@@ -1173,6 +1179,16 @@ const CHAPTERS: Chapter[] = [
                 <strong>If a photo goes missing</strong> — trashed, deleted for good — its frame
                 stays as an honest gap saying so. Delete a virtual copy and its frames fall back to
                 the original.
+              </li>
+              <li>
+                <strong>The copy belongs to the canvas.</strong> It joins the canvas's photos the
+                moment it is made, carries the <em>canvas</em> tags and stays on the filmstrip
+                when its frame is taken off the page — so you can put it back. Only removing it
+                from the filmstrip (the trash on its chip) or deleting the whole canvas lets it go:
+                the copy then loses its <em>canvas</em> tags and is tagged{" "}
+                <em>canvas artifact</em> instead, so you can find the strays under <em>Tags</em>{" "}
+                and decide whether to keep or delete them. Put the copy on a canvas again and the
+                tag goes.
               </li>
             </ul>
           </>

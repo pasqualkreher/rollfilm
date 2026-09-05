@@ -540,11 +540,6 @@ export interface DirListing {
   entries: DirEntry[];
 }
 
-export interface TagUsage {
-  name: string;
-  count: number;
-}
-
 // One labeled count in the stats dashboard (a camera, a year, a bucket).
 export interface StatCount {
   name: string;
@@ -687,4 +682,11 @@ export interface LibraryMergeProgress {
   // Outcome of the last finished run - still here after leaving the screen.
   result: LibraryMergeResult | null;
   error: string | null;
+}
+
+// One of the user's own tags with how many photos (outside the Trash) carry
+// it - the Settings list that deletes a tag from every photo at once.
+export interface TagUsage {
+  name: string;
+  count: number;
 }

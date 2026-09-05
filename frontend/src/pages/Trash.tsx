@@ -82,6 +82,8 @@ export function Trash() {
     setSelected(new Set());
     setLastIndex(null);
     queryClient.invalidateQueries({ queryKey: ["trash"] });
+    // Trashing or restoring photos changes which tags live photos carry.
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
     // Restored photos reappear in the grid and album counts.
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["albums"] });

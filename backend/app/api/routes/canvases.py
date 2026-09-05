@@ -342,13 +342,22 @@ def remove_canvas_images(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Take photos out of the membership. Frames referencing them stay on the
-    page (the canvas can still draw them) - membership is the filmstrip, not
-    the design."""
+    """Take photos out of the membership - the filmstrip's own remove. Frames
+    referencing them stay on the page (the canvas can still draw them) -
+    membership is the filmstrip, not the design. A virtual copy that leaves
+    its last canvas here becomes a "canvas artifact"."""
     canvas = get_owned_canvas(db, current_user.id, canvas_id)
+    ids = set(payload.image_ids)
     db.query(CanvasImage).filter(
-        CanvasImage.canvas_id == canvas.id, CanvasImage.image_id.in_(set(payload.image_ids))
+        CanvasImage.canvas_id == canvas.id, CanvasImage.image_id.in_(ids)
     ).delete(synchronize_session=False)
+    if payload.drop_frames:
+        layout = db.query(CanvasLayout).filter(CanvasLayout.canvas_id == canvas.id).first()
+        if layout is not None:
+            db.query(LayoutItem).filter(
+                LayoutItem.layout_id == layout.id, LayoutItem.image_id.in_(ids)
+            ).delete(synchronize_session=False)
+            layout.updated_at = _utcnow()
     sync_membership_tags(db, current_user.id)
     db.commit()
     return _summary_out(db, canvas)
@@ -513,6 +522,53 @@ def clear_canvas_layout(
         db.flush()
         sync_membership_tags(db, current_user.id)
         db.commit()
+
+
+@router.patch("/{canvas_id}/layout/items/{item_id}", status_code=204)
+def repoint_layout_item(
+    canvas_id: str,
+    item_id: str,
+    payload: schemas.LayoutItemImageIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Adopt the virtual copy the canvas editor just minted to edit a placed
+    photo: make it a member of the canvas and point the frame at it, right
+    away.
+
+    The copy's pixels are saved the instant the docked editor closes, so the
+    canvas must not wait for the user's next Save to know about the copy -
+    otherwise leaving unsaved (or a restart) would put the untouched original
+    back on the page and strand the copy in the library. Membership is what
+    keeps the copy on the filmstrip after its frame is taken off the page:
+    only removing it from the strip (or deleting the canvas) lets it go, and
+    that is when it becomes a "canvas artifact". A frame the working layout
+    doesn't hold yet (placed since the last save) is simply skipped - the
+    next Save carries it; the membership is written either way.
+    """
+    canvas = get_owned_canvas(db, current_user.id, canvas_id)
+    image = db.get(Image, payload.image_id)
+    if image is None or image.owner_id != current_user.id or image.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    member = (
+        db.query(CanvasImage)
+        .filter(CanvasImage.canvas_id == canvas.id, CanvasImage.image_id == image.id)
+        .first()
+    )
+    if member is None:
+        db.add(CanvasImage(canvas_id=canvas.id, image_id=image.id, added_at=_utcnow()))
+    layout = db.query(CanvasLayout).filter(CanvasLayout.canvas_id == canvas.id).first()
+    item = (
+        db.query(LayoutItem).filter(LayoutItem.layout_id == layout.id, LayoutItem.id == item_id).first()
+        if layout is not None
+        else None
+    )
+    if item is not None and item.kind == "photo":
+        item.image_id = image.id
+        item.missing = False
+        layout.updated_at = _utcnow()
+    sync_membership_tags(db, current_user.id)
+    db.commit()
 
 
 @router.post("/{canvas_id}/layout/shelf", status_code=204)

@@ -106,6 +106,14 @@ class ImageRenameResult(BaseModel):
     pair_error: str | None = None
 
 
+class TagUsage(BaseModel):
+    """One of the user's own tags with how many photos (not in the Trash)
+    carry it - the Settings list that lets a tag be deleted outright."""
+
+    name: str
+    count: int
+
+
 class AddTagRequest(BaseModel):
     name: str
 
@@ -394,6 +402,13 @@ class CanvasShelfIn(BaseModel):
     enabled: bool
 
 
+class LayoutItemImageIn(BaseModel):
+    """Point one placed frame at another photo - the canvas editor's swap of a
+    frame to the virtual copy it just minted for editing."""
+
+    image_id: str
+
+
 class CanvasLayoutOut(BaseModel):
     canvas_id: str
     page_mode: Literal["pages", "infinite"]
@@ -455,6 +470,12 @@ class CanvasRenameIn(BaseModel):
 
 class CanvasImagesIn(BaseModel):
     image_ids: list[str]
+    # Removing only: also take the photos' frames off the working layout. The
+    # filmstrip's remove sets this - it is offered only for photos with no
+    # frame on the page, so any frame still saved is one the editor already
+    # took off and hasn't saved yet; left in place, a placed virtual copy
+    # would be re-adopted as a member at once and never leave.
+    drop_frames: bool = False
 
 
 class CanvasGalleryOut(BaseModel):
@@ -942,11 +963,6 @@ class LibraryMergeProgressOut(BaseModel):
     error: str | None = None
 
 
-class TagUsage(BaseModel):
-    name: str
-    count: int
-
-
 class StatCount(BaseModel):
     """One labeled count in the stats dashboard (a camera, a year, a bucket)."""
 
@@ -976,5 +992,3 @@ class LibraryStats(BaseModel):
     last_taken_at: datetime | None = None
 
 
-class PruneTagsResult(BaseModel):
-    removed: list[str]

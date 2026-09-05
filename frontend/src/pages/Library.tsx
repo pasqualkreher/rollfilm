@@ -303,6 +303,8 @@ export function Library() {
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["trash"] });
+    // Trashing or restoring photos changes which tags live photos carry.
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
   }
 
   async function addTagToSelected(name: string) {

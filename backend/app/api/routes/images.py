@@ -53,6 +53,7 @@ from app.services import (
 )
 from app.services.auto_tags import auto_tag_criterion, auto_tag_error, is_auto_tag
 from app.services.membership_tags import sync_membership_tags
+from app.services.tag_cleanup import prune_unused_tags
 from app.services.filesystem import (
     VIRTUAL_PATH_MARKER,
     library_relative_path,
@@ -139,6 +140,8 @@ def _remove_tag_from_image(db: Session, owner_id: int, image: Image, name: str) 
     if tag is None:
         return
     db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
+    # The last photo dropping a tag takes the tag with it.
+    prune_unused_tags(db, owner_id)
 
 
 def _has_any_edit(image: Image) -> bool:
@@ -1220,6 +1223,7 @@ def bulk_reset_metadata(
         if auto_ids:
             query = query.filter(ImageTag.tag_id.notin_(auto_ids))
         query.delete(synchronize_session=False)
+        prune_unused_tags(db, current_user.id)
     if payload.albums:
         db.query(AlbumImage).filter(AlbumImage.image_id.in_(image_ids)).delete(synchronize_session=False)
         # Leaving every album drops the "album" / "album: …" tags too.
@@ -1547,6 +1551,8 @@ def remove_tag(
     tag = db.query(Tag).filter(Tag.owner_id == current_user.id, Tag.name == tag_name).first()
     if tag:
         db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
+        # A tag no photo carries any more disappears with its last photo.
+        prune_unused_tags(db, current_user.id)
         db.commit()
     db.refresh(image)
     return image
