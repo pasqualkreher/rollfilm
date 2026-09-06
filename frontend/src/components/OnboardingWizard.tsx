@@ -266,7 +266,7 @@ export function OnboardingWizard() {
                 </li>
                 <li>
                   <strong>Immich</strong>: optionally connect an Immich photo server in Settings to
-                  upload JPEGs and albums. RAW files are never uploaded.
+                  upload photos and albums. RAW files only if you turn that on in Settings.
                 </li>
               </ol>
             </div>

@@ -105,9 +105,12 @@ def _member_images_query(db: Session, album: Album):
 
 
 def _enqueue_member_uploads(db: Session, immich: ImmichConfig, album: Album) -> None:
-    """Queue an Immich upload of every JPEG member (manual + tag rule), each
-    added to the same-named Immich album."""
-    for image in _member_images_query(db, album).filter(Image.file_type == FileType.jpeg):
+    """Queue an Immich upload of every uploadable member (JPEGs, plus RAWs
+    when the "include RAW" setting is on; manual + tag rule), each added to
+    the same-named Immich album. JPEGs are queued first so a pair's JPEG
+    reaches Immich before its RAW."""
+    members = _member_images_query(db, album).filter(Image.file_type.in_(immich.file_types))
+    for image in sorted(members, key=lambda im: im.file_type == FileType.raw):
         path = resolve_image_path(image)
         if path.exists():
             enqueue_immich_upload(
@@ -292,8 +295,8 @@ def add_images_to_album(
     # was flagged (full mode mirrors every album).
     immich = get_immich_config(db)
     if added and _mirrored(immich, album):
-        for image in added:
-            if image.file_type != FileType.jpeg or image.deleted_at is not None:
+        for image in sorted(added, key=lambda im: im.file_type == FileType.raw):
+            if image.file_type not in immich.file_types or image.deleted_at is not None:
                 continue
             path = resolve_image_path(image)
             if path.exists():

@@ -32,8 +32,8 @@ import logging
 import threading
 import time
 
-from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_
+from sqlalchemy.orm import Query, Session
 
 from app.db.models import Album, AlbumImage, FileType, Image, ImageTag, ImmichPendingDeletion, Tag
 from app.db.session import SessionLocal
@@ -87,6 +87,62 @@ def _note_failure(image_id: str) -> None:
 def _clear_failure(image_id: str) -> None:
     with _backoff_lock:
         _upload_backoff.pop(image_id, None)
+
+
+def immich_flagged(image: Image) -> bool:
+    """Selective-mode eligibility of one photo: flagged itself, or the RAW
+    half of a pair whose JPEG is flagged. A RAW follows its JPEG (see
+    settings_store.IMMICH_INCLUDE_RAW), so the flag on either side of a pair
+    counts for the RAW - but never the other way round, JPEG behavior stays
+    exactly as before."""
+    if image.immich_sync:
+        return True
+    partner = image.paired_image
+    return (
+        image.file_type == FileType.raw and partner is not None and bool(partner.immich_sync)
+    )
+
+
+def with_immich_partners(images: list[Image], config: ImmichConfig) -> list[Image]:
+    """The given photos plus, when RAWs are allowed on Immich, the RAW partner
+    of every JPEG among them. The library grid sends only the visible half of
+    a RAW+JPEG pair, so event-driven uploads (flag toggle, "Add to Immich")
+    would otherwise miss the RAW. Order is preserved and the partner is
+    appended right after its JPEG so the JPEG reaches Immich first."""
+    if not config.include_raw:
+        return list(images)
+    seen = {image.id for image in images}
+    result: list[Image] = []
+    for image in images:
+        result.append(image)
+        partner = image.paired_image
+        if (
+            image.file_type == FileType.jpeg
+            and partner is not None
+            and partner.file_type == FileType.raw
+            and partner.deleted_at is None
+            and partner.id not in seen
+        ):
+            seen.add(partner.id)
+            result.append(partner)
+    return result
+
+
+def _with_raw_partners_of(query: Query, qualifying: Query) -> Query:
+    """Widen an Image query to the RAWs paired with a qualifying JPEG, on top
+    of the qualifying photos themselves. ``qualifying`` selects Image.id."""
+    return query.filter(
+        or_(
+            Image.id.in_(qualifying),
+            and_(Image.file_type == FileType.raw, Image.paired_image_id.in_(qualifying)),
+        )
+    )
+
+
+def _jpegs_first(images: list[Image]) -> list[Image]:
+    """Upload order for a pass: JPEGs before RAWs, so a pair's JPEG shows up
+    on Immich first (stable sort keeps the query order otherwise)."""
+    return sorted(images, key=lambda image: image.file_type == FileType.raw)
 
 
 def immich_album_names(db: Session, image: Image, config: ImmichConfig) -> tuple[str, ...]:
@@ -146,7 +202,10 @@ def _remove_trashed(db: Session, config: ImmichConfig) -> None:
     on disk while they're in the Trash."""
     query = db.query(Image).filter(Image.deleted_at.isnot(None))
     if config.sync_mode == IMMICH_MODE_SELECTIVE:
-        query = query.filter(Image.immich_sync.is_(True))
+        # A RAW uploaded because its JPEG was flagged may carry no flag
+        # itself - it still has to leave Immich together with the JPEG.
+        flagged = db.query(Image.id).filter(Image.immich_sync.is_(True))
+        query = _with_raw_partners_of(query, flagged)
 
     lookup: dict[str, Image] = {}
     for image in query.all():
@@ -154,7 +213,7 @@ def _remove_trashed(db: Session, config: ImmichConfig) -> None:
             _delete_asset_tolerant(config, image.immich_asset_id, image.original_filename)
             image.immich_asset_id = None
             db.commit()
-        elif image.file_type == FileType.jpeg and image.id not in _trash_checked:
+        elif image.file_type in config.file_types and image.id not in _trash_checked:
             path = resolve_image_path(image)
             checksum = sha1_file(path) if path.exists() else None
             if checksum:
@@ -195,14 +254,15 @@ def _process_pending_deletions(db: Session, config: ImmichConfig) -> None:
 
 
 def _upload_missing(db: Session, config: ImmichConfig) -> None:
-    """Upload every JPEG the sync mode says belongs on Immich but that has no
-    recorded asset id yet. Sequential on the loop thread on purpose: passes
-    can't overlap themselves, so a big first pass (full mode over an existing
-    library) just takes a few cycles' worth of time instead of flooding the
-    upload pool with duplicates."""
+    """Upload every photo the sync mode says belongs on Immich (JPEGs, plus
+    RAWs when the "include RAW" option is on) but that has no recorded asset
+    id yet. Sequential on the loop thread on purpose: passes can't overlap
+    themselves, so a big first pass (full mode over an existing library) just
+    takes a few cycles' worth of time instead of flooding the upload pool with
+    duplicates."""
     query = db.query(Image).filter(
         Image.deleted_at.is_(None),
-        Image.file_type == FileType.jpeg,
+        Image.file_type.in_(config.file_types),
         Image.immich_asset_id.is_(None),
         # Virtual copies ("virtual copy") never sync: their bytes are the
         # source's bytes, so Immich would checksum-dedupe them onto the
@@ -218,18 +278,23 @@ def _upload_missing(db: Session, config: ImmichConfig) -> None:
             Album.immich_sync.is_(True), Album.tag_filter.isnot(None)
         ):
             rule_tags.update(album.tag_filter_list)
+        qualifying = db.query(Image.id)
         if rule_tags:
             tagged = (
                 db.query(ImageTag.image_id)
                 .join(Tag, Tag.id == ImageTag.tag_id)
                 .filter(Tag.name.in_(rule_tags))
             )
-            query = query.filter(
+            qualifying = qualifying.filter(
                 or_(Image.immich_sync.is_(True), Image.id.in_(tagged))
             )
         else:
-            query = query.filter(Image.immich_sync.is_(True))
-    for image in query.all():
+            qualifying = qualifying.filter(Image.immich_sync.is_(True))
+        # A RAW follows its JPEG: the RAW half of a pair qualifies whenever
+        # the JPEG does, no matter whether the flag was propagated to it.
+        # (With RAWs excluded above this clause simply never matches.)
+        query = _with_raw_partners_of(query, qualifying)
+    for image in _jpegs_first(query.all()):
         if not _should_attempt(image.id):
             continue
         path = resolve_image_path(image)

@@ -572,7 +572,7 @@ export function Library() {
               {immich?.sync_mode === "selective" && (
                 <label
                   className="filter-field filter-field-inline"
-                  title="Upload the selected photos to Immich in the background. RAW files are never uploaded. Untick to stop syncing them."
+                  title="Upload the selected photos to Immich in the background. RAW files only when “Also upload RAW files” is on in Settings. Untick to stop syncing them."
                 >
                   <input
                     type="checkbox"
@@ -590,7 +590,7 @@ export function Library() {
                   className="btn"
                   onClick={addSelectedToImmich}
                   disabled={immichBusy}
-                  title="Upload the selected photos to your Immich server. RAW files are never uploaded."
+                  title="Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
                 >
                   {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
                 </button>

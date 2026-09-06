@@ -62,7 +62,7 @@ from app.services.filesystem import (
 from app.services.hashing import perceptual_hash
 from app.services.immich_sync import immich_album_names as _immich_album_names
 from app.services.borg_backup import run_backup_soon
-from app.services.immich_sync import run_immich_sync_soon
+from app.services.immich_sync import run_immich_sync_soon, with_immich_partners
 from app.services.settings_store import get_auto_develop_groups, get_immich_config
 from app.workers.queue import (
     enqueue_immich_upload,
@@ -1086,8 +1086,9 @@ def push_images_to_immich(
 ):
     """Push already-imported library photos to Immich. Only works when the
     Immich integration is configured in Settings. Mirrors the import option:
-    JPEGs are uploaded, RAW/other files are skipped. Immich does its own
-    checksum-based dedup, so re-pushing the same photo is safe."""
+    JPEGs are uploaded (and their paired RAWs when the "include RAW" setting
+    is on), other files are skipped. Immich does its own checksum-based
+    dedup, so re-pushing the same photo is safe."""
     immich = get_immich_config(db)
     if immich is None:
         raise HTTPException(
@@ -1096,10 +1097,11 @@ def push_images_to_immich(
         )
 
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    images = with_immich_partners(images, immich)
     uploaded = duplicate = skipped = failed = 0
     for image in images:
-        # Same policy as import: only JPEGs go to Immich, never RAW originals.
-        if image.file_type != FileType.jpeg:
+        # Same policy as import: RAWs only when the Settings option allows it.
+        if image.file_type not in immich.file_types:
             skipped += 1
             continue
         path = resolve_image_path(image)
@@ -1135,7 +1137,11 @@ def push_images_to_immich(
     if duplicate:
         parts.append(f"{duplicate} already on Immich")
     if skipped:
-        parts.append(f"{skipped} skipped (RAW/non-JPEG)")
+        parts.append(
+            f"{skipped} skipped (not uploadable)"
+            if immich.include_raw
+            else f"{skipped} skipped (RAW/non-JPEG)"
+        )
     if failed:
         parts.append(f"{failed} failed")
     return schemas.ImmichPushResult(
@@ -1151,17 +1157,22 @@ def set_images_immich_sync(
     current_user: User = Depends(get_current_user),
 ):
     """Flag/unflag photos for selective Immich sync. Flagging on also queues an
-    immediate background upload of each JPEG (with its flagged albums mirrored);
-    unflagging just clears the flag - photos already on Immich are left there."""
+    immediate background upload of each JPEG (with its flagged albums mirrored),
+    plus its paired RAW when the "include RAW" setting is on; unflagging just
+    clears the flag - photos already on Immich are left there. The flag is
+    kept in step across a RAW+JPEG pair: the library grid only sends the
+    visible half, and a pair is one shot."""
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     for image in images:
         image.immich_sync = payload.enabled
+        if image.paired_image is not None:
+            image.paired_image.immich_sync = payload.enabled
     db.commit()
 
     immich = get_immich_config(db)
     if payload.enabled and immich is not None:
-        for image in images:
-            if image.file_type != FileType.jpeg:
+        for image in with_immich_partners(images, immich):
+            if image.file_type not in immich.file_types:
                 continue
             path = resolve_image_path(image)
             if not path.exists():

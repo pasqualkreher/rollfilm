@@ -1056,27 +1056,27 @@ export function ImportWizard() {
         {immichConfigured && immichMode === "manual" && (
           <label
             className="filter-field filter-field-inline"
-            title="Upload the selected JPEGs to Immich after import. RAW files are never uploaded."
+            title="Upload the selected photos to Immich after import. RAW files only when “Also upload RAW files” is on in Settings."
           >
             <input
               type="checkbox"
               checked={uploadToImmich}
               onChange={(e) => setUploadToImmich(e.target.checked)}
             />{" "}
-            Add to Immich (JPG only)
+            Add to Immich
           </label>
         )}
         {immichConfigured && immichMode === "selective" && (
           <label
             className="filter-field filter-field-inline"
-            title="Mark every imported photo for Immich sync. RAW files are never uploaded. You can also mark single photos in the preview."
+            title="Mark every imported photo for Immich sync. RAW files only when “Also upload RAW files” is on in Settings. You can also mark single photos in the preview."
           >
             <input
               type="checkbox"
               checked={syncAllToImmich}
               onChange={(e) => setSyncAllToImmich(e.target.checked)}
             />{" "}
-            Sync to Immich (JPG only)
+            Sync to Immich
           </label>
         )}
         {immichConfigured && immichMode === "full" && (
@@ -1085,7 +1085,7 @@ export function ImportWizard() {
             style={{ color: "var(--text-muted)" }}
             title="Change this under Settings → Immich integration → Sync mode"
           >
-            🔄 Immich full sync is on. Every imported JPEG is uploaded automatically.
+            🔄 Immich full sync is on. Every imported photo is uploaded automatically.
           </span>
         )}
         <button

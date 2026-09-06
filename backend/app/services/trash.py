@@ -25,6 +25,7 @@ from app.db.models import (
 from app.db.session import SessionLocal
 from app.services import thumbnails
 from app.services.hashing import sha1_file
+from app.services.immich_sync import immich_flagged
 from app.services.membership_tags import sync_membership_tags
 from app.services.settings_store import (
     IMMICH_MODE_FULL,
@@ -85,7 +86,9 @@ def _queue_immich_removals(db: Session, images: list[Image]) -> None:
             # A virtual copy was never uploaded (and hashing "its" file would
             # hash the source's bytes) - nothing to remove over there.
             continue
-        if config.sync_mode == IMMICH_MODE_SELECTIVE and not image.immich_sync:
+        # (A RAW counts as flagged when its paired JPEG is - it was uploaded on
+        # the JPEG's behalf, so it leaves Immich with it too.)
+        if config.sync_mode == IMMICH_MODE_SELECTIVE and not immich_flagged(image):
             continue
         if image.immich_asset_id:
             db.add(
@@ -93,9 +96,11 @@ def _queue_immich_removals(db: Session, images: list[Image]) -> None:
                     asset_id=image.immich_asset_id, filename=image.original_filename
                 )
             )
-        elif image.file_type == FileType.jpeg and image.source_root_id is None:
+        elif image.file_type in config.file_types and image.source_root_id is None:
             # Synced before asset ids were recorded: hash the file while it
             # still exists; the sync loop resolves it against Immich later.
+            # (Only JPEGs can be in that state in practice - RAW uploads have
+            # always recorded their asset id - but the rule stays in one place.)
             checksum = sha1_file(settings.library_root / image.file_path)
             if checksum:
                 db.add(

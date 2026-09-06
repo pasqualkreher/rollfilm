@@ -656,7 +656,8 @@ class StagePathsRequest(BaseModel):
 
 
 class CommitImportRequest(BaseModel):
-    # Also push the selected JPEGs (never RAWs) to Immich after import.
+    # Also push the selected JPEGs (plus RAWs when the "include RAW" Immich
+    # setting is on) to Immich after import.
     upload_to_immich: bool = False
     # Selective sync: flag *every* imported photo for Immich sync (the
     # action-bar checkbox); individual photos can instead be flagged one by
@@ -690,6 +691,9 @@ class ImmichSettingsOut(BaseModel):
     # Master switch: False turns the whole integration off (uploads, sync loop,
     # album mirroring, the import checkboxes) while keeping the config stored.
     enabled: bool
+    # Also upload RAW files (default off: JPEGs only). A RAW follows its paired
+    # JPEG; turning this off leaves already uploaded RAWs on Immich.
+    include_raw: bool
 
 
 class ImmichSettingsUpdate(BaseModel):
@@ -699,6 +703,8 @@ class ImmichSettingsUpdate(BaseModel):
     sync_mode: str | None = None
     # Omit / send null to leave the master switch unchanged.
     enabled: bool | None = None
+    # Omit / send null to leave the RAW option unchanged.
+    include_raw: bool | None = None
 
 
 class RawDecodeSettingsOut(BaseModel):

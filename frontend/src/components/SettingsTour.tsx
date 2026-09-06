@@ -19,7 +19,7 @@ const TOUR_TEXT: Record<string, string> = {
   "Library data":
     "The database and thumbnails live in a hidden .photomanager folder inside the library folder, so the library can be moved as a whole. Exclude it from cloud sync.",
   "Immich integration":
-    "Optional: connect an Immich photo server to upload JPEGs and albums. Skip this if you don't use Immich.",
+    "Optional: connect an Immich photo server to upload photos and albums. Skip this if you don't use Immich.",
   "RAW files":
     "How unedited RAW photos look while browsing: brightened automatically (default) or unprocessed and dark, as in the editor.",
   "Photo editor":

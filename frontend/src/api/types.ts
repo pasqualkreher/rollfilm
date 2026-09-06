@@ -457,6 +457,9 @@ export interface ImmichSettings {
   // Master switch: false turns the whole integration off (uploads, sync loop,
   // import checkboxes) while the stored server/key/mode are kept.
   enabled: boolean;
+  // Also upload RAW files (off by default: JPEGs only). A RAW follows its
+  // paired JPEG; turning this off leaves already uploaded RAWs on Immich.
+  include_raw: boolean;
 }
 
 export interface ImmichTestResult {

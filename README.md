@@ -100,6 +100,7 @@ This is one of the highlights of the project: keep your library mirrored to an e
   - `full` — every photo and album is mirrored automatically
 - **Background reconciliation loop** — runs at startup and every 60 seconds: uploads missing assets, backfills asset IDs (checksum-based, so Immich deduplicates correctly), mirrors app albums to Immich albums, and propagates deletions through a durable pending-deletion queue
 - Per-image exponential backoff on failures; event-driven uploads for instant sync after import
+- **JPEGs by default, RAWs on request** — an off-by-default option also uploads RAW files; a RAW follows its paired JPEG, so a flagged or mirrored shot arrives as JPEG + RAW (ready for stacking in Immich)
 - Immich mirrors only your *visible* library — the local library always remains the recoverable source of truth
 
 ### External sources

@@ -38,6 +38,7 @@ from app.services.exif import (
 )
 from app.services.filesystem import library_relative_path
 from app.services.hashing import perceptual_hash, sha256_file
+from app.services.immich_sync import immich_flagged
 from app.services.pairing import pair_library, pair_siblings
 from app.services.raw import (
     classify_file_type,
@@ -1428,7 +1429,9 @@ def commit_import_session(
         or (immich.sync_mode == IMMICH_MODE_MANUAL and upload_to_immich)
     )
 
-    for image in new_images:
+    # JPEGs first, so a pair's JPEG is queued for Immich before its RAW (the
+    # post-import work below doesn't care about the order).
+    for image in sorted(new_images, key=lambda im: im.file_type == FileType.raw):
         db.refresh(image)
         image_path = settings.library_root / image.file_path
         # Hand over the thumbnail and preview the review already rendered. The
@@ -1444,9 +1447,11 @@ def commit_import_session(
         # handover couldn't cover.
         enqueue_post_import(image.id, image_path)
 
-        # Push only the JPEGs to Immich, never the RAWs.
-        if immich and image.file_type == FileType.jpeg and (
-            upload_all or (selective and image.immich_sync)
+        # Push the JPEGs to Immich - and the RAWs only when the "include RAW"
+        # setting allows it. In selective mode a RAW follows its paired JPEG's
+        # flag (pairing ran above, so paired_image is set by now).
+        if immich and image.file_type in immich.file_types and (
+            upload_all or (selective and immich_flagged(image))
         ):
             enqueue_immich_upload(
                 immich.base_url,

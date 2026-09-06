@@ -181,7 +181,7 @@ export function ImportLightbox({
               {showImmichSync && !isDuplicate ? (
                 <label
                   className="lightbox-import-toggle"
-                  title="Upload this photo to Immich right after import. RAW files are never uploaded."
+                  title="Upload this photo to Immich right after import. RAW files only when “Also upload RAW files” is on in Settings."
                 >
                   <input
                     type="checkbox"

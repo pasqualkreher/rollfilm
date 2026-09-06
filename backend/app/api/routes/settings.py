@@ -17,6 +17,7 @@ from app.services.settings_store import (
     IMMICH_API_KEY,
     IMMICH_BASE_URL,
     IMMICH_ENABLED,
+    IMMICH_INCLUDE_RAW,
     IMMICH_MODE_SELECTIVE,
     IMMICH_MODES,
     IMMICH_SYNC_MODE,
@@ -29,6 +30,7 @@ from app.services.settings_store import (
     get_auto_develop_enabled,
     get_auto_develop_groups,
     get_immich_enabled,
+    get_immich_include_raw,
     get_immich_sync_mode,
     get_immich_sync_paused,
     get_raw_native_decode,
@@ -47,13 +49,15 @@ from app.workers.queue import immich_pending_uploads, immich_upload_history
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
-def _sync_progress(db: Session, mode: str) -> tuple[int, int]:
-    """(synced, total) for the current sync mode: how many of the JPEGs the
+def _sync_progress(db: Session, mode: str, include_raw: bool) -> tuple[int, int]:
+    """(synced, total) for the current sync mode: how many of the photos the
     mode wants on Immich already have a recorded asset id. Full and manual
     count the whole visible library; selective counts flagged photos plus the
-    members of flagged albums (both reach Immich in that mode)."""
+    members of flagged albums (both reach Immich in that mode). RAWs only
+    count when the "include RAW" option is on."""
+    file_types = (FileType.jpeg, FileType.raw) if include_raw else (FileType.jpeg,)
     query = db.query(Image.id).filter(
-        Image.deleted_at.is_(None), Image.file_type == FileType.jpeg
+        Image.deleted_at.is_(None), Image.file_type.in_(file_types)
     )
     if mode == IMMICH_MODE_SELECTIVE:
         flagged_album_members = (
@@ -71,7 +75,7 @@ def _sync_progress(db: Session, mode: str) -> tuple[int, int]:
 
 def _activity(db: Session) -> schemas.ImmichActivityOut:
     mode = get_immich_sync_mode(db)
-    synced, total = _sync_progress(db, mode)
+    synced, total = _sync_progress(db, mode, get_immich_include_raw(db))
     return schemas.ImmichActivityOut(
         pending_uploads=immich_pending_uploads(),
         sync_mode=mode,
@@ -123,6 +127,7 @@ def get_immich_settings(
         api_key_set=bool(api_key),
         sync_mode=get_immich_sync_mode(db),
         enabled=get_immich_enabled(db),
+        include_raw=get_immich_include_raw(db),
     )
 
 
@@ -141,6 +146,8 @@ def update_immich_settings(
         set_setting(db, IMMICH_SYNC_MODE, payload.sync_mode)
     if payload.enabled is not None:
         set_setting(db, IMMICH_ENABLED, "1" if payload.enabled else "0")
+    if payload.include_raw is not None:
+        set_setting(db, IMMICH_INCLUDE_RAW, "1" if payload.include_raw else "0")
     db.commit()
     # A mode/server/switch change may make photos newly syncable (or removable)
     # - reconcile now instead of on the next timed pass. (With the integration
@@ -153,6 +160,7 @@ def update_immich_settings(
         api_key_set=bool(api_key),
         sync_mode=get_immich_sync_mode(db),
         enabled=get_immich_enabled(db),
+        include_raw=get_immich_include_raw(db),
     )
 
 

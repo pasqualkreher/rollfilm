@@ -251,8 +251,9 @@ const CHAPTERS: Chapter[] = [
                 albums and edits — the file in the external folder stays untouched.
               </li>
               <li>
-                <strong>"Also upload to Immich (JPG only)"</strong> pushes the imported JPEGs to
-                your Immich server, if you set one up. RAW files never leave this library.
+                <strong>"Add to Immich"</strong> pushes the imported JPEGs to your Immich server,
+                if you set one up. RAW files go along only when "Also upload RAW files" is on
+                under Settings → Immich integration.
               </li>
             </ul>
           </>
@@ -1270,7 +1271,8 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>Add to Immich</strong> uploads the set's JPEGs to your server (shown only
-                when the integration is configured; RAW files are skipped).
+                when the integration is configured; RAW files only with "Also upload RAW files"
+                on in Settings).
               </li>
               <li>
                 <strong>Remove from selects</strong> empties the tray again. The photos themselves

@@ -217,8 +217,8 @@ export function Selects() {
                   disabled={immichBusy}
                   title={
                     hasSelection
-                      ? "Upload the selected photos to your Immich server. RAW files are never uploaded."
-                      : "Upload all photos in Selects to your Immich server. RAW files are never uploaded."
+                      ? "Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
+                      : "Upload all photos in Selects to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
                   }
                 >
                   {immichBusy

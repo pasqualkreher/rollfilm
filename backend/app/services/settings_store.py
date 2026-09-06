@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.db.models import AppSetting
+from app.db.models import AppSetting, FileType
 
 IMMICH_BASE_URL = "immich_base_url"
 IMMICH_API_KEY = "immich_api_key"
@@ -19,6 +19,11 @@ IMMICH_SYNC_PAUSED = "immich_sync_paused"
 # the single gate every upload/sync/mirror path already checks. Unset counts
 # as enabled so existing configured installations keep behaving as before.
 IMMICH_ENABLED = "immich_enabled"
+# "1" lets RAW files reach Immich too (default: JPEGs only). A RAW follows its
+# paired JPEG: whenever the JPEG is synced, the RAW goes along; an unpaired RAW
+# is treated like a JPEG. Switching this off later leaves already uploaded RAWs
+# on Immich - it only stops new RAW uploads.
+IMMICH_INCLUDE_RAW = "immich_include_raw"
 
 # How photos reach Immich:
 #   manual    - the current workflow: a per-import "upload to Immich" checkbox
@@ -89,11 +94,19 @@ class ImmichConfig:
     base_url: str
     api_key: str
     sync_mode: str = DEFAULT_IMMICH_SYNC_MODE
+    include_raw: bool = False
 
     @property
     def album_sync(self) -> bool:
         """Both selective and full modes mirror app albums into Immich albums."""
         return self.sync_mode in (IMMICH_MODE_SELECTIVE, IMMICH_MODE_FULL)
+
+    @property
+    def file_types(self) -> tuple[FileType, ...]:
+        """Which file types may be uploaded to Immich at all. The single place
+        that knows the rule - every upload/sync/progress path checks
+        ``image.file_type in config.file_types``."""
+        return (FileType.jpeg, FileType.raw) if self.include_raw else (FileType.jpeg,)
 
 
 @dataclass(frozen=True)
@@ -174,6 +187,10 @@ def get_immich_enabled(db: Session) -> bool:
     return get_setting(db, IMMICH_ENABLED) != "0"
 
 
+def get_immich_include_raw(db: Session) -> bool:
+    return get_setting(db, IMMICH_INCLUDE_RAW) == "1"
+
+
 def get_immich_config(db: Session) -> ImmichConfig | None:
     """Both a URL and a key must be present for uploads to be attempted -
     a half-configured integration is treated as "not configured", and so is a
@@ -184,4 +201,9 @@ def get_immich_config(db: Session) -> ImmichConfig | None:
     api_key = (get_setting(db, IMMICH_API_KEY) or "").strip()
     if not base_url or not api_key:
         return None
-    return ImmichConfig(base_url=base_url, api_key=api_key, sync_mode=get_immich_sync_mode(db))
+    return ImmichConfig(
+        base_url=base_url,
+        api_key=api_key,
+        sync_mode=get_immich_sync_mode(db),
+        include_raw=get_immich_include_raw(db),
+    )

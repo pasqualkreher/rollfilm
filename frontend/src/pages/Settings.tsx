@@ -481,6 +481,20 @@ export function Settings() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["immich-settings"] }),
   });
 
+  // "Also upload RAW files". Turning it on wakes the sync loop (server side),
+  // which then uploads the RAWs of everything already synced.
+  const setIncludeRaw = useMutation({
+    mutationFn: (include_raw: boolean) =>
+      api.settings.updateImmich({
+        base_url: (immich?.base_url ?? immichUrl).trim(),
+        include_raw,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["immich-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["immich-activity"] });
+    },
+  });
+
   // Master switch. Server/key/mode stay stored while off, so switching back
   // on restores the integration exactly as it was.
   const setImmichEnabled = useMutation({
@@ -849,8 +863,8 @@ export function Settings() {
 
       <Section {...sectionProps("Immich integration")}>
         <Desc>
-          Immich is a self-hosted photo server. Connect it here to upload JPEGs from this
-          library. RAW files are never uploaded. Create an API key in Immich under{" "}
+          Immich is a self-hosted photo server. Connect it here to upload photos from this
+          library. Create an API key in Immich under{" "}
           <strong>Account Settings → API Keys</strong>.
         </Desc>
         <OptionRow
@@ -934,7 +948,8 @@ export function Settings() {
           <div className="settings-subgroup">
             <h4 className="settings-subhead">Sync mode</h4>
             <Desc>
-              How photos reach Immich. Only JPEGs are uploaded.
+              How photos reach Immich. JPEGs are uploaded; RAW files only with the option
+              below.
             </Desc>
             {(
               [
@@ -951,7 +966,7 @@ export function Settings() {
                 {
                   value: "full",
                   title: "Full sync",
-                  desc: "Every imported JPEG and every album is uploaded and kept up to date.",
+                  desc: "Every imported photo and every album is uploaded and kept up to date.",
                 },
               ] as { value: ImmichSyncMode; title: string; desc: string }[]
             ).map((opt) => (
@@ -968,6 +983,20 @@ export function Settings() {
               />
             ))}
             {setSyncMode.isError && <Note error>{(setSyncMode.error as Error).message}</Note>}
+            <div className="settings-subgroup">
+              <OptionRow
+                type="checkbox"
+                checked={immich?.include_raw ?? false}
+                disabled={setIncludeRaw.isPending}
+                busy={setIncludeRaw.isPending}
+                onChange={(c) => setIncludeRaw.mutate(c)}
+                title="Also upload RAW files"
+                desc="Off: only JPEGs reach Immich. On: RAW files are uploaded too, alongside their JPEG. RAWs already on Immich stay there when you turn this off."
+              />
+              {setIncludeRaw.isError && (
+                <Note error>{(setIncludeRaw.error as Error).message}</Note>
+              )}
+            </div>
             {immichActivity && (
               <div className="settings-subgroup">
                 <h4 className="settings-subhead">Sync status</h4>

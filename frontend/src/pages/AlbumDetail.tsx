@@ -419,7 +419,7 @@ export function AlbumDetail() {
         <label
           className="filter-field filter-field-inline"
           style={{ fontSize: 13, fontWeight: 400 }}
-          title="Keep this album in sync with Immich. RAW files are never uploaded."
+          title="Keep this album in sync with Immich. RAW files only when “Also upload RAW files” is on in Settings."
         >
           <input
             type="checkbox"
@@ -541,7 +541,7 @@ export function AlbumDetail() {
                 className="btn"
                 onClick={addSelectedToImmich}
                 disabled={immichBusy}
-                title="Upload the selected photos to your Immich server. RAW files are never uploaded."
+                title="Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
               >
                 {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
               </button>

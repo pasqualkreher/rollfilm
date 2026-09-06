@@ -893,7 +893,7 @@ export function ImageDetail() {
             {immichConfigured && immich?.sync_mode === "selective" && (
               <label
                 className="filter-field filter-field-inline"
-                title="Upload this photo to Immich automatically. RAW files are never uploaded."
+                title="Upload this photo to Immich automatically. RAW files only when “Also upload RAW files” is on in Settings."
               >
                 <input
                   type="checkbox"
@@ -910,7 +910,7 @@ export function ImageDetail() {
                 className="btn"
                 onClick={addToImmich}
                 disabled={immichBusy}
-                title="Upload this photo to your Immich server. RAW files are never uploaded."
+                title="Upload this photo to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
               >
                 {immichBusy ? "Uploading..." : "Add to Immich"}
               </button>
