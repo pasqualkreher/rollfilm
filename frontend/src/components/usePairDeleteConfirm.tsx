@@ -127,8 +127,8 @@ export function usePairDeleteConfirm() {
             <h3>{baseIds.length === 1 ? "Delete photo" : `Delete ${baseIds.length} photos`}</h3>
             <p className="settings-desc" style={{ margin: 0 }}>
               {baseIds.length === 1
-                ? "This photo has a RAW/JPEG partner. What would you like to delete?"
-                : "Some of these photos have a RAW/JPEG partner. What would you like to delete?"}
+                ? "This photo exists as a RAW and a JPEG file. What would you like to delete?"
+                : "Some of these photos exist as a RAW and a JPEG file. What would you like to delete?"}
             </p>
             {pending.warning && <p className="pair-delete-warning">{pending.warning}</p>}
             <div className="pair-delete-actions">
@@ -138,7 +138,7 @@ export function usePairDeleteConfirm() {
               >
                 {baseIds.length === 1
                   ? "Delete both (RAW + JPEG)"
-                  : `Delete selected + ${partnerIds.length} partner${partnerIds.length === 1 ? "" : "s"}`}
+                  : `Delete selected + ${partnerIds.length} matching file${partnerIds.length === 1 ? "" : "s"}`}
               </button>
               <button className="btn danger" onClick={() => finish(baseIds)}>
                 {baseIds.length === 1 ? "Delete only this file" : "Delete only the selected"}

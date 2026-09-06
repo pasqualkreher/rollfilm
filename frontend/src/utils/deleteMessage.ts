@@ -12,18 +12,18 @@ export function deleteConfirmMessage(
   const referenced = images.length - managed;
   const pairSuffix =
     hiddenPaired > 0
-      ? ` (plus ${hiddenPaired} paired RAW/JPEG file${hiddenPaired === 1 ? "" : "s"})`
+      ? ` (plus ${hiddenPaired} matching RAW/JPEG file${hiddenPaired === 1 ? "" : "s"})`
       : "";
 
   const parts: string[] = [];
   if (managed > 0) {
     parts.push(
-      `${managed} photo(s) will move to the Trash - you can restore them from there later.`
+      `${managed} photo(s) will be moved to the Trash. You can restore them from there later.`
     );
   }
   if (referenced > 0) {
     parts.push(
-      `${referenced} photo(s) from external folders will be removed from the library only - the original files stay untouched on disk.`
+      `${referenced} photo(s) from external sources will be removed from the library only. The original files stay on disk.`
     );
   }
   return `Delete ${images.length - hiddenPaired} photo(s)${pairSuffix}?\n\n${parts.join("\n")}`;
@@ -47,6 +47,6 @@ export function membershipWarning(
         : "a canvas";
   const count = `${usage.in_any} of them ${usage.in_any === 1 ? "is" : "are"} in ${where}`;
   return permanent
-    ? `${count} - deleting for good removes ${usage.in_any === 1 ? "it" : "them"} from there too (a canvas keeps an empty frame).`
-    : `${count} - ${usage.in_any === 1 ? "it disappears" : "they disappear"} from there until restored from the Trash.`;
+    ? `${count}. Deleting permanently also removes ${usage.in_any === 1 ? "it" : "them"} from there.`
+    : `${count}. ${usage.in_any === 1 ? "It disappears" : "They disappear"} from there until restored from the Trash.`;
 }

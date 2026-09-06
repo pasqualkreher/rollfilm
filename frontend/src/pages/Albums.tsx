@@ -152,7 +152,7 @@ function MomentsRow({ items }: { items: SmartAlbumOut[] }) {
               type="button"
               className={`smart-card smart-card--stack${expanded === key ? " open" : ""}`}
               onClick={() => setExpanded(expanded === key ? null : key)}
-              title={`${members.length} ${key} moments - click to ${expanded === key ? "collapse" : "expand"}`}
+              title={`${members.length} ${key} moments. Click to ${expanded === key ? "collapse" : "expand"}.`}
             >
               <CoverMosaic
                 imageIds={members
@@ -237,7 +237,7 @@ function CanvasCard({
         type="button"
         className="canvas-shelf-open"
         onClick={onOpen}
-        title={`Show “${canvas.canvas_name}” as it will print`}
+        title={`Show “${canvas.canvas_name}” in print view`}
       >
         <div
           className="canvas-shelf-paper"
@@ -254,8 +254,8 @@ function CanvasCard({
           canvas off the shelf; the canvas itself is deleted on the Canvas page. */}
       <button
         className="card-remove"
-        title="Take off the Canvas Shelf (the canvas and its versions are kept)"
-        aria-label={`Take “${canvas.canvas_name}” off the Canvas Shelf`}
+        title="Remove from the Canvas Shelf. The canvas and its versions are kept."
+        aria-label={`Remove “${canvas.canvas_name}” from the Canvas Shelf`}
         onClick={(event) => {
           event.stopPropagation();
           onRemove();
@@ -643,10 +643,10 @@ export function Albums() {
   async function removeFromShelf(canvas: CanvasGalleryOut): Promise<boolean> {
     if (
       !(await dialogs.confirm({
-        title: `Take “${canvas.canvas_name}” off the Canvas Shelf?`,
+        title: `Remove “${canvas.canvas_name}” from the Canvas Shelf?`,
         message:
-          "Only the card is removed - the canvas and its saved versions stay untouched. Turn it back on inside the canvas (Versions → Canvas Shelf).",
-        confirmLabel: "Take it off",
+          "Only the card is removed. The canvas and its saved versions are kept. You can show it again inside the canvas under Versions → Canvas Shelf.",
+        confirmLabel: "Remove",
       }))
     )
       return false;
@@ -718,7 +718,7 @@ export function Albums() {
           value={newTags}
           onChange={setNewTags}
           emptyLabel="Tags (optional)"
-          title="Build the album from tags: photos with any selected tag are included automatically"
+          title="Optional: photos with any of the selected tags are added to the album automatically"
         />
         <button className="btn primary" type="submit">
           Create album
@@ -730,7 +730,7 @@ export function Albums() {
         )}
       </form>
 
-      {albums && albums.length === 0 && <div className="empty-state">No albums yet - create one above.</div>}
+      {albums && albums.length === 0 && <div className="empty-state">No albums yet. Create one above.</div>}
 
       <div className="thumbnail-grid">
         {albums?.map((album) => {
@@ -781,7 +781,7 @@ export function Albums() {
               )}
               <button
                 className="card-remove"
-                title="Delete album (photos stay in the library)"
+                title="Delete album. The photos stay in the library."
                 aria-label={`Delete album ${album.name}`}
                 onClick={(e) => {
                   e.preventDefault();
@@ -825,7 +825,7 @@ export function Albums() {
         <section className="canvas-shelf-section">
           <h3 className="smart-row-title">
             Canvas Shelf
-            <span className="smart-row-hint">The saved version of each album’s canvas - click to see it as it will print</span>
+            <span className="smart-row-hint">Saved canvas designs. Click one to see it in print view.</span>
           </h3>
           <div className="canvas-shelf">
             {canvases.map((canvas) => (

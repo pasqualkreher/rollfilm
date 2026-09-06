@@ -23,7 +23,7 @@ export function ViewPrefsControls({ showMerge = true }: { showMerge?: boolean })
           className={`toggle-chip${merge ? " active" : ""}`}
           onClick={() => setMergePairs(!merge)}
           aria-pressed={merge}
-          title="Show each RAW+JPEG pair as one photo. Rating or coloring it applies to the RAW too."
+          title="Show each RAW and JPEG pair as one photo. Ratings and color labels apply to both files."
         >
           {merge && <IconCheck size={12} />} Merge RAW+JPG
         </button>

@@ -16,7 +16,7 @@ const ASPECTS: { key: keyof BulkResetOptions; label: string }[] = [
   { key: "color_label", label: "Colors" },
   { key: "tags", label: "Tags" },
   { key: "albums", label: "Albums" },
-  { key: "develop", label: "Edits (develop)" },
+  { key: "develop", label: "Edits" },
   { key: "geometry", label: "Crop & geometry" },
 ];
 
@@ -91,7 +91,7 @@ export function ResetMenu({ count, onReset }: Props) {
         type="button"
         className="btn"
         onClick={() => setOpen((o) => !o)}
-        title="Reset selected aspects back to the just-imported state"
+        title="Reset the selected properties to their state right after import"
       >
         Reset… <span className="reset-menu-caret"><IconChevronDown size={12} /></span>
       </button>

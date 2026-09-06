@@ -303,7 +303,7 @@ export function AlbumDetail() {
       editedCount > 0 &&
       !(await dialogs.confirm({
         title: `Auto-develop ${selected.size} photo(s)?`,
-        message: `This overwrites the develop settings of ${editedCount} already-edited photo(s).`,
+        message: `This replaces the existing edits of ${editedCount} photo(s).`,
         confirmLabel: "Auto-develop",
       }))
     )
@@ -317,7 +317,7 @@ export function AlbumDetail() {
       );
       setDevelopMsg(
         result.skipped > 0
-          ? `Auto-developed ${result.applied} photo(s); skipped ${result.skipped} (no similar edits to learn from yet).`
+          ? `Auto-developed ${result.applied} photo(s). Skipped ${result.skipped} with no similar edits to learn from.`
           : `Auto-developed ${result.applied} photo(s).`
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -337,7 +337,7 @@ export function AlbumDetail() {
       editedCount > 0 &&
       !(await dialogs.confirm({
         title: `Apply preset “${name}” to ${selected.size} photo(s)?`,
-        message: `This overwrites the develop settings of ${editedCount} already-edited photo(s).`,
+        message: `This replaces the existing edits of ${editedCount} photo(s).`,
         confirmLabel: "Apply preset",
       }))
     )
@@ -419,7 +419,7 @@ export function AlbumDetail() {
         <label
           className="filter-field filter-field-inline"
           style={{ fontSize: 13, fontWeight: 400 }}
-          title="Mirror this album to Immich and upload its JPEGs"
+          title="Keep this album in sync with Immich. RAW files are never uploaded."
         >
           <input
             type="checkbox"
@@ -432,8 +432,8 @@ export function AlbumDetail() {
       {album && (
         <button
           className="btn btn-sm quiet-danger album-bottom-delete"
-          title="Delete this album - its photos stay in the library"
-          aria-label="Delete this album - its photos stay in the library"
+          title="Delete this album. Its photos stay in the library."
+          aria-label="Delete this album"
           onClick={async () => {
             if (
               !(await dialogs.confirm({
@@ -541,7 +541,7 @@ export function AlbumDetail() {
                 className="btn"
                 onClick={addSelectedToImmich}
                 disabled={immichBusy}
-                title="Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
+                title="Upload the selected photos to your Immich server. RAW files are never uploaded."
               >
                 {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
               </button>
@@ -552,7 +552,7 @@ export function AlbumDetail() {
               className="btn"
               onClick={autoDevelopSelected}
               disabled={developBusy}
-              title="Develop each selected photo automatically, learned from your own saved edits"
+              title="Apply automatic edits to the selected photos, based on your own saved edits"
             >
               {developBusy ? "Working…" : "Auto develop"}
             </button>
@@ -561,7 +561,7 @@ export function AlbumDetail() {
                 value=""
                 placeholder="Apply preset…"
                 disabled={developBusy}
-                title="Apply a saved editor preset to the whole selection"
+                title="Apply a saved editor preset to the selected photos"
                 ariaLabel="Apply preset"
                 onChange={(v) => {
                   if (v) applyPresetToSelected(v);

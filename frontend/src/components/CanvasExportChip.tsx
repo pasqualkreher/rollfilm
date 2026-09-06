@@ -45,7 +45,7 @@ export function ExportChip({
     const sources = new Map(images.map((image) => [image.id, exportUrl(image)]));
     const desktop = window.photoManager?.exportPdf;
     if (desktop) {
-      setBusy("Rendering the pages losslessly at full resolution - RAW and edited photos can take a minute each…");
+      setBusy("Rendering the pages at full resolution. RAW and edited photos can take a minute each…");
       try {
         const result = await desktop({
           html: renderLayoutHtml(doc, sheets, sources, { title }),
@@ -80,7 +80,7 @@ export function ExportChip({
         // script) and folded into the file, so it needs nothing but itself.
         const sources = new Map<string, string>();
         for (const [index, image] of images.entries()) {
-          setBusy(`Rendering photo ${index + 1} of ${images.length} losslessly at full resolution…`);
+          setBusy(`Rendering photo ${index + 1} of ${images.length} at full resolution…`);
           sources.set(image.id, await fetchDataUrl(exportUrl(image)));
         }
         setBusy("Writing the file…");
@@ -110,7 +110,7 @@ export function ExportChip({
           </button>
           <span className="canvas-panel-note">
             {sheets.length} {sheets.length === 1 ? "page" : "pages"} at {Math.round(sheets[0].w)}×
-            {Math.round(sheets[0].h)} mm, photos lossless at full resolution, text as real text.
+            {Math.round(sheets[0].h)} mm. Photos at full resolution, text stays selectable.
           </span>
         </div>
         <div className="canvas-panel-row">
@@ -118,14 +118,13 @@ export function ExportChip({
             Web page (HTML)
           </button>
           <span className="canvas-panel-note">
-            One file with the photos inside it, lossless at full resolution - so it can run to
-            hundreds of MB. Opens in any browser and prints from there - and can be handed to a
-            print shop as is.
+            A single file with all photos embedded at full resolution, so it can be very large.
+            Opens in any browser and can be printed from there.
           </span>
         </div>
         {busy && <div className="canvas-panel-note canvas-export-busy">{busy}</div>}
         {error && <div className="canvas-panel-note canvas-export-error">{error}</div>}
-        {empty && <div className="canvas-panel-note">Put something on the canvas first.</div>}
+        {empty && <div className="canvas-panel-note">Place something on the canvas first.</div>}
       </div>
       )}
     </FilterChip>

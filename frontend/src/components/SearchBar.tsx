@@ -50,7 +50,7 @@ export function SearchBar() {
       </span>
       <input
         type="text"
-        placeholder="Search the current view... e.g. 'dog on a beach'"
+        placeholder="Search photos, e.g. 'dog on a beach'"
         value={value}
         onChange={(e) => setValue(e.target.value)}
       />

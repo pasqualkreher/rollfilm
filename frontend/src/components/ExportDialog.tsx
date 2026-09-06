@@ -145,18 +145,18 @@ export function ExportDialog({
               ariaLabel="Export format"
               onChange={(v) => setFormat(v as "jpeg" | "original")}
               options={[
-                { value: "jpeg", label: "JPEG - edits baked in" },
-                { value: "original", label: "Original files - 1:1 with all metadata" },
+                { value: "jpeg", label: "JPEG with edits applied" },
+                { value: "original", label: "Original files, unchanged" },
               ]}
             />
           </div>
           <p className="settings-desc" style={{ margin: 0 }}>
             {format === "original"
-              ? `Downloads the files exactly as they are in your library - RAW stays RAW, every meta tag kept${
-                  imageIds.length === 1 ? "." : " - several photos download as a zip."
+              ? `Downloads the files exactly as they are in your library, with all metadata${
+                  imageIds.length === 1 ? "." : ". Several photos download as a zip."
                 }`
-              : `Exports a JPEG with your edits baked in, rendered at full resolution${
-                  imageIds.length === 1 ? "." : " - several photos download as a zip."
+              : `Exports a JPEG with your edits applied, at full resolution${
+                  imageIds.length === 1 ? "." : ". Several photos download as a zip."
                 }`}
           </p>
           {format === "jpeg" && (
@@ -207,7 +207,7 @@ export function ExportDialog({
                 {progress.total === 1
                   ? "your photo"
                   : `photo ${Math.min(progress.done + 1, progress.total)} of ${progress.total}`}
-                … please keep this window open.
+                … Please keep this window open.
               </span>
             </div>
           )}

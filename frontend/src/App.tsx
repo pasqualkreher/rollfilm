@@ -140,7 +140,7 @@ function ImportNavLink({ onNavigate }: { onNavigate?: () => void }) {
       onClick={onNavigate}
       title={
         !isUploading && sessionId
-          ? "An import batch is staged and waiting for your review"
+          ? "Imported photos are waiting for your review"
           : undefined
       }
     >
@@ -351,7 +351,7 @@ function TopBar() {
           href={`mailto:contact@rollfilm.org?subject=${encodeURIComponent(
             `Rollfilm v${__APP_VERSION__}`
           )}`}
-          title="Contact — report a problem or send an idea"
+          title="Contact: report a problem or send an idea"
           aria-label="Contact"
         >
           <IconMail size={16} />
@@ -378,7 +378,7 @@ function ImmichSyncIndicator() {
       className="nav-task"
       role="status"
       aria-live="polite"
-      title="Photos are uploading to Immich in the background. You'll be asked before quitting would interrupt this."
+      title="Photos are uploading to Immich in the background. You will be asked before quitting interrupts this."
     >
       <span className="spinner" aria-hidden="true" />
       Immich sync: {pending} left

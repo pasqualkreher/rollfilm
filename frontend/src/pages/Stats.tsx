@@ -198,7 +198,7 @@ export function Stats() {
     return (
       <div className="page stats-page">
         <h2 className="section-title">Statistics</h2>
-        <div className="empty-state">Couldn't load the statistics. Try again in a moment.</div>
+        <div className="empty-state">The statistics could not be loaded. Try again in a moment.</div>
       </div>
     );
   }
@@ -238,7 +238,7 @@ export function Stats() {
     <div className="page stats-page">
       <h2 className="section-title">Statistics</h2>
       <p className="stats-page-sub">
-        {s.total_photos.toLocaleString()} photos{span ? `, ${span}` : ""} — shot on{" "}
+        {s.total_photos.toLocaleString()} photos{span ? `, ${span}` : ""}, taken with{" "}
         {s.camera_count.toLocaleString()} {s.camera_count === 1 ? "camera" : "cameras"}.
       </p>
 
@@ -288,10 +288,10 @@ export function Stats() {
         <BarCard
           title="Focal lengths"
           rows={s.focal_buckets}
-          desc="Which ranges you actually shoot (real focal length, as written by the camera)."
+          desc="Which focal length ranges you use most, as recorded by the camera."
         />
         <BarCard title="Ratings" rows={ratings} desc="How your rated photos are distributed." />
-        <BarCard title="Library makeup" rows={makeup} desc="What kind of files your photos are." />
+        <BarCard title="Library makeup" rows={makeup} desc="The file types in your library." />
       </div>
     </div>
   );

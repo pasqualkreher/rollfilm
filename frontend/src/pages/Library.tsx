@@ -376,7 +376,7 @@ export function Library() {
       editedCount > 0 &&
       !(await dialogs.confirm({
         title: `Auto-develop ${selected.size} photo(s)?`,
-        message: `This overwrites the develop settings of ${editedCount} already-edited photo(s).`,
+        message: `This replaces the existing edits of ${editedCount} photo(s).`,
         confirmLabel: "Auto-develop",
       }))
     )
@@ -390,7 +390,7 @@ export function Library() {
       );
       setDevelopMsg(
         result.skipped > 0
-          ? `Auto-developed ${result.applied} photo(s); skipped ${result.skipped} (no similar edits to learn from yet).`
+          ? `Auto-developed ${result.applied} photo(s). Skipped ${result.skipped} with no similar edits to learn from.`
           : `Auto-developed ${result.applied} photo(s).`
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -413,7 +413,7 @@ export function Library() {
       editedCount > 0 &&
       !(await dialogs.confirm({
         title: `Apply preset “${name}” to ${selected.size} photo(s)?`,
-        message: `This overwrites the develop settings of ${editedCount} already-edited photo(s).`,
+        message: `This replaces the existing edits of ${editedCount} photo(s).`,
         confirmLabel: "Apply preset",
       }))
     )
@@ -459,7 +459,7 @@ export function Library() {
       const updated = await api.images.setImmichSync(Array.from(selected), enabled);
       setImmichMsg(
         enabled
-          ? `Flagged ${updated.length} photo(s) for Immich sync — uploading in the background.`
+          ? `${updated.length} photo(s) marked for Immich sync. Uploading in the background.`
           : `Stopped syncing ${updated.length} photo(s) to Immich.`
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -572,7 +572,7 @@ export function Library() {
               {immich?.sync_mode === "selective" && (
                 <label
                   className="filter-field filter-field-inline"
-                  title="Sync the selected photos to Immich — JPEGs upload in the background (RAW files are skipped). Untick to stop syncing them."
+                  title="Upload the selected photos to Immich in the background. RAW files are never uploaded. Untick to stop syncing them."
                 >
                   <input
                     type="checkbox"
@@ -590,7 +590,7 @@ export function Library() {
                   className="btn"
                   onClick={addSelectedToImmich}
                   disabled={immichBusy}
-                  title="Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
+                  title="Upload the selected photos to your Immich server. RAW files are never uploaded."
                 >
                   {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
                 </button>
@@ -602,7 +602,7 @@ export function Library() {
               className="btn"
               onClick={autoDevelopSelected}
               disabled={developBusy}
-              title="Develop each selected photo automatically, learned from your own saved edits"
+              title="Apply automatic edits to the selected photos, based on your own saved edits"
             >
               {developBusy ? "Working…" : "Auto develop"}
             </button>
@@ -611,7 +611,7 @@ export function Library() {
                 value=""
                 placeholder="Apply preset…"
                 disabled={developBusy}
-                title="Apply a saved editor preset to the whole selection"
+                title="Apply a saved editor preset to the selected photos"
                 ariaLabel="Apply preset"
                 onChange={(v) => {
                   if (v) applyPresetToSelected(v);

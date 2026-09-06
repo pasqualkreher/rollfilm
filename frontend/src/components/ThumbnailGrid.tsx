@@ -60,7 +60,7 @@ export function fileTypeBadgeClass(fileType: string, merged: boolean, base = "ba
 // tiles with a small copy glyph inside the file-type badge, so a row of
 // look-alike thumbnails still tells the physical photo from its copies.
 export const VIRTUAL_COPY_TITLE =
-  "Virtual copy — shares its file with the original photo and only carries its own edits";
+  "Virtual copy: uses the original photo's file and only stores its own edits";
 
 export function VirtualCopyMark() {
   return (

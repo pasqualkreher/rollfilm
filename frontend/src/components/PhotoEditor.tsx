@@ -1852,7 +1852,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
     if (
       !(await dialogs.confirm({
         title: `Delete preset “${selectedPreset}”?`,
-        message: "The preset is removed from this machine. Photos it was applied to keep their edits.",
+        message: "The preset is removed from this computer. Photos it was applied to keep their edits.",
         confirmLabel: "Delete preset",
         danger: true,
       }))
@@ -1979,9 +1979,9 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
 
   function autoErrorText(err: unknown): string {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("No edited photos")) return "No edited photos to learn from yet – save an edit or a copy first.";
-    if (msg.includes("Embedding not ready")) return "This photo's analysis isn't ready yet – try again in a moment.";
-    if (msg.includes("affect no settings")) return "Auto develop is set to affect no settings – enable at least one group in Settings.";
+    if (msg.includes("No edited photos")) return "No edited photos to learn from yet. Save an edit or a copy first.";
+    if (msg.includes("Embedding not ready")) return "This photo is still being analyzed. Try again in a moment.";
+    if (msg.includes("affect no settings")) return "Auto develop has no settings enabled. Enable at least one group in Settings.";
     return "Auto develop failed.";
   }
 
@@ -2002,7 +2002,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
     if (dirty) {
       const leave = await dialogs.confirm({
         title: "Discard unsaved edits?",
-        message: "Your changes haven't been saved. Leave the editor without saving?",
+        message: "Your changes have not been saved. Leave the editor without saving?",
         confirmLabel: "Discard edits",
         cancelLabel: "Keep editing",
         danger: true,
@@ -2415,7 +2415,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
       // the pointer is on its row's button, so the hover marking already shows it.
       return true;
     } catch {
-      setSegmentError("Subject detection isn't available – the model may still be downloading.");
+      setSegmentError("Subject detection is not available yet. The model may still be downloading.");
       return false;
     } finally {
       setSegmenting(null);
@@ -3019,7 +3019,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
             <button
               className={`btn btn-sm${brushErase ? " primary" : " ghost"}`}
               onClick={() => setBrushErase((v) => !v)}
-              title="Paint to remove from this mask instead of adding — hold Alt for a single erase stroke"
+              title="Paint to remove from the mask instead of adding. Hold Alt for a single erase stroke."
             >
               {brushErase ? "Erasing" : "Erase"}
             </button>
@@ -3508,7 +3508,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                   aria-pressed={!snapshot}
                   aria-label="Compare with the original"
                   onClick={() => setSnapshot(null)}
-                  title="Compare with the untouched photo"
+                  title="Compare with the original photo"
                 >
                   <IconImage size={14} />
                 </button>
@@ -3519,8 +3519,8 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                   onClick={() => setSnapshot(edits)}
                   title={
                     snapshot
-                      ? "Comparing with the edit as it was when you took the snapshot - click again to snapshot the edit as it is now"
-                      : "Take a snapshot of the edit as it is now, and compare later changes with it instead of the original"
+                      ? "Comparing with the snapshot. Click again to take a new snapshot of the current edit."
+                      : "Take a snapshot of the current edit to compare later changes against it"
                   }
                 >
                   <IconCamera size={14} />
@@ -3555,7 +3555,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                   aria-label="Compare split by a draggable line"
                   disabled={nothingToCompare}
                   onClick={() => setCompareMode((m) => (m === "split" ? "off" : "split"))}
-                  title={`Split: ${baselineLabel.toLowerCase()} and edit on the same picture, divided by a line you can drag`}
+                  title={`Split view: ${baselineLabel.toLowerCase()} and edit in one picture, divided by a draggable line`}
                 >
                   <IconSplit size={14} />
                 </button>
@@ -3565,7 +3565,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                   aria-label="Compare side by side"
                   disabled={nothingToCompare}
                   onClick={() => setCompareMode((m) => (m === "pair" ? "off" : "pair"))}
-                  title={`Side by side: ${baselineLabel.toLowerCase()} and edit as two pictures, nothing hidden`}
+                  title={`Side by side: ${baselineLabel.toLowerCase()} and edit as two pictures`}
                 >
                   <IconSideBySide size={14} />
                 </button>
@@ -3583,8 +3583,8 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
         </h3>
         <p style={{ color: "var(--text-muted)", fontSize: 12, margin: "0 0 4px" }}>
           {docked
-            ? "Non-destructive. The virtual copy keeps itself - the state you leave is the state that's saved."
-            : "Non-destructive. Save updates this photo; Save copy makes a new edited photo."}
+            ? "The original file is never changed. This virtual copy is saved automatically when you close the editor."
+            : "The original file is never changed. Save updates this photo, Save copy creates a new edited photo."}
         </p>
 
         {/* The histogram belongs to the photo, not to any one group of
@@ -3846,7 +3846,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                     return next;
                   })
                 }
-                title="Targeted adjustment: drag on the photo to move the curve at that tone"
+                title="Drag on the photo to adjust the curve at that tone"
               >
                 <IconTarget />
               </button>
@@ -4019,7 +4019,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
         {openGroup === "masks" && (
           <div className="editor-accordion-body">
         <div className="mask-list">
-          {adj.masks.length === 0 && <p className="mask-empty">No masks yet — add one to adjust part of the photo.</p>}
+          {adj.masks.length === 0 && <p className="mask-empty">No masks yet. Add one to adjust only part of the photo.</p>}
           {adj.masks.map((m) => (
             <div
               key={m.id}
@@ -4115,7 +4115,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                 className={`btn btn-sm${showMaskArea ? " primary" : ""}`}
                 aria-pressed={showMaskArea}
                 onClick={() => setShowMaskArea((v) => !v)}
-                title="Mark what this mask covers on the photo while you set it up"
+                title="Highlight the area this mask covers"
               >
                 Show mask
               </button>
@@ -4206,7 +4206,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                     className="btn btn-sm"
                     disabled={segmenting !== null}
                     onClick={() => runSegment(subStr(selSub, "subject") || "sky", selectedMask.id, selSub.id)}
-                    title="Find this subject again in the current frame"
+                    title="Detect this subject again"
                   >
                     {segmenting ? "Finding…" : "Recompute"}
                   </button>
@@ -4228,7 +4228,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                   <button
                     className={`btn btn-sm${colorPickMode ? " primary" : ""}`}
                     onClick={toggleColorPick}
-                    title="Sample the target colour from the image"
+                    title="Pick the target color from the image"
                   >
                     {colorPickMode ? "Click the image…" : "Pick color"}
                   </button>
@@ -4285,11 +4285,11 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                   <button
                     className={`btn btn-sm${selLimit.invert ? " primary" : ""}`}
                     onClick={() => updateLimit({ invert: !selLimit.invert })}
-                    title="Limit to everything OUTSIDE the shape instead"
+                    title="Limit to everything outside the shape instead"
                   >
                     Outside
                   </button>
-                  <button className="btn btn-sm ghost" onClick={removeLimit} title="Drop the limit — the mask applies everywhere it selects again">
+                  <button className="btn btn-sm ghost" onClick={removeLimit} title="Remove the limit. The mask applies to its whole area again.">
                     Remove
                   </button>
                 </div>
@@ -4445,7 +4445,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                 className="btn btn-sm ghost"
                 disabled={autoAdjust.isPending || busy}
                 onClick={() => autoAdjust.mutate()}
-                title="Suggest develop settings learned from your edited photos"
+                title="Suggest settings based on your own edited photos"
               >
                 {autoAdjust.isPending ? "Auto…" : "Auto"}
               </button>
@@ -4476,7 +4476,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                dock (or clicking another frame) saves the current state, so
                Save and Save copy would only be two extra questions. */
             <div className="editor-footer-primary">
-              <span className="editor-autosave-note" title="The virtual copy keeps itself - closing the editor saves the current state">
+              <span className="editor-autosave-note" title="Closing the editor saves the current state">
                 {saveEdits.isPending ? "Saving…" : "Saved when you close"}
               </span>
             </div>
@@ -4486,7 +4486,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
               className="btn"
               onClick={() => setSaveCopyOpen(true)}
               disabled={busy}
-              title="Create a new photo in your library from these edits - a baked JPEG (“edit copy”) or a virtual copy that shares the original's file (“virtual copy”)"
+              title="Create a new photo from these edits: a new JPEG file or a virtual copy that shares the original file"
             >
               {saveCopy.isPending ? "Saving…" : "Save copy"}
             </button>

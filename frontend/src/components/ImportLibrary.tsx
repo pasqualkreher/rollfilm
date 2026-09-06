@@ -92,10 +92,9 @@ export function ImportLibrary() {
     <div className="import-panel">
       <h3 className="import-panel-title">Import a library</h3>
       <p className="import-panel-desc">
-        Took a second drive travelling and worked on the photos there? Point Rollfilm at that
-        library and it folds into this one — <strong>with</strong> the stars, colour labels,
-        edits, tags and albums you gave them on the trip. Nothing here is removed, and the other
-        drive is only read.
+        Merge another Rollfilm library into this one, for example from a second drive. Photos
+        come across <strong>with</strong> their ratings, color labels, edits, tags and albums.
+        Nothing here is removed, and the other library is only read.
       </p>
 
       {running && (
@@ -109,7 +108,7 @@ export function ImportLibrary() {
             {progress!.eta_seconds != null && ` · about ${formatEta(progress!.eta_seconds)} left`}
           </p>
           <p className="import-panel-desc">
-            You can keep using Rollfilm while this runs — browse, edit, even import a card.
+            You can keep using Rollfilm while this runs.
           </p>
           <div className="merge-summary-actions">
             <button className="btn" onClick={cancel}>
@@ -137,8 +136,8 @@ export function ImportLibrary() {
             </li>
             {summary.known_photos > 0 && (
               <li>
-                <strong>{summary.known_photos}</strong> already here — the file stays as it is,
-                only the ratings and edits from the trip come across
+                <strong>{summary.known_photos}</strong> already in this library. Only their ratings
+                and edits are updated.
               </li>
             )}
             {summary.albums > 0 && (
@@ -161,11 +160,11 @@ export function ImportLibrary() {
 
       {!running && result && (
         <p className="status-note">
-          {result.canceled ? "Stopped" : "Done"} — {result.added} photo
+          {result.canceled ? "Stopped" : "Done"}: {result.added} photo
           {result.added === 1 ? "" : "s"} added
-          {result.updated > 0 && `, ${result.updated} updated from the trip`}
+          {result.updated > 0 && `, ${result.updated} updated`}
           {result.skipped > 0 && `, ${result.skipped} skipped (file missing)`}.
-          {result.canceled && " Running it again picks up where this left off."}
+          {result.canceled && " Run it again to continue where it stopped."}
         </p>
       )}
 

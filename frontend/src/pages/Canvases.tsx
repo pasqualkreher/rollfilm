@@ -103,7 +103,7 @@ export function Canvases() {
       !(await dialogs.confirm({
         title: `Delete canvas “${canvas.name}”?`,
         message:
-          "The design and all its saved versions are deleted. The photos stay in your library - including any virtual copies.",
+          "The design and all its saved versions are deleted. The photos stay in your library.",
         confirmLabel: "Delete canvas",
         danger: true,
       }))
@@ -179,7 +179,7 @@ export function Canvases() {
                 </button>
                 <button
                   className="btn btn-sm quiet-danger"
-                  title="Delete this canvas - the photos stay in the library"
+                  title="Delete this canvas. The photos stay in the library."
                   onClick={() => void deleteCanvas(canvas)}
                 >
                   <IconTrash size={13} />

@@ -46,12 +46,12 @@ export function ZoomReadout({ zoom }: { zoom: ZoomReadoutTarget }) {
         <button
           className={percent !== null && percent >= 396 ? "active" : ""}
           onClick={() => zoom.zoomToNative(4)}
-          title="Four times actual pixels - the maximum"
+          title="Four times actual pixels (maximum)"
         >
           400%
         </button>
       </span>
-      <span className="zoom-readout-value" title={`Current zoom, in actual pixels — ${hint}`}>
+      <span className="zoom-readout-value" title={`Current zoom. ${hint.charAt(0).toUpperCase() + hint.slice(1)}`}>
         {percent === null ? "—" : `${percent}%`}
       </span>
     </span>

@@ -48,7 +48,7 @@ function findIncompletePairs(files: StagedFileOut[]): StagedFileOut[] {
 // three steps up front is what makes the staging area self-explanatory:
 // nothing reaches the library until step 3.
 function ImportSteps({ current }: { current: 1 | 2 }) {
-  const steps = ["Choose photos", "Review & select", "In your library"];
+  const steps = ["Choose photos", "Review & select", "Added to library"];
   return (
     <ol className="import-steps" aria-label="Import steps">
       {steps.map((label, i) => {
@@ -281,7 +281,7 @@ export function ImportWizard() {
       const message = err instanceof Error ? err.message : String(err);
       void dialogs.alert({
         title: "Import failed",
-        message: `${message}\n\nYour photos are still in the staging area - nothing was lost. Please try again.`,
+        message: `${message}\n\nYour photos are still in the review area. Nothing was lost. Please try again.`,
       });
     },
   });
@@ -710,16 +710,15 @@ export function ImportWizard() {
     if (missingHalf.length > 0) {
       const one = missingHalf.length === 1;
       const includeBoth = await dialogs.confirm({
-        title: one ? "Import the second file too?" : "Import the second file of each pair?",
+        title: one ? "Import the matching file too?" : "Import the matching files too?",
         message: one
-          ? "Your camera saved this shot twice - once as a RAW, once as a JPEG - and only one " +
-            "of the two is ticked for import. Taking both keeps the pair together as one photo " +
-            "in your library."
-          : `Your camera saved ${missingHalf.length} of these shots twice - once as a RAW, once ` +
-            "as a JPEG - and for each of them only one of the two is ticked for import. Taking " +
-            "both keeps each pair together as one photo in your library.",
+          ? "This photo exists as both a RAW and a JPEG file, but only one of them is selected. " +
+            "Importing both keeps them together as one photo in your library."
+          : `${missingHalf.length} of these photos exist as both a RAW and a JPEG file, but only ` +
+            "one of each is selected. Importing both keeps each pair together as one photo in " +
+            "your library.",
         confirmLabel: "Import both files",
-        cancelLabel: "Import only what I ticked",
+        cancelLabel: "Import only the selected",
       });
       if (includeBoth) {
         await Promise.allSettled(
@@ -765,7 +764,7 @@ export function ImportWizard() {
         return;
       }
       const label = sourceLabelFor(fileList);
-      stageFileList(fileList, label, "No JPEG/RAW photos found in that folder.");
+      stageFileList(fileList, label, "No JPEG or RAW photos found in that folder.");
       target.value = ""; // allow re-picking the same folder later
     }
     el.addEventListener("change", onChange);
@@ -784,7 +783,7 @@ export function ImportWizard() {
       }
       const label =
         fileList.length === 1 ? fileList[0].name : `${fileList.length} selected files`;
-      stageFileList(fileList, label, "None of the selected files are JPEG/RAW photos.");
+      stageFileList(fileList, label, "None of the selected files are JPEG or RAW photos.");
       target.value = ""; // allow re-picking the same files later
     }
     el.addEventListener("change", onChange);
@@ -817,7 +816,7 @@ export function ImportWizard() {
         <ImportSteps current={1} />
         <p className="import-intro">
           <strong>Import</strong> copies photos into your library. An <strong>external source</strong>{" "}
-          just points to a folder and leaves the files where they are.
+          shows photos from a folder without copying them.
         </p>
         <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} />
         <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
@@ -855,7 +854,7 @@ export function ImportWizard() {
                   className="btn"
                   style={{ marginLeft: 8 }}
                   onClick={cancelUpload}
-                  title="Stop and throw away everything copied so far"
+                  title="Stop and discard everything copied so far"
                 >
                   Cancel
                 </button>
@@ -869,9 +868,9 @@ export function ImportWizard() {
                   style={{ marginLeft: 8 }}
                   onClick={stopStaging}
                   disabled={stagingStopped}
-                  title="Stop copying and review the photos that already made it in"
+                  title="Stop copying and review the photos copied so far"
                 >
-                  {stagingStopped ? "Stopping…" : "Stop & keep copied"}
+                  {stagingStopped ? "Stopping…" : "Stop & keep"}
                 </button>
               )}
               {importMenuOpen && !isUploading && (
@@ -936,9 +935,9 @@ export function ImportWizard() {
               <p className="import-panel-desc" style={{ color: "var(--text-muted)" }}>
                 {folderImportActive
                   ? totalFileCount
-                    ? "Photos are being copied — the counter ticks up as each one lands, and they're analyzed (duplicates, previews, metadata) in the background. Nothing is added to your library until you review."
+                    ? "Photos are being copied and analyzed in the background. Nothing is added to your library until you have reviewed them."
                     : "Looking for photos in the selected folder…"
-                  : "Photos are being received — the review screen opens as soon as they're copied, while analysis continues in the background."}
+                  : "Photos are being received. The review screen opens as soon as they are copied."}
               </p>
             )}
             {pickError && <p className="status-note status-note--error">{pickError}</p>}
@@ -961,8 +960,8 @@ export function ImportWizard() {
         <ImportSteps current={2} />
         <h2 className="section-title">Review &amp; choose what to keep</h2>
         <p className="import-review-sub">
-          From <strong>{sourceLabel}</strong> — these photos are staged, nothing is in your
-          library yet. Rate, compare and select, then press "Add to library".
+          From <strong>{sourceLabel}</strong>. Nothing is in your library yet. Rate, compare and
+          select, then click "Add to library".
         </p>
         {/* Background copying still running: photos keep appearing, and the
             commit button below stays disabled until this finishes. */}
@@ -974,14 +973,14 @@ export function ImportWizard() {
                   copyEta != null ? ` · ~${formatEta(copyEta)} left` : ""
                 }`
               : ""}{" "}
-            — you can start reviewing now.
+            You can start reviewing now.
             <button
               className="btn btn-slim"
               onClick={stopStaging}
               disabled={stagingStopped}
-              title="Stop copying and import just the photos that already made it in"
+              title="Stop copying and keep the photos copied so far"
             >
-              {stagingStopped ? "Finishing this batch…" : "Stop copying & keep these"}
+              {stagingStopped ? "Stopping…" : "Stop copying"}
             </button>
           </p>
         )}
@@ -990,9 +989,8 @@ export function ImportWizard() {
             the card. */}
         {stoppedEarly && (
           <p className="import-staging-banner" role="status">
-            Copying stopped — the {(files?.length ?? 0).toLocaleString()} photo(s) that made it in
-            are below. The rest were left where they are; import these, then import the source
-            again to pick up the others.
+            Copying stopped. The {(files?.length ?? 0).toLocaleString()} photo(s) copied so far are
+            shown below. To get the rest, import the same source again later.
           </p>
         )}
         {/* Copying done, background analysis (thumbnails/EXIF/duplicates)
@@ -1003,13 +1001,13 @@ export function ImportWizard() {
             {analysisTotal > 0
               ? `${analysisProcessed.toLocaleString()} / ${analysisTotal.toLocaleString()}`
               : ""}{" "}
-            — you can review now; importing unlocks when the analysis finishes.
+            You can review now. Importing becomes available when the analysis finishes.
           </p>
         )}
         {stagingError && !stagingInBackground && (
           <p className="import-staging-banner import-staging-banner--error" role="alert">
-            Some photos couldn't be loaded ({stagingError}). You can still import the ones that made
-            it in below.
+            Some photos could not be loaded ({stagingError}). You can still import the ones shown
+            below.
           </p>
         )}
       </div>
@@ -1058,7 +1056,7 @@ export function ImportWizard() {
         {immichConfigured && immichMode === "manual" && (
           <label
             className="filter-field filter-field-inline"
-            title="Upload the selected JPEGs to Immich after import (RAW files are never uploaded)"
+            title="Upload the selected JPEGs to Immich after import. RAW files are never uploaded."
           >
             <input
               type="checkbox"
@@ -1071,7 +1069,7 @@ export function ImportWizard() {
         {immichConfigured && immichMode === "selective" && (
           <label
             className="filter-field filter-field-inline"
-            title="Flag every imported photo for Immich sync (JPG only — RAW files are never uploaded). Individual photos can be flagged in the preview instead."
+            title="Mark every imported photo for Immich sync. RAW files are never uploaded. You can also mark single photos in the preview."
           >
             <input
               type="checkbox"
@@ -1087,7 +1085,7 @@ export function ImportWizard() {
             style={{ color: "var(--text-muted)" }}
             title="Change this under Settings → Immich integration → Sync mode"
           >
-            🔄 Immich full sync is on — every imported JPEG uploads automatically.
+            🔄 Immich full sync is on. Every imported JPEG is uploaded automatically.
           </span>
         )}
         <button
@@ -1096,10 +1094,10 @@ export function ImportWizard() {
           disabled={selectedCount === 0 || commit.isPending || stagingInBackground || analysisPending}
           title={
             stagingInBackground
-              ? "Wait until all photos have finished copying before importing"
+              ? "Available when all photos have been copied"
               : analysisPending
-                ? "Wait until all photos have been analyzed (duplicates, metadata) before importing"
-                : "Copies the selected photos into your library"
+                ? "Available when all photos have been analyzed"
+                : "Copy the selected photos into your library"
           }
         >
           {commit.isPending ? (
@@ -1148,14 +1146,14 @@ export function ImportWizard() {
 
       {selectMode && (
         <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
-          Click photos to select them for import - shift-click to tick or clear a whole range, or
-          use the tick box on a day heading to take that day at once. Or open a photo and press
-          Space to toggle it, 0-5 to rate.
+          Click photos to select them. Shift-click selects a range. The checkbox on a day heading
+          selects the whole day. In the preview, Space toggles the selection and 0-5 sets the
+          rating.
         </p>
       )}
 
       {isLoading ? (
-        <div className="empty-state">Processing uploaded files...</div>
+        <div className="empty-state">Processing files…</div>
       ) : (
         /* Day-sectioned with the library's date scrubber on the right edge -
            reviewing a big card scrolls and navigates like the library, at the

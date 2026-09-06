@@ -91,9 +91,9 @@ export function ExternalSources() {
     <section className="import-panel">
       <h3 className="section-title">External photo sources</h3>
       <p className="import-panel-desc">
-        Show photos from a folder — like a NAS or an archive — without copying them in. The files
-        stay where they are, and each source is re-scanned at startup and when you press its
-        scan button.
+        Show photos from a folder, such as a NAS or an archive, without copying them. The files
+        stay where they are. Each source is scanned at startup and when you click its scan
+        button.
       </p>
       <div className="import-toolbar" style={{ flexWrap: "wrap" }}>
         <input
@@ -150,7 +150,7 @@ export function ExternalSources() {
                   {s.scanning && <span className="source-scanning"> · scanning…</span>}
                   {!s.available && (
                     <span className="source-disconnected-note">
-                      {" "}· not connected — its photos are hidden until you reconnect it
+                      {" "}· not connected. Its photos are hidden until you reconnect it.
                     </span>
                   )}
                 </span>
@@ -163,8 +163,8 @@ export function ExternalSources() {
                   aria-label={`Scan "${s.name}" now`}
                   title={
                     !s.available
-                      ? "Reconnect the drive/folder to scan it"
-                      : "Scan now: re-index the whole folder - new files are added and photos you deleted from this source come back"
+                      ? "Connect the drive or folder to scan it"
+                      : "Scan the folder again. New files are added and photos you removed from this source reappear."
                   }
                 >
                   <IconRotate size={14} />
@@ -172,14 +172,14 @@ export function ExternalSources() {
                 <button
                   className="btn btn-sm quiet-danger"
                   aria-label={`Remove source "${s.name}"`}
-                  title="Remove this source - its files stay on disk"
+                  title="Remove this source. Its files stay on disk."
                   onClick={async () => {
                     if (
                       await dialogs.confirm({
                         title: `Remove "${s.name}"?`,
                         message:
-                          `This removes its ${s.image_count} indexed photo(s) from the library. ` +
-                          `The original files on the source are NOT deleted.`,
+                          `This removes its ${s.image_count} photo(s) from the library. ` +
+                          `The original files are not deleted.`,
                         confirmLabel: "Remove",
                         danger: true,
                       })

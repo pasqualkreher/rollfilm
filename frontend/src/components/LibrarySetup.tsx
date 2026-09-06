@@ -32,7 +32,7 @@ export function LibrarySetup() {
         window.location.reload();
         return;
       }
-      setError("The library couldn't be set up. Please try a different folder.");
+      setError("The library could not be set up. Please try a different folder.");
       setBusy(false);
     } catch {
       setError("Something went wrong choosing the folder. Please try again.");
@@ -52,15 +52,15 @@ export function LibrarySetup() {
         />
         <h1 className="setup-title">Welcome to Rollfilm</h1>
         <p className="setup-lead">
-          Let's set up your photo library. Choose a folder to hold your photos — its database and
-          thumbnails live in a hidden <code>.photomanager</code> subfolder inside it, so the whole
-          library is self-contained and travels with the folder.
+          Choose a folder for your photo library. The database and thumbnails are stored in a
+          hidden <code>.photomanager</code> folder inside it, so the library can be moved as a
+          whole.
         </p>
 
         {busy ? (
           <div className="setup-busy">
             <span className="spinner" aria-hidden="true" />
-            <span>Setting up your library… the first launch can take a few minutes.</span>
+            <span>Setting up your library… The first start can take a few minutes.</span>
           </div>
         ) : (
           <button className="btn primary setup-choose" onClick={choose}>
@@ -71,8 +71,8 @@ export function LibrarySetup() {
         {error && <p className="setup-error">{error}</p>}
 
         <p className="setup-note">
-          You can keep more than one library and switch between them later in Settings. If the folder
-          is cloud-synced (iCloud, Dropbox, Nextcloud), exclude <code>.photomanager</code> from
+          You can have more than one library and switch between them in Settings. If the folder is
+          synced to the cloud (iCloud, Dropbox, Nextcloud), exclude <code>.photomanager</code> from
           syncing.
         </p>
       </div>

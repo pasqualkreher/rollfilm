@@ -181,7 +181,7 @@ export function ImportLightbox({
               {showImmichSync && !isDuplicate ? (
                 <label
                   className="lightbox-import-toggle"
-                  title="Flag this photo for Immich sync — it uploads right after import (JPG only; RAW is skipped)"
+                  title="Upload this photo to Immich right after import. RAW files are never uploaded."
                 >
                   <input
                     type="checkbox"
@@ -226,7 +226,7 @@ export function ImportLightbox({
             {loadFailed ? (
               <div className="detail-photo-error">
                 <span className="detail-photo-error-icon" aria-hidden="true"><IconImage size={40} /></span>
-                <p>This photo can't be displayed - the file may be damaged or unreadable.</p>
+                <p>This photo cannot be displayed. The file may be damaged or unreadable.</p>
               </div>
             ) : (
               <img

@@ -133,7 +133,7 @@ export function Trash() {
     if (
       !(await dialogs.confirm({
         title: `Permanently delete ${ids.length} photo(s)?`,
-        message: `This removes the original files from your library - it cannot be undone.${warning ? `\n\n${warning}` : ""}`,
+        message: `The original files are deleted from your library. This cannot be undone.${warning ? `\n\n${warning}` : ""}`,
         confirmLabel: "Delete forever",
         danger: true,
       }))
@@ -158,7 +158,7 @@ export function Trash() {
       <div className="filter-bar">
         <strong>Trash</strong>
         <span style={{ color: "var(--text-muted)" }}>
-          Deleted library photos stay here until you restore them or delete them for good.
+          Deleted photos stay here until you restore them or delete them permanently.
           {trashSettings && trashSettings.retention_days > 0
             ? ` Photos are deleted automatically after ${trashSettings.retention_days} days (change this in Settings).`
             : ""}
@@ -188,8 +188,8 @@ export function Trash() {
             className="btn btn-sm quiet-danger"
             onClick={deleteSelectedForever}
             disabled={selected.size === 0}
-            title="Delete the selected photos forever"
-            aria-label="Delete the selected photos forever"
+            title="Delete the selected photos permanently"
+            aria-label="Delete the selected photos permanently"
           >
             <IconTrash size={15} />
           </button>
@@ -206,7 +206,7 @@ export function Trash() {
           <div className="empty-state">Loading...</div>
         ) : images.length === 0 ? (
           <div className="empty-state">
-            The Trash is empty. Deleted library photos land here and can be restored.
+            The Trash is empty. Deleted photos appear here and can be restored.
           </div>
         ) : (
           <ThumbnailGrid

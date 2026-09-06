@@ -30,7 +30,7 @@ export function isAutoTag(name: string): boolean {
 }
 
 export function autoTagMessage(name: string): string {
-  return `“${name.trim()}” is assigned automatically and can't be added by hand.`;
+  return `“${name.trim()}” is assigned automatically and cannot be added manually.`;
 }
 
-export const AUTO_TAG_CHIP_TITLE = "Assigned automatically — can't be removed";
+export const AUTO_TAG_CHIP_TITLE = "Assigned automatically. Cannot be removed.";

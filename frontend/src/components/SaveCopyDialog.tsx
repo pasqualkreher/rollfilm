@@ -58,7 +58,7 @@ export function SaveCopyDialog({
         <div className="pair-delete-body">
           <h3>Save copy</h3>
           <p className="settings-desc" style={{ margin: 0 }}>
-            The original stays untouched either way.
+            The original photo is not changed.
           </p>
           <div className="copy-kind-choice" role="radiogroup" aria-label="Kind of copy">
             <button
@@ -74,7 +74,7 @@ export function SaveCopyDialog({
               </span>
               <span className="copy-kind-text">
                 <strong>Physical copy</strong>
-                <span>A new JPEG file with your edits baked in, tagged “edit copy”.</span>
+                <span>A new JPEG file with your edits applied, tagged “edit copy”.</span>
               </span>
             </button>
             <button
@@ -91,7 +91,7 @@ export function SaveCopyDialog({
               <span className="copy-kind-text">
                 <strong>Virtual copy</strong>
                 <span>
-                  No new file: a second library entry that shares the original’s file and keeps
+                  No new file. A second entry in the library that uses the original file and keeps
                   its own edits, tagged “virtual copy”.
                 </span>
               </span>
@@ -135,7 +135,7 @@ export function SaveCopyDialog({
           {busy && (
             <span className="status-note" role="status" aria-live="polite">
               {physical
-                ? "Rendering your photo… please keep this window open."
+                ? "Rendering your photo… Please keep this window open."
                 : "Creating the virtual copy…"}
             </span>
           )}

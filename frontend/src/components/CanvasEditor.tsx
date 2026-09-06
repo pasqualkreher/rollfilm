@@ -701,7 +701,7 @@ export function CanvasEditor({
     const name = await dialogs.prompt({
       title: "Save canvas",
       message:
-        "The canvas is kept as a version under this name. The same name replaces that version; a new name keeps the old one as well.",
+        "The canvas is saved as a version with this name. Using an existing name replaces that version. A new name keeps the old version as well.",
       initial: active?.name ?? `Version ${existing.length + 1}`,
       placeholder: "Version name",
       confirmLabel: "Save",
@@ -734,7 +734,7 @@ export function CanvasEditor({
     if (!dirtyRef.current) return true;
     const leave = await dialogs.confirm({
       title: "Discard unsaved changes?",
-      message: "The canvas hasn't been saved since you last changed it. Leave without saving?",
+      message: "Your changes have not been saved. Leave without saving?",
       confirmLabel: "Discard changes",
       cancelLabel: "Keep editing",
       danger: true,
@@ -854,9 +854,9 @@ export function CanvasEditor({
         !(await dialogs.confirm({
           title: `Load “${name}”?`,
           message: dirtyRef.current
-            ? "The canvas becomes this version. Changes you haven't saved are lost - undo right after brings them back."
-            : "The canvas becomes this version. Undo right after brings the current state back.",
-          confirmLabel: "Load it",
+            ? "The canvas is replaced by this version. Unsaved changes are lost. Undo brings them back."
+            : "The canvas is replaced by this version. Undo brings the current state back.",
+          confirmLabel: "Load",
         }))
       )
         return;
@@ -911,9 +911,9 @@ export function CanvasEditor({
     async (versionId: string, name: string) => {
       if (
         !(await dialogs.confirm({
-          title: `Forget version “${name}”?`,
-          message: "Only this saved copy is forgotten - the canvas itself is untouched.",
-          confirmLabel: "Forget it",
+          title: `Delete version “${name}”?`,
+          message: "Only this saved version is deleted. The canvas itself is not changed.",
+          confirmLabel: "Delete version",
           danger: true,
         }))
       )
@@ -1601,8 +1601,8 @@ export function CanvasEditor({
       !(await dialogs.confirm({
         title: `Place ${unplaced.length} more photo${unplaced.length === 1 ? "" : "s"}?`,
         message:
-          "The canvas's photos that aren't on the canvas yet will be flowed into a grid after what you already have. Nothing you placed by hand moves.",
-        confirmLabel: "Place them",
+          "Photos that are not on the canvas yet are arranged in a grid after the existing ones. Nothing you placed by hand moves.",
+        confirmLabel: "Place photos",
       }))
     ) {
       return;
@@ -1633,8 +1633,8 @@ export function CanvasEditor({
       !(await dialogs.confirm({
         title: "Clear the canvas?",
         message:
-          "Every frame and caption you placed is removed and the page starts empty. The photos stay in your library.",
-        confirmLabel: "Clear it",
+          "All placed photos and text are removed and the page starts empty. The photos stay in your library.",
+        confirmLabel: "Clear canvas",
         danger: true,
       }))
     ) {
@@ -1724,10 +1724,10 @@ export function CanvasEditor({
         onIt > 0 &&
         !(await dialogs.confirm({
           title: last ? "Empty this page?" : `Delete page ${page + 1}?`,
-          message: `The ${onIt} thing${onIt === 1 ? "" : "s"} on it ${
+          message: `The ${onIt} item${onIt === 1 ? "" : "s"} on it ${
             onIt === 1 ? "is" : "are"
-          } taken off the canvas. The photos stay in your library.`,
-          confirmLabel: last ? "Empty it" : "Delete the page",
+          } removed from the canvas. The photos stay in your library.`,
+          confirmLabel: last ? "Empty page" : "Delete page",
           danger: true,
         }))
       ) {
@@ -2349,8 +2349,8 @@ export function CanvasEditor({
     const ok = await dialogs.confirm({
       title: copy ? "Remove this copy from the canvas?" : "Remove this photo from the canvas?",
       message: copy
-        ? "The virtual copy is taken off the canvas's photos. It stays in the library, tagged “canvas artifact”, where you can keep or delete it."
-        : "The photo is taken off the canvas's photos. It stays in the library.",
+        ? "The virtual copy is removed from the canvas. It stays in the library, tagged “canvas artifact”, where you can keep or delete it."
+        : "The photo is removed from the canvas. It stays in the library.",
       confirmLabel: "Remove",
       danger: true,
     });
@@ -2814,10 +2814,10 @@ export function CanvasEditor({
               <span>
                 <strong>Moving the photo inside its frame.</strong>{" "}
                 {cropRoom
-                  ? "Drag it to choose what shows. The frame stays where it is."
-                  : "It fills the frame exactly, so zoom it in to give it room to move."}
+                  ? "Drag the photo to choose what is visible. The frame stays where it is."
+                  : "The photo fills the frame exactly. Zoom in to give it room to move."}
               </span>
-              <label className="canvas-crop-zoom" title="How far into the photo the frame is cropped">
+              <label className="canvas-crop-zoom" title="How much the photo is enlarged inside the frame">
                 Zoom
                 <input
                   type="range"
@@ -2829,7 +2829,7 @@ export function CanvasEditor({
                 />
                 {croppingItem.content_scale.toFixed(1)}×
               </label>
-              <button className="btn btn-sm" onClick={resetCrop} title="Centre the photo again at full size">
+              <button className="btn btn-sm" onClick={resetCrop} title="Center the photo at full size">
                 Reset
               </button>
               <button className="btn btn-sm primary" onClick={() => setCroppingId(null)}>
@@ -2855,7 +2855,7 @@ export function CanvasEditor({
             <button
               className="btn btn-sm back-btn"
               onClick={() => void requestExit()}
-              title="Back to your canvases (Esc)"
+              title="Back to the canvas list (Esc)"
             >
               <IconArrowLeft size={14} /> Back
             </button>
@@ -3226,7 +3226,7 @@ function PrintView({
           <IconArrowLeft size={13} /> Back
         </button>
         {sheets.length > 1 ? `Page ${index + 1} of ${sheets.length}` : "Print view"}
-        <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to come back</span>
+        <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to go back</span>
         <span className="canvas-print-export">
           <ExportChip doc={doc} byId={byId} title={title} drop="up" />
         </span>
@@ -3439,7 +3439,7 @@ function PageRail({
                     className="page-card-tool is-danger"
                     title={
                       pageCount === 1
-                        ? "Take everything off this page"
+                        ? "Remove everything from this page"
                         : "Delete this page and everything on it"
                     }
                     aria-label="Delete page"
@@ -3692,7 +3692,7 @@ function SelectionFrame({
               event.stopPropagation();
               onResetRotation();
             }}
-            title="Drag to rotate — hold Shift for 15° steps · double-click to straighten (0°)"
+            title="Drag to rotate. Hold Shift for 15° steps. Double-click to reset to 0°."
           />
         </>
       )}
@@ -3742,14 +3742,14 @@ function VersionsChip({
     <FilterChip
       label={versions.length ? `Versions (${versions.length})` : "Versions"}
       active={doc.show_in_canvases}
-      title="The saved versions of this canvas: load one back, rename it, and choose what the Canvas Shelf shows"
+      title="Saved versions of this canvas: load, rename, and choose which one the Canvas Shelf shows"
     >
       <div className="canvas-panel">
         <div className="canvas-panel-row">
           <span className="canvas-panel-note">
             {versions.length
-              ? "Every Save keeps the canvas as a version under the name you give it. Load one to put it back on the canvas."
-              : "Nothing saved yet. Save (⌘S) keeps the canvas as a version under a name of your choice."}
+              ? "Each save stores the canvas as a named version. Load one to restore it."
+              : "Nothing saved yet. Save (⌘S) stores the canvas as a named version."}
           </span>
         </div>
 
@@ -3790,7 +3790,7 @@ function VersionsChip({
                     className="canvas-version-name"
                     title={
                       version.id === activeVersionId
-                        ? `“${version.name}” is what the Canvas Shelf shows`
+                        ? `“${version.name}” is shown on the Canvas Shelf`
                         : version.name
                     }
                   >
@@ -3800,7 +3800,7 @@ function VersionsChip({
                   <button
                     className="btn btn-sm"
                     onClick={() => onLoad(version.id, version.name)}
-                    title="Put this version back on the canvas"
+                    title="Restore this version"
                   >
                     Load
                   </button>
@@ -3817,7 +3817,7 @@ function VersionsChip({
                   </button>
                   <button
                     className="canvas-version-tool is-danger"
-                    title="Forget this version (the canvas itself is untouched)"
+                    title="Delete this version. The canvas itself is not changed."
                     aria-label={`Delete version ${version.name}`}
                     onClick={() => onRemove(version.id, version.name)}
                   >
@@ -3839,8 +3839,8 @@ function VersionsChip({
           />
           <span className="canvas-panel-note">
             {versions.length === 0
-              ? "Show this canvas on the Canvas Shelf of the Albums page. Save it first - the shelf shows saved versions."
-              : "Show this canvas on the Canvas Shelf of the Albums page. The shelf shows the version marked with a dot - the one last saved or loaded."}
+              ? "Show this canvas on the Canvas Shelf of the Albums page. Save it first, the shelf shows saved versions."
+              : "Show this canvas on the Canvas Shelf of the Albums page. The shelf shows the version marked with a dot, the one last saved or loaded."}
           </span>
         </label>
       </div>
@@ -3938,7 +3938,7 @@ function CanvasToolbar({
           aria-label="Save canvas"
           title={
             dirty
-              ? "Save the canvas as a named version (⌘S) - there are unsaved changes"
+              ? "Save the canvas as a named version (⌘S). There are unsaved changes."
               : "Save the canvas as a named version (⌘S)"
           }
         >
@@ -3954,7 +3954,7 @@ function CanvasToolbar({
             onClick={() => commit(toPages)}
             aria-label="Pages"
             aria-pressed={doc.page_mode === "pages"}
-            title="Pages: a run of sheets of a fixed size, like a photo book. Photos stay inside the page; the rail on the left adds, copies and reorders pages."
+            title="Pages: separate sheets of a fixed size, like a photo book. Use the list on the left to add, copy and reorder pages."
           >
             <IconSheets size={15} />
           </button>
@@ -3963,7 +3963,7 @@ function CanvasToolbar({
             onClick={() => commit(toFreeCanvas)}
             aria-label="Free canvas"
             aria-pressed={doc.page_mode === "infinite"}
-            title="Free canvas: one endless sheet with no edges. Every page is merged into the first."
+            title="Free canvas: one endless sheet without page edges. All pages are merged into one."
           >
             <IconInfinity size={15} />
           </button>
@@ -4032,7 +4032,7 @@ function CanvasToolbar({
                   value={round1(marginOf(doc))}
                   min={0}
                   max={100}
-                  title="Page margin: a hairline guide on every sheet that photos snap to, and where placed photos flow. 0 hides it."
+                  title="Page margin: a guide line on every page that photos snap to. 0 hides it."
                   onChange={(margin_mm) => commit((c) => ({ ...c, margin_mm }))}
                 />
               </div>
@@ -4057,7 +4057,7 @@ function CanvasToolbar({
             onClick={() => commit((c) => ({ ...c, show_page_guide: !c.show_page_guide }), { history: false })}
             aria-label="Page guide"
             aria-pressed={doc.show_page_guide}
-            title="Page guide: outlines the sheets this design would be cut into. Keep your work inside them and switching to Pages moves nothing."
+            title="Page guide: shows the page outlines on the free canvas. Keep your work inside them to switch to Pages without changes."
           >
             <IconGuide size={15} />
           </button>
@@ -4067,7 +4067,7 @@ function CanvasToolbar({
           onClick={() => commit((c) => ({ ...c, show_grid: !c.show_grid }), { history: false })}
           aria-label="Grid"
           aria-pressed={doc.show_grid}
-          title="Grid: show a measuring grid on the paper (it is never printed)"
+          title="Grid: show a measuring grid on the page. It is not printed."
         >
           <IconGrid size={15} />
         </button>
@@ -4085,7 +4085,7 @@ function CanvasToolbar({
           onClick={() => commit((c) => ({ ...c, snap: !c.snap }), { history: false })}
           aria-label="Snap"
           aria-pressed={doc.snap}
-          title="Snap: line edges and centres up with each other and with the page while you drag"
+          title="Snap: align edges and centers with each other and with the page while dragging"
         >
           <IconAnchor size={15} />
         </button>
@@ -4100,9 +4100,9 @@ function CanvasToolbar({
           title={
             unplaced === 0
               ? memberCount === 0
-                ? "This canvas has no photos yet - add some from the library's Select mode"
-                : "Every photo of this canvas is already placed"
-              : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}: flow the canvas's photos that aren't placed yet into a grid after what you have`
+                ? "This canvas has no photos yet. Select photos in the library and choose “Add to canvas”."
+                : "All photos of this canvas are already placed"
+              : `Place ${unplaced} photo${unplaced === 1 ? "" : "s"} that ${unplaced === 1 ? "is" : "are"} not on the canvas yet, arranged in a grid`
           }
         >
           <IconImage size={15} />
@@ -4112,7 +4112,7 @@ function CanvasToolbar({
           className="btn btn-sm canvas-tool"
           onClick={onAddText}
           aria-label="Add text"
-          title="Add text: put a caption or a title on the page"
+          title="Add text: a caption or a title"
         >
           <IconTextT size={15} />
         </button>
@@ -4124,7 +4124,7 @@ function CanvasToolbar({
           onClick={onClear}
           disabled={!canClear}
           aria-label="Clear the canvas"
-          title="Clear the canvas: wipes everything you placed off the page. The photos stay in your library."
+          title="Clear the canvas: remove everything from the page. The photos stay in your library."
         >
           <IconEraser size={15} />
         </button>
@@ -4142,7 +4142,7 @@ function CanvasToolbar({
         <button className="btn btn-sm" onClick={() => onZoom(1 / 1.2)} aria-label="Zoom out" title="Zoom out (−)">
           <IconMinus size={14} />
         </button>
-        <span className="canvas-zoom-readout" title="How big the page is on screen next to its real printed size">
+        <span className="canvas-zoom-readout" title="Size on screen compared to the printed size">
           {Math.round((zoom * 100) / 3.78)}%
         </span>
         <button className="btn btn-sm" onClick={() => onZoom(1.2)} aria-label="Zoom in" title="Zoom in (+)">
@@ -4160,7 +4160,7 @@ function CanvasToolbar({
           className="btn btn-sm canvas-tool"
           onClick={onFitAll}
           aria-label="Fit the whole layout"
-          title="Fit the whole layout in the window - every page at once (press Shift-0)"
+          title="Fit all pages in the window (Shift-0)"
         >
           <IconFitAll size={15} />
         </button>
@@ -4168,7 +4168,7 @@ function CanvasToolbar({
           className="btn btn-sm canvas-tool"
           onClick={onPrint}
           aria-label="Print view"
-          title="Print view: see the pages as they will print - only the paper, filling the window (press P, Escape to come back)"
+          title="Print view: show the pages as they will print (P). Escape to go back."
         >
           <IconPrinter size={15} />
         </button>
@@ -4275,7 +4275,7 @@ function FontEditor({
   return (
     <FilterChip
       label={`${fontLabel(style.font)} · ${WEIGHT_NAMES[weight] ?? weight}${style.italic ? " Italic" : ""}`}
-      title="The typeface, weight and spacing of the selected text"
+      title="Font, weight and spacing of the selected text"
     >
       <div className="canvas-panel canvas-font-panel">
         <div className="canvas-panel-row">
@@ -4361,7 +4361,7 @@ function FontEditor({
             min={0.7}
             max={3}
             unit="×"
-            title="Distance between lines, as a multiple of the type size"
+            title="Line spacing, as a multiple of the font size"
             onChange={(line_height) => onStyle({ line_height })}
           />
         </div>
@@ -4373,7 +4373,7 @@ function FontEditor({
             min={-0.1}
             max={1}
             unit="em"
-            title="Extra space between letters, in fractions of the type size"
+            title="Extra space between letters, relative to the font size"
             onChange={(letter_spacing) => onStyle({ letter_spacing })}
           />
         </div>
@@ -4400,22 +4400,22 @@ function FontEditor({
 function CanvasHelp() {
   const rows: [string, string][] = [
     ["Move a photo", "Drag it"],
-    ["Reorder the pages", "Drag a page up or down the rail on the left"],
-    ["Jump to a page", "Click it in the rail"],
-    ["Find your way back", "Double-click the empty free canvas to jump to your first photo"],
-    ["Design for print", "Turn on the free canvas's page guide and keep your work inside it"],
-    ["Select several", "Drag on empty paper, or Shift-click"],
-    ["Move the view", "Scroll, or drag the scrollbars · hold Space and drag"],
+    ["Reorder pages", "Drag a page up or down in the list on the left"],
+    ["Jump to a page", "Click it in the list on the left"],
+    ["Find your photos again", "Double-click an empty area of the free canvas to jump to the first photo"],
+    ["Design for print", "Turn on the page guide and keep your work inside it"],
+    ["Select several items", "Drag across an empty area, or Shift-click"],
+    ["Move the view", "Scroll or drag the scrollbars · hold Space and drag"],
     ["Zoom the canvas", "+ and − · Alt and scroll · hold Space and scroll"],
     ["Fit one page in the window", "0 (⌘+ and ⌘− zoom the whole app, not the canvas)"],
-    ["Fit the whole layout", "Shift-0 - every page, or the whole free canvas, at once"],
-    ["See it as it will print", "P - only the paper, filling the window · ← → turn the pages · scroll to zoom, drag to move, 0 fits again · Escape to come back"],
-    ["Crop inside a frame", "Double-click the photo, then drag and scroll"],
-    ["Resize", "Drag a corner or a side · a photo keeps its shape while the lock is on, Shift frees it · type a size in the bar"],
-    ["Rotate", "Drag the round handle above it · Shift for 15° steps"],
-    ["Nudge", "Arrow keys · Shift for 10 mm at a time"],
-    ["Stacking order", "⌘] and ⌘[ · add Shift for all the way"],
-    ["Remove from the page", "Delete (the photo stays in the library)"],
+    ["Fit all pages", "Shift-0"],
+    ["Print view", "P · ← → turn pages · scroll to zoom, drag to move, 0 to fit · Escape to go back"],
+    ["Crop inside a frame", "Double-click the photo, then drag to move and scroll to zoom"],
+    ["Resize", "Drag a corner or a side · Shift ignores the aspect lock · or type a size in the bar"],
+    ["Rotate", "Drag the round handle above the item · Shift for 15° steps"],
+    ["Nudge", "Arrow keys · Shift for 10 mm steps"],
+    ["Stacking order", "⌘] and ⌘[ · add Shift to move to the front or back"],
+    ["Remove from the page", "Delete key. The photo stays in the library."],
     ["Undo", "⌘Z · ⌘⇧Z to redo"],
   ];
   return (
@@ -4426,7 +4426,7 @@ function CanvasHelp() {
           <IconHelp size={13} /> How this works
         </>
       }
-      title="Every gesture the canvas understands"
+      title="Mouse and keyboard controls for the canvas"
     >
       <dl className="canvas-help">
         {rows.map(([what, how]) => (
@@ -4492,11 +4492,11 @@ function CanvasActionBar({
   if (selection.length === 0) {
     return (
       <div className="canvas-action-bar canvas-action-bar--hint">
-        Click a photo to select it · drag across the paper to select several · double-click a photo to
-        move it inside its frame ·{" "}
+        Click a photo to select it · drag across the page to select several · double-click a photo
+        to move it inside its frame ·{" "}
         {endless
-          ? "double-click the empty canvas to jump back to your first photo"
-          : "scroll or drag the scrollbars to get around"}
+          ? "double-click an empty area to jump back to your first photo"
+          : "scroll or drag the scrollbars to move around"}
       </div>
     );
   }
@@ -4526,7 +4526,7 @@ function CanvasActionBar({
               title={
                 editingOpen
                   ? "Close the edit panel"
-                  : "Develop this photo in the editor. Works on a virtual copy tagged 'virtual copy' in the library - the original photo is never changed."
+                  : "Edit this photo in the photo editor. The edits are made on a virtual copy, the original photo is never changed."
               }
             >
               <IconPencil size={13} /> <span className="canvas-action-label">Edit photo</span>
@@ -4536,13 +4536,13 @@ function CanvasActionBar({
             <button
               className={`btn btn-sm${cropping ? " primary" : ""}`}
               onClick={cropping ? onEndCrop : onCrop}
-              title="Move and zoom the photo inside its frame without moving the frame"
+              title="Move and zoom the photo inside its frame. The frame stays where it is."
             >
               <IconCrop size={13} /> <span className="canvas-action-label">{cropping ? "Done cropping" : "Crop in frame"}</span>
             </button>
           )}
           {cropping && (
-            <button className="btn btn-sm" onClick={onResetCrop} title="Centre the photo again at full size">
+            <button className="btn btn-sm" onClick={onResetCrop} title="Center the photo at full size">
               <IconRestore size={13} /> <span className="canvas-action-label">Reset crop</span>
             </button>
           )}
@@ -4550,7 +4550,7 @@ function CanvasActionBar({
             <button
               className="btn btn-sm"
               onClick={onFitFrame}
-              title="Reshape the frame to the photo's own proportions, undoing any crop"
+              title="Adjust the frame to the photo's proportions and remove any crop"
             >
               <IconRotate size={13} /> <span className="canvas-action-label">Fit frame to photo</span>
             </button>
@@ -4599,8 +4599,8 @@ function CanvasActionBar({
               aria-pressed={aspectLock}
               title={
                 aspectLock
-                  ? "Shape locked: width and height change together (click to unlock)"
-                  : "Shape free: width and height change separately (click to lock)"
+                  ? "Proportions locked: width and height change together. Click to unlock."
+                  : "Proportions unlocked: width and height change separately. Click to lock."
               }
               onClick={() => onAspectLock(!aspectLock)}
             >
@@ -4620,7 +4620,7 @@ function CanvasActionBar({
               min={0}
               max={50}
               unit="%"
-              title="A border added around the photo, as a share of its shorter edge - like the editor's white frame"
+              title="Border around the photo, as a percentage of its shorter edge"
               onChange={(frame_pct) => onPhotoStyle({ frame_pct })}
             />
           <FilterChip
@@ -4660,8 +4660,8 @@ function CanvasActionBar({
             disabled={selection.length !== 1}
             title={
               selection.length === 1
-                ? "Remember this item's size, rotation and style, to give to others"
-                : "Select one item to copy its settings"
+                ? "Copy this item's size, rotation and style to apply to other items"
+                : "Select a single item to copy its settings"
             }
           >
             <IconDuplicate size={13} /> <span className="canvas-action-label">Copy settings</span>
@@ -4672,7 +4672,7 @@ function CanvasActionBar({
             disabled={!pasteable || !selection.some((item) => item.kind === pasteable)}
             title={
               pasteable
-                ? `Give the selected ${pasteable === "photo" ? "photos" : "text boxes"} the copied size, rotation and style`
+                ? `Apply the copied size, rotation and style to the selected ${pasteable === "photo" ? "photos" : "text boxes"}`
                 : "Copy an item's settings first"
             }
           >
@@ -4701,7 +4701,7 @@ function CanvasActionBar({
             value={textStyle.size_mm ?? 8}
             min={2}
             max={80}
-            title="Type size in millimetres, as it would print"
+            title="Font size in millimeters, as printed"
             onChange={(size_mm) => onStyle({ size_mm })}
           />
           <input
@@ -4759,7 +4759,7 @@ function CanvasActionBar({
       <button
         className="btn btn-sm quiet-danger"
         onClick={onDelete}
-        title="Take these off the page (Delete). The photos stay in the library."
+        title="Remove from the page (Delete). The photos stay in the library."
       >
         <IconTrash size={13} /> <span className="canvas-action-label">Remove from page</span>
       </button>
@@ -4819,7 +4819,7 @@ function Filmstrip({
           role="separator"
           aria-orientation="horizontal"
           aria-label="Filmstrip size"
-          title="Drag up or down to make the photos bigger or smaller (double-click: follow the thumbnail Size again)"
+          title="Drag up or down to change the thumbnail size. Double-click to follow the general thumbnail size again."
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             event.preventDefault();
@@ -4850,7 +4850,7 @@ function Filmstrip({
         <div className="canvas-filmstrip-row">
           {loading && <span className="canvas-filmstrip-note">Loading…</span>}
           {!loading && images.length === 0 && (
-            <span className="canvas-filmstrip-note">No photos yet - select some in the library and choose &ldquo;Add to canvas&rdquo;.</span>
+            <span className="canvas-filmstrip-note">No photos yet. Select photos in the library and choose &ldquo;Add to canvas&rdquo;.</span>
           )}
           {images.map((image) => (
             <span key={image.id} className="canvas-chip-wrap" style={{ width: chipWidth, height: chipHeight }}>
@@ -4859,8 +4859,8 @@ function Filmstrip({
               style={{ width: chipWidth, height: chipHeight }}
               title={
                 placed.has(image.id)
-                  ? `${image.original_filename} — already on the canvas. Click to place another copy.`
-                  : `${image.original_filename} — click to place it, or drag it where you want it`
+                  ? `${image.original_filename}: already on the canvas. Click to place another copy.`
+                  : `${image.original_filename}: click to place it, or drag it onto the page`
               }
               onPointerDown={(event) => {
                 // A press that turns into a drag places the photo where it is
@@ -4886,8 +4886,8 @@ function Filmstrip({
                 className="canvas-chip-remove"
                 title={
                   image.virtual_of_image_id
-                    ? "Remove this copy from the canvas (it stays in the library as a canvas artifact)"
-                    : "Remove from the canvas (the photo stays in the library)"
+                    ? "Remove this copy from the canvas. It stays in the library, tagged “canvas artifact”."
+                    : "Remove from the canvas. The photo stays in the library."
                 }
                 aria-label="Remove from the canvas"
                 onPointerDown={(event) => event.stopPropagation()}
@@ -4914,9 +4914,9 @@ function Filmstrip({
         {open && images.length > 0 && (
           <span className="canvas-filmstrip-note">
             {remaining === 0
-              ? "All of them are on the canvas."
+              ? "All photos are on the canvas."
               : `${remaining} not on the canvas yet.`}{" "}
-            Drag one onto the paper, or click it to drop it on the page you are looking at.
+            Drag a photo onto the page, or click it to place it on the current page.
           </span>
         )}
       </div>

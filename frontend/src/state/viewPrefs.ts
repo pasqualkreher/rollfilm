@@ -64,7 +64,7 @@ const DEFAULT_SLIDESHOW_SECONDS: SlideshowSeconds = 5;
 const STAGE_BG_KEY = "pm.stageBg";
 export const STAGE_BACKGROUNDS = [
   { key: "lightest", label: "Paper", title: "Paper white (6% grey)" },
-  { key: "light", label: "Gray", title: "Gray (25%) - the neutral to judge a photo against" },
+  { key: "light", label: "Gray", title: "Neutral gray (25%), best for judging a photo" },
   { key: "dark", label: "Black", title: "Black" },
 ] as const;
 export type StageBg = (typeof STAGE_BACKGROUNDS)[number]["key"];

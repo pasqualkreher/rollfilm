@@ -202,7 +202,7 @@ function AppearanceSetting() {
       : skinInfo(appearance.resolved).label;
   const sub =
     appearance.mode === "auto"
-      ? `Follows your system — showing ${skinInfo(appearance.resolved).label}`
+      ? `Follows your system, currently ${skinInfo(appearance.resolved).label}`
       : `Always ${appearance.mode}`;
 
   useEffect(() => {
@@ -216,7 +216,7 @@ function AppearanceSetting() {
 
   return (
     <>
-      <Desc>Pick a light skin and a dark one, then choose which is showing.</Desc>
+      <Desc>Choose a light theme and a dark theme, then choose which one is shown.</Desc>
       <div className="theme-summary">
         <ThemeSummaryPreview appearance={appearance} />
         <div className="theme-summary-text">
@@ -336,15 +336,15 @@ const AUTO_DEVELOP_GROUPS: { key: string; label: string; desc: string }[] = [
 // The smart-album sections the Albums page can show. Keys mirror the backend's
 // SMART_ALBUM_SECTION_NAMES (services/settings_store.py).
 const SMART_ALBUM_SECTIONS: { key: string; label: string; desc: string }[] = [
-  { key: "moments", label: "Moments", desc: "Groups of visually similar photos, found and named automatically (beaches, portraits, food, …)." },
-  { key: "tags", label: "Tags", desc: "One album per tag you've given your photos — albums by tag." },
-  { key: "places", label: "Places", desc: "Photos taken close together, named after the nearest town. Uses the radius below." },
-  { key: "countries", label: "Countries", desc: "One album per country, from the photos' GPS position." },
-  { key: "country_years", label: "Countries by year", desc: "The country albums split by year — e.g. “Italy 2024”." },
-  { key: "days", label: "Big days", desc: "Single days with unusually many photos — a trip, a party, an event." },
+  { key: "moments", label: "Moments", desc: "Photos that look alike, grouped and named automatically (beaches, portraits, food, …)." },
+  { key: "tags", label: "Tags", desc: "One album for each tag you have added to your photos." },
+  { key: "places", label: "Places", desc: "Photos taken near each other, named after the nearest town. Uses the radius below." },
+  { key: "countries", label: "Countries", desc: "One album per country, based on the photos' GPS location." },
+  { key: "country_years", label: "Countries by year", desc: "Country albums split by year, for example “Italy 2024”." },
+  { key: "days", label: "Big days", desc: "Days with unusually many photos, such as a trip or an event." },
   { key: "years", label: "Years", desc: "One album per year." },
   { key: "months", label: "Months", desc: "One album per month." },
-  { key: "edits", label: "Edited", desc: "Every photo you edited, plus the saved edit copies." },
+  { key: "edits", label: "Edited", desc: "All photos you have edited, including saved copies." },
 ];
 
 export function Settings() {
@@ -629,23 +629,23 @@ export function Settings() {
       recordRate("pm.est.sync", (Date.now() - ctx.startedAt) / 1000, photoCount ?? 0);
       const parts = [
         `Removed ${result.removed_missing_files} entr${result.removed_missing_files === 1 ? "y" : "ies"} for files no longer on disk`,
-        `cleaned up ${result.orphan_thumbnails_removed} orphaned thumbnail folder(s)`,
+        `removed ${result.orphan_thumbnails_removed} unused thumbnail folder(s)`,
       ];
       if (result.renamed_files_followed > 0) {
         // Worth its own sentence: the photos kept their stars, tags and edits
         // instead of being dropped, which is the opposite of what the first
         // number would otherwise suggest happened to them.
         parts.push(
-          `followed ${result.renamed_files_followed} file(s) you renamed or moved yourself`
+          `followed ${result.renamed_files_followed} renamed or moved file(s)`
         );
       }
       if (result.thumbnails_queued > 0) {
         parts.push(
-          `queued ${result.thumbnails_queued} missing thumbnail(s) for rebuild (finishes in the background)`
+          `${result.thumbnails_queued} missing thumbnail(s) are being rebuilt in the background`
         );
       }
       setSyncResult(
-        `${parts.join(", ")}. Found ${result.untracked_files_found} file(s) in the library folder that aren't imported yet.`
+        `${parts.join(", ")}. Found ${result.untracked_files_found} file(s) in the library folder that are not imported yet.`
       );
       // Stale browser-cached thumbnails (e.g. for re-created derivatives) must
       // reload, not be served from cache.
@@ -662,7 +662,7 @@ export function Settings() {
     onMutate: () => ({ startedAt: Date.now() }),
     onSuccess: (result, _vars, ctx) => {
       recordRate(REBUILD_EST_KEY, (Date.now() - ctx.startedAt) / 1000, result.rebuilt);
-      setRebuildResult(`Rebuilt thumbnails/previews for ${result.rebuilt} photo(s).`);
+      setRebuildResult(`Rebuilt thumbnails and previews for ${result.rebuilt} photo(s).`);
       // Bump the cache-bust so the freshly rebuilt (e.g. higher-res) images
       // actually reload instead of being served from the browser cache.
       bumpThumbnailCacheBust();
@@ -709,16 +709,15 @@ export function Settings() {
       // forcing it on every flip of the switch.
       const est = estimateText(photoCount, REBUILD_EST_KEY);
       const rebuild = await dialogs.confirm({
-        title: "Apply to already-imported photos too?",
+        title: "Apply to existing photos too?",
         message:
-          "The setting is saved: RAWs you import from now on, and the photo editor, use it " +
-          "right away. Thumbnails and previews of the photos already in your library were " +
-          "made with the old setting, so they keep their current look until they are " +
-          "rebuilt. You can do that now" +
+          "The setting is saved. It applies to new imports and to the editor right away. " +
+          "Thumbnails of photos already in your library keep their current look until they " +
+          "are rebuilt. You can rebuild them now" +
           (est ? ` (${est})` : "") +
-          ' or any time later with "Rebuild all thumbnails" under Library maintenance.',
+          ' or later with "Rebuild all thumbnails" under Library maintenance.',
         confirmLabel: "Rebuild thumbnails now",
-        cancelLabel: "Only new imports",
+        cancelLabel: "Later",
       });
       if (rebuild) rebuildThumbnails.mutate();
     },
@@ -729,8 +728,8 @@ export function Settings() {
     onSuccess: (result) => {
       setRepairDatesResult(
         result.fixed > 0
-          ? `Corrected the capture date of ${result.fixed} photo(s) (${result.checked} checked) — the timeline now sorts them onto their real day.`
-          : `All ${result.checked} photo(s) already carry their correct capture date.`
+          ? `Corrected the capture date of ${result.fixed} photo(s) (${result.checked} checked). The timeline now sorts them correctly.`
+          : `All ${result.checked} photo(s) already have the correct capture date.`
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
     },
@@ -766,8 +765,8 @@ export function Settings() {
       title: `Delete the tag “${tag.name}”?`,
       message:
         tag.count === 0
-          ? "No photo outside the Trash carries it. It is removed from any trashed photos too."
-          : `It is taken off ${tag.count === 1 ? "the one photo" : `all ${tag.count} photos`} that carry it (and any in the Trash). The photos stay.`,
+          ? "No photo currently uses it. It is also removed from photos in the Trash."
+          : `The tag is removed from ${tag.count === 1 ? "one photo" : `${tag.count} photos`}, including any in the Trash. The photos themselves are not deleted.`,
       confirmLabel: "Delete tag",
       danger: true,
     });
@@ -799,7 +798,7 @@ export function Settings() {
           className="btn subtle"
           style={{ marginLeft: 12, fontSize: 13 }}
           onClick={() => setTourOpen(true)}
-          title="A quick guided walk through every settings section"
+          title="A short guided tour of the settings"
         >
           Show me around
         </button>
@@ -826,9 +825,8 @@ export function Settings() {
       {desktop?.changeLibraryRoot && (
         <Section {...sectionProps("Library folder")}>
           <Desc>
-            Where your photo files are stored (chosen on first start), together with this library's
-            database, thumbnails and staging. Changing the folder restarts the app and switches to
-            that folder's library; your existing photo files are not moved automatically.
+            The folder that holds your photos and this library's database. Changing it restarts
+            the app and opens the library in the new folder. Your existing photos are not moved.
           </Desc>
           <p className="settings-path">{libraryRoot ?? "…"}</p>
           <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
@@ -840,12 +838,10 @@ export function Settings() {
       {desktop?.getDataRoot && (
         <Section {...sectionProps("Library data")}>
           <Desc>
-            The database, thumbnails and import staging live in a hidden{" "}
-            <code>.photomanager</code> subfolder inside the library folder, so the whole library is
-            self-contained and moves with the folder — point the app at a different library folder
-            to switch to a separate library. If the folder is cloud-synced, exclude{" "}
-            <code>.photomanager</code> from syncing. (The model cache and logs stay in the standard
-            app-data location.)
+            The database, thumbnails and import staging are stored in a hidden{" "}
+            <code>.photomanager</code> folder inside the library folder. The library is
+            self-contained and can be moved as a whole. If the folder is synced to the cloud,
+            exclude <code>.photomanager</code> from syncing.
           </Desc>
           <p className="settings-path">{dataRoot ?? "…"}</p>
         </Section>
@@ -853,9 +849,8 @@ export function Settings() {
 
       <Section {...sectionProps("Immich integration")}>
         <Desc>
-          Add your Immich host and an API key here to enable the{" "}
-          <em>"Also upload to Immich"</em> option during import. Only JPEGs are uploaded - RAW files
-          stay in this library only. Create an API key in Immich under{" "}
+          Immich is a self-hosted photo server. Connect it here to upload JPEGs from this
+          library. RAW files are never uploaded. Create an API key in Immich under{" "}
           <strong>Account Settings → API Keys</strong>.
         </Desc>
         <OptionRow
@@ -865,7 +860,7 @@ export function Settings() {
           busy={setImmichEnabled.isPending}
           onChange={(c) => setImmichEnabled.mutate(c)}
           title="Enable Immich integration"
-          desc="Off = nothing is uploaded or synced and the Immich options disappear from import and albums. Your server, API key and sync mode stay saved."
+          desc="When off, nothing is uploaded and the Immich options are hidden. Your server, API key and sync mode stay saved."
         />
         {setImmichEnabled.isError && (
           <Note error>{(setImmichEnabled.error as Error).message}</Note>
@@ -886,7 +881,7 @@ export function Settings() {
           autoComplete="new-password"
           label={
             <>
-              API key {immich?.api_key_set && <em>(a key is saved - leave blank to keep it)</em>}
+              API key {immich?.api_key_set && <em>(a key is saved, leave blank to keep it)</em>}
             </>
           }
           placeholder={immich?.api_key_set ? "••••••••  (unchanged)" : "Paste your Immich API key"}
@@ -939,25 +934,24 @@ export function Settings() {
           <div className="settings-subgroup">
             <h4 className="settings-subhead">Sync mode</h4>
             <Desc>
-              How photos reach Immich. Only JPEGs are uploaded — RAW files always stay in this
-              library only.
+              How photos reach Immich. Only JPEGs are uploaded.
             </Desc>
             {(
               [
                 {
                   value: "manual",
                   title: "Ask on import",
-                  desc: "Show the “Also upload to Immich” checkbox on import, plus the manual “Add to Immich” buttons. Nothing is synced automatically.",
+                  desc: "Nothing is uploaded automatically. You choose on import, or use “Add to Immich” on selected photos.",
                 },
                 {
                   value: "selective",
                   title: "Selective sync",
-                  desc: "Sync only the photos and albums you flag with “Sync to Immich”. Flagged items upload automatically and albums are mirrored.",
+                  desc: "Only photos and albums marked “Sync to Immich” are uploaded and kept up to date.",
                 },
                 {
                   value: "full",
                   title: "Full sync",
-                  desc: "Automatically upload every imported JPEG and mirror every album to Immich.",
+                  desc: "Every imported JPEG and every album is uploaded and kept up to date.",
                 },
               ] as { value: ImmichSyncMode; title: string; desc: string }[]
             ).map((opt) => (
@@ -1003,7 +997,7 @@ export function Settings() {
                     busy={setImmichPaused.isPending}
                     onChange={(c) => setImmichPaused.mutate(c)}
                     title="Pause automatic sync"
-                    desc="Stops background uploads until you resume — useful on mobile data or another metered connection. Manual “Add to Immich” still works, and resuming catches up automatically."
+                    desc="Stops background uploads until you resume, for example on a metered connection. “Add to Immich” still works. Pending uploads continue when you resume."
                   />
                 </div>
                 {setImmichPaused.isError && (
@@ -1037,17 +1031,14 @@ export function Settings() {
 
       <Section {...sectionProps("RAW files")}>
         <Desc>
-          RAW files come off the sensor looking flat and often too dark, so they normally need a
-          starting correction before they look right on screen.
+          RAW files usually look flat and dark until they are processed.
         </Desc>
         <Desc>
-          <strong>Off (default):</strong> every RAW gets that starting correction automatically —
-          dark shots are brightened to a normal level, and bright areas like sky, snow or sunlit skin
-          are held back so they don't turn into flat white patches. Photos that are already well
-          exposed stay as they are.
+          <strong>Off (default):</strong> RAW photos are brightened automatically so they look
+          normal while browsing. Bright areas such as sky or snow are preserved.
           <br />
-          <strong>On:</strong> no correction at all. You see the RAW exactly as the camera recorded
-          it — usually darker and flatter — and set the look yourself in the editor.
+          <strong>On:</strong> RAW photos are shown exactly as the camera recorded them, usually
+          darker and flatter. You set the look yourself in the editor.
         </Desc>
         <OptionRow
           type="checkbox"
@@ -1055,40 +1046,39 @@ export function Settings() {
           disabled={rawDecode === undefined || setRawDecode.isPending || rebuildThumbnails.isPending}
           busy={setRawDecode.isPending || rebuildThumbnails.isPending}
           onChange={(c) => setRawDecode.mutate(c)}
-          title="Load RAWs without processing (native exposure)"
+          title="Show RAW files unprocessed"
           desc={
             rebuildThumbnails.isPending
-              ? `Rebuilding thumbnails so the change applies to your library… ${rebuildProgressLine()}`
-              : "Applies to RAWs you import from now on and to the editor right away. For " +
-                "photos already in your library you'll be asked whether to rebuild their " +
-                "thumbnails/previews, which can take a while."
+              ? `Rebuilding thumbnails so the change applies to existing photos… ${rebuildProgressLine()}`
+              : "Applies to new imports and to the editor right away. For photos already in " +
+                "your library you will be asked whether to rebuild their thumbnails, which " +
+                "can take a while."
           }
         />
       </Section>
 
       <Section {...sectionProps("Photo editor")}>
         <Desc>
-          <strong>Save copy</strong> asks whether you want a physical copy (your edits baked into
-          a new JPEG in your library) or a virtual copy (a second entry that shares the original's
-          file and keeps its own edits). The original is left untouched either way. A physical copy
-          is normally made at full JPEG quality and the photo's full size.
+          <strong>Save copy</strong> in the editor creates a new photo from your edits and leaves
+          the original unchanged. A physical copy is a new JPEG file with the edits applied. A
+          virtual copy shares the original file and only stores its own edits. Physical copies are
+          made at full quality and full size.
         </Desc>
         <OptionRow
           type="checkbox"
           checked={askSaveCopyOptions}
           onChange={setAskSaveCopyOptions}
           title="Ask for quality and size before saving a copy"
-          desc="With this on, choosing the physical copy also shows JPEG quality and size controls, so you can turn the quality down or cap the long edge - useful when the copy is meant to be a small file rather than a keeper."
+          desc="Shows JPEG quality and size controls when saving a physical copy, so you can make a smaller file."
         />
       </Section>
 
       <Section {...sectionProps("Auto develop")}>
         <Desc>
-          Adds an <strong>Auto</strong> button to the photo editor that suggests develop settings
-          learned from your own editing: it finds the photos most similar to the one you're editing
-          among those you've saved (in place or as a copy) and blends the settings you chose for
-          them. The more photos you edit, the better the suggestions get. Suggestions only fill the
-          sliders — nothing is applied to your photo until you save.
+          Adds an <strong>Auto</strong> button to the photo editor. It suggests editing settings
+          based on photos you have already edited and saved, by finding the most similar ones and
+          blending their settings. The more you edit, the better the suggestions get. Nothing is
+          applied until you save.
         </Desc>
         <OptionRow
           type="checkbox"
@@ -1101,14 +1091,14 @@ export function Settings() {
             autoDevelop === undefined
               ? "…"
               : autoDevelop.example_count === 0
-                ? "No edited photos yet — save an edit (or an edited copy) and Auto can start learning from it."
+                ? "No edited photos yet. Save an edit or an edited copy and Auto starts learning from it."
                 : `Currently learning from ${autoDevelop.example_count} edited photo${autoDevelop.example_count === 1 ? "" : "s"} in your library.`
           }
         />
         {autoDevelop?.enabled && (
           <div className="settings-subgroup settings-subgroup--indent">
             <Desc>
-              Which settings Auto is allowed to change — unchecked groups keep their current values:
+              Settings that Auto may change. Unchecked groups are left as they are:
             </Desc>
             {AUTO_DEVELOP_GROUPS.map((g) => (
               <OptionRow
@@ -1123,7 +1113,7 @@ export function Settings() {
               />
             ))}
             {autoDevelop.enabled_groups.length === 0 && (
-              <Note error>All groups are unchecked — the Auto button won't change anything.</Note>
+              <Note error>All groups are unchecked, so the Auto button changes nothing.</Note>
             )}
           </div>
         )}
@@ -1132,9 +1122,9 @@ export function Settings() {
 
       <Section {...sectionProps("Smart albums")}>
         <Desc>
-          The Albums page can show automatic collections above your own albums — visually similar
-          photos, places, countries and time groups. They're computed from your library and update
-          on their own; nothing is stored as a real album. Pick which sections you want:
+          The Albums page can show automatic collections above your own albums: similar photos,
+          places, countries and time periods. They are generated from your library and update on
+          their own. Choose which sections to show:
         </Desc>
         {SMART_ALBUM_SECTIONS.map((s) => (
           <div key={s.key}>
@@ -1183,7 +1173,7 @@ export function Settings() {
                   {radiusSaved && <span className="status-note">Saved.</span>}
                 </div>
                 <Note>
-                  Photos within this distance of each other form one place — small values separate
+                  Photos within this distance of each other form one place. Small values separate
                   neighboring towns, large values group whole regions.
                 </Note>
               </div>
@@ -1191,17 +1181,16 @@ export function Settings() {
           </div>
         ))}
         {smartAlbumSettings?.sections.length === 0 && (
-          <Note>All sections are off — the Albums page shows only your own albums.</Note>
+          <Note>All sections are off. The Albums page shows only your own albums.</Note>
         )}
         {saveSmartAlbums.isError && <Note error>{(saveSmartAlbums.error as Error).message}</Note>}
       </Section>
 
       <Section {...sectionProps("Tags")}>
         <Desc>
-          The tags you have given your photos, with how many carry each. Deleting one takes it off
-          every photo at once. Tags the app hands out itself (edit, virtual copy, album, canvas…)
-          are not listed — they follow the photos on their own, and a tag no photo carries any more
-          disappears by itself.
+          The tags you have added to your photos, with the number of photos for each. Deleting a
+          tag removes it from every photo. Tags the app assigns itself (edit copy, virtual copy, …)
+          are not listed and are managed automatically.
         </Desc>
         {!tagUsage ? (
           <Desc>Loading…</Desc>
@@ -1231,10 +1220,10 @@ export function Settings() {
 
       <Section {...sectionProps("Trash")}>
         <Desc>
-          Deleted library photos stay in the Trash and can be restored. On every app start, photos
-          that have been in the Trash longer than this are deleted for good, in the background.
-          Set 0 to keep them forever. (Photos from external sources never go to the Trash -
-          deleting one only removes it from the catalog, the file on the source is untouched.)
+          Deleted photos are moved to the Trash and can be restored from there. Photos that have
+          been in the Trash longer than this are deleted permanently when the app starts. Set 0 to
+          keep them forever. Photos from external sources are never moved to the Trash: deleting
+          one only removes it from the library, the file stays on the source.
         </Desc>
         <div className="import-toolbar" style={{ alignItems: "center" }}>
           <label className="filter-field">
@@ -1261,7 +1250,7 @@ export function Settings() {
           </button>
           {trashSaved && (
             <span className="status-note">
-              Saved{parseInt(trashDays, 10) === 0 ? " — photos are kept forever." : "."}
+              Saved{parseInt(trashDays, 10) === 0 ? ". Photos are kept forever." : "."}
             </span>
           )}
         </div>
@@ -1271,16 +1260,15 @@ export function Settings() {
           checked={askDeletePartner}
           onChange={setAskDeletePartner}
           title="Ask what to delete for RAW + JPEG pairs"
-          desc="A RAW and its matching JPEG are normally deleted together. With this on, deleting one first asks whether to remove only that file or the whole pair."
+          desc="A RAW file and its matching JPEG are normally deleted together. With this on, you are asked whether to delete only the selected file or both."
         />
       </Section>
 
       <Section {...sectionProps("Library maintenance")}>
         <div className="settings-block">
           <Desc>
-            The library folder on disk is the source of truth. This removes database entries whose
-            files are no longer there (e.g. deleted outside the app), cleans up thumbnails that
-            belong to no photo anymore, and regenerates missing thumbnails in the background.
+            Compares the database with the library folder on disk. Removes entries whose files are
+            gone, cleans up unused thumbnails and regenerates missing ones in the background.
           </Desc>
           <div className="maintenance-run">
             <button className="btn" onClick={() => sync.mutate()} disabled={sync.isPending}>
@@ -1308,10 +1296,9 @@ export function Settings() {
 
         <div className="settings-block">
           <Desc>
-            Emergency reset: rebuilds <em>every</em> cached thumbnail/preview from the original
-            files, which can take a long time. Normally "Sync database to library" above is all you
-            need - use this only if thumbnails still look wrong afterwards (e.g. after an image
-            rendering fix).
+            Rebuilds <em>every</em> thumbnail and preview from the original files. This can take a
+            long time. Normally "Sync database to library" is enough. Use this only if thumbnails
+            still look wrong afterwards.
           </Desc>
           <div className="maintenance-run">
             <button
@@ -1341,10 +1328,9 @@ export function Settings() {
 
         <div className="settings-block">
           <Desc>
-            Photos imported by older versions could end up sorted by their import moment instead of
-            when they were taken (their capture date wasn't read from every EXIF variant yet). This
-            re-reads the capture date from every photo's file and fixes the stored one where it
-            differs - nothing else about the photos changes.
+            Photos imported with older versions may be sorted by import date instead of capture
+            date. This re-reads the capture date from every photo file and corrects it where
+            needed. Nothing else changes.
           </Desc>
           <button className="btn" onClick={() => repairDates.mutate()} disabled={repairDates.isPending}>
             {repairDates.isPending ? (
@@ -1363,10 +1349,8 @@ export function Settings() {
       <Section {...sectionProps("Backup & restore")}>
         <div className="settings-block">
           <Desc>
-            Download a backup of your managed library: every imported photo file plus its ratings,
-            color labels, albums, and edits. Photos from external sources are not bundled - they stay
-            on their own storage and can be re-indexed by re-adding the source. Tags are not included
-            in the backup.
+            Download a backup of your library: every imported photo file plus ratings, color labels,
+            albums and edits. Photos from external sources and tags are not included.
           </Desc>
           <a className="btn primary" href={api.maintenance.backupUrl()} style={{ display: "inline-block" }}>
             Download backup
@@ -1381,17 +1365,16 @@ export function Settings() {
               <a href="https://www.borgbackup.org" target="_blank" rel="noreferrer">
                 Borg
               </a>{" "}
-              repository. Borg is deduplicating, so each run stores only what changed since the last
-              one, and the backup updates automatically after imports and edits (and at least once a
-              day). The <em>repository address</em> can be a local folder, a mounted NAS path, or a
-              remote <code>user@host:/path</code> reached over SSH. Only your managed library and its
-              database are backed up — photos from external sources stay on their own storage.
+              repository. Borg stores only what changed since the last run. The backup runs
+              automatically after imports and edits, and at least once a day. The repository can be
+              a local folder, a NAS path or a remote <code>user@host:/path</code> over SSH. Photos
+              from external sources are not included.
             </Desc>
 
             {borg && !borg.available && (
               <Note error>
-                Borg isn't installed on this machine. Install it, then reload — on macOS:{" "}
-                <code>brew install borgbackup</code>. Backups stay off until Borg is available.
+                Borg is not installed on this machine. Install it and reload the app. On macOS:{" "}
+                <code>brew install borgbackup</code>.
               </Note>
             )}
 
@@ -1411,9 +1394,9 @@ export function Settings() {
                 <>
                   Passphrase{" "}
                   {borg?.passphrase_set ? (
-                    <em>(a passphrase is saved — leave blank to keep it)</em>
+                    <em>(a passphrase is saved, leave blank to keep it)</em>
                   ) : (
-                    <em>(encrypts the repository; leave blank for an unencrypted repo)</em>
+                    <em>(optional, encrypts the repository)</em>
                   )}
                 </>
               }
@@ -1491,7 +1474,7 @@ export function Settings() {
                 busy={saveBorg.isPending}
                 onChange={(checked) => saveBorg.mutate(checked)}
                 title="Back up automatically"
-                desc="Runs after imports and edits (debounced), and at least once a day, while the app is open."
+                desc="Runs after imports and edits, and at least once a day, while the app is open."
               />
             )}
 
@@ -1519,8 +1502,7 @@ export function Settings() {
         <div className="settings-block">
           <Desc>
             Restoring a backup <strong>replaces everything currently in your library</strong> with
-            the backup's contents. Files on external sources are not touched; their catalog entries
-            are rebuilt on the next scan.
+            the backup's contents. Files on external sources are not affected.
           </Desc>
           <input
             ref={restoreFileInputRef}

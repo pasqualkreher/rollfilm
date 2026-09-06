@@ -13,28 +13,28 @@ export const SETTINGS_TOUR_KEY = "pm:settings-tour";
 // entry here still gets a stop, just with a generic line.
 const TOUR_TEXT: Record<string, string> = {
   Appearance:
-    "Pick a colour skin or follow your system's light/dark mode. Purely cosmetic - change it whenever you like.",
+    "Choose a color theme or follow your system's light/dark mode. You can change this anytime.",
   "Library folder":
-    "Where your photo files live. Point the app at a different folder anytime to switch to a separate library - for example one for work and one for personal.",
+    "The folder that holds your photos. Choose a different folder to switch libraries, for example one for work and one for private photos.",
   "Library data":
-    "The library's database and thumbnails sit in a hidden .photomanager subfolder inside the library folder, so the whole library travels with the folder. Exclude it from cloud sync if the folder is synced.",
+    "The database and thumbnails live in a hidden .photomanager folder inside the library folder, so the library can be moved as a whole. Exclude it from cloud sync.",
   "Immich integration":
-    "Optional: connect an Immich server to upload JPEGs and mirror albums, manually or automatically. Skip this if you don't use Immich.",
+    "Optional: connect an Immich photo server to upload JPEGs and albums. Skip this if you don't use Immich.",
   "RAW files":
-    "How unedited RAW photos look while browsing: automatically brightened to a normal exposure (default), or native and dark with all their headroom, like in the editor.",
+    "How unedited RAW photos look while browsing: brightened automatically (default) or unprocessed and dark, as in the editor.",
   "Photo editor":
-    "Save copy in the editor makes a new, edited JPEG at full quality in one click. Turn this on if you'd rather be asked for quality and size each time.",
+    "Save copy in the editor creates a new edited JPEG at full quality in one click. Turn this on to be asked for quality and size each time.",
   "Auto develop":
-    "Adds an Auto button to the editor that suggests develop settings learned from your own saved edits. The more you edit, the better it gets.",
+    "Adds an Auto button to the editor that suggests settings based on your own saved edits. The more you edit, the better it gets.",
   "Smart albums":
-    "Automatic collections on the Albums page - similar photos, places, countries and time groups. Tick the ones you want; nothing is stored as a real album.",
+    "Automatic collections on the Albums page: similar photos, places, countries and time periods. Choose which ones to show.",
   Trash:
-    "Deleted photos stay in the Trash and can be restored. Choose how long they're kept before being removed for good (0 = forever).",
-  Tags: "Housekeeping for tags no photo uses anymore - remove them to keep the tag filter tidy.",
+    "Deleted photos stay in the Trash and can be restored. Choose how long they are kept before they are deleted permanently (0 = forever).",
+  Tags: "Your tags and how many photos use each. Delete tags you no longer need.",
   "Library maintenance":
-    "The library folder on disk is the source of truth. Run this if things look out of sync - it cleans up stale entries and regenerates missing thumbnails.",
+    "Repair tools for when the library looks out of sync. They clean up stale entries and regenerate missing thumbnails.",
   "Backup & restore":
-    "Download a backup of your managed library (photos, ratings, albums, edits) and restore it later - worth doing every now and then.",
+    "Download a backup of your library (photos, ratings, albums, edits) and restore it later.",
 };
 
 export function SettingsTour({

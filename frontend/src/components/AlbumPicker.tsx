@@ -85,7 +85,7 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult, chipsO
         emptyLabel={noAlbums ? "No albums yet" : undefined}
         // The bulk action bar hides the hint below (no room for a second
         // line), so the reason has to be reachable from the button itself.
-        title={noAlbums ? "Create an album on the Albums page first" : undefined}
+        title={noAlbums ? "Create an album on the Albums page first." : undefined}
         disabled={busy}
         ariaLabel="Add to album"
         onChange={(v) => {

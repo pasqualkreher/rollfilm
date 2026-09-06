@@ -488,7 +488,7 @@ export function ImageDetail() {
       const result = await api.images.rename(image.id, stem);
       setRenaming(false);
       if (result.pair_error) setRenameNote(result.pair_error);
-      else if (result.paired_filename) setRenameNote(`Renamed the pair to ${result.paired_filename} too.`);
+      else if (result.paired_filename) setRenameNote(`The matching file was renamed to ${result.paired_filename}.`);
       queryClient.invalidateQueries({ queryKey: ["image", activeId] });
       if (image.paired_image_id) {
         queryClient.invalidateQueries({ queryKey: ["image", image.paired_image_id] });
@@ -663,7 +663,7 @@ export function ImageDetail() {
             {previewFailed ? (
               <div className="detail-photo-error">
                 <span className="detail-photo-error-icon" aria-hidden="true"><IconImage size={40} /></span>
-                <p>This photo can't be displayed - the file may be damaged or unreadable.</p>
+                <p>This photo cannot be displayed. The file may be damaged or unreadable.</p>
                 <p className="detail-photo-error-name">{image.original_filename}</p>
                 <button
                   className="btn"
@@ -743,7 +743,7 @@ export function ImageDetail() {
             <button
               className="btn btn-sm slideshow-btn"
               onClick={() => setSlideshowOpen(true)}
-              title="Play a fullscreen slideshow of the photos you're browsing (S)"
+              title="Play a fullscreen slideshow of the current photos (S)"
             >
               <IconPlay size={13} /> Slideshow
             </button>
@@ -833,7 +833,7 @@ export function ImageDetail() {
                 <button
                   className="detail-rename-btn"
                   onClick={startRename}
-                  title="Rename this photo - this renames the file on disk too"
+                  title="Rename this photo. The file on disk is renamed as well."
                   aria-label="Rename photo"
                 >
                   <IconPencil size={15} />
@@ -847,7 +847,7 @@ export function ImageDetail() {
               <button
                 className="detail-trash-btn"
                 onClick={deletePhoto}
-                title="Delete this photo (and its RAW/JPEG partner) - library photos move to the Trash, external photos are only removed from the catalog"
+                title="Delete this photo. Library photos move to the Trash, photos from external sources are only removed from the library."
                 aria-label="Delete photo"
               >
                 <IconTrash size={15} />
@@ -859,7 +859,7 @@ export function ImageDetail() {
               {renameError ? (
                 <span className="detail-rename-error">{renameError}</span>
               ) : paired ? (
-                `Renames the file on disk, and ${paired.original_filename} with it.`
+                `Renames the file on disk, together with ${paired.original_filename}.`
               ) : (
                 "Renames the file on disk. The photo keeps its rating, tags and edits."
               )}
@@ -878,7 +878,7 @@ export function ImageDetail() {
             <button
               className={`btn${selects.has(image.id) ? " primary" : ""}`}
               onClick={() => selects.toggle(image!.id)}
-              title={selects.has(image.id) ? "Remove this photo from your selects" : "Add this photo to your selects"}
+              title={selects.has(image.id) ? "Remove this photo from Selects" : "Add this photo to Selects, your shortlist"}
             >
               {selects.has(image.id) ? (
                 <>
@@ -893,7 +893,7 @@ export function ImageDetail() {
             {immichConfigured && immich?.sync_mode === "selective" && (
               <label
                 className="filter-field filter-field-inline"
-                title="Flag this photo for automatic Immich sync (JPEG only; RAW is skipped)"
+                title="Upload this photo to Immich automatically. RAW files are never uploaded."
               >
                 <input
                   type="checkbox"
@@ -910,7 +910,7 @@ export function ImageDetail() {
                 className="btn"
                 onClick={addToImmich}
                 disabled={immichBusy}
-                title="Upload this photo's JPEG to your configured Immich server (RAW is skipped)"
+                title="Upload this photo to your Immich server. RAW files are never uploaded."
               >
                 {immichBusy ? "Uploading..." : "Add to Immich"}
               </button>
@@ -959,7 +959,7 @@ export function ImageDetail() {
               className="detail-description"
               value={descDraft}
               disabled={descBusy}
-              placeholder="What is this photo?"
+              placeholder="Add a description…"
               aria-label="Description"
               onChange={(e) => setDescDraft(e.target.value)}
               onBlur={saveDescription}
@@ -1033,7 +1033,7 @@ export function ImageDetail() {
               className="btn"
               style={{ display: "block", width: "100%", marginTop: 14, textAlign: "center" }}
               onClick={() => setExportOpen(true)}
-              title="Export a JPEG with your edits baked in, or download the original file 1:1 with all meta tags"
+              title="Export a JPEG with your edits applied, or download the original file unchanged"
             >
               Export…
             </button>
@@ -1041,7 +1041,7 @@ export function ImageDetail() {
               className="btn"
               style={{ display: "block", width: "100%", marginTop: 8, textAlign: "center" }}
               onClick={() => setSaveCopyOpen(true)}
-              title="Create a new photo in your library from the saved edits - a baked JPEG (“edit copy”) or a virtual copy that shares the original's file (“virtual copy”)"
+              title="Create a new photo from the saved edits: a new JPEG file or a virtual copy that shares the original file"
             >
               Save copy
             </button>

@@ -286,10 +286,10 @@ export function ImportReviewGrid({
           title={
             selectMode
               ? isDuplicate(f)
-                ? "Already in your library - can't be imported"
+                ? "Already in your library"
                 : f.duplicate_in_trash
-                  ? "This photo is in the Trash - importing it restores it"
-                  : "Click to tick, shift-click to tick or clear a whole range"
+                  ? "This photo is in the Trash. Importing it restores it."
+                  : "Click to select. Shift-click selects a range."
               : "Click to preview"
           }
         >
@@ -320,7 +320,7 @@ export function ImportReviewGrid({
           )}
           {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
             <span className="duplicate-badge">
-              {f.duplicate_in_trash ? "In Trash - restores" : "Already in library"}
+              {f.duplicate_in_trash ? "In Trash, will be restored" : "Already in library"}
             </span>
           )}
           <span className={fileTypeBadgeClass(f.file_type, merged)}>

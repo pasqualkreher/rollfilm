@@ -102,8 +102,8 @@ export function ThemePicker() {
           <strong>Mode</strong>
           <span className="settings-option-desc">
             {mode === "auto"
-              ? "Following your system's light/dark setting."
-              : `Always ${mode}, whatever the system is set to.`}
+              ? "Follows your system's light/dark setting."
+              : `Always ${mode}, regardless of the system setting.`}
           </span>
         </span>
         <span className="segmented">
@@ -121,7 +121,8 @@ export function ThemePicker() {
       </div>
 
       <p className="theme-group-label">
-        Light skin
+        Light theme
+
         {showingLight && <span className="theme-group-badge">On screen</span>}
       </p>
       <SkinGroup
@@ -131,7 +132,8 @@ export function ThemePicker() {
       />
 
       <p className="theme-group-label">
-        Dark skin
+        Dark theme
+
         {!showingLight && <span className="theme-group-badge">On screen</span>}
       </p>
       <SkinGroup skins={DARK_SKINS} selected={dark} onSelect={(s) => setDarkSkin(s as DarkSkin)} />

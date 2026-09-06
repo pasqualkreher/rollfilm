@@ -37,7 +37,7 @@ export function DirectoryPicker({ onSelect, onClose }: Props) {
           {isLoading ? (
             <div className="empty-state">Loading…</div>
           ) : !data?.exists ? (
-            <div className="empty-state">That folder can't be found inside the backend.</div>
+            <div className="empty-state">That folder could not be found.</div>
           ) : (
             <>
               {data.parent !== null && (
@@ -47,8 +47,8 @@ export function DirectoryPicker({ onSelect, onClose }: Props) {
               )}
               {data.entries.length === 0 && (
                 <div className="empty-state" style={{ padding: 20 }}>
-                  No sub-folders here. Use <strong>Use this folder</strong> to pick it, or go up to look
-                  elsewhere. (Your NAS must be mounted into the backend to appear here.)
+                  No subfolders here. Click <strong>Use this folder</strong> to choose it, or go up one
+                  level. A NAS must be mounted on this computer to appear here.
                 </div>
               )}
               {data.entries.map((e) => (

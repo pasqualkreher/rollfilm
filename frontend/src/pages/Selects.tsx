@@ -203,7 +203,7 @@ export function Selects() {
                 className="btn primary"
                 onClick={() => setExportOpen(true)}
                 disabled={actionIds.length === 0}
-                title="Export as JPEGs with the saved edits baked in, or download the original files 1:1 with all meta tags"
+                title="Export as JPEGs with edits applied, or download the original files unchanged"
               >
                 {hasSelection
                   ? `Export ${selected.size} photo${selected.size === 1 ? "" : "s"}`
@@ -217,8 +217,8 @@ export function Selects() {
                   disabled={immichBusy}
                   title={
                     hasSelection
-                      ? "Upload the selected JPEGs to your configured Immich server (RAW files are skipped)"
-                      : "Upload all JPEGs in your selects to Immich (RAW files are skipped)"
+                      ? "Upload the selected photos to your Immich server. RAW files are never uploaded."
+                      : "Upload all photos in Selects to your Immich server. RAW files are never uploaded."
                   }
                 >
                   {immichBusy
@@ -266,8 +266,8 @@ export function Selects() {
 
           {selectMode && (
             <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
-              Click photos to select them - shift-click to select a range. Export, Immich and
-              Add to… act on your selection while one exists.
+              Click photos to select them. Shift-click selects a range. Export, Immich and Add to…
+              then apply to the selection.
             </p>
           )}
 

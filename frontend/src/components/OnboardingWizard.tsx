@@ -115,10 +115,10 @@ export function OnboardingWizard() {
       setCleanupResult(
         failed === 0
           ? "Old files removed."
-          : `Removed ${result.removed.length}, but ${failed} folder${failed === 1 ? "" : "s"} couldn't be deleted — you can remove them manually later.`
+          : `Removed ${result.removed.length}, but ${failed} folder${failed === 1 ? "" : "s"} could not be deleted. You can remove them manually later.`
       );
     } catch {
-      setCleanupResult("Couldn't remove the old files. You can try again later.");
+      setCleanupResult("Could not remove the old files. You can try again later.");
     } finally {
       setRemoving(false);
     }
@@ -151,16 +151,16 @@ export function OnboardingWizard() {
           {step === "welcome" && (
             <div>
               <p className="onboarding-lead">
-                Rollfilm is a desktop photo library with a film-look editor — your photos and their
-                database stay on your own machine. This quick setup takes about a minute; you can
-                skip it anytime and change everything later in <strong>Settings</strong>.
+                Rollfilm is a desktop photo library with a film-style editor. Your photos and their
+                database stay on your own computer. This setup takes about a minute. You can skip
+                it and change everything later in <strong>Settings</strong>.
               </p>
               <ul className="onboarding-list">
-                <li>Tidy up any leftovers from an older install.</li>
-                <li>Choose where your library and its database live.</li>
-                <li>Pick a colour style.</li>
-                <li>See the workflow, from import to Immich.</li>
-                <li>Take a quick tour of the Settings.</li>
+                <li>Remove leftovers from an older version.</li>
+                <li>See where your library is stored.</li>
+                <li>Choose a color theme.</li>
+                <li>Learn the basic workflow.</li>
+                <li>Take a short tour of the Settings.</li>
               </ul>
             </div>
           )}
@@ -169,9 +169,9 @@ export function OnboardingWizard() {
             <div>
               <h3 className="onboarding-step-title">Clean up old files</h3>
               <p className="onboarding-lead">
-                An earlier version of this app left some files behind on your system (from back when
-                it was called <em>Photo Manager</em>). They're just old caches and logs — safe to
-                remove. Your photos and library are <strong>not</strong> affected.
+                An earlier version of this app (then called <em>Photo Manager</em>) left cache and log
+                files on your system. They are safe to remove. Your photos and library are{" "}
+                <strong>not</strong> affected.
               </p>
               {legacy && legacy.length > 0 ? (
                 <>
@@ -201,10 +201,10 @@ export function OnboardingWizard() {
             <div>
               <h3 className="onboarding-step-title">Where your library lives</h3>
               <p className="onboarding-lead">
-                Your photos are stored in the folder you picked when the app started. Its database,
-                thumbnails and import staging live in a hidden <code>.photomanager</code> subfolder
-                inside it — so the whole library is self-contained and travels with the folder (a
-                copy, an external drive, a NAS).
+                Your photos are stored in the folder you chose at startup. The database, thumbnails and
+                import staging live in a hidden <code>.photomanager</code> folder inside it. The
+                library is self-contained and can be moved as a whole, for example to an external
+                drive.
               </p>
               <div className="onboarding-field">
                 <span className="onboarding-field-label">Library folder</span>
@@ -215,11 +215,10 @@ export function OnboardingWizard() {
                 <code className="onboarding-field-value">{dataRoot ?? "…"}</code>
               </div>
               <p style={{ color: "var(--text-muted)", marginTop: 12 }}>
-                <strong>You can keep more than one library.</strong> Point the app at a different
-                folder anytime (Settings → Library folder) to switch to a separate library — one for
-                work and one for personal, say. Each keeps its own database and thumbnails. If the
-                folder is cloud-synced (iCloud, Dropbox, Nextcloud), exclude{" "}
-                <code>.photomanager</code> from syncing.
+                <strong>You can have more than one library.</strong> Choose a different folder anytime
+                under Settings → Library folder. Each library keeps its own database and
+                thumbnails. If the folder is synced to the cloud (iCloud, Dropbox, Nextcloud),
+                exclude <code>.photomanager</code> from syncing.
               </p>
               {desktop?.changeLibraryRoot && (
                 <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
@@ -233,8 +232,8 @@ export function OnboardingWizard() {
             <div>
               <h3 className="onboarding-step-title">Pick a style</h3>
               <p className="onboarding-lead">
-                Choose a colour skin, or follow your system's light/dark setting. The preview on each
-                tile shows its own colours. You can change this anytime in Settings.
+                Choose a color theme, or follow your system's light/dark setting. You can change this
+                anytime in Settings.
               </p>
               <ThemePicker />
             </div>
@@ -244,31 +243,30 @@ export function OnboardingWizard() {
             <div>
               <h3 className="onboarding-step-title">The workflow</h3>
               <p className="onboarding-lead">
-                From a fresh library to finished photos — five steps, all reachable from the top nav.
+                From import to finished photos in five steps. All are reachable from the top bar.
               </p>
               <ol className="onboarding-workflow">
                 <li>
-                  <strong>Import</strong> — drop in files or pick a folder. Photos land in a review
-                  area first; nothing enters your library until you press <em>Add to library</em>.
-                  Duplicates are flagged automatically.
+                  <strong>Import</strong>: drop in files or choose a folder. Photos first appear in a
+                  review area. Nothing enters your library until you click <em>Add to library</em>.
+                  Duplicates are detected automatically.
                 </li>
                 <li>
-                  <strong>Browse &amp; cull</strong> — rate with stars, add colour labels and tags,
-                  then filter to the keepers. The search box understands plain language like{" "}
-                  <em>"dog on a beach"</em>.
+                  <strong>Browse &amp; cull</strong>: rate photos with stars, add color labels and
+                  tags, then filter to the ones you want to keep. The search box understands plain
+                  language, such as <em>"dog on a beach"</em>.
                 </li>
                 <li>
-                  <strong>Collect</strong> — add photos to <em>Selects</em> to build a shortlist,
-                  then download it as a zip or turn it into an album.
+                  <strong>Collect</strong>: add photos to <em>Selects</em> to build a shortlist, then
+                  download them as a zip or turn them into an album.
                 </li>
                 <li>
-                  <strong>Edit</strong> — open a photo for tone, colour and film-look effects. Edits
-                  never touch the original file.
+                  <strong>Edit</strong>: adjust tone, color and film-style effects. The original file
+                  is never changed.
                 </li>
                 <li>
-                  <strong>Immich</strong> — optionally connect your Immich server in Settings to
-                  upload JPEGs and mirror albums, manually or automatically. RAW files always stay in
-                  this library only.
+                  <strong>Immich</strong>: optionally connect an Immich photo server in Settings to
+                  upload JPEGs and albums. RAW files are never uploaded.
                 </li>
               </ol>
             </div>
@@ -278,14 +276,14 @@ export function OnboardingWizard() {
             <div>
               <h3 className="onboarding-step-title">Make it yours in Settings</h3>
               <p className="onboarding-lead">
-                Everything you just saw — and a lot more — is adjustable in <strong>Settings</strong>:
-                how RAW files look while browsing, auto develop, smart albums, Immich, Trash
-                retention, backups. Worth a look once you're settled in.
+                Everything you just saw and more can be adjusted in <strong>Settings</strong>: how RAW
+                files are displayed, auto develop, smart albums, Immich, Trash retention and
+                backups.
               </p>
               <p className="onboarding-lead">
-                Want a quick guided walk through each section now? It takes under a minute, and you
-                can skip out at any step. You can rerun it anytime with{" "}
-                <em>"Show me around"</em> at the top of the Settings page.
+                Want a short guided tour of the settings now? It takes under a minute and can be
+                skipped at any step. You can restart it anytime with <em>"Show me around"</em> on
+                the Settings page.
               </p>
               <button
                 className="btn primary"

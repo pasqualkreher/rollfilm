@@ -261,7 +261,7 @@ export function PhotoFilters({
       type="button"
       className={`filter-pin${pinned ? " active" : ""}`}
       aria-pressed={pinned}
-      title={pinned ? "Unpin the filters (back to a popover)" : "Pin the filters open"}
+      title={pinned ? "Unpin the filters" : "Keep the filters open"}
       onClick={() => setFilterPinned(!pinned)}
     >
       <IconPin size={13} filled={pinned} />
