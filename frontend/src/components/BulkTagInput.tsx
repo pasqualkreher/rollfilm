@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { IconPlus } from "./Icons";
+import { TagSuggestInput } from "./TagSuggestInput";
 import { autoTagMessage, isAutoTag } from "../utils/autoTags";
 
 interface Props {
@@ -13,9 +14,8 @@ export function BulkTagInput({ onAdd }: Props) {
   const [error, setError] = useState<string | null>(null);
   const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const name = value.trim();
+  function add(raw: string) {
+    const name = raw.trim();
     if (!name) return;
     if (isAutoTag(name)) {
       setError(autoTagMessage(name));
@@ -26,27 +26,26 @@ export function BulkTagInput({ onAdd }: Props) {
     setValue("");
   }
 
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    add(value);
+  }
+
   return (
     <form onSubmit={submit} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-      <input
-        list="bulk-tag-suggestions"
-        type="text"
+      <TagSuggestInput
         placeholder="Add tag to selection..."
+        ariaLabel="Add tag to selection"
         value={value}
-        onChange={(e) => {
-          setValue(e.target.value);
+        onChange={(v) => {
+          setValue(v);
           if (error) setError(null);
         }}
+        onSubmit={add}
+        suggestions={(allTags ?? []).filter((t) => !isAutoTag(t))}
         title={error ?? undefined}
-        aria-invalid={error ? true : undefined}
+        invalid={!!error}
       />
-      <datalist id="bulk-tag-suggestions">
-        {(allTags ?? [])
-          .filter((t) => !isAutoTag(t))
-          .map((t) => (
-            <option key={t} value={t} />
-          ))}
-      </datalist>
       <button
         className="btn"
         type="submit"

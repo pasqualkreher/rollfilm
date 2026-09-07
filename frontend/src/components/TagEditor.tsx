@@ -2,23 +2,22 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { IconPlus, IconX } from "./Icons";
+import { TagSuggestInput } from "./TagSuggestInput";
 import { AUTO_TAG_CHIP_TITLE, autoTagMessage, isAutoTag } from "../utils/autoTags";
 
 interface Props {
   tags: string[];
   onAdd: (name: string) => void;
   onRemove: (name: string) => void;
-  datalistId?: string;
 }
 
-export function TagEditor({ tags, onAdd, onRemove, datalistId = "tag-suggestions" }: Props) {
+export function TagEditor({ tags, onAdd, onRemove }: Props) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const name = value.trim();
+  function add(raw: string) {
+    const name = raw.trim();
     if (!name || tags.includes(name)) return;
     if (isAutoTag(name)) {
       setError(autoTagMessage(name));
@@ -27,6 +26,11 @@ export function TagEditor({ tags, onAdd, onRemove, datalistId = "tag-suggestions
     setError(null);
     onAdd(name);
     setValue("");
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    add(value);
   }
 
   return (
@@ -50,23 +54,18 @@ export function TagEditor({ tags, onAdd, onRemove, datalistId = "tag-suggestions
         </div>
       )}
       <form onSubmit={submit} style={{ display: "flex", gap: 6 }}>
-        <input
-          list={datalistId}
-          type="text"
+        <TagSuggestInput
           placeholder="Add tag..."
+          ariaLabel="Add tag"
           value={value}
-          onChange={(e) => {
-            setValue(e.target.value);
+          onChange={(v) => {
+            setValue(v);
             if (error) setError(null);
           }}
+          onSubmit={add}
+          suggestions={(allTags ?? []).filter((t) => !isAutoTag(t))}
+          exclude={tags}
         />
-        <datalist id={datalistId}>
-          {(allTags ?? [])
-            .filter((t) => !isAutoTag(t))
-            .map((t) => (
-              <option key={t} value={t} />
-            ))}
-        </datalist>
         <button className="btn" type="submit" disabled={!value.trim()} title="Add tag" aria-label="Add tag">
           <IconPlus size={14} />
         </button>
