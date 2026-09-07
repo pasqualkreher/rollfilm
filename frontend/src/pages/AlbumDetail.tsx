@@ -8,7 +8,7 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
-import { AddToPicker } from "../components/AddToPicker";
+import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { AlbumNameField } from "../components/AlbumNameField";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
@@ -256,8 +256,8 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
   }
 
-  function reportAddTo({ kind, name, ok }: { kind: "album" | "canvas"; name: string; ok: boolean }) {
-    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+  function reportAddTo({ kind, name, ok }: AddToResult) {
+    const what = kind === "canvas" ? `canvas “${name}”` : kind === "selects" ? "selects" : `“${name}”`;
     setAlbumMsg(
       ok
         ? { text: `Added ${selected.size} photo(s) to ${what}.`, error: false }
@@ -528,15 +528,15 @@ export function AlbumDetail() {
             <AddToPicker
               onAddToAlbum={addSelectedToAlbum}
               onAddToCanvas={addSelectedToCanvas}
+              onAddToSelects={() => selects.add(Array.from(selected))}
               onResult={reportAddTo}
             />
           </div>
-          <div className="control-group">
-            <button className="btn" onClick={() => selects.add(Array.from(selected))}>
-              Add to selects
-            </button>
-            {/* Hidden in full sync mode - everything uploads automatically there. */}
-            {immichConfigured && immich?.sync_mode !== "full" && (
+          {/* Hidden in full sync mode - everything uploads automatically there.
+              The whole group goes, not just the button, so no empty gap is
+              left now that "Add to selects" lives in the picker above. */}
+          {immichConfigured && immich?.sync_mode !== "full" && (
+            <div className="control-group">
               <button
                 className="btn"
                 onClick={addSelectedToImmich}
@@ -545,8 +545,8 @@ export function AlbumDetail() {
               >
                 {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
               </button>
-            )}
-          </div>
+            </div>
+          )}
           <div className="control-group">
             <button
               className="btn"

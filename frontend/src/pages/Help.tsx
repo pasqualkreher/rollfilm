@@ -1253,7 +1253,7 @@ const CHAPTERS: Chapter[] = [
         body: (
           <>
             <p>
-              Add photos from the Library's bulk bar ("Add to Selects"), from inside an album, or on
+              Add photos from the Library's bulk bar ("Add to…" → Selects), from inside an album, or on
               a photo's own page. Nothing about the photos changes by being in there.
             </p>
             <ul>

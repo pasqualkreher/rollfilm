@@ -22,7 +22,7 @@ import {
   fileTypeBadgeClass,
 } from "../components/ThumbnailGrid";
 import { editsFromImage } from "../utils/adjustments";
-import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconImage, IconPencil, IconPlay, IconPlus, IconTrash, IconX } from "../components/Icons";
+import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconImage, IconPencil, IconPlay, IconTrash, IconX } from "../components/Icons";
 import { Slideshow } from "../components/Slideshow";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
@@ -875,21 +875,6 @@ export function ImageDetail() {
             >
               Edit
             </button>
-            <button
-              className={`btn${selects.has(image.id) ? " primary" : ""}`}
-              onClick={() => selects.toggle(image!.id)}
-              title={selects.has(image.id) ? "Remove this photo from Selects" : "Add this photo to Selects, your shortlist"}
-            >
-              {selects.has(image.id) ? (
-                <>
-                  <IconCheck size={13} /> In selects
-                </>
-              ) : (
-                <>
-                  <IconPlus size={13} /> Add to selects
-                </>
-              )}
-            </button>
             {immichConfigured && immich?.sync_mode === "selective" && (
               <label
                 className="filter-field filter-field-inline"
@@ -976,12 +961,19 @@ export function ImageDetail() {
             <TagEditor tags={image.tags} onAdd={addTag} onRemove={removeTag} />
           </div>
           <div className="detail-section">
-            <div className="detail-section-label">Albums</div>
+            {/* "Add to" rather than "Albums": the picker below also covers
+                Selects and canvases, and the album chips are the memberships
+                it created. Selects used to be its own button in the action
+                row above, where three buttons ellipsized to "E… / + Add to …". */}
+            <div className="detail-section-label">Add to</div>
             <AlbumPicker chipsOnly onAdd={addToAlbum} currentAlbumIds={image.album_ids} onRemove={removeFromAlbum} />
             <div>
               <AddToPicker
                 onAddToAlbum={addToAlbum}
                 onAddToCanvas={(canvasId) => api.canvases.addImages(canvasId, [image.id])}
+                onAddToSelects={() => selects.add(image!.id)}
+                onRemoveFromSelects={() => selects.remove(image!.id)}
+                inSelects={selects.has(image.id)}
               />
             </div>
           </div>

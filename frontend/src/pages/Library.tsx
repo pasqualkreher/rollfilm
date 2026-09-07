@@ -15,7 +15,7 @@ import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { VirtualTimeline } from "../components/VirtualTimeline";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
-import { AddToPicker } from "../components/AddToPicker";
+import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { IconTrash } from "../components/Icons";
@@ -327,8 +327,8 @@ export function Library() {
     queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
   }
 
-  function reportAddTo({ kind, name, ok }: { kind: "album" | "canvas"; name: string; ok: boolean }) {
-    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+  function reportAddTo({ kind, name, ok }: AddToResult) {
+    const what = kind === "canvas" ? `canvas “${name}”` : kind === "selects" ? "selects" : `“${name}”`;
     setAlbumMsg(
       ok
         ? { text: `Added ${selected.size} photo(s) to ${what}.`, error: false }
@@ -564,6 +564,7 @@ export function Library() {
             <AddToPicker
               onAddToAlbum={addSelectedToAlbum}
               onAddToCanvas={addSelectedToCanvas}
+              onAddToSelects={() => selects.add(Array.from(selected))}
               onResult={reportAddTo}
             />
           </div>
@@ -619,16 +620,6 @@ export function Library() {
                 options={presetNames.map((name) => ({ value: name, label: name }))}
               />
             )}
-            <button
-              className="btn"
-              onClick={() => {
-                const count = selected.size;
-                selects.add(Array.from(selected));
-                setDevelopMsg(`Added ${count} photo(s) to selects.`);
-              }}
-            >
-              Add to selects
-            </button>
             <ResetMenu count={selected.size} onReset={resetSelected} />
           </div>
           <button
