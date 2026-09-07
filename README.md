@@ -6,26 +6,212 @@
 
 **From memory card to finished photo. One app, on your own computer.**
 
-Import, cull, search and edit — the whole path in one window, with first-class
-[Immich](https://immich.app) integration at the end of it.
-Local AI search, map & timeline browsing, RAW support.
-No account, no cloud, no Docker, no setup.
+Import, cull, search and edit in a single window — then mirror the keepers to your
+[Immich](https://immich.app) server. Search your library by describing what you
+remember, browse it on a map and a timeline, shoot RAW, edit non-destructively.<br>
+**No account. No cloud. No Docker. No setup.**
 
 [![Latest release](https://img.shields.io/github/v/release/pasqualkreher/Rollfilm?label=release&color=4c8dae)](https://github.com/pasqualkreher/Rollfilm/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/pasqualkreher/Rollfilm/total?color=4c8dae)](https://github.com/pasqualkreher/Rollfilm/releases)
+[![CI](https://github.com/pasqualkreher/Rollfilm/actions/workflows/ci.yml/badge.svg)](https://github.com/pasqualkreher/Rollfilm/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Windows%20·%20Linux-lightgrey)](#download--installation)
+[![GitHub stars](https://img.shields.io/github/stars/pasqualkreher/Rollfilm?style=flat&color=f5c518)](https://github.com/pasqualkreher/Rollfilm/stargazers)
 
-**[rollfilm.org](https://rollfilm.org)** · [Download](#download--installation) · [Screenshots](#screenshots) · [Features](#features) · [Contributing](CONTRIBUTING.md) · [FAQ](https://rollfilm.org/#faq)
+**[⬇ Download](#download--installation)** · [Why Rollfilm](#why-rollfilm) · [Screenshots](#screenshots) · [Features](#features) · [Contributing](#contributing) · [rollfilm.org](https://rollfilm.org)
 
 <a href="https://rollfilm.org"><img src="docs/screenshots/library.jpg" alt="Rollfilm library view" width="850"></a>
 
 </div>
 
-Your photos stay on your own machine. Rollfilm imports them into a managed library, makes them searchable with natural language, and can optionally mirror your library to an existing Immich server.
+## Try it in five minutes
+
+1. **Download** the installer for macOS, Windows or Linux from the [Releases page](https://github.com/pasqualkreher/Rollfilm/releases/latest).
+2. **Start it.** There is nothing to configure. On first launch Rollfilm fetches the search model once; after that it works fully offline.
+3. **Plug in a card** or point it at a folder. Cull on the import light table, then type *"sunset at the beach"* into search and watch it find the shot.
+
+Your photos stay on your own machine. Rollfilm copies them into a managed library, makes them searchable with natural language, and can optionally mirror your library to an existing Immich server.
 
 > **Project status: work in progress.**
-> This is an early but already very usable release that I wanted to share. The core — import pipeline, library organization, semantic search, and especially the Immich integration — works well. The built-in photo editor is experimental and should be seen as a fun extra rather than a finished feature (see [Photo editor](#photo-editor-experimental)).
+> An early but already very usable release. The core — import pipeline, library organization, semantic search, and especially the Immich integration — works well and is used daily. The built-in photo editor is experimental and should be seen as a fun extra rather than a finished feature (see [Photo editor](#photo-editor-experimental)).
+
+## Why Rollfilm
+
+- **Search by describing, not by tagging.** CLIP embeddings live in your local SQLite database. "Dog in the snow", "red bicycle against a wall" — no tags, no cloud API, no upload.
+- **An import you actually look forward to.** Photos are staged and shown on a light table while they copy. Compare, pick, reject and rate while the rest is still coming off the card.
+- **Immich as a destination, not a replacement.** Keep a fast local desktop library and let Rollfilm mirror it to your Immich server: manual, selective or everything. Albums, deletions and RAW+JPEG pairs follow.
+- **Your originals are never touched.** Edits, stars, tags and albums live in the database beside the files. Rename or move a photo in Finder and it is matched back by content, not by name.
+- **One window for the whole path.** Timeline, map, gear filters, statistics, a non-destructive editor with masks — without switching apps.
+- **Nothing to run, nothing to host.** A native desktop app. No account, no server, no Docker, no subscription.
+
+### Is it for you?
+
+| Rollfilm is a good fit if you… | Look elsewhere if you… |
+| :--- | :--- |
+| shoot RAW+JPEG and want to cull straight off the card | need multiple users, a web UI or mobile access |
+| want natural-language search that never leaves your machine | want a finished, Lightroom-class editor today |
+| run Immich and want a local library feeding it | need a code-signed, commercially supported app |
+| like keeping full control over your files on disk | are looking for a cloud service |
+
+## Screenshots
+
+More on [rollfilm.org](https://rollfilm.org/#screenshots).
+
+| | |
+| :---: | :---: |
+| <img src="docs/screenshots/search.jpg" alt="Semantic search" width="420"><br>**Semantic search** — describe what you remember | <img src="docs/screenshots/map.jpg" alt="Map view" width="420"><br>**Map view** — every geotagged photo |
+| <img src="docs/screenshots/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="docs/screenshots/immich-sync.jpg" alt="Immich sync modes" width="420"><br>**Immich sync** — your library, mirrored |
+| <img src="docs/screenshots/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor** — non-destructive, masks, film sims | <img src="docs/screenshots/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare** — split by a draggable line, or side by side |
+| <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="docs/screenshots/themes.jpg" alt="Color skins" width="420"><br>**Skins** — a light one, a dark one, or follow the system |
+
+## Features
+
+| | Highlights |
+| :--- | :--- |
+| **Import** | Staged import wizard with a light table, RAW+JPEG pairing, byte-identical duplicate detection, EXIF and lens data, reverse geocoding |
+| **Organize** | Albums, smart albums, tags with bulk tagging, star ratings, color labels, selects/picks, per-photo descriptions, trash with retention |
+| **Search** | Local semantic search, image-to-image similarity, gear filters that cross-filter each other, map, exact-scrolling timeline, statistics |
+| **Immich** | Three sync modes, background reconciliation every 60 s, album mirroring, durable deletion queue, optional RAW upload |
+| **Edit** *(experimental)* | Non-destructive, backend-rendered, masks with local AI subject selection, tone curves on the histogram, auto develop learned from your own edits |
+| **Safety** | Originals never modified, renames survive Finder, backup and restore as one zip, external folders mounted read-only |
+
+<details>
+<summary><b>Library &amp; import — full list</b></summary>
+
+- **Staged import wizard** — photos are copied at the speed of the media, reviewed in a virtualized grid that stays responsive at thousands of files, and analyzed in the background while you're already culling
+- **RAW support** (via rawpy) with automatic RAW+JPEG pairing
+- **EXIF extraction** (ExifTool) — capture date, camera, **lens**, exposure data — and reverse geocoding of GPS coordinates to country/place
+- **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
+- **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
+- Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
+- **Rename photos from the app** — the file on disk is renamed with them, the RAW/JPEG partner follows to the same name, and the photo keeps its stars, tags, albums, edits and cached previews
+- **Free-text descriptions** per photo, stored in the database like every other edit
+- **Renames survive Finder** — a photo you rename or move outside the app is matched back by its content, not its name, so it keeps everything you gave it instead of being treated as deleted
+- **Trash** with configurable retention and automatic background purge — a deletion keeps the photo's stars, tags, albums and edits, and Restore brings it all back
+- **Backup & restore** — one zip with every photo plus all ratings, colors, albums, tags and edits, and a one-click "sync database to library" repair
+
+</details>
+
+<details>
+<summary><b>Search &amp; browsing — full list</b></summary>
+
+- **Semantic search** — describe what you're looking for in natural language ("sunset at the beach", "dog in the snow"). Powered by CLIP embeddings stored in SQLite via `sqlite-vec`, fully local, no cloud API
+- Image-to-image similarity search
+- **Gear-aware filters** — narrow the library by camera, lens or a focal-length range slider; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot), and the filter bar can be **pinned open** so it stays put while you cull
+- **Map view** (Leaflet) of all geotagged photos
+- **A timeline that stays out of the way at any size** — the whole library is laid out up front, so the scrollbar is exact from the first frame and the date scrubber on the right lands anywhere in it instantly; only the tiles near the viewport are ever mounted
+- **Details without leaving the grid** — hover a tile for an "i" that opens camera, lens, exposure, tags and albums beside it
+- **Statistics** — photos per year, plus which camera bodies, lenses and focal-length ranges you actually shoot, how your ratings fall, and what the library is made of
+- **Light & dark skins** — three restrained pairs (Graphite, Slate, Ink), a light one and a dark one chosen separately, with a Light / Dark / Auto switch that can follow the system
+
+</details>
+
+<details>
+<summary><b>Immich integration ⭐ — full list</b></summary>
+
+One of the highlights of the project: keep your library mirrored to an existing [Immich](https://immich.app) server without giving up local-first management.
+
+- Configure server URL + API key directly in the app (Settings → Immich) — nothing goes into config files
+- **Three sync modes:**
+  - `manual` — per-import checkbox and on-demand "Add to Immich" buttons
+  - `selective` — only photos and albums you flag for sync
+  - `full` — every photo and album is mirrored automatically
+- **Background reconciliation loop** — runs at startup and every 60 seconds: uploads missing assets, backfills asset IDs (checksum-based, so Immich deduplicates correctly), mirrors app albums to Immich albums, and propagates deletions through a durable pending-deletion queue
+- Per-image exponential backoff on failures; event-driven uploads for instant sync after import
+- **JPEGs by default, RAWs on request** — an off-by-default option also uploads RAW files; a RAW follows its paired JPEG, so a flagged or mirrored shot arrives as JPEG + RAW (ready for stacking in Immich)
+- Immich mirrors only your *visible* library — the local library always remains the recoverable source of truth
+
+</details>
+
+<details>
+<summary><b>External sources</b></summary>
+
+- **Index photo collections in place** (e.g. a NAS) — read-only, without copying anything into the managed library
+- Browse any mounted drive directly from the app
+
+</details>
+
+<a name="photo-editor-experimental"></a>
+<details>
+<summary><b>Photo editor (experimental) — full list</b></summary>
+
+A non-destructive editor is included, but consider it a gimmick for now — it's fun to play with, not a Lightroom replacement.
+
+- All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
+- **Built to keep up** — while a slider is being dragged, only the pixels your screen can actually show are rendered (zoomed in, only the visible tile), so editing stays fluid even on 40MP RAWs
+- Edits are stored as values in the database; originals are never touched
+- Exposure/contrast/highlights/shadows, white balance, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
+- **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives
+- **Masks** — radial, linear, brush, luminance and color, plus **AI subject selection** (sky, water, greenery, people, buildings, ground) run locally with SegFormer. Point at a mask in the list and it marks what it covers
+- **Compare against the original** — split by a divider you drag across the photo, or the two side by side. On a RAW the original half is shown with the library's auto-exposure, so the comparison isn't just "the edit is brighter"
+- **Auto develop** — an optional "Auto" button that suggests develop settings *learned from your own edits*: a local CLIP k-nearest-neighbor recommender finds the photos you've already edited that look most like the one you're working on and blends their settings. No training step, no cloud — every edit you save immediately makes the next suggestion better. Works on a single photo or a whole selection at once
+
+</details>
+
+## Download & installation
+
+Prebuilt installers for macOS, Windows, and Linux are on the [Releases page](https://github.com/pasqualkreher/Rollfilm/releases/latest) and on [rollfilm.org](https://rollfilm.org/#download).
+
+| Platform | Get it | First launch |
+| :--- | :--- | :--- |
+| **macOS** (Apple Silicon) | `Rollfilm-<version>-arm64.dmg` | One-time Gatekeeper step, see [below](#macos-apple-silicon) |
+| **Windows** | `Rollfilm-Setup-<version>.exe` | SmartScreen: **More info → Run anyway** |
+| **Linux** | `Rollfilm-<version>.AppImage` | `chmod +x` and run |
+
+On first start the app downloads the CLIP model for semantic search; after that everything works offline.
+
+> **The installers are not code-signed.** An Apple Developer membership is 99 € a year and a Windows certificate costs on top of that; Rollfilm is an unpaid hobby project. Nothing is wrong with the download — both systems will say so in their own way, and the steps below are how you get past it. Every installer is published with a `.sha256` file next to it if you want to verify what you downloaded.
+
+### macOS (Apple Silicon)
+
+The quickest route — download in the terminal, so macOS never tags the file as quarantined and no dialog ever appears:
+
+```bash
+curl -L -o ~/Downloads/Rollfilm.dmg "$(curl -fsSL \
+  https://api.github.com/repos/pasqualkreher/Rollfilm/releases/latest \
+  | grep -o 'https://[^"]*arm64\.dmg' | head -n1)"
+open ~/Downloads/Rollfilm.dmg
+```
+
+Drag Rollfilm into `/Applications` and start it.
+
+<details>
+<summary><b>Already downloaded in the browser? Two other routes, and what is actually going on</b></summary>
+
+**What's going on:** when a browser downloads a file, it tags it with an attribute called `com.apple.quarantine`. On a tagged app that Apple hasn't notarized, Gatekeeper refuses the first launch. So there are three ways in — one that avoids the tag (the `curl` route above), one that removes it, one that leaves it and approves the app instead. Any of them works; they differ only in whether you want to touch a terminal.
+
+**B · Strip the tag off.** Drag Rollfilm into `/Applications`, then run once:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Rollfilm.app"
+```
+
+This deletes the attribute the browser added (`-d`) from the whole app bundle (`-r`). Afterwards the app is in exactly the state the `curl` route would have produced. You do *not* have to try launching it first.
+
+**C · No terminal at all — approve the app in System Settings.** Drag Rollfilm into `/Applications`, then:
+
+1. Open Rollfilm. macOS refuses and shows a warning — close it.
+2. Go to **System Settings → Privacy & Security** and scroll to the bottom.
+3. Next to *"Rollfilm was blocked to protect your Mac"* click **Open Anyway**, confirm, and enter your admin password.
+4. From then on Rollfilm starts by double-click like any other app.
+
+Step 1 is not optional here — the entry in System Settings only appears *after* a blocked launch attempt. On macOS 14 and older there was a shortcut (right-click → **Open**); Apple removed it in macOS 15 Sequoia.
+
+**The difference:** the `curl` route and B end up identical — no quarantine attribute, so Gatekeeper has nothing to complain about. C leaves the attribute in place and instead records a one-time exception for this specific app. All three are permanent for the copy you installed; a future version you download in a browser goes through the same thing again.
+
+</details>
+
+### Windows
+
+Run `Rollfilm-Setup-<version>.exe`. SmartScreen will warn about an unknown publisher — choose **More info → Run anyway**.
+
+### Linux
+
+Download `Rollfilm-<version>.AppImage`, make it executable (`chmod +x Rollfilm-*.AppImage`) and run it.
+
+### Updates
+
+On Windows and Linux the app updates itself: it checks the Releases page, downloads the new version in the background and applies it on the next quit. **On macOS it can't** — swapping an app bundle in place requires a signed build — so it only tells you a new version exists and opens the release page. Updating there means repeating the install: same two commands, drag over the old app.
 
 ## Who builds this, and how
 
@@ -54,125 +240,6 @@ What that means in practice:
 
 If that trade sounds fine to you, welcome. If not, that's a reasonable call too.
 
-## Screenshots
-
-More on [rollfilm.org](https://rollfilm.org/#screenshots).
-
-| | |
-| :---: | :---: |
-| <img src="docs/screenshots/search.jpg" alt="Semantic search" width="420"><br>**Semantic search** — describe what you remember | <img src="docs/screenshots/map.jpg" alt="Map view" width="420"><br>**Map view** — every geotagged photo |
-| <img src="docs/screenshots/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="docs/screenshots/immich-sync.jpg" alt="Immich sync modes" width="420"><br>**Immich sync** — your library, mirrored |
-| <img src="docs/screenshots/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor** — non-destructive, masks, film sims | <img src="docs/screenshots/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare** — split by a draggable line, or side by side |
-| <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="docs/screenshots/themes.jpg" alt="Color skins" width="420"><br>**Skins** — a light one, a dark one, or follow the system |
-
-## Features
-
-### Library & import
-- **Staged import wizard** — photos are copied at the speed of the media, reviewed in a virtualized grid that stays responsive at thousands of files, and analyzed in the background while you're already culling
-- **RAW support** (via rawpy) with automatic RAW+JPEG pairing
-- **EXIF extraction** (ExifTool) — capture date, camera, **lens**, exposure data — and reverse geocoding of GPS coordinates to country/place
-- **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
-- **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
-- Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
-- **Rename photos from the app** — the file on disk is renamed with them, the RAW/JPEG partner follows to the same name, and the photo keeps its stars, tags, albums, edits and cached previews
-- **Free-text descriptions** per photo, stored in the database like every other edit
-- **Renames survive Finder** — a photo you rename or move outside the app is matched back by its content, not its name, so it keeps everything you gave it instead of being treated as deleted
-- **Trash** with configurable retention and automatic background purge — a deletion keeps the photo's stars, tags, albums and edits, and Restore brings it all back
-- **Backup & restore** — one zip with every photo plus all ratings, colors, albums, tags and edits, and a one-click "sync database to library" repair
-
-### Search & browsing
-- **Semantic search** — describe what you're looking for in natural language ("sunset at the beach", "dog in the snow"). Powered by CLIP embeddings stored in SQLite via `sqlite-vec`, fully local, no cloud API
-- Image-to-image similarity search
-- **Gear-aware filters** — narrow the library by camera, lens or a focal-length range slider; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot), and the filter bar can be **pinned open** so it stays put while you cull
-- **Map view** (Leaflet) of all geotagged photos
-- **A timeline that stays out of the way at any size** — the whole library is laid out up front, so the scrollbar is exact from the first frame and the date scrubber on the right lands anywhere in it instantly; only the tiles near the viewport are ever mounted
-- **Details without leaving the grid** — hover a tile for an "i" that opens camera, lens, exposure, tags and albums beside it
-- **Statistics** — photos per year, plus which camera bodies, lenses and focal-length ranges you actually shoot, how your ratings fall, and what the library is made of
-- **Light & dark skins** — three restrained pairs (Graphite, Slate, Ink), a light one and a dark one chosen separately, with a Light / Dark / Auto switch that can follow the system
-
-### Immich integration ⭐
-This is one of the highlights of the project: keep your library mirrored to an existing [Immich](https://immich.app) server without giving up local-first management.
-
-- Configure server URL + API key directly in the app (Settings → Immich) — nothing goes into config files
-- **Three sync modes:**
-  - `manual` — per-import checkbox and on-demand "Add to Immich" buttons
-  - `selective` — only photos and albums you flag for sync
-  - `full` — every photo and album is mirrored automatically
-- **Background reconciliation loop** — runs at startup and every 60 seconds: uploads missing assets, backfills asset IDs (checksum-based, so Immich deduplicates correctly), mirrors app albums to Immich albums, and propagates deletions through a durable pending-deletion queue
-- Per-image exponential backoff on failures; event-driven uploads for instant sync after import
-- **JPEGs by default, RAWs on request** — an off-by-default option also uploads RAW files; a RAW follows its paired JPEG, so a flagged or mirrored shot arrives as JPEG + RAW (ready for stacking in Immich)
-- Immich mirrors only your *visible* library — the local library always remains the recoverable source of truth
-
-### External sources
-- **Index photo collections in place** (e.g. a NAS) — read-only, without copying anything into the managed library
-- Browse any mounted drive directly from the app
-
-### Photo editor (experimental)
-A non-destructive editor is included, but consider it a gimmick for now — it's fun to play with, not a Lightroom replacement.
-
-- All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
-- **Built to keep up** — while a slider is being dragged, only the pixels your screen can actually show are rendered (zoomed in, only the visible tile), so editing stays fluid even on 40MP RAWs
-- Edits are stored as values in the database; originals are never touched
-- Exposure/contrast/highlights/shadows, white balance, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
-- **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives
-- **Masks** — radial, linear, brush, luminance and color, plus **AI subject selection** (sky, water, greenery, people, buildings, ground) run locally with SegFormer. Point at a mask in the list and it marks what it covers
-- **Compare against the original** — split by a divider you drag across the photo, or the two side by side. On a RAW the original half is shown with the library's auto-exposure, so the comparison isn't just "the edit is brighter"
-- **Auto develop** — an optional "Auto" button that suggests develop settings *learned from your own edits*: a local CLIP k-nearest-neighbor recommender finds the photos you've already edited that look most like the one you're working on and blends their settings. No training step, no cloud — every edit you save immediately makes the next suggestion better. Works on a single photo or a whole selection at once
-
-## Download & installation
-
-Prebuilt installers for macOS, Windows, and Linux are on the [Releases page](https://github.com/pasqualkreher/Rollfilm/releases/latest) and on [rollfilm.org](https://rollfilm.org/#download).
-
-On first start the app downloads the CLIP model for semantic search; after that everything works offline.
-
-> **The installers are not code-signed.** An Apple Developer membership is 99 € a year and a Windows certificate costs on top of that; Rollfilm is an unpaid hobby project. Nothing is wrong with the download — but both systems will say so in their own way, and the steps below are how you get past it. Every installer is published with a `.sha256` file next to it if you want to verify what you downloaded.
-
-### macOS (Apple Silicon)
-
-**What's going on:** when a browser downloads a file, it tags it with an attribute called `com.apple.quarantine`. On a tagged app that Apple hasn't notarized, Gatekeeper refuses the first launch. So there are three ways in — one that avoids the tag, one that removes it, one that leaves it and approves the app instead. Any of them works; they differ only in whether you want to touch a terminal.
-
-**A · Download in the terminal — the tag is never set.**
-
-```bash
-curl -L -o ~/Downloads/Rollfilm.dmg "$(curl -fsSL \
-  https://api.github.com/repos/pasqualkreher/Rollfilm/releases/latest \
-  | grep -o 'https://[^"]*arm64\.dmg' | head -n1)"
-open ~/Downloads/Rollfilm.dmg
-```
-
-`curl` isn't a browser and doesn't tag anything. Drag Rollfilm into `/Applications` and start it — no dialog at any point.
-
-**B · Already downloaded in the browser — strip the tag off.** Drag Rollfilm into `/Applications`, then run once:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Rollfilm.app"
-```
-
-This deletes the attribute the browser added (`-d`) from the whole app bundle (`-r`). Afterwards the app is in exactly the state route A would have produced. You do *not* have to try launching it first.
-
-**C · No terminal at all — approve the app in System Settings.** Drag Rollfilm into `/Applications`, then:
-
-1. Open Rollfilm. macOS refuses and shows a warning — close it.
-2. Go to **System Settings → Privacy & Security** and scroll to the bottom.
-3. Next to *"Rollfilm was blocked to protect your Mac"* click **Open Anyway**, confirm, and enter your admin password.
-4. From then on Rollfilm starts by double-click like any other app.
-
-Step 1 is not optional here — the entry in System Settings only appears *after* a blocked launch attempt. On macOS 14 and older there was a shortcut (right-click → **Open**); Apple removed it in macOS 15 Sequoia.
-
-**The difference:** A and B end up identical — no quarantine attribute, so Gatekeeper has nothing to complain about. C leaves the attribute in place and instead records a one-time exception for this specific app. All three are permanent for the copy you installed; a future version you download in a browser goes through the same thing again.
-
-### Windows
-
-Run `Rollfilm-Setup-<version>.exe`. SmartScreen will warn about an unknown publisher — choose **More info → Run anyway**.
-
-### Linux
-
-Download `Rollfilm-<version>.AppImage`, make it executable (`chmod +x Rollfilm-*.AppImage`) and run it.
-
-### Updates
-
-On Windows and Linux the app updates itself: it checks the Releases page, downloads the new version in the background and applies it on the next quit. **On macOS it can't** — swapping an app bundle in place requires a signed build — so it only tells you a new version exists and opens the release page. Updating there means repeating the install: same two commands, drag over the old app.
-
 ## Tech stack
 
 | Layer | Tech |
@@ -184,7 +251,7 @@ On Windows and Linux the app updates itself: it checks the Releases page, downlo
 
 Everything runs locally — the only network access is the initial CLIP model download and your own Immich server (if configured).
 
-## Getting started (development)
+## Development
 
 Rollfilm is a native desktop app (Electron). You need Node.js 18+, a Python 3.11+ that can load SQLite extensions (on macOS use Homebrew Python — the system build has extension loading compiled out and `sqlite-vec` will fail), and ExifTool on your `PATH` (the packaged app ships its own; development does not).
 
@@ -200,7 +267,7 @@ npm run dist
 
 There is also a GitHub Actions workflow ([.github/workflows/build-desktop.yml](.github/workflows/build-desktop.yml)) that builds macOS, Windows, and Linux installers, and a one-command local build (`node build-desktop.js`).
 
-### Backend standalone (development)
+### Backend standalone
 
 ```bash
 cd backend
@@ -210,13 +277,11 @@ python run_server.py   # runs Alembic migrations, then starts the API on localho
 pytest                 # 350+ tests, in-memory database, a few seconds
 ```
 
-Thinking about contributing? [CONTRIBUTING.md](CONTRIBUTING.md) covers what is likely to be accepted, the commit style, and what to run before opening a pull request.
-
-## Configuration
+### Configuration
 
 The desktop app configures itself (data directory, ports) and stores everything under your user data folder. The Immich server URL and API key are deliberately **not** environment variables: they are entered in the app under Settings → Immich integration and stored in the database. For backend development, `PM_DATA_DIR` overrides where the library/database live.
 
-## Architecture
+### Architecture
 
 ```
 rollfilm/
@@ -255,7 +320,7 @@ Issues and pull requests are welcome — please read [CONTRIBUTING.md](CONTRIBUT
 
 ## Support the project
 
-Rollfilm is free and open source, built in my spare time. If it's useful to you, a star on GitHub or a mention to a friend already helps. More on [rollfilm.org](https://rollfilm.org/#about).
+Rollfilm is free and open source, built in my spare time. If it's useful to you, a ⭐ on GitHub or a mention to a friend already helps. Bug reports from a setup unlike mine help even more. More on [rollfilm.org](https://rollfilm.org/#about).
 
 ## License
 
