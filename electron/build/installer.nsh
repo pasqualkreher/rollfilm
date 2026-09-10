@@ -41,10 +41,86 @@
   Pop $0
 !macroend
 
+; Where the previous version lives, read before anything touches the
+; registry. The old uninstaller deletes its keys when it succeeds, and when
+; it fails halfway the keys may or may not still be there - so remember the
+; path up front, for the fallback below. Installer build only: the uninstaller
+; has no previous version to look after.
+!ifndef BUILD_UNINSTALLER
+  Var rfOldInstallDir
+!endif
+
 !macro customInit
   !insertmacro _killRollfilmProcesses
+
+  ; initMultiUser has run by now, so SHELL_CONTEXT points at the hive of the
+  ; installation electron-builder is about to replace.
+  ClearErrors
+  ReadRegStr $rfOldInstallDir SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
+  ${If} ${Errors}
+    StrCpy $rfOldInstallDir ""
+  ${EndIf}
+  ClearErrors
 !macroend
 
 !macro customUnInit
   !insertmacro _killRollfilmProcesses
+!macroend
+
+; electron-builder's own "is the app running?" check, in the installer and
+; the uninstaller alike, looks for Rollfilm.exe with `tasklist | find`, asks,
+; sends a close request, polls twice and then puts up "Rollfilm cannot be
+; closed. Please close it manually and click Retry". Since electron-builder
+; 24.13.2 that dialog comes back on every Retry for some users even with
+; nothing left running (electron-builder #8131, #9593); Cancel ends in "Failed
+; to uninstall old application files", and the only way forward was
+; uninstalling by hand. We already know how to close Rollfilm for certain -
+; the sweep above - so the check *is* the sweep: no question, no loop.
+; Defining this macro makes electron-builder leave its own version out of
+; both the installer and the uninstaller this build produces.
+!macro customCheckAppRunning
+  !insertmacro _killRollfilmProcesses
+!macroend
+
+; Reached right after electron-builder ran the previous version's uninstaller
+; (silently, with --updated). Its default reaction to a failure is a message
+; box - "Failed to uninstall old application files. Please try running the
+; installer again" - and Quit; running it again fails the same way, and the
+; user ends up in Settings > Apps uninstalling by hand before the setup gets
+; anywhere. Nothing in the old directory is worth that: the new version
+; brings a complete copy of everything. So on an error we remove the old
+; files ourselves and carry on installing.
+;
+; $R0 is the old uninstaller's exit code (0 = fine; 2 is its Abort when a
+; file could not be moved), the error flag means it could not even be
+; started. The directory is only wiped when it actually holds a Rollfilm -
+; a registry value pointing somewhere else is not a reason to delete that.
+!macro _rfRecoverFailedUninstall
+  ${If} ${Errors}
+    ClearErrors
+    StrCpy $R0 -1
+  ${EndIf}
+  ${If} $R0 != 0
+    DetailPrint "The previous version's uninstaller failed ($R0) - removing its files directly."
+    !insertmacro _killRollfilmProcesses
+    ${If} $rfOldInstallDir != ""
+    ${AndIf} ${FileExists} "$rfOldInstallDir\Rollfilm.exe"
+      RMDir /r "$rfOldInstallDir"
+    ${EndIf}
+    ; Whatever is left (a locked file or two) gets overwritten by the
+    ; install; a directory that survives only because it is our own working
+    ; directory is fine too.
+    ClearErrors
+    StrCpy $R0 0
+  ${EndIf}
+!macroend
+
+!macro customUnInstallCheck
+  !insertmacro _rfRecoverFailedUninstall
+!macroend
+
+; Same again for the second pass electron-builder makes on a per-machine
+; install (it also looks for a per-user copy to remove).
+!macro customUnInstallCheckCurrentUser
+  !insertmacro _rfRecoverFailedUninstall
 !macroend
