@@ -50,6 +50,29 @@
   Var rfOldInstallDir
 !endif
 
+; electron-builder builds the setup with "ShowInstDetails nevershow" and
+; switches DetailPrint off at the top of the install section, so the page
+; shows a bar and "Installing, please wait..." for minutes - most of that
+; time in a silent CopyFiles of the unpacked gigabyte - and nothing else. The
+; list control and the status line still exist on the page, so turn them
+; back on at run time: show the list (dialog item 1016 of the inner page)
+; and route DetailPrint to both it and the status line. Idempotent - it runs
+; from every hook, because on a per-machine install the first hook is skipped
+; in the elevated instance that actually does the work. Outside the install
+; page (silent runs, .onInit) FindWindow yields 0 and nothing happens.
+!macro _rfShowProgress
+  Push $0
+  Push $1
+  FindWindow $0 "#32770" "" $HWNDPARENT
+  ${If} $0 != 0
+    GetDlgItem $1 $0 1016
+    ShowWindow $1 ${SW_SHOW}
+    SetDetailsPrint both
+  ${EndIf}
+  Pop $1
+  Pop $0
+!macroend
+
 !macro customInit
   !insertmacro _killRollfilmProcesses
 
@@ -79,7 +102,16 @@
 ; Defining this macro makes electron-builder leave its own version out of
 ; both the installer and the uninstaller this build produces.
 !macro customCheckAppRunning
+  !insertmacro _rfShowProgress
+  DetailPrint "Closing Rollfilm if it is still running..."
   !insertmacro _killRollfilmProcesses
+  !ifndef BUILD_UNINSTALLER
+    ; What electron-builder does next, and says nothing about: run the
+    ; previous version's uninstaller and wait for it.
+    ${If} $rfOldInstallDir != ""
+      DetailPrint "Removing the previous version from $rfOldInstallDir (this can take a minute)..."
+    ${EndIf}
+  !endif
 !macroend
 
 ; Reached right after electron-builder ran the previous version's uninstaller
@@ -96,6 +128,7 @@
 ; started. The directory is only wiped when it actually holds a Rollfilm -
 ; a registry value pointing somewhere else is not a reason to delete that.
 !macro _rfRecoverFailedUninstall
+  !insertmacro _rfShowProgress
   ${If} ${Errors}
     ClearErrors
     StrCpy $R0 -1
@@ -112,15 +145,34 @@
     ; directory is fine too.
     ClearErrors
     StrCpy $R0 0
+  ${ElseIf} $rfOldInstallDir != ""
+    DetailPrint "Previous version removed."
   ${EndIf}
+!macroend
+
+; Next comes the part that takes longest and used to look like a hang: the
+; 7z package is unpacked to a temporary folder and then copied into place, a
+; gigabyte or so, with no progress of its own. Said once, after the last
+; uninstall pass - electron-builder makes a second one on a per-machine
+; install, looking for a per-user copy as well.
+!macro _rfAnnounceUnpack
+  DetailPrint "Unpacking Rollfilm ${VERSION} - a few hundred megabytes, this takes a while..."
 !macroend
 
 !macro customUnInstallCheck
   !insertmacro _rfRecoverFailedUninstall
+  ${If} $installMode != "all"
+    !insertmacro _rfAnnounceUnpack
+  ${EndIf}
 !macroend
 
-; Same again for the second pass electron-builder makes on a per-machine
-; install (it also looks for a per-user copy to remove).
 !macro customUnInstallCheckCurrentUser
   !insertmacro _rfRecoverFailedUninstall
+  !insertmacro _rfAnnounceUnpack
+!macroend
+
+; Everything is in place (files, registry, shortcuts) when this runs.
+!macro customInstall
+  !insertmacro _rfShowProgress
+  DetailPrint "Rollfilm ${VERSION} is installed."
 !macroend
