@@ -1403,7 +1403,8 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
         // nothing usable is painted"). Zoomed out this is the whole-frame
         // render that finally shows the edit everywhere; still zoomed native
         // it re-tiles the visible part and the flag simply stays up.
-        if (!tier && groundStaleRef.current) tier = targetTier(1);
+        const staleGround = !tier && groundStaleRef.current;
+        if (staleGround) tier = targetTier(1);
         // Which of the two halves still needs work: the settle is worth
         // running for the original alone, e.g. when a compare mode is entered
         // over an edit that is already sharp.
@@ -1421,6 +1422,21 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
           // much sooner without them; at true 100% the budget is a no-op.
           const region = tier === "native" ? visibleRegion() : null;
           const dtoken = dirtyToken.current;
+          // Zoomed OUT over a stale ground: the tile carrying the new edit sits
+          // on the old edit for the seconds the whole-frame accurate render
+          // takes, as a visible rectangle. A whole-frame scrub render is a
+          // fraction of that, so it goes on first - the rectangle is gone at
+          // once, softly, and the accurate frame replaces it moments later.
+          // Only for the whole-frame case: still zoomed in, a tile of the
+          // visible part is what's owed, and the ground outside it can wait.
+          if (staleGround && !region) {
+            const quick = await api.images.editorPreview(
+              image.id, previewEditsLatest.current!, fctrl.signal, "scrub", false, peekRef.current,
+              null, scaleRef.current > 1.001, SCRUB_ZOOM_WHOLE_PX[scrubLevelRef.current]
+            );
+            if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
+            await drawBlob(quick, seq, false, previewEditsLatest.current!.crop);
+          }
           // This exact edit state was already painted from the fallback tier
           // and only the full-resolution base is missing: poll instead of
           // asking for a render - the old behaviour re-rendered the very
