@@ -65,6 +65,7 @@ import {
   snapResize,
   worldRect,
   type Guide,
+  type Margins,
   type Rect,
 } from "../utils/canvasLayout";
 import { ExportChip } from "./CanvasExportChip";
@@ -92,11 +93,22 @@ const SNAP_PX = 5;
 // per-canvas margin existed).
 const MARGIN_MM = 12;
 
-// The document's page margin, guarded: never negative, never past the middle
+// The document's page margins, guarded: never negative, never past the middle
 // of the sheet (the two sides would cross and every inset flips sign).
-function marginOf(doc: { margin_mm?: number; page_width_mm: number; page_height_mm: number }): number {
-  const margin = doc.margin_mm ?? MARGIN_MM;
-  return Math.max(0, Math.min(margin, doc.page_width_mm / 2, doc.page_height_mm / 2));
+// of the sheet. x is left/right, y is top/bottom; a document from before the
+// split carries one margin, which serves both.
+function marginOf(doc: {
+  margin_mm?: number;
+  margin_y_mm?: number;
+  page_width_mm: number;
+  page_height_mm: number;
+}): Margins {
+  const x = doc.margin_mm ?? MARGIN_MM;
+  const y = doc.margin_y_mm ?? x;
+  return {
+    x: Math.max(0, Math.min(x, doc.page_width_mm / 2)),
+    y: Math.max(0, Math.min(y, doc.page_height_mm / 2)),
+  };
 }
 // Frames are drawn with handles this big on screen, whatever the zoom.
 const HANDLE_PX = 9;
@@ -1336,7 +1348,7 @@ export function CanvasEditor({
     const { items: flowed, pages } = autoFlow(
       images.map((image) => ({ id: image.id, aspect: imageAspect(image.id) ?? 1.5 })),
       doc,
-      { columns: 3, marginMm: marginOf(doc), gapMm: 6, startZ: 1 }
+      { columns: 3, margin: marginOf(doc), gapMm: 6, startZ: 1 }
     );
     setDoc((current) =>
       current
@@ -1408,7 +1420,7 @@ export function CanvasEditor({
     const id = uuid();
     const page = visiblePage();
     const margin = marginOf(doc);
-    const width = Math.max(20, Math.min(120, doc.page_width_mm - margin * 2));
+    const width = Math.max(20, Math.min(120, doc.page_width_mm - margin.x * 2));
     // Below whatever is already on this sheet, so a new caption never lands on
     // top of a photo and reads as a glitch.
     const spot = nextFreeSpot(
@@ -1424,7 +1436,7 @@ export function CanvasEditor({
       kind: "text",
       image_id: null,
       page,
-      x_mm: margin,
+      x_mm: margin.x,
       y_mm: spot.y,
       width_mm: width,
       height_mm: 16,
@@ -1611,7 +1623,7 @@ export function CanvasEditor({
     const { items: flowed, pages } = autoFlow(
       unplaced.map((image) => ({ id: image.id, aspect: imageAspect(image.id) ?? 1.5 })),
       doc,
-      { columns: 3, marginMm: marginOf(doc), gapMm: 6, startZ: topZ + 1 }
+      { columns: 3, margin: marginOf(doc), gapMm: 6, startZ: topZ + 1 }
     );
     const added = flowed.map((item) => ({ ...item, id: uuid(), page: item.page + startPage }));
     commit((current) => ({
@@ -2457,7 +2469,6 @@ export function CanvasEditor({
           selected it says how to select something instead of going blank. */}
       <CanvasActionBar
         selection={selectedItems}
-        endless={endless}
         cropping={croppingId !== null}
         onRestack={restack}
         onDelete={removeSelected}
@@ -2604,13 +2615,16 @@ export function CanvasEditor({
                           }}
                         />
                       )}
-                      {/* The page margin, as a hairline you lay out against.
+                      {/* The page margins, as a hairline you lay out against.
                           An editing aid like the grid: never printed, never
-                          exported, and gone when the margin is 0. */}
-                      {marginOf(doc) > 0 && (
+                          exported, and gone when both margins are 0. */}
+                      {(marginOf(doc).x > 0 || marginOf(doc).y > 0) && (
                         <div
                           className="canvas-margin-guide"
-                          style={{ inset: marginOf(doc), borderWidth: 1 / zoom }}
+                          style={{
+                            inset: `${marginOf(doc).y}px ${marginOf(doc).x}px`,
+                            borderWidth: 1 / zoom,
+                          }}
                         />
                       )}
                       <span className="canvas-page-number" style={{ fontSize: 5, bottom: -8 }}>
@@ -2843,6 +2857,16 @@ export function CanvasEditor({
               Drag anywhere to move the view · scroll to zoom
             </div>
           )}
+
+          {/* A blank canvas says, in one quiet line on the paper, how to get
+              a photo onto it. Gone the moment the first item lands. */}
+          {items.length === 0 && !croppingItem && (
+            <div className="canvas-empty-hint" aria-live="polite">
+              {images.length === 0
+                ? "Select photos in the library and choose “Add to canvas” to add them here"
+                : "Drag a photo from the filmstrip onto the page to add it"}
+            </div>
+          )}
         </div>
       </div>
 
@@ -2863,7 +2887,6 @@ export function CanvasEditor({
         }
         open={showFilmstrip}
         onToggle={() => setShowFilmstrip((open) => !open)}
-        onAdd={(id) => addPhotos([id])}
         onRemove={(id) => void removeFromCanvas(id)}
         onDragStart={(event, id) => {
           const world = toWorld(event.clientX, event.clientY);
@@ -3900,6 +3923,7 @@ function CanvasToolbar({
   onFill: () => void;
   unplaced: number;
   memberCount: number;
+  // Take everything off every page. Nothing is deleted: the photos stay.
   onClear: () => void;
   canClear: boolean;
   onSave: () => void;
@@ -3914,10 +3938,11 @@ function CanvasToolbar({
     PAGE_PRESETS.find((p) => p.key === presetKey)?.label ??
     `${Math.round(doc.page_width_mm)}×${Math.round(doc.page_height_mm)} mm`;
 
-  // Everything the old "Paper" popover held sits IN the bar now, as icons with
-  // their explanations in the tooltips: nothing to open before you can read or
-  // change what the canvas is. Toggles carry aria-pressed + the is-on tint;
-  // anything destructive keeps its confirm dialog behind the icon.
+  // Everything the old "Paper" popover held sits IN the bar now, as icons
+  // with a word next to each - the glyphs for "snap" or "place" are nobody's
+  // native tongue - and the full explanation in the tooltip. When the bar is
+  // too narrow for the words they drop away (see .canvas-tool-label) and the
+  // icons and tooltips carry on. Toggles carry aria-pressed + the is-on tint.
   return (
     <div className="filter-bar canvas-toolbar">
       <div className="control-group">
@@ -3943,12 +3968,13 @@ function CanvasToolbar({
           }
         >
           <IconSave size={15} />
+          <span className="canvas-tool-label">Save</span>
         </button>
         {versionsChip}
       </div>
 
       <div className="control-group">
-        <span className="segmented segmented--icons" role="group" aria-label="Canvas kind">
+        <span className="segmented segmented--tools" role="group" aria-label="Canvas kind">
           <button
             className={doc.page_mode === "pages" ? "active" : ""}
             onClick={() => commit(toPages)}
@@ -3957,6 +3983,7 @@ function CanvasToolbar({
             title="Pages: separate sheets of a fixed size, like a photo book. Use the list on the left to add, copy and reorder pages."
           >
             <IconSheets size={15} />
+            <span className="canvas-tool-label">Pages</span>
           </button>
           <button
             className={doc.page_mode === "infinite" ? "active" : ""}
@@ -3966,6 +3993,7 @@ function CanvasToolbar({
             title="Free canvas: one endless sheet without page edges. All pages are merged into one."
           >
             <IconInfinity size={15} />
+            <span className="canvas-tool-label">Free canvas</span>
           </button>
         </span>
         {/* The free canvas has no page, so a page size means nothing there -
@@ -4026,31 +4054,62 @@ function CanvasToolbar({
                   />
                 </span>
               </div>
-              <div className="canvas-panel-row">
-                <span className="canvas-panel-label">Margin</span>
+              {/* Two margins, not four: left and right share one value, top
+                  and bottom the other - a photo book wants a wider inner
+                  margin only in theory, and a bar of four boxes is what
+                  people actually get wrong. */}
+              <div className="canvas-panel-row canvas-panel-row--last">
+                <span className="canvas-panel-label">Margin left &amp; right</span>
                 <MmField
-                  value={round1(marginOf(doc))}
+                  value={round1(marginOf(doc).x)}
                   min={0}
                   max={100}
-                  title="Page margin: a guide line on every page that photos snap to. 0 hides it."
+                  title="Margin on the left and right edge of every page, in millimetres"
                   onChange={(margin_mm) => commit((c) => ({ ...c, margin_mm }))}
                 />
+              </div>
+              <div className="canvas-panel-row">
+                <span className="canvas-panel-label">Margin top &amp; bottom</span>
+                <MmField
+                  value={round1(marginOf(doc).y)}
+                  min={0}
+                  max={100}
+                  title="Margin on the top and bottom edge of every page, in millimetres"
+                  onChange={(margin_y_mm) => commit((c) => ({ ...c, margin_y_mm }))}
+                />
+              </div>
+              <div className="canvas-panel-row">
+                <span className="canvas-panel-note">
+                  The margins are guide lines on every page: photos snap to them and placed
+                  photos flow inside them. They are never printed. 0 hides a line.
+                </span>
               </div>
             </div>
           </FilterChip>
         )}
-        <label
-          className="canvas-swatch canvas-toolbar-swatch"
-          style={{ background: doc.background }}
-          title={`Paper colour: ${swatchName(doc.background)}`}
+        {/* The paper's colour: the same chip as a frame's colour - a dot and
+            the colour's name, and behind it the swatches plus "any other
+            colour" - so the two pickers look and work alike. */}
+        <FilterChip
+          label={
+            <>
+              <span className="canvas-swatch-dot" style={{ background: doc.background }} />
+              {swatchName(doc.background)}
+            </>
+          }
+          title={`Paper colour: ${swatchName(doc.background)}. It prints.`}
         >
-          <input
-            type="color"
-            value={doc.background}
-            aria-label="Paper colour"
-            onChange={(event) => commit((c) => ({ ...c, background: event.target.value }), { history: false })}
-          />
-        </label>
+          <div className="canvas-panel">
+            <div className="canvas-panel-row">
+              <span className="canvas-panel-label">Paper colour</span>
+              <SwatchPicker
+                value={doc.background}
+                label="Paper colour"
+                onChange={(background) => commit((c) => ({ ...c, background }), { history: false })}
+              />
+            </div>
+          </div>
+        </FilterChip>
         {doc.page_mode === "infinite" && (
           <button
             className={`btn btn-sm canvas-tool${doc.show_page_guide ? " is-on" : ""}`}
@@ -4060,6 +4119,7 @@ function CanvasToolbar({
             title="Page guide: shows the page outlines on the free canvas. Keep your work inside them to switch to Pages without changes."
           >
             <IconGuide size={15} />
+            <span className="canvas-tool-label">Page guide</span>
           </button>
         )}
         <button
@@ -4070,6 +4130,7 @@ function CanvasToolbar({
           title="Grid: show a measuring grid on the page. It is not printed."
         >
           <IconGrid size={15} />
+          <span className="canvas-tool-label">Grid</span>
         </button>
         {doc.show_grid && (
           <MmField
@@ -4088,6 +4149,7 @@ function CanvasToolbar({
           title="Snap: align edges and centers with each other and with the page while dragging"
         >
           <IconAnchor size={15} />
+          <span className="canvas-tool-label">Snap</span>
         </button>
       </div>
 
@@ -4106,6 +4168,11 @@ function CanvasToolbar({
           }
         >
           <IconImage size={15} />
+          <span className="canvas-tool-label">
+            {unplaced > 0 ? `Place ${unplaced} photo${unplaced === 1 ? "" : "s"}` : "Place photos"}
+          </span>
+          {/* The count also rides on the icon's shoulder, for when the bar
+              is too narrow for the words. */}
           {unplaced > 0 && <span className="canvas-tool-badge">{unplaced}</span>}
         </button>
         <button
@@ -4115,23 +4182,12 @@ function CanvasToolbar({
           title="Add text: a caption or a title"
         >
           <IconTextT size={15} />
-        </button>
-        {/* Next to the two ways of putting things on the page - what it
-            undoes - and well away from Save, which it has nothing to do
-            with. An eraser rather than a trash can: nothing is deleted. */}
-        <button
-          className="btn btn-sm canvas-tool quiet-danger"
-          onClick={onClear}
-          disabled={!canClear}
-          aria-label="Clear the canvas"
-          title="Clear the canvas: remove everything from the page. The photos stay in your library."
-        >
-          <IconEraser size={15} />
+          <span className="canvas-tool-label">Add text</span>
         </button>
       </div>
 
-      <span style={{ flex: 1 }} />
-
+      {/* No spacer before the view tools: one continuous run of groups,
+          rather than two clusters with a void between them. */}
       <div className="control-group">
         <button className="btn btn-sm" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">
           <IconUndo size={14} />
@@ -4155,6 +4211,7 @@ function CanvasToolbar({
           title="Fit one page in the window (press 0)"
         >
           <IconFitPage size={15} />
+          <span className="canvas-tool-label">Fit page</span>
         </button>
         <button
           className="btn btn-sm canvas-tool"
@@ -4163,6 +4220,7 @@ function CanvasToolbar({
           title="Fit all pages in the window (Shift-0)"
         >
           <IconFitAll size={15} />
+          <span className="canvas-tool-label">Fit all</span>
         </button>
         <button
           className="btn btn-sm canvas-tool"
@@ -4171,9 +4229,28 @@ function CanvasToolbar({
           title="Print view: show the pages as they will print (P). Escape to go back."
         >
           <IconPrinter size={15} />
+          <span className="canvas-tool-label">Print view</span>
         </button>
         {exportChip}
         <CanvasHelp />
+      </div>
+
+      {/* Clearing the canvas sits flush at the far right, on its own: the
+          one destructive thing in the bar, well away from the tools that put
+          things on the page. An eraser rather than a trash can - nothing is
+          deleted, the photos stay. */}
+      <span style={{ flex: 1 }} />
+      <div className="control-group">
+        <button
+          className="btn btn-sm canvas-tool quiet-danger"
+          onClick={onClear}
+          disabled={!canClear}
+          aria-label="Clear the canvas"
+          title="Clear the canvas: remove everything from every page. The photos stay in the filmstrip and in your library."
+        >
+          <IconEraser size={15} />
+          <span className="canvas-tool-label">Clear canvas</span>
+        </button>
       </div>
     </div>
   );
@@ -4444,7 +4521,6 @@ function CanvasHelp() {
 
 function CanvasActionBar({
   selection,
-  endless,
   cropping,
   onRestack,
   onDelete,
@@ -4465,7 +4541,6 @@ function CanvasActionBar({
   onStyle,
 }: {
   selection: LayoutItem[];
-  endless: boolean;
   cropping: boolean;
   onRestack: (direction: "front" | "back" | "forward" | "backward") => void;
   onDelete: () => void;
@@ -4486,20 +4561,10 @@ function CanvasActionBar({
   pasteable: LayoutItem["kind"] | null;
   onStyle: (style: Partial<LayoutTextStyle>) => void;
 }) {
-  // With nothing selected the bar teaches instead of going blank - and keeping
-  // it in the layout means the canvas below never jumps when a selection
-  // appears.
-  if (selection.length === 0) {
-    return (
-      <div className="canvas-action-bar canvas-action-bar--hint">
-        Click a photo to select it · drag across the page to select several · double-click a photo
-        to move it inside its frame ·{" "}
-        {endless
-          ? "double-click an empty area to jump back to your first photo"
-          : "scroll or drag the scrollbars to move around"}
-      </div>
-    );
-  }
+  // With nothing selected there is no bar: an empty strip under the toolbar
+  // read as a broken one. The canvas moves down a row when the first
+  // selection appears - accepted, over a permanent blank band.
+  if (selection.length === 0) return null;
 
   const photos = selection.filter((item) => item.kind === "photo").length;
   const texts = selection.length - photos;
@@ -4759,7 +4824,7 @@ function CanvasActionBar({
       <button
         className="btn btn-sm quiet-danger"
         onClick={onDelete}
-        title="Remove from the page (Delete). The photos stay in the library."
+        title="Remove the selected items from the page (Delete). The photos stay in the library."
       >
         <IconTrash size={13} /> <span className="canvas-action-label">Remove from page</span>
       </button>
@@ -4775,7 +4840,6 @@ function Filmstrip({
   placed,
   open,
   onToggle,
-  onAdd,
   onRemove,
   onDragStart,
   backButton,
@@ -4785,7 +4849,6 @@ function Filmstrip({
   placed: Set<string>;
   open: boolean;
   onToggle: () => void;
-  onAdd: (id: string) => void;
   // Take a photo off the canvas's photos. Only shown for photos that have no
   // frame on the page - a placed photo would just stay (frames keep it).
   onRemove: (id: string) => void;
@@ -4859,16 +4922,15 @@ function Filmstrip({
               style={{ width: chipWidth, height: chipHeight }}
               title={
                 placed.has(image.id)
-                  ? `${image.original_filename}: already on the canvas. Click to place another copy.`
-                  : `${image.original_filename}: click to place it, or drag it onto the page`
+                  ? `${image.original_filename}: already on the canvas. Drag it onto the page to place another copy.`
+                  : `${image.original_filename}: drag it onto the page to place it`
               }
               onPointerDown={(event) => {
-                // A press that turns into a drag places the photo where it is
-                // dropped; a press that doesn't is a plain click and places it
-                // on the page for you.
+                // Only a drag places the photo - where it is dropped. A plain
+                // click does nothing: a photo appearing somewhere on the page
+                // from a click meant to inspect the chip was a surprise.
                 if (event.button === 0) onDragStart(event, image.id);
               }}
-              onClick={() => onAdd(image.id)}
             >
               <img
                 src={api.images.thumbnailUrl(image.id, editVersion(image), "small")}

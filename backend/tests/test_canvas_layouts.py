@@ -5,6 +5,7 @@ what happens to a frame whose photo goes to the Trash or is deleted for good,
 and the guards that keep an unusable page out of the database.
 """
 
+import json
 from datetime import datetime
 
 import pytest
@@ -335,3 +336,45 @@ def test_saving_under_an_existing_name_replaces_that_version(db: Session):
     out = restore_layout_version(canvas.id, first_id, db=db, current_user=user)
     assert out.items[0].x_mm == 50
     assert out.active_version_id == first_id
+
+
+def test_the_margins_are_two_values_each_clamped_to_its_own_axis(db: Session):
+    """Left/right and top/bottom are set separately, and each is held to
+    half of the edge it measures - a margin past the middle would cross."""
+    canvas = _canvas(db)
+    user = db.get(User, 1)
+
+    out = save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(page_width_mm=100, page_height_mm=40, margin_mm=8, margin_y_mm=3),
+        db=db,
+        current_user=user,
+    )
+    assert (out.margin_mm, out.margin_y_mm) == (8.0, 3.0)
+
+    out = save_canvas_layout(
+        canvas.id,
+        schemas.CanvasLayoutIn(page_width_mm=100, page_height_mm=40, margin_mm=80, margin_y_mm=-1),
+        db=db,
+        current_user=user,
+    )
+    assert (out.margin_mm, out.margin_y_mm) == (50.0, 0.0)
+
+
+def test_a_document_without_a_top_bottom_margin_uses_the_sides(db: Session):
+    """Versions kept (and clients built) before the split carry one margin;
+    restoring one must not silently reset the top and bottom to the default."""
+    canvas = _canvas(db)
+    user = db.get(User, 1)
+
+    save_canvas_layout(canvas.id, schemas.CanvasLayoutIn(margin_mm=5), db=db, current_user=user)
+    out = create_layout_version(canvas.id, schemas.LayoutVersionIn(name="Old"), db=db, current_user=user)
+    version = db.get(LayoutVersion, out.versions[0].id)
+    doc = json.loads(version.doc)
+    del doc["margin_y_mm"]
+    version.doc = json.dumps(doc)
+    db.commit()
+
+    save_canvas_layout(canvas.id, schemas.CanvasLayoutIn(margin_mm=20, margin_y_mm=9), db=db, current_user=user)
+    out = restore_layout_version(canvas.id, version.id, db=db, current_user=user)
+    assert (out.margin_mm, out.margin_y_mm) == (5.0, 5.0)

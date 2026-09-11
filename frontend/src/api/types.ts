@@ -274,9 +274,11 @@ export interface CanvasLayout {
   show_grid: boolean;
   grid_mm: number;
   snap: boolean;
-  // Page margin in mm: drawn as a guide on each sheet, a snap target, and
-  // where the auto-layout flows photos.
+  // Page margins in mm: drawn as a guide on each sheet, a snap target, and
+  // where the auto-layout flows photos. margin_mm is the left and right
+  // margin (the name predates the split), margin_y_mm the top and bottom one.
   margin_mm: number;
+  margin_y_mm: number;
   // Free canvas only: draw the outline of the sheets this design would be cut
   // into, so laying out against them makes a later switch to Pages a
   // relabelling rather than a redesign.

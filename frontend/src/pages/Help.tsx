@@ -1007,9 +1007,8 @@ const CHAPTERS: Chapter[] = [
             <h4>Getting photos onto the paper</h4>
             <ul>
               <li>
-                <strong>Click a chip</strong> in the filmstrip and the photo lands on the page you
-                are looking at; <strong>drag it</strong> and it lands where you let go. A placed
-                chip gets a tick; click it again to place a second copy.
+                <strong>Drag a chip</strong> from the filmstrip onto the paper and the photo lands
+                where you let go. A placed chip gets a tick; drag it again to place a second copy.
               </li>
               <li>
                 <strong>Place N photos</strong> flows everything not yet on the paper into a
@@ -1022,10 +1021,6 @@ const CHAPTERS: Chapter[] = [
                 installed on this computer, plus weight, italic, line height and letter spacing;
                 the bar also sets the type size in millimetres, the colour and the alignment in
                 the box.
-              </li>
-              <li>
-                <strong>Clear</strong> (the eraser) wipes the paper. The photos stay in the
-                filmstrip and the library.
               </li>
             </ul>
             <h4>Working an item</h4>
@@ -1066,8 +1061,10 @@ const CHAPTERS: Chapter[] = [
                 choose; it is never printed.
               </li>
               <li>
-                <strong>Remove from page</strong> (or <kbd>Delete</kbd>) takes items off the
-                paper. The photo stays in the library — and in the filmstrip.
+                <strong>Remove from page</strong> (or <kbd>Delete</kbd>) takes the selected items
+                off the paper. <strong>Clear canvas</strong> (the eraser at the right end of the
+                toolbar) takes everything off every page — it asks first. Either way the photos
+                stay in the library and in the filmstrip.
               </li>
             </ul>
             <h4>Getting around</h4>
@@ -1100,9 +1097,10 @@ const CHAPTERS: Chapter[] = [
                 <strong>Page setup</strong> (the chip named after the current size) holds the size —
                 A3, A4 and A5 in both orientations, US Letter, 30 cm and 21 cm squares, photo book
                 28×21 and 21×28, photo 15×10 and 18×13 cm — or any width and height in millimetres:
-                typing a number <em>is</em> choosing custom. The <strong>margin</strong> is a
-                hairline guide on every sheet that photos snap to and that placed photos flow
-                inside; 0 hides it.
+                typing a number <em>is</em> choosing custom. The <strong>margins</strong> — one
+                value for left and right, another for top and bottom — are hairline guides on
+                every sheet that photos snap to and that placed photos flow inside; 0 hides a
+                line.
               </li>
               <li>
                 <strong>Paper colour</strong> — a swatch from gallery white to black, or any colour.

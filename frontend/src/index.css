@@ -7805,7 +7805,7 @@ button.smart-card {
   max-width: none;
 }
 
-/* Icon tools: square-ish buttons, the glyph centred, the explanation in the
+/* Tools: an icon with its name beside it and the explanation in the
    tooltip. Toggles get the segmented control's soft accent tint when on, so
    "active" reads the same way everywhere in the bar. */
 .canvas-tool {
@@ -7813,7 +7813,34 @@ button.smart-card {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 5px 8px;
+  gap: 6px;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+/* The word next to a tool's icon. Below what a full row of named tools
+   needs, the words go and the icons and tooltips carry on alone. Measured
+   against the WINDOW, not the bar: a container query would make the toolbar
+   a stacking context, and its popovers (page setup, versions, export) would
+   then sit under the canvas instead of over it. */
+.canvas-tool-label {
+  font-size: 12px;
+  line-height: 1;
+}
+
+@media (max-width: 1600px) {
+  .canvas-toolbar .canvas-tool-label {
+    display: none;
+  }
+}
+
+/* Labelled segments (Pages / Free canvas): icon and word side by side. */
+.segmented--tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  white-space: nowrap;
 }
 
 .canvas-tool.is-on {
@@ -7840,23 +7867,6 @@ button.smart-card {
   pointer-events: none;
 }
 
-/* The paper-colour well: the swatch itself is the control; the native colour
-   picker (with its eyedropper) opens on click. */
-.canvas-toolbar-swatch {
-  width: 22px;
-  height: 22px;
-  align-self: center;
-  cursor: pointer;
-}
-
-.canvas-toolbar-swatch input[type="color"] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-}
 
 .canvas-size-select {
   max-width: 160px;
@@ -7880,9 +7890,22 @@ button.smart-card {
   font-size: 13px;
 }
 
-.canvas-action-bar--hint {
-  color: var(--text-muted);
-  font-size: 12px;
+/* The blank canvas explaining itself: one light-grey line over the middle
+   of the stage, no box, letting pointer events through so the paper beneath
+   still takes drops and clicks. Grey on white paper and grey on the dark
+   free canvas alike, so it is its own colour rather than a theme token. */
+.canvas-empty-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 48px);
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: center;
+  color: rgba(128, 128, 128, 0.75);
+  pointer-events: none;
+  user-select: none;
 }
 
 .canvas-action-what {
@@ -7910,6 +7933,16 @@ button.smart-card {
   /* Safety net for bars narrower than even the compact row can manage:
      scroll sideways rather than push the layout around. */
   overflow-x: auto;
+}
+
+/* While one of the bar's chips is open (frame colour, font) the popover
+   must hang out below the bar: the sideways scroll would otherwise clip it
+   into a scrollable stub, and the container's own stacking context would
+   paint it under the canvas that follows in the DOM. */
+.canvas-action-bar:has(.filter-chip-pop) {
+  position: relative;
+  z-index: 60;
+  overflow: visible;
 }
 
 .canvas-action-bar .btn {

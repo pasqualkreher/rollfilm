@@ -319,9 +319,10 @@ function CanvasShelfViewer({
       show_grid: false,
       grid_mm: 10,
       snap: true,
-      // Read-only stand-in doc: the margin is an editing aid the shelf never
+      // Read-only stand-in doc: the margins are an editing aid the shelf never
       // draws, so any value satisfies the shape.
       margin_mm: 0,
+      margin_y_mm: 0,
       show_page_guide: canvas.show_page_guide,
       show_in_canvases: true,
       items: canvas.items,

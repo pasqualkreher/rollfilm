@@ -54,11 +54,20 @@ export function pageAtMm(worldY: number, layout: PageBox, pageCount: number): nu
   return Math.max(0, Math.min(pageCount - 1, Math.floor(worldY / stride)));
 }
 
-// margin_mm is optional because read-only consumers (the shelf's gallery
-// docs) don't carry it - only the editor, which snaps and flows, does.
+// The margins are optional because read-only consumers (the shelf's gallery
+// docs) don't carry them - only the editor, which snaps and flows, does.
+// margin_mm is left/right, margin_y_mm top/bottom.
 export type PageBox = Pick<CanvasLayout, "page_mode" | "page_width_mm" | "page_height_mm"> & {
   margin_mm?: number;
+  margin_y_mm?: number;
 };
+
+// The page margins on each axis, in mm: x for left and right, y for top and
+// bottom. Older documents carry a single margin, which then serves both.
+export interface Margins {
+  x: number;
+  y: number;
+}
 
 // An item's frame in world coordinates (page offset folded in).
 export function worldRect(item: LayoutItem, layout: PageBox): Rect {
@@ -159,10 +168,11 @@ export function snapTargets(
   if (layout.page_mode === "pages") {
     const first = pageAtMm(moving.y, layout, pageCount);
     const last = pageAtMm(moving.y + moving.h, layout, pageCount);
-    // The page margin is a line you lay things out AGAINST, so it snaps like
-    // the page edges do. Only a real margin: at 0 the lines would double the
-    // edges.
-    const margin = Math.max(0, layout.margin_mm ?? 0);
+    // The page margins are lines you lay things out AGAINST, so they snap
+    // like the page edges do. Only a real margin: at 0 the lines would double
+    // the edges.
+    const marginX = Math.max(0, layout.margin_mm ?? 0);
+    const marginY = Math.max(0, layout.margin_y_mm ?? layout.margin_mm ?? 0);
     for (let page = first; page <= last; page++) {
       const top = pageOffsetMm(page, layout);
       const bottom = top + layout.page_height_mm;
@@ -176,14 +186,16 @@ export function snapTargets(
         { at: (top + bottom) / 2, from: 0, to: layout.page_width_mm },
         { at: bottom, from: 0, to: layout.page_width_mm }
       );
-      if (margin > 0 && margin < layout.page_width_mm / 2 && margin < layout.page_height_mm / 2) {
+      if (marginX > 0 && marginX < layout.page_width_mm / 2) {
         x.push(
-          { at: margin, from: top, to: bottom },
-          { at: layout.page_width_mm - margin, from: top, to: bottom }
+          { at: marginX, from: top, to: bottom },
+          { at: layout.page_width_mm - marginX, from: top, to: bottom }
         );
+      }
+      if (marginY > 0 && marginY < layout.page_height_mm / 2) {
         y.push(
-          { at: top + margin, from: 0, to: layout.page_width_mm },
-          { at: bottom - margin, from: 0, to: layout.page_width_mm }
+          { at: top + marginY, from: 0, to: layout.page_width_mm },
+          { at: bottom - marginY, from: 0, to: layout.page_width_mm }
         );
       }
     }
@@ -299,10 +311,10 @@ export interface FlowPhoto {
 export function autoFlow(
   photos: FlowPhoto[],
   layout: PageBox,
-  options: { columns: number; marginMm: number; gapMm: number; startZ: number }
+  options: { columns: number; margin: Margins; gapMm: number; startZ: number }
 ): { items: Omit<LayoutItem, "id">[]; pages: number } {
-  const { columns, marginMm, gapMm, startZ } = options;
-  const usableWidth = layout.page_width_mm - marginMm * 2;
+  const { columns, margin, gapMm, startZ } = options;
+  const usableWidth = layout.page_width_mm - margin.x * 2;
   const cellWidth = (usableWidth - gapMm * (columns - 1)) / columns;
   // Square cells keep the maths honest across mixed orientations; a portrait
   // photo simply doesn't fill its cell's width.
@@ -310,7 +322,7 @@ export function autoFlow(
   const rowsPerPage =
     layout.page_mode === "infinite"
       ? Math.max(1, columns)
-      : Math.max(1, Math.floor((layout.page_height_mm - marginMm * 2 + gapMm) / (cellHeight + gapMm)));
+      : Math.max(1, Math.floor((layout.page_height_mm - margin.y * 2 + gapMm) / (cellHeight + gapMm)));
   const perPage = columns * rowsPerPage;
 
   const items: Omit<LayoutItem, "id">[] = [];
@@ -323,8 +335,8 @@ export function autoFlow(
     const aspect = photo.aspect > 0 ? photo.aspect : 1.5;
     const width = aspect >= 1 ? cellWidth : cellHeight * aspect;
     const height = aspect >= 1 ? cellWidth / aspect : cellHeight;
-    const cellX = marginMm + column * (cellWidth + gapMm);
-    const cellY = marginMm + row * (cellHeight + gapMm);
+    const cellX = margin.x + column * (cellWidth + gapMm);
+    const cellY = margin.y + row * (cellHeight + gapMm);
     items.push({
       kind: "photo",
       image_id: photo.id,
@@ -353,14 +365,14 @@ export function nextFreeSpot(
   existing: Rect[],
   layout: PageBox,
   size: { w: number; h: number },
-  marginMm: number
+  margin: Margins
 ): { x: number; y: number } {
-  const bottom = existing.length ? Math.max(...existing.map((r) => r.y + r.h)) : marginMm;
-  const y = existing.length ? bottom + 5 : marginMm;
+  const bottom = existing.length ? Math.max(...existing.map((r) => r.y + r.h)) : margin.y;
+  const y = existing.length ? bottom + 5 : margin.y;
   const maxY =
-    layout.page_mode === "pages" ? layout.page_height_mm - size.h - marginMm : Number.POSITIVE_INFINITY;
+    layout.page_mode === "pages" ? layout.page_height_mm - size.h - margin.y : Number.POSITIVE_INFINITY;
   return {
-    x: Math.max(marginMm, (layout.page_width_mm - size.w) / 2),
-    y: Math.max(marginMm, Math.min(y, maxY)),
+    x: Math.max(margin.x, (layout.page_width_mm - size.w) / 2),
+    y: Math.max(margin.y, Math.min(y, maxY)),
   };
 }
