@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
 import { setQualityPaused, tierUrl, usePhotoTier } from "../utils/photoQuality";
-import type { CanvasLayout, ImageOut, LayoutItem, LayoutTextStyle, LayoutVersion } from "../api/types";
+import type { CanvasLayout, ImageOut, LayoutItem, LayoutTextStyle } from "../api/types";
 import { CANVAS_STRIP_MAX_PX, CANVAS_STRIP_MIN_PX, collapsePairs, setCanvasStripChip, thumbPx, useCanvasStripChip, useThumbSize } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
 import { PhotoEditor } from "./PhotoEditor";
@@ -28,6 +28,7 @@ import {
   IconEraser,
   IconFitAll,
   IconFitPage,
+  IconFocus,
   IconGrid,
   IconGuide,
   IconHelp,
@@ -38,12 +39,12 @@ import {
   IconAnchor,
   IconMinus,
   IconPencil,
+  IconPlay,
   IconPlus,
   IconPrinter,
   IconRedo,
   IconRestore,
   IconRotate,
-  IconSave,
   IconSendBack,
   IconSheets,
   IconTextT,
@@ -69,6 +70,11 @@ import {
   type Rect,
 } from "../utils/canvasLayout";
 import { ExportChip } from "./CanvasExportChip";
+import { FocusButton, FocusToggle, useFocusChrome } from "./FocusToggle";
+import { Presence } from "./Presence";
+
+// How long after the last edit the canvas writes itself.
+const AUTOSAVE_MS = 700;
 
 // The creative layout of a canvas: its photos placed by hand on pages (or on
 // one unbounded canvas) instead of flowed into the grid.
@@ -426,14 +432,15 @@ export function CanvasEditor({
   // ref (it is not rendered) with a tick so the Paste button can wake up.
   const settingsClipboard = useRef<ItemSettings | null>(null);
   const [clipboardTick, setClipboardTick] = useState(0);
-  // True while the canvas differs from what was last saved. Nothing saves on
-  // its own: Save (⌘S) writes the canvas as a named version, and leaving with
-  // this set asks first.
+  // True while the canvas differs from what the server holds: set by every
+  // edit, cleared once the autosave below has written it.
   const [dirty, setDirty] = useState(false);
-  const dirtyRef = useRef(false);
-  dirtyRef.current = dirty;
-  const [saving, setSaving] = useState(false);
   const [showFilmstrip, setShowFilmstrip] = useState(true);
+  // Focus mode (F): toolbar, action bar, page rail and filmstrip put away,
+  // and the app's top bar with them - only the page, still fully editable.
+  // A docked photo editor stays: it is in use, not in the way.
+  const [focusMode, setFocusMode] = useState(false);
+  useFocusChrome(focusMode);
   // Holding Space turns any drag into a pan. Every canvas editor works this
   // way, and once the paper is covered in photos it is the only place left to
   // grab: dragging the background would otherwise always mean "select".
@@ -466,6 +473,11 @@ export function CanvasEditor({
   // Editing a placed photo happens on a virtual copy ("virtual copy"): the
   // library original stays untouched, the frame follows the copy.
   const [editingImage, setEditingImage] = useState<ImageOut | null>(null);
+  // The layer over the edited frame's photo that the docked editor draws its
+  // mask guides and pointer surface into - masks are drawn on the page, in
+  // the frame, not on a stage of the editor's own. Set by the frame that
+  // currently shows the edited photo (see CanvasItem's maskHostRef).
+  const [maskHost, setMaskHost] = useState<HTMLDivElement | null>(null);
   // The background climb to full-resolution photos waits while the editor is
   // open: its live preview renders must never queue behind those.
   useEffect(() => {
@@ -629,6 +641,7 @@ export function CanvasEditor({
         queryClient.invalidateQueries({ queryKey: ["image", fresh.id] });
         queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
         queryClient.invalidateQueries({ queryKey: ["canvases"] });
+        queryClient.invalidateQueries({ queryKey: ["canvas", canvasId] });
       })
       .catch(() => {
         // Non-fatal: the next files refetch carries the fresh row anyway.
@@ -675,23 +688,21 @@ export function CanvasEditor({
 
   // --- Saving ---------------------------------------------------------------
   //
-  // Nothing here is automatic. Save (the toolbar button and ⌘S) asks for a
-  // name, writes the working layout and keeps it as a version under that
-  // name - the same name again replaces that version, a new name starts
-  // another. The dialog opens on the name of the version the canvas came
-  // from, so plain "save my work" is one Enter away.
+  // The canvas saves itself. Every edit marks the document changed, and a
+  // moment after the last one the working layout is written - one write when
+  // a drag settles, not one per frame. There is no Save button and nothing
+  // to lose on the way out: leaving flushes whatever was still counting
+  // down.
 
   const docRef = useRef(doc);
   docRef.current = doc;
-  const savingRef = useRef(false);
 
   const adoptServerLayout = useCallback(
     (result: CanvasLayout) => {
       queryClient.setQueryData(["canvas-layout", canvasId], result);
-      // The Canvases shelf on the Albums page draws from these versions, the
-      // overview card from the working layout.
-      queryClient.invalidateQueries({ queryKey: ["canvases"] });
+      // The overview card and the canvas view draw from the working layout.
       queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+      queryClient.invalidateQueries({ queryKey: ["canvas", canvasId] });
       // A save changes what the canvas holds, and with it the membership
       // tags (canvas, canvas: <name>, canvas artifact) the Library filters
       // on - its index is cached for minutes.
@@ -702,97 +713,54 @@ export function CanvasEditor({
     [queryClient, canvasId]
   );
 
-  // Resolves true once the canvas is saved, false when the user backed out
-  // or the write failed.
-  const saveCanvas = useCallback(async (): Promise<boolean> => {
-    const current = docRef.current;
-    if (!current || savingRef.current) return false;
-    const layout = queryClient.getQueryData<CanvasLayout>(["canvas-layout", canvasId]);
-    const existing = layout?.versions ?? [];
-    const active = existing.find((v) => v.id === layout?.active_version_id);
-    const name = await dialogs.prompt({
-      title: "Save canvas",
-      message:
-        "The canvas is saved as a version with this name. Using an existing name replaces that version. A new name keeps the old version as well.",
-      initial: active?.name ?? `Version ${existing.length + 1}`,
-      placeholder: "Version name",
-      confirmLabel: "Save",
-    });
-    if (name === null) return false;
-    savingRef.current = true;
-    setSaving(true);
-    try {
-      await api.canvases.saveLayout(canvasId, current);
-      adoptServerLayout(await api.canvases.createLayoutVersion(canvasId, name));
-      // An edit made while the dialog was up is not on the server yet.
-      if (docRef.current === current) setDirty(false);
-      return true;
-    } catch {
-      await dialogs.alert({
-        title: "The canvas could not be saved",
-        message: "Check that the app is still connected, then try again.",
-      });
-      return false;
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  }, [canvasId, queryClient, dialogs, adoptServerLayout]);
+  // The document waiting for its debounce - what an unmount has to flush.
+  const pendingSave = useRef<Doc | null>(null);
+  useEffect(() => {
+    if (!doc || !dirty) return;
+    pendingSave.current = doc;
+    const timer = window.setTimeout(() => {
+      pendingSave.current = null;
+      api.canvases
+        .saveLayout(canvasId, doc)
+        .then((result) => {
+          adoptServerLayout(result);
+          // An edit made while the write was in flight is not on the server
+          // yet - it has its own countdown running.
+          if (docRef.current === doc) setDirty(false);
+        })
+        .catch(() => {
+          // The edit stays on screen and marked unsaved; the next edit
+          // writes again, and leaving flushes it once more.
+          pendingSave.current = docRef.current;
+        });
+    }, AUTOSAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [doc, dirty, canvasId, adoptServerLayout]);
 
-  // Leaving with unsaved changes asks first. Escape's last rung and the Back
-  // button route through here; so does any link out of the page (below),
-  // since the app's navigation cannot be halted any other way.
-  const confirmLeave = useCallback(async (): Promise<boolean> => {
-    if (!dirtyRef.current) return true;
-    const leave = await dialogs.confirm({
-      title: "Discard unsaved changes?",
-      message: "Your changes have not been saved. Leave without saving?",
-      confirmLabel: "Discard changes",
-      cancelLabel: "Keep editing",
-      danger: true,
-    });
-    if (leave) {
-      dirtyRef.current = false;
-      setDirty(false);
-    }
-    return leave;
-  }, [dialogs]);
+  // Leaving the canvas must not drop the last edit that hadn't reached its
+  // debounce yet.
+  useEffect(() => {
+    return () => {
+      if (pendingSave.current) api.canvases.saveLayout(canvasId, pendingSave.current).catch(() => {});
+    };
+  }, [canvasId]);
 
+  // Back writes what is still counting down BEFORE leaving, so the canvas
+  // view that follows reads the layout it just saw - a flush racing the
+  // view's own fetch could show it one edit behind.
   const requestExit = useCallback(async () => {
     if (!onExit) return;
-    if (await confirmLeave()) onExit();
-  }, [onExit, confirmLeave]);
-
-  // The app's own links (the module row, a card on another page) would
-  // unmount the editor with the draft still unsaved. The router cannot be
-  // asked to wait, so the click is caught on its way there: stopped, asked
-  // about, and re-issued by hand if the user lets it go. Closing or
-  // reloading the window gets the browser's own question.
-  useEffect(() => {
-    if (!dirty) return;
-    function onClick(event: MouseEvent) {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey) return;
-      const anchor = (event.target as Element | null)?.closest?.("a[href]");
-      if (!(anchor instanceof HTMLAnchorElement)) return;
-      const href = anchor.getAttribute("href") ?? "";
-      if (!href.startsWith("#/")) return;
-      event.preventDefault();
-      event.stopPropagation();
-      void confirmLeave().then((leave) => {
-        if (leave) window.location.hash = href.slice(1);
-      });
+    const pending = pendingSave.current;
+    if (pending) {
+      pendingSave.current = null;
+      try {
+        adoptServerLayout(await api.canvases.saveLayout(canvasId, pending));
+      } catch {
+        // Leave anyway; the edit is still on the server's previous state.
+      }
     }
-    function onBeforeUnload(event: BeforeUnloadEvent) {
-      event.preventDefault();
-      event.returnValue = "";
-    }
-    document.addEventListener("click", onClick, true);
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => {
-      document.removeEventListener("click", onClick, true);
-      window.removeEventListener("beforeunload", onBeforeUnload);
-    };
-  }, [dirty, confirmLeave]);
+    onExit();
+  }, [onExit, canvasId, adoptServerLayout]);
 
   // Every edit goes through here: it records history and marks the document
   // as unsaved.
@@ -849,95 +817,6 @@ export function CanvasEditor({
       return next;
     });
   }, []);
-
-  // --- Saved versions -------------------------------------------------------
-  //
-  // Every Save keeps the canvas as a named version. The list lives on the
-  // layout query (the server sends it with every layout response), and every
-  // version call answers with the fresh layout, so the cache is simply
-  // replaced.
-
-  const versions = saved?.versions ?? [];
-  const activeVersionId = saved?.active_version_id ?? null;
-
-  const loadVersion = useCallback(
-    async (versionId: string, name: string) => {
-      if (
-        !(await dialogs.confirm({
-          title: `Load “${name}”?`,
-          message: dirtyRef.current
-            ? "The canvas is replaced by this version. Unsaved changes are lost. Undo brings them back."
-            : "The canvas is replaced by this version. Undo brings the current state back.",
-          confirmLabel: "Load",
-        }))
-      )
-        return;
-      try {
-        const result = await api.canvases.restoreLayoutVersion(canvasId, versionId);
-        adoptServerLayout(result);
-        const { canvas_id: _a, updated_at: _u, active_version_id: _v, versions: _vs, ...rest } = result;
-        // Through the history, so loading a version is itself undoable.
-        commit(rest);
-        // What is on the canvas now is exactly what the server holds.
-        setDirty(false);
-      } catch {
-        await dialogs.alert({
-          title: "The version could not be loaded",
-          message: "Check that the app is still connected, then try again.",
-        });
-      }
-    },
-    [canvasId, adoptServerLayout, commit, dialogs]
-  );
-
-  const renameVersion = useCallback(
-    async (versionId: string, name: string) => {
-      try {
-        adoptServerLayout(await api.canvases.renameLayoutVersion(canvasId, versionId, name));
-      } catch {
-        // The old name stands; nothing to clean up.
-      }
-    },
-    [canvasId, adoptServerLayout]
-  );
-
-  // On or off the Canvas Shelf. Part of the layout row rather than of the
-  // design, so it flips on the server right away and never counts as
-  // unsaved - the document carries it along so a later Save agrees.
-  const setShelf = useCallback(
-    async (enabled: boolean) => {
-      setDoc((current) => (current ? { ...current, show_in_canvases: enabled } : current));
-      try {
-        await api.canvases.setShelf(canvasId, enabled);
-        const layout = queryClient.getQueryData<CanvasLayout>(["canvas-layout", canvasId]);
-        if (layout) adoptServerLayout({ ...layout, show_in_canvases: enabled });
-      } catch {
-        // Not on the server yet: the next Save carries it.
-        setDirty(true);
-      }
-    },
-    [canvasId, queryClient, adoptServerLayout]
-  );
-
-  const removeVersion = useCallback(
-    async (versionId: string, name: string) => {
-      if (
-        !(await dialogs.confirm({
-          title: `Delete version “${name}”?`,
-          message: "Only this saved version is deleted. The canvas itself is not changed.",
-          confirmLabel: "Delete version",
-          danger: true,
-        }))
-      )
-        return;
-      try {
-        adoptServerLayout(await api.canvases.deleteLayoutVersion(canvasId, versionId));
-      } catch {
-        // The version stays in the list; trying again is free.
-      }
-    },
-    [canvasId, adoptServerLayout, dialogs]
-  );
 
   // --- Geometry -------------------------------------------------------------
   //
@@ -1206,6 +1085,18 @@ export function CanvasEditor({
     [doc, fitRect, items]
   );
 
+  // Putting the bars away (or back) resizes the stage under the page: fit it
+  // again, so focus mode opens on the page as large as it now goes.
+  const fitToViewRef = useRef(fitToView);
+  fitToViewRef.current = fitToView;
+  const focusSeen = useRef(focusMode);
+  useEffect(() => {
+    if (focusSeen.current === focusMode) return;
+    focusSeen.current = focusMode;
+    const frame = requestAnimationFrame(() => fitToViewRef.current());
+    return () => cancelAnimationFrame(frame);
+  }, [focusMode]);
+
   // The way back from having scrolled off into the white. An endless canvas has
   // no edges to stop you and no scrollbar that means anything once you are a
   // long way out, so double-clicking the empty canvas jumps to the first photo
@@ -1335,11 +1226,10 @@ export function CanvasEditor({
   // photos - an empty sheet that first makes you go and ask for them is the
   // thing everyone got stuck on.
   //
-  // Deliberately neither dirty nor undoable: until the user changes something
-  // this is a starting point rather than a document, so merely opening the
-  // canvas in the library still writes no rows. That is also
-  // what makes starting empty possible - clearing a canvas DOES save, so a
-  // layout the user emptied has been written, and is never seeded again.
+  // Not undoable (there is no state before it), but saved like every other
+  // change: the canvas view and the overview card show the same grid the
+  // editor opened on. Clearing a canvas saves too, so a layout the user
+  // emptied has been written and is never seeded again.
   const seededFor = useRef<string | null>(null);
   useEffect(() => {
     if (!doc || !saved || saved.updated_at || imagesLoading) return;
@@ -1360,6 +1250,7 @@ export function CanvasEditor({
           }
         : current
     );
+    setDirty(true);
   }, [canvasId, doc, imageAspect, images, imagesLoading, saved]);
 
   const addPhotos = useCallback(
@@ -2081,6 +1972,21 @@ export function CanvasEditor({
   };
 
   const onBackgroundPointerDown = (event: React.PointerEvent) => {
+    // Touching the canvas takes the keyboard back from whatever was clicked
+    // last. A button keeps focus after its click, and a focused button owns
+    // Space - so without this, using the toolbar once quietly killed
+    // hold-Space-to-pan (and hold-Space-to-zoom) for the rest of the session,
+    // and Space re-fired that button instead. It also hands the arrow keys to
+    // the scroll container whenever nothing is selected, which is the plain
+    // left/right/up/down scroll of the view. Text being edited on the canvas
+    // keeps the caret it has.
+    const focusTarget = event.target as HTMLElement | null;
+    if (
+      !focusTarget?.isContentEditable &&
+      !/^(INPUT|TEXTAREA|SELECT)$/.test(focusTarget?.tagName ?? "")
+    ) {
+      viewportRef.current?.focus({ preventScroll: true });
+    }
     if (event.button === 1 || event.altKey || panKey) {
       beginPan(event);
       return;
@@ -2142,6 +2048,11 @@ export function CanvasEditor({
 
   // --- Keyboard -------------------------------------------------------------
 
+  // E reads the latest editPhoto (it closes over this render's selection)
+  // without adding it to the listener's dependencies.
+  const editPhotoRef = useRef(editPhoto);
+  editPhotoRef.current = editPhoto;
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
@@ -2150,6 +2061,13 @@ export function CanvasEditor({
       // The print view has the keyboard while it is up: its Escape closes it,
       // and must not also drop the selection underneath.
       if (printPage !== null) return;
+      // F: focus mode. Ahead of the docked editor's claim on the keyboard -
+      // it has no F of its own, and focus is the whole canvas's business.
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && (event.key === "f" || event.key === "F")) {
+        event.preventDefault();
+        setFocusMode((on) => !on);
+        return;
+      }
       // Same for the docked photo editor: while it is open the keyboard is
       // its (undo, arrows, Escape) - the canvas underneath must not also
       // undo, nudge frames or step its own Escape ladder.
@@ -2158,11 +2076,6 @@ export function CanvasEditor({
       // toolbar being driven from the keyboard.
       const onButton = target?.tagName === "BUTTON";
       const meta = event.metaKey || event.ctrlKey;
-      if (meta && !event.shiftKey && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        void saveCanvas();
-        return;
-      }
       if (meta && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
@@ -2215,10 +2128,18 @@ export function CanvasEditor({
         if (croppingId) setCroppingId(null);
         else if (editingTextId) setEditingTextId(null);
         else if (selected.size > 0) setSelected(new Set());
+        else if (focusMode) setFocusMode(false);
         else void requestExit();
         return;
       }
       if (selected.size === 0) return;
+      // E opens the photo editor on the selected frame's photo - the same as
+      // the toolbar's Edit (it does nothing unless one photo frame is picked).
+      if (!meta && !event.altKey && !onButton && (event.key === "e" || event.key === "E")) {
+        event.preventDefault();
+        void editPhotoRef.current();
+        return;
+      }
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
         removeSelected();
@@ -2269,7 +2190,7 @@ export function CanvasEditor({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [croppingId, editingTextId, fitToView, requestExit, openPrint, printPage, redo, removeSelected, restack, saveCanvas, selected, undo, updateItems, zoomAt]);
+  }, [croppingId, editingTextId, fitToView, focusMode, requestExit, openPrint, printPage, redo, removeSelected, restack, selected, undo, updateItems, zoomAt]);
 
   // --- Render ---------------------------------------------------------------
 
@@ -2383,6 +2304,7 @@ export function CanvasEditor({
     setExtraFiles((list) => list.filter((file) => !ids.includes(file.id)));
     onMembershipChangedRef.current?.();
     queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+    queryClient.invalidateQueries({ queryKey: ["canvas", canvasId] });
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });
     queryClient.invalidateQueries({ queryKey: ["facets"] });
@@ -2401,6 +2323,11 @@ export function CanvasEditor({
         return travel.x > 0.001 || travel.y > 0.001;
       })()
     : false;
+  // Whether the view has anywhere to go: the scroll surface is bigger than the
+  // window in at least one direction. Both numbers are the ones on screen (the
+  // surface at this zoom, the viewport's own client box), so this follows every
+  // zoom and every resize without measuring anything of its own.
+  const canPan = origin.w > view.width + 1 || origin.h > view.height + 1;
   // How many sheets the guide draws: enough to hold everything on the canvas,
   // plus one empty one ahead to carry on into.
   const guideSheets =
@@ -2433,6 +2360,8 @@ export function CanvasEditor({
         onFit={() => fitToView()}
         onFitAll={() => fitToView(true)}
         onPrint={openPrint}
+        onFocus={() => setFocusMode((on) => !on)}
+        focused={focusMode}
         canUndo={past.current.length > 0}
         canRedo={future.current.length > 0}
         historyTick={historyTick}
@@ -2446,21 +2375,7 @@ export function CanvasEditor({
         onExit={onExit && requestExit}
         onClear={clearCanvas}
         canClear={items.length > 0}
-        onSave={() => void saveCanvas()}
-        dirty={dirty}
-        saving={saving}
         exportChip={<ExportChip doc={doc} byId={byId} title={title} />}
-        versionsChip={
-          <VersionsChip
-            doc={doc}
-            versions={versions}
-            activeVersionId={activeVersionId}
-            onShelf={setShelf}
-            onLoad={loadVersion}
-            onRename={renameVersion}
-            onRemove={removeVersion}
-          />
-        }
       />
 
       {/* A second, always-present bar: what is selected and what can be done
@@ -2549,6 +2464,11 @@ export function CanvasEditor({
           <div
             className="canvas-viewport"
             ref={viewportRef}
+            // Focusable, but never in the tab order: it is only ever focused by
+            // a click on the canvas itself (see onBackgroundPointerDown), so
+            // the stage - not a leftover toolbar button - is what the keyboard
+            // is talking to while you work on the page.
+            tabIndex={-1}
             onScroll={syncView}
             onPointerDown={onBackgroundPointerDown}
             onPointerMove={onPointerMove}
@@ -2675,6 +2595,11 @@ export function CanvasEditor({
                       selected={selected.has(item.id)}
                       cropping={croppingId === item.id}
                       editing={editingTextId === item.id}
+                      maskHostRef={
+                        editingImage && item.kind === "photo" && item.image_id === editingImage.id
+                          ? setMaskHost
+                          : undefined
+                      }
                       onPointerDown={(event) => {
                         if (panKey || event.altKey || event.button === 1) return; // let the viewport pan
                         event.stopPropagation();
@@ -2858,6 +2783,14 @@ export function CanvasEditor({
             </div>
           )}
 
+          {/* The one gesture the canvas has nothing on screen to point at, in
+              a quiet line in the corner. Only while the view actually has
+              somewhere to go - at fit, where nothing can move, it would be a
+              lie - and it steps aside for the mode banners above. */}
+          {canPan && !panKey && !croppingItem && (
+            <div className="canvas-pan-hint">Hold Space and drag to move the view · Alt-drag does the same</div>
+          )}
+
           {/* A blank canvas says, in one quiet line on the paper, how to get
               a photo onto it. Gone the moment the first item lands. */}
           {items.length === 0 && !croppingItem && (
@@ -2879,7 +2812,7 @@ export function CanvasEditor({
             <button
               className="btn btn-sm back-btn"
               onClick={() => void requestExit()}
-              title="Back to the canvas list (Esc)"
+              title="Back to the canvas view (Esc)"
             >
               <IconArrowLeft size={14} /> Back
             </button>
@@ -2896,16 +2829,19 @@ export function CanvasEditor({
         </div>
         {/* Editing docks as the row's right column, top to bottom of the
             window: it pushes everything left, the filmstrip included. */}
-        {editingImage && (
-          <PhotoEditor
-            key={editingImage.id}
-            docked
-            image={editingImage}
-            onClose={() => void closeEditor()}
-            onPreviewFrame={onPreviewFrame}
-            onEditsSettled={refreshEditedFile}
-          />
-        )}
+        <Presence open={editingImage !== null} ms={140}>
+          {editingImage && (
+            <PhotoEditor
+              key={editingImage.id}
+              docked
+              image={editingImage}
+              onClose={() => void closeEditor()}
+              onPreviewFrame={onPreviewFrame}
+              onEditsSettled={refreshEditedFile}
+              maskHost={maskHost}
+            />
+          )}
+        </Presence>
       </div>
 
       {printPage !== null &&
@@ -2922,7 +2858,11 @@ export function CanvasEditor({
 // The layout with everything that is not the layout taken away: no toolbar,
 // no rail, no grid, no handles - one sheet at a time, as big as the window
 // allows, on a dark ground. It is for LOOKING, so it does nothing else: the
-// arrow keys turn the pages and Escape brings the canvas back.
+// arrow keys turn the pages and Escape brings the canvas back. The same
+// component IS the canvas view (pages/CanvasView.tsx): what a canvas looks
+// like from outside is exactly what its print view shows - same frames,
+// same crop-in-frame, same borders, same photo derivatives, climbing to
+// full resolution the same way.
 
 interface PrintSheet {
   // The sheet's rectangle in world millimetres, and what is drawn on it.
@@ -2971,14 +2911,20 @@ function printSheets(doc: Doc, pageCount: number): PrintSheet[] {
 const PRINT_PAD_X = 84;
 const PRINT_PAD_Y = 64;
 const PRINT_IDLE_MS = 2200;
+// Focus mode keeps only a sliver of ground around the page: no bar to make
+// room for, and the arrows fade with the pointer anyway.
+const FOCUS_PAD = 28;
 
-function PrintView({
+export function PrintView({
   doc,
   byId,
   pageCount,
   start,
   title,
   onClose,
+  closeTitle = "Back to the canvas (Escape)",
+  caption,
+  onEdit,
 }: {
   doc: Doc;
   byId: Map<string, ImageOut>;
@@ -2986,6 +2932,13 @@ function PrintView({
   start: number;
   title: string;
   onClose: () => void;
+  closeTitle?: string;
+  // What the bottom bar says about the whole document, before the page
+  // count: the canvas view puts the canvas's name here; the editor's own
+  // print view says "Print view".
+  caption?: string;
+  // The canvas view's pencil: hands over to the editor.
+  onEdit?: () => void;
 }) {
   const sheets = useMemo(() => printSheets(doc, pageCount), [doc, pageCount]);
   const [index, setIndex] = useState(() => Math.max(0, Math.min(sheets.length - 1, start)));
@@ -3004,12 +2957,57 @@ function PrintView({
   lookRef.current = look;
   const pan = useRef<{ id: number; x: number; y: number; moved: boolean } | null>(null);
   const [panning, setPanning] = useState(false);
+  // Focus mode: the same view with the bar gone and the screen taken - the
+  // pages as large as they go on black, nothing else. F toggles it; Esc (or
+  // leaving fullscreen any other way) comes back to the view, not out of it.
+  const [focused, setFocused] = useState(false);
+  const focusedRef = useRef(false);
+  focusedRef.current = focused;
+  // Where fullscreen is refused, the app's top bar must still go.
+  useFocusChrome(focused);
+  // When focus mode last ended: in fullscreen the browser takes Esc for
+  // itself, and a keydown that still arrives afterwards must not also close
+  // the view behind it.
+  const focusEndedAt = useRef(0);
 
   const wake = useCallback(() => {
     setIdle(false);
     if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
     idleTimer.current = window.setTimeout(() => setIdle(true), PRINT_IDLE_MS);
   }, []);
+
+  const enterFocus = useCallback(() => {
+    focusedRef.current = true;
+    setFocused(true);
+    setLook({ scale: 1, x: 0, y: 0 });
+    // The whole screen if the browser allows it; the overlay covers the
+    // window either way.
+    boxRef.current?.requestFullscreen?.().catch(() => {});
+    wake();
+  }, [wake]);
+
+  const leaveFocus = useCallback(() => {
+    if (!focusedRef.current) return;
+    focusedRef.current = false;
+    focusEndedAt.current = performance.now();
+    setFocused(false);
+    setLook({ scale: 1, x: 0, y: 0 });
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    wake();
+  }, [wake]);
+
+  // Leaving fullscreen by any route (Esc, the OS's own control) ends the
+  // focus mode, so the two never come apart.
+  useEffect(() => {
+    function onFsChange() {
+      if (!document.fullscreenElement) leaveFocus();
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFsChange);
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    };
+  }, [leaveFocus]);
 
   useEffect(() => {
     wake();
@@ -3018,12 +3016,17 @@ function PrintView({
     };
   }, [wake]);
 
+  // The box's size, not the window's: the print view starts under the app's
+  // top bar (index.css, --chrome-top), so the window's height would over-fit
+  // the sheet by the bar.
   useEffect(() => {
-    function onResize() {
-      setSize({ w: window.innerWidth, h: window.innerHeight });
-    }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    const el = boxRef.current;
+    if (!el) return;
+    const measure = () => setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   const last = sheets.length - 1;
@@ -3047,6 +3050,7 @@ function PrintView({
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
+    const boxEl = el;
     function onWheel(event: WheelEvent) {
       event.preventDefault();
       const from = lookRef.current;
@@ -3057,8 +3061,9 @@ function PrintView({
         // page left half off-screen only looks broken.
         setLook({ scale: 1, x: 0, y: 0 });
       } else {
-        const cx = event.clientX - window.innerWidth / 2;
-        const cy = event.clientY - window.innerHeight / 2;
+        const box = boxEl.getBoundingClientRect();
+        const cx = event.clientX - (box.left + box.width / 2);
+        const cy = event.clientY - (box.top + box.height / 2);
         const ratio = scale / from.scale;
         setLook({ scale, x: cx - (cx - from.x) * ratio, y: cy - (cy - from.y) * ratio });
       }
@@ -3074,7 +3079,18 @@ function PrintView({
       switch (event.key) {
         case "Escape":
           event.preventDefault();
+          if (focusedRef.current) {
+            leaveFocus();
+            return;
+          }
+          if (performance.now() - focusEndedAt.current < 500) return;
           onClose();
+          return;
+        case "f":
+        case "F":
+          event.preventDefault();
+          if (focusedRef.current) leaveFocus();
+          else enterFocus();
           return;
         case "ArrowRight":
         case "ArrowDown":
@@ -3101,11 +3117,18 @@ function PrintView({
           event.preventDefault();
           setLook({ scale: 1, x: 0, y: 0 });
           return;
+        // E hands over to the editor - the pencil's shortcut, where there is one.
+        case "e":
+        case "E":
+          if (!onEdit) return;
+          event.preventDefault();
+          onEdit();
+          return;
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [go, index, last, onClose]);
+  }, [go, index, last, onClose, onEdit, enterFocus, leaveFocus]);
 
   // Fetch the neighbouring sheets' photos ahead of time, so turning a page
   // shows a page and not a page filling in.
@@ -3121,22 +3144,23 @@ function PrintView({
   }, [byId, index, sheets]);
 
   const sheet = sheets[index] ?? sheets[0];
-  const zoom = Math.max(
-    0.01,
-    Math.min((size.w - PRINT_PAD_X * 2) / sheet.w, (size.h - PRINT_PAD_Y * 2) / sheet.h)
-  );
+  const padX = focused ? FOCUS_PAD : PRINT_PAD_X;
+  const padY = focused ? FOCUS_PAD : PRINT_PAD_Y;
+  const zoom = Math.max(0.01, Math.min((size.w - padX * 2) / sheet.w, (size.h - padY * 2) / sheet.h));
 
   return (
     <div
       ref={boxRef}
-      className={`canvas-print${idle ? " is-idle" : ""}${panning ? " is-panning" : ""}`}
+      className={`canvas-print${idle ? " is-idle" : ""}${panning ? " is-panning" : ""}${
+        focused ? " is-focus" : ""
+      }`}
       role="dialog"
       aria-modal="true"
-      aria-label="Print view"
+      aria-label={caption ?? "Print view"}
       onPointerDown={(event) => {
         wake();
         if (event.button !== 0) return;
-        if ((event.target as Element).closest("button")) return;
+        if ((event.target as Element).closest("button, .filter-chip")) return;
         pan.current = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
         setPanning(true);
         event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -3162,14 +3186,15 @@ function PrintView({
       onDoubleClick={(event) => {
         // The lightbox's gesture: in for a closer look, back out to the whole
         // page - about the point that was double-clicked.
-        if ((event.target as Element).closest("button")) return;
+        if ((event.target as Element).closest("button, .filter-chip")) return;
         const from = lookRef.current;
         if (from.scale > 1) {
           setLook({ scale: 1, x: 0, y: 0 });
         } else {
           const scale = 2.5;
-          const cx = event.clientX - window.innerWidth / 2;
-          const cy = event.clientY - window.innerHeight / 2;
+          const box = event.currentTarget.getBoundingClientRect();
+          const cx = event.clientX - (box.left + box.width / 2);
+          const cy = event.clientY - (box.top + box.height / 2);
           setLook({ scale, x: cx - (cx - from.x) * scale, y: cy - (cy - from.y) * scale });
         }
         wake();
@@ -3212,6 +3237,10 @@ function PrintView({
               />
             ))}
         </div>
+        {/* From outside, a page with nothing on it says so, quietly. */}
+        {onEdit && sheet.items.length === 0 && (
+          <div className="canvas-view-empty">Nothing on this page yet</div>
+        )}
       </div>
 
       {sheets.length > 1 && (
@@ -3237,23 +3266,36 @@ function PrintView({
         </>
       )}
 
-      {/* Same bottom bar as the shelf's print view (and the photo stages):
-          the standard Back flush left, the caption centred, Export flush
-          right. */}
+      {/* In focus mode the bar is gone; the one way back sits where it was,
+          fading with the rest of the chrome. */}
+      {focused && <FocusToggle onToggle={leaveFocus} className="canvas-print-chrome" />}
+
+      {/* One bottom bar, like the photo stages' toolbars: the standard Back
+          flush left, the caption centred, the pencil and Export flush right. */}
+      {!focused && (
       <div className="canvas-print-foot canvas-print-chrome" aria-live="polite">
-        <button
-          className="btn btn-sm back-btn stage-back-btn"
-          onClick={onClose}
-          title="Back to the canvas (Escape)"
-        >
+        <button className="btn btn-sm back-btn stage-back-btn" onClick={onClose} title={closeTitle}>
           <IconArrowLeft size={13} /> Back
         </button>
-        {sheets.length > 1 ? `Page ${index + 1} of ${sheets.length}` : "Print view"}
+        {caption ?? "Print view"}
+        {sheets.length > 1 ? ` · Page ${index + 1} of ${sheets.length}` : ""}
         <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to go back</span>
         <span className="canvas-print-export">
+          <FocusButton onClick={enterFocus} className="canvas-tool canvas-view-edit" />
+          {onEdit && (
+            <button
+              className="btn btn-sm canvas-tool canvas-view-edit"
+              onClick={onEdit}
+              title="Edit this canvas"
+              aria-label="Edit this canvas"
+            >
+              <IconPencil size={14} /> Edit
+            </button>
+          )}
           <ExportChip doc={doc} byId={byId} title={title} drop="up" />
         </span>
       </div>
+      )}
     </div>
   );
 }
@@ -3500,6 +3542,7 @@ function CanvasItem({
   selected,
   cropping,
   editing,
+  maskHostRef,
   onPointerDown,
   onDoubleClick,
   onText,
@@ -3516,6 +3559,10 @@ function CanvasItem({
   selected: boolean;
   cropping: boolean;
   editing: boolean;
+  // Set while this frame's photo is the one open in the docked editor: a
+  // layer laid over the photo (same box, same content transform) that the
+  // editor draws its mask guides into and takes mask strokes from.
+  maskHostRef?: (el: HTMLDivElement | null) => void;
   onPointerDown: (event: React.PointerEvent) => void;
   onDoubleClick: () => void;
   onText: (text: string) => void;
@@ -3642,6 +3689,9 @@ function CanvasItem({
               : "Photo unavailable"}
         </div>
       )}
+      {image && maskHostRef && (
+        <div ref={maskHostRef} className="canvas-mask-host" style={{ transform: contentTransform }} />
+      )}
       {cropping && <div className="canvas-crop-hint" style={{ borderWidth: 2 / zoom }} />}
     </div>
   );
@@ -3723,154 +3773,6 @@ function SelectionFrame({
   );
 }
 
-// --- Saved versions ---------------------------------------------------------
-//
-// The chip where a canvas worth keeping gets a name. It also holds the
-// "Canvases shelf" switch: the Albums page shows, per opted-in canvas, the one
-// version last kept or last loaded here - never the autosaving working draft.
-
-function versionDate(iso: string): string {
-  const date = new Date(iso);
-  return `${date.toLocaleDateString(undefined, { day: "numeric", month: "short" })}, ${date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
-}
-
-function VersionsChip({
-  doc,
-  versions,
-  activeVersionId,
-  onShelf,
-  onLoad,
-  onRename,
-  onRemove,
-}: {
-  doc: Doc;
-  versions: LayoutVersion[];
-  activeVersionId: string | null;
-  onShelf: (enabled: boolean) => Promise<void>;
-  onLoad: (id: string, name: string) => Promise<void>;
-  onRename: (id: string, name: string) => Promise<void>;
-  onRemove: (id: string, name: string) => Promise<void>;
-}) {
-  // The one version whose name is open for editing, and the text in the box.
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-
-  async function finishRename(id: string) {
-    const next = draft.trim();
-    setRenamingId(null);
-    if (next) await onRename(id, next);
-  }
-
-  return (
-    <FilterChip
-      label={versions.length ? `Versions (${versions.length})` : "Versions"}
-      active={doc.show_in_canvases}
-      title="Saved versions of this canvas: load, rename, and choose which one the Canvas Shelf shows"
-    >
-      <div className="canvas-panel">
-        <div className="canvas-panel-row">
-          <span className="canvas-panel-note">
-            {versions.length
-              ? "Each save stores the canvas as a named version. Load one to restore it."
-              : "Nothing saved yet. Save (⌘S) stores the canvas as a named version."}
-          </span>
-        </div>
-
-        {versions.length > 0 && (
-          <div className="canvas-panel-row canvas-version-list" role="list">
-            {versions.map((version) =>
-              renamingId === version.id ? (
-                <form
-                  key={version.id}
-                  className="canvas-version"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    finishRename(version.id);
-                  }}
-                >
-                  <input
-                    type="text"
-                    className="canvas-version-rename"
-                    value={draft}
-                    autoFocus
-                    onChange={(event) => setDraft(event.target.value)}
-                    onBlur={() => finishRename(version.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        event.stopPropagation();
-                        setRenamingId(null);
-                      }
-                    }}
-                  />
-                </form>
-              ) : (
-                <div
-                  key={version.id}
-                  role="listitem"
-                  className={`canvas-version${version.id === activeVersionId ? " is-active" : ""}`}
-                >
-                  <span
-                    className="canvas-version-name"
-                    title={
-                      version.id === activeVersionId
-                        ? `“${version.name}” is shown on the Canvas Shelf`
-                        : version.name
-                    }
-                  >
-                    {version.name}
-                  </span>
-                  <span className="canvas-version-date">{versionDate(version.created_at)}</span>
-                  <button
-                    className="btn btn-sm"
-                    onClick={() => onLoad(version.id, version.name)}
-                    title="Restore this version"
-                  >
-                    Load
-                  </button>
-                  <button
-                    className="canvas-version-tool"
-                    title="Rename this version"
-                    aria-label={`Rename version ${version.name}`}
-                    onClick={() => {
-                      setDraft(version.name);
-                      setRenamingId(version.id);
-                    }}
-                  >
-                    <IconPencil size={12} />
-                  </button>
-                  <button
-                    className="canvas-version-tool is-danger"
-                    title="Delete this version. The canvas itself is not changed."
-                    aria-label={`Delete version ${version.name}`}
-                    onClick={() => onRemove(version.id, version.name)}
-                  >
-                    <IconTrash size={12} />
-                  </button>
-                </div>
-              )
-            )}
-          </div>
-        )}
-
-        <label className="canvas-panel-row canvas-panel-row--last">
-          <span className="canvas-panel-label">Canvas Shelf</span>
-          <input
-            type="checkbox"
-            checked={doc.show_in_canvases}
-            disabled={versions.length === 0 && !doc.show_in_canvases}
-            onChange={(event) => void onShelf(event.target.checked)}
-          />
-          <span className="canvas-panel-note">
-            {versions.length === 0
-              ? "Show this canvas on the Canvas Shelf of the Albums page. Save it first, the shelf shows saved versions."
-              : "Show this canvas on the Canvas Shelf of the Albums page. The shelf shows the version marked with a dot, the one last saved or loaded."}
-          </span>
-        </label>
-      </div>
-    </FilterChip>
-  );
-}
-
 // --- Toolbar ----------------------------------------------------------------
 //
 // Two bars, and the split is the point. The top one only ever holds things
@@ -3887,6 +3789,8 @@ function CanvasToolbar({
   onFit,
   onFitAll,
   onPrint,
+  onFocus,
+  focused,
   canUndo,
   canRedo,
   onUndo,
@@ -3899,11 +3803,7 @@ function CanvasToolbar({
   onExit,
   onClear,
   canClear,
-  onSave,
-  dirty,
-  saving,
   exportChip,
-  versionsChip,
 }: {
   title: string;
   onExit?: () => void;
@@ -3914,6 +3814,8 @@ function CanvasToolbar({
   onFit: () => void;
   onFitAll: () => void;
   onPrint: () => void;
+  onFocus: () => void;
+  focused: boolean;
   canUndo: boolean;
   canRedo: boolean;
   historyTick: number;
@@ -3926,11 +3828,7 @@ function CanvasToolbar({
   // Take everything off every page. Nothing is deleted: the photos stay.
   onClear: () => void;
   canClear: boolean;
-  onSave: () => void;
-  dirty: boolean;
-  saving: boolean;
   exportChip: React.ReactNode;
-  versionsChip: React.ReactNode;
 }) {
   const presetKey =
     PAGE_PRESETS.find((p) => p.w === doc.page_width_mm && p.h === doc.page_height_mm)?.key ?? "custom";
@@ -3951,28 +3849,8 @@ function CanvasToolbar({
         </span>
       </div>
 
-      {/* File first, then page, then what goes on it, then (far right) how
-          it is viewed: Save and its versions sit by the title. */}
-      <div className="control-group">
-        {/* Nothing saves by itself: the button lights up while there are
-            unsaved changes, and Save asks for the version's name. */}
-        <button
-          className={`btn btn-sm canvas-tool${dirty ? " primary" : ""}`}
-          onClick={onSave}
-          disabled={saving}
-          aria-label="Save canvas"
-          title={
-            dirty
-              ? "Save the canvas as a named version (⌘S). There are unsaved changes."
-              : "Save the canvas as a named version (⌘S)"
-          }
-        >
-          <IconSave size={15} />
-          <span className="canvas-tool-label">Save</span>
-        </button>
-        {versionsChip}
-      </div>
-
+      {/* Page first, then what goes on it, then (far right) how it is viewed.
+          Nothing to save here: the canvas writes itself. */}
       <div className="control-group">
         <span className="segmented segmented--tools" role="group" aria-label="Canvas kind">
           <button
@@ -4231,6 +4109,20 @@ function CanvasToolbar({
           <IconPrinter size={15} />
           <span className="canvas-tool-label">Print view</span>
         </button>
+        <button
+          className={`btn btn-sm canvas-tool focus-btn${focused ? " active" : ""}`}
+          onClick={onFocus}
+          aria-pressed={focused}
+          aria-label={focused ? "Leave focus mode" : "Focus mode"}
+          title={
+            focused
+              ? "Leave focus mode (F)"
+              : "Focus mode: put the app's top bar away and keep working on the page (F)"
+          }
+        >
+          <IconFocus size={15} />
+          <span className="canvas-tool-label">Focus</span>
+        </button>
         {exportChip}
         <CanvasHelp />
       </div>
@@ -4482,7 +4374,7 @@ function CanvasHelp() {
     ["Find your photos again", "Double-click an empty area of the free canvas to jump to the first photo"],
     ["Design for print", "Turn on the page guide and keep your work inside it"],
     ["Select several items", "Drag across an empty area, or Shift-click"],
-    ["Move the view", "Scroll or drag the scrollbars · hold Space and drag"],
+    ["Move the view", "Hold Space and drag · Alt-drag · scroll, the scrollbars, or the arrow keys with nothing selected"],
     ["Zoom the canvas", "+ and − · Alt and scroll · hold Space and scroll"],
     ["Fit one page in the window", "0 (⌘+ and ⌘− zoom the whole app, not the canvas)"],
     ["Fit all pages", "Shift-0"],

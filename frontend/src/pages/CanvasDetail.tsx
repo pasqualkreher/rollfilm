@@ -35,7 +35,7 @@ export function CanvasDetail() {
           <CanvasEditor
             canvasId={id}
             title={canvas?.name ?? "Canvas"}
-            onExit={() => navigate("/canvas")}
+            onExit={() => navigate(`/canvas/${id}/view`)}
             files={files ?? []}
             stripImages={collapsePairs(files ?? [])}
             imagesLoading={isLoading || !files}

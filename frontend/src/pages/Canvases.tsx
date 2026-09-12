@@ -1,34 +1,22 @@
 // The Canvas tab's front page: create a new canvas, open an existing one.
 // Canvases are documents, not collections - they stand on their own, and
 // photos reach them from the library's Select mode ("Add to canvas") or from
-// the filmstrip inside the canvas itself.
+// the filmstrip inside the canvas itself. A card opens the canvas as it will
+// print (the view); the pencil on the card, or in the view, opens the editor.
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { CanvasPreview, CanvasSummary } from "../api/types";
 import { useAppDialogs } from "../components/AppDialogs";
-import { shelfSheets, ShelfSheetItems, type CanvasSheetDoc } from "../components/CanvasSheet";
-import { IconPencil, IconTrash } from "../components/Icons";
+import { EMPTY_SHEET_DOC, shelfSheets, ShelfSheetItems } from "../components/CanvasSheet";
+import { IconPencil, IconRename, IconTrash } from "../components/Icons";
 import { errorText } from "../utils/apiError";
 
-// A blank white sheet for a canvas that has never been saved: an empty paper
-// says "nothing on it yet" better than a card with no picture at all.
-const EMPTY_SHEET: CanvasSheetDoc = {
-  page_mode: "pages",
-  page_width_mm: 297,
-  page_height_mm: 210,
-  page_count: 1,
-  background: "#ffffff",
-  show_page_guide: false,
-  items: [],
-  thumb_versions: {},
-};
-
-// The card's preview: the working layout's first sheet, drawn exactly like a
-// Canvas Shelf card - the paper itself with the photos on it.
+// The card's preview: the working layout's first sheet - the paper itself
+// with the photos on it.
 function CardPreview({ preview }: { preview: CanvasPreview | null }) {
-  const doc = preview ?? EMPTY_SHEET;
+  const doc = preview ?? EMPTY_SHEET_DOC;
   const sheet = shelfSheets(doc)[0];
   return (
     <div
@@ -69,7 +57,7 @@ export function Canvases() {
     onSuccess: (created) => {
       setName("");
       queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
-      // Straight into the new canvas - an empty overview card teaches nothing.
+      // Straight into the new canvas's editor - an empty view teaches nothing.
       navigate(`/canvas/${created.id}`);
     },
     // Canvas names are unique - a taken name comes back as an error the user
@@ -95,15 +83,17 @@ export function Canvases() {
       return;
     }
     queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
-    queryClient.invalidateQueries({ queryKey: ["canvases"] });
+    queryClient.invalidateQueries({ queryKey: ["canvas", canvas.id] });
+    // The photos' "canvas: <name>" tags follow the rename.
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
   }
 
   async function deleteCanvas(canvas: CanvasSummary) {
     if (
       !(await dialogs.confirm({
         title: `Delete canvas “${canvas.name}”?`,
-        message:
-          "The design and all its saved versions are deleted. The photos stay in your library.",
+        message: "The design is deleted. The photos stay in your library.",
         confirmLabel: "Delete canvas",
         danger: true,
       }))
@@ -111,7 +101,6 @@ export function Canvases() {
       return;
     await api.canvases.remove(canvas.id);
     queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
-    queryClient.invalidateQueries({ queryKey: ["canvases"] });
     // Its photos lost their canvas tags (virtual copies gained "canvas
     // artifact"): the Library's cached index and tag lists are stale.
     queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -119,12 +108,15 @@ export function Canvases() {
     queryClient.invalidateQueries({ queryKey: ["facets"] });
   }
 
+  const openView = (id: string) => navigate(`/canvas/${id}/view`);
+
   return (
     <div className="page">
       <h2 className="section-title">Canvas</h2>
       <p className="page-subtitle" style={{ color: "var(--text-muted)", marginTop: -8 }}>
-        Free design surfaces: place photos by hand on pages or an endless sheet, save versions,
-        print or export. Add photos from the library&rsquo;s Select mode.
+        Free design surfaces: place photos by hand on pages or an endless sheet, print or export.
+        Everything you do is saved as you go. Click a canvas to see it as it will print; the
+        pencil opens it for editing. Add photos from the library&rsquo;s Select mode.
       </p>
 
       <div className="album-create-row" style={{ display: "flex", gap: 8, margin: "16px 0" }}>
@@ -158,9 +150,10 @@ export function Canvases() {
               className="canvas-list-card"
               role="button"
               tabIndex={0}
-              onClick={() => navigate(`/canvas/${canvas.id}`)}
+              title={`Show “${canvas.name}”`}
+              onClick={() => openView(canvas.id)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") navigate(`/canvas/${canvas.id}`);
+                if (event.key === "Enter") openView(canvas.id);
               }}
             >
               <CardPreview preview={canvas.preview} />
@@ -172,14 +165,24 @@ export function Canvases() {
               <div className="canvas-list-actions" onClick={(event) => event.stopPropagation()}>
                 <button
                   className="btn btn-sm"
-                  title="Rename this canvas"
-                  onClick={() => void renameCanvas(canvas)}
+                  title="Edit this canvas"
+                  aria-label={`Edit canvas ${canvas.name}`}
+                  onClick={() => navigate(`/canvas/${canvas.id}`)}
                 >
                   <IconPencil size={13} />
                 </button>
                 <button
+                  className="btn btn-sm"
+                  title="Rename this canvas"
+                  aria-label={`Rename canvas ${canvas.name}`}
+                  onClick={() => void renameCanvas(canvas)}
+                >
+                  <IconRename size={13} />
+                </button>
+                <button
                   className="btn btn-sm quiet-danger"
                   title="Delete this canvas. The photos stay in the library."
+                  aria-label={`Delete canvas ${canvas.name}`}
                   onClick={() => void deleteCanvas(canvas)}
                 >
                   <IconTrash size={13} />

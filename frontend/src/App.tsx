@@ -4,13 +4,15 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
-import { IconChart, IconGear, IconHelp, IconMail, IconMenu, IconTrash } from "./components/Icons";
+import { IconChart, IconGear, IconHelp, IconLandfill, IconMail, IconMenu } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
 import { WaitProvider } from "./state/wait";
+import { Presence } from "./components/Presence";
+import { MOTION } from "./utils/usePresence";
 
 // Every screen except the Library is code-split. The app used to ship as one
 // bundle, so each launch parsed and compiled the photo editor (by far the
@@ -37,6 +39,7 @@ const ImageDetail = page(imageDetail, "ImageDetail");
 const Albums = page(() => import("./pages/Albums"), "Albums");
 const Canvases = page(() => import("./pages/Canvases"), "Canvases");
 const CanvasDetail = page(() => import("./pages/CanvasDetail"), "CanvasDetail");
+const CanvasView = page(() => import("./pages/CanvasView"), "CanvasView");
 const AlbumDetail = page(() => import("./pages/AlbumDetail"), "AlbumDetail");
 const SmartAlbumDetail = page(() => import("./pages/SmartAlbumDetail"), "SmartAlbumDetail");
 const Settings = page(() => import("./pages/Settings"), "Settings");
@@ -214,6 +217,7 @@ function currentPageTitle(pathname: string): string {
   return "Library";
 }
 
+
 // Top bar: while a blocking Settings task runs, the nav is locked (you can't
 // switch tabs) and a spinner + label shows what's happening. On narrow windows
 // the tab row collapses into a burger menu instead of wrapping onto extra rows.
@@ -224,6 +228,22 @@ function TopBar() {
   const { isUploading, sessionId } = useImportSession();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  // The bar's height goes on the root as a CSS variable (--top-bar-height,
+  // index.css): it is where the full-window workspaces start.
+  useEffect(() => {
+    const el = dockRef.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const measure = () => root.style.setProperty("--top-bar-height", `${el.offsetHeight}px`);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty("--top-bar-height");
+    };
+  }, []);
 
   // Close the burger menu on an outside click or Escape (link clicks close it
   // via onNavigate).
@@ -246,6 +266,7 @@ function TopBar() {
   }, [menuOpen]);
 
   return (
+    <div className="top-bar-dock" ref={dockRef}>
     <div className="top-bar">
       {/* Three zones: left (brand/nav/status) and right (version/icons) carry
           equal flex weight, so the search field between them sits exactly on
@@ -284,11 +305,13 @@ function TopBar() {
           {(isUploading || sessionId) && <span className="nav-burger-dot" aria-hidden />}
         </button>
         <span className="nav-current">{currentPageTitle(location.pathname)}</span>
-        {menuOpen && (
-          <nav className="nav-menu" role="menu">
-            <NavLinks onNavigate={() => setMenuOpen(false)} />
-          </nav>
-        )}
+        <Presence open={menuOpen} ms={MOTION.pop}>
+          {menuOpen && (
+            <nav className="nav-menu" role="menu">
+              <NavLinks onNavigate={() => setMenuOpen(false)} />
+            </nav>
+          )}
+        </Presence>
       </div>
       {locked && (
         <span className="nav-task" role="status" aria-live="polite">
@@ -316,7 +339,7 @@ function TopBar() {
           title="Trash"
           aria-label="Trash"
         >
-          <IconTrash size={16} />
+          <IconLandfill size={16} />
         </NavLink>
         <NavLink
           to="/stats"
@@ -358,6 +381,7 @@ function TopBar() {
         </a>
       </nav>
       </div>
+    </div>
     </div>
   );
 }
@@ -412,6 +436,7 @@ export default function App() {
             <Route path="/albums/:id" element={<AlbumDetail />} />
             <Route path="/canvas" element={<Canvases />} />
             <Route path="/canvas/:id" element={<CanvasDetail />} />
+            <Route path="/canvas/:id/view" element={<CanvasView />} />
             <Route path="/smart-albums/:id" element={<SmartAlbumDetail />} />
             <Route path="/image/:id" element={<ImageDetail />} />
             <Route path="/map" element={<MapView />} />

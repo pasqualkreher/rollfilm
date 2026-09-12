@@ -1,23 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
+import { withoutMembershipNames } from "../utils/autoTags";
 import { useAppDialogs } from "../components/AppDialogs";
 import { TagFilter } from "../components/TagFilter";
 import { errorText } from "../utils/apiError";
-import {
-  IconArrowLeft,
-  IconChevronDown,
-  IconChevronLeft,
-  IconChevronRight,
-  IconPencil,
-  IconTrash,
-} from "../components/Icons";
+import { IconChevronDown, IconRename, IconTrash } from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
-import { ExportChip } from "../components/CanvasExportChip";
-import { shelfSheets, ShelfSheetItems } from "../components/CanvasSheet";
-import type { CanvasGalleryOut, AlbumOut, ImageOut, SmartAlbumOut } from "../api/types";
+import type { AlbumOut, SmartAlbumOut } from "../api/types";
 
 // Cover thumbnail that fades in once decoded (see .smart-card img in CSS)
 // instead of popping into the card.
@@ -203,378 +194,6 @@ function albumCount(album: AlbumOut): string {
   return `${album.image_count} photos${tags.length ? ` · ${tags.join(", ")}` : ""}`;
 }
 
-// --- The Canvas Shelf -------------------------------------------------------
-//
-// Albums whose canvas opted in ("Canvas Shelf", chosen inside the canvas)
-// appear here as a print-style preview: the paper itself with the photos on
-// it, drawn from the album's chosen VERSION - the one last saved or last
-// loaded - never from the autosaving working draft. A card opens the
-// full-screen print view below, for LOOKING and exporting only: editing stays
-// in the album's own canvas.
-
-function CanvasCard({
-  canvas,
-  onOpen,
-  onRemove,
-}: {
-  canvas: CanvasGalleryOut;
-  onOpen: () => void;
-  onRemove: () => void;
-}) {
-  const sheet = useMemo(() => shelfSheets(canvas)[0], [canvas]);
-
-  const caption = [
-    `“${canvas.version_name}”`,
-    `${canvas.version_count} ${canvas.version_count === 1 ? "version" : "versions"}`,
-    canvas.page_mode === "pages" && canvas.page_count > 1 ? `${canvas.page_count} pages` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <div className="canvas-shelf-card">
-      <button
-        type="button"
-        className="canvas-shelf-open"
-        onClick={onOpen}
-        title={`Show “${canvas.canvas_name}” in print view`}
-      >
-        <div
-          className="canvas-shelf-paper"
-          style={{ background: canvas.background, aspectRatio: `${sheet.w} / ${sheet.h}` }}
-        >
-          <ShelfSheetItems canvas={canvas} sheet={sheet} />
-        </div>
-        <div className="canvas-shelf-caption">
-          <div className="canvas-shelf-name">{canvas.canvas_name}</div>
-          <div className="canvas-shelf-meta">{caption}</div>
-        </div>
-      </button>
-      {/* Same corner button as the album cards - but this one only takes the
-          canvas off the shelf; the canvas itself is deleted on the Canvas page. */}
-      <button
-        className="card-remove"
-        title="Remove from the Canvas Shelf. The canvas and its versions are kept."
-        aria-label={`Remove “${canvas.canvas_name}” from the Canvas Shelf`}
-        onClick={(event) => {
-          event.stopPropagation();
-          onRemove();
-        }}
-      >
-        <IconTrash size={12} />
-      </button>
-    </div>
-  );
-}
-
-// Room kept around the sheet, as in the canvas's print view: the arrows live
-// in the side bands, the caption in the bottom one.
-const SHELF_PAD_X = 84;
-const SHELF_PAD_Y = 64;
-const SHELF_IDLE_MS = 2200;
-
-// The full-screen print view of one shelf canvas. Deliberately read-only: the
-// only things that work here are the print view's own moves - turn the pages,
-// zoom about the cursor, drag the sheet, Escape out - and Export. Changing the
-// design means opening the album's canvas.
-function CanvasShelfViewer({
-  canvas,
-  onClose,
-  onRemove,
-}: {
-  canvas: CanvasGalleryOut;
-  onClose: () => void;
-  // Take the canvas off the shelf from in here (the canvas itself is kept).
-  // Resolves true once it is off, so the viewer can close over a card that
-  // no longer exists.
-  onRemove: () => Promise<boolean>;
-}) {
-  const sheets = useMemo(() => shelfSheets(canvas), [canvas]);
-  const [index, setIndex] = useState(0);
-  const [size, setSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
-  // The controls fade once the pointer has settled, so a page can be looked
-  // at with nothing at all around it; any movement brings them back.
-  const [idle, setIdle] = useState(false);
-  const idleTimer = useRef<number | null>(null);
-  // A closer look: the wheel zooms about the cursor, a drag moves the page.
-  // scale 1 = the whole sheet fit in the window; x/y displace its centre, in
-  // screen pixels.
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  const [look, setLook] = useState({ scale: 1, x: 0, y: 0 });
-  const lookRef = useRef(look);
-  lookRef.current = look;
-  const pan = useRef<{ id: number; x: number; y: number } | null>(null);
-  const [panning, setPanning] = useState(false);
-
-  // What the Export chip needs: the version's document dressed as a full
-  // layout (the editing aids are irrelevant to an export), and just enough of
-  // an ImageOut per photo to build its export URL with the right cache-buster.
-  const doc = useMemo(
-    () => ({
-      page_mode: canvas.page_mode,
-      page_width_mm: canvas.page_width_mm,
-      page_height_mm: canvas.page_height_mm,
-      page_count: canvas.page_count,
-      background: canvas.background,
-      show_grid: false,
-      grid_mm: 10,
-      snap: true,
-      // Read-only stand-in doc: the margins are an editing aid the shelf never
-      // draws, so any value satisfies the shape.
-      margin_mm: 0,
-      margin_y_mm: 0,
-      show_page_guide: canvas.show_page_guide,
-      show_in_canvases: true,
-      items: canvas.items,
-    }),
-    [canvas]
-  );
-  const byId = useMemo(() => {
-    const map = new Map<string, ImageOut>();
-    for (const [id, version] of Object.entries(canvas.thumb_versions)) {
-      map.set(id, { id, edit_rev: Number(version) || 0 } as unknown as ImageOut);
-    }
-    return map;
-  }, [canvas]);
-
-  const wake = useCallback(() => {
-    setIdle(false);
-    if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
-    idleTimer.current = window.setTimeout(() => setIdle(true), SHELF_IDLE_MS);
-  }, []);
-
-  useEffect(() => {
-    wake();
-    return () => {
-      if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
-    };
-  }, [wake]);
-
-  useEffect(() => {
-    function onResize() {
-      setSize({ w: window.innerWidth, h: window.innerHeight });
-    }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  const last = sheets.length - 1;
-  const go = useCallback(
-    (to: number) => {
-      setIndex(Math.max(0, Math.min(last, to)));
-      wake();
-    },
-    [last, wake]
-  );
-
-  // Every page opens at fit: a zoom is an inspection of THIS page.
-  useEffect(() => {
-    setLook({ scale: 1, x: 0, y: 0 });
-  }, [index]);
-
-  // The wheel zooms about the cursor. Bound by hand because React registers
-  // wheel handlers passively, and a passive handler cannot preventDefault.
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el) return;
-    function onWheel(event: WheelEvent) {
-      event.preventDefault();
-      const from = lookRef.current;
-      const scale = Math.max(1, Math.min(10, from.scale * Math.exp(-event.deltaY * 0.0022)));
-      if (scale === from.scale) return;
-      if (scale === 1) {
-        setLook({ scale: 1, x: 0, y: 0 });
-      } else {
-        const cx = event.clientX - window.innerWidth / 2;
-        const cy = event.clientY - window.innerHeight / 2;
-        const ratio = scale / from.scale;
-        setLook({ scale, x: cx - (cx - from.x) * ratio, y: cy - (cy - from.y) * ratio });
-      }
-      wake();
-    }
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [wake]);
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      switch (event.key) {
-        case "Escape":
-          event.preventDefault();
-          onClose();
-          return;
-        case "ArrowRight":
-        case "ArrowDown":
-        case "PageDown":
-        case " ":
-          event.preventDefault();
-          go(index + 1);
-          return;
-        case "ArrowLeft":
-        case "ArrowUp":
-        case "PageUp":
-          event.preventDefault();
-          go(index - 1);
-          return;
-        case "Home":
-          event.preventDefault();
-          go(0);
-          return;
-        case "End":
-          event.preventDefault();
-          go(last);
-          return;
-        case "0":
-          event.preventDefault();
-          setLook({ scale: 1, x: 0, y: 0 });
-          return;
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [go, index, last, onClose]);
-
-  // Fetch the neighbouring sheets' photos ahead of time, so turning a page
-  // shows a page and not a page filling in.
-  useEffect(() => {
-    for (const near of [index + 1, index - 1]) {
-      const sheet = sheets[near];
-      if (!sheet) continue;
-      for (const item of sheet.items) {
-        if (item.kind !== "photo" || !item.image_id || item.available === false) continue;
-        new Image().src = api.images.previewUrl(
-          item.image_id,
-          canvas.thumb_versions[item.image_id] ?? DEFAULT_EDIT_VERSION
-        );
-      }
-    }
-  }, [canvas, index, sheets]);
-
-  const sheet = sheets[Math.min(index, last)];
-  const zoom = Math.max(
-    0.01,
-    Math.min((size.w - SHELF_PAD_X * 2) / sheet.w, (size.h - SHELF_PAD_Y * 2) / sheet.h)
-  );
-
-  return createPortal(
-    <div
-      ref={boxRef}
-      className={`canvas-print${idle ? " is-idle" : ""}${panning ? " is-panning" : ""}`}
-      role="dialog"
-      aria-modal="true"
-      aria-label={`“${canvas.canvas_name}” print view`}
-      onPointerDown={(event) => {
-        wake();
-        if (event.button !== 0) return;
-        if ((event.target as Element).closest("button, .filter-chip")) return;
-        pan.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
-        setPanning(true);
-        event.currentTarget.setPointerCapture?.(event.pointerId);
-      }}
-      onPointerMove={(event) => {
-        wake();
-        const start = pan.current;
-        if (!start || start.id !== event.pointerId) return;
-        const dx = event.clientX - start.x;
-        const dy = event.clientY - start.y;
-        if (!dx && !dy) return;
-        pan.current = { id: start.id, x: event.clientX, y: event.clientY };
-        setLook((from) => ({ ...from, x: from.x + dx, y: from.y + dy }));
-      }}
-      onPointerUp={() => {
-        pan.current = null;
-        setPanning(false);
-      }}
-      onPointerCancel={() => {
-        pan.current = null;
-        setPanning(false);
-      }}
-      onDoubleClick={(event) => {
-        // In for a closer look, back out to the whole page - about the point
-        // that was double-clicked.
-        if ((event.target as Element).closest("button, .filter-chip")) return;
-        const from = lookRef.current;
-        if (from.scale > 1) {
-          setLook({ scale: 1, x: 0, y: 0 });
-        } else {
-          const scale = 2.5;
-          const cx = event.clientX - window.innerWidth / 2;
-          const cy = event.clientY - window.innerHeight / 2;
-          setLook({ scale, x: cx - (cx - from.x) * scale, y: cy - (cy - from.y) * scale });
-        }
-        wake();
-      }}
-    >
-      <div
-        className="canvas-print-sheet canvas-shelf-view"
-        style={{
-          width: sheet.w * zoom,
-          height: sheet.h * zoom,
-          background: canvas.background,
-          transform: `translate(${look.x}px, ${look.y}px) scale(${look.scale})`,
-        }}
-      >
-        <ShelfSheetItems canvas={canvas} sheet={sheet} detail />
-      </div>
-
-      {sheets.length > 1 && (
-        <>
-          <button
-            className="lightbox-nav-btn lightbox-nav-prev canvas-print-chrome"
-            onClick={() => go(index - 1)}
-            disabled={index === 0}
-            aria-label="Previous page"
-            title="Previous page (←)"
-          >
-            <IconChevronLeft size={20} />
-          </button>
-          <button
-            className="lightbox-nav-btn lightbox-nav-next canvas-print-chrome"
-            onClick={() => go(index + 1)}
-            disabled={index === last}
-            aria-label="Next page"
-            title="Next page (→)"
-          >
-            <IconChevronRight size={20} />
-          </button>
-        </>
-      )}
-
-      {/* One bottom bar, like the photo stages' toolbars: the standard Back
-          flush left, the caption centred, Export flush right. */}
-      <div className="canvas-print-foot canvas-print-chrome" aria-live="polite">
-        <button
-          className="btn btn-sm back-btn stage-back-btn"
-          onClick={onClose}
-          title="Back to the albums (Escape)"
-        >
-          <IconArrowLeft size={13} /> Back
-        </button>
-        {canvas.canvas_name} · “{canvas.version_name}”
-        {sheets.length > 1 ? ` · Page ${index + 1} of ${sheets.length}` : ""}
-        <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to come back</span>
-        <span className="canvas-print-export">
-          <ExportChip doc={doc} byId={byId} title={canvas.canvas_name} drop="up" />
-          {/* The card's × from inside the view: off the shelf, nothing more.
-              Deleting a canvas stays inside the canvas itself. */}
-          <button
-            className="btn btn-sm canvas-tool quiet-danger canvas-print-shelf-off"
-            onClick={async () => {
-              if (await onRemove()) onClose();
-            }}
-            aria-label={`Take “${canvas.canvas_name}” off the Canvas Shelf`}
-            title="Take off the Canvas Shelf (the canvas and its versions are kept)"
-          >
-            <IconTrash size={14} />
-          </button>
-        </span>
-      </div>
-    </div>,
-    document.body
-  );
-}
-
 export function Albums() {
   const [name, setName] = useState("");
   const [newTags, setNewTags] = useState<string[]>([]);
@@ -583,16 +202,12 @@ export function Albums() {
 
   // Which album card currently has its name open for editing (one at a time).
   const [renamingId, setRenamingId] = useState<string | null>(null);
-  // The shelf canvas currently open in the full-screen print view.
-  const [viewing, setViewing] = useState<CanvasGalleryOut | null>(null);
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
-  const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
-  // The Canvases shelf: albums whose canvas opted in, each showing its chosen
-  // kept version (see CanvasCard above).
-  const { data: canvases } = useQuery({
-    queryKey: ["canvases"],
-    queryFn: () => api.canvases.gallery(),
+  const { data: allTags } = useQuery({
+    queryKey: ["tags"],
+    queryFn: () => api.tags.list(),
+    select: withoutMembershipNames,
   });
 
   // Auto-computed albums (similarity clusters + years/months/big days). The
@@ -636,26 +251,6 @@ export function Albums() {
       return;
     await api.albums.remove(id);
     queryClient.invalidateQueries({ queryKey: ["albums"] });
-  }
-
-  // The shelf card's ×: off the shelf, nothing more. The canvas and its kept
-  // versions stay with the album - the checkbox inside the canvas re-shows it.
-  // Also offered inside the full-screen view; true means it came off.
-  async function removeFromShelf(canvas: CanvasGalleryOut): Promise<boolean> {
-    if (
-      !(await dialogs.confirm({
-        title: `Remove “${canvas.canvas_name}” from the Canvas Shelf?`,
-        message:
-          "Only the card is removed. The canvas and its saved versions are kept. You can show it again inside the canvas under Versions → Canvas Shelf.",
-        confirmLabel: "Remove",
-      }))
-    )
-      return false;
-    await api.canvases.setShelf(canvas.canvas_id, false);
-    queryClient.invalidateQueries({ queryKey: ["canvases"] });
-    // The canvas's own Versions panel reads this flag from the layout query.
-    queryClient.invalidateQueries({ queryKey: ["canvas-layout", canvas.canvas_id] });
-    return true;
   }
 
   const clustersPending = smart
@@ -777,7 +372,7 @@ export function Albums() {
                     setRenamingId(album.id);
                   }}
                 >
-                  <IconPencil size={13} />
+                  <IconRename size={13} />
                 </button>
               )}
               <button
@@ -821,33 +416,6 @@ export function Albums() {
             a lone album card keeps its normal size instead of stretching huge. */}
         <i className="grid-filler" aria-hidden />
       </div>
-
-      {canvases && canvases.length > 0 && (
-        <section className="canvas-shelf-section">
-          <h3 className="smart-row-title">
-            Canvas Shelf
-            <span className="smart-row-hint">Saved canvas designs. Click one to see it in print view.</span>
-          </h3>
-          <div className="canvas-shelf">
-            {canvases.map((canvas) => (
-              <CanvasCard
-                key={canvas.canvas_id}
-                canvas={canvas}
-                onOpen={() => setViewing(canvas)}
-                onRemove={() => removeFromShelf(canvas)}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {viewing && (
-        <CanvasShelfViewer
-          canvas={viewing}
-          onClose={() => setViewing(null)}
-          onRemove={() => removeFromShelf(viewing)}
-        />
-      )}
     </div>
   );
 }
