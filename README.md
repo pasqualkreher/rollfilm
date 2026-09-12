@@ -6,9 +6,10 @@
 
 **From memory card to finished photo. One app, on your own computer.**
 
-Import, cull, search and edit in a single window — then mirror the keepers to your
-[Immich](https://immich.app) server. Search your library by describing what you
-remember, browse it on a map and a timeline, shoot RAW, edit non-destructively.<br>
+Import, cull, search, edit and lay out on a page — in a single window — then mirror
+the keepers to your [Immich](https://immich.app) server. Search your library by
+describing what you remember, browse it on a map and a timeline, shoot RAW, edit
+non-destructively, print what you made.<br>
 **No account. No cloud. No Docker. No setup.**
 
 [![Latest release](https://img.shields.io/github/v/release/pasqualkreher/Rollfilm?label=release&color=4c8dae)](https://github.com/pasqualkreher/Rollfilm/releases/latest)
@@ -39,6 +40,8 @@ Your photos stay on your own machine. Rollfilm copies them into a managed librar
 
 - **Search by describing, not by tagging.** CLIP embeddings live in your local SQLite database. "Dog in the snow", "red bicycle against a wall" — no tags, no cloud API, no upload.
 - **An import you actually look forward to.** Photos are staged and shown on a light table while they copy. Compare, pick, reject and rate while the rest is still coming off the card.
+- **An import you can put down.** A session stays open until you end it: cull half a card today, pull it, and pick the same session up tomorrow — it recognises the card when it comes back and copies only what is still missing.
+- **A page, not just a grid.** Put photos on a canvas — a photo book page, a poster, a contact sheet — move and crop them by hand, add captions, edit a photo right there, and export a lossless PDF for the print shop.
 - **Immich as a destination, not a replacement.** Keep a fast local desktop library and let Rollfilm mirror it to your Immich server: manual, selective or everything. Albums, deletions and RAW+JPEG pairs follow.
 - **Your originals are never touched.** Edits, stars, tags and albums live in the database beside the files. Rename or move a photo in Finder and it is matched back by content, not by name.
 - **One window for the whole path.** Timeline, map, gear filters, statistics, a non-destructive editor with masks — without switching apps.
@@ -63,27 +66,36 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 | <img src="docs/screenshots/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="docs/screenshots/immich-sync.jpg" alt="Immich sync modes" width="420"><br>**Immich sync** — your library, mirrored |
 | <img src="docs/screenshots/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor** — non-destructive, masks, film sims | <img src="docs/screenshots/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare** — split by a draggable line, or side by side |
 | <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="docs/screenshots/themes.jpg" alt="Color skins" width="420"><br>**Skins** — a light one, a dark one, or follow the system |
+| <img src="docs/screenshots/canvas.jpg" alt="Canvas editor with photos laid out on a page" width="420"><br>**Canvas** — lay photos out on a page, print or export it | <img src="docs/screenshots/albums-wide.jpg" alt="Albums page" width="420"><br>**Albums** — countries, years and months, plus your own |
+| <img src="docs/screenshots/canvas-edit.jpg" alt="Canvas with the photo editor docked beside the page" width="420"><br>**Canvas edit** — edit a photo right on the page, the original stays untouched | <img src="docs/screenshots/import-sessions.jpg" alt="Open import sessions" width="420"><br>**Import sessions** — an import stays open until you end it, pull the card and come back later |
 
 ## Features
 
 | | Highlights |
 | :--- | :--- |
-| **Import** | Staged import wizard with a light table, RAW+JPEG pairing, byte-identical duplicate detection, EXIF and lens data, reverse geocoding |
-| **Organize** | Albums, smart albums, tags with bulk tagging, star ratings, color labels, selects/picks, per-photo descriptions, trash with retention |
+| **Import** | Staged import wizard with a light table, sessions that stay open until you end them, RAW+JPEG pairing, byte-identical duplicate detection, EXIF and lens data, reverse geocoding |
+| **Organize** | Albums, smart albums, tags with bulk tagging, star ratings, color labels, selects/picks, per-photo descriptions, trash with retention, a right-click menu on every photo, chips that say which albums and canvases a photo is in |
 | **Search** | Local semantic search, image-to-image similarity, gear filters that cross-filter each other, map, exact-scrolling timeline, statistics |
 | **Immich** | Three sync modes, background reconciliation every 60 s, album mirroring, durable deletion queue, optional RAW upload |
-| **Edit** *(experimental)* | Non-destructive, backend-rendered, masks with local AI subject selection, tone curves on the histogram, auto develop learned from your own edits |
+| **Edit** *(experimental)* | Non-destructive, backend-rendered, masks with local AI subject selection, tone curves on the histogram, auto develop learned from your own edits, virtual copies |
+| **Canvas** | Pages or one free sheet, A4/A3/Letter/square or any size in mm, drag, crop-in-frame, rotate, snap, captions, the editor docked beside the page, print view and lossless PDF export |
 | **Safety** | Originals never modified, renames survive Finder, backup and restore as one zip, external folders mounted read-only |
 
 <details>
 <summary><b>Library &amp; import — full list</b></summary>
 
 - **Staged import wizard** — photos are copied at the speed of the media, reviewed in a virtualized grid that stays responsive at thousands of files, and analyzed in the background while you're already culling
+- **Sessions you can come back to** — *Continue later* keeps your ticks, stars, labels and the files already copied; *Open import sessions* on the Import page lists what is still open and *Continue* copies only what isn't copied yet, including photos shot onto the card since. Photos already added in an earlier round stay visible, marked as in the library and blocked from coming in twice
+- **The card, not its path** — a session remembers the card itself, so it is recognised even when the computer mounts it under another name, and a different card under the same name is not mistaken for it. An unplugged card shows as *Not connected* until it returns
+- **One session, several sources** — *Add folder…* / *Add photos…* in the review collect from more than one card or folder into the same session, each tracked and continued on its own
 - **RAW support** (via rawpy) with automatic RAW+JPEG pairing
 - **EXIF extraction** (ExifTool) — capture date, camera, **lens**, exposure data — and reverse geocoding of GPS coordinates to country/place
 - **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
 - **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
 - Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
+- **Select without a mode** — Cmd/Ctrl-click or Shift-click the first photo and checkboxes appear on every tile; Cmd/Ctrl+A takes everything, Esc clears, E opens a single picked photo in the editor. A plain click still opens the photo
+- **Right-click any photo** — export, save a copy, or show the file in Finder / Explorer; on a selected photo the action applies to the whole selection
+- **Where a photo lives** — album and canvas chips beside each photo and on the grid's hover card, each a link into that album or canvas, with an × to take the photo out
 - **Rename photos from the app** — the file on disk is renamed with them, the RAW/JPEG partner follows to the same name, and the photo keeps its stars, tags, albums, edits and cached previews
 - **Free-text descriptions** per photo, stored in the database like every other edit
 - **Renames survive Finder** — a photo you rename or move outside the app is matched back by its content, not its name, so it keeps everything you gave it instead of being treated as deleted
@@ -98,11 +110,12 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 - **Semantic search** — describe what you're looking for in natural language ("sunset at the beach", "dog in the snow"). Powered by CLIP embeddings stored in SQLite via `sqlite-vec`, fully local, no cloud API
 - Image-to-image similarity search
 - **Gear-aware filters** — narrow the library by camera, lens or a focal-length range slider; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot), and the filter bar can be **pinned open** so it stays put while you cull
+- **Smart albums** with the same filter bar as the library — JPEG/RAW, rating, colour label, tags, date range
 - **Map view** (Leaflet) of all geotagged photos
 - **A timeline that stays out of the way at any size** — the whole library is laid out up front, so the scrollbar is exact from the first frame and the date scrubber on the right lands anywhere in it instantly; only the tiles near the viewport are ever mounted
 - **Details without leaving the grid** — hover a tile for an "i" that opens camera, lens, exposure, tags and albums beside it
 - **Statistics** — photos per year, plus which camera bodies, lenses and focal-length ranges you actually shoot, how your ratings fall, and what the library is made of
-- **Light & dark skins** — three restrained pairs (Graphite, Slate, Ink), a light one and a dark one chosen separately, with a Light / Dark / Auto switch that can follow the system
+- **Look & feel** — seven light/dark skin pairs (Stone, Slate, Ink, Orange, Sand, Sage, Blue), a light one and a dark one chosen separately with a Light / Dark / Auto switch that can follow the system; rounded or square corners; the interface typeface picked from what your system already has
 
 </details>
 
@@ -124,6 +137,23 @@ One of the highlights of the project: keep your library mirrored to an existing 
 </details>
 
 <details>
+<summary><b>Canvas — full list</b></summary>
+
+A free design surface: place photos where you want them instead of where the grid puts them, then print or export the result.
+
+- **Make one from a selection** — pick photos in the Library, an album or Selects and choose *Add to… → canvas*; in merged view the RAW partner comes along. A canvas has its own photos, kept on a filmstrip along the bottom until you put them on the paper
+- **Two kinds of paper** — *Pages* is a run of sheets of one size, like a photo book, with a rail to add, copy and reorder pages; *Free canvas* is one endless sheet with an optional page guide so you can still design for print
+- **Any paper size** — A4, A3, US Letter, two squares, or a width and height in millimetres; separate side and top/bottom margins; a measuring grid that is never printed
+- **Laying out** — drag from the filmstrip, resize with locked or free proportions, rotate (Shift for 15° steps), *crop in frame* to move and zoom the picture inside its frame, a coloured border per photo, copy and paste settings between items, stack with bring-to-front / send-to-back, snapping to other items, page edges, centre lines and margins
+- **Captions** — text boxes with any font installed on the computer, weight, italic, size in millimetres, colour and alignment
+- **Edit a photo on the page** — *Edit photo* docks the full editor beside the paper and develops a virtual copy, so each canvas can have its own version of a picture and the library original is never changed; masks are drawn on the frame itself
+- **Print view and export** — the paper alone, page by page, in a focus mode that takes the whole screen; export is a PDF at the exact page size with every photo lossless at full resolution and text as real text, or a single self-contained HTML file. Never a re-compressed JPEG
+- **It saves itself** — no Save button and no "discard changes?" question; every change is written a moment later, and undo/redo covers every step
+- **Focus mode** — F hides every bar; the paper stays editable and gets the whole window
+
+</details>
+
+<details>
 <summary><b>External sources</b></summary>
 
 - **Index photo collections in place** (e.g. a NAS) — read-only, without copying anything into the managed library
@@ -140,10 +170,13 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 - All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
 - **Built to keep up** — while a slider is being dragged, only the pixels your screen can actually show are rendered (zoomed in, only the visible tile), so editing stays fluid even on 40MP RAWs
 - Edits are stored as values in the database; originals are never touched
+- **It saves itself** — no Save button: edits are written a moment after a slider comes to rest and again when you close. Small dots on sliders and sections show where the edits are
+- **Focus mode** — F hides the app's bars, P the panel, so the photo gets the whole window
 - Exposure/contrast/highlights/shadows, white balance, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
 - **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives
 - **Masks** — radial, linear, brush, luminance and color, plus **AI subject selection** (sky, water, greenery, people, buildings, ground) run locally with SegFormer. Point at a mask in the list and it marks what it covers
 - **Compare against the original** — split by a divider you drag across the photo, or the two side by side. On a RAW the original half is shown with the library's auto-exposure, so the comparison isn't just "the edit is brighter"
+- **Physical and virtual copies** — *Save copy* bakes an edit into a new file in the library; a virtual copy is a second, independently editable version of the same file that costs no disk space
 - **Auto develop** — an optional "Auto" button that suggests develop settings *learned from your own edits*: a local CLIP k-nearest-neighbor recommender finds the photos you've already edited that look most like the one you're working on and blends their settings. No training step, no cloud — every edit you save immediately makes the next suggestion better. Works on a single photo or a whole selection at once
 
 </details>
@@ -228,7 +261,7 @@ three-line function exists, which is how the reasoning survives between sessions
 
 What that means in practice:
 
-- **It's tested where it counts.** 350+ backend tests cover the paths that could
+- **It's tested where it counts.** 450+ backend tests cover the paths that could
   lose your photos or your edits — import, trash, pairing, library sync. Your
   originals are never modified; edits live in the database beside them.
 - **It also means one person's blind spots.** Rollfilm is used daily on one
@@ -274,7 +307,7 @@ cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 python run_server.py   # runs Alembic migrations, then starts the API on localhost
-pytest                 # 350+ tests, in-memory database, a few seconds
+pytest                 # 450+ tests, in-memory database, a few seconds
 ```
 
 ### Configuration
