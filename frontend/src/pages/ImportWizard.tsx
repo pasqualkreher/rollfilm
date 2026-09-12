@@ -25,7 +25,7 @@ import {
   updateReviewState,
   type ReviewScrollAnchor,
 } from "../utils/importReviewState";
-import { IconCheck, IconChevronDown, IconFolder, IconImage } from "../components/Icons";
+import { IconCheck, IconChevronDown, IconFolder, IconImage, IconImport } from "../components/Icons";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 
@@ -972,7 +972,7 @@ export function ImportWizard() {
                 aria-expanded={importMenuOpen}
               >
                 {!isUploading
-                  ? <>Import photos <IconChevronDown size={12} /></>
+                  ? <><IconImport size={13} /> Import photos <IconChevronDown size={12} /></>
                   : folderImportActive
                     ? totalFileCount
                       ? `Importing... ${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}`

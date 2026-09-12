@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { SubMask } from "../utils/adjustments";
 
 // Guide + editable handles for the selected mask's spatial sub-mask, drawn over
@@ -29,6 +29,9 @@ const HANDLE_R = 1.0; // handle radius in viewBox-x units (grab tolerance is lar
 // Rotation handle sits this far (viewBox units) beyond the ellipse top; mirrors
 // PhotoEditor's MASK_ROT_OFF (0.07 fraction) so render + hit-test agree.
 const ROT_OFF_VB = 7;
+// Stroke sample flag bit for an erasing dab - mirrors masks._ERASE and
+// PhotoEditor's BRUSH_ERASE.
+const BRUSH_ERASE = 2;
 
 // Every mask's *covered area* is marked with the same pink zebra: diagonal
 // candy stripes, the way a video scope marks a region. A flat wash reads as
@@ -62,11 +65,42 @@ function brushFadeStops(feather: number): [number, number][] {
   return stops;
 }
 
-export function MaskOverlay({
+// Memoised by value: the editor re-renders on every slider frame, and a brush
+// mask is one SVG element per stroke sample - thousands of nodes that React
+// rebuilt each time although nothing about the mask had changed. The cursor
+// and style props are compared by content (the editor makes fresh objects for
+// them every render); `sub` by identity, which changes exactly when the mask
+// does.
+type MaskOverlayProps = Parameters<typeof MaskOverlayImpl>[0];
+function sameCursor(a: MaskOverlayProps["cursor"], b: MaskOverlayProps["cursor"]): boolean {
+  if (!a || !b) return a === b;
+  return a.x === b.x && a.y === b.y && a.size === b.size;
+}
+function sameStyle(a: CSSProperties | undefined, b: CSSProperties | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.transform === b.transform && a.transformOrigin === b.transformOrigin;
+}
+export const MaskOverlay = memo(
+  MaskOverlayImpl,
+  (a, b) =>
+    a.sub === b.sub &&
+    a.aspect === b.aspect &&
+    a.handles === b.handles &&
+    a.mark === b.mark &&
+    a.dashed === b.dashed &&
+    a.cursorSink === b.cursorSink &&
+    a.brushSink === b.brushSink &&
+    sameCursor(a.cursor, b.cursor) &&
+    sameStyle(a.style, b.style)
+);
+
+function MaskOverlayImpl({
   sub,
   style,
   aspect = 1,
   cursor = null,
+  cursorSink,
+  brushSink,
   handles = false,
   mark = true,
   dashed = false,
@@ -75,6 +109,19 @@ export function MaskOverlay({
   style?: CSSProperties;
   aspect?: number;
   cursor?: { x: number; y: number; size: number } | null;
+  // Where the brush ring's moves arrive from while it is shown: the editor
+  // calls every registered mover per pointer move and the ring follows in the
+  // DOM, with no render in between. `cursor` still says whether the ring is
+  // up (and where it first appeared); its last moved-to position wins over
+  // that on a re-render, so the ring never jumps back.
+  cursorSink?: Set<(x: number, y: number) => void>;
+  // Where a brush stroke's samples arrive while it is being painted: the
+  // editor stamps them here the moment the pointer moves and hands them to
+  // the edit state in batches (see BRUSH_FLUSH_MS). The overlay's brush
+  // canvas paints the live samples at once and skips them again when the
+  // batch lands in `sub`, so the guide follows the pointer at pointer rate
+  // while the editor re-renders a few times a second.
+  brushSink?: Set<(pts: number[][]) => void>;
   // Draw the drag handles - only while editing on the image. The shape's own
   // outline renders either way, so a mask being edited stays locatable.
   handles?: boolean;
@@ -86,8 +133,133 @@ export function MaskOverlay({
   // boundary the mask is confined to never reads as the selection itself.
   dashed?: boolean;
 }) {
+  const ringRef = useRef<SVGEllipseElement | null>(null);
+  const ringPosRef = useRef<{ x: number; y: number } | null>(null);
+  const ringShown = cursor !== null;
+  useEffect(() => {
+    if (!ringShown) ringPosRef.current = null;
+  }, [ringShown]);
+  useEffect(() => {
+    if (!cursorSink) return;
+    const move = (x: number, y: number) => {
+      ringPosRef.current = { x, y };
+      const el = ringRef.current;
+      if (el) {
+        el.setAttribute("cx", String(x * 100));
+        el.setAttribute("cy", String(y * 100));
+      }
+    };
+    cursorSink.add(move);
+    return () => {
+      cursorSink.delete(move);
+    };
+  }, [cursorSink]);
   const p = sub.parameters;
   const num = (k: string, d: number) => (typeof p[k] === "number" ? (p[k] as number) : d);
+  // --- The brush guide is a canvas, painted incrementally --------------------
+  // It used to be one SVG <ellipse> per stroke sample inside a luminance
+  // <mask>: thousands of nodes React rebuilt and the browser re-rasterised on
+  // every render while painting. Here the coverage lives in an offscreen
+  // canvas that only ever receives the NEW samples (a redraw from scratch
+  // happens when the stroke list shrinks - undo - or the dab falloff
+  // changes), and the visible canvas is the zebra cut to that coverage.
+  const brushCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const brushStateRef = useRef<{
+    coverage: HTMLCanvasElement;
+    zebra: HTMLCanvasElement | null;
+    painted: number; // samples of `strokes` already on the coverage
+    live: number; // samples stamped through the sink, not yet seen in `strokes`
+    key: string; // size/feather/aspect the coverage was painted with
+  } | null>(null);
+  const isBrush = sub.type === "brush";
+  const brushStrokes = isBrush && Array.isArray(p.strokes) ? (p.strokes as number[][]) : null;
+  const brushFeather = isBrush ? Math.min(1, Math.max(0, num("feather", 50) / 100)) : 0;
+  const brushMark = isBrush && mark;
+  // Canvas backing store: a fixed long edge stretched over the photo like the
+  // SVG viewBox is; the dab radius is `size` of the long edge, so it is the
+  // same circle in canvas pixels whatever the aspect.
+  const BRUSH_W = aspect >= 1 ? 1200 : Math.round(1200 * aspect);
+  const BRUSH_H = aspect >= 1 ? Math.round(1200 / aspect) : 1200;
+  const stampDabs = (pts: number[][]) => {
+    const st = brushStateRef.current;
+    if (!st) return;
+    const ctx = st.coverage.getContext("2d")!;
+    const long = Math.max(BRUSH_W, BRUSH_H);
+    const stops = brushFadeStops(brushFeather);
+    for (const s of pts) {
+      const x = (s[0] ?? 0) * BRUSH_W;
+      const y = (s[1] ?? 0) * BRUSH_H;
+      const r = Math.max(1, (s[2] ?? 0.06) * long);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      for (const [offset, alpha] of stops) g.addColorStop(Math.min(1, offset), `rgba(255,255,255,${alpha})`);
+      ctx.globalCompositeOperation = ((s[3] ?? 0) & BRUSH_ERASE) !== 0 ? "destination-out" : "source-over";
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  };
+  const compositeBrush = () => {
+    const st = brushStateRef.current;
+    const cv = brushCanvasRef.current;
+    if (!st || !cv) return;
+    const ctx = cv.getContext("2d")!;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!brushMark) return;
+    if (!st.zebra) st.zebra = makeZebra(cv.width, cv.height);
+    ctx.drawImage(st.zebra, 0, 0);
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.drawImage(st.coverage, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+  };
+  useLayoutEffect(() => {
+    if (!brushStrokes) return;
+    const cv = brushCanvasRef.current;
+    if (!cv) return;
+    const key = `${BRUSH_W}x${BRUSH_H}:${brushFeather}`;
+    let st = brushStateRef.current;
+    if (cv.width !== BRUSH_W || cv.height !== BRUSH_H) {
+      cv.width = BRUSH_W;
+      cv.height = BRUSH_H;
+      if (st) st.zebra = null;
+    }
+    if (!st || st.key !== key || brushStrokes.length < st.painted) {
+      const coverage = st?.coverage ?? document.createElement("canvas");
+      coverage.width = BRUSH_W;
+      coverage.height = BRUSH_H;
+      st = { coverage, zebra: st?.zebra ?? null, painted: 0, live: 0, key };
+      brushStateRef.current = st;
+      stampDabs(brushStrokes);
+      st.painted = brushStrokes.length;
+    } else {
+      // The samples painted live through the sink are the head of what just
+      // arrived (same order, same points) - they are not painted twice.
+      const fresh = brushStrokes.length - st.painted;
+      const skip = Math.min(st.live, fresh);
+      if (fresh > skip) stampDabs(brushStrokes.slice(st.painted + skip));
+      st.live -= skip;
+      st.painted = brushStrokes.length;
+    }
+    compositeBrush();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brushStrokes, brushFeather, brushMark, BRUSH_W, BRUSH_H]);
+  useEffect(() => {
+    if (!brushSink || !isBrush) return;
+    const paint = (pts: number[][]) => {
+      const st = brushStateRef.current;
+      if (!st) return;
+      stampDabs(pts);
+      st.live += pts.length;
+      compositeBrush();
+    };
+    brushSink.add(paint);
+    return () => {
+      brushSink.delete(paint);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brushSink, isBrush, brushFeather, brushMark, BRUSH_W, BRUSH_H]);
   const handle = (x: number, y: number, key: string) => (
     <ellipse key={key} cx={x} cy={y} rx={HANDLE_R} ry={HANDLE_R * aspect} className="mask-handle" vectorEffect="non-scaling-stroke" />
   );
@@ -225,43 +397,17 @@ export function MaskOverlay({
     // got rendered.
     const rx = (s: number) => Math.max(0.3, s * 100 * (aspect >= 1 ? 1 : 1 / aspect));
     const ry = (s: number) => Math.max(0.3, s * 100 * (aspect >= 1 ? aspect : 1));
-    const fadeId = `mask-brush-fade-${sub.id}`;
-    const maskId = `mask-brush-${sub.id}`;
+    // The painted area itself is on the canvas beside this SVG (see the brush
+    // hooks above); the SVG keeps the ring, which needs the viewBox stretch.
+    void feather;
+    void strokes;
     shapes = (
       <>
-        <defs>
-          {/* Mirrors the render's falloff: solid out to (1 - feather) of the
-              radius, then smoothstep to nothing at the edge. Without this the
-              guide was a hard-edged disc and the Feather slider looked dead.
-              White, because the dabs are the content of a luminance <mask>. */}
-          <radialGradient id={fadeId}>
-            {brushFadeStops(feather).map(([offset, opacity], i) => (
-              <stop key={i} offset={`${offset * 100}%`} stopColor="#fff" stopOpacity={opacity} />
-            ))}
-          </radialGradient>
-          {/* The painted area drives a mask over the zebra, so the stripes are
-              the paint - a striped dab per sample would break up as the strokes
-              overlap. */}
-          <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
-            {strokes.map((s, i) => (
-              <ellipse
-                key={i}
-                cx={(s[0] ?? 0) * 100}
-                cy={(s[1] ?? 0) * 100}
-                rx={rx(s[2] ?? 0.06)}
-                ry={ry(s[2] ?? 0.06)}
-                fill={`url(#${fadeId})`}
-              />
-            ))}
-          </mask>
-        </defs>
-        {mark && strokes.length > 0 && (
-          <rect x="0" y="0" width="100" height="100" fill={`url(#${ZEBRA_ID})`} mask={`url(#${maskId})`} />
-        )}
         {cursor && (
           <ellipse
-            cx={cursor.x * 100}
-            cy={cursor.y * 100}
+            ref={ringRef}
+            cx={(ringPosRef.current ?? cursor).x * 100}
+            cy={(ringPosRef.current ?? cursor).y * 100}
             rx={rx(cursor.size)}
             ry={ry(cursor.size)}
             className="mask-brush-ring"
@@ -293,6 +439,16 @@ export function MaskOverlay({
     return null;
   }
 
+  if (isBrush) {
+    return (
+      <div className={`mask-overlay mask-overlay-brush${dashed ? " mask-overlay-dashed" : ""}`} style={style}>
+        <canvas ref={brushCanvasRef} className="mask-brush-canvas" width={BRUSH_W} height={BRUSH_H} />
+        <svg className="mask-brush-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+          {shapes}
+        </svg>
+      </div>
+    );
+  }
   return (
     <svg
       className={`mask-overlay${dashed ? " mask-overlay-dashed" : ""}`}
@@ -306,4 +462,28 @@ export function MaskOverlay({
       {shapes}
     </svg>
   );
+}
+
+// The zebra as pixels, for the brush canvas: the same pink candy stripes the
+// SVG pattern draws (ZebraPattern), one stripe = 1% of the picture's width,
+// so the two kinds of marking read alike side by side.
+function makeZebra(w: number, h: number): HTMLCanvasElement {
+  const cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "rgba(255, 45, 149, 0.12)";
+  ctx.fillRect(0, 0, w, h);
+  const unit = w / 100;
+  ctx.strokeStyle = "rgba(255, 45, 149, 0.55)";
+  ctx.lineWidth = unit;
+  ctx.beginPath();
+  // 45-degree lines, period 2 units, covering the whole rectangle.
+  const period = 2 * unit * Math.SQRT2;
+  for (let d = -h; d < w + h; d += period) {
+    ctx.moveTo(d, 0);
+    ctx.lineTo(d - h, h);
+  }
+  ctx.stroke();
+  return cv;
 }

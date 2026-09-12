@@ -3043,11 +3043,16 @@ textarea:focus-visible {
    photo view's panel collapses (.detail-panel--collapsed: negative margin of
    the rail's own width, so nothing inside it reflows; the body clips it). */
 .editor-overlay--panel-hidden .editor-panel {
+  /* The rail leaves the flow at once (one layout, one refit of the stage) and
+     slides out on the compositor: animating the margin instead laid the
+     stage out on every frame of the slide and refitted the canvas each
+     time - a forced layout per frame that hitched with a big photo open. */
   margin-right: -320px;
+  transform: translateX(100%);
   opacity: 0;
   visibility: hidden;
   transition:
-    margin-right 0.28s var(--ease-out),
+    transform 0.28s var(--ease-out),
     opacity 0.16s var(--ease-in),
     visibility 0s linear 0.28s;
 }
@@ -3088,7 +3093,6 @@ textarea:focus-visible {
   padding: 0 0 0 20px;
   /* Clips the rail while it slides out (see .editor-overlay--panel-hidden). */
   overflow: hidden;
-  transition: padding-right 0.28s var(--ease-out);
 }
 
 .editor-stage {
@@ -3750,7 +3754,7 @@ input.editor-preset-select {
   border-left: 1px solid var(--border);
   overflow: hidden;
   transition:
-    margin-right 0.28s var(--ease-out),
+    transform 0.28s var(--ease-out),
     opacity 0.2s ease-out,
     visibility 0s;
 }
@@ -6171,10 +6175,15 @@ input.editor-preset-select {
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6);
 }
 
-/* Exploded ("spiderfied") same-spot cluster: members fan out on a ring or
-   spiral around the pin, each popping in. */
+/* Exploded ("spiderfied") cluster: members fan out on a ring or spiral
+   around the pin, each popping in. Hover grows them less than a lone pin so
+   an enlarged tile doesn't bury its neighbours in the fan. */
 .map-pin-spider img {
   animation: map-pin-pop 0.18s ease-out;
+}
+
+.map-pin-spider.map-pin-active img {
+  transform: scale(1.8);
 }
 
 @keyframes map-pin-pop {
@@ -6981,6 +6990,22 @@ kbd {
    handles below stay on the accent, because those are controls. No `fill` here:
    the shapes that have one point at the zebra pattern through a `fill`
    attribute, which a rule on this class would override. */
+/* The brush guide: a canvas (the painted coverage under the zebra) and,
+   over it, the SVG that carries the size ring. Both fill the overlay box. */
+.mask-overlay-brush {
+  overflow: hidden;
+}
+
+.mask-brush-canvas,
+.mask-brush-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
 .mask-overlay-shape {
   stroke: #ff2d95;
   stroke-width: 1.5;

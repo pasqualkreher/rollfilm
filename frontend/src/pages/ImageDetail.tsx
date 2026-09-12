@@ -447,6 +447,20 @@ export function ImageDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paired, restedId]);
 
+  // Warm the editor's decode base for the rested photo, so pressing E lands
+  // on a ready base and the first frame is immediate instead of a raw
+  // demosaic away. A little after the rest, so a photo merely paused on for
+  // half a second (250ms rest + this) starts no decode; moving on cancels
+  // the timer. Not while the editor is already open on it.
+  useEffect(() => {
+    if (restedId !== activeId || adjustOpen) return;
+    const t = setTimeout(() => {
+      void api.images.editorWarm(restedId).catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restedId, adjustOpen]);
+
   // Similar-photos strip: a CLIP search per photo is the most expensive
   // per-view request the lightbox makes - only run it for the rested photo,
   // never for photos zapped past.

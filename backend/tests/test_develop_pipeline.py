@@ -890,3 +890,175 @@ def test_clarity_keeps_colour_on_fully_saturated_content():
     for amount in (1.3, -1.3):  # slider at the ends of its travel
         _, dhue = _hue_sat_drift(chart, thumbnails._clarity(chart, 12.0, amount))
         assert dhue < 0.05, f"clarity {amount:+} rotated hue by {dhue:.3f} degrees"
+
+
+# --- Profiled noise reduction ------------------------------------------------
+
+
+def _smooth_scene(h=480, w=720) -> np.ndarray:
+    """A noise-free scene with gentle gradients, a few hard edges and a strip of
+    fine texture - the content NR has to keep while it removes the noise."""
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    y = 0.15 + 0.5 * xx / w + 0.1 * np.sin(yy / 90.0)
+    y += 0.2 * ((xx // 180) % 2)                       # hard vertical edges
+    tex = 0.12 * np.sin(xx / 1.2) * np.sin(yy / 1.2)   # fine texture...
+    y += tex * (yy > h * 0.7)                           # ...in the bottom strip
+    y = np.clip(y, 0.02, 0.98)
+    return np.stack([y, y * 0.95, y * 0.9], axis=-1).astype(np.float32)
+
+
+def _noisy(scene: np.ndarray, sigma: float, seed: int = 0) -> np.ndarray:
+    return np.clip(scene + _rng(seed).normal(0, sigma, scene.shape).astype(np.float32), 0, 1)
+
+
+def _flat_noise(a: np.ndarray, scene: np.ndarray) -> float:
+    """Noise std in the flat part of the scene (top 60%, away from the edges),
+    measured against the clean scene."""
+    y = (a @ thumbnails._LUMA) - (scene @ thumbnails._LUMA)
+    h = scene.shape[0]
+    return float(y[: int(h * 0.6), 20:160].std())
+
+
+def test_luma_nr_strength_follows_the_pictures_noise():
+    """The pass is profiled: it removes the noise it can measure. At the same
+    slider position an ISO-12800-like frame loses most of its grain, and a
+    nearly clean frame is left nearly alone - a fixed strength can only ever
+    do one of the two."""
+    scene = _smooth_scene()
+    loud = _noisy(scene, 11 / 255.0)
+    quiet = _noisy(scene, 1.5 / 255.0, seed=1)
+    loud_out = thumbnails._denoise_arr(loud, 50, 0)
+    quiet_out = thumbnails._denoise_arr(quiet, 50, 0)
+    assert _flat_noise(loud_out, scene) < _flat_noise(loud, scene) * 0.3, "ISO 12800 grain stayed"
+    moved_loud = float(np.abs(loud_out - loud).mean())
+    moved_quiet = float(np.abs(quiet_out - quiet).mean())
+    assert moved_quiet < moved_loud * 0.35, f"clean frame smoothed as hard as the noisy one: {moved_quiet:.4f} vs {moved_loud:.4f}"
+
+
+def test_luma_nr_slider_is_alive_at_low_values():
+    """The previous pass smoothed by a fixed h <= 7/255: below slider 60 an ISO
+    12800 frame was untouched, so the control read as dead. Now 25 already
+    removes a visible share of the grain."""
+    scene = _smooth_scene()
+    loud = _noisy(scene, 11 / 255.0)
+    assert _flat_noise(thumbnails._denoise_arr(loud, 25, 0), scene) < _flat_noise(loud, scene) * 0.6
+
+
+def test_luma_nr_never_retones():
+    """NR removes texture, not tonality: the flat areas keep their mean even at
+    full strength, where the old pass lifted clipped-shadow noise."""
+    scene = _smooth_scene()
+    loud = _noisy(scene, 11 / 255.0)
+    out = thumbnails._denoise_arr(loud, 100, 0)
+    h = scene.shape[0]
+    d = ((out @ thumbnails._LUMA) - (loud @ thumbnails._LUMA))[: int(h * 0.6), 20:160]
+    assert abs(float(d.mean())) * 255 < 0.5, f"flat area shifted by {d.mean()*255:+.2f}/255"
+
+
+def test_luma_nr_keeps_edges_and_detail_slider_keeps_texture():
+    """Hard edges survive (NLM does not blur across them), and the Detail
+    slider hands fine texture back: at 100 the textured strip keeps more of
+    its high-frequency energy than at 0."""
+    import cv2
+    scene = _smooth_scene()
+    loud = _noisy(scene, 8 / 255.0)
+    luma = lambda a: (a @ thumbnails._LUMA).astype(np.float32)
+    h = scene.shape[0]
+
+    def edge_contrast(a):  # step across the x=180 edge, rows above the texture
+        y = luma(a)[: int(h * 0.6)]
+        return float(y[:, 184:190].mean() - y[:, 170:176].mean())
+
+    def texture_energy(a):
+        y = luma(a)[int(h * 0.75):]
+        return float((y - cv2.GaussianBlur(y, (0, 0), 2.0)).std())
+
+    smooth = thumbnails._denoise_arr(loud, 60, 0, detail_amt=0)
+    textured = thumbnails._denoise_arr(loud, 60, 0, detail_amt=100)
+    assert abs(edge_contrast(smooth) - edge_contrast(scene)) < 0.02, "edge lost contrast"
+    assert texture_energy(textured) > texture_energy(smooth) * 1.15
+    # ...without switching NR off: Detail tilts the strength (0 smooths harder,
+    # 100 leaves more standing), and at 100 the flat area is still mostly clean.
+    assert _flat_noise(textured, scene) < _flat_noise(loud, scene) * 0.5
+
+
+def test_denoise_probe_makes_a_tile_match_the_frame():
+    """A zoomed tile is denoised against the FRAME's noise, not its own. A tile
+    of pure texture would otherwise call its texture noise and come out
+    smoother than the whole-frame render it sits in."""
+    h, w = 400, 800
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    y = 0.3 + 0.3 * yy / h
+    y += 0.2 * np.sin(xx / 1.5) * np.sin(yy / 1.5) * (xx >= w // 2)  # texture on the right
+    scene = np.repeat(np.clip(y, 0.02, 0.98)[..., None], 3, axis=-1).astype(np.float32)
+    frame = _noisy(scene, 6 / 255.0)
+    whole = thumbnails._denoise_arr(frame, 60, 40)
+    box = (slice(40, h - 40), slice(w // 2 + 40, w - 40))
+    tile = frame[box]
+    probe = thumbnails._noise_probe(frame)
+    with_probe = thumbnails._denoise_arr(tile, 60, 40, ref_short_edge=h, probe=probe)
+    on_its_own = thumbnails._denoise_arr(tile, 60, 40, ref_short_edge=h)
+    # The tile's border rows differ (NLM's window runs out of picture); the
+    # region render pads for that, so judge the interior.
+    inner = (slice(24, -24), slice(24, -24))
+    d_probe = float(np.abs(with_probe[inner] - whole[box][inner]).mean())
+    d_own = float(np.abs(on_its_own[inner] - whole[box][inner]).mean())
+    assert d_probe * 255 < 0.6, f"tile with the frame probe differs by {d_probe*255:.2f}/255"
+    assert d_probe < d_own * 0.5, f"probe did not help: {d_probe:.5f} vs {d_own:.5f}"
+
+
+def test_denoise_stage_tones_the_probe_like_the_tile():
+    """The wiring: a tile render hands the LINEAR probe to the stage, which
+    tones it with the same adjustments - so an exposure lift that raises the
+    shadow noise is seen by the estimator exactly as the tile sees it."""
+    h, w = 360, 600
+    scene = _smooth_scene(h, w) * 0.25       # a dark linear base...
+    lin = _noisy(scene, 3 / 255.0)
+    adj = develop.defaults() | {"exposure": 1.5, "luma_noise_reduction": 60, "color_noise_reduction": 30}
+    toned = thumbnails._linear_tone_block_banded(lin, adj, 1.0)
+    whole = thumbnails._denoise_stage(toned, adj, False, h)
+    box = (slice(60, h - 60), slice(200, w - 60))
+    tile = thumbnails._linear_tone_block_banded(np.ascontiguousarray(lin[box]), adj, 1.0)
+    out = thumbnails._denoise_stage(tile, adj, False, h, noise_probe=thumbnails._noise_probe(lin), base_gain=1.0)
+    inner = (slice(24, -24), slice(24, -24))
+    d = float(np.abs(out[inner] - whole[box][inner]).mean())
+    assert d * 255 < 0.6, f"tile differs from the frame by {d*255:.2f}/255"
+
+
+def test_noise_probe_is_the_same_grid_for_tile_and_frame():
+    """Sampling the linear base then toning it equals sampling the toned frame:
+    the tone block is per-pixel and the grid is fixed by the frame's size."""
+    h, w = 6 * 192 + 50, 8 * 192 + 70
+    lin = _rng(3).random((h, w, 3), dtype=np.float32) * 0.5
+    adj = develop.defaults() | {"exposure": 0.7, "contrast": 20}
+    a = thumbnails._linear_tone_block_banded(thumbnails._noise_probe(lin), adj, 1.0)
+    b = thumbnails._noise_probe(thumbnails._linear_tone_block_banded(lin, adj, 1.0))
+    assert a.shape == b.shape == (6 * 8 * 192, 192, 3)
+    np.testing.assert_allclose(a, b, atol=1e-6)
+    # A frame smaller than the grid is its own probe.
+    small = lin[:300, :500]
+    assert thumbnails._noise_probe(small).shape == small.shape
+
+
+def test_luma_noise_detail_is_a_develop_scalar():
+    """Default 50 is neutral; it lives above the denoise cut, so it takes part
+    in the tone-stage cache key like the two amount sliders."""
+    assert develop.defaults()["luma_noise_detail"] == 50
+    assert develop.is_neutral({"luma_noise_detail": 50})
+    assert not develop.is_neutral({"luma_noise_detail": 60})
+    assert develop.normalize({"luma_noise_detail": 500})["luma_noise_detail"] == 100
+    assert "luma_noise_detail" not in thumbnails._POST_DENOISE_KEYS
+
+
+def test_chromatic_aberration_resamples_between_pixels():
+    """The radial rescale is a fraction of a pixel over most of the frame.
+    Nearest sampling rendered that as whole-pixel steps (jagged fringes at
+    100%); bilinear gives the in-between values a sub-pixel shift implies."""
+    from app.services import develop_effects
+    h, w = 200, 400
+    arr = np.zeros((h, w, 3), np.float32)
+    arr[:, 300:] = 1.0                                   # edge 100px right of centre
+    out = develop_effects.apply_chromatic_aberration(arr, 100, 0)
+    red_edge = out[h // 2, 295:305, 0]
+    assert ((red_edge > 0.05) & (red_edge < 0.95)).any(), "red edge moved by a whole pixel or not at all"
+    assert np.array_equal(out[..., 1], arr[..., 1]), "green must stay put"

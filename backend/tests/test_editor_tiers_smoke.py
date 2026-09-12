@@ -221,6 +221,30 @@ def test_a_region_tile_reuses_its_tone_stage(photo, monkeypatch):
     assert calls == 1, "the tile's tone stage was recomputed instead of reused"
 
 
+def test_a_region_tile_is_prepared_once(photo, monkeypatch):
+    """Cutting, converting and downscaling the tile out of the native base ran
+    per zoomed frame, ahead of every cache. The prepared tile is kept between
+    frames of the same box and budget - and serving it from the cache must not
+    change a pixel."""
+    _warm_native(photo)
+    region = (0.3, 0.25, 0.3, 0.3)
+    thumbnails.invalidate_tone_stage()
+    first = thumbnails.render_editor_preview_bytes(
+        photo, 0, None, develop.normalize({"exposure": 0.4}), region=region, region_px=40
+    )
+    assert len(thumbnails._tile_cache) == 1
+    resized = []
+    real_resize = thumbnails.cv2.resize
+    monkeypatch.setattr(thumbnails.cv2, "resize", lambda *a, **k: (resized.append(1), real_resize(*a, **k))[1])
+    again = thumbnails.render_editor_preview_bytes(
+        photo, 0, None, develop.normalize({"exposure": 0.4}), region=region, region_px=40
+    )
+    assert again == first
+    # The second frame's tile came from the cache: nothing was downscaled to
+    # the budget again. (The pipeline itself doesn't resize a plain exposure edit.)
+    assert resized == []
+
+
 def test_geometry_takes_the_long_way(photo):
     """With the frame rotated, the region cannot be a plain slice of the base -
     the render has to run the geometry first and cut afterwards. Same test, but
@@ -276,6 +300,47 @@ def test_editor_preview_threads_is_stale_into_the_pipeline(photo):
         thumbnails.render_editor_preview_bytes(
             photo, 0, None, adj, is_stale=stale_after_entry
         )
+
+
+def test_the_settle_tiers_render_at_the_on_screen_size(tmp_path, monkeypatch):
+    """`settle_px` is the canvas's on-screen size: a full/ultra settle renders
+    at the ladder rung covering it, never the tier's ceiling when the screen
+    shows less - and never a size the screen would show upscaled. Each rung
+    derives from the 3900 base, so no rung costs a decode."""
+    from io import BytesIO
+
+    from app.services import raw as raw_service
+
+    path = tmp_path / "huge.jpg"
+    ys, xs = np.mgrid[0:3000, 0:4000].astype(np.float32)
+    g = 0.5 + 0.3 * np.sin(xs / 41.0) * np.cos(ys / 37.0)
+    PILImage.fromarray(
+        (np.clip(np.dstack([g, g * 0.9, g * 0.8]), 0, 1) * 255).astype(np.uint8), "RGB"
+    ).save(path, "JPEG", quality=80)
+    image = Image(
+        id="settle-px", owner_id=1, file_path=str(path), original_filename="huge.jpg",
+        file_hash="hash3", file_type=FileType.jpeg, file_size=path.stat().st_size,
+        taken_at=datetime(2026, 9, 12, 12, 0, 0), width=4000, height=3000,
+    )
+    monkeypatch.setattr("app.services.filesystem.resolve_image_path", lambda img: path)
+    thumbnails.clear_editor_base_caches()
+    adj = develop.normalize({"exposure": 0.3})
+
+    def long_edge(**kw) -> int:
+        data = thumbnails.render_editor_preview_bytes(image, 0, None, adj, **kw)
+        return max(PILImage.open(BytesIO(data)).size)
+
+    assert long_edge(ultra=True) == thumbnails.ULTRA_EDITOR_PREVIEW_PX  # no budget: the ceiling
+
+    def fail(*a, **k):
+        raise AssertionError("a settle rung decoded instead of deriving from the 3900 base")
+
+    monkeypatch.setattr(raw_service, "load_linear_base", fail)
+    assert long_edge(ultra=True, settle_px=2800) == 3000        # the rung above the screen
+    assert long_edge(ultra=True, settle_px=99999) == thumbnails.ULTRA_EDITOR_PREVIEW_PX
+    assert long_edge(ultra=True, settle_px=1700) == 1800
+    assert long_edge(full_quality=True, settle_px=2800) == thumbnails.FULL_EDITOR_PREVIEW_PX  # capped
+    assert long_edge(full_quality=True, settle_px=2100) == 2200
 
 
 def test_the_scrub_tier_honours_an_adaptive_budget(tmp_path, monkeypatch):

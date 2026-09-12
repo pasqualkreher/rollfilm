@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { IconFolder } from "./Icons";
 
 // First-run library picker, shown before the backend is running (the desktop
 // shell opens the window with no library configured). This replaces the old
@@ -64,7 +65,7 @@ export function LibrarySetup() {
           </div>
         ) : (
           <button className="btn primary setup-choose" onClick={choose}>
-            Choose library folder…
+            <IconFolder size={13} /> Choose library folder…
           </button>
         )}
 

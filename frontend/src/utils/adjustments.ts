@@ -53,6 +53,9 @@ export const SCALAR_SPEC = {
   // master over both used to sit here; see normalizeAdjustments() for how the
   // edits saved while it existed are folded into these two.
   luma_noise_reduction: { def: 0, min: 0, max: 100 },
+  // How much fine texture the luma pass keeps at edges: 0 smooths everything,
+  // 100 keeps texture (and grain) where the picture has structure.
+  luma_noise_detail: { def: 50, min: 0, max: 100 },
   color_noise_reduction: { def: 0, min: 0, max: 100 },
   chromatic_aberration_red_cyan: { def: 0, min: -100, max: 100 },
   chromatic_aberration_blue_yellow: { def: 0, min: -100, max: 100 },
@@ -312,6 +315,13 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
 }
 
 export function adjustmentsAreNeutral(a: Adjustments): boolean {
+  if (a === DEFAULT_ADJUSTMENTS) return true;
+  // The scalars first, without serialising anything: during a slider drag one
+  // of them is off its default, and that answers the question in a few dozen
+  // comparisons instead of two stringifies of the whole tree per frame.
+  for (const k of Object.keys(SCALAR_SPEC) as ScalarKey[]) {
+    if (a[k] !== DEFAULT_ADJUSTMENTS[k]) return false;
+  }
   return JSON.stringify(a) === JSON.stringify(DEFAULT_ADJUSTMENTS);
 }
 
@@ -374,10 +384,11 @@ export const SECTIONS: Section[] = [
     title: "Details",
     fields: [
       { key: "sharpness", label: "Sharpness" },
-      { key: "sharpness_threshold", label: "Threshold" },
+      { key: "sharpness_threshold", label: "Sharpness Threshold" },
       { key: "clarity", label: "Clarity" },
       { key: "dehaze", label: "Dehaze" },
       { key: "luma_noise_reduction", label: "Luminance NR" },
+      { key: "luma_noise_detail", label: "Luminance NR Detail" },
       { key: "color_noise_reduction", label: "Color NR" },
       { key: "chromatic_aberration_red_cyan", label: "Red–Cyan CA" },
       { key: "chromatic_aberration_blue_yellow", label: "Blue–Yellow CA" },

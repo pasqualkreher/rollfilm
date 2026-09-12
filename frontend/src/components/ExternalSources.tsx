@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { DirectoryPicker } from "./DirectoryPicker";
-import { IconRotate, IconTrash } from "./Icons";
+import { IconFolder, IconPlus, IconRotate, IconTrash } from "./Icons";
 import { useAppDialogs } from "./AppDialogs";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
@@ -113,14 +113,14 @@ export function ExternalSources() {
           style={{ minWidth: 220, flex: 1 }}
         />
         <button className="btn" onClick={handleBrowse}>
-          Browse…
+          <IconFolder size={13} /> Browse…
         </button>
         <button
           className="btn primary"
           onClick={() => addSource.mutate()}
           disabled={!path.trim() || addSource.isPending}
         >
-          {addSource.isPending ? "Adding..." : "Add & scan"}
+          <IconPlus size={13} /> {addSource.isPending ? "Adding..." : "Add & scan"}
         </button>
       </div>
       {addSource.isError && (

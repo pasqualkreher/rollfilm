@@ -128,10 +128,13 @@ def apply_chromatic_aberration(arr: np.ndarray, red_cyan: int, blue_yellow: int)
     `red_cyan` scales the RED channel's sampling radius, `blue_yellow` the BLUE
     channel; each -100..100, with opposite signs moving in opposite directions.
     The max radial rescale at +/-100 is ~0.4% of the radius (subtle). Depending
-    on sign this can *add* CA or partially *correct* existing CA. Nearest-index
-    sampling, mirroring `apply_distortion` in thumbnails.py."""
+    on sign this can *add* CA or partially *correct* existing CA. Bilinear
+    resampling: the rescale is a fraction of a pixel over most of the frame,
+    which nearest-index sampling can only render as a staircase of whole-pixel
+    steps - visible at 100% as jagged fringes on every diagonal edge."""
     if not red_cyan and not blue_yellow:
         return arr
+    import cv2
     h, w = arr.shape[:2]
     cx = (w - 1) / 2.0
     cy = (h - 1) / 2.0
@@ -143,9 +146,12 @@ def apply_chromatic_aberration(arr: np.ndarray, red_cyan: int, blue_yellow: int)
         # +/-0.4% of the radius at the extremes: scale the sampling radius about
         # centre, so the channel is gathered from a slightly larger/smaller ring.
         scale = 1.0 + (max(-100, min(100, amt)) / 100.0) * 0.004
-        sx = np.clip(np.rint(cx + (xs - cx) * scale), 0, w - 1).astype(np.int32)
-        sy = np.clip(np.rint(cy + (ys - cy) * scale), 0, h - 1).astype(np.int32)
-        out[..., chan] = arr[sy, sx, chan]
+        map_x = (cx + (xs - cx) * scale).astype(np.float32)
+        map_y = (cy + (ys - cy) * scale).astype(np.float32)
+        out[..., chan] = cv2.remap(
+            np.ascontiguousarray(arr[..., chan]), map_x, map_y, cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
     return np.clip(out, 0.0, 1.0)
 
 

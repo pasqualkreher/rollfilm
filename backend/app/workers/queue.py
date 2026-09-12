@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -32,7 +33,12 @@ from app.services.immich import (
     upload_asset,
 )
 from app.services.raw import extract_preview
-from app.services.thumbnails import RENDER_SLOTS, generate_derivatives, has_derivatives
+from app.services.thumbnails import (
+    RENDER_SLOTS,
+    editor_recently_active,
+    generate_derivatives,
+    has_derivatives,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +380,12 @@ def _process(image_id: str, source_path: Path) -> None:
 
 _BACKFILL_IDLE_POLL_S = 5.0
 _BACKFILL_CHUNK = 100
+# The backfill also stays out of the editor's way: a CLIP forward pass plus
+# four decode threads right through a slider drag was the "the editor stutters
+# for the first minute after startup" report. Same signal the thumbnail
+# rebuild and the full.jpg warmer wait on; checked between mini-batches, so
+# the editor gets its cores back within one encode.
+_BACKFILL_EDITOR_IDLE_S = 10.0
 
 _backfill_lock = Lock()
 _backfill_thread: threading.Thread | None = None
@@ -396,6 +408,8 @@ def register_import_activity_probe(probe: Callable[[], bool]) -> None:
 
 def _import_work_active() -> bool:
     if derivatives_pending() > 0:
+        return True
+    if editor_recently_active(_BACKFILL_EDITOR_IDLE_S):
         return True
     for probe in list(_import_activity_probes):
         try:
@@ -467,7 +481,9 @@ def _images_missing_embeddings(limit: int) -> list[tuple[str, Path]]:
 # of sequential decode time. Beyond either value the returns flatten out while
 # an import-preemption pause gets coarser.
 _EMBED_BATCH = 16
-_EMBED_DECODE_WORKERS = 4
+# Never the whole machine: on a 4-core laptop four decode threads plus the
+# encode left nothing for anything else.
+_EMBED_DECODE_WORKERS = max(1, min(4, (os.cpu_count() or 2) - 2))
 
 
 def _decode_for_embedding(image_id: str, source_path: Path) -> PILImage.Image | None:

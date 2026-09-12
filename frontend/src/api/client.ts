@@ -583,7 +583,9 @@ export const api = {
       // at true 100% the budget equals the cut, so the zoomed-in sharpness the
       // native tier exists for is untouched). Without a region it is the
       // whole-frame scrub tier's adaptive resolution (`px=`) - the editor
-      // walks it down when drag frames stop keeping up with the pointer.
+      // walks it down when drag frames stop keeping up with the pointer - or,
+      // on a full/ultra settle, the canvas's on-screen size, so the settle
+      // renders what the screen can show instead of the tier's ceiling.
       regionPx: number | null = null,
       // Native settle polling: the caller already painted this edit state from
       // the fallback tier and only waits for the full-resolution base. With
@@ -612,7 +614,9 @@ export const api = {
         peek ? `peek=${encodeURIComponent(peek)}` : "",
         regionParam,
         regionParam && regionPx ? `region_px=${Math.round(regionPx)}` : "",
-        !regionParam && regionPx && mode === "scrub" ? `px=${Math.round(regionPx)}` : "",
+        !regionParam && regionPx && (mode === "scrub" || mode === "full" || mode === "ultra")
+          ? `px=${Math.round(regionPx)}`
+          : "",
         mode === "native" && nativeOnly ? "native_only=1" : "",
         zoomed && mode === "scrub" ? "zoomed=1" : "",
       ]
@@ -675,6 +679,12 @@ export const api = {
     // opening the Masks panel a second or two ahead of the click is usually
     // enough for the click itself to be instant. Fire and forget - if it
     // doesn't finish (or fails), segment() does the work as it always did.
+    // Decode the editor's base for a photo ahead of opening the editor on it
+    // (the lightbox calls this once the user rests on a photo). Answers at
+    // once; the decode happens on the server's warm-up thread.
+    editorWarm(id: string): Promise<void> {
+      return request<unknown>(`/images/${id}/editor-warm`, { method: "POST" }).then(() => undefined);
+    },
     segmentPrepare(id: string, edits: ImageEdits): Promise<void> {
       return request(`/images/${id}/segment/prepare`, {
         method: "POST",
@@ -682,8 +692,12 @@ export const api = {
       });
     },
     // Save the full non-destructive edit (rotation + crop + tonal) in place.
-    saveEdits(id: string, edits: ImageEdits): Promise<ImageOut> {
-      return request(`/images/${id}/edits`, { method: "PATCH", body: JSON.stringify(apiEdits(edits)) });
+    // `deferDerivatives`: the editor's autosave while it is open - the values
+    // are written, the thumbnail/preview re-render waits for the editor's
+    // final save (a 40MP raw decode per slider rest was fighting the editor).
+    saveEdits(id: string, edits: ImageEdits, opts?: { deferDerivatives?: boolean }): Promise<ImageOut> {
+      const q = opts?.deferDerivatives ? "?defer_derivatives=1" : "";
+      return request(`/images/${id}/edits${q}`, { method: "PATCH", body: JSON.stringify(apiEdits(edits)) });
     },
     // Bake the edit into a new managed library photo (tagged "edited").
     // quality/maxSize mirror the export options (long-edge cap, JPEG quality).

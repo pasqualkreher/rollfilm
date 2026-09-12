@@ -60,6 +60,9 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     # per-channel sliders look dead below its value. See normalize() for how
     # edits saved while it existed are folded in.
     "luma_noise_reduction": (0, 0, 100, False),
+    # How much of the fine texture the luma pass hands back at edges (and how
+    # hard it smooths in between): 0 = smooth everything, 100 = keep texture.
+    "luma_noise_detail": (50, 0, 100, False),
     "color_noise_reduction": (0, 0, 100, False),
     "chromatic_aberration_red_cyan": (0, -100, 100, False),
     "chromatic_aberration_blue_yellow": (0, -100, 100, False),

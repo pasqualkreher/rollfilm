@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 // A colour-grading hue/saturation wheel: hue is the angle around the disc
 // (0..360, red at the top, running clockwise to match the conic gradient),
@@ -15,10 +15,39 @@ interface Props {
   onReset?: () => void;
 }
 
-export function ColorWheel({ label, hue, saturation, onChange, onReset }: Props) {
+// Memoised on the value alone: four wheels sit in the Color group and the
+// editor re-renders on every slider frame. The callbacks are fresh arrows
+// each render that close over nothing but the wheel's own range key, so they
+// are left out of the comparison (the latest one is read through a ref).
+export const ColorWheel = memo(
+  ColorWheelImpl,
+  (a, b) => a.label === b.label && a.hue === b.hue && a.saturation === b.saturation
+);
+
+function ColorWheelImpl({ label, hue, saturation, onChange, onReset }: Props) {
   const discRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
+  // One onChange per animation frame, last position wins - the same
+  // coalescing the sliders do. Pointer events arrive several per frame and
+  // each one was a state write that re-rendered the whole editor.
+  const pendingRef = useRef<{ hue: number; saturation: number } | null>(null);
+  const rafRef = useRef(0);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const onResetRef = useRef(onReset);
+  onResetRef.current = onReset;
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
+  function queueChange(v: { hue: number; saturation: number }) {
+    pendingRef.current = v;
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      const pending = pendingRef.current;
+      pendingRef.current = null;
+      if (pending) onChangeRef.current(pending);
+    });
+  }
 
   // Pointer (client) coords -> {hue, saturation}. Angle is measured clockwise
   // from the top (atan2(dx, -dy)) so it lines up with `conic-gradient(from 0)`.
@@ -59,14 +88,14 @@ export function ColorWheel({ label, hue, saturation, onChange, onReset }: Props)
           draggingRef.current = true;
           setDragging(true);
           discRef.current!.setPointerCapture(e.pointerId);
-          onChange(fromPointer(e.clientX, e.clientY));
+          onChangeRef.current(fromPointer(e.clientX, e.clientY));
         }}
         onPointerMove={(e) => {
-          if (draggingRef.current) onChange(fromPointer(e.clientX, e.clientY));
+          if (draggingRef.current) queueChange(fromPointer(e.clientX, e.clientY));
         }}
         onPointerUp={(e) => endDrag(e.pointerId)}
         onPointerCancel={(e) => endDrag(e.pointerId)}
-        onDoubleClick={() => onReset?.()}
+        onDoubleClick={() => onResetRef.current?.()}
       >
         <span className="grade-wheel-puck" style={{ left: `${puckLeft}%`, top: `${puckTop}%` }} />
       </div>

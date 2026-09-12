@@ -1682,12 +1682,17 @@ def _apply_edits(image: Image, payload: schemas.ImageEdits) -> None:
 def save_edits(
     image_id: str,
     payload: schemas.ImageEdits,
+    defer_derivatives: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Save the full non-destructive edit (rotation + crop + tonal sliders) in
     place and re-render this photo's derivatives. The original file on disk is
-    never modified - resetting everything restores the original look."""
+    never modified - resetting everything restores the original look.
+
+    `?defer_derivatives=1` (the editor's autosave while it is open): the values
+    are written now and the thumbnail/preview renders wait for the editor's
+    final save - see thumbnails.defer_derivatives for why."""
     _validate_edits(payload)
     image = get_owned_image(db, current_user.id, image_id)
     _apply_edits(image, payload)
@@ -1702,7 +1707,11 @@ def save_edits(
         _remove_tag_from_image(db, current_user.id, image, "edit")
     db.commit()
     db.refresh(image)
-    _try_regenerate_derivatives(image)
+    if defer_derivatives:
+        thumbnails.defer_derivatives(image.id)
+    else:
+        thumbnails.take_deferred(image.id)
+        _try_regenerate_derivatives(image)
     run_backup_soon()
     return image
 
@@ -1749,6 +1758,22 @@ def _parse_region(raw: str | None) -> tuple[float, float, float, float] | None:
 # Above this a settled render is something the user waits for, so it is worth a
 # line in the log saying which tier spent it.
 _SLOW_PREVIEW_MS = 300
+
+
+def _render_breakdown(meta: dict) -> str:
+    """The slow-log tail: `px=1600 base=12 geom=30 tone=210* detail=40 ...`
+    from the timing dict the render fills in (thumbnails._mark). A `*` marks
+    a stage answered from its cache."""
+    t = meta.get("t") or {}
+    parts = []
+    if meta.get("px"):
+        parts.append(f"px={meta['px']}")
+    for key in ("wait", "base", "geom", "tone", "detail", "color", "masks", "fx", "encode"):
+        if key in t:
+            hit = "*" if t.get(f"{key}_hit") else ""
+            parts.append(f"{key}={t[key]:.0f}{hit}")
+    return " ".join(parts)
+
 
 _editor_preview_seq = itertools.count(1)
 _editor_preview_latest: dict[str, int] = {}
@@ -1814,6 +1839,13 @@ def editor_preview(
     # has grown too expensive to track the pointer at the fixed tier - see the
     # ladder in PhotoEditor. Clamped the same way; other tiers ignore it.
     scrub_px = max(480, min(thumbnails.EDITOR_PREVIEW_PX, px)) if px else None
+    # The same `px` on a full/ultra request is the canvas's on-screen size: the
+    # settle renders at the ladder rung covering it instead of the tier's
+    # ceiling (see thumbnails._SETTLE_PX_LADDER). Clamped like the rest.
+    settle_px = (
+        max(thumbnails.EDITOR_PREVIEW_PX, min(thumbnails.ULTRA_EDITOR_PREVIEW_PX, px))
+        if px and (full or ultra) else None
+    )
     # `?native_only=1`: the caller already has this edit state painted from the
     # fallback tier and is only waiting for the full-resolution base. Answering
     # such a poll by re-rendering the multi-second fallback frame it already
@@ -1865,6 +1897,7 @@ def editor_preview(
             zoomed=zoomed,
             scrub_px=scrub_px,
             is_stale=_is_stale,
+            settle_px=settle_px,
         )
         if native and not thumbnails.native_base_ready(
             image.id, thumbnails.editor_mtime_ns(image)
@@ -1876,15 +1909,20 @@ def editor_preview(
         # needs to know. Below the threshold it says nothing: the interactive
         # frames are tens of milliseconds and would drown the log.
         elapsed_ms = (time.perf_counter() - started) * 1000
-        if elapsed_ms >= _SLOW_PREVIEW_MS:
+        # Every frame at DEBUG (so `--log-level debug` shows a whole drag), the
+        # slow ones at INFO - with the per-stage breakdown, since "1.5s" alone
+        # never says whether it was the decode, denoise, a mask or the encode.
+        if elapsed_ms >= _SLOW_PREVIEW_MS or logger.isEnabledFor(logging.DEBUG):
             tier = ("native" if native else "ultra" if ultra else "full" if full
                     else "scrub" if scrub else "accurate")
-            logger.info(
-                "editor preview %s%s took %.0f ms (%s)",
+            logger.log(
+                logging.INFO if elapsed_ms >= _SLOW_PREVIEW_MS else logging.DEBUG,
+                "editor preview %s%s took %.0f ms (%s) %s",
                 tier,
                 " region" if view_region else " whole frame",
                 elapsed_ms,
                 image_id,
+                _render_breakdown(render_meta),
             )
     except thumbnails.PreviewSuperseded:
         # The client has already aborted this fetch; the status only matters to
@@ -1918,6 +1956,31 @@ def editor_preview(
         # the client stretches it to fit.
         headers["X-Rollfilm-Box"] = f"{bx},{by},{bw},{bh}"
     return Response(content=data, media_type="image/jpeg", headers=headers)
+
+
+@router.post("/{image_id}/editor-warm", status_code=202)
+def editor_warm(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Decode the editor's base for this photo now, before the editor opens.
+    The lightbox calls this once the user has rested on a photo: pressing E
+    then lands on a warm base and the first frame is immediate instead of
+    waiting out a raw demosaic. Fire-and-forget - the decode runs on the
+    warm-up thread (single-flight per image, see thumbnails.warm_editor_base)
+    and this answers at once. Skipped while an editor is actively rendering
+    elsewhere: a decode beside its frames would only slow them down."""
+    image = get_owned_image(db, current_user.id, image_id)
+    if thumbnails.editor_recently_active(2.0):
+        return {"status": "busy"}
+    path = resolve_image_path(image)
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return {"status": "missing"}
+    thumbnails.warm_editor_base(image.id, str(path), mtime_ns)
+    return {"status": "warming"}
 
 
 # One segmentation at a time per process: the model is a shared object and each

@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from collections import OrderedDict
@@ -62,7 +63,13 @@ def _get_model():
         with _model_lock:
             if _model is None:
                 import open_clip
+                import torch
 
+                # CPU inference (Windows/Linux, or a Mac without MPS) would
+                # otherwise take every core for each forward pass; two are
+                # left for the request thread and the renderer, the same
+                # courtesy the render pipeline extends (thumbnails._RENDER_THREADS).
+                torch.set_num_threads(max(1, (os.cpu_count() or 2) - 2))
                 model, _, preprocess = open_clip.create_model_and_transforms(
                     settings.clip_model_name,
                     pretrained=settings.clip_model_pretrained,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
@@ -490,7 +490,11 @@ export function CanvasEditor({
   editingImageIdRef.current = editingImage?.id ?? null;
   // The frame being edited shows the editor's own preview frames live, so the
   // photo is developed right there on the page. One object URL at a time.
-  const [livePreviewUrl, setLivePreviewUrl] = useState<string | null>(null);
+  // Not React state: a frame lands several times a second during a slider
+  // drag, and a state write per frame re-rendered the whole canvas page (every
+  // item, the selection, the toolbar) to swap one <img>'s src. The one frame
+  // showing the edit subscribes to this store instead (see CanvasItem).
+  const livePreview = useMemo(createLivePreviewStore, []);
   const livePreviewRef = useRef<string | null>(null);
   // After the dock closes, the tile whose photo was edited keeps showing the
   // last live preview frame until the closing save has settled and the fresh
@@ -501,7 +505,7 @@ export function CanvasEditor({
     const url = URL.createObjectURL(blob);
     const old = livePreviewRef.current;
     livePreviewRef.current = url;
-    setLivePreviewUrl(url);
+    livePreview.set(url);
     if (old) URL.revokeObjectURL(old);
     // The frame also follows the SHAPE of what the editor renders, live: a
     // quarter-turn (or a legacy crop) reshapes the frame in the same paint as
@@ -600,7 +604,7 @@ export function CanvasEditor({
     if (!editingOpenRef.current && livePreviewRef.current) {
       URL.revokeObjectURL(livePreviewRef.current);
       livePreviewRef.current = null;
-      setLivePreviewUrl(null);
+      livePreview.set(null);
     }
   }, []);
 
@@ -664,7 +668,7 @@ export function CanvasEditor({
     } else {
       if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
       livePreviewRef.current = null;
-      setLivePreviewUrl(null);
+      livePreview.set(null);
     }
     onMembershipChangedRef.current?.();
   }, []);
@@ -2227,7 +2231,7 @@ export function CanvasEditor({
     liveAspectRef.current = null;
     if (livePreviewRef.current) URL.revokeObjectURL(livePreviewRef.current);
     livePreviewRef.current = null;
-    setLivePreviewUrl(null);
+    livePreview.set(null);
     setHeldPreviewId(null);
     if (image.virtual_of_image_id) {
       setEditingImage(image);
@@ -2584,12 +2588,11 @@ export function CanvasEditor({
                       item={item}
                       doc={doc}
                       image={item.image_id ? byId.get(item.image_id) ?? null : null}
-                      livePreviewUrl={
-                        (editingImage
+                      livePreview={livePreview}
+                      live={
+                        editingImage
                           ? item.image_id === editingImage.id
-                          : item.image_id != null && item.image_id === heldPreviewId)
-                          ? livePreviewUrl
-                          : null
+                          : item.image_id != null && item.image_id === heldPreviewId
                       }
                       zoom={zoom}
                       selected={selected.has(item.id)}
@@ -3533,11 +3536,37 @@ function PageRail({
 
 // --- One placed item --------------------------------------------------------
 
+// The docked editor's live frame URL (see CanvasEditor.livePreview).
+type LivePreviewStore = {
+  get: () => string | null;
+  set: (url: string | null) => void;
+  subscribe: (fn: () => void) => () => void;
+};
+function createLivePreviewStore(): LivePreviewStore {
+  let url: string | null = null;
+  const subs = new Set<() => void>();
+  return {
+    get: () => url,
+    set: (next) => {
+      url = next;
+      subs.forEach((fn) => fn());
+    },
+    subscribe: (fn) => {
+      subs.add(fn);
+      return () => {
+        subs.delete(fn);
+      };
+    },
+  };
+}
+const NO_LIVE_PREVIEW: LivePreviewStore = { get: () => null, set: () => {}, subscribe: () => () => {} };
+
 function CanvasItem({
   item,
   doc,
   image,
-  livePreviewUrl = null,
+  livePreview = NO_LIVE_PREVIEW,
+  live = false,
   zoom,
   selected,
   cropping,
@@ -3552,9 +3581,12 @@ function CanvasItem({
   item: LayoutItem;
   doc: Doc;
   image: ImageOut | null;
-  // While this frame's photo is open in the docked editor: the newest preview
-  // frame, shown instead of the cached thumbnail - the edit happens IN the page.
-  livePreviewUrl?: string | null;
+  // While this frame's photo is open in the docked editor (`live`): the
+  // newest preview frame, read from the store, shown instead of the cached
+  // thumbnail - the edit happens IN the page. Only the live frame reads it, so
+  // a new frame re-renders this one item and nothing else.
+  livePreview?: LivePreviewStore;
+  live?: boolean;
   zoom: number;
   selected: boolean;
   cropping: boolean;
@@ -3572,6 +3604,7 @@ function CanvasItem({
   print?: boolean;
 }) {
   const rect = worldRect(item, doc);
+  const livePreviewUrl = useSyncExternalStore(livePreview.subscribe, () => (live ? livePreview.get() : null));
 
   // The photo climbs thumbnail -> preview -> full in the background (see
   // utils/photoQuality.ts). The print view can show a frame as big as the

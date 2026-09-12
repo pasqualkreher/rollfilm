@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -157,13 +157,25 @@ const SCRUB_REGION_MIN_PX = [1600, 1024, 800, 640];
 // walks it back up. The gap between the two is the hysteresis that keeps the
 // ladder from oscillating on noisy timings.
 const SCRUB_STEP_DOWN_MS = 140;
-const SCRUB_STEP_UP_MS = 45;
+const SCRUB_STEP_UP_MS = 70;
+// Fast frames in a row before the ladder climbs a rung. It used to take eight
+// under 45ms - a bar zoomed frames on a small machine never cleared, so one
+// expensive drag (Clarity while zoomed) parked every later drag on a 900px
+// tile stretched over a 4K viewport. Each drag also starts one rung above
+// where the last one ended (see the pointer-up handler).
+const SCRUB_STEP_UP_FRAMES = 5;
 
 // How long the edit has to stand still before the editor writes it. A drag
 // fires changes the whole way through, so the write waits for the slider to
 // come to rest - every save re-renders this photo's derivatives on the server,
 // and doing that mid-drag would fight the preview for the same machine.
 const AUTOSAVE_IDLE_MS = 1000;
+// How long brush samples collect before they reach the edit state (and so
+// the server). The guide on the photo follows the pointer at once through the
+// overlay's brush sink; the render behind it is asked for a few times a
+// second instead of per pointer move - each of those re-rasterised every
+// stroke of the mask server-side, and re-rendered the editor.
+const BRUSH_FLUSH_MS = 200;
 
 const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "presets"];
 const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String(i + 1));
@@ -375,7 +387,11 @@ function Slider({
           {label}
           {edited && <span className="editor-edited-dot" title="Changed from its default" />}
         </span>
-        <span className="editor-slider-val">{format ? format(uiValue) : uiShown > 0 ? `+${uiShown}` : uiShown}</span>
+        {/* A sign only where the slider swings both ways: "+15" on a 0..80
+            threshold or a 0..100 amount reads as a direction that isn't there. */}
+        <span className="editor-slider-val">
+          {format ? format(uiValue) : min < 0 && uiShown > 0 ? `+${uiShown}` : uiShown}
+        </span>
       </span>
       <input
         type="range"
@@ -443,13 +459,65 @@ function computeHistBinsFromBitmap(bmp: ImageBitmap | HTMLCanvasElement): Uint32
   return computeHistBins(ctx.getImageData(0, 0, w, h));
 }
 
+// The histogram bins live in a tiny store of their own rather than in the
+// editor's React state: a preview frame lands several times a second during a
+// drag, and a state write for each one re-rendered the entire editor (1500
+// lines of JSX, every slider, the mask overlay) just to repaint a 256x64 plot.
+// Only the components that draw the plot subscribe, so a bins update costs
+// exactly those.
+type HistStore = {
+  get: () => Uint32Array[] | null;
+  set: (bins: Uint32Array[] | null) => void;
+  subscribe: (fn: () => void) => () => void;
+};
+function createHistStore(): HistStore {
+  let bins: Uint32Array[] | null = null;
+  const subs = new Set<() => void>();
+  return {
+    get: () => bins,
+    set: (b) => {
+      bins = b;
+      subs.forEach((fn) => fn());
+    },
+    subscribe: (fn) => {
+      subs.add(fn);
+      return () => {
+        subs.delete(fn);
+      };
+    },
+  };
+}
+function useHistBins(store: HistStore): Uint32Array[] | null {
+  return useSyncExternalStore(store.subscribe, store.get);
+}
+
+// The spinner over an empty plot - its own subscriber, so "is there a
+// histogram yet" never has to be read by the editor's render.
+function HistogramWait({ store, hidden }: { store: HistStore; hidden: boolean }) {
+  const bins = useHistBins(store);
+  if (bins !== null || hidden) return null;
+  return (
+    <span className="editor-histogram-wait" aria-label="Loading histogram">
+      <span className="spinner" aria-hidden />
+    </span>
+  );
+}
+
+// CurveEditor takes the bins as a prop; this bridge subscribes on its behalf
+// so a bins update re-renders the curve plot and nothing above it.
+function LiveCurveEditor({ store, ...rest }: { store: HistStore } & Omit<ComponentProps<typeof CurveEditor>, "histogram">) {
+  const bins = useHistBins(store);
+  return <CurveEditor {...rest} histogram={bins} />;
+}
+
 // A live RGB histogram (Lightroom/RapidRAW-style): screen-blended channel fills,
 // sqrt scaling so shadow/highlight detail stays readable next to midtone peaks.
-// Driven by `bins` from state so it survives being unmounted/remounted as
+// Driven by the bins store so it survives being unmounted/remounted as
 // accordion groups open and close - it redraws on mount AND when the bins change
 // (the old version only drew on preview render, so a collapsed group's histogram
 // was blank until the next edit).
-function Histogram({ bins }: { bins: Uint32Array[] | null }) {
+function Histogram({ store }: { store: HistStore }) {
+  const bins = useHistBins(store);
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const hc = ref.current;
@@ -501,21 +569,16 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const onFrame = () => docked && hostSvgRef.current !== null;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const panDragRef = useRef<{ x: number; y: number } | null>(null);
-  // RGB histogram bins of the latest preview; the <Histogram> components (in the
-  // Basic and Curves groups) draw from this and redraw when it changes or on mount.
-  const [histBins, setHistBins] = useState<Uint32Array[] | null>(null);
+  // RGB histogram bins of the latest preview; the <Histogram> / curve plot
+  // subscribe to this store and redraw when it changes or on mount. Not React
+  // state on purpose - see createHistStore.
+  const histStore = useMemo(createHistStore, []);
   // True from the moment a photo is (re)selected until its first whole frame
   // is on the canvas. Drives the "Rendering…" badge: on open that wait is
   // spent looking at the library placeholder, on a photo switch at the
   // previous photo - neither says anything is happening without it.
   const [framePending, setFramePending] = useState(true);
-  // Mirror of histBins for the render paths: "is the histogram still empty?"
-  // must be readable inside drawBlob without being a dependency of it.
-  const histBinsRef = useRef<Uint32Array[] | null>(null);
-  const applyHistBins = useCallback((bins: Uint32Array[]) => {
-    histBinsRef.current = bins;
-    setHistBins(bins);
-  }, []);
+  const applyHistBins = useCallback((bins: Uint32Array[]) => histStore.set(bins), [histStore]);
   // When the histogram last updated - scrub frames throttle it (see drawBlob).
   const histAtRef = useRef(0);
   // Downscaled copy of the current preview for the curve picker. Reading a
@@ -664,14 +727,24 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // The compare view's other half is shown at the edited canvas's size (CSS in
   // split, the same fit in pair), so it is judged against the same on-screen
   // size - only against its OWN painted frame, which can lag the edit's.
+  // The canvas's on-screen long edge in device pixels - the honest answer to
+  // "how many rendered pixels can this screen show", which the settle sends
+  // as its render budget. Rounded up with a little slack: a frame a pixel
+  // short of the screen would read as upscaled and be settled again.
+  function shownPx(): number {
+    const cv = canvasRef.current;
+    if (!cv) return 0;
+    const dpr = window.devicePixelRatio || 1;
+    return (
+      Math.ceil(
+        Math.max(parseFloat(cv.style.width) || 0, parseFloat(cv.style.height) || 0) * scaleRef.current * dpr
+      ) + 2
+    );
+  }
   function targetTier(paintedPx = paintedPxRef.current): "full" | "ultra" | "native" | null {
     const cv = canvasRef.current;
     if (!cv || !paintedPx) return null;
-    const dpr = window.devicePixelRatio || 1;
-    const shown = Math.max(
-      (parseFloat(cv.style.width) || 0) * scaleRef.current * dpr,
-      (parseFloat(cv.style.height) || 0) * scaleRef.current * dpr
-    );
+    const shown = shownPx() - 2;
     // A pixel of slack: rounding in fitCanvasToStage must not trigger a render.
     if (shown <= paintedPx + 1) return null;
     if (shown <= FULL_TIER_PX) return "full";
@@ -731,7 +804,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const origPendingRef = useRef(-1);
 
   // The RGB histogram is drawn by the module-level <Histogram> component from the
-  // bins computed after each preview render (see setHistBins below); it appears in
+  // bins computed after each preview render (see histStore / applyHistBins); it appears in
   // both the Basic and Curves groups and survives accordion open/close.
 
   // The canvas's on-screen size must not follow its bitmap size (the default
@@ -811,16 +884,25 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     // A refit changes how big the photo is shown, and therefore how much
     // resolution it needs - a wider window (or a move to a hi-dpi screen) can
     // leave the settled frame upscaled. Re-settle so it never stays soft.
+    // Coalesced to one refit per frame: the panel's slide and a window drag
+    // fire this many times a frame, and each refit is a forced layout
+    // (getBoundingClientRect + getComputedStyle).
+    let raf = 0;
     const onResize = () => {
-      fitCanvasToStage();
-      // Only worth a render if the new fit actually leaves the photo stretched -
-      // this fires on every accordion open and window-drag tick too.
-      if (isUpscaled()) scheduleSettleRef.current();
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        fitCanvasToStage();
+        // Only worth a render if the new fit actually leaves the photo stretched -
+        // this fires on every accordion open and window-drag tick too.
+        if (isUpscaled()) scheduleSettleRef.current();
+      });
     };
     const ro = new ResizeObserver(onResize);
     ro.observe(box);
     window.addEventListener("resize", onResize);
     return () => {
+      cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener("resize", onResize);
     };
@@ -895,6 +977,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     erase?: boolean;
   } | null>(null);
   const brushLast = useRef<{ x: number; y: number } | null>(null);
+  // Samples painted since the last flush to the edit state (see BRUSH_FLUSH_MS)
+  // and the overlays' live painters (MaskOverlay registers one per brush).
+  const pendingStrokesRef = useRef<{ maskId: string; idx: number; pts: number[][] } | null>(null);
+  const strokeFlushTimer = useRef(0);
+  const brushSink = useMemo(() => new Set<(pts: number[][]) => void>(), []);
+  useEffect(() => () => clearTimeout(strokeFlushTimer.current), []);
   // Eraser latch for the brush; Alt inverts it for one stroke.
   const [brushErase, setBrushErase] = useState(false);
   const [cropCursor, setCropCursor] = useState("crosshair");
@@ -953,6 +1041,25 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // under the pointer), and the pointer position for the brush-size ring.
   const [maskCursor, setMaskCursor] = useState("crosshair");
   const [maskCursorPos, setMaskCursorPos] = useState<{ x: number; y: number } | null>(null);
+  // The brush ring follows the pointer through the DOM, not through state:
+  // each MaskOverlay registers a mover here, and a pointer move calls those
+  // instead of re-rendering the editor (state only says whether the ring is
+  // shown, and where it first appeared).
+  const maskCursorSink = useMemo(() => new Set<(x: number, y: number) => void>(), []);
+  const maskCursorShownRef = useRef(false);
+  function moveMaskCursor(p: { x: number; y: number }) {
+    if (!maskCursorShownRef.current) {
+      maskCursorShownRef.current = true;
+      setMaskCursorPos(p);
+      return;
+    }
+    maskCursorSink.forEach((move) => move(p.x, p.y));
+  }
+  function hideMaskCursor() {
+    if (!maskCursorShownRef.current) return;
+    maskCursorShownRef.current = false;
+    setMaskCursorPos(null);
+  }
   // Which control-panel accordion group is expanded. Only one is open at a time
   // ("" = all collapsed); purely presentational grouping of the existing panel.
   // Opens fully collapsed, so the panel starts as a plain list of groups and
@@ -1098,6 +1205,43 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const MIN_ZOOM = 0.2; // allow zooming out below fit
   const MAX_NATIVE_ZOOM = 4; // 400% of actual pixels, as in the lightbox
   const zoomed = scale > 1.001;
+  const splitPosRef = useRef(splitPos);
+  const splitDividerRef = useRef<HTMLDivElement | null>(null);
+  // A gesture's view changes go to the DOM directly and to React state once
+  // per animation frame. The wheel fires many times a frame and a pan drag at
+  // pointer rate, and each state write re-rendered the whole editor; the
+  // transform is a CSS property on a handful of elements, so it is written
+  // there at once (what the user sees) and the state catches up on the next
+  // frame (what everything else reads). The rendered strings are identical,
+  // so the catch-up is invisible.
+  const viewCommitRafRef = useRef(0);
+  function applyViewTransform() {
+    const t = `translate(${panRef.current.x}px, ${panRef.current.y}px) scale(${scaleRef.current})`;
+    if (canvasRef.current) canvasRef.current.style.transform = t;
+    if (origCanvasRef.current) {
+      origCanvasRef.current.style.transform = t;
+      if (splitDividerRef.current) {
+        origCanvasRef.current.style.clipPath = `inset(0 ${(1 - splitPosRef.current) * 100}% 0 0)`;
+      }
+    }
+    if (splitDividerRef.current) {
+      splitDividerRef.current.style.left =
+        `calc(${50 + (splitPosRef.current - 0.5) * scaleRef.current * 100}% + ${panRef.current.x}px)`;
+    }
+    wrapRef.current?.querySelectorAll<SVGSVGElement>(":scope > .mask-overlay").forEach((el) => {
+      el.style.transform = t;
+    });
+  }
+  function scheduleViewCommit() {
+    if (viewCommitRafRef.current) return;
+    viewCommitRafRef.current = requestAnimationFrame(() => {
+      viewCommitRafRef.current = 0;
+      setScale(scaleRef.current);
+      setPan(panRef.current);
+      setSplitPos(splitPosRef.current);
+    });
+  }
+  useEffect(() => () => cancelAnimationFrame(viewCommitRafRef.current), []);
 
   // How much the fitted canvas must be scaled to show ACTUAL photo pixels
   // 1:1 - the reference behind "100%", the zoom ceiling and the readout.
@@ -1266,8 +1410,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // the pointer-up handler don't close over a stale value).
   previewEditsLatest.current = previewEdits;
   compareRef.current = compare;
-  scaleRef.current = scale;
-  panRef.current = pan;
+  // Not while a gesture's DOM-first values are waiting for their commit: a
+  // render in between (a histogram tick, say) would reset the refs to the
+  // state they are about to replace.
+  if (!viewCommitRafRef.current) {
+    scaleRef.current = scale;
+    panRef.current = pan;
+    splitPosRef.current = splitPos;
+  }
   wantOrigRef.current = compareMode !== "off";
   pairRef.current = pair;
   const baselineLatest = useRef(baselineEdits);
@@ -1321,14 +1471,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       // the settle or another withHistogram=false path, and the panel would
       // sit on a blank histogram until the first edit. A peeked frame is
       // still excluded - candy stripes are not the photo's tonality.
-      if (withHistogram || (histBinsRef.current == null && !peekRef.current)) {
-        // The readback itself is cheap (downscaled scratch canvas), but the
-        // setHistBins state write re-renders the whole editor - per scrub
-        // frame that stacked onto the per-pointer-move renders and read as a
-        // jerky drag. Track the sliders at ~7 updates/s while the pointer is
-        // down; every settled frame still refreshes it immediately.
+      if (withHistogram || (histStore.get() == null && !peekRef.current)) {
+        // The readback is cheap (downscaled scratch canvas) and the store
+        // update repaints only the plot, so the histogram can track a drag
+        // at ~16 updates/s; every settled frame still refreshes it at once.
         const now = performance.now();
-        if (!scrubbing.current || now - histAtRef.current >= 150) {
+        if (!scrubbing.current || now - histAtRef.current >= 60) {
           histAtRef.current = now;
           const bins = computeHistBinsFromBitmap(bmp);
           if (bins) applyHistBins(bins);
@@ -1397,7 +1545,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // whole frame) - except when there is none at all yet: the assembled
         // canvas (ground + tile) beats a histogram that stays blank until the
         // first edit.
-        if (histBinsRef.current == null && !peekRef.current) {
+        if (histStore.get() == null && !peekRef.current) {
           const bins = computeHistBinsFromBitmap(canvas);
           if (bins) applyHistBins(bins);
         }
@@ -1513,22 +1661,38 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // it re-tiles the visible part and the flag simply stays up.
         const staleGround = !tier && groundStaleRef.current;
         if (staleGround) tier = targetTier(1);
+        // Native is the only tier the user can be zoomed far enough into for
+        // most of the frame to be off screen, and the only one where that
+        // matters: it renders at true resolution, where the whole frame of a
+        // 40MP raw is ~14s of decode plus ~18s of pipeline. Cut to what is
+        // visible it is a fraction of that. At fit view the region is null and
+        // nothing about the render changes. The tile also carries its
+        // on-screen size (region.px): between fit and 100% the native cut is
+        // up to ~4x the pixels the screen shows, and the settle arrives that
+        // much sooner without them; at true 100% the budget is a no-op.
+        let region = tier === "native" ? visibleRegion() : null;
+        // Native with no tile to cut is the WHOLE frame at sensor resolution
+        // - a 40MP raw through the entire pipeline (6s, half a gigabyte of
+        // temporaries, swap on an 8GB machine) for a view zoomed a hair past
+        // the ultra tier. Ultra is a few percent soft there and seconds
+        // cheaper; the native whole frame is kept for photos that are not
+        // much bigger than it, where it is both cheap and a real 1:1.
+        if (tier === "native" && !region) {
+          const cropNow = previewEditsLatest.current?.crop;
+          const nativeLong =
+            Math.max(image.width ?? 0, image.height ?? 0) * (cropNow ? Math.max(cropNow.width, cropNow.height) : 1);
+          if (nativeLong > ULTRA_TIER_PX * 1.15) {
+            // Already painted at ultra: nothing sharper is on offer here.
+            tier = paintedPxRef.current >= ULTRA_TIER_PX - 1 && !staleGround ? null : "ultra";
+            region = null;
+          }
+        }
         // Which of the two halves still needs work: the settle is worth
         // running for the original alone, e.g. when a compare mode is entered
         // over an edit that is already sharp.
         const otier = wantOrigRef.current ? targetTier(origPaintedPxRef.current) : null;
         let rearm = false;
         if (tier) {
-          // Native is the only tier the user can be zoomed far enough into for
-          // most of the frame to be off screen, and the only one where that
-          // matters: it renders at true resolution, where the whole frame of a
-          // 40MP raw is ~14s of decode plus ~18s of pipeline. Cut to what is
-          // visible it is a fraction of that. At fit view the region is null and
-          // nothing about the render changes. The tile also carries its
-          // on-screen size (region.px): between fit and 100% the native cut is
-          // up to ~4x the pixels the screen shows, and the settle arrives that
-          // much sooner without them; at true 100% the budget is a no-op.
-          const region = tier === "native" ? visibleRegion() : null;
           const dtoken = dirtyToken.current;
           // Zoomed OUT over a stale ground: the tile carrying the new edit sits
           // on the old edit for the seconds the whole-frame accurate render
@@ -1551,9 +1715,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           // multi-second fallback frame already on the canvas, every 2.5s,
           // for the whole life of a ~14s raw decode.
           const nativeOnly = tier === "native" && nativePendingRef.current === dtoken;
+          // A whole-frame settle carries the on-screen size as its budget: at
+          // fit view on a 4K display the canvas needs ~2800 device pixels and
+          // the ultra tier used to render 3900 of them every time the sliders
+          // came to rest. The native tile carries its own (region.px).
           const blob = await api.images.editorPreview(
             image.id, previewEditsLatest.current!, fctrl.signal, tier, false, peekRef.current,
-            region, false, region ? region.px : null, nativeOnly
+            region, false, region ? region.px : tier === "native" ? null : shownPx(), nativeOnly
           );
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
           if (blob.servedTier === "pending") {
@@ -1583,7 +1751,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           const onativeOnly = otier === "native" && origPendingRef.current === otoken;
           const oblob = await api.images.editorPreview(
             image.id, baselineLatest.current, fctrl.signal, otier, baselineBrowseRef.current, null,
-            oregion, false, oregion ? oregion.px : null, onativeOnly
+            oregion, false, oregion ? oregion.px : otier === "native" ? null : shownPx(), onativeOnly
           );
           if ((scrubbing.current && !compareRef.current) || otoken !== origToken.current) return;
           if (oblob.servedTier === "pending") {
@@ -1739,7 +1907,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               scrubLevelRef.current = level + 1;
               scrubEmaRef.current = null;
               scrubStepFramesRef.current = 0;
-            } else if (ema < SCRUB_STEP_UP_MS && level > 0 && scrubStepFramesRef.current >= 8) {
+            } else if (ema < SCRUB_STEP_UP_MS && level > 0 && scrubStepFramesRef.current >= SCRUB_STEP_UP_FRAMES) {
               scrubLevelRef.current = level - 1;
               scrubEmaRef.current = null;
               scrubStepFramesRef.current = 0;
@@ -1799,8 +1967,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     groundStaleRef.current = false;
     nativePendingRef.current = -1;
     origPendingRef.current = -1;
-    histBinsRef.current = null;
-    setHistBins(null);
+    histStore.set(null);
     setFramePending(true);
   }, [image.id]);
 
@@ -1857,6 +2024,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     const onUp = () => {
       if (!scrubbing.current) return;
       scrubbing.current = false;
+      // The next drag gets a rung more resolution than this one settled on:
+      // what was too slow for Clarity is usually fine for Exposure, and a
+      // drag that is still too slow walks back down within two frames.
+      if (scrubLevelRef.current > 0) {
+        scrubLevelRef.current--;
+        scrubEmaRef.current = null;
+        scrubStepFramesRef.current = 0;
+      }
       // Only re-render if edits actually changed during the hold (a real drag).
       // The frames drawn during the drag were cheap scrub frames, so re-render
       // the released state accurately; the pump then schedules the full settle.
@@ -1961,8 +2136,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       // React re-renders, and it must compute from THIS tick's values.
       scaleRef.current = next;
       panRef.current = shown;
-      setScale(next);
-      setPan(shown);
+      applyViewTransform();
+      scheduleViewCommit();
     }
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -2006,6 +2181,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       // What this write put on the server - the autosave below compares
       // against it, so a save-then-close never writes twice.
       lastWrittenKeyRef.current = editsKey;
+      deferredWriteRef.current = false;
       unseenWriteRef.current = false;
       queryClient.invalidateQueries({ queryKey: ["image", image.id] });
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -2036,6 +2212,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // URLs) and make the picture flash under the cursor. The grid and the photo
   // view catch up when the editor closes; this says there is something for them.
   const unseenWriteRef = useRef(false);
+  // An autosave writes the values only (defer_derivatives): the photo's
+  // thumbnail/preview are re-rendered by the final save on the way out, which
+  // therefore has to happen even when the values are already on the server.
+  const deferredWriteRef = useRef(false);
   const [autosaveState, setAutosaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
 
   const flushQueries = useCallback(() => {
@@ -2053,8 +2233,9 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     setAutosaveState("saving");
     let ok = false;
     try {
-      await api.images.saveEdits(image.id, pending.edits);
+      await api.images.saveEdits(image.id, pending.edits, { deferDerivatives: true });
       lastWrittenKeyRef.current = pending.editsKey;
+      deferredWriteRef.current = true;
       unseenWriteRef.current = true;
       ok = true;
       setAutosaveState("saved");
@@ -2091,14 +2272,18 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     return () => {
       window.clearTimeout(autosaveTimerRef.current);
       const pending = autosaveRef.current;
-      if (pending.editsKey === lastWrittenKeyRef.current) {
-        // Nothing left to write (an autosave or requestClose got there first) -
-        // the row is settled as it stands; let the app see the last write.
+      if (pending.editsKey === lastWrittenKeyRef.current && !deferredWriteRef.current) {
+        // Nothing left to write (requestClose got there first, or nothing
+        // changed) - the row is settled as it stands; let the app see the
+        // last write.
         flushQueries();
         onEditsSettledRef.current?.(imageId);
         return;
       }
+      // Either values the timer hadn't caught yet, or values an autosave did
+      // write but whose derivatives it deferred: this final save renders them.
       lastWrittenKeyRef.current = pending.editsKey;
+      deferredWriteRef.current = false;
       unseenWriteRef.current = true;
       void api.images
         .saveEdits(imageId, pending.edits)
@@ -2583,8 +2768,26 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // pointer-down sample and whether this is an erase stroke - the renderer needs
   // the stroke boundaries to sweep each one as a continuous segment run (and to
   // avoid drawing a line from where one stroke ended to where the next began).
-  function appendStroke(id: string, x: number, y: number, size: number, flags: number, idx = 0) {
-    appendStrokes(id, [[x, y, size, flags]], idx);
+  // Hand the collected samples to the edit state now.
+  function flushStrokes() {
+    clearTimeout(strokeFlushTimer.current);
+    strokeFlushTimer.current = 0;
+    const pend = pendingStrokesRef.current;
+    pendingStrokesRef.current = null;
+    if (pend) appendStrokes(pend.maskId, pend.pts, pend.idx);
+  }
+  // A stroke's new samples: painted on the guide at once, collected for the
+  // edit state, flushed after BRUSH_FLUSH_MS (or when the gesture ends).
+  function queueStrokes(id: string, pts: number[][], idx = 0) {
+    if (pts.length === 0) return;
+    brushSink.forEach((paint) => paint(pts));
+    const pend = pendingStrokesRef.current;
+    if (pend && pend.maskId === id && pend.idx === idx) pend.pts.push(...pts);
+    else {
+      flushStrokes();
+      pendingStrokesRef.current = { maskId: id, idx, pts: pts.slice() };
+    }
+    if (!strokeFlushTimer.current) strokeFlushTimer.current = window.setTimeout(flushStrokes, BRUSH_FLUSH_MS);
   }
   // Append several stroke points at once (a fast drag interpolates a run of
   // evenly-spaced points) in a single immutable update.
@@ -3058,16 +3261,16 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   function updateMaskHover(p: Pt) {
     const sub = adj.masks.find((m) => m.id === selectedMaskId)?.sub_masks[canvasSubIdx];
     if (!sub || !isSpatial(sub.type)) {
-      setMaskCursorPos(null);
+      hideMaskCursor();
       setMaskCursor("crosshair");
       return;
     }
     if (sub.type === "brush") {
-      setMaskCursorPos(p);
+      moveMaskCursor(p);
       setMaskCursor("none");
       return;
     }
-    setMaskCursorPos(null);
+    hideMaskCursor();
     const mode = sub.type === "radial" ? radialHitTest(p, radialParams(sub)) : linearHitTest(p, linearParams(sub));
     setMaskCursor(maskCursorFor(sub.type, mode));
   }
@@ -3102,8 +3305,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       const erasing = brushErase !== altKey;
       maskGesture.current = { type: "brush", maskId: mask.id, idx, mode: "paint", start: p, orig: {}, erase: erasing };
       brushLast.current = p;
-      setMaskCursorPos(p);
-      appendStroke(mask.id, p.x, p.y, subNum(sub, "size", 0.06), BRUSH_PEN_DOWN | (erasing ? BRUSH_ERASE : 0), idx);
+      moveMaskCursor(p);
+      // The pen-down sample goes to the state at once (it starts the stroke
+      // the server sees); the guide paints it first, like every sample.
+      const down = [p.x, p.y, subNum(sub, "size", 0.06), BRUSH_PEN_DOWN | (erasing ? BRUSH_ERASE : 0)];
+      flushStrokes();
+      brushSink.forEach((paint) => paint([down]));
+      appendStrokes(mask.id, [down], idx);
     }
   }
   function maskPointerMove(clientX: number, clientY: number) {
@@ -3177,7 +3385,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       // enough to follow the curve of the gesture, not dense enough to hide gaps.
       const sub = adj.masks.find((m) => m.id === g.maskId)?.sub_masks[g.idx];
       const size = sub ? subNum(sub, "size", 0.06) : 0.06;
-      setMaskCursorPos(p);
+      moveMaskCursor(p);
       // x and y are fractions of *different* edges, so hypot() on them is not a
       // distance - on a 3:2 photo a vertical drag measured 1.5x short and sampled
       // that much coarser. Convert to fractions of the long edge (the unit `size`
@@ -3198,13 +3406,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           const t = (i * step) / dist;
           pts.push([last.x + (p.x - last.x) * t, last.y + (p.y - last.y) * t, size, flags]);
         }
-        appendStrokes(g.maskId, pts, g.idx);
+        queueStrokes(g.maskId, pts, g.idx);
         const lastPt = pts[pts.length - 1];
         brushLast.current = { x: lastPt[0], y: lastPt[1] };
       }
     }
   }
   function endMaskGesture() {
+    flushStrokes();
     maskGesture.current = null;
     brushLast.current = null;
   }
@@ -3361,9 +3570,11 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // Both sides of a compare would be the same picture: neutral edits against
   // the original, or adjustments unchanged since they were captured (the
   // geometry is shared by both sides, so it can't differ - see baselineEdits).
+  // The snapshot's side is serialised once per snapshot, not once per frame.
+  const snapshotKey = useMemo(() => (snapshot ? JSON.stringify(snapshot.adjustments) : null), [snapshot]);
   const nothingToCompare = useMemo(
-    () => (snapshot ? JSON.stringify(adj) === JSON.stringify(snapshot.adjustments) : allNeutral),
-    [snapshot, adj, allNeutral]
+    () => (snapshotKey !== null ? JSON.stringify(adj) === snapshotKey : allNeutral),
+    [snapshotKey, adj, allNeutral]
   );
 
   // Nothing left to compare - the toggles disable themselves there, so the mode
@@ -3455,7 +3666,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               }}
               onPointerCancel={() => endMaskGesture()}
               onPointerLeave={() => {
-                if (!maskGesture.current) setMaskCursorPos(null);
+                if (!maskGesture.current) hideMaskCursor();
               }}
               onClick={(e) => {
                 if (maskDrawMode) e.stopPropagation();
@@ -3477,6 +3688,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   mark={overlayMark}
                   handles={maskDrawMode && overlayIsSelected && !limitEdit}
                   aspect={aspect}
+                  cursorSink={maskCursorSink}
+                  brushSink={brushSink}
                   cursor={
                     overlaySpatialSub.type === "brush" && maskDrawMode && overlayIsSelected && !limitEdit && maskCursorPos
                       ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlaySpatialSub, "size", 0.06) }
@@ -3491,6 +3704,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   dashed
                   handles={maskDrawMode && overlayIsSelected && limitEdit}
                   aspect={aspect}
+                  cursorSink={maskCursorSink}
+                  brushSink={brushSink}
                   cursor={
                     overlayLimitSub.type === "brush" && maskDrawMode && overlayIsSelected && limitEdit && maskCursorPos
                       ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlayLimitSub, "size", 0.06) }
@@ -3642,7 +3857,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   setCropCursor(cropCursorFor(cropHitTest(p, drawn, 14 / rect.width, 14 / rect.height)));
                 }
               } else if (panDragRef.current) {
-                setPan(clampPan({ x: e.clientX - panDragRef.current.x, y: e.clientY - panDragRef.current.y }, scale));
+                panRef.current = clampPan(
+                  { x: e.clientX - panDragRef.current.x, y: e.clientY - panDragRef.current.y },
+                  scaleRef.current
+                );
+                applyViewTransform();
+                scheduleViewCommit();
               }
             }}
             onMouseUp={() => {
@@ -3658,7 +3878,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               panDragRef.current = null;
               curvePickDrag.current = null;
               endMaskGesture();
-              setMaskCursorPos(null);
+              hideMaskCursor();
               setCurveMarker(null);
             }}
             onDoubleClick={(e) => {
@@ -3720,6 +3940,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             // line stays exactly on the clip edge at any zoom while keeping a
             // constant on-screen weight.
             <div
+              ref={splitDividerRef}
               className="split-divider"
               style={{ left: `calc(${50 + (splitPos - 0.5) * scale * 100}% + ${pan.x}px)` }}
               onPointerDown={(e) => {
@@ -3728,7 +3949,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 splitDragRef.current = true;
               }}
               onPointerMove={(e) => {
-                if (splitDragRef.current) setSplitPos(clamp01(fractionAt(e.clientX, e.clientY).x));
+                if (!splitDragRef.current) return;
+                splitPosRef.current = clamp01(fractionAt(e.clientX, e.clientY).x);
+                applyViewTransform();
+                scheduleViewCommit();
               }}
               onPointerUp={(e) => {
                 splitDragRef.current = false;
@@ -3787,6 +4011,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               mark={overlayMark}
               handles={maskDrawMode && overlayIsSelected && !limitEdit}
               aspect={canvasAspectForOverlay()}
+              cursorSink={maskCursorSink}
+              brushSink={brushSink}
               cursor={
                 overlaySpatialSub.type === "brush" && maskDrawMode && overlayIsSelected && !limitEdit && maskCursorPos
                   ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlaySpatialSub, "size", 0.06) }
@@ -3807,6 +4033,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               dashed
               handles={maskDrawMode && overlayIsSelected && limitEdit}
               aspect={canvasAspectForOverlay()}
+              cursorSink={maskCursorSink}
+              brushSink={brushSink}
               cursor={
                 overlayLimitSub.type === "brush" && maskDrawMode && overlayIsSelected && limitEdit && maskCursorPos
                   ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlayLimitSub, "size", 0.06) }
@@ -3956,14 +4184,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             through every group and through the panel's own scrolling. */}
         <div className="editor-histogram-pinned">
           <div className="editor-histogram-slot">
-            <Histogram bins={histBins} />
+            <Histogram store={histStore} />
             {/* Empty until the photo's first frame is read back - a spinner
                 on the plot says so, where a bare black box looked broken. */}
-            {histBins === null && !error && (
-              <span className="editor-histogram-wait" aria-label="Loading histogram">
-                <span className="spinner" aria-hidden />
-              </span>
-            )}
+            <HistogramWait store={histStore} hidden={!!error} />
           </div>
         </div>
 
@@ -4255,11 +4479,11 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               </button>
             </div>
             {adj.curve_mode === "point" ? (
-              <CurveEditor
+              <LiveCurveEditor
+                store={histStore}
                 points={adj.point_curves[curveChannel]}
                 color={CURVE_CHANNELS.find((c) => c.key === curveChannel)!.color}
                 onChange={(pts) => setPointCurve(curveChannel, pts)}
-                histogram={histBins}
                 channel={curveChannel}
                 marker={curvePickMode ? curveMarker : null}
               />

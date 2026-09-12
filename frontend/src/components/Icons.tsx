@@ -719,6 +719,17 @@ export function IconCanvas(props: IconProps) {
 }
 
 // A tray with an arrow leaving upward - export, getting a photo out as a file.
+// Arrow dropping into a tray - the mirror of IconExport: files coming in.
+export function IconImport(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M8 2.5V10" />
+      <path d="M5.25 7.25 8 10l2.75-2.75" />
+      <path d="M2.75 9.75v2.5a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1v-2.5" />
+    </svg>
+  );
+}
+
 export function IconExport(props: IconProps) {
   return (
     <svg {...svgProps(props)}>

@@ -93,6 +93,67 @@ def test_the_full_warmer_holds_back_while_the_editor_renders(photo, monkeypatch)
     assert rendered.wait(timeout=5.0), "never warmed once the editor went quiet"
 
 
+def test_the_embedding_backfill_waits_for_the_same_pause(monkeypatch):
+    """The CLIP backfill used to yield to imports only - a forward pass plus
+    four decode threads ran straight through a slider drag in the first
+    minute after startup. It consults the editor signal like the rest."""
+    from app.workers import queue
+
+    monkeypatch.setattr(queue, "derivatives_pending", lambda: 0)
+    monkeypatch.setattr(queue, "_import_activity_probes", [])
+    assert not queue._import_work_active()
+    thumbnails.note_editor_activity()
+    assert queue._import_work_active()
+    thumbnails._editor_last_activity = time.monotonic() - queue._BACKFILL_EDITOR_IDLE_S - 1
+    assert not queue._import_work_active()
+
+
+def test_the_render_pipeline_leaves_a_core_for_the_ui():
+    """Every core but one for cv2 and the tone bands (capped at four, where the
+    banded block plateaus) - a 4-core machine keeps one for the request thread
+    and the renderer."""
+    cpu = thumbnails.os.cpu_count() or 2
+    assert thumbnails._RENDER_THREADS == max(1, cpu - 1)
+    assert thumbnails._TONE_BAND_WORKERS == max(1, min(4, cpu - 1))
+    thumbnails.cv2.getNumThreads  # forces the lazy import, which applies the cap
+    if "GCD" not in thumbnails.cv2.getBuildInformation():
+        # The GCD build (macOS wheel) ignores setNumThreads by design.
+        assert thumbnails.cv2.getNumThreads() == thumbnails._RENDER_THREADS
+
+
+def test_deferred_derivatives_wait_for_the_editor_to_close(photo, monkeypatch):
+    """An autosave while the editor is open must not re-render the photo's
+    derivatives beside the editor (a 40MP raw decode per slider rest); the
+    final save claims the deferred work, and a worker catches what an editor
+    that never closes properly leaves behind - once editing has stopped."""
+    monkeypatch.setattr(thumbnails, "_DEFERRED_DELAY_S", 0.01)
+    monkeypatch.setattr(thumbnails, "_DEFERRED_EDITOR_IDLE_S", 2.0)
+    monkeypatch.setattr(thumbnails, "_DEFERRED_POLL_S", 0.01)
+    rendered = threading.Event()
+    monkeypatch.setattr(thumbnails, "regenerate_for_image", lambda image, slot_timeout=None: rendered.set())
+    monkeypatch.setattr(thumbnails, "warm_full_cache", lambda image_id: None)
+
+    class _Db:
+        def get(self, model, image_id):
+            return photo
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.db.session.SessionLocal", lambda: _Db())
+
+    thumbnails.note_editor_activity()
+    thumbnails.defer_derivatives(photo.id)
+    assert not rendered.wait(timeout=0.3), "rendered beside the open editor"
+    # The editor's own final save claims the work - nothing left for the worker.
+    assert thumbnails.take_deferred(photo.id)
+    assert not thumbnails.take_deferred(photo.id)
+
+    thumbnails.defer_derivatives(photo.id)
+    thumbnails._editor_last_activity = 0.0
+    assert rendered.wait(timeout=5.0), "never rendered once the editor went quiet"
+
+
 def test_the_rebuild_worker_waits_for_the_same_pause(monkeypatch):
     from app.services import maintenance
 

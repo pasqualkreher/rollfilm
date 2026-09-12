@@ -5,6 +5,7 @@ import type { LibraryMergeSummary } from "../api/types";
 import { useWait } from "../state/wait";
 import { formatEta } from "../utils/duration";
 import { useTransientMessage } from "../utils/transientMessage";
+import { IconFolder } from "./Icons";
 
 function size(bytes: number): string {
   if (bytes < 1e9) return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
@@ -120,7 +121,7 @@ export function ImportLibrary() {
 
       {!running && !summary && (
         <button className="btn" onClick={choose} disabled={reading}>
-          {reading ? "Reading…" : "Choose library folder…"}
+          <IconFolder size={13} /> {reading ? "Reading…" : "Choose library folder…"}
         </button>
       )}
 

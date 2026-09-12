@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import { pchipSample } from "../utils/curveConvert";
 
 // A square 0..255 -> 0..255 tone-curve editor. Points live on the same grid the
@@ -68,7 +68,22 @@ function histPath(bins: Uint32Array): string {
   return `${d} L ${N} ${N} Z`;
 }
 
-export function CurveEditor({ points, color, onChange, histogram, channel = "luma", marker }: Props) {
+// Memoised: the plot sits in the editor, which re-renders on every slider
+// frame. `onChange` is left out of the comparison on purpose - the editor
+// passes a fresh arrow each render, and the one thing it closes over (the
+// channel) arrives as a prop too, so a stale one can never write to the wrong
+// curve.
+export const CurveEditor = memo(
+  CurveEditorImpl,
+  (a, b) =>
+    a.points === b.points &&
+    a.color === b.color &&
+    a.histogram === b.histogram &&
+    a.channel === b.channel &&
+    a.marker === b.marker
+);
+
+function CurveEditorImpl({ points, color, onChange, histogram, channel = "luma", marker }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   // Index of the control point currently being dragged, or null.
   const dragRef = useRef<number | null>(null);
@@ -177,6 +192,11 @@ export function CurveEditor({ points, color, onChange, histogram, channel = "lum
         : null;
   const markerY = marker != null ? pchipSample(points, [marker])[0] : null;
   const bins = histogram?.[HIST_BIN[channel]] ?? null;
+  // The curve is 129 PCHIP evaluations and the silhouette 256 segments; each
+  // is recomputed only when its own input changes, so a histogram tick during
+  // a drag redraws the silhouette and leaves the curve alone.
+  const lineD = useMemo(() => curvePath(points), [points]);
+  const histD = useMemo(() => (bins ? histPath(bins) : ""), [bins]);
 
   return (
     <div className="curve-editor">
@@ -206,7 +226,7 @@ export function CurveEditor({ points, color, onChange, histogram, channel = "lum
         {bins && (
           <path
             className="curve-hist"
-            d={histPath(bins)}
+            d={histD}
             fill={channel === "luma" ? "var(--text-muted)" : color}
           />
         )}
@@ -227,7 +247,7 @@ export function CurveEditor({ points, color, onChange, histogram, channel = "lum
           </g>
         )}
         {/* The curve itself. */}
-        <path className="curve-line" d={curvePath(points)} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        <path className="curve-line" d={lineD} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" />
         {/* Control points: a visual dot plus a larger transparent hit target. */}
         {points.map(([x, y], i) => (
           <g key={i}>

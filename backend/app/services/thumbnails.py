@@ -35,8 +35,25 @@ class _LazyCV2:
         if _LazyCV2._mod is None:
             import cv2 as _cv2
 
+            # One core stays out of OpenCV's pool for the whole process (the
+            # module object is shared by masks.py / develop_effects.py). Left
+            # to itself cv2 fans every spatial pass over all cores, and on a
+            # 4-core machine that starves the request thread serving the frame
+            # and the Electron renderer moving the slider - the editor felt
+            # sluggish while the CPU was 100% busy on its behalf. The pipeline
+            # loses next to nothing: its passes are memory-bound past a few
+            # threads (see _TONE_BAND_WORKERS). The macOS wheel is built on
+            # GCD, which ignores this call and schedules against the system's
+            # own load instead - the cap bites on the pthreads builds (Linux,
+            # Windows), which are the machines it is for.
+            _cv2.setNumThreads(_RENDER_THREADS)
             _LazyCV2._mod = _cv2
         return getattr(_LazyCV2._mod, name)
+
+
+# How many threads the render pipeline may spread over: every core but one.
+# Shared by cv2's internal pool and the tone-band pool below.
+_RENDER_THREADS = max(1, (os.cpu_count() or 2) - 1)
 
 
 cv2 = _LazyCV2()
@@ -622,8 +639,241 @@ def _dehaze(arr: np.ndarray, amount: int, ref_long_edge: float | None = None) ->
     return np.clip(arr + (j - arr) * keep[..., None], 0.0, 1.0)
 
 
+# --- Noise reduction ---------------------------------------------------------
+# Camera-style NR split by channel: luminance grain and colour blotching are
+# different problems and get a slider each. The eye barely resolves chroma
+# detail (JPEG ships 4:2:0 for the same reason), so the colour half can be
+# aggressive without the result going soft; the luma half is where softness
+# and plastic come from, so it is the careful one.
+#
+# The luma pass is PROFILED: it measures the picture's own noise instead of
+# smoothing by a fixed amount. A fixed strength cannot be right - what removes
+# ISO 12800 grain plasticises an ISO 200 file, and what is gentle on the ISO
+# 200 file does nothing at 12800. The pass this replaces smoothed by a fixed
+# h <= 7/255: on an ISO 12800 frame (sigma ~11/255) the flat areas kept
+# exactly their original noise up to slider 60, and "100" removed a third.
+#
+#  1. sigma is estimated from the finest-scale Haar detail coefficient (Donoho's
+#     MAD estimator: noise is everywhere and edges are sparse, so the median of
+#     |diagonal detail| ignores structure), per brightness band - the tone curve
+#     lifts shadow noise far above highlight noise, and one number for both
+#     over-smooths the highlights while the shadows stay grainy.
+#  2. A variance-stabilising transform built from that profile makes the noise
+#     uniform over the tonal range, so one non-local-means strength is right
+#     everywhere; the result is mapped back afterwards.
+#  3. NLM runs at three scales (full, half, quarter): a 7px patch cannot see the
+#     low-frequency clumping that demosaicing and a tone curve make of sensor
+#     noise, which is the part that reads as "blotchy" at 100%. The coarse
+#     corrections are Wiener-limited to the noise amplitude measured at that
+#     scale, so real structure of that size is never flattened.
+#  4. The residual is added back where the denoised picture has structure (the
+#     Luminance Detail slider): noise sitting on an edge is masked by the edge,
+#     and the fine texture NLM loses lives in that residual.
+#  5. The original's low frequencies are restored so NR never re-tones ("denoise
+#     changes the contrast" - clipped shadow noise averages to a lifted black).
+#
+# The noise is measured on a PROBE - a fixed grid of blocks taken from the
+# whole frame - never on the array in hand. The editor's zoomed render is a
+# tile of the frame, and a tile of sky says something different about the
+# noise than a tile of foliage; measured per tile the look would jump as the
+# native tile swapped in over the whole-frame render. Same grid, same blocks,
+# same answer for every render of the frame (see _noise_probe).
+#
+# Everything runs in float32; NLM itself takes 16-bit input, which frees the
+# pass of the 8-bit round trip the previous one imposed on the whole pipeline.
+
+# Brightness bands of the noise profile: finer in the shadows, where the tone
+# curve's lift changes the noise fastest.
+_NR_BAND_EDGES = np.array([0.0, 0.04, 0.08, 0.15, 0.25, 0.4, 0.6, 0.8, 1.0], np.float32)
+_NR_BAND_CENTRES = 0.5 * (_NR_BAND_EDGES[1:] + _NR_BAND_EDGES[:-1])
+# Below this the estimate is treated as "no noise to measure" and the slider
+# still does a little (an in-camera-denoised JPEG has next to nothing left,
+# and a slider at 100 that changes nothing reads as broken).
+_NR_SIGMA_FLOOR = 1.5 / 255.0
+_NR_LEVELS = 3
+# Coarse-level corrections beyond this many sigmas are shrunk away as
+# structure (Wiener-style, smooth rather than a hard cut).
+_NR_COARSE_GUARD_K = 3.0
+# Probe: a 6x8 grid of 192px blocks (1.8MP whatever the frame size).
+_NR_PROBE_BLOCK = 192
+_NR_PROBE_GRID = (6, 8)
+
+
+def _noise_probe(arr: np.ndarray, scale: float = 1.0) -> np.ndarray:
+    """A fixed grid of blocks from the whole frame, stacked into one tall
+    image. Deterministic in the frame's size, so a tile render (which samples
+    the linear base before cutting) and a whole-frame render (which samples
+    the toned frame) measure the identical pixels - the tone block is
+    per-pixel, so toning the blocks equals sampling the toned frame. `scale`
+    shrinks each block the way a budget-capped tile was shrunk (INTER_AREA),
+    so the probe sees the noise at the tile's resolution. Frames smaller than
+    the grid are their own probe."""
+    h, w = arr.shape[:2]
+    rows, cols = _NR_PROBE_GRID
+    b = _NR_PROBE_BLOCK
+    if h < rows * b or w < cols * b:
+        blocks = [arr]
+    else:
+        ys = np.linspace(0, h - b, rows).round().astype(int)
+        xs = np.linspace(0, w - b, cols).round().astype(int)
+        blocks = [arr[y:y + b, x:x + b] for y in ys for x in xs]
+    if scale < 0.999:
+        blocks = [
+            cv2.resize(
+                np.ascontiguousarray(blk, dtype=np.float32),
+                (max(1, int(round(blk.shape[1] * scale))), max(1, int(round(blk.shape[0] * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+            for blk in blocks
+        ]
+    if len(blocks) == 1:
+        return np.ascontiguousarray(blocks[0], dtype=np.float32)
+    # Blocks in a row of the grid share a width; stack the whole grid vertically.
+    return np.concatenate([np.asarray(blk, dtype=np.float32) for blk in blocks], axis=0)
+
+
+def _haar_detail(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Level-1 Haar of a plane: (local 2x2 mean, diagonal detail). For white
+    noise of std sigma the diagonal coefficient has std sigma."""
+    h, w = a.shape[:2]
+    q = a[: h - h % 2, : w - w % 2].reshape(h // 2, 2, w // 2, 2)
+    p00, p01, p10, p11 = q[:, 0, :, 0], q[:, 0, :, 1], q[:, 1, :, 0], q[:, 1, :, 1]
+    return 0.25 * (p00 + p01 + p10 + p11), 0.5 * (p00 - p01 - p10 + p11)
+
+
+def _noise_sigma(a: np.ndarray) -> float:
+    """Noise std of a plane (robust MAD of the Haar diagonal detail), ignoring
+    clipped pixels - a blown highlight or a crushed black has zero noise and
+    would only drag the median down."""
+    mean, diag = _haar_detail(a)
+    d = np.abs(diag[(mean > 0.004) & (mean < 0.996)])
+    return float(1.4826 * np.median(d)) if d.size >= 256 else 0.0
+
+
+def _noise_profile(y: np.ndarray) -> tuple[float, np.ndarray]:
+    """(global sigma, sigma per brightness band over _NR_BAND_CENTRES) of a
+    luma plane. Bands too thin to measure take their neighbours' value; every
+    band is kept within 0.5..2.5x the global figure so a band that is all
+    texture (foliage in the midtones) cannot call the texture noise."""
+    mean, diag = _haar_detail(y)
+    ok = (mean > 0.004) & (mean < 0.996)
+    ad, m = np.abs(diag[ok]), mean[ok]
+    sg = max(float(1.4826 * np.median(ad)) if ad.size >= 256 else 0.0, _NR_SIGMA_FLOOR)
+    bands = np.full(len(_NR_BAND_CENTRES), np.nan, np.float32)
+    for i in range(len(bands)):
+        sel = (m >= _NR_BAND_EDGES[i]) & (m < _NR_BAND_EDGES[i + 1])
+        if int(sel.sum()) >= 4000:
+            bands[i] = 1.4826 * np.median(ad[sel])
+    known = np.flatnonzero(~np.isnan(bands))
+    if known.size == 0:
+        bands[:] = sg
+    else:
+        bands = np.interp(np.arange(len(bands)), known, bands[known]).astype(np.float32)
+    return sg, np.clip(bands, 0.5 * sg, 2.5 * sg).astype(np.float32)
+
+
+def _nlm16(plane16: np.ndarray, h: float) -> np.ndarray:
+    """Non-local means on a 16-bit plane; `h` in 0..1 units."""
+    return cv2.fastNlMeansDenoising(
+        plane16, h=[float(h * 65535.0)], templateWindowSize=7, searchWindowSize=21,
+        normType=cv2.NORM_L1,
+    )
+
+
+def _half(a: np.ndarray) -> np.ndarray:
+    h, w = a.shape[:2]
+    return cv2.resize(a, (max(1, w // 2), max(1, h // 2)), interpolation=cv2.INTER_AREA)
+
+
+def _up(a: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
+    return cv2.resize(a, (shape[1], shape[0]), interpolation=cv2.INTER_LINEAR)
+
+
+def _luma_nr(
+    y: np.ndarray, probe_y: np.ndarray, amount: float, detail: float, ref_short_edge: float
+) -> np.ndarray:
+    """The luminance pass (see the section comment). `y`/`probe_y` are luma
+    planes 0..1, `amount`/`detail` 0..1."""
+    sg, bands = _noise_profile(probe_y)
+    # Variance-stabilising LUT: t(y) = integral of sg/sigma(u) du, so the noise
+    # in t is sg everywhere; encoded to 16 bit for NLM, with the inverse tabled
+    # over the 16-bit range so mapping back is a gather, not a search.
+    n = 4096
+    ys = np.linspace(0.0, 1.0, n, dtype=np.float32)
+    sig_y = np.maximum(np.interp(ys, _NR_BAND_CENTRES, bands), 1e-6).astype(np.float32)
+    slope = sg / sig_y
+    t = np.concatenate([[0.0], np.cumsum(0.5 * (slope[1:] + slope[:-1]) / (n - 1))]).astype(np.float32)
+    total = float(t[-1])
+    t /= total
+    sigma_t = sg / total
+    fwd16 = np.clip(t * 65535.0 + 0.5, 0.0, 65535.0).astype(np.uint16)
+    inv = np.interp(np.linspace(0.0, 1.0, 65536), t, ys).astype(np.float32)
+
+    def to_t16(plane: np.ndarray) -> np.ndarray:
+        return fwd16[np.clip((plane * (n - 1) + 0.5).astype(np.int32), 0, n - 1)]
+
+    # Per-level noise, measured on the probe in t-space. Real noise is not
+    # white (demosaicing correlates it), so each scale is measured rather than
+    # halved - but capped below the white-noise fall-off, since at the coarse
+    # scales the measurement is increasingly of the picture, not the noise.
+    probe_t = to_t16(probe_y).astype(np.float32) / 65535.0
+    sigmas = []
+    for lvl in range(_NR_LEVELS):
+        cap = sigma_t * (0.75 ** lvl)
+        est = _noise_sigma(probe_t)
+        sigmas.append(min(est if est > 0 else cap, cap))
+        probe_t = _half(probe_t)
+    # Strength: h = k * sigma. Calibrated on Gaussian noise, h = sigma is the
+    # RMSE optimum for NLM; photos want less (texture reads as noise to the
+    # estimator), so the slider spans 0.35..1.35 sigma, and Detail tilts it -
+    # 0 smooths harder, 100 leaves more texture standing.
+    k = (0.35 + 1.0 * amount) * (1.25 - 0.5 * detail)
+    pyr = [to_t16(y)]
+    for lvl in range(1, _NR_LEVELS):
+        pyr.append(_half(pyr[-1]))
+    dn: np.ndarray | None = None
+    for lvl in reversed(range(_NR_LEVELS)):
+        kk = k if lvl == 0 else k * 0.85
+        out = _nlm16(pyr[lvl], kk * sigmas[lvl]).astype(np.float32) / 65535.0
+        if lvl > 0:
+            # Wiener guard: a coarse correction far above the noise at that
+            # scale is structure, and is shrunk toward zero.
+            src = pyr[lvl].astype(np.float32) / 65535.0
+            delta = out - src
+            lim = _NR_COARSE_GUARD_K * sigmas[lvl]
+            delta *= (lim * lim) / (delta * delta + lim * lim)
+            out = src + delta
+        if dn is not None:
+            # Replace this level's low band with the denoised coarser level.
+            out += _up(dn, out.shape) - _up(_half(out), out.shape)
+        dn = out
+    del pyr
+    y_dn = inv[np.clip(dn * 65535.0 + 0.5, 0.0, 65535.0).astype(np.uint16)]
+    del dn
+    # Detail: give the residual back where the denoised picture has structure.
+    # The threshold is in units of the local noise, so it means the same thing
+    # in the lifted shadows as in the highlights.
+    resid = y - y_dn
+    g = cv2.GaussianBlur(y_dn, (0, 0), 1.0)
+    grad = cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3))
+    del g
+    grad = cv2.GaussianBlur(grad, (0, 0), 1.5)
+    sig_loc = sig_y[np.clip((y_dn * (n - 1) + 0.5).astype(np.int32), 0, n - 1)]
+    mask = np.clip((grad - 2.0 * sig_loc) / (6.0 * sig_loc), 0.0, 1.0)
+    del grad, sig_loc
+    y_out = y_dn + resid * (mask * detail)
+    del resid, mask
+    # Tone add-back: NR only ever removes texture, never tonality. The low band
+    # is compared at quarter scale, where a wide Gaussian is cheap.
+    sb = max(12.0, ref_short_edge / 100.0)
+    qh, qw = max(1, y.shape[0] // 4), max(1, y.shape[1] // 4)
+    small = cv2.resize(y - y_out, (qw, qh), interpolation=cv2.INTER_AREA)
+    y_out += _up(_box_gauss(small, sb / 4.0), y.shape)
+    return np.clip(y_out, 0.0, 1.0, out=y_out)
+
+
 # How far above the estimated chroma-noise level a correction may reach before
-# it is treated as real colour and shrunk away (see _denoise_image). Measured
+# it is treated as real colour and shrunk away (see _chroma_nr). Measured
 # against noise-free charts and synthetic high-ISO blotching: 4 halves the hue
 # damage on hard colour boundaries (32 -> 13 degrees) and near-eliminates it on
 # smooth colour (11 -> 2.5 degrees) while removing MORE chroma noise than the
@@ -633,83 +883,92 @@ def _dehaze(arr: np.ndarray, amount: int, ref_long_edge: float | None = None) ->
 _CHROMA_NOISE_K = 4.0
 
 
-def _denoise_image(
-    image: PILImage.Image, luma_amt: int, color_amt: int, ref_short_edge: float | None = None
-) -> PILImage.Image:
-    """Camera-style NR, split by channel in YCrCb. The ugly part of high-ISO
-    noise is the low-frequency colour blotching (rainbow mottling), whose blobs
-    are far larger than non-local means' 7px patch / 21px search window - no
-    NLM strength can reach them, it only desaturates edges while luma turns to
-    plastic. So: luma gets *gentle* NLM (quadratic ramp - low slider values
-    stay subtle), and chroma gets a large-radius guided filter driven by the
-    cleaned luma, which flattens the blotches while colour still snaps to real
-    luminance edges. The eye barely resolves chroma detail, so the chroma pass
-    can be aggressive without the result looking soft."""
+def _chroma_smooth(plane: np.ndarray, guide: np.ndarray, fc: float, h: float) -> np.ndarray:
+    """One chroma plane smoothed: NLM + Gaussian at quarter scale, then a
+    guided upsample against luma that snaps the colour back onto real edges.
+    Quarter scale because the downscale averages the fine confetti away and
+    shrinks the blotches into NLM's patch/search window, so they are removed
+    as a pattern instead of merely averaged down; the Gaussian finishes the
+    widest mottling that is below the patch scale even at quarter size."""
+    hh, ww = plane.shape[:2]
+    small = cv2.resize(plane, (max(1, ww // 4), max(1, hh // 4)), interpolation=cv2.INTER_AREA)
+    small16 = np.clip(small * 65535.0 + 0.5, 0.0, 65535.0).astype(np.uint16)
+    small = _nlm16(small16, h).astype(np.float32) / 65535.0
+    small = cv2.GaussianBlur(small, (0, 0), 0.5 + fc * 5.0)
+    return cv2.ximgproc.guidedFilter(guide, _up(small, plane.shape), 8, 2e-3)
+
+
+def _chroma_nr(arr: np.ndarray, probe: np.ndarray, fc: float) -> np.ndarray:
+    """The colour pass: Cr/Cb smoothed against the (already denoised) luma,
+    with the correction Wiener-limited to what is plausibly noise. Blotching
+    is a large-scale pattern whose blobs dwarf NLM's window at full size, so
+    the smoothing is wide - which is exactly what would bleed two colours of
+    the same brightness into each other (the guided upsample can only put back
+    edges LUMA can see). Measured on a noise-free chart, the unguarded pass
+    moved hue by 42 degrees and saturation by 0.24: damage done to a photo
+    with nothing to denoise. So the probe states the noise level - the median
+    |correction| on it, since noise is everywhere and edges are not - and
+    corrections far above it are shrunk toward zero. Noise passes through
+    nearly untouched; a real colour boundary is an order of magnitude above
+    it and is left alone. On a clean image the level collapses and the pass
+    becomes a no-op."""
+    ycc = cv2.cvtColor(arr, cv2.COLOR_RGB2YCrCb)
+    pycc = cv2.cvtColor(probe, cv2.COLOR_RGB2YCrCb)
+    w = min(1.0, fc * 1.5)
+    for c in (1, 2):
+        # Strength follows the noise at the scale NLM works on.
+        s_q = _noise_sigma(cv2.resize(
+            pycc[..., c], (max(1, pycc.shape[1] // 4), max(1, pycc.shape[0] // 4)),
+            interpolation=cv2.INTER_AREA,
+        ))
+        h = (0.6 + 1.2 * fc) * max(s_q, 1.0 / 255.0)
+        pdelta = _chroma_smooth(pycc[..., c], pycc[..., 0], fc, h) - pycc[..., c]
+        level = float(np.median(np.abs(pdelta)))
+        limit = max(_CHROMA_NOISE_K * level, 1e-5)
+        ch = ycc[..., c]
+        delta = _chroma_smooth(ch, ycc[..., 0], fc, h) - ch
+        delta *= (limit * limit) / (delta * delta + limit * limit)
+        ch += delta * w
+    return np.clip(cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB), 0.0, 1.0)
+
+
+def _denoise_arr(
+    arr: np.ndarray, luma_amt: int, color_amt: int, detail_amt: int = 50,
+    ref_short_edge: float | None = None, probe: np.ndarray | None = None,
+) -> np.ndarray:
+    """NR on a display-referred float RGB array (0..1). `probe` is the toned
+    noise probe of the whole frame (see _noise_probe); without one the array
+    is its own frame."""
     fl = min(100, max(0, luma_amt)) / 100.0
     fc = min(100, max(0, color_amt)) / 100.0
     if fl <= 0 and fc <= 0:
-        return image
-    ycc = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2YCrCb)
-    y = ycc[..., 0]
-    h_luma = 7.0 * fl * fl
-    if h_luma >= 0.5:
-        y_dn = cv2.fastNlMeansDenoising(y, None, h_luma, 7, 21)
-        # NR must not re-tone the image ("denoise changes the contrast"): NLM
-        # nudges the low-frequency luma too (clipped shadow noise, plateau
-        # averaging), which reads as lifted blacks / flattened contrast at
-        # higher amounts. Add back the *original* image's low-frequency luma so
-        # denoising only ever removes fine-grained texture, never tonality.
-        sigma = max(4.0, (ref_short_edge or min(ycc.shape[:2])) / 200.0)
-        tone_shift = cv2.GaussianBlur(y.astype(np.float32), (0, 0), sigma) - cv2.GaussianBlur(
-            y_dn.astype(np.float32), (0, 0), sigma
+        return arr
+    arr = np.clip(arr, 0.0, 1.0)
+    if probe is None:
+        probe = _noise_probe(arr)
+    probe = np.clip(probe, 0.0, 1.0)
+    if fl > 0:
+        y = (arr @ _LUMA).astype(np.float32)
+        y_dn = _luma_nr(
+            y, (probe @ _LUMA).astype(np.float32), fl,
+            min(100, max(0, detail_amt)) / 100.0, ref_short_edge or min(arr.shape[:2]),
         )
-        y = np.clip(y_dn.astype(np.float32) + tone_shift, 0.0, 255.0).astype(np.uint8)
-    hh, ww = ycc.shape[:2]
-    # Chroma at quarter scale: the downscale averages the fine confetti away
-    # and shrinks the blotches into NLM's patch/search window, so they get
-    # removed as a *pattern* instead of merely averaged down. The eye barely
-    # resolves chroma anyway (JPEG ships 4:2:0 for the same reason).
-    sw, sh = max(1, ww // 4), max(1, hh // 4)
-    guide = y.astype(np.float32) / 255.0
-    w = min(1.0, fc * 1.5)
-    out = np.empty_like(ycc)
-    out[..., 0] = y
-    for c in (1, 2):
-        small = cv2.resize(ycc[..., c], (sw, sh), interpolation=cv2.INTER_AREA)
-        small = cv2.fastNlMeansDenoising(small, None, 3.0 + fc * 12.0, 7, 21)
-        # NLM handles the per-pixel/mid-frequency part; the widest mottling is
-        # still below its patch scale even at quarter size, so finish with a
-        # Gaussian - the guided upsample below restores the colour edges.
-        small = cv2.GaussianBlur(small, (0, 0), 0.5 + fc * 5.0)
-        up = cv2.resize(small, (ww, hh), interpolation=cv2.INTER_LINEAR)
-        # Joint upsampling: a small guided filter against full-res luma snaps
-        # the smoothed colour back onto real edges.
-        smooth = cv2.ximgproc.guidedFilter(guide, up.astype(np.float32) / 255.0, 8, 2e-3)
-        ch = ycc[..., c].astype(np.float32) / 255.0
-        # NR must not repaint the picture ("denoise changes the colours"), the
-        # chroma counterpart of the tone add-back in the luma pass above. The
-        # quarter-scale blur is wide (up to ~20px at full size) and the guided
-        # upsample can only put back edges LUMA can see - two saturated areas of
-        # the same brightness have no luma edge between them, so their colours
-        # bled into each other. Measured on a noise-free chart, denoise 50 moved
-        # hue by up to 42 degrees and saturation by 0.24: damage done to a photo
-        # with nothing to denoise.
-        #
-        # So keep only the part of the correction that is plausibly noise. The
-        # image states its own noise level - the median |correction| is a robust
-        # estimate of it, since noise is everywhere and edges are not - and
-        # corrections far above it are shrunk toward zero (Wiener-style, smooth
-        # rather than a hard cut, so nothing switches on at a threshold). Noise
-        # sits at or below the level and passes through nearly untouched; a real
-        # colour boundary is an order of magnitude above it and is left alone.
-        # On a clean image the estimate collapses and the pass becomes a no-op,
-        # which is the behaviour that was actually wanted all along.
-        delta = smooth - ch
-        level = float(np.median(np.abs(delta[::4, ::4])))
-        limit = max(_CHROMA_NOISE_K * level, 1e-5)
-        delta *= (limit * limit) / (delta * delta + limit * limit)
-        out[..., c] = np.clip((ch + delta * w) * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
-    return PILImage.fromarray(cv2.cvtColor(out, cv2.COLOR_YCrCb2RGB), "RGB")
+        # Added as a luma offset, so chroma is exactly what it was.
+        arr = np.clip(arr + (y_dn - y)[..., None], 0.0, 1.0)
+        del y, y_dn
+    if fc > 0:
+        arr = _chroma_nr(arr, probe, fc)
+    return arr
+
+
+def _denoise_image(
+    image: PILImage.Image, luma_amt: int, color_amt: int, ref_short_edge: float | None = None,
+    detail_amt: int = 50,
+) -> PILImage.Image:
+    """8-bit convenience wrapper around _denoise_arr."""
+    arr = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+    out = _denoise_arr(arr, luma_amt, color_amt, detail_amt, ref_short_edge)
+    return PILImage.fromarray((out * 255.0 + 0.5).astype(np.uint8), "RGB")
 
 
 def _apply_chrome(arr: np.ndarray, chrome: int, chrome_blue: int) -> np.ndarray:
@@ -1180,10 +1439,12 @@ def _linear_tone_block(lin: np.ndarray, adj: dict, base_gain: float = 1.0) -> np
 # a result BIT-IDENTICAL to the whole-frame call - no halos, no seams. It is
 # also the pipeline's only big single-threaded stretch: cv2 parallelises the
 # spatial passes itself (~3 cores busy measured), but this block ran one core
-# while the others idled - 2.2s of a 13.5s 24MP settle mix. Capped at 95% of
-# the cores on purpose, so the machine keeps breathing room for the request
-# thread and the UI while a render is in flight.
-_TONE_BAND_WORKERS = max(1, int((os.cpu_count() or 1) * 0.95))
+# while the others idled - 2.2s of a 13.5s 24MP settle mix. Capped at four
+# bands: the block is memory-bandwidth bound and measured to plateau there
+# (24MP: 1404ms -> 721ms, flat from 4 workers on), so more bands only add
+# threads for the request thread and the UI to compete with - and never more
+# than every core but one, so a 4-core machine keeps one for them.
+_TONE_BAND_WORKERS = max(1, min(4, _RENDER_THREADS))
 # Below this the split costs more in thread round-trips than it saves: a scrub
 # frame (~0.8MP) stays on one core and keeps its tens-of-ms latency; the
 # accurate tier (~1.7MP) and everything above get the bands.
@@ -1803,11 +2064,38 @@ def _detail_stage_put(key: str | None, arr: np.ndarray) -> None:
     )
 
 
+# The zoomed render's TILE, ready for the pipeline: the region cut out of the
+# native base, converted to float32 and downscaled to its on-screen budget.
+# That preparation ran per frame - for a big visible region a 20-30MP slice of
+# the 40MP base converted to float32 (a 240-360MB temporary) and INTER_AREA'd
+# down to ~1600px - and measured 200-280ms of every zoomed drag frame, paid
+# even when the tone stage below was a cache hit. The tile depends on nothing
+# but the base, the cut box and the budget, so it is kept like the stages
+# are: three slots, copied out on use (see _stage_get). Sized for the
+# interactive tiles (a 1600px tile is ~20MB); a settle-sized one is left out.
+_tile_cache: "OrderedDict[str, np.ndarray]" = OrderedDict()
+_TILE_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_TILE_CACHE_MAX_ENTRIES = 3
+_TILE_CACHE_TOTAL_MAX_BYTES = 128 * 1024 * 1024
+
+
+def _tile_cache_get(key: str | None) -> np.ndarray | None:
+    return _stage_get(_tile_cache, key)
+
+
+def _tile_cache_put(key: str | None, arr: np.ndarray) -> None:
+    _stage_put(
+        _tile_cache, key, arr,
+        _TILE_CACHE_MAX_BYTES, _TILE_CACHE_MAX_ENTRIES, _TILE_CACHE_TOTAL_MAX_BYTES,
+    )
+
+
 def invalidate_tone_stage() -> None:
     """Drop the stage caches (image edited on disk, decode settings changed)."""
     with _tone_stage_lock:
         _tone_stage.clear()
         _detail_stage.clear()
+        _tile_cache.clear()
 
 
 def apply_adjustments(
@@ -1826,14 +2114,28 @@ def apply_adjustments(
     )
 
 
+def _denoise_wanted(adj: dict, fast: bool) -> bool:
+    """Whether _denoise_stage will touch the pixels - what decides if a render
+    needs to sample the noise probe of the whole frame first."""
+    return not fast and bool(
+        adj.get("luma_noise_reduction", 0) or adj.get("color_noise_reduction", 0)
+    )
+
+
 def _denoise_stage(
-    arr: np.ndarray, adj: dict, fast: bool, ref_short_edge: float | None = None
+    arr: np.ndarray, adj: dict, fast: bool, ref_short_edge: float | None = None,
+    noise_probe: np.ndarray | None = None, base_gain: float = 1.0,
 ) -> np.ndarray:
     """Denoise (spatial), split into Luminance + Colour like RapidRAW - the two
     halves of high-ISO noise are removed by different amounts of smoothing
     (colour blotching is the ugly part and the eye barely resolves chroma
     detail, so chroma takes more without going soft), so they get a slider each.
-    cv2's NLM needs 8-bit input, so this one pass round-trips through uint8.
+    See the noise-reduction section above for the pass itself.
+
+    `noise_probe` is the LINEAR probe of the whole frame (see _noise_probe),
+    passed by the editor's tile render, which only has a tile of the frame in
+    `arr`; it is toned here, exactly as the tile was. Whole-frame renders leave
+    it None and the toned array is its own probe.
 
     The one pass a drag never gets: the luma NLM alone is ~147ms on a 1100px
     scrub frame, which would drop the preview to under 7 frames a second. It's
@@ -1845,16 +2147,29 @@ def _denoise_stage(
     cn = adj.get("color_noise_reduction", 0)
     if fast or (ln <= 0 and cn <= 0):
         return arr
-    denoised = _denoise_image(
-        PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB"), ln, cn, ref_short_edge
+    probe = None
+    if noise_probe is not None:
+        probe = _linear_tone_block_banded(noise_probe, adj, base_gain)
+    return _denoise_arr(
+        arr, ln, cn, adj.get("luma_noise_detail", 50), ref_short_edge, probe,
     )
-    return np.asarray(denoised, dtype=np.float32) / 255.0
+
+
+def _mark(timing: dict | None, key: str, since: float) -> float:
+    """Record how long the stage ending now took (ms, added to any earlier
+    figure under the same key) and return the new start time. A no-op with no
+    dict, so the render paths that don't ask for a breakdown pay one branch."""
+    now = time.perf_counter()
+    if timing is not None:
+        timing[key] = timing.get(key, 0.0) + (now - since) * 1000.0
+    return now
 
 
 def apply_adjustments_linear(
     lin: np.ndarray, base_gain: float, adj: dict, include_grain: bool = True, fast: bool = False,
     tone_cache_key: str | None = None, peek: str | None = None, view=None,
-    is_stale: Callable[[], bool] | None = None,
+    is_stale: Callable[[], bool] | None = None, noise_probe: np.ndarray | None = None,
+    timing: dict | None = None,
 ) -> PILImage.Image:
     """The develop pipeline on a scene-referred linear float base (the RAW
     demosaic, values may exceed 1.0 after the gain).
@@ -1876,6 +2191,11 @@ def apply_adjustments_linear(
     editor's zoomed render: everything positional - the masks and the vignette -
     then keeps computing against the whole frame while only the tile's pixels
     are produced. The default is the whole frame, which is every other caller.
+
+    `noise_probe` is the linear noise probe of the WHOLE frame (_noise_probe),
+    which a tile render passes so denoise measures the photo's noise, not the
+    tile's - see the noise-reduction section. Whole-frame renders leave it
+    None; the toned frame is its own probe.
 
     `include_grain=False` skips the grain pass so the caller can add grain
     *after* downscaling to the output size (see generate_derivatives): grain
@@ -1912,7 +2232,13 @@ def apply_adjustments_linear(
     Below the line stays out: at ~150ms a frame the preview would stop tracking
     the pointer, which just trades one kind of unusable for another. Those four
     come back on the accurate render at pointer-up, so the settled preview - and
-    the save - are unchanged either way."""
+    the save - are unchanged either way.
+
+    `timing` (the editor preview passes one) collects per-stage milliseconds -
+    tone/detail/color/masks/fx, plus `tone_hit`/`detail_hit` when a cached
+    stage answered - for the route's slow-render log line. Nothing else reads
+    it; the pixels don't depend on it."""
+    t0 = time.perf_counter()
     # Every resolution-dependent radius below is measured against the WHOLE
     # frame, never the array in hand. A zoomed tile IS a smaller array of the
     # same photo: scaling clarity, sharpening or denoise to the tile would
@@ -1926,6 +2252,7 @@ def apply_adjustments_linear(
         # before the cache so a neutral edit can never take a cached stage and
         # fall through the rest of the pipeline instead of returning here.
         arr = _linear_tone_block_banded(lin, adj, base_gain)
+        _mark(timing, "tone", t0)
         return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
 
     # Tone + denoise depend on their own sliders and nothing else, so when
@@ -1953,13 +2280,18 @@ def apply_adjustments_linear(
         if tone_cache_key and _detail_block_active(adj) else None
     )
     arr = _detail_stage_get(detail_key)
+    if arr is not None and timing is not None:
+        timing["detail_hit"] = True
     if arr is None:
         key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
         arr = _tone_stage_get(key)
         if arr is None:
             arr = _linear_tone_block_banded(lin, adj, base_gain)
-            arr = _denoise_stage(arr, adj, fast, short_edge)
+            arr = _denoise_stage(arr, adj, fast, short_edge, noise_probe, base_gain)
             _tone_stage_put(key, arr)
+        elif timing is not None:
+            timing["tone_hit"] = True
+        t0 = _mark(timing, "tone", t0)
         _abort_if_stale()
         # Detail (spatial): clarity = large-radius local contrast, structure =
         # medium-radius local contrast, sharpness = small-radius edge enhancement.
@@ -2008,12 +2340,15 @@ def apply_adjustments_linear(
         if dh:
             arr = _dehaze(arr, dh, long_edge)
         _detail_stage_put(detail_key, arr)
+        t0 = _mark(timing, "detail", t0)
     _abort_if_stale()
     arr = _display_color_block(arr, adj)
+    t0 = _mark(timing, "color", t0)
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
     _abort_if_stale()
     arr, peek_field = apply_masks(arr, adj, peek=peek, view=view, ref_long_edge=long_edge)
+    t0 = _mark(timing, "masks", t0)
     # Highlight-bloom / diffusion effects run on the *toned* image (like a filter
     # in front of the lens), after the tonal pass. Mist and halation are
     # affordable at scrub size (+34/+39ms); glow and flare are not (+143/+84),
@@ -2044,6 +2379,7 @@ def apply_adjustments_linear(
     if peek_field is not None:
         arr = paint_mask_peek(arr, peek_field, view=view)
     out = (arr * 255.0 + 0.5).astype(np.uint8)
+    _mark(timing, "fx", t0)
     return PILImage.fromarray(out, "RGB")
 
 
@@ -2664,6 +3000,31 @@ def clear_editor_base_caches() -> None:
     invalidate_tone_stage()
 
 
+# The settle tiers (full / ultra) render at the size the picture is SHOWN at,
+# not at their ceiling: at fit view on a 4K display the canvas needs ~2800
+# device pixels and ultra rendered 3900 - about twice the pixels through the
+# whole pipeline (denoise, glow, flare included) for detail the screen threw
+# away. The editor sends its on-screen size (`settle_px`) and the render is
+# capped to the next rung of this ladder, rounded UP so the frame is never
+# softer than the screen. A short ladder rather than the exact size, so a
+# window resize by a few pixels doesn't decode a new base per pixel: each rung
+# is one entry in the base cache, derived from the 3900 decode (never its own
+# decode - see _cached_editor_base), and the tone/detail stages are keyed per
+# rung. Anything up to the accurate tier's size settles there already.
+_SETTLE_PX_LADDER = (1800, 2200, 2600, 3000, 3400, ULTRA_EDITOR_PREVIEW_PX)
+
+
+def _settle_base_px(cap: int, settle_px: int | None) -> int:
+    """The base to render a settle at: the tier's cap, or the ladder rung at
+    or above the on-screen size when that is smaller."""
+    if not settle_px or settle_px >= cap:
+        return cap
+    for rung in _SETTLE_PX_LADDER:
+        if rung >= settle_px:
+            return min(rung, cap)
+    return cap
+
+
 def render_editor_preview_bytes(
     image: "Image",
     rotation: int,
@@ -2688,6 +3049,7 @@ def render_editor_preview_bytes(
     zoomed: bool = False,
     scrub_px: int | None = None,
     is_stale: Callable[[], bool] | None = None,
+    settle_px: int | None = None,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
     (same code path as generate_derivatives/render_edited_image) on a cached,
@@ -2725,6 +3087,12 @@ def render_editor_preview_bytes(
     is already drawing."""
     from app.services.filesystem import resolve_image_path
 
+    if meta is not None:
+        # When the request reached the service - _render_editor_bytes reports
+        # the gap to its own start as `wait` (the full-render lock, a stat on
+        # a sleeping disk, a machine deep in swap: a 384s tile once logged
+        # 450ms of stages and nothing else).
+        meta["t_entry"] = time.perf_counter()
     # Drop superseded renders instead of running them: the client aborts its
     # fetch the moment a newer edit state exists, but an aborted request's
     # thread still runs to completion here. The check matters most right after
@@ -2811,14 +3179,17 @@ def render_editor_preview_bytes(
         )
     if full_quality or ultra:
         # Serialise + bound resolution so a burst of settle-renders can't stack
-        # into many GB of concurrent full-frame numpy arrays.
+        # into many GB of concurrent full-frame numpy arrays. `settle_px` (the
+        # editor's on-screen size) caps the render below the tier's ceiling -
+        # see _SETTLE_PX_LADDER.
         with _full_render_lock:
             _bail_if_stale()
             return _render_editor_bytes(
-                image, path, ULTRA_EDITOR_PREVIEW_PX if ultra else FULL_EDITOR_PREVIEW_PX,
+                image, path,
+                _settle_base_px(ULTRA_EDITOR_PREVIEW_PX if ultra else FULL_EDITOR_PREVIEW_PX, settle_px),
                 rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=95, fast=False, browse=browse,
-                peek=peek, is_stale=is_stale,
+                peek=peek, is_stale=is_stale, meta=meta,
             )
     if scrub:
         # Zoomed in, the scrub frames are what the user is judging detail on,
@@ -2840,12 +3211,12 @@ def render_editor_preview_bytes(
             rotation, crop, adjustments, distortion,
             flip_h, flip_v, straighten, persp_h, persp_v,
             quality=88 if zoomed else 82, fast=True, browse=browse,
-            peek=peek, is_stale=is_stale,
+            peek=peek, is_stale=is_stale, meta=meta,
         )
     return _render_editor_bytes(
         image, path, max_px, rotation, crop, adjustments, distortion,
         flip_h, flip_v, straighten, persp_h, persp_v, quality=88, fast=False, browse=browse,
-        peek=peek, is_stale=is_stale,
+        peek=peek, is_stale=is_stale, meta=meta,
     )
 
 
@@ -2945,7 +3316,15 @@ def _render_editor_bytes(
     below runs on roughly the pixels the screen can show instead of the native
     cut's. The box the client composites into stays named in the frame's own
     pixels (meta box/box_size) - the client stretches the smaller tile into it,
-    which is the same downsample its display was doing anyway."""
+    which is the same downsample its display was doing anyway.
+
+    `meta["t"]` (when `meta` is given) receives the per-stage breakdown the
+    route logs for slow renders: base / geom / the pipeline's own stages /
+    encode, in ms; `meta["px"]` the base's long edge the render ran on."""
+    timing: dict | None = meta.setdefault("t", {}) if meta is not None else None
+    t0 = time.perf_counter()
+    if timing is not None and "t_entry" in meta:
+        timing["wait"] = (t0 - meta["t_entry"]) * 1000.0
     mtime_ns = path.stat().st_mtime_ns
     if native:
         lin16, gain = _cached_native_base(image.id, str(path), mtime_ns)
@@ -2958,6 +3337,9 @@ def _render_editor_bytes(
         if not fast:
             warm_editor_base(image.id, str(path), mtime_ns)
         lin16, gain = _cached_editor_base(image.id, str(path), mtime_ns, base_px)
+    t0 = _mark(timing, "base", t0)
+    if meta is not None:
+        meta["px"] = int(max(lin16.shape[:2]))
     # Cut to the region BEFORE anything touches the pixels, whenever the
     # geometry leaves the frame where it is. This is what makes a zoomed render
     # cheap rather than merely cheaper: converting a 40MP base to float32 is a
@@ -2973,6 +3355,7 @@ def _render_editor_bytes(
     early_cut: tuple[int, int, int, int] | None = None
     early_box: tuple[int, int, int, int] | None = None
     tile_scale = 1.0
+    noise_probe: np.ndarray | None = None
     if region is not None and not geometry_moves_pixels:
         base_h, base_w = lin16.shape[:2]
         early_cut = _region_box(region, base_w, base_h)
@@ -2985,29 +3368,52 @@ def _render_editor_bytes(
         x1 = max(x0 + 1, min(base_w, int(round((rx + rw) * base_w))))
         y1 = max(y0 + 1, min(base_h, int(round((ry + rh) * base_h))))
         early_box = (x0, y0, x1, y1)
-        lin16 = lin16[py0:py1, px0:px1]
-        # Downscale to the on-screen budget before anything expensive sees the
-        # pixels - INTER_AREA, same as _downscale_linear. Via float32: the base
-        # is float16, which cv2.resize can't take, and the float32 copy of the
-        # cut was about to be made anyway. The slack keeps a tile already at
-        # (or a hair over) its budget exact.
         if region_px and max(x1 - x0, y1 - y0) > region_px * 1.05:
             tile_scale = region_px / max(x1 - x0, y1 - y0)
-            th_, tw_ = lin16.shape[:2]
-            lin16 = cv2.resize(
-                lin16.astype(np.float32),
-                (max(1, int(round(tw_ * tile_scale))), max(1, int(round(th_ * tile_scale)))),
-                interpolation=cv2.INTER_AREA,
-            )
+        # Denoise measures the noise of the PHOTO, so its probe is sampled from
+        # the whole frame before the cut - at the tile's scale, so it sees the
+        # noise the way the tile does.
+        if _denoise_wanted(adjustments, fast):
+            noise_probe = _noise_probe(lin16, tile_scale)
+        tile_key = json.dumps(
+            [image.id, mtime_ns, native, base_px, early_cut, round(tile_scale, 5)],
+            separators=(",", ":"),
+        )
+        tile = _tile_cache_get(tile_key)
+        if tile is not None:
+            lin16 = tile
+        else:
+            lin16 = lin16[py0:py1, px0:px1]
+            # Downscale to the on-screen budget before anything expensive sees the
+            # pixels - INTER_AREA, same as _downscale_linear. Via float32: the base
+            # is float16, which cv2.resize can't take, and the float32 copy of the
+            # cut was about to be made anyway. The slack keeps a tile already at
+            # (or a hair over) its budget exact.
+            if tile_scale < 1.0:
+                th_, tw_ = lin16.shape[:2]
+                lin16 = cv2.resize(
+                    lin16.astype(np.float32),
+                    (max(1, int(round(tw_ * tile_scale))), max(1, int(round(th_ * tile_scale)))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            else:
+                lin16 = lin16.astype(np.float32)
+            _tile_cache_put(tile_key, lin16)
 
     # Last exit before the big allocations: the float32 copy of a native base
     # alone is ~480MB.
     if is_stale is not None and is_stale():
         raise PreviewSuperseded()
-    arr = lin16.astype(np.float32)
+    # A prepared tile is float32 already (and this render's own copy); the
+    # whole-frame bases are float16 and convert here.
+    arr = lin16.astype(np.float32, copy=False)
     if distortion:
         arr = apply_distortion_array(arr, distortion)
     arr = apply_edits_array(arr, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
+    t0 = _mark(timing, "geom", t0)
+    if meta is not None and early_cut is not None:
+        # A tile: the size the pipeline actually ran on, not the base's.
+        meta["px"] = int(max(arr.shape[:2]))
     view = None
     trim: tuple[int, int, int, int] | None = None
     if early_cut is not None:
@@ -3050,6 +3456,8 @@ def _render_editor_bytes(
         # Grow by the padding, render that, and cut the padding off at the end.
         px0, py0 = max(0, x0 - REGION_PAD_PX), max(0, y0 - REGION_PAD_PX)
         px1, py1 = min(full_w, x1 + REGION_PAD_PX), min(full_h, y1 + REGION_PAD_PX)
+        if _denoise_wanted(adjustments, fast):
+            noise_probe = _noise_probe(arr)
         arr = arr[py0:py1, px0:px1]
         view = masks.FieldView(px0, py0, full_w, full_h)
         trim = (x0 - px0, y0 - py0, x1 - x0, y1 - y0)
@@ -3087,8 +3495,9 @@ def _render_editor_bytes(
     # against the auto-exposed picture the user actually saw before opening it.
     img = apply_adjustments_linear(
         arr, gain if browse else 1.0, adjustments, fast=fast, tone_cache_key=tone_key,
-        peek=peek, view=view, is_stale=is_stale,
+        peek=peek, view=view, is_stale=is_stale, noise_probe=noise_probe, timing=timing,
     )
+    t0 = time.perf_counter()
     if trim is not None:
         tx, ty, tw, th = trim
         img = img.crop((tx, ty, tx + tw, ty + th))
@@ -3097,6 +3506,7 @@ def _render_editor_bytes(
         raise PreviewSuperseded()
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=quality)
+    _mark(timing, "encode", t0)
     return buf.getvalue()
 
 
@@ -3259,6 +3669,73 @@ _FULL_WARM_POLL_S = 1.0
 _full_warm_lock = threading.Lock()
 _full_warm_pending: set[str] = set()
 _full_warm_thread: "threading.Thread | None" = None
+
+
+# Derivatives deferred while the editor is open. Every autosave used to
+# re-render thumbnail + preview synchronously - for a 40MP raw that is a fresh
+# half-size demosaic plus the whole pipeline, ~1GB of working set, one second
+# after every slider came to rest, beside the editor's own renders, and then a
+# full.jpg warm on top. On an 8GB machine that was the swap storm behind
+# "nach jedem Regler hängt es". The editor now saves with
+# `defer_derivatives`: the values land at once, the renders wait for the
+# editor to close (its final save regenerates synchronously, as before). This
+# worker is the safety net for an editor that never sends that final save
+# (a crash, a closed window): it regenerates what is still pending once the
+# editor has been quiet for a good while.
+_DEFERRED_DELAY_S = 5.0
+_DEFERRED_EDITOR_IDLE_S = 45.0
+_DEFERRED_POLL_S = 5.0
+_deferred_lock = threading.Lock()
+_deferred_derivatives: set[str] = set()
+_deferred_thread: "threading.Thread | None" = None
+
+
+def defer_derivatives(image_id: str) -> None:
+    """Note that this image's derivatives are stale and will be regenerated
+    later - by the editor's final save, or by the worker once editing stops."""
+    global _deferred_thread
+    with _deferred_lock:
+        _deferred_derivatives.add(image_id)
+        if _deferred_thread is None or not _deferred_thread.is_alive():
+            _deferred_thread = threading.Thread(target=_deferred_run, name="deferred-derivatives", daemon=True)
+            _deferred_thread.start()
+
+
+def take_deferred(image_id: str) -> bool:
+    """Claim a deferred regeneration (the caller is about to do it now)."""
+    with _deferred_lock:
+        if image_id in _deferred_derivatives:
+            _deferred_derivatives.discard(image_id)
+            return True
+        return False
+
+
+def _deferred_run() -> None:
+    import time as _time
+
+    from app.db.session import SessionLocal
+
+    while True:
+        _time.sleep(_DEFERRED_DELAY_S)
+        while editor_recently_active(_DEFERRED_EDITOR_IDLE_S):
+            _time.sleep(_DEFERRED_POLL_S)
+        with _deferred_lock:
+            if not _deferred_derivatives:
+                return
+            image_id = _deferred_derivatives.pop()
+        try:
+            db = SessionLocal()
+            try:
+                from app.db.models import Image as ImageRow
+
+                image = db.get(ImageRow, image_id)
+                if image is not None and image.deleted_at is None:
+                    regenerate_for_image(image)
+                    warm_full_cache(image_id)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("deferred derivative render failed for %s", image_id)
 
 
 def warm_full_cache(image_id: str) -> None:

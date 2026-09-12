@@ -723,7 +723,10 @@ const CHAPTERS: Chapter[] = [
             <li>
               <strong>Map</strong> (in the nav) shows a pin for every photo whose EXIF carries GPS
               coordinates — phones add these automatically, many cameras don't. A RAW+JPEG pair is
-              one pin. Click a pin to open the photo.
+              one pin. Photos taken close together share a pin with a count badge; click it and
+              they fan out around the pin so every one is visible and clickable (click the pin
+              again, or the map, to fold them back). Only a crowd too big for one fan zooms in
+              instead. Click a single pin to open the photo.
             </li>
             <li>
               <strong>Statistics</strong> (the chart icon, top right) counts what you have: photos,
@@ -993,8 +996,13 @@ const CHAPTERS: Chapter[] = [
             </ul>
             <h4>6 · Details</h4>
             <p>
-              Sharpness and its threshold, clarity, dehaze, luminance and color noise reduction,
-              and chromatic aberration correction (red–cyan, blue–yellow).
+              Sharpness and its threshold, clarity, dehaze, noise reduction and chromatic
+              aberration correction (red–cyan, blue–yellow). Noise reduction measures the
+              photo's own noise, so the same slider position means the same thing at ISO 400
+              and ISO 12800: Luminance NR sets how much grain goes, Luminance NR Detail how much
+              fine texture stays at edges (0 smooths everything, 100 keeps the grain where
+              there is structure), Color NR how much colour blotching goes. It is judged at
+              100% zoom and is skipped while a slider is being dragged.
             </p>
             <h4>7 · Effects</h4>
             <p>
