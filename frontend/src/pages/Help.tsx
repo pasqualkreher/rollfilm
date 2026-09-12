@@ -8,6 +8,11 @@
 // to find it, one sentence saying what it is, then the detail. That way a
 // question can be answered by picking a chapter and skimming lead sentences,
 // without reading the guide.
+//
+// Inside a topic the detail is kept short: h4 sub-blocks of a few bullets
+// each, one point per bullet, opened by the phrase that is the point. Long
+// subjects (the editor, masks, shortcuts) are their own topics rather than
+// long ones.
 
 import { useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -30,6 +35,35 @@ function Tip({ title, children }: { title: string; children: ReactNode }) {
     <div className="help-tip">
       <strong>{title}</strong> {children}
     </div>
+  );
+}
+
+// One small shortcut table per screen: key on the left, what it does on the
+// right. Splitting by screen (instead of one long table with a "Where"
+// column) lets the eye find "the editor keys" in one glance.
+interface KeyRow {
+  keys: ReactNode;
+  does: ReactNode;
+}
+
+function Keys({ rows }: { rows: KeyRow[] }) {
+  return (
+    <table className="help-shortcuts">
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>What it does</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i}>
+            <td>{r.keys}</td>
+            <td>{r.does}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -118,7 +152,8 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Pick the keepers.</strong> Still on that review screen: give stars and
                 color labels, untick what you don't want, then press{" "}
-                <strong>Add … photos to library</strong>.
+                <strong>Add … photos to library</strong>. What you leave behind waits in the
+                session for another day.
               </li>
               <li>
                 <strong>Find them again.</strong> The <strong>Library</strong> is a newest-first
@@ -147,17 +182,25 @@ const CHAPTERS: Chapter[] = [
         id: "appearance",
         title: "Making it look right",
         where: <>Settings → Look &amp; feel</>,
-        lead: <>You pick two skins — one light, one dark — and a mode that decides which is showing.</>,
+        lead: (
+          <>
+            You pick two skins — one light, one dark — and a mode that decides which is showing.
+            Corners and the typeface are yours to choose too.
+          </>
+        ),
         body: (
           <>
+            <h4>Light, dark, or both</h4>
             <p>
               The mode is <strong>Light</strong>, <strong>Dark</strong>, or <strong>Auto</strong>,
               which follows your operating system and switches along with it while the app is open.
             </p>
-            <p>Four skins per side, all deliberately quiet so nothing competes with the photos:</p>
+            <h4>Seven skins per side</h4>
+            <p>All deliberately quiet, so nothing competes with the photos:</p>
             <ul>
               <li>
-                <strong>Graphite</strong> — neutral gray, the default.
+                <strong>Stone</strong> — muted gray with the contrast taken down a step: nothing is
+                pure white or near-black. The default, and the deep one for a dim room.
               </li>
               <li>
                 <strong>Slate</strong> — cooler, with a steel-blue accent.
@@ -170,10 +213,33 @@ const CHAPTERS: Chapter[] = [
                 <strong>Orange</strong> — warm surfaces with a burnt orange accent, amber in the
                 dark.
               </li>
+              <li>
+                <strong>Sand</strong> — warm grey without the colour: greige surfaces and a taupe
+                accent.
+              </li>
+              <li>
+                <strong>Sage</strong> — grey with a trace of green and a muted sage accent.
+              </li>
+              <li>
+                <strong>Blue</strong> — neutral grey with a classic blue accent, sky blue in the dark.
+              </li>
+            </ul>
+            <p>Each tile previews its own colors.</p>
+            <h4>Corners and typeface</h4>
+            <ul>
+              <li>
+                <strong>Corners</strong> makes cards, buttons and thumbnails rounded or square.
+              </li>
+              <li>
+                <strong>Typeface</strong> sets the font the whole interface is in:{" "}
+                <em>Rollfilm</em> (your system's own interface face) or one of five close relatives
+                your system already has — Helvetica, Avenir, Arial, Verdana, Trebuchet. Nothing is
+                downloaded.
+              </li>
             </ul>
             <p>
-              Each tile previews its own colors. The choice belongs to the computer, not the
-              library, so it survives switching libraries.
+              All of these belong to the computer, not the library, so they survive switching
+              libraries.
             </p>
           </>
         ),
@@ -220,16 +286,19 @@ const CHAPTERS: Chapter[] = [
                 <kbd>0</kbd>–<kbd>5</kbd> for stars, <kbd>Space</kbd> to include or exclude).
               </li>
               <li>
-                <strong>Selecting.</strong> Press "Select", then click cards to tick them.{" "}
+                <strong>Selecting.</strong> Every card carries a tick box; click it, or{" "}
+                <kbd>⌘</kbd>/<kbd>Ctrl</kbd>-click the card, to include or exclude the photo.{" "}
                 <strong>Shift-click</strong> applies that same tick (or untick) to the whole range
-                since your last click. The tick box on a <strong>day heading</strong> takes or
-                clears that day in one go; if the batch spans several months or years, the heading
-                offers those wider scopes too.
+                since your last click; <kbd>⌘A</kbd> ticks everything shown. The tick box on a{" "}
+                <strong>day heading</strong> takes or clears that day in one go; if the batch spans
+                several months or years, the heading offers those wider scopes too.
               </li>
               <li>
                 <strong>Adding.</strong> "Add N photos to library" copies the selection into your
-                library folder. "Discard batch" throws the staging session away — at that point
-                nothing has entered your library at all.
+                library folder. It does not end the session: whatever you left unticked stays for
+                another day, so a big card can be culled a hundred photos at a time.{" "}
+                <strong>Discard session</strong> throws the rest away — photos already added stay in
+                your library.
               </li>
             </ol>
             <h4>Good to know</h4>
@@ -238,7 +307,7 @@ const CHAPTERS: Chapter[] = [
                 <strong>A long copy doesn't have to run to the end.</strong>{" "}
                 <em>Stop &amp; keep copied</em> finishes the photos already on their way and hands
                 you the review for exactly those. Nothing is thrown away — that is what "Cancel"
-                and "Discard batch" are for.
+                and "Discard session" are for.
               </li>
               <li>
                 <strong>RAW+JPEG pairs</strong> shot together are detected. In merged view they act
@@ -254,6 +323,49 @@ const CHAPTERS: Chapter[] = [
                 <strong>"Add to Immich"</strong> pushes the imported JPEGs to your Immich server,
                 if you set one up. RAW files go along only when "Also upload RAW files" is on
                 under Settings → Immich integration.
+              </li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        id: "import-sessions",
+        title: "Picking up where you left off",
+        where: <>Import → Open import sessions · the review's Continue later button</>,
+        lead: (
+          <>
+            An import session stays open until you end it — so a card can be culled in several
+            sittings, and a card you unplug halfway is recognised when it comes back.
+          </>
+        ),
+        body: (
+          <>
+            <ul>
+              <li>
+                <strong>Continue later</strong> closes the review and keeps everything: your ticks,
+                stars and labels, and the files already copied.
+              </li>
+              <li>
+                <strong>Open import sessions</strong> on the Import page lists every session that is
+                still open, with what is left to review or copy. <em>Continue</em> reopens it and
+                copies only what is not copied yet; <em>Discard</em> ends it.
+              </li>
+              <li>
+                <strong>The card, not its path.</strong> A session remembers the card itself, so
+                the same card is recognised even if the computer mounts it under another name. An
+                unplugged card shows as <strong>Not connected</strong> until it returns.
+              </li>
+              <li>
+                <strong>Choosing the same folder again</strong> while a session for it is open
+                asks whether to continue that session instead of starting a second one.
+              </li>
+              <li>
+                <strong>Add folder… / Add photos…</strong> in the review collect from several
+                cards or folders in one session.
+              </li>
+              <li>
+                <strong>Coming back to a review</strong> restores its filters, the open preview and
+                the place you were scrolled to.
               </li>
             </ul>
           </>
@@ -368,31 +480,18 @@ const CHAPTERS: Chapter[] = [
             <h4>Narrowing what you see</h4>
             <ul>
               <li>
-                <strong>Filters:</strong> album, minimum star rating, color label, tags (a photo
-                must carry <em>all</em> the tags you pick), camera, lens, a focal-length range and a
-                capture-date range. They <strong>cross-filter</strong> each other: pick a camera and
-                the lens and focal-length choices narrow to what that camera actually shot. "Clear"
-                resets everything. The pin in the menu's top-right corner{" "}
-                <strong>docks the filters</strong> as a row of the bar, so they stay open while you
-                cull instead of closing on the next click — in the Library, an album and the import
-                review alike.
+                <strong>Filters:</strong> an album or a canvas, minimum star rating, color label,
+                tags (a photo must carry <em>all</em> the tags you pick), camera, lens, a
+                focal-length range and a capture-date range. "Clear" resets everything.
               </li>
               <li>
-                <strong>Where a photo is used:</strong> every photo in an album carries the tags{" "}
-                <strong>album</strong> and <strong>album: &lt;name&gt;</strong>, every photo a
-                canvas holds <strong>canvas</strong> and <strong>canvas: &lt;name&gt;</strong> —
-                so the tag filter finds them. Rollfilm keeps these tags itself (album and canvas
-                names are unique for that reason); you can't add or remove them by hand.
+                <strong>Filters cross-filter each other:</strong> pick a camera and the lens and
+                focal-length choices narrow to what that camera actually shot.
               </li>
               <li>
-                <strong>A look without opening:</strong> point at a tile and an{" "}
-                <strong>i</strong> appears; click it for the photo's details — camera, lens,
-                exposure, size, tags, albums — beside the tile, without leaving the grid.
-              </li>
-              <li>
-                <strong>Badges:</strong> a small copy glyph marks a <strong>virtual copy</strong>, a
-                second entry that shares another photo's file (see <em>Editing → Physical and
-                virtual copies</em>).
+                <strong>Docking the filters:</strong> the pin in the menu's top-right corner keeps
+                the filters open as a row of the bar, so they stay put while you cull instead of
+                closing on the next click — in the Library, an album and the import review alike.
               </li>
               <li>
                 <strong>File types:</strong> show RAW + JPEG, only JPEGs, or only RAWs. With{" "}
@@ -403,17 +502,48 @@ const CHAPTERS: Chapter[] = [
                 <strong>Thumbnail size</strong> from XS to XL, remembered per computer.
               </li>
             </ul>
+            <h4>Reading a tile</h4>
+            <ul>
+              <li>
+                <strong>A look without opening:</strong> point at a tile and an{" "}
+                <strong>i</strong> appears; click it for the photo's details — camera, lens,
+                exposure, size, tags, albums, canvases — beside the tile, without leaving the grid.
+              </li>
+              <li>
+                <strong>Where a photo is used:</strong> the info card and the photo view show one
+                chip per album and per canvas that holds the photo. Click a chip to go there, its ×
+                to take the photo out (taking it off a canvas removes its frames from the page, and
+                asks first).
+              </li>
+              <li>
+                <strong>Badges:</strong> a small copy glyph marks a <strong>virtual copy</strong>, a
+                second entry that shares another photo's file (see <em>Editing → Physical and
+                virtual copies</em>).
+              </li>
+            </ul>
             <h4>Working on many photos at once</h4>
-            <p>
-              Press <strong>Select</strong>, click photos (<kbd>Shift</kbd>-click for a range — it
-              ticks the run, or clears it if the photo you clicked was already ticked), and the bar
-              at the bottom acts on all of them: set stars or a color label, add a tag,{" "}
-              <strong>Add to…</strong> an album or a canvas (with "+ New" right in the list), add to
-              Selects, send to Immich, <strong>Auto develop</strong> the whole selection,{" "}
-              <strong>apply a saved preset</strong>, delete — or <strong>Reset…</strong> chosen
-              aspects back to the just-imported state (any of stars, colors, tags, albums, edits,
-              crop &amp; geometry).
-            </p>
+            <ul>
+              <li>
+                <strong>Pick photos the way the desktop does:</strong> <kbd>⌘</kbd>/<kbd>Ctrl</kbd>
+                -click one, then tick more. <kbd>Shift</kbd>-click takes a range — it ticks the
+                run, or clears it if the photo you clicked was already ticked. <kbd>⌘A</kbd> takes
+                everything shown, <kbd>Esc</kbd> lets go.
+              </li>
+              <li>
+                <strong>The bar at the bottom acts on all of them:</strong> set stars or a color
+                label, add a tag, <strong>Add to…</strong> an album, a canvas or Selects (with "+
+                New" right in the list), send to Immich, <strong>Auto develop</strong> the whole
+                selection, <strong>apply a saved preset</strong>, delete.
+              </li>
+              <li>
+                <strong>Reset…</strong> takes chosen aspects back to the just-imported state — any
+                of stars, colors, tags, albums, edits, crop &amp; geometry.
+              </li>
+              <li>
+                <strong>Right-click a ticked photo</strong> for Export, Save copy and Show in
+                Finder — each acting on the whole selection.
+              </li>
+            </ul>
           </>
         ),
       },
@@ -428,13 +558,21 @@ const CHAPTERS: Chapter[] = [
           </>
         ),
         body: (
-          <p>
-            Search matches your tag names first, then ranks photos by how closely the image content
-            itself matches your words. It respects where you are: inside an album it searches that
-            album, everywhere else the whole library. Photos on a disconnected external source are
-            skipped, and an active filter (rating, color, tag, date) narrows the results too — if
-            something you know is there doesn't show up, clear the filters first.
-          </p>
+          <ul>
+            <li>
+              <strong>How it ranks:</strong> your tag names match first, then photos are ordered by
+              how closely the image content itself matches your words.
+            </li>
+            <li>
+              <strong>Where it looks:</strong> inside an album it searches that album, everywhere
+              else the whole library. Photos on a disconnected external source are skipped.
+            </li>
+            <li>
+              <strong>Filters still apply.</strong> An active rating, color, tag or date filter
+              narrows the results too — if something you know is there doesn't show up, clear the
+              filters first.
+            </li>
+          </ul>
         ),
       },
       {
@@ -442,31 +580,52 @@ const CHAPTERS: Chapter[] = [
         title: "Stars, colors and tags",
         lead: <>Three marks you give photos yourself. They are independent, and none of them mean anything until you decide what they mean.</>,
         body: (
-          <ul>
-            <li>
-              <strong>Stars (0–5)</strong> — click the stars on a card, in the photo view or in the
-              bulk bar, or press <kbd>0</kbd>–<kbd>5</kbd>. Clicking the same star again clears the
-              rating.
-            </li>
-            <li>
-              <strong>Color labels</strong> — red, orange, yellow, green, blue, magenta or gray.
-              Use them for whatever workflow suits you (green = done, red = revisit).
-            </li>
-            <li>
-              <strong>Tags</strong> — free-form keywords with autocomplete. Add them to one photo in
-              its side panel, or to a whole selection at once. A tag exists only while a photo
-              carries it: the last photo dropping one takes it out of the filter list too. To take a
-              tag off every photo at once, delete it under <em>Settings → Library → Tags</em>.
-            </li>
-            <li>
-              <strong>Four tags the app gives out itself:</strong> <em>edit</em> (the photo has a
-              saved edit), <em>edit copy</em> (a JPEG saved from the editor), <em>virtual copy</em>{" "}
-              and <em>canvas artifact</em> (a virtual copy that a canvas made and no canvas holds
-              any more). They say what a photo <em>is</em>, so you can't add them by hand, their
-              chips have no remove button, the tag manager leaves them alone and a bulk tag reset
-              keeps them on the photo. They come and go on their own.
-            </li>
-          </ul>
+          <>
+            <ul>
+              <li>
+                <strong>Stars (0–5)</strong> — click the stars on a card, in the photo view or in
+                the bulk bar, or press <kbd>0</kbd>–<kbd>5</kbd>. Clicking the same star again
+                clears the rating.
+              </li>
+              <li>
+                <strong>Color labels</strong> — red, orange, yellow, green, blue, magenta or gray.
+                Use them for whatever workflow suits you (green = done, red = revisit).
+              </li>
+              <li>
+                <strong>Tags</strong> — free-form keywords with autocomplete. Add them to one photo
+                in its side panel, or to a whole selection at once. A tag exists only while a photo
+                carries it: the last photo dropping one takes it out of the filter list too. To
+                take a tag off every photo at once, delete it under{" "}
+                <em>Settings → Library → Tags</em>.
+              </li>
+            </ul>
+            <h4>Tags the app gives out itself</h4>
+            <p>
+              Six tags say what a photo <em>is</em>, so Rollfilm keeps them and you can't add or
+              remove them by hand. Their chips have no remove button, the tag manager leaves them
+              alone, and a bulk tag reset keeps them on the photo.
+            </p>
+            <ul>
+              <li>
+                <strong>edit</strong> — the photo has a saved edit.
+              </li>
+              <li>
+                <strong>edit copy</strong> — a JPEG saved from the editor.
+              </li>
+              <li>
+                <strong>virtual copy</strong> — a second entry sharing another photo's file.
+              </li>
+              <li>
+                <strong>canvas artifact</strong> — a virtual copy that a canvas made and no canvas
+                holds any more.
+              </li>
+              <li>
+                <strong>album</strong> and <strong>canvas</strong> — the photo is in at least one
+                album, or on at least one canvas. Which ones is shown as chips on the photo, not
+                as tags.
+              </li>
+            </ul>
+          </>
         ),
       },
       {
@@ -483,7 +642,7 @@ const CHAPTERS: Chapter[] = [
           <ul>
             <li>
               <strong>Create</strong> an album with the field at the top of the Albums page. Fill it
-              from the bulk bar ("Add to album") or from a photo's side panel.
+              from the bulk bar ("Add to…") or from a photo's side panel.
             </li>
             <li>
               <strong>An album that fills itself:</strong> give it one or more tags when you create
@@ -491,7 +650,8 @@ const CHAPTERS: Chapter[] = [
               photos you tag later.
             </li>
             <li>
-              <strong>Rename</strong> by clicking the name on the album card.
+              <strong>Rename</strong> with the rename button in the card's corner. Album names are
+              unique, because the app keeps track of which photos are in which album by name.
             </li>
           </ul>
         ),
@@ -535,11 +695,22 @@ const CHAPTERS: Chapter[] = [
                 <strong>Edited</strong> — every photo you have edited, plus the saved edit copies.
               </li>
             </ul>
-            <p>
-              Switch off any row you don't want under <em>Settings → Library → Smart albums</em>,
-              where you also set how wide a "place" is. Moments are worked out in the background —
-              the row says so the first time, and after that they follow your imports on their own.
-            </p>
+            <h4>Good to know</h4>
+            <ul>
+              <li>
+                <strong>Inside a smart album the filter bar works as everywhere else</strong> —
+                stars, colour, tags and dates narrow what the row shows.
+              </li>
+              <li>
+                <strong>Switch off any row you don't want</strong> under{" "}
+                <em>Settings → Library → Smart albums</em>, where you also set how wide a "place"
+                is.
+              </li>
+              <li>
+                <strong>Moments are worked out in the background</strong> — the row says so the
+                first time, and after that they follow your imports on their own.
+              </li>
+            </ul>
           </>
         ),
       },
@@ -584,44 +755,59 @@ const CHAPTERS: Chapter[] = [
         ),
         body: (
           <>
+            <h4>Looking closer</h4>
             <ul>
               <li>
-                <strong>Looking closer:</strong> scroll or pinch to zoom toward the cursor, drag to
-                pan, double-click to jump between fit and 100%. The zoom control under the photo
-                names the current percentage and offers Fit / 100% / 200%.
-              </li>
-              <li>
-                <strong>The side panel</strong> holds the EXIF details (capture date, camera, lens,
-                ISO, aperture, shutter, focal length), the photo's tags and albums, a{" "}
-                <strong>Similar photos</strong> strip found by visual similarity, and{" "}
-                <strong>Export…</strong>. The trash can next to the file name deletes the photo.
-              </li>
-              <li>
-                <strong>Renaming:</strong> the pencil beside the file name renames the{" "}
-                <strong>file on disk</strong> — the one place the app writes to your original. The
-                extension is never up for editing, the RAW/JPEG partner takes the same name, a
-                name already in use is refused before anything moves, and the photo keeps its id
-                with every star, tag, album and edit. Rename or move a photo in Finder instead and
-                the next library sync matches it back by its content, so nothing is lost either way.
-              </li>
-              <li>
-                <strong>Description:</strong> a free-text box in the panel, saved when you click
-                out of it. It lives in the database like everything else; the file is not
-                rewritten. While you type in it, the keyboard belongs to the box, not to paging.
-              </li>
-              <li>
-                <strong>Without the mouse:</strong> <kbd>E</kbd> opens the editor, <kbd>P</kbd> hides
-                the panel so the photo gets the whole window, <kbd>0</kbd>–<kbd>5</kbd> rate,{" "}
-                <kbd>←</kbd> / <kbd>→</kbd> walk the same filtered set you came from, <kbd>↑</kbd> /{" "}
-                <kbd>↓</kbd> switch between the RAW and the JPEG of a pair, and <kbd>Esc</kbd> goes
-                back — first out of the zoom, then out of the photo.
+                <strong>Zoom</strong> by scrolling or pinching toward the cursor, drag to pan,
+                double-click to jump between fit and 100%. The zoom control under the photo names
+                the current percentage and offers Fit / 100% / 200%.
               </li>
               <li>
                 <strong>Slideshow:</strong> the toolbar's <strong>Slideshow</strong> button (or{" "}
                 <kbd>S</kbd>) plays the set you're browsing fullscreen, advancing automatically and
-                wrapping around at the end. <kbd>Space</kbd> pauses, <kbd>←</kbd> / <kbd>→</kbd> step
-                by hand, the control bar picks the pace (3, 5 or 10 seconds per photo), and{" "}
+                wrapping around at the end. <kbd>Space</kbd> pauses, <kbd>←</kbd> / <kbd>→</kbd>{" "}
+                step by hand, the control bar picks the pace (3, 5 or 10 seconds per photo), and{" "}
                 <kbd>Esc</kbd> ends the show on the photo it reached.
+              </li>
+            </ul>
+            <h4>The side panel</h4>
+            <ul>
+              <li>
+                <strong>Details:</strong> capture date, camera, lens, ISO, aperture, shutter, focal
+                length; the photo's tags; a chip for every album and canvas it is in (click one to
+                go there, its × takes the photo out); a <strong>Similar photos</strong> strip found
+                by visual similarity; and <strong>Export…</strong>. The trash can next to the file
+                name deletes the photo.
+              </li>
+              <li>
+                <strong>Description:</strong> a free-text box, saved when you click out of it. It
+                lives in the database like everything else; the file is not rewritten. While you
+                type in it, the keyboard belongs to the box, not to paging.
+              </li>
+              <li>
+                <strong>Renaming:</strong> the pencil beside the file name renames the{" "}
+                <strong>file on disk</strong> — the one place the app writes to your original. The
+                extension is never up for editing, the RAW/JPEG partner takes the same name, and a
+                name already in use is refused before anything moves. The photo keeps its id with
+                every star, tag, album and edit.
+              </li>
+              <li>
+                <strong>Renamed it in Finder instead?</strong> The next library sync matches the
+                file back by its content, so nothing is lost either way.
+              </li>
+            </ul>
+            <h4>Without the mouse</h4>
+            <ul>
+              <li>
+                <kbd>E</kbd> opens the editor, <kbd>P</kbd> hides the panel so the photo gets the
+                whole window, <kbd>0</kbd>–<kbd>5</kbd> rate.
+              </li>
+              <li>
+                <kbd>←</kbd> / <kbd>→</kbd> walk the same filtered set you came from; <kbd>↑</kbd> /{" "}
+                <kbd>↓</kbd> switch between the RAW and the JPEG of a pair.
+              </li>
+              <li>
+                <kbd>Esc</kbd> goes back — first out of the zoom, then out of the photo.
               </li>
             </ul>
           </>
@@ -639,28 +825,125 @@ const CHAPTERS: Chapter[] = [
         ),
         body: (
           <>
-            <p>
-              The panel is nine sections, opened one at a time — <kbd>1</kbd>–<kbd>9</kbd> jump
-              straight to one. The histogram stays visible above them all, whichever section is
-              open.
-            </p>
+            <h4>How it is laid out</h4>
+            <ul>
+              <li>
+                <strong>Nine sections, one open at a time</strong> — Transform, Film Simulation,
+                Tone, Curves, Color, Details, Effects, Masks, Presets. <kbd>1</kbd>–<kbd>9</kbd>{" "}
+                jump straight to one. Each is described in the next topic; masks have a topic of
+                their own.
+              </li>
+              <li>
+                <strong>The histogram stays visible</strong> above them all, whichever section is
+                open. It shows a spinner while the first frame is on its way, and a small{" "}
+                <em>Rendering…</em> badge sits in the corner of the photo meanwhile — an empty
+                histogram is waiting, not broken.
+              </li>
+              <li>
+                <strong>A dot says where the work is.</strong> A slider off its default carries
+                one, and so does the header of any closed section holding such a slider — so a
+                collapsed panel still tells you what this photo's look is made of.
+              </li>
+              <li>
+                <strong>Background:</strong> three surrounds behind the photo — Paper, a neutral
+                25% Gray (the one to judge a photo on) and Black. Some pictures only tell you the
+                truth on one of them.
+              </li>
+            </ul>
+            <h4>Handy while you work</h4>
+            <ul>
+              <li>
+                <strong>Double-click a slider</strong> to reset just that one.
+              </li>
+              <li>
+                <strong>Compare</strong> three ways: <strong>hold</strong> the compare button to
+                peek at the original, <strong>split</strong> the picture by a line you drag, or put
+                the two <strong>side by side</strong>. A RAW's original half is shown with the
+                library's auto-exposure, so the before/after says more than "the edit is brighter".
+              </li>
+              <li>
+                <strong>Compare with a snapshot</strong> instead of the original: the camera icon
+                beside the compare button freezes the edit as it is right now, and every compare
+                from then on is judged against that state — handy for "was that last slider an
+                improvement?". Click it again to take a fresh snapshot; the picture icon goes back
+                to comparing with the untouched photo.
+              </li>
+              <li>
+                <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo. One slider drag or brush stroke is one
+                step, so undo walks back the way you worked.
+              </li>
+              <li>
+                <kbd>↑</kbd> / <kbd>↓</kbd> step through the open section's sliders, <kbd>←</kbd> /{" "}
+                <kbd>→</kbd> change the focused one.
+              </li>
+              <li>
+                <kbd>P</kbd> hides the panel, <kbd>F</kbd> puts the app's top bar away too — the
+                tools stay.
+              </li>
+            </ul>
+            <h4>Finishing</h4>
+            <ul>
+              <li>
+                <strong>Your edits save themselves.</strong> There is no Save button: a moment
+                after a control comes to rest the edit is written onto this photo, and closing the
+                editor writes whatever is left. Nothing else changes; the file on disk stays as it
+                was.
+              </li>
+              <li>
+                <strong>Save copy</strong> makes a new photo and leaves the original untouched. It
+                asks which kind — a <strong>physical copy</strong> (a new JPEG file with the edits
+                baked in) or a <strong>virtual copy</strong> (no new file, a second entry with its
+                own edits). The difference matters, so it has its own topic below.
+              </li>
+              <li>
+                <strong>Reset all</strong> clears every adjustment and gives you the photo as it was
+                imported.
+              </li>
+              <li>
+                <strong>For the best quality</strong>, export the edited original rather than a
+                saved copy — a copy is already a JPEG, and exporting it compresses it a second time.
+              </li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        id: "editor-sections",
+        title: "The nine sections",
+        where: <>Editor panel · <kbd>1</kbd>–<kbd>9</kbd></>,
+        lead: (
+          <>
+            In the order they sit in the panel, which is also the order worth working in: frame the
+            picture, pick a base look, then light, then colour, then the finishing touches.
+          </>
+        ),
+        body: (
+          <>
             <h4>1 · Transform — the frame</h4>
-            <p>
-              Opening it puts the crop box on the photo: drag it freeform or locked to a ratio
-              (Original, 1:1, 3:2, 4:3, 5:4, 7:5, 16:9 and their portrait counterparts), then{" "}
-              <em>Apply</em>. Applying cuts the picture down there and then, so everything after it
-              is judged on the cropped photo; the crop button reopens the box on the full frame when
-              you want to re-frame. Also here: rotation in 90° steps, flips, straighten, horizontal
-              and vertical tilt, lens distortion, a <strong>white frame</strong> (a matte border
-              that saves and exports like any other adjustment), and composition overlays — rule of
-              thirds, grid, diagonals.
-            </p>
+            <ul>
+              <li>
+                <strong>Crop:</strong> opening the section puts the crop box on the photo. Drag it
+                freeform or locked to a ratio (Original, 1:1, 3:2, 4:3, 5:4, 7:5, 16:9 and their
+                portrait counterparts), then <em>Apply</em>. Applying cuts the picture down there and
+                then, so everything after it is judged on the cropped photo; the crop button reopens
+                the box on the full frame when you want to re-frame.
+              </li>
+              <li>
+                <strong>Also here:</strong> rotation in 90° steps, flips, straighten, horizontal
+                and vertical tilt, lens distortion, and composition overlays — rule of thirds,
+                grid, diagonals.
+              </li>
+              <li>
+                <strong>White frame:</strong> a matte border that saves and exports like any other
+                adjustment.
+              </li>
+            </ul>
             <h4>2 · Film Simulation — the starting point</h4>
             <p>
               Built-in Fuji-style looks (Provia, Velvia, Astia, Classic Chrome, Classic Neg.,
-              Nostalgic Neg., Eterna, Acros and its yellow/red filters, Monochrome) with a strength
-              slider. The look becomes the base your other adjustments build on, so it is worth
-              choosing before you start pushing sliders.
+              Nostalgic Neg., Eterna, Acros and its yellow/red/green filters, Monochrome) with a
+              strength slider. The look becomes the base your other adjustments build on, so it is
+              worth choosing before you start pushing sliders.
             </p>
             <h4>3 · Tone — the light</h4>
             <p>
@@ -671,13 +954,21 @@ const CHAPTERS: Chapter[] = [
               you want for skies and hard sunlight.
             </p>
             <h4>4 · Curves</h4>
-            <p>
-              A point curve per channel (luma, red, green, blue), drawn over that channel's own
-              histogram, or the parametric region sliders. Click to add a point and drag it in one
-              go, <kbd>Shift</kbd>-drag to hold its input value, arrow keys to nudge, double-click
-              to remove. The target button aims the curve at the photo: point at a tone, drag up or
-              down, and the point for exactly that tone moves with you.
-            </p>
+            <ul>
+              <li>
+                <strong>Point curve</strong> per channel (luma, red, green, blue), drawn over that
+                channel's own histogram — or the parametric region sliders.
+              </li>
+              <li>
+                <strong>Working the curve:</strong> click to add a point and drag it in one go,{" "}
+                <kbd>Shift</kbd>-drag to hold its input value, arrow keys to nudge, double-click to
+                remove.
+              </li>
+              <li>
+                <strong>The target button</strong> aims the curve at the photo: point at a tone,
+                drag up or down, and the point for exactly that tone moves with you.
+              </li>
+            </ul>
             <h4>5 · Color</h4>
             <p>
               Temperature, tint, vibrance, saturation, hue, and the Fuji Color Chrome / Chrome Blue
@@ -710,30 +1001,10 @@ const CHAPTERS: Chapter[] = [
               Glow, halation, light flares, grain (amount, size, roughness), vignette (amount,
               midpoint, roundness, feather) and mist.
             </p>
-            <h4>8 · Masks — editing part of the photo</h4>
+            <h4>8 · Masks</h4>
             <p>
-              Radial, linear, brush, luminance, color and edge masks, each with its own set of
-              sliders. Any of them can be <strong>limited to an area</strong>: add a radial,
-              linear or brush shape to a mask and it applies only where the two overlap (or, with
-              Outside, only where they don't). That is what makes the selections with no place of
-              their own usable — an <strong>edge</strong>
-              mask selects where the picture has detail instead of where it is bright — the one
-              to put sharpness or clarity on, since it catches hair, branches and fabric while
-              leaving skin and sky alone (a luminance mask cannot tell those apart: it only knows
-              how dark they are) — but it finds every edge in the frame, so limit it to the part of
-              the picture you meant. <strong>Select subject</strong> finds
-              a region for you — sky, water, greenery, people, buildings or ground — and drops it in
-              as a mask you can then refine like any other. The first subject on a photo takes a few
-              seconds (the detection model downloads itself once, on first use); any further one on
-              the same photo is instant. Change the crop or straighten afterwards and the mask says
-              so, with a button to find it again in the new frame. Point at a mask in the list to
-              see what it covers, marked in pink; it steps out of the way as soon as you point
-              elsewhere. <strong>Show mask</strong> keeps that marking up while you work, which is
-              how a luminance, color or edge mask is set — those have no shape on the photo, so the
-              marking is the only way to see what they select as you drag their sliders. It also
-              happens by itself: move a slider that decides what a mask selects — a threshold, a
-              feather, a tolerance — and the mask is marked while you work, clearing again a moment
-              after you stop.
+              Editing part of the photo instead of all of it. Big enough for its own topic — the
+              next one.
             </p>
             <h4>9 · Presets</h4>
             <p>
@@ -741,56 +1012,75 @@ const CHAPTERS: Chapter[] = [
               are not part of a preset — they belong to one picture). A saved preset can also be
               applied to a whole selection at once from the Library's bulk bar.
             </p>
-            <h4>Handy while you work</h4>
+          </>
+        ),
+      },
+      {
+        id: "masks",
+        title: "Masks — editing part of the photo",
+        where: <>Editor → section 8, or press <kbd>8</kbd></>,
+        lead: (
+          <>
+            A mask says <em>where</em> an adjustment applies. Each one has its own set of sliders,
+            and you can have as many as you like.
+          </>
+        ),
+        body: (
+          <>
+            <h4>The kinds</h4>
             <ul>
               <li>
-                <strong>Double-click a slider</strong> to reset just that one.
+                <strong>Radial, linear, brush</strong> — shapes you place on the photo.
               </li>
               <li>
-                <strong>Compare</strong> three ways: <strong>hold</strong> the compare button to
-                peek at the original, <strong>split</strong> the picture by a line you drag, or put
-                the two <strong>side by side</strong>. A RAW's original half is shown with the
-                library's auto-exposure, so the before/after says more than "the edit is brighter".
+                <strong>Luminance, color</strong> — selections by how bright or what colour a pixel
+                is. They have no shape of their own on the photo.
               </li>
               <li>
-                <strong>Compare with a snapshot</strong> instead of the original: the camera icon
-                beside the compare button freezes the edit as it is right now, and every compare
-                from then on is judged against that state — handy for "was that last slider an
-                improvement?". Click it again to take a fresh snapshot; the picture icon goes back
-                to comparing with the untouched photo.
+                <strong>Edge</strong> — selects where the picture has detail instead of where it is
+                bright. The one to put sharpness or clarity on: it catches hair, branches and
+                fabric while leaving skin and sky alone, which a luminance mask cannot do (it only
+                knows how dark they are).
               </li>
               <li>
-                <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo. One slider drag or brush stroke is one
-                step, so undo walks back the way you worked.
-              </li>
-              <li>
-                <kbd>↑</kbd> / <kbd>↓</kbd> step through the open section's sliders, <kbd>←</kbd> /{" "}
-                <kbd>→</kbd> change the focused one.
-              </li>
-              <li>
-                <strong>Background:</strong> switch between a light and a dark surround behind the
-                photo — some pictures only tell you the truth on one of them.
+                <strong>Select subject</strong> finds a region for you — sky, water, greenery,
+                people, buildings or ground — and drops it in as a mask you then refine like any
+                other. The first subject on a photo takes a few seconds (the detection model
+                downloads itself once, on first use); any further one on the same photo is
+                instant.
               </li>
             </ul>
-            <h4>Finishing</h4>
+            <h4>Limiting a mask to an area</h4>
             <ul>
               <li>
-                <strong>Save</strong> updates this photo's edit. Nothing else changes; the file
-                stays as it was.
+                <strong>Add a shape to a mask</strong> — a radial, linear or brush — and it applies
+                only where the two overlap. With <em>Outside</em>, only where they don't.
               </li>
               <li>
-                <strong>Save copy</strong> makes a new photo and leaves the original untouched. It
-                asks which kind — a <strong>physical copy</strong> (a new JPEG file with the edits
-                baked in) or a <strong>virtual copy</strong> (no new file, a second entry with its
-                own edits). The difference matters, so it has its own topic below.
+                <strong>That is what makes the shapeless masks usable.</strong> An edge mask finds
+                every edge in the frame, a colour mask every pixel of that colour — limit it to the
+                part of the picture you meant.
               </li>
               <li>
-                <strong>Reset all</strong> clears every adjustment and gives you the photo as it was
-                imported.
+                <strong>Changed the crop or straighten afterwards?</strong> A subject mask says so,
+                with a button to find the subject again in the new frame.
+              </li>
+            </ul>
+            <h4>Seeing what a mask covers</h4>
+            <ul>
+              <li>
+                <strong>Point at a mask</strong> in the list and what it covers is marked in pink;
+                the marking steps out of the way as soon as you point elsewhere.
               </li>
               <li>
-                <strong>For the best quality</strong>, export the edited original rather than a
-                saved copy — a copy is already a JPEG, and exporting it compresses it a second time.
+                <strong>Show mask</strong> keeps that marking up while you work. That is how a
+                luminance, color or edge mask is set — the marking is the only way to see what they
+                select as you drag their sliders.
+              </li>
+              <li>
+                <strong>It also happens by itself:</strong> move a slider that decides what a mask
+                selects — a threshold, a feather, a tolerance — and the mask is marked while you
+                work, clearing again a moment after you stop.
               </li>
             </ul>
           </>
@@ -799,7 +1089,12 @@ const CHAPTERS: Chapter[] = [
       {
         id: "copies",
         title: "Physical and virtual copies",
-        where: <>Editor → Save copy</>,
+        where: (
+          <>
+            Editor → Save copy · Photo view → Save copy · Right-click a photo in the Library, an
+            album or Selects
+          </>
+        ),
         lead: (
           <>
             Both give you a second photo with its own edit and leave the original untouched. One
@@ -869,6 +1164,11 @@ const CHAPTERS: Chapter[] = [
                 <em>Settings → Photos → Photo editor</em> to also pick JPEG quality and size when
                 saving one.
               </li>
+              <li>
+                <strong>Many at once:</strong> a right-click on a ticked photo copies the whole
+                selection — each photo from the edit it has saved — and the dialog counts its way
+                through them.
+              </li>
             </ul>
             <Tip title="Edits never reach Immich by themselves.">
               Immich always receives the file as it lies on disk — the original JPEG, without your
@@ -895,29 +1195,29 @@ const CHAPTERS: Chapter[] = [
             <h4>How it learns</h4>
             <ul>
               <li>
-                Every photo you have edited — saved in place or saved as a copy — becomes an
-                example. Asked for a suggestion, it finds the examples that look most{" "}
+                <strong>Every photo you have edited</strong> — saved in place or saved as a copy —
+                becomes an example. Asked for a suggestion, it finds the examples that look most{" "}
                 <strong>visually similar</strong> to the photo in front of you and blends the
                 settings you chose for them, weighting the closest matches most. It therefore works
                 from a single edited photo, and gets better the more you edit.
               </li>
               <li>
-                RAW and JPEG learn from their own kind where possible — a RAW is developed from
-                flat, a camera JPEG only fine-tuned — and it never learns from the photo you are
-                editing or from its RAW+JPEG partner.
+                <strong>RAW and JPEG learn from their own kind</strong> where possible — a RAW is
+                developed from flat, a camera JPEG only fine-tuned — and it never learns from the
+                photo you are editing or from its RAW+JPEG partner.
               </li>
               <li>
-                It suggests sliders and color settings, never <strong>crop, rotation or masks</strong>
-                : those belong to one specific photo and don't transfer.
+                <strong>It suggests sliders and color settings</strong>, never crop, rotation or
+                masks: those belong to one specific photo and don't transfer.
               </li>
             </ul>
             <h4>Using it</h4>
             <ul>
               <li>
                 <strong>In the editor</strong> an <strong>Auto</strong> button appears in the
-                footer. It only fills the sliders with a suggestion — nothing reaches your photo
-                until you <em>Save</em> — so you can push it further, or reset and try again. Masks
-                you have drawn are kept.
+                footer. It only fills the sliders with a suggestion — you can push it further,
+                reset and try again, or undo it away before you close the editor. Masks you have
+                drawn are kept.
               </li>
               <li>
                 <strong>On a selection:</strong> pick photos in the Library and press{" "}
@@ -943,7 +1243,7 @@ const CHAPTERS: Chapter[] = [
   {
     id: "canvas",
     label: "Canvas",
-    blurb: "Photos arranged by hand on printable pages or one endless sheet — with captions, saved versions and a lossless PDF at the end.",
+    blurb: "Photos arranged by hand on printable pages or one endless sheet — with captions, a print view and a lossless PDF at the end.",
     topics: [
       {
         id: "canvas-basics",
@@ -957,6 +1257,7 @@ const CHAPTERS: Chapter[] = [
         ),
         body: (
           <>
+            <h4>Making and opening one</h4>
             <ul>
               <li>
                 <strong>Make one</strong> on the Canvas page (a name and <em>Create canvas</em>), or
@@ -965,6 +1266,19 @@ const CHAPTERS: Chapter[] = [
                 <em>+ New canvas…</em>. A single photo's page has the same picker. In merged view
                 the RAW partner comes along, so the canvas holds the whole shot.
               </li>
+              <li>
+                <strong>Open one</strong> by clicking its card: the canvas is shown as it will
+                print, page by page, with nothing around it. The pencil in the bottom bar (or on
+                the card) opens it for editing; Back from the editor returns to this view. The
+                rename button on the card renames it.
+              </li>
+              <li>
+                <strong>From a photo:</strong> photos on a canvas carry a canvas chip in the photo
+                view — clicking it lands here too.
+              </li>
+            </ul>
+            <h4>What it holds</h4>
+            <ul>
               <li>
                 <strong>A canvas has its own photos.</strong> They sit in the filmstrip along the
                 bottom until you put them on the paper, and stay there when you take a frame off
@@ -1028,7 +1342,9 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Move</strong> by dragging. <strong>Resize</strong> with a corner or side
                 handle — a photo keeps its shape while the padlock in the bar is locked,{" "}
-                <kbd>Shift</kbd> frees it — or type a width and height into the bar.{" "}
+                <kbd>Shift</kbd> frees it — or type a width and height into the bar.
+              </li>
+              <li>
                 <strong>Rotate</strong> with the round handle above it (<kbd>Shift</kbd> for 15°
                 steps); double-click that handle, or press <em>Reset rotation</em>, to set it
                 straight again.
@@ -1048,11 +1364,16 @@ const CHAPTERS: Chapter[] = [
                 border (or a text box's style) to others of the same kind. Position and the photo
                 itself are never copied.
               </li>
+            </ul>
+            <h4>Several at once, and the order they stack in</h4>
+            <ul>
               <li>
                 <strong>Select several</strong> by dragging across empty paper or{" "}
-                <kbd>Shift</kbd>-clicking; they move and nudge together. <strong>Stack</strong>{" "}
-                with <em>Bring to front</em> / <em>Send to back</em>, or <kbd>⌘]</kbd> /{" "}
-                <kbd>⌘[</kbd> one step at a time.
+                <kbd>Shift</kbd>-clicking; they move and nudge together.
+              </li>
+              <li>
+                <strong>Stack</strong> with <em>Bring to front</em> / <em>Send to back</em>, or{" "}
+                <kbd>⌘]</kbd> / <kbd>⌘[</kbd> one step at a time.
               </li>
               <li>
                 <strong>Snap</strong> (the anchor) lines edges and centres up with other items,
@@ -1068,25 +1389,36 @@ const CHAPTERS: Chapter[] = [
               </li>
             </ul>
             <h4>Getting around</h4>
-            <p>
-              <kbd>+</kbd> / <kbd>−</kbd> zoom the canvas (<kbd>⌘+</kbd> would zoom the whole app),{" "}
-              <kbd>0</kbd> fits one page, <kbd>Shift</kbd>+<kbd>0</kbd> the whole layout, and holding{" "}
-              <kbd>Space</kbd> lets you drag the view and scroll to zoom. Double-click the empty
-              free canvas to jump back to your first photo. <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd> undo
-              and redo every step, and the filmstrip's top edge is a sash — drag it to make the
-              chips bigger or smaller, double-click it to follow the shared thumbnail size again.
-            </p>
+            <ul>
+              <li>
+                <strong>Zoom:</strong> <kbd>+</kbd> / <kbd>−</kbd> zoom the canvas (<kbd>⌘+</kbd>{" "}
+                would zoom the whole app), <kbd>0</kbd> fits one page, <kbd>Shift</kbd>+<kbd>0</kbd>{" "}
+                the whole layout.
+              </li>
+              <li>
+                <strong>Pan:</strong> hold <kbd>Space</kbd> and drag — <kbd>Alt</kbd>-drag does the
+                same — and scroll while holding to zoom. With nothing selected, the arrow keys
+                scroll the view. Double-click the empty free canvas to jump back to your first
+                photo.
+              </li>
+              <li>
+                <strong>Undo:</strong> <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd> undo and redo every step.
+              </li>
+              <li>
+                <strong>The filmstrip's top edge is a sash</strong> — drag it to make the chips
+                bigger or smaller, double-click it to follow the shared thumbnail size again.
+              </li>
+            </ul>
           </>
         ),
       },
       {
         id: "canvas-pages",
-        title: "Pages, paper and versions",
+        title: "Pages and paper",
         where: <>The toolbar's left half · the pages rail</>,
         lead: (
           <>
-            The paper is set up once per canvas, and the canvas is saved on purpose, under a name
-            — nothing saves itself.
+            The paper is set up once per canvas; everything you put on it is written as you go.
           </>
         ),
         body: (
@@ -1097,44 +1429,37 @@ const CHAPTERS: Chapter[] = [
                 <strong>Page setup</strong> (the chip named after the current size) holds the size —
                 A3, A4 and A5 in both orientations, US Letter, 30 cm and 21 cm squares, photo book
                 28×21 and 21×28, photo 15×10 and 18×13 cm — or any width and height in millimetres:
-                typing a number <em>is</em> choosing custom. The <strong>margins</strong> — one
-                value for left and right, another for top and bottom — are hairline guides on
-                every sheet that photos snap to and that placed photos flow inside; 0 hides a
-                line.
+                typing a number <em>is</em> choosing custom.
+              </li>
+              <li>
+                <strong>Margins</strong> — one value for left and right, another for top and bottom
+                — are hairline guides on every sheet that photos snap to and that placed photos
+                flow inside; 0 hides a line.
               </li>
               <li>
                 <strong>Paper colour</strong> — a swatch from gallery white to black, or any colour.
                 It prints.
               </li>
+            </ul>
+            <h4>Pages</h4>
+            <ul>
               <li>
                 <strong>The pages rail</strong> (Pages mode) shows a miniature of every page. Click
                 one to jump there, drag it up or down to reorder, and hover for{" "}
                 <em>Duplicate</em> and <em>Delete</em>; <em>Add a page</em> sits at the bottom.
-                Dragging an item past the bottom of a sheet moves it onto the next one.
+              </li>
+              <li>
+                <strong>Dragging an item past the bottom of a sheet</strong> moves it onto the next
+                one.
               </li>
             </ul>
             <h4>Saving</h4>
             <ul>
               <li>
-                <strong>Save</strong> (<kbd>⌘S</kbd>) lights up while there are unsaved changes
-                and asks for a name. The canvas is kept as a <strong>version</strong> under it: the
-                same name replaces that version, a new name keeps the old one as well — so "draft"
-                and "final" can live side by side.
-              </li>
-              <li>
-                <strong>Versions</strong> lists them: <em>Load</em> puts one back on the canvas
-                (undo brings the state before back), the pencil renames it, the trash can forgets
-                it. Forgetting a version never touches the canvas.
-              </li>
-              <li>
-                <strong>Leaving with unsaved changes</strong> — Back, <kbd>Esc</kbd>, a link
-                elsewhere in the app — asks "Discard unsaved changes?" first, like the photo
-                editor.
-              </li>
-              <li>
-                <strong>Canvas Shelf:</strong> tick it under Versions and the canvas gets a card on
-                the Albums page, showing the version last saved or loaded as it will print. Click
-                the card for a read-only print view; its × only removes the card.
+                <strong>The canvas saves itself.</strong> There is no Save button: a moment after
+                every change the layout is written. Leaving the canvas writes whatever was still
+                pending, so nothing asks about unsaved changes on the way out. Undo (<kbd>⌘Z</kbd>)
+                is the way back to an earlier state while the canvas is open.
               </li>
             </ul>
           </>
@@ -1153,22 +1478,36 @@ const CHAPTERS: Chapter[] = [
         ),
         body: (
           <>
+            <h4>How it works</h4>
             <ul>
               <li>
                 <strong>The first edit makes the copy.</strong> Pressing <em>Edit photo</em> on a
                 frame mints a virtual copy (tagged <em>virtual copy</em>, see{" "}
                 <em>Editing → Physical and virtual copies</em>) and points the frame at it — on the
-                server too, right away, so the copy counts as on the canvas even before you save.
-                Editing the same frame again reopens that copy; the photo on the page updates live
-                while you work. The Canvas Shelf shows the version you last saved, so save the
-                canvas to see the edit there.
+                server too, right away, so the copy counts as on the canvas. Editing the same
+                frame again reopens that copy.
               </li>
               <li>
-                <strong>It saves when you close.</strong> The docked editor has no Save button: the
-                state you leave — closing the panel, clicking another frame, leaving the canvas —
-                is the state that's kept. Crop and the grid overlay are not offered there, because
-                framing lives on the page (<em>Crop in frame</em>).
+                <strong>The page updates live</strong> while you work, and the canvas view shows the
+                edit as soon as the canvas has saved itself.
               </li>
+              <li>
+                <strong>It saves itself.</strong> The docked editor has no Save button either: it
+                writes a moment after each control comes to rest, and the state you leave — closing
+                the panel, clicking another frame, leaving the canvas — is the state that's kept.
+              </li>
+              <li>
+                <strong>Masks are drawn on the page.</strong> The guides, the brush and the handles
+                sit on the frame itself, turned with it, so what you paint is what the print shows.
+              </li>
+              <li>
+                <strong>No crop and no grid overlay</strong> here, because framing lives on the
+                page (<em>Crop in frame</em>). <strong>Save copy</strong> works, though — it makes
+                a photo in the library and leaves the page and the frame exactly as they are.
+              </li>
+            </ul>
+            <h4>The copy and the frame</h4>
+            <ul>
               <li>
                 <strong>Shape follows the edit.</strong> Turn the photo a quarter and a frame that
                 still had the photo's own proportions turns with it; a frame you shaped by hand
@@ -1181,13 +1520,15 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>The copy belongs to the canvas.</strong> It joins the canvas's photos the
-                moment it is made, carries the <em>canvas</em> tags and stays on the filmstrip
-                when its frame is taken off the page — so you can put it back. Only removing it
-                from the filmstrip (the trash on its chip) or deleting the whole canvas lets it go:
-                the copy then loses its <em>canvas</em> tags and is tagged{" "}
-                <em>canvas artifact</em> instead, so you can find the strays under <em>Tags</em>{" "}
-                and decide whether to keep or delete them. Put the copy on a canvas again and the
-                tag goes.
+                moment it is made, carries the <em>canvas</em> tag and stays on the filmstrip when
+                its frame is taken off the page — so you can put it back.
+              </li>
+              <li>
+                <strong>Strays are tagged.</strong> Only removing the copy from the filmstrip (the
+                trash on its chip) or deleting the whole canvas lets it go: it then loses its{" "}
+                <em>canvas</em> tag and is tagged <em>canvas artifact</em> instead, so you can find
+                it under <em>Tags</em> and decide whether to keep or delete it. Put the copy on a
+                canvas again and the tag goes.
               </li>
             </ul>
           </>
@@ -1205,12 +1546,22 @@ const CHAPTERS: Chapter[] = [
         ),
         body: (
           <>
+            <h4>Print view</h4>
             <ul>
               <li>
-                <strong>Print view:</strong> <kbd>←</kbd> / <kbd>→</kbd> turn the pages, scroll to
-                zoom, drag to move, <kbd>0</kbd> fits again, <kbd>Esc</kbd> comes back. The
-                controls fade while you look and return on any movement.
+                <kbd>←</kbd> / <kbd>→</kbd> turn the pages, scroll to zoom, drag to move,{" "}
+                <kbd>0</kbd> fits again, <kbd>Esc</kbd> comes back. The controls fade while you look
+                and return on any movement.
               </li>
+              <li>
+                <strong>Focus</strong> (<kbd>F</kbd>) takes the whole screen: only the pages on
+                black, nothing else; <kbd>F</kbd> or <kbd>Esc</kbd> ends it. The canvas editor and
+                the photo editor have the same <kbd>F</kbd>: every bar put away, the work area
+                stays.
+              </li>
+            </ul>
+            <h4>Export</h4>
+            <ul>
               <li>
                 <strong>PDF for printing</strong> — one page per sheet at the page size you set,
                 photos lossless at full resolution, text as real text. Edited photos and RAWs are
@@ -1222,8 +1573,8 @@ const CHAPTERS: Chapter[] = [
                 — but it can run to hundreds of MB.
               </li>
               <li>
-                There is no JPEG or PNG export and no resolution to choose: what goes in is exactly
-                what the library holds, never a re-compressed copy.
+                <strong>No JPEG or PNG export, no resolution to choose:</strong> what goes in is
+                exactly what the library holds, never a re-compressed copy.
               </li>
             </ul>
           </>
@@ -1251,13 +1602,14 @@ const CHAPTERS: Chapter[] = [
         body: (
           <>
             <p>
-              Add photos from the Library's bulk bar ("Add to…" → Selects), from inside an album, or on
-              a photo's own page. Nothing about the photos changes by being in there.
+              Add photos from the Library's bulk bar ("Add to…" → Selects), from inside an album, or
+              on a photo's own page. Nothing about the photos changes by being in there.
             </p>
             <ul>
               <li>
-                <strong>Review the set.</strong> Click photos to select them (shift-click for a
-                range) — or leave nothing selected and the actions apply to the whole list.
+                <strong>Review the set.</strong> Everything starts ticked; untick what should stay
+                out (<kbd>⌘</kbd>/<kbd>Ctrl</kbd>-click, or shift-click for a range) — or clear the
+                selection and the actions apply to the whole list.
               </li>
               <li>
                 <strong>Export…</strong> gets them out; see the next topic.
@@ -1283,7 +1635,12 @@ const CHAPTERS: Chapter[] = [
       {
         id: "export",
         title: "Export",
-        where: <>Photo view → Export… · Selects → Export…</>,
+        where: (
+          <>
+            Photo view → Export… · Selects → Export… · Right-click a photo in the Library, an album
+            or Selects
+          </>
+        ),
         lead: <>Two kinds of file, depending on who is getting it.</>,
         body: (
           <>
@@ -1298,7 +1655,18 @@ const CHAPTERS: Chapter[] = [
                 RAW, every metadata tag kept. This is what you give another editor, or an archive.
               </li>
             </ul>
-            <p>Several photos at once come down as a zip.</p>
+            <h4>Good to know</h4>
+            <ul>
+              <li>
+                <strong>Several photos at once</strong> come down as a zip.
+              </li>
+              <li>
+                <strong>Right-click</strong> a photo in the Library, an album or Selects for Export
+                — on a ticked photo it takes the whole selection. The same menu has{" "}
+                <strong>Save copy</strong> and <strong>Show in Finder</strong> (Explorer on
+                Windows), which selects the photo's file on disk.
+              </li>
+            </ul>
           </>
         ),
       },
@@ -1313,8 +1681,9 @@ const CHAPTERS: Chapter[] = [
               Immich
             </a>{" "}
             server — to see your photos on your phone, or share them with family. Only JPEGs are
-            ever uploaded, exactly as they lie on disk: RAW files always stay local, and{" "}
-            <strong>edits don't travel</strong> unless you save them as a physical copy first.
+            ever uploaded, exactly as they lie on disk: RAW files stay local unless you say
+            otherwise, and <strong>edits don't travel</strong> unless you save them as a physical
+            copy first.
           </>
         ),
         body: (
@@ -1339,14 +1708,19 @@ const CHAPTERS: Chapter[] = [
             <ul>
               <li>
                 <strong>Manual</strong> (default) — nothing happens by itself. You push photos:
-                the "Also upload to Immich" tick during import, or "Add to Immich" on a selection.
+                the <strong>Add to Immich</strong> button on the import review, or on a selection.
               </li>
               <li>
-                <strong>Selective</strong> — you mark what should live on Immich with the "Sync to
-                Immich" tick on a selection or on an album. Marked photos upload and stay in sync.
+                <strong>Selective</strong> — you mark what should live on Immich with the{" "}
+                <strong>Sync to Immich</strong> button on a selection or on an album (it shows a
+                tick while it is on). Marked photos upload and stay in sync.
               </li>
               <li>
                 <strong>Full</strong> — every JPEG and every album is mirrored automatically.
+              </li>
+              <li>
+                <strong>Also upload RAW files</strong> sends the RAW half along as well; off by
+                default.
               </li>
             </ul>
             <h4>What "in sync" means</h4>
@@ -1356,18 +1730,20 @@ const CHAPTERS: Chapter[] = [
               Immich was briefly unreachable:
             </p>
             <ul>
-              <li>New or restored photos are uploaded; photos you put in the Trash are removed from
-                Immich.</li>
+              <li>
+                <strong>New or restored photos</strong> are uploaded; photos you put in the Trash
+                are removed from Immich.
+              </li>
               <li>
                 <strong>"Delete forever"</strong> removes the photo from Immich permanently, too.
               </li>
               <li>
-                Mirrored albums follow along — adding and removing photos, renaming, deleting.
-                Deleting an album never deletes photos, on either side.
+                <strong>Mirrored albums follow along</strong> — adding and removing photos,
+                renaming, deleting. Deleting an album never deletes photos, on either side.
               </li>
               <li>
-                Unticking "Sync to Immich" only <em>stops</em> syncing; photos already there stay.
-                Removing happens exclusively via the Trash.
+                <strong>Switching "Sync to Immich" off</strong> only <em>stops</em> syncing; photos
+                already there stay. Removing happens exclusively via the Trash.
               </li>
               <li>
                 <strong>What Immich sees is the file, not the edit.</strong> An edited JPEG arrives
@@ -1438,28 +1814,44 @@ const CHAPTERS: Chapter[] = [
                 entry back; press <em>Scan now</em> on the source (or import the file) if you want
                 it again.
               </li>
+              <li>
+                <strong>In the Trash a click picks a photo</strong> rather than opening it — there
+                is nothing to open — and the right-click menu is not offered.
+              </li>
             </ul>
             <h4>Half a pair</h4>
-            <p>
-              Delete only the JPEG of a RAW+JPEG shot and the pair is <strong>suspended</strong> for
-              as long as one half is in the Trash: the deleted file is gone from the library right
-              away, and the half left behind stops standing in for it — it shows as the single RAW
-              it now is. In the Trash the entry is badged for what is actually in there, not for the
-              shot it came from. Restore, and the two are a pair again with nothing to redo. A pair
-              is deleted together by default; turn on{" "}
-              <em>Settings → Library → Trash → "Ask what to delete for RAW + JPEG pairs"</em> to be
-              offered "only this file" instead.
-            </p>
+            <ul>
+              <li>
+                <strong>Delete only the JPEG of a RAW+JPEG shot</strong> and the pair is{" "}
+                <strong>suspended</strong> for as long as one half is in the Trash: the deleted file
+                is gone from the library right away, and the half left behind shows as the single
+                RAW it now is.
+              </li>
+              <li>
+                <strong>In the Trash the entry is badged</strong> for what is actually in there, not
+                for the shot it came from. Restore, and the two are a pair again with nothing to
+                redo.
+              </li>
+              <li>
+                <strong>A pair is deleted together by default.</strong> Turn on{" "}
+                <em>Settings → Library → Trash → "Ask what to delete for RAW + JPEG pairs"</em> to
+                be offered "only this file" instead.
+              </li>
+            </ul>
             <h4>Emptying it</h4>
-            <p>
-              <strong>"Delete forever"</strong> on the Trash page is the only step that removes
-              original files from your library folder, and it cannot be undone — the confirmation
-              always spells out what will happen to your selection. The Trash also empties itself:
-              at every app start, photos that have been in there longer than the retention period
-              (default <strong>14 days</strong>) are deleted for good in the background. Change or
-              disable that under <em>Settings → Library → Trash</em> — 0 keeps deleted photos
-              forever.
-            </p>
+            <ul>
+              <li>
+                <strong>"Delete forever"</strong> on the Trash page is the only step that removes
+                original files from your library folder, and it cannot be undone — the confirmation
+                always spells out what will happen to your selection.
+              </li>
+              <li>
+                <strong>The Trash also empties itself:</strong> at every app start, photos that have
+                been in there longer than the retention period (default <strong>14 days</strong>)
+                are deleted for good in the background. Change or disable that under{" "}
+                <em>Settings → Library → Trash</em> — 0 keeps deleted photos forever.
+              </li>
+            </ul>
           </>
         ),
       },
@@ -1467,29 +1859,53 @@ const CHAPTERS: Chapter[] = [
         id: "backup",
         title: "Backup, restore and repair",
         where: <>Settings → Maintenance</>,
-        lead: <>Four buttons, from "keep a copy" to "something is wrong, fix it".</>,
+        lead: (
+          <>
+            Backup comes in two kinds — a zip you download, or a repository that keeps itself up to
+            date — plus two repair buttons for when something is wrong.
+          </>
+        ),
         body: (
-          <ul>
-            <li>
-              <strong>Download backup</strong> — one zip with every photo plus all ratings, colors,
-              albums, tags and edits.
-            </li>
-            <li>
-              <strong>Restore from backup</strong> — replaces <em>everything</em> in the current
-              library with the backup's contents. You have to type "delete" to confirm.
-            </li>
-            <li>
-              <strong>Sync database to library</strong> — the one-stop repair. Removes entries whose
-              files vanished from disk, deletes thumbnails belonging to no photo, regenerates
-              missing thumbnails in the background, and reports files sitting in the library folder
-              that were never imported.
-            </li>
-            <li>
-              <strong>Rebuild all thumbnails</strong> — the emergency reset: regenerates every
-              thumbnail and preview from the originals. Slow, and only needed if thumbnails still
-              look wrong after a sync.
-            </li>
-          </ul>
+          <>
+            <h4>Backup</h4>
+            <ul>
+              <li>
+                <strong>Download backup</strong> — one zip with every imported photo file plus all
+                ratings, color labels, albums and edits. Photos from external sources and tags are
+                not included.
+              </li>
+              <li>
+                <strong>Automatic backup (Borg)</strong> — a continuously updated backup in a{" "}
+                <a href="https://www.borgbackup.org" target="_blank" rel="noreferrer">
+                  Borg
+                </a>{" "}
+                repository, which stores only what changed since the last run. The repository can
+                be a local folder, a NAS path or <code>user@host:/path</code> over SSH, with an
+                optional passphrase. <em>Test repository</em> checks it, <em>Back up now</em> runs
+                one, and with <em>Back up automatically</em> on it runs after imports and edits and
+                at least once a day while the app is open; the section reports the last run. Borg
+                has to be installed on the computer — the section says so if it isn't.
+              </li>
+              <li>
+                <strong>Restore from backup</strong> — replaces <em>everything</em> in the current
+                library with the zip's contents. You have to type "delete" to confirm.
+              </li>
+            </ul>
+            <h4>Repair</h4>
+            <ul>
+              <li>
+                <strong>Sync database to library</strong> — the one-stop repair. Removes entries
+                whose files vanished from disk, deletes thumbnails belonging to no photo,
+                regenerates missing thumbnails in the background, and reports files sitting in the
+                library folder that were never imported.
+              </li>
+              <li>
+                <strong>Rebuild all thumbnails</strong> — the emergency reset: regenerates every
+                thumbnail and preview from the originals. Slow, and only needed if thumbnails still
+                look wrong after a sync.
+              </li>
+            </ul>
+          </>
         ),
       },
     ],
@@ -1504,200 +1920,212 @@ const CHAPTERS: Chapter[] = [
       {
         id: "shortcuts",
         title: "Keyboard shortcuts",
-        lead: <>Culling is a keyboard job — these are the keys that make it one.</>,
+        lead: <>Culling is a keyboard job — these are the keys that make it one, one table per screen.</>,
         body: (
-          <table className="help-shortcuts">
-            <thead>
-              <tr>
-                <th>Where</th>
-                <th>Key</th>
-                <th>What it does</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Photo view</td>
-                <td>
-                  <kbd>←</kbd> / <kbd>→</kbd>
-                </td>
-                <td>Previous / next photo (walks the same filtered set you came from)</td>
-              </tr>
-              <tr>
-                <td>Photo view</td>
-                <td>
-                  <kbd>↑</kbd> / <kbd>↓</kbd>
-                </td>
-                <td>Switch between the RAW and the JPEG half of a pair</td>
-              </tr>
-              <tr>
-                <td>Photo view</td>
-                <td>
-                  <kbd>0</kbd>–<kbd>5</kbd>
-                </td>
-                <td>Set the star rating (0 clears it)</td>
-              </tr>
-              <tr>
-                <td>Photo view</td>
-                <td>
-                  <kbd>E</kbd>
-                </td>
-                <td>Open the editor on this photo</td>
-              </tr>
-              <tr>
-                <td>Photo view</td>
-                <td>
-                  <kbd>P</kbd>
-                </td>
-                <td>Show / hide the side panel, so the photo gets the whole window</td>
-              </tr>
-              <tr>
-                <td>Photo view</td>
-                <td>
-                  <kbd>S</kbd>
-                </td>
-                <td>
-                  Start a fullscreen slideshow of the set you're browsing (Space pauses, Esc ends
-                  it)
-                </td>
-              </tr>
-              <tr>
-                <td>Photo view</td>
-                <td>
-                  <kbd>Esc</kbd>
-                </td>
-                <td>Zoomed in: back to fit. Otherwise: back to the grid</td>
-              </tr>
-              <tr>
-                <td>Editor</td>
-                <td>
-                  <kbd>1</kbd>–<kbd>9</kbd>
-                </td>
-                <td>
-                  Open a section: 1 Transform, 2 Film Simulation, 3 Tone, 4 Curves, 5 Color,
-                  6 Details, 7 Effects, 8 Masks, 9 Presets
-                </td>
-              </tr>
-              <tr>
-                <td>Editor</td>
-                <td>
-                  <kbd>↑</kbd> / <kbd>↓</kbd>
-                </td>
-                <td>Step through the sliders of the open section</td>
-              </tr>
-              <tr>
-                <td>Editor</td>
-                <td>
-                  <kbd>←</kbd> / <kbd>→</kbd>
-                </td>
-                <td>Adjust the focused slider's value</td>
-              </tr>
-              <tr>
-                <td>Editor</td>
-                <td>
-                  <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd>
-                </td>
-                <td>Undo / redo (one slider drag or brush stroke is one step)</td>
-              </tr>
-              <tr>
-                <td>Editor</td>
-                <td>
-                  <kbd>Esc</kbd>
-                </td>
-                <td>Close the Transform section and its crop box, or close the editor</td>
-              </tr>
-              <tr>
-                <td>Import preview</td>
-                <td>
-                  <kbd>←</kbd> / <kbd>→</kbd> / <kbd>Esc</kbd>
-                </td>
-                <td>Previous / next staged file, close the preview</td>
-              </tr>
-              <tr>
-                <td>Import preview</td>
-                <td>
-                  <kbd>0</kbd>–<kbd>5</kbd>
-                </td>
-                <td>Set the star rating (0 clears it)</td>
-              </tr>
-              <tr>
-                <td>Import preview</td>
-                <td>
-                  <kbd>Space</kbd>
-                </td>
-                <td>Include / exclude this file from the import</td>
-              </tr>
-              <tr>
-                <td>Any grid</td>
-                <td>
-                  <kbd>Shift</kbd> + click
-                </td>
-                <td>Select a range of photos (in select mode) — or clear the run if it was ticked</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>⌘S</kbd>
-                </td>
-                <td>Save the canvas as a named version</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd>
-                </td>
-                <td>Undo / redo</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> / <kbd>⇧0</kbd>
-                </td>
-                <td>Zoom in / out, fit one page, fit the whole layout</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>Space</kbd> + drag
-                </td>
-                <td>Move the view (scroll while holding it to zoom)</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>P</kbd>
-                </td>
-                <td>Print view — only the paper, filling the window; Esc comes back</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd>
-                </td>
-                <td>Nudge the selected items 1 mm (Shift: 10 mm)</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>⌘]</kbd> / <kbd>⌘[</kbd>
-                </td>
-                <td>One step forward / back in the stack (Shift: all the way)</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>Delete</kbd>
-                </td>
-                <td>Take the selected items off the page (the photos stay in the library)</td>
-              </tr>
-              <tr>
-                <td>Canvas</td>
-                <td>
-                  <kbd>Esc</kbd>
-                </td>
-                <td>Step out: end crop, end typing, clear the selection, leave the canvas</td>
-              </tr>
-            </tbody>
-          </table>
+          <>
+            <h4>Any grid</h4>
+            <Keys
+              rows={[
+                {
+                  keys: (
+                    <>
+                      <kbd>⌘</kbd> / <kbd>Ctrl</kbd> + click
+                    </>
+                  ),
+                  does: "Select or deselect a photo without opening it",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>Shift</kbd> + click
+                    </>
+                  ),
+                  does: "Select a range of photos — or clear the run if it was ticked",
+                },
+                { keys: <kbd>⌘A</kbd>, does: "Select every photo shown" },
+                {
+                  keys: <kbd>Esc</kbd>,
+                  does: "Clear the selection (not in the import review, where the ticks are the point)",
+                },
+                { keys: <kbd>E</kbd>, does: "One photo selected: open it with the editor already open" },
+              ]}
+            />
+            <h4>Import review</h4>
+            <Keys
+              rows={[
+                {
+                  keys: (
+                    <>
+                      <kbd>←</kbd> / <kbd>→</kbd>
+                    </>
+                  ),
+                  does: "Previous / next staged file in the preview",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>0</kbd>–<kbd>5</kbd>
+                    </>
+                  ),
+                  does: "Set the star rating (0 clears it)",
+                },
+                { keys: <kbd>Space</kbd>, does: "Include / exclude this file from the import" },
+                { keys: <kbd>Esc</kbd>, does: "Close the preview" },
+              ]}
+            />
+            <h4>Photo view</h4>
+            <Keys
+              rows={[
+                {
+                  keys: (
+                    <>
+                      <kbd>←</kbd> / <kbd>→</kbd>
+                    </>
+                  ),
+                  does: "Previous / next photo (walks the same filtered set you came from)",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>↑</kbd> / <kbd>↓</kbd>
+                    </>
+                  ),
+                  does: "Switch between the RAW and the JPEG half of a pair",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>0</kbd>–<kbd>5</kbd>
+                    </>
+                  ),
+                  does: "Set the star rating (0 clears it)",
+                },
+                { keys: <kbd>E</kbd>, does: "Open the editor on this photo" },
+                { keys: <kbd>P</kbd>, does: "Show / hide the side panel, so the photo gets the whole window" },
+                {
+                  keys: <kbd>S</kbd>,
+                  does: "Start a fullscreen slideshow of the set you're browsing (Space pauses, Esc ends it)",
+                },
+                { keys: <kbd>Esc</kbd>, does: "Zoomed in: back to fit. Otherwise: back to the grid" },
+              ]}
+            />
+            <h4>Editor</h4>
+            <Keys
+              rows={[
+                {
+                  keys: (
+                    <>
+                      <kbd>1</kbd>–<kbd>9</kbd>
+                    </>
+                  ),
+                  does: "Open a section: 1 Transform, 2 Film Simulation, 3 Tone, 4 Curves, 5 Color, 6 Details, 7 Effects, 8 Masks, 9 Presets",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>↑</kbd> / <kbd>↓</kbd>
+                    </>
+                  ),
+                  does: "Step through the sliders of the open section",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>←</kbd> / <kbd>→</kbd>
+                    </>
+                  ),
+                  does: "Adjust the focused slider's value",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd>
+                    </>
+                  ),
+                  does: "Undo / redo (one slider drag or brush stroke is one step)",
+                },
+                { keys: <kbd>P</kbd>, does: "Show / hide the edit panel, so the photo gets the whole window" },
+                {
+                  keys: <kbd>F</kbd>,
+                  does: "Focus mode — the app's top bar put away, the editing tools stay; F or Esc brings it back",
+                },
+                {
+                  keys: <kbd>Esc</kbd>,
+                  does: "Step out: leave focus mode, close the Transform section and its crop box, or close the editor",
+                },
+              ]}
+            />
+            <h4>Canvas editor</h4>
+            <Keys
+              rows={[
+                { keys: <kbd>E</kbd>, does: "Open the photo editor on the selected photo frame" },
+                {
+                  keys: (
+                    <>
+                      <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd>
+                    </>
+                  ),
+                  does: "Undo / redo",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> / <kbd>⇧0</kbd>
+                    </>
+                  ),
+                  does: "Zoom in / out, fit one page, fit the whole layout",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>Space</kbd> + drag · <kbd>Alt</kbd> + drag
+                    </>
+                  ),
+                  does: "Move the view (scroll while holding Space to zoom)",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd>
+                    </>
+                  ),
+                  does: "Nudge the selected items 1 mm (Shift: 10 mm); with nothing selected, scroll the view",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>⌘]</kbd> / <kbd>⌘[</kbd>
+                    </>
+                  ),
+                  does: "One step forward / back in the stack (Shift: all the way)",
+                },
+                { keys: <kbd>Delete</kbd>, does: "Take the selected items off the page (the photos stay in the library)" },
+                { keys: <kbd>P</kbd>, does: "Print view — only the paper, filling the window; Esc comes back" },
+                {
+                  keys: <kbd>F</kbd>,
+                  does: "Focus mode — the app's top bar put away, the tools stay; F or Esc brings it back",
+                },
+                { keys: <kbd>Esc</kbd>, does: "Step out: end crop, end typing, clear the selection, leave the canvas" },
+              ]}
+            />
+            <h4>Canvas view (print view)</h4>
+            <Keys
+              rows={[
+                {
+                  keys: (
+                    <>
+                      <kbd>←</kbd> / <kbd>→</kbd>
+                    </>
+                  ),
+                  does: "Previous / next page (Space also goes forward; Home / End jump to the first / last)",
+                },
+                { keys: <kbd>0</kbd>, does: "Fit the page again" },
+                { keys: <kbd>E</kbd>, does: "Edit this canvas" },
+                { keys: <kbd>F</kbd>, does: "Focus mode — full screen, only the pages on black; F or Esc ends it" },
+                { keys: <kbd>Esc</kbd>, does: "Back to the canvas list" },
+              ]}
+            />
+          </>
         ),
       },
       {
@@ -1747,6 +2175,12 @@ const CHAPTERS: Chapter[] = [
               Check <em>Import → External photo sources</em>: a "Disconnected" source means its
               drive or network share is offline. Its photos reappear as soon as it is back.
             </p>
+            <h4>An import session says "Not connected"</h4>
+            <p>
+              The card or folder it was copying from is not plugged in. Plug it back in — it is
+              recognised as the same card even under another name — and <em>Continue</em> picks up
+              where it stopped. What was already copied is safe in the meantime.
+            </p>
             <h4>An Immich upload didn't arrive</h4>
             <p>
               <em>Settings → Immich → Recent uploads</em> lists every background upload with a ✓ or
@@ -1758,6 +2192,11 @@ const CHAPTERS: Chapter[] = [
               Search covers the current scope only (the album you are in) and skips disconnected
               external sources. Check the filter bar too — an active rating, color, tag or date
               filter narrows search results as well.
+            </p>
+            <h4>The histogram is empty, or the photo says "Rendering…"</h4>
+            <p>
+              The first frame of an edit is still on its way — a RAW takes a moment to decode.
+              Nothing is broken; both fill in as soon as it lands.
             </p>
             <h4>Thumbnails look wrong or outdated</h4>
             <p>
