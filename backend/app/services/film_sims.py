@@ -112,10 +112,12 @@ _RECIPES: dict[str, dict] = {
         "split": (210, 0.03, 45, 0.02),
     },
     # B&W: orthopanchromatic-style mix with deep blacks and a fine shoulder;
-    # the Ye/R variants mimic contrast filters (darkening skies as R grows).
+    # the Ye/R/G variants mimic contrast filters (R darkens skies, G lifts foliage
+# and darkens skin).
     "acros": {"bw": (0.25, 0.60, 0.15), "curve": _SHARED_ACROS_CURVE},
     "acros_ye": {"bw": (0.35, 0.55, 0.10), "curve": _SHARED_ACROS_CURVE},
     "acros_r": {"bw": (0.55, 0.38, 0.07), "curve": _SHARED_ACROS_CURVE},
+    "acros_g": {"bw": (0.13, 0.72, 0.15), "curve": _SHARED_ACROS_CURVE},
     "monochrome": {
         "bw": (0.30, 0.59, 0.11),
         "curve": [(0, 2), (64, 60), (128, 128), (200, 202), (255, 253)],

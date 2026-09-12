@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconCamera, IconCheck, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSideBySide, IconSplit, IconTarget, IconTrash, IconUndo, IconX } from "./Icons";
+import { IconArrowLeft, IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSaveCopy, IconSideBySide, IconSplit, IconTarget, IconTrash, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
+import { FocusButton, useFocusChrome } from "./FocusToggle";
 import {
   adjustmentsFromImage,
   BAND_SWATCH,
   COLOR_BANDS,
   defaultAdjustments,
+  editedGroups,
   editsAreNeutral,
   editsFromImage,
   FILM_SIMS,
@@ -65,6 +68,8 @@ import { StageBackgroundToggle } from "./StageBackgroundToggle";
 import { useStageBg, useAskSaveCopyOptions } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
 import { useWait } from "../state/wait";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
 
 interface Props {
   image: ImageOut;
@@ -74,6 +79,10 @@ interface Props {
   // fixed overlay. Everything inside behaves identically - same stage, same
   // panel, same pipeline - only the frame around it changes.
   docked?: boolean;
+  // On the way out: the host has been told to close (onClose ran) and keeps
+  // the editor mounted a moment longer so it can fade rather than vanish.
+  // Nothing inside is reachable meanwhile.
+  closing?: boolean;
   // Every whole-frame preview the editor paints, as it paints it - so an
   // embedder (the canvas) can show the live edit in its own frame. The stage
   // may then even be hidden: the pipeline keeps rendering regardless.
@@ -89,6 +98,12 @@ interface Props {
   // its held preview frame and thumbnail URL always resolve against the
   // post-save state, never a mid-save one.
   onEditsSettled?: (imageId: string) => void;
+  // Docked: the element ON THE CANVAS FRAME that the mask guides, handles
+  // and pointer surface are drawn into, so masks are drawn where the photo
+  // is - on the page - instead of on a stage of the editor's own. The
+  // embedder lays it over the frame's photo (same box, same content
+  // transform); the editor fits its surface to the picture inside it.
+  maskHost?: HTMLElement | null;
 }
 
 interface DragRect {
@@ -143,6 +158,12 @@ const SCRUB_REGION_MIN_PX = [1600, 1024, 800, 640];
 // ladder from oscillating on noisy timings.
 const SCRUB_STEP_DOWN_MS = 140;
 const SCRUB_STEP_UP_MS = 45;
+
+// How long the edit has to stand still before the editor writes it. A drag
+// fires changes the whole way through, so the write waits for the slider to
+// come to rest - every save re-renders this photo's derivatives on the server,
+// and doing that mid-drag would fight the preview for the same machine.
+const AUTOSAVE_IDLE_MS = 1000;
 
 const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "presets"];
 const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String(i + 1));
@@ -322,6 +343,9 @@ function Slider({
   uiScale?: number;
 }) {
   const uiValue = value / uiScale;
+  // Off its default = this slider is part of the look. Marked on the label so
+  // the panel says where the work is without you reading every number.
+  const edited = Math.abs(value - resetValue) > 1e-6;
   // Saved edits can hold odd internal values (uiValue x.5) - display rounded.
   const uiShown = Math.round(uiValue);
   // A drag fires change events as fast as the pointer moves - under load
@@ -347,7 +371,10 @@ function Slider({
   return (
     <label className="editor-slider">
       <span className="editor-slider-head">
-        <span>{label}</span>
+        <span>
+          {label}
+          {edited && <span className="editor-edited-dot" title="Changed from its default" />}
+        </span>
         <span className="editor-slider-val">{format ? format(uiValue) : uiShown > 0 ? `+${uiShown}` : uiShown}</span>
       </span>
       <input
@@ -457,7 +484,7 @@ function Histogram({ bins }: { bins: Uint32Array[] | null }) {
   return <canvas ref={ref} className="editor-histogram" width={256} height={64} />;
 }
 
-export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, onEditsSettled }: Props) {
+export function PhotoEditor({ image, onClose, docked = false, closing = false, onPreviewFrame, onEditsSettled, maskHost = null }: Props) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const { withWait } = useWait();
@@ -466,11 +493,22 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const stageMainRef = useRef<HTMLDivElement | null>(null);
+  // The hit layer over the canvas frame's photo (docked, masks open): an SVG
+  // in a 0..100 viewBox stretched over the picture, whose screen matrix maps
+  // a pointer straight to image fractions - through the frame's rotation,
+  // the page zoom and the content transform alike.
+  const hostSvgRef = useRef<SVGSVGElement | null>(null);
+  const onFrame = () => docked && hostSvgRef.current !== null;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const panDragRef = useRef<{ x: number; y: number } | null>(null);
   // RGB histogram bins of the latest preview; the <Histogram> components (in the
   // Basic and Curves groups) draw from this and redraw when it changes or on mount.
   const [histBins, setHistBins] = useState<Uint32Array[] | null>(null);
+  // True from the moment a photo is (re)selected until its first whole frame
+  // is on the canvas. Drives the "Rendering…" badge: on open that wait is
+  // spent looking at the library placeholder, on a photo switch at the
+  // previous photo - neither says anything is happening without it.
+  const [framePending, setFramePending] = useState(true);
   // Mirror of histBins for the render paths: "is the histogram still empty?"
   // must be readable inside drawBlob without being a dependency of it.
   const histBinsRef = useRef<Uint32Array[] | null>(null);
@@ -661,6 +699,23 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   const renderedToken = useRef(-1);
   const pumping = useRef(false);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Set once the editor is unmounted. The pump and the settle are async: an
+  // aborted fetch rejects AFTER the unmount cleanup has run, and the loop's
+  // finally then armed a fresh settle timer that the cleanup could no longer
+  // clear. 350ms later the dead editor sent a full render, the server took
+  // it as the newest request for the image and dropped the NEW editor's
+  // first render as superseded - which left that editor on "Loading…" for
+  // good (a quick close-and-reopen was all it took).
+  // Reset on the way in as well: StrictMode (dev) mounts, unmounts and
+  // re-mounts every effect once, and a flag set only in the cleanup would
+  // stay up after that rehearsal - the loop would then never run at all.
+  const goneRef = useRef(false);
+  useEffect(() => {
+    goneRef.current = false;
+    return () => {
+      goneRef.current = true;
+    };
+  }, []);
   const pumpRef = useRef<() => void>(() => {});
   // Whether the last accurate render took long (heavy passes like denoise/
   // dehaze/clarity active). When true, discrete changes paint a cheap scrub
@@ -685,10 +740,13 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   // visibly jumped between the two renders (and on every slider change).
   // Instead, fit the canvas into the stage from its aspect ratio - both
   // renders of the same edit state then display at exactly the same size.
-  function fitCanvasToStage() {
-    const canvas = canvasRef.current;
+  // The on-screen size a picture of the given pixel size takes in the stage:
+  // scaled up or down to fill the box's content area, the same fit the photo
+  // view gives its photo (useImageZoomPan), so a picture shown here is the
+  // size it was there.
+  function fitIntoStage(pxW: number, pxH: number): { w: string; h: string } | null {
     const box = stageMainRef.current;
-    if (!canvas || !box || !canvas.width || !canvas.height) return;
+    if (!box || !pxW || !pxH) return null;
     // Fit into the box's CONTENT area: getBoundingClientRect includes the
     // box's padding, so fitting against it pressed the photo flush against
     // the frame's edges instead of leaving the padding visible.
@@ -696,12 +754,41 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
     const cs = getComputedStyle(box);
     let width = rect.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const height = rect.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    if (width < 2 || height < 2) return;
+    if (width < 2 || height < 2) return null;
     // Side by side puts two panes of equal size in this one box.
     if (pairRef.current) width = Math.max(2, (width - PAIR_GAP) / 2);
-    const s = Math.min(width / canvas.width, height / canvas.height);
-    const w = `${Math.round(canvas.width * s)}px`;
-    const h = `${Math.round(canvas.height * s)}px`;
+    const s = Math.min(width / pxW, height / pxH);
+    // Not rounded: the photo view sets the fractional size, and a half-pixel
+    // difference at the photo's edge is a visible blink when the editor
+    // opens over it.
+    return { w: `${pxW * s}px`, h: `${pxH * s}px` };
+  }
+
+  function fitCanvasToStage() {
+    // The placeholder (the photo view's own preview, shown until the first
+    // render lands) is fitted the same way, so opening the editor leaves the
+    // photo exactly where the photo view had it - and the render then takes
+    // the placeholder's place without a jump.
+    const placeholder = placeholderRef.current;
+    if (placeholder) {
+      // Before its bytes are in (its own onLoad refits then), the photo's
+      // stored shape stands in - so the very first paint already has the
+      // preview at the photo view's size rather than one frame at its
+      // natural size. The stored shape is the original's; after a crop the
+      // onLoad refit corrects it a frame later.
+      const size = placeholder.naturalWidth
+        ? fitIntoStage(placeholder.naturalWidth, placeholder.naturalHeight)
+        : fitIntoStage(image.width ?? 0, image.height ?? 0);
+      if (size) {
+        placeholder.style.width = size.w;
+        placeholder.style.height = size.h;
+      }
+    }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const size = fitIntoStage(canvas.width, canvas.height);
+    if (!size) return;
+    const { w, h } = size;
     canvas.style.width = w;
     canvas.style.height = h;
     // The original pane is the same picture in the same frame, so it takes the
@@ -938,6 +1025,24 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   // editor renders the native (darker) base, and that brightness snap would
   // read as a bug. Edited photos and JPEGs match the editor's render.
   const [placeholderFailed, setPlaceholderFailed] = useState(false);
+  const placeholderRef = useRef<HTMLImageElement | null>(null);
+  // Fit the placeholder BEFORE the first paint: the editor opens over the
+  // photo view showing this same preview, and one frame of it at another
+  // size is the blink the whole overlay was laid out to avoid.
+  useLayoutEffect(() => {
+    fitCanvasToStage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // The stage's control row carries the same panel switch as the photo
+  // view's, in the same place - so it does not appear and vanish with the
+  // editor. Its own state: hiding the info panel to look at a photo must
+  // not hide the sliders you open the editor for.
+  const [panelOpen, setPanelOpen] = useState(true);
+  // Focus mode (F): the panel and the control row put away, and the app's
+  // top bar with them - the photo alone, as big as the window allows. Not
+  // when docked: there the canvas editor's own focus mode is the one.
+  const [focusMode, setFocusMode] = useState(false);
+  useFocusChrome(focusMode && !docked);
   const placeholderUrl = useMemo(
     () =>
       image.file_type !== "raw" || image.edit_rev > 0
@@ -945,6 +1050,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
         : null,
     [image],
   );
+  const placeholderShown = loading && !!placeholderUrl && !placeholderFailed;
   // Shared with the library photo view and the import preview.
   const bgMode = useStageBg();
   // Hold-to-compare: while true, the canvas re-renders with every tonal/colour/
@@ -1056,10 +1162,9 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   );
 
   // One stringify per actual edit change (not per render). Two things read it:
-  // the dirty check (against the pre-computed saved-state key) and the undo
-  // history, which uses it as the identity of an edit state.
+  // the autosave (against lastWrittenKeyRef - what the server holds) and the
+  // undo history, which uses it as the identity of an edit state.
   const editsKey = useMemo(() => JSON.stringify(edits), [edits]);
-  const dirty = editsKey !== savedKey;
 
   // Undo/redo. The history keeps whole edit snapshots, so putting one back is
   // just writing every piece of edit state at once - see utils/editHistory for
@@ -1206,6 +1311,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
       paintedPxRef.current = Math.max(bmp.width, bmp.height);
+      setFramePending(false);
       // A whole frame replaces everything - the ground is this edit state now.
       groundTokenRef.current = dirtyToken.current;
       groundStaleRef.current = false;
@@ -1371,7 +1477,9 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   // will be saved. Cancelled the instant a new drag starts.
   const scheduleSettle = useCallback(() => {
     clearTimeout(settleTimer.current);
+    if (goneRef.current) return;
     settleTimer.current = setTimeout(async () => {
+      if (goneRef.current) return;
       // A pointer is down, so a drag may still be in flight - but the settle
       // must not be *dropped* here, or the photo stays on a preview tier until
       // the next edit happens to come along (press the mouse again inside the
@@ -1518,9 +1626,15 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
       // and drops the rest, so two concurrent fetches would cancel each other at
       // random. Edits come first; the original is brought up to date once
       // they're settled.
+      // A render the server dropped as superseded (409) while THIS editor
+      // still wants it - a straggler from elsewhere claimed "newest" for the
+      // image - is asked for again rather than left unrendered, a few times
+      // at most so two editors on one photo can't chase each other forever.
+      let retries = 0;
       while (
-        renderedToken.current !== dirtyToken.current ||
-        (wantOrigRef.current && origRendered.current !== origToken.current)
+        !goneRef.current &&
+        (renderedToken.current !== dirtyToken.current ||
+          (wantOrigRef.current && origRendered.current !== origToken.current))
       ) {
         if (renderedToken.current === dirtyToken.current) {
           const otoken = origToken.current;
@@ -1645,6 +1759,11 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
           if ((e as Error).name !== "AbortError") {
             setError(`Couldn't render the preview: ${(e as Error).message}`);
             setLoading(false);
+          } else if (!ctrl.signal.aborted && !goneRef.current && retries < 3) {
+            // Not our abort: the server superseded it. Try again shortly.
+            retries++;
+            await new Promise((r) => setTimeout(r, 150));
+            continue;
           }
         }
         renderedToken.current = token;
@@ -1656,6 +1775,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
     // whole invariant: whatever frame the loop left on the canvas, a
     // full-quality one is on its way. Called mid-drag it costs nothing, because
     // the settle re-arms itself while a pointer is down instead of rendering.
+    // (A closed editor has no canvas left to settle - see goneRef.)
     scheduleSettle();
   }, [image.id, drawBlob, drawRegionIntoFrame, drawOriginal, scheduleSettle]);
   pumpRef.current = () => void pump();
@@ -1681,6 +1801,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
     origPendingRef.current = -1;
     histBinsRef.current = null;
     setHistBins(null);
+    setFramePending(true);
   }, [image.id]);
 
   // Geometry moved, so the compare view's original no longer matches the frame
@@ -1882,49 +2003,120 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   const saveEdits = useMutation({
     mutationFn: () => withWait("Saving edits…", () => api.images.saveEdits(image.id, edits)),
     onSuccess: () => {
-      // What this write put on the server - the unmount autosave below
-      // compares against it, so a docked save-then-close never writes twice.
+      // What this write put on the server - the autosave below compares
+      // against it, so a save-then-close never writes twice.
       lastWrittenKeyRef.current = editsKey;
+      unseenWriteRef.current = false;
       queryClient.invalidateQueries({ queryKey: ["image", image.id] });
       queryClient.invalidateQueries({ queryKey: ["images"] });
       onClose();
     },
   });
 
-  // Docked (canvas) mode has no Save buttons: whatever is on the sliders when
-  // the editor goes away IS the photo's state. requestClose (Esc, Back) saves
-  // through the mutation above; this cleanup catches every path that unmounts
-  // the editor directly - deselecting the frame, clicking another frame,
-  // leaving the canvas. Keys, not `dirty`: `saved` is the mount-time state,
-  // so after a requestClose save `dirty` still reads true.
+  // ---- Autosave. Whatever is on the sliders IS the photo's state, so the
+  // editor writes it by itself: once the edit has stood still for a moment
+  // (AUTOSAVE_IDLE_MS - a drag fires changes all the way through, so the write
+  // waits for the slider to come to rest), and again on the way out for
+  // anything the timer hadn't caught yet.
+  //
+  // `lastWrittenKeyRef` is what the server holds; everything below compares
+  // against it rather than against `dirty`, whose `saved` baseline is the
+  // mount-time state and so stays "dirty" forever once you've touched a slider.
   const lastWrittenKeyRef = useRef(savedKey);
   const autosaveRef = useRef({ editsKey, edits });
   autosaveRef.current = { editsKey, edits };
   const onEditsSettledRef = useRef(onEditsSettled);
   onEditsSettledRef.current = onEditsSettled;
+  // One write at a time - a second change during a write re-arms the timer from
+  // the finally below instead of racing the first one onto the server.
+  const autosavingRef = useRef(false);
+  const autosaveTimerRef = useRef(0);
+  // An autosave deliberately does NOT invalidate the queries: refetching the
+  // image would swap the `image` prop mid-edit (new edit_rev -> new preview
+  // URLs) and make the picture flash under the cursor. The grid and the photo
+  // view catch up when the editor closes; this says there is something for them.
+  const unseenWriteRef = useRef(false);
+  const [autosaveState, setAutosaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+
+  const flushQueries = useCallback(() => {
+    if (!unseenWriteRef.current) return;
+    unseenWriteRef.current = false;
+    queryClient.invalidateQueries({ queryKey: ["image", image.id] });
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+  }, [queryClient, image.id]);
+
+  const runAutosave = useCallback(async () => {
+    if (autosavingRef.current) return;
+    const pending = autosaveRef.current;
+    if (pending.editsKey === lastWrittenKeyRef.current) return;
+    autosavingRef.current = true;
+    setAutosaveState("saving");
+    let ok = false;
+    try {
+      await api.images.saveEdits(image.id, pending.edits);
+      lastWrittenKeyRef.current = pending.editsKey;
+      unseenWriteRef.current = true;
+      ok = true;
+      setAutosaveState("saved");
+    } catch {
+      // The key is left alone, so the state is still pending: the next edit
+      // re-arms the timer and closing saves it through the mutation (which has
+      // somewhere to show the error). Deliberately no timer retry - a backend
+      // that is down would turn into a write every second.
+      setAutosaveState("failed");
+    } finally {
+      autosavingRef.current = false;
+      // Changed again while that write was in flight - come back for it.
+      if (ok && autosaveRef.current.editsKey !== lastWrittenKeyRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = window.setTimeout(() => void runAutosave(), AUTOSAVE_IDLE_MS);
+      }
+    }
+  }, [image.id]);
+
   useEffect(() => {
-    if (!docked) return;
+    if (editsKey === lastWrittenKeyRef.current) return;
+    // Restarted on every change, so a whole drag ends in a single write.
+    window.clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = window.setTimeout(() => void runAutosave(), AUTOSAVE_IDLE_MS);
+    return () => window.clearTimeout(autosaveTimerRef.current);
+  }, [editsKey, runAutosave]);
+
+  // The way out. requestClose (Esc, Back) saves through the mutation above;
+  // this cleanup catches every path that unmounts the editor directly - closing
+  // the photo view, navigating away, and on the canvas deselecting or clicking
+  // another frame.
+  useEffect(() => {
     const imageId = image.id;
     return () => {
+      window.clearTimeout(autosaveTimerRef.current);
       const pending = autosaveRef.current;
       if (pending.editsKey === lastWrittenKeyRef.current) {
-        // Nothing left to write (requestClose saved already, or nothing
-        // changed) - the row is settled as it stands.
+        // Nothing left to write (an autosave or requestClose got there first) -
+        // the row is settled as it stands; let the app see the last write.
+        flushQueries();
         onEditsSettledRef.current?.(imageId);
         return;
       }
       lastWrittenKeyRef.current = pending.editsKey;
+      unseenWriteRef.current = true;
       void api.images
         .saveEdits(imageId, pending.edits)
-        .then(() => onEditsSettledRef.current?.(imageId))
+        .then(() => {
+          // The editor is gone, so nothing here re-renders - but the grid and
+          // the photo view it went back to are showing the old derivatives.
+          flushQueries();
+          onEditsSettledRef.current?.(imageId);
+        })
         .catch(() => {
           // Nothing left to show the error in - the editor is gone. The row
           // keeps the previous saved state; settle so the canvas falls back
           // to it honestly instead of holding the unsaved preview.
+          flushQueries();
           onEditsSettledRef.current?.(imageId);
         });
     };
-  }, [docked, image.id]);
+  }, [image.id, flushQueries]);
 
   // Always reached through the dialog, which blocks the editor and shows its
   // own busy state. A virtual copy takes the editor's current (possibly
@@ -1937,6 +2129,13 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      // On the canvas the copy is a photo taken OUT of the page - the page
+      // itself, and the frame you were editing, stay exactly as they are. So
+      // no close and no jump: the new photo is in the library when you want it.
+      if (docked) {
+        setSaveCopyOpen(false);
+        return;
+      }
       onClose();
       // Jump to the freshly created edited photo rather than staying on the
       // original - and make its back arrow lead to the Library, not back
@@ -2003,28 +2202,18 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
 
   const busy = saveEdits.isPending || saveCopy.isPending;
 
-  // Leaving with unsaved edits asks first. Escape and the Back button both
-  // route through here; the save paths call onClose directly once the write
-  // has landed, so they never see the prompt.
-  async function requestClose() {
-    // Docked (canvas) mode never asks - the current state is what's kept, so
-    // leaving simply saves it first (the mutation's onSuccess closes).
-    if (docked) {
-      if (busy) return;
-      if (dirty) saveEdits.mutate();
-      else onClose();
+  // Leaving saves. Escape and the Back button both route through here; the
+  // save mutation's onSuccess closes once the write has landed, so nothing is
+  // ever dropped and nothing has to be confirmed. Paths that unmount the editor
+  // without coming through here are caught by the autosave effect above.
+  function requestClose() {
+    if (busy) return;
+    if (editsKey !== lastWrittenKeyRef.current) {
+      saveEdits.mutate();
       return;
     }
-    if (dirty) {
-      const leave = await dialogs.confirm({
-        title: "Discard unsaved edits?",
-        message: "Your changes have not been saved. Leave the editor without saving?",
-        confirmLabel: "Discard edits",
-        cancelLabel: "Keep editing",
-        danger: true,
-      });
-      if (!leave) return;
-    }
+    // Autosave already wrote it - just let the rest of the app see it.
+    flushQueries();
     onClose();
   }
 
@@ -2043,7 +2232,8 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
         else if (cropMode) setOpenGroup("");
         else if (saveCopyOpen) {
           if (!saveCopy.isPending) setSaveCopyOpen(false);
-        } else if (!busy) void requestClose();
+        } else if (focusMode) setFocusMode(false);
+        else if (!busy) requestClose();
         return;
       }
 
@@ -2073,13 +2263,26 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
         return;
       }
 
-      // 1..9 open the matching control section (same order as the panel).
-      // Skipped while a text-entry control has focus so typing a preset name
-      // or a slider value never switches sections.
-      const idx = SECTION_KEY_ORDER.indexOf(e.key);
-      if (idx === -1) return;
+      // Text-entry controls keep their letters and digits: typing a preset
+      // name or a slider value must never switch sections or hide the panel.
       if (tag === "TEXTAREA" || tag === "SELECT") return;
       if (tag === "INPUT" && !["range", "checkbox"].includes((target as HTMLInputElement).type)) return;
+
+      // F: focus mode (see focusMode).
+      if (!docked && (e.key === "f" || e.key === "F")) {
+        setFocusMode((on) => !on);
+        return;
+      }
+
+      // P hides/shows the panel, as in the photo view.
+      if (!docked && (e.key === "p" || e.key === "P")) {
+        setPanelOpen((open) => !open);
+        return;
+      }
+
+      // 1..9 open the matching control section (same order as the panel).
+      const idx = SECTION_KEY_ORDER.indexOf(e.key);
+      if (idx === -1) return;
       const groupId = GROUP_ORDER[idx];
       setOpenGroup(groupId);
       // Scroll after the body has rendered so the opened section is in view.
@@ -2091,14 +2294,35 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy, dirty, cropMode, maskDrawMode, colorPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, undo, redo]);
+  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, focusMode, undo, redo]);
 
   function fractionAt(clientX: number, clientY: number) {
+    const clamp = (v: number) => Math.min(Math.max(v, 0), 1);
+    // On the canvas frame the picture may be rotated with its frame, so a
+    // bounding box will not do: invert the hit layer's screen matrix.
+    const svg = onFrame() ? hostSvgRef.current : null;
+    const ctm = svg?.getScreenCTM();
+    if (ctm) {
+      const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+      return { x: clamp(pt.x / 100), y: clamp(pt.y / 100) };
+    }
     const box = canvasRef.current!.getBoundingClientRect();
     return {
-      x: Math.min(Math.max((clientX - box.left) / box.width, 0), 1),
-      y: Math.min(Math.max((clientY - box.top) / box.height, 0), 1),
+      x: clamp((clientX - box.left) / box.width),
+      y: clamp((clientY - box.top) / box.height),
     };
+  }
+
+  // The picture's on-screen size in px, wherever it is being drawn on -
+  // what turns a pixel tolerance into a fraction.
+  function pictureSizePx(): { w: number; h: number } {
+    const svg = onFrame() ? hostSvgRef.current : null;
+    const ctm = svg?.getScreenCTM();
+    if (ctm) {
+      return { w: 100 * Math.hypot(ctm.a, ctm.b) || 1, h: 100 * Math.hypot(ctm.c, ctm.d) || 1 };
+    }
+    const rect = canvasRef.current?.getBoundingClientRect();
+    return { w: rect?.width || 1, h: rect?.height || 1 };
   }
 
   // Displayed image aspect (width/height). Needed wherever an x-fraction has to
@@ -2732,9 +2956,7 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
     end_y: subNum(sub, "end_y", 0.8),
   });
   function maskTol() {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    const w = rect?.width || 1;
-    const h = rect?.height || 1;
+    const { w, h } = pictureSizePx();
     return { tolX: MASK_HANDLE_PX / w, tolY: MASK_HANDLE_PX / h };
   }
   const nearHandle = (p: Pt, h: Pt, tolX: number, tolY: number) => {
@@ -3060,6 +3282,12 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
   // ---- Panel accordion. Groups collapse to a single open one at a time: each
   // header toggles openGroup, and each body renders only when it's the open id.
   const sectionFields = (title: string): FieldDef[] => SECTIONS.find((s) => s.title === title)?.fields ?? [];
+  // Which groups hold something off its default - a collapsed group otherwise
+  // hides every edit inside it, so the header carries a dot instead.
+  const edited = useMemo(
+    () => editedGroups(adj, { rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion }),
+    [adj, rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion]
+  );
   // A group of scalar sliders bound straight to adj[key] (Basic/Color/Details/
   // Effects control blocks - unchanged behaviour, just factored out).
   function scalarSliders(fields: FieldDef[]) {
@@ -3107,7 +3335,10 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
           }
         }}
       >
-        <span>{title}</span>
+        <span>
+          {title}
+          {edited[id] && <span className="editor-edited-dot" title="This group contains edits" />}
+        </span>
         <span className={`editor-accordion-caret${open ? " open" : ""}`} aria-hidden>
           ›
         </span>
@@ -3179,30 +3410,130 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
 
   return (
     <div
-      className={`editor-overlay${docked ? " editor-overlay--docked" : ""}${
-        // Docked, the stage is normally hidden (the canvas frame shows the
-        // live edit - including geometry, so Transform stays in the canvas
-        // too). Only mask DRAWING happens on the stage, so that one group
-        // still summons it.
-        docked && openGroup === "masks" ? " editor-needs-stage" : ""
+      className={`editor-overlay${docked ? " editor-overlay--docked" : ""}${closing ? " editor-overlay--closing" : ""}${
+        panelOpen || docked ? "" : " editor-overlay--panel-hidden"
       }`}
     >
+      {/* Docked, the stage stays hidden for good: the canvas frame shows the
+          live edit, geometry included, and masks are drawn ON THAT FRAME -
+          the guides, handles and pointer surface below are portalled into
+          the host the canvas lays over its photo. The surface is fitted to
+          the picture the way the frame fits it (cover: as wide as the box or
+          as tall, whichever fills), so the 0..1 mask coordinates land on the
+          same pixels the frame shows. It only takes the pointer while a mask
+          is being drawn; otherwise the frame underneath keeps working. */}
+      {docked &&
+        maskHost &&
+        openGroup === "masks" &&
+        (() => {
+          const aspect = canvasAspectForOverlay();
+          return createPortal(
+            <div
+              className={`canvas-mask-surface${maskDrawMode ? " is-drawing" : ""}`}
+              style={{
+                aspectRatio: `${aspect}`,
+                width: `max(100%, calc(100cqh * ${aspect}))`,
+                cursor: maskDrawMode ? maskCursor : undefined,
+              }}
+              onPointerDown={(e) => {
+                if (!maskDrawMode || e.button !== 0) return;
+                // Ours, not the frame's: a drag here paints, it does not move
+                // the frame or start a marquee on the page.
+                e.stopPropagation();
+                e.preventDefault();
+                e.currentTarget.setPointerCapture?.(e.pointerId);
+                maskPointerDown(e.clientX, e.clientY, e.altKey);
+              }}
+              onPointerMove={(e) => {
+                if (!maskDrawMode) return;
+                maskPointerMove(e.clientX, e.clientY);
+              }}
+              onPointerUp={(e) => {
+                if (maskGesture.current) e.stopPropagation();
+                endMaskGesture();
+                if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+              }}
+              onPointerCancel={() => endMaskGesture()}
+              onPointerLeave={() => {
+                if (!maskGesture.current) setMaskCursorPos(null);
+              }}
+              onClick={(e) => {
+                if (maskDrawMode) e.stopPropagation();
+              }}
+              onDoubleClick={(e) => {
+                if (maskDrawMode) e.stopPropagation();
+              }}
+            >
+              <svg
+                ref={hostSvgRef}
+                className="canvas-mask-hit"
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+                aria-hidden
+              />
+              {overlaySpatialSub && (
+                <MaskOverlay
+                  sub={overlaySpatialSub}
+                  mark={overlayMark}
+                  handles={maskDrawMode && overlayIsSelected && !limitEdit}
+                  aspect={aspect}
+                  cursor={
+                    overlaySpatialSub.type === "brush" && maskDrawMode && overlayIsSelected && !limitEdit && maskCursorPos
+                      ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlaySpatialSub, "size", 0.06) }
+                      : null
+                  }
+                />
+              )}
+              {overlayLimitSub && (
+                <MaskOverlay
+                  sub={overlayLimitSub}
+                  mark={false}
+                  dashed
+                  handles={maskDrawMode && overlayIsSelected && limitEdit}
+                  aspect={aspect}
+                  cursor={
+                    overlayLimitSub.type === "brush" && maskDrawMode && overlayIsSelected && limitEdit && maskCursorPos
+                      ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlayLimitSub, "size", 0.06) }
+                      : null
+                  }
+                />
+              )}
+            </div>,
+            maskHost
+          );
+        })()}
       <div className="editor-body">
         <div className={`editor-stage editor-stage-${bgMode}`} ref={stageRef}>
         <div className={`editor-stage-main${pair ? " editor-stage-main--pair" : ""}`} ref={stageMainRef}>
         {loading &&
-          (placeholderUrl && !placeholderFailed ? (
+          (placeholderShown ? (
             <img
+              ref={placeholderRef}
               className="editor-placeholder"
               src={placeholderUrl}
               alt=""
               draggable={false}
+              onLoad={fitCanvasToStage}
               onError={() => setPlaceholderFailed(true)}
             />
           ) : (
-            <div className="editor-hint">Loading…</div>
+            <div className="editor-hint editor-hint-loading">
+              <span className="spinner" aria-hidden />
+              Loading…
+            </div>
           ))}
         {error && <div className="editor-hint">{error}</div>}
+        {/* The first frame of this photo is still on its way, and the stage
+            is showing something else meanwhile (the placeholder on open, the
+            previous photo on a switch). A corner badge, not a centred hint:
+            the picture underneath is still worth looking at. Faded in after a
+            short delay so a warm-cache render never flashes it. */}
+        {framePending && !error && (loading ? placeholderShown : true) && (
+          <div className="editor-rendering" role="status">
+            <span className="spinner" aria-hidden />
+            Rendering…
+          </div>
+        )}
         {/* Side by side: the original gets a pane of its own, left of the edited
             one. The stage is already a centred flex row, so the two just sit
             next to each other; fitCanvasToStage gives each half the room. Panes
@@ -3493,19 +3824,23 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
         <div className="editor-bg-toggle">
           <button
             className="btn btn-sm back-btn stage-back-btn"
-            onClick={() => void requestClose()}
+            onClick={() => requestClose()}
             disabled={busy}
             title={busy ? "Saving…" : "Back (Esc)"}
           >
             <IconArrowLeft size={13} /> Back
           </button>
-          {!loading && !error && (
-            <>
-            <StageBackgroundToggle />
+          {/* The whole row is there from the first frame - the editor must
+              look complete the moment it opens, not assemble itself as the
+              first render lands. The background switch works right away (it
+              is a preference, not a render); zoom and the compares wait,
+              greyed out, for a picture to act on. */}
+          <StageBackgroundToggle />
+          <span className={`editor-toolbar-live${loading || error ? " is-waiting" : ""}`}>
             <ZoomReadout
               zoom={{
                 zoomed,
-                zoomPercent: Math.round((scale / nativeScale()) * 100),
+                zoomPercent: loading || error ? null : Math.round((scale / nativeScale()) * 100),
                 resetZoom,
                 zoomToNative,
               }}
@@ -3587,20 +3922,31 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
                 </button>
               </span>
             </span>
-            </>
-          )}
+          </span>
+          {/* Same switch, same spot as in the photo view (P as well). */}
+          <button
+            className="btn btn-sm detail-panel-toggle"
+            onClick={() => setPanelOpen((open) => !open)}
+            title={panelOpen ? "Hide the edit panel (P)" : "Show the edit panel (P)"}
+            aria-label={panelOpen ? "Hide the edit panel" : "Show the edit panel"}
+            aria-expanded={panelOpen}
+            aria-controls="editor-side-panel"
+          >
+            Panel {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
+          </button>
+          {!docked && <FocusButton active={focusMode} onClick={() => setFocusMode((on) => !on)} />}
         </div>
       </div>
 
-      <div className="editor-panel">
+      <div id="editor-side-panel" className="editor-panel">
         <div className="editor-panel-body">
         <h3 className="section-title" style={{ marginBottom: 2 }}>
           Edit
         </h3>
         <p style={{ color: "var(--text-muted)", fontSize: 12, margin: "0 0 4px" }}>
           {docked
-            ? "The original file is never changed. This virtual copy is saved automatically when you close the editor."
-            : "The original file is never changed. Save updates this photo, Save copy creates a new edited photo."}
+            ? "The original file is never changed. This virtual copy saves itself as you edit; Save copy creates a new edited photo."
+            : "The original file is never changed. Your edits save themselves as you edit; Save copy creates a new edited photo."}
         </p>
 
         {/* The histogram belongs to the photo, not to any one group of
@@ -3609,7 +3955,16 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
             the moment you opened any other one. Pinned here it stays on screen
             through every group and through the panel's own scrolling. */}
         <div className="editor-histogram-pinned">
-          <Histogram bins={histBins} />
+          <div className="editor-histogram-slot">
+            <Histogram bins={histBins} />
+            {/* Empty until the photo's first frame is read back - a spinner
+                on the plot says so, where a bare black box looked broken. */}
+            {histBins === null && !error && (
+              <span className="editor-histogram-wait" aria-label="Loading histogram">
+                <span className="spinner" aria-hidden />
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Transform: rotate/flip, the crop box and its ratio, straighten +
@@ -3949,7 +4304,10 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
             {scalarSliders(sectionFields("Color"))}
 
             {/* HSL colour mixer: per-band Hue / Saturation / Luminance (adj.hsl). */}
-            <div className="editor-section-title">Color mixer</div>
+            <div className="editor-section-title">
+              Color mixer
+              {edited.colorMixer && <span className="editor-edited-dot" title="This group contains edits" />}
+            </div>
             <div className="mixer-bands">
               {COLOR_BANDS.map((b) => (
                 <button
@@ -3974,7 +4332,10 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
             </div>
 
             {/* Colour grading: four hue/saturation wheels + blending / balance. */}
-            <div className="editor-section-title">Color Grading</div>
+            <div className="editor-section-title">
+              Color Grading
+              {edited.colorGrading && <span className="editor-edited-dot" title="This group contains edits" />}
+            </div>
             <div className="grade-wheels">
               {GRADE_RANGES.map((r) => (
                 <div key={r.key} className="grade-wheel-cell">
@@ -4006,7 +4367,10 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
             </div>
 
             {/* Colour calibration: seven primary hue/saturation + shadow tint. */}
-            <div className="editor-section-title">Calibration</div>
+            <div className="editor-section-title">
+              Calibration
+              {edited.calibration && <span className="editor-edited-dot" title="This group contains edits" />}
+            </div>
             <div className="editor-sliders">
               {CALIB_FIELDS.map((f) => (
                 <Slider
@@ -4487,16 +4851,11 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
               Reset all
             </button>
           </div>
-          {docked ? (
-            /* The canvas edits a virtual copy that keeps itself: closing the
-               dock (or clicking another frame) saves the current state, so
-               Save and Save copy would only be two extra questions. */
-            <div className="editor-footer-primary">
-              <span className="editor-autosave-note" title="Closing the editor saves the current state">
-                {saveEdits.isPending ? "Saving…" : "Saved when you close"}
-              </span>
-            </div>
-          ) : (
+          {/* No Save button anywhere: the edit belongs to this photo, so what
+              is on the sliders when you leave IS the photo's state - closing
+              writes it (requestClose), and so does every path that unmounts
+              the editor (the autosave effect). Save copy stays, because it
+              makes a *different* photo - a real decision, not bookkeeping. */}
           <div className="editor-footer-primary">
             <button
               className="btn"
@@ -4504,22 +4863,38 @@ export function PhotoEditor({ image, onClose, docked = false, onPreviewFrame, on
               disabled={busy}
               title="Create a new photo from these edits: a new JPEG file or a virtual copy that shares the original file"
             >
-              {saveCopy.isPending ? "Saving…" : "Save copy"}
+              <IconSaveCopy size={13} /> {saveCopy.isPending ? "Saving…" : "Save copy"}
             </button>
-            <button className="btn primary" onClick={() => saveEdits.mutate()} disabled={busy || !dirty}>
-              {saveEdits.isPending ? "Saving…" : "Save"}
-            </button>
+            <span
+              className={`editor-autosave-note${autosaveState === "failed" ? " failed" : ""}`}
+              title="Edits are written a moment after you stop moving a control, and again when you close the editor"
+            >
+              {saveEdits.isPending || autosaveState === "saving"
+                ? "Saving…"
+                : autosaveState === "failed"
+                  ? "Not saved — saves on close"
+                  : autosaveState === "saved"
+                    ? "Saved"
+                    : "Saves automatically"}
+            </span>
           </div>
-          )}
         </div>
       </div>
       </div>
-      {saveCopyOpen && (
-        <SaveCopyDialog
-          onClose={() => setSaveCopyOpen(false)}
-          onSave={(req) => saveCopy.mutateAsync(req)}
-          askOptions={askSaveCopyOptions}
-        />
+      {/* Portalled: docked on the canvas the editor is a z-indexed column,
+          and a fixed modal inside it would be trapped in that stacking
+          context - under the canvas's own layers instead of over the app. */}
+      {createPortal(
+        <Presence open={saveCopyOpen} ms={MOTION.modal}>
+          {saveCopyOpen && (
+            <SaveCopyDialog
+              onClose={() => setSaveCopyOpen(false)}
+              onSave={(req) => saveCopy.mutateAsync(req)}
+              askOptions={askSaveCopyOptions}
+            />
+          )}
+        </Presence>,
+        document.body
       )}
     </div>
   );

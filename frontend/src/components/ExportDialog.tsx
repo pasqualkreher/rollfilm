@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, saveDownload } from "../api/client";
 import { useTransientMessage } from "../utils/transientMessage";
 import { Dropdown } from "./Dropdown";
+import { IconExport } from "./Icons";
 
 // Long-edge presets for the size dropdown; null = keep the original size.
 // Shared with the editor's Save-copy dialog, which offers the same choices.
@@ -19,12 +20,15 @@ export function ExportDialog({
   imageIds,
   singleFilename,
   onClose,
+  closing = false,
 }: {
   imageIds: string[];
   // Original filename of the one photo (single-photo entry point) - drives the
   // save dialog's suggested name; omitted for multi-selections (always a zip).
   singleFilename?: string;
   onClose: () => void;
+  // Set by <Presence> while the dialog animates out.
+  closing?: boolean;
 }) {
   const [quality, setQuality] = useState(90);
   const [maxSize, setMaxSize] = useState<number | null>(null);
@@ -131,7 +135,7 @@ export function ExportDialog({
   }
 
   return (
-    <div className="modal-overlay" onClick={() => !busy && onClose()}>
+    <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={() => !busy && onClose()}>
       <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pair-delete-body">
           <h3>{imageIds.length === 1 ? "Export photo" : `Export ${imageIds.length} photos`}</h3>
@@ -219,7 +223,9 @@ export function ExportDialog({
                   Exporting…
                 </>
               ) : (
-                "Export"
+                <>
+                  <IconExport size={13} /> Export
+                </>
               )}
             </button>
             <button className="btn ghost" onClick={onCancel}>

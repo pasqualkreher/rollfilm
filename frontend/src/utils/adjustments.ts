@@ -190,6 +190,7 @@ export type FilmSim =
   | "acros"
   | "acros_ye"
   | "acros_r"
+  | "acros_g"
   | "monochrome";
 
 // The full develop object. Scalars + three enums + nested groups.
@@ -419,6 +420,7 @@ export const FILM_SIMS: { value: FilmSim; label: string; swatch: string }[] = [
   { value: "acros", label: "Acros", swatch: "linear-gradient(135deg, #2b2b2b, #d6d6d6)" },
   { value: "acros_ye", label: "Acros +Ye", swatch: "linear-gradient(135deg, #3a3628, #d9d3b8)" },
   { value: "acros_r", label: "Acros +R", swatch: "linear-gradient(135deg, #402c2c, #dcc9c9)" },
+  { value: "acros_g", label: "Acros +G", swatch: "linear-gradient(135deg, #2c3a2e, #c9dccd)" },
   { value: "monochrome", label: "Monochrome", swatch: "linear-gradient(135deg, #1f1f1f, #cfcfcf)" },
 ];
 
@@ -689,3 +691,58 @@ export const MASK_ADJUST_FIELDS: FieldDef[] = (
 )
   .map((k) => SECTIONS.flatMap((s) => s.fields).find((f) => f.key === k))
   .filter((f): f is FieldDef => !!f);
+
+// ---- "Something in here was changed": which panel groups hold a non-default
+// value. The edit panel marks those group headers (and every slider that is off
+// its own default) with a small dot, so you can see where a photo has been
+// worked on without opening each group in turn.
+export function scalarIsEdited(key: ScalarKey, value: number): boolean {
+  // Exposure/straighten are fractional - compare with a tolerance rather than
+  // by identity, so a value dragged back to zero doesn't stay marked.
+  return Math.abs(value - SCALAR_SPEC[key].def) > 1e-6;
+}
+
+// The geometry half of the edit state, which lives outside `Adjustments`.
+export interface GeometryEditState {
+  rotation: number;
+  crop: CropBox | null;
+  flipH: boolean;
+  flipV: boolean;
+  straighten: number;
+  perspH: number;
+  perspV: number;
+  distortion: number;
+}
+
+// Keyed by the accordion group id in PhotoEditor, plus the three sub-headings
+// inside Color. Groups with nothing to mark (Presets) are simply absent.
+export function editedGroups(a: Adjustments, g: GeometryEditState): Record<string, boolean> {
+  const fieldsEdited = (title: string) =>
+    (SECTIONS.find((s) => s.title === title)?.fields ?? []).some((f) => scalarIsEdited(f.key, a[f.key]));
+  const same = (v: unknown, def: unknown) => JSON.stringify(v) === JSON.stringify(def);
+  const colorMixer = COLOR_BANDS.some((b) => a.hsl[b].some((v) => v !== 0) || a.hsl_range[b] !== 0);
+  const colorGrading = !same(a.color_grading, neutralColorGrading());
+  const calibration = !same(a.color_calibration, neutralCalibration());
+  return {
+    transform:
+      g.rotation !== 0 ||
+      !!g.crop ||
+      g.flipH ||
+      g.flipV ||
+      g.straighten !== 0 ||
+      g.perspH !== 0 ||
+      g.perspV !== 0 ||
+      g.distortion !== 0 ||
+      scalarIsEdited("frame_width", a.frame_width),
+    filmsim: a.film_sim !== "none",
+    basic: a.tone_mapper !== "basic" || fieldsEdited("Basic"),
+    curves: !same(a.point_curves, identityPointCurves()) || !same(a.parametric_curve, neutralParametricCurve()),
+    color: fieldsEdited("Color") || colorMixer || colorGrading || calibration,
+    details: fieldsEdited("Details"),
+    effects: fieldsEdited("Effects"),
+    masks: a.masks.length > 0,
+    colorMixer,
+    colorGrading,
+    calibration,
+  };
+}

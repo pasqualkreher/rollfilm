@@ -95,7 +95,8 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     "curve_mode": ("point", ("point", "parametric")),
     "film_sim": ("none", ("none", "provia", "velvia", "astia", "classic_chrome",
                           "classic_neg", "nostalgic_neg", "eterna",
-                          "acros", "acros_ye", "acros_r", "monochrome")),
+                          "acros", "acros_ye", "acros_r", "acros_g",
+                          "monochrome")),
 }
 
 # Identity point curve: pass-through on the 0..255 grid.
