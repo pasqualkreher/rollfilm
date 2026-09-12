@@ -13,6 +13,7 @@ import {
   tileAspectRatio,
 } from "./ThumbnailGrid";
 import { usePhotoInfoCard } from "./PhotoInfoCard";
+import { usePhotoContextMenu } from "./PhotoContextMenu";
 import { useMergePairs } from "../state/viewPrefs";
 import { thumbPx, thumbTier, useThumbSize } from "../state/viewPrefs";
 import {
@@ -30,6 +31,7 @@ import {
   type LayoutRow,
   type LayoutTile,
 } from "../utils/justifiedLayout";
+import { isSelectClick } from "../utils/selection";
 
 // Layout, constants and the scroll-window tracking are shared with the import
 // review's grid - see utils/justifiedLayout.ts. Only what this timeline does
@@ -49,7 +51,6 @@ interface Props {
   images: LibraryIndexImage[];
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string, index: number, shiftKey: boolean) => void;
-  selectMode?: boolean;
   // When this key changes (the Library's filters), the view jumps to the top
   // of the new result set instead of re-anchoring to the photo that happened
   // to be on screen - a filtered library is a different list, and the old
@@ -63,7 +64,7 @@ interface Props {
 // directly on real, correctly-sized tiles - while only the tiles near the
 // viewport are actually mounted, keeping the DOM and thumbnail traffic small
 // no matter how big the library is.
-export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMode, resetKey }: Props) {
+export function VirtualTimeline({ images, selectedIds, onToggleSelect, resetKey }: Props) {
   const navigate = useNavigate();
   const mergePairs = useMergePairs();
   const thumbSize = useThumbSize();
@@ -73,9 +74,16 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
   const tier = thumbTier(thumbSize);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
+  // A plain click opens the photo; Cmd/Ctrl-click or Shift-click picks it
+  // (see utils/selection). Once a photo is picked every tile grows a checkbox,
+  // so the rest of the selection can be built with plain clicks on those.
+  const selecting = Boolean(onToggleSelect) && (selectedIds?.size ?? 0) > 0;
   // The per-tile "i" that opens a photo's details. Hidden while selecting -
   // the tile's top-left corner is the checkbox's there.
-  const { infoButton, overlay: infoOverlay } = usePhotoInfoCard(!selectMode);
+  const { infoButton, overlay: infoOverlay } = usePhotoInfoCard(!selecting);
+  // Right-click: Export / Save copy for the photo, or the whole selection when
+  // the photo is part of it.
+  const { onContextMenu, overlay: menuOverlay } = usePhotoContextMenu(selectedIds);
 
   const allIds = useMemo(() => images.map((im) => im.id), [images]);
   const { width, window: window_, scrollerRef, lastScrollRef } = useVirtualWindow(
@@ -205,7 +213,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
     return (
       <div
         key={image.id}
-        className={`thumb-card${selectMode && selectedIds?.has(image.id) ? " selected" : ""}`}
+        className={`thumb-card${selectedIds?.has(image.id) ? " selected" : ""}`}
         style={{
           position: "absolute",
           top: row.top,
@@ -214,7 +222,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
           height: row.height,
         }}
         onClick={(e) => {
-          if (selectMode && onToggleSelect) {
+          if (onToggleSelect && isSelectClick(e)) {
             onToggleSelect(image.id, index, e.shiftKey);
           } else {
             // Record where this tile sits in the viewport, so coming back
@@ -230,6 +238,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
             navigate(`/image/${image.id}`, { state: { imageIds: allIds } });
           }
         }}
+        onContextMenu={(e) => onContextMenu(e, image)}
       >
         <Thumb
           src={api.images.thumbnailUrl(image.id, image.thumb_version || DEFAULT_EDIT_VERSION, tier)}
@@ -244,7 +253,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
           {fileTypeBadge(image.file_type, merged)}
         </span>
         {infoButton(image.id)}
-        {selectMode && onToggleSelect && (
+        {selecting && onToggleSelect && (
           <input
             className="select-checkbox"
             type="checkbox"
@@ -333,6 +342,7 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, selectMod
         sections={scrubberSections}
       />
       {infoOverlay}
+      {menuOverlay}
     </div>
   );
 }

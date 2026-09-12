@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { IconPlus, IconX } from "./Icons";
 import { TagSuggestInput } from "./TagSuggestInput";
-import { AUTO_TAG_CHIP_TITLE, autoTagMessage, isAutoTag } from "../utils/autoTags";
+import { AUTO_TAG_CHIP_TITLE, autoTagMessage, isAutoTag, withoutMembershipNames } from "../utils/autoTags";
 
 interface Props {
   tags: string[];
@@ -15,6 +15,10 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
+  // "album: <name>" and "canvas: <name>" are not shown here: where a photo
+  // is used has its own chips (MembershipChips), so listing the names again
+  // as tags only said the same thing twice.
+  const shown = withoutMembershipNames(tags);
 
   function add(raw: string) {
     const name = raw.trim();
@@ -35,10 +39,10 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
 
   return (
     <div>
-      {tags.length > 0 && (
+      {shown.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-          {tags.map((t) =>
-            isAutoTag(t) ? (
+          {shown.map((t) => {
+            return isAutoTag(t) ? (
               <span key={t} className="tag-chip tag-chip-auto" title={AUTO_TAG_CHIP_TITLE}>
                 {t}
               </span>
@@ -49,8 +53,8 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
                   <IconX size={11} />
                 </button>
               </span>
-            )
-          )}
+            );
+          })}
         </div>
       )}
       <form onSubmit={submit} style={{ display: "flex", gap: 6 }}>

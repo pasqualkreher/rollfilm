@@ -12,10 +12,15 @@ function readApiBase() {
 
 contextBridge.exposeInMainWorld("photoManager", {
   apiBaseUrl: readApiBase(),
+  // "darwin" | "win32" | "linux": the context menu names Finder or Explorer by it.
+  platform: process.platform,
   // Opens the native OS folder dialog; resolves to an absolute host path or null.
   pickFolder: () => ipcRenderer.invoke("pm:pick-folder"),
   // Native multi-file dialog; resolves to [{ path, size }] or null when dismissed.
   pickFiles: () => ipcRenderer.invoke("pm:pick-files"),
+  // Selects a file in Finder / Explorer / the file manager (its folder when
+  // the file is gone). Resolves { ok, missing? } / { ok: false, error }.
+  revealFile: (filePath) => ipcRenderer.invoke("pm:reveal-file", filePath),
   // Current photo-library folder (empty string until first-run setup picks one).
   getLibraryRoot: () => ipcRenderer.invoke("pm:get-library-root"),
   // First-run setup: pick the library folder and start the backend. Resolves

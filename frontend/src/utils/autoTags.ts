@@ -29,6 +29,20 @@ export function isAutoTag(name: string): boolean {
   );
 }
 
+// The membership NAME tags ("album: Holiday", "canvas: Poster"). They exist
+// for filtering and for the server's own bookkeeping; the UI shows where a
+// photo is used as album / canvas chips instead (see MembershipChips), so
+// these never appear as tags anywhere - not on the photo, not in the tag
+// lists and pickers.
+export function isMembershipNameTag(name: string): boolean {
+  const folded = name.trim().toLowerCase();
+  return folded.startsWith(ALBUM_TAG_PREFIX) || folded.startsWith(CANVAS_TAG_PREFIX);
+}
+
+export function withoutMembershipNames(tags: string[]): string[] {
+  return tags.filter((tag) => !isMembershipNameTag(tag));
+}
+
 export function autoTagMessage(name: string): string {
   return `“${name.trim()}” is assigned automatically and cannot be added manually.`;
 }

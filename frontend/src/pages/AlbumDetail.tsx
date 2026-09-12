@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { withoutMembershipNames } from "../utils/autoTags";
 import { useAppDialogs } from "../components/AppDialogs";
 import type { BulkResetOptions, ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -12,7 +13,8 @@ import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { AlbumNameField } from "../components/AlbumNameField";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
-import { IconArrowLeft, IconPencil, IconTrash } from "../components/Icons";
+import { IconArrowLeft, IconCloudUp, IconRename, IconTrash } from "../components/Icons";
+import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { Dropdown } from "../components/Dropdown";
 import { loadPresets } from "../utils/presets";
@@ -21,8 +23,11 @@ import { useTasks } from "../state/tasks";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { collapsePairs } from "../state/viewPrefs";
+import { modKeyLabel, useSelectionKeys } from "../utils/selection";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
+import { Presence } from "../components/Presence";
+import { MOTION } from "../utils/usePresence";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
@@ -33,7 +38,6 @@ export function AlbumDetail() {
   const [dateFrom, setDateFrom] = useState<string | null>(null);
   const [dateTo, setDateTo] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selectMode, setSelectMode] = useState(false);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
@@ -55,7 +59,11 @@ export function AlbumDetail() {
     enabled: !!id,
   });
 
-  const { data: allTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list() });
+  const { data: allTags } = useQuery({
+    queryKey: ["tags"],
+    queryFn: () => api.tags.list(),
+    select: withoutMembershipNames,
+  });
 
   // "Add to Immich" only appears when the integration is configured in Settings.
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
@@ -82,25 +90,21 @@ export function AlbumDetail() {
 
 
   // Escape walks back to the albums, the same as it leaves the lightbox and
-  // the editor - one key out of any view. In select mode it first ends the
-  // end. A dialog on top captures Escape before this sees it.
+  // the editor - one key out of any view. While photos are selected the
+  // first Escape only clears the selection (useSelectionKeys below takes that
+  // press). A dialog on top captures Escape before this sees it.
+  const hasSelection = selected.size > 0;
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || hasSelection) return;
       const target = e.target as HTMLElement | null;
       // A text box keeps its own Escape (backing out of a rename or search).
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
-      if (selectMode) {
-        setSelectMode(false);
-        setSelected(new Set());
-        setLastIndex(null);
-      } else {
-        navigate("/albums");
-      }
+      navigate("/albums");
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectMode, navigate]);
+  }, [hasSelection, navigate]);
 
   const filters: LibraryFilters = {
     view_mode: viewMode,
@@ -183,6 +187,15 @@ export function AlbumDetail() {
     setSelected(new Set());
     setLastIndex(null);
   }
+
+  // Cmd/Ctrl+A picks the whole album, Escape drops the selection, E opens a
+  // single selected photo in the editor.
+  useSelectionKeys({
+    onSelectAll: selectAll,
+    onClear: clearSelection,
+    hasSelection,
+    edit: { selected, order: orderedImages.map((img) => img.id) },
+  });
 
   async function applyBulk(patch: { rating?: number; color_label?: string }) {
     if (selected.size === 0) return;
@@ -407,7 +420,7 @@ export function AlbumDetail() {
               aria-label="Rename this album"
               onClick={() => setRenaming(true)}
             >
-              <IconPencil size={14} />
+              <IconRename size={14} />
             </button>
           )}
         </>
@@ -416,18 +429,12 @@ export function AlbumDetail() {
       )}
       {album && <span className="count-pill">{album.image_count} photos</span>}
       {album && immichConfigured && immich?.sync_mode === "selective" && (
-        <label
-          className="filter-field filter-field-inline"
-          style={{ fontSize: 13, fontWeight: 400 }}
+        <ImmichSyncToggle
+          small
+          on={album.immich_sync}
+          onToggle={toggleAlbumImmichSync}
           title="Keep this album in sync with Immich. RAW files only when “Also upload RAW files” is on in Settings."
-        >
-          <input
-            type="checkbox"
-            checked={album.immich_sync}
-            onChange={(e) => toggleAlbumImmichSync(e.target.checked)}
-          />{" "}
-          Sync to Immich
-        </label>
+        />
       )}
       {album && (
         <button
@@ -475,21 +482,14 @@ export function AlbumDetail() {
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
       >
-        <button
-          className={`btn${selectMode ? " primary" : ""}`}
-          onClick={() => {
-            setSelectMode((v) => !v);
-            if (selectMode) clearSelection();
-          }}
-        >
-          {selectMode ? "Done selecting" : "Select"}
-        </button>
-        {selectMode && (
+        {/* Both only once a photo is picked (Cmd/Ctrl-click) - the toolbar
+            stays clean while nothing is selected; Cmd/Ctrl+A works anytime. */}
+        {hasSelection && (
           <>
-            <button className="btn" onClick={selectAll}>
+            <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
               Select all
             </button>
-            <button className="btn" onClick={clearSelection} disabled={selected.size === 0}>
+            <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
               Clear selection
             </button>
           </>
@@ -514,94 +514,90 @@ export function AlbumDetail() {
           </button>
         </div>
       )}
-      {selected.size > 0 && (
-        // Same grouped layout as the Library bar: groups wrap as units and
-        // Delete right-aligns on whatever line it ends up on.
-        <div className="filter-bar action-bar--bottom">
-          <div className="control-group">
-            <span>{selected.size} selected</span>
-            <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
-            <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
-          </div>
-          <div className="control-group">
-            <BulkTagInput onAdd={addTagToSelected} />
-            <AddToPicker
-              onAddToAlbum={addSelectedToAlbum}
-              onAddToCanvas={addSelectedToCanvas}
-              onAddToSelects={() => selects.add(Array.from(selected))}
-              onResult={reportAddTo}
-            />
-          </div>
-          {/* Hidden in full sync mode - everything uploads automatically there.
-              The whole group goes, not just the button, so no empty gap is
-              left now that "Add to selects" lives in the picker above. */}
-          {immichConfigured && immich?.sync_mode !== "full" && (
+      <Presence open={selected.size > 0} ms={MOTION.bar}>
+        {selected.size > 0 && (
+          // Same grouped layout as the Library bar: groups wrap as units and
+          // Delete right-aligns on whatever line it ends up on.
+          <div className="filter-bar action-bar--bottom">
+            <div className="control-group">
+              <span>{selected.size} selected</span>
+              <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
+              <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
+            </div>
+            <div className="control-group">
+              <BulkTagInput onAdd={addTagToSelected} />
+              <AddToPicker
+                onAddToAlbum={addSelectedToAlbum}
+                onAddToCanvas={addSelectedToCanvas}
+                onAddToSelects={() => selects.add(Array.from(selected))}
+                onResult={reportAddTo}
+              />
+            </div>
+            {/* Hidden in full sync mode - everything uploads automatically there.
+                The whole group goes, not just the button, so no empty gap is
+                left now that "Add to selects" lives in the picker above. */}
+            {immichConfigured && immich?.sync_mode !== "full" && (
+              <div className="control-group">
+                <button
+                  className="btn"
+                  onClick={addSelectedToImmich}
+                  disabled={immichBusy}
+                  title="Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
+                >
+                  <IconCloudUp size={13} /> {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+                </button>
+              </div>
+            )}
             <div className="control-group">
               <button
                 className="btn"
-                onClick={addSelectedToImmich}
-                disabled={immichBusy}
-                title="Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
+                onClick={autoDevelopSelected}
+                disabled={developBusy}
+                title="Apply automatic edits to the selected photos, based on your own saved edits"
               >
-                {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+                {developBusy ? "Working…" : "Auto develop"}
+              </button>
+              {presetNames.length > 0 && (
+                <Dropdown
+                  value=""
+                  placeholder="Apply preset…"
+                  disabled={developBusy}
+                  title="Apply a saved editor preset to the selected photos"
+                  ariaLabel="Apply preset"
+                  onChange={(v) => {
+                    if (v) applyPresetToSelected(v);
+                  }}
+                  options={presetNames.map((name) => ({ value: name, label: name }))}
+                />
+              )}
+              <ResetMenu count={selected.size} onReset={resetSelected} />
+              <button className="btn" onClick={removeSelectedFromAlbum}>
+                Remove from this album
               </button>
             </div>
-          )}
-          <div className="control-group">
             <button
-              className="btn"
-              onClick={autoDevelopSelected}
-              disabled={developBusy}
-              title="Apply automatic edits to the selected photos, based on your own saved edits"
+              className="btn btn-sm quiet-danger"
+              style={{ marginLeft: "auto" }}
+              onClick={deleteSelected}
+              title="Delete the selected photos"
+              aria-label="Delete the selected photos"
             >
-              {developBusy ? "Working…" : "Auto develop"}
+              <IconTrash size={15} />
             </button>
-            {presetNames.length > 0 && (
-              <Dropdown
-                value=""
-                placeholder="Apply preset…"
-                disabled={developBusy}
-                title="Apply a saved editor preset to the selected photos"
-                ariaLabel="Apply preset"
-                onChange={(v) => {
-                  if (v) applyPresetToSelected(v);
-                }}
-                options={presetNames.map((name) => ({ value: name, label: name }))}
-              />
+            {(immichMsg || developMsg || albumMsg) && (
+              <div className="action-bar-messages">
+                {immichMsg && <span>{immichMsg}</span>}
+                {developMsg && <span>{developMsg}</span>}
+                {albumMsg && (
+                  <span className={albumMsg.error ? "action-bar-message--error" : undefined}>
+                    {albumMsg.text}
+                  </span>
+                )}
+              </div>
             )}
-            <ResetMenu count={selected.size} onReset={resetSelected} />
-            <button className="btn" onClick={removeSelectedFromAlbum}>
-              Remove from this album
-            </button>
           </div>
-          <button
-            className="btn btn-sm quiet-danger"
-            style={{ marginLeft: "auto" }}
-            onClick={deleteSelected}
-            title="Delete the selected photos"
-            aria-label="Delete the selected photos"
-          >
-            <IconTrash size={15} />
-          </button>
-          {(immichMsg || developMsg || albumMsg) && (
-            <div className="action-bar-messages">
-              {immichMsg && <span>{immichMsg}</span>}
-              {developMsg && <span>{developMsg}</span>}
-              {albumMsg && (
-                <span className={albumMsg.error ? "action-bar-message--error" : undefined}>
-                  {albumMsg.text}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-      {selectMode && (
-        <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
-          Click photos to select them - shift-click to select a range.
-        </p>
-      )}
-
+        )}
+      </Presence>
       {isLoading ? (
         <div className="empty-state">Loading...</div>
       ) : (
@@ -609,7 +605,6 @@ export function AlbumDetail() {
           images={orderedImages}
           selectedIds={selected}
           onToggleSelect={toggleSelect}
-          selectMode={selectMode}
           groupByDate={!q}
           onRemove={removeFromAlbum}
           removeTitle="Remove from this album"

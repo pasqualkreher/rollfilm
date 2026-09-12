@@ -1,9 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { SmartAlbumOut } from "../api/types";
+import { withoutMembershipNames } from "../utils/autoTags";
+import type { ColorLabel, ImageOut, SmartAlbumOut, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
+import { PhotoFilters } from "../components/PhotoFilters";
 import { IconArrowLeft } from "../components/Icons";
 import { collapsePairs } from "../state/viewPrefs";
 
@@ -14,6 +16,12 @@ export function SmartAlbumDetail() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+  const [viewMode, setViewMode] = useState<ViewMode>("combined");
+  const [ratingMin, setRatingMin] = useState(0);
+  const [colorLabel, setColorLabel] = useState<ColorLabel>("none");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [dateFrom, setDateFrom] = useState<string | null>(null);
+  const [dateTo, setDateTo] = useState<string | null>(null);
 
   // Escape walks back to the albums, the same as it leaves a manual album,
   // the lightbox and the editor - one key out of any view. A dialog on top
@@ -62,10 +70,34 @@ export function SmartAlbumDetail() {
     enabled: !!id,
   });
 
-  // Smart albums have no filter bar to host a "Merge RAW+JPG" toggle, so we
-  // always collapse each RAW+JPEG pair to its JPEG - one card per shot, showing
-  // the JPEG everyone actually looks at (same as the merged library/import view).
-  const orderedImages = collapsePairs(images ?? []);
+  const { data: allTags } = useQuery({
+    queryKey: ["tags"],
+    queryFn: () => api.tags.list(),
+    select: withoutMembershipNames,
+  });
+
+  // A smart album is a fixed, server-computed list (no filter parameters on its
+  // endpoint), so the bar's filters are applied here to the photos already in
+  // hand - same rules as the backend's library query, just client-side.
+  const matches = (img: ImageOut) => {
+    if (viewMode === "jpeg_only" && img.file_type !== "jpeg") return false;
+    if (viewMode === "raw_only" && img.file_type !== "raw") return false;
+    if (ratingMin > 0 && img.rating < ratingMin) return false;
+    if (colorLabel !== "none" && img.color_label !== colorLabel) return false;
+    // AND, like the library: a photo must carry every picked tag.
+    if (selectedTags.length && !selectedTags.every((t) => img.tags.includes(t))) return false;
+    // Capture date, so a photo without one drops out of a date range at all -
+    // the same as the server's NULL comparison. ISO strings compare by date.
+    if (dateFrom && !(img.taken_at && img.taken_at >= `${dateFrom}T00:00:00`)) return false;
+    if (dateTo && !(img.taken_at && img.taken_at <= `${dateTo}T23:59:59`)) return false;
+    return true;
+  };
+  const filtered = (images ?? []).filter(matches);
+
+  // Like an opened manual album: the default view collapses each RAW+JPEG pair
+  // to its JPEG - one card per shot, showing the file everyone actually looks
+  // at - while the JPEG/RAW buttons give a flat, type-filtered list instead.
+  const orderedImages = viewMode === "combined" ? collapsePairs(filtered) : filtered;
   // Date sections + the right-edge scrubber, like an opened manual album. The
   // grid picks the granularity itself: a single-month album (a month card, a
   // one-trip moment) gets day sections, anything wider months - so a "July
@@ -73,6 +105,25 @@ export function SmartAlbumDetail() {
 
   return (
     <div className="page page-timeline">
+      {/* The same view + filter bar as the library and a manual album, so a
+          smart album is looked through the same way as everything else. Merge
+          is hidden: the combined view always collapses pairs here. */}
+      <PhotoFilters
+        viewMode={viewMode}
+        onViewMode={setViewMode}
+        showMerge={false}
+        ratingMin={ratingMin}
+        onRatingMin={setRatingMin}
+        colorLabel={colorLabel}
+        onColorLabel={setColorLabel}
+        allTags={allTags}
+        selectedTags={selectedTags}
+        onTags={setSelectedTags}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onDateFrom={setDateFrom}
+        onDateTo={setDateTo}
+      />
       <div className="page-scroll">
         {isError && (
           <div className="empty-state">
@@ -87,7 +138,10 @@ export function SmartAlbumDetail() {
           </div>
         )}
         {images && images.length === 0 && <div className="empty-state">No photos here right now.</div>}
-        {images && images.length > 0 && <ThumbnailGrid images={orderedImages} groupByDate />}
+        {images && images.length > 0 && orderedImages.length === 0 && (
+          <div className="empty-state">No photos match the filters.</div>
+        )}
+        {orderedImages.length > 0 && <ThumbnailGrid images={orderedImages} groupByDate />}
       </div>
 
       {/* The album's row - Back and name - lives UNDER the content, like the

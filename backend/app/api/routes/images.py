@@ -709,6 +709,19 @@ def get_image(image_id: str, db: Session = Depends(get_db), current_user: User =
     return get_owned_image(db, current_user.id, image_id)
 
 
+@router.get("/{image_id}/file-path")
+def get_image_file_path(
+    image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """The photo's absolute path on disk, for the desktop app's "Show in
+    Finder / Explorer". A virtual copy answers with its source's file - that is
+    the only file it has. `exists` lets the client say so when the file has
+    gone missing instead of opening nothing."""
+    image = get_owned_image(db, current_user.id, image_id)
+    resolved = resolve_image_path(image)
+    return {"path": str(resolved), "exists": resolved.exists()}
+
+
 @router.patch("/bulk", response_model=list[schemas.ImageOut])
 def bulk_update_images(
     update: schemas.BulkImageUpdate,

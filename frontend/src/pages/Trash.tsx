@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { membershipWarning } from "../utils/deleteMessage";
 import { useAppDialogs } from "../components/AppDialogs";
-import { IconRestore, IconTrash } from "../components/Icons";
+import { IconLandfill, IconRestore, IconTrash } from "../components/Icons";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import type { ImageOut } from "../api/types";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
@@ -156,7 +156,9 @@ export function Trash() {
   return (
     <div className="page page-timeline">
       <div className="filter-bar">
-        <strong>Trash</strong>
+        <strong className="trash-title">
+          <IconLandfill size={16} /> Trash
+        </strong>
         <span style={{ color: "var(--text-muted)" }}>
           Deleted photos stay here until you restore them or delete them permanently.
           {trashSettings && trashSettings.retention_days > 0
@@ -213,7 +215,10 @@ export function Trash() {
             images={images}
             selectedIds={selected}
             onToggleSelect={toggleSelect}
-            selectMode
+            // Nothing to open here, so a plain click picks the photo.
+            clickSelects
+            // Deleted photos are restored or purged, not exported or copied.
+            contextMenu={false}
           />
         )}
       </div>

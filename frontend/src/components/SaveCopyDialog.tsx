@@ -25,25 +25,35 @@ export function SaveCopyDialog({
   onClose,
   onSave,
   askOptions,
+  count = 1,
+  closing = false,
 }: {
   onClose: () => void;
   // Runs the actual request; the caller closes the editor and navigates to
-  // the new photo on success, which unmounts this dialog.
-  onSave: (req: SaveCopyRequest) => Promise<unknown>;
+  // the new photo on success, which unmounts this dialog. `report` tells the
+  // dialog how many of `count` photos are done, for the multi-photo note.
+  onSave: (req: SaveCopyRequest, report: (done: number) => void) => Promise<unknown>;
   // Show the JPEG quality / size controls for the physical copy.
   askOptions: boolean;
+  // How many photos the copy is made of - the grid's multi-select passes the
+  // selection size; the editor and the lightbox always copy one.
+  count?: number;
+  // Set by <Presence> while the dialog animates out.
+  closing?: boolean;
 }) {
   const [kind, setKind] = useState<SaveCopyRequest["kind"]>("physical");
   const [quality, setQuality] = useState(FULL_COPY_QUALITY);
   const [maxSize, setMaxSize] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(0);
   const [error, setError] = useTransientMessage();
 
   async function doSave() {
     setBusy(true);
+    setDone(0);
     setError(null);
     try {
-      await onSave(kind === "physical" ? { kind, quality, maxSize } : { kind });
+      await onSave(kind === "physical" ? { kind, quality, maxSize } : { kind }, setDone);
     } catch (e) {
       setBusy(false);
       setError((e as Error).message || "Could not save the copy.");
@@ -51,14 +61,15 @@ export function SaveCopyDialog({
   }
 
   const physical = kind === "physical";
+  const many = count > 1;
 
   return (
-    <div className="modal-overlay" onClick={() => !busy && onClose()}>
+    <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={() => !busy && onClose()}>
       <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pair-delete-body">
-          <h3>Save copy</h3>
+          <h3>{many ? `Save copy of ${count} photos` : "Save copy"}</h3>
           <p className="settings-desc" style={{ margin: 0 }}>
-            The original photo is not changed.
+            {many ? "The original photos are not changed." : "The original photo is not changed."}
           </p>
           <div className="copy-kind-choice" role="radiogroup" aria-label="Kind of copy">
             <button
@@ -74,7 +85,11 @@ export function SaveCopyDialog({
               </span>
               <span className="copy-kind-text">
                 <strong>Physical copy</strong>
-                <span>A new JPEG file with your edits applied, tagged “edit copy”.</span>
+                <span>
+                  {many
+                    ? "A new JPEG file per photo with its edits applied, tagged “edit copy”."
+                    : "A new JPEG file with your edits applied, tagged “edit copy”."}
+                </span>
               </span>
             </button>
             <button
@@ -91,8 +106,9 @@ export function SaveCopyDialog({
               <span className="copy-kind-text">
                 <strong>Virtual copy</strong>
                 <span>
-                  No new file. A second entry in the library that uses the original file and keeps
-                  its own edits, tagged “virtual copy”.
+                  {many
+                    ? "No new files. A second entry in the library per photo that uses the original file and keeps its own edits, tagged “virtual copy”."
+                    : "No new file. A second entry in the library that uses the original file and keeps its own edits, tagged “virtual copy”."}
                 </span>
               </span>
             </button>
@@ -134,9 +150,11 @@ export function SaveCopyDialog({
           {error && <span className="status-note status-note--error">{error}</span>}
           {busy && (
             <span className="status-note" role="status" aria-live="polite">
-              {physical
-                ? "Rendering your photo… Please keep this window open."
-                : "Creating the virtual copy…"}
+              {many
+                ? `${physical ? "Rendering" : "Copying"} photo ${Math.min(done + 1, count)} of ${count}… Please keep this window open.`
+                : physical
+                  ? "Rendering your photo… Please keep this window open."
+                  : "Creating the virtual copy…"}
             </span>
           )}
           <div className="pair-delete-actions">
@@ -147,7 +165,9 @@ export function SaveCopyDialog({
                   Saving…
                 </>
               ) : physical ? (
-                "Save physical copy"
+                many ? "Save physical copies" : "Save physical copy"
+              ) : many ? (
+                "Save virtual copies"
               ) : (
                 "Save virtual copy"
               )}

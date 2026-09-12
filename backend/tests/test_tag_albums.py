@@ -200,6 +200,9 @@ def test_tags_smart_album_section(db: Session):
     _tag(db, "a", "beach")
     _tag(db, "b", "beach")
     _tag(db, "c", "family")
+    # Membership name tags belong to their album / canvas card, not to Tags.
+    _tag(db, "a", "album: Holiday")
+    _tag(db, "b", "canvas: Poster")
     db.commit()
 
     albums = smart_albums.get_tag_albums(db, 1)

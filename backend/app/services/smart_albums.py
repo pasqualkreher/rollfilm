@@ -45,6 +45,7 @@ from app.db.models import FileType, Image, ImageTag, Tag
 from app.db.session import SessionLocal, engine
 from app.services import embeddings, geocode
 from app.services import sources as sources_service
+from app.services.auto_tags import ALBUM_TAG_PREFIX, CANVAS_TAG_PREFIX
 
 # Cosine similarity two photos need to land in the same cluster. ViT-B-32
 # image/image similarities run roughly: near-duplicates 0.9+, same subject or
@@ -1073,6 +1074,11 @@ def get_tag_albums(db: Session, owner_id: int) -> list[GroupAlbum]:
             Image.owner_id == owner_id,
             Image.deleted_at.is_(None),
             Tag.owner_id == owner_id,
+            # "album: <name>" / "canvas: <name>" name an album or canvas that
+            # already has its own card (or its own page): a second card per
+            # name under Tags said the same thing twice.
+            ~Tag.name.like(f"{ALBUM_TAG_PREFIX}%"),
+            ~Tag.name.like(f"{CANVAS_TAG_PREFIX}%"),
         )
     )
     rows = sources_service.exclude_unavailable(query, unavailable).all()

@@ -7,10 +7,19 @@ declare global {
     photoManager?: {
       /** Base URL of the locally-spawned backend, e.g. http://127.0.0.1:52345. */
       apiBaseUrl: string | null;
+      /** Node's process.platform ("darwin", "win32", "linux"). Absent in older builds. */
+      platform?: string;
       /** Opens the native folder dialog; resolves to an absolute path or null. */
       pickFolder: () => Promise<string | null>;
       /** Native multi-file dialog; resolves to picked files (absolute path + size) or null. */
       pickFiles?: () => Promise<{ path: string; size: number }[] | null>;
+      /**
+       * Selects a file in Finder / Explorer / the file manager; opens its
+       * folder instead when the file is gone (`missing`). Absent in older builds.
+       */
+      revealFile?: (
+        filePath: string
+      ) => Promise<{ ok: boolean; missing?: boolean; error?: string }>;
       /** Current photo-library folder ("" until first-run setup picks one). */
       getLibraryRoot: () => Promise<string>;
       /**

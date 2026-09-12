@@ -65,6 +65,16 @@ export function AddToPicker({
     setBusy(true);
     try {
       await action();
+      // Where a photo is used shows as marks on the photo itself (the album /
+      // canvas chips, the info card's icons) - they read the photo's
+      // album_ids and its derived "canvas: …" tags, which the server has just
+      // rewritten. Every caller used to refresh only the album/canvas lists,
+      // so the new mark turned up whenever something else happened to refetch.
+      if (kind !== "selects") {
+        queryClient.invalidateQueries({ queryKey: ["image"] });
+        queryClient.invalidateQueries({ queryKey: ["images"] });
+        queryClient.invalidateQueries({ queryKey: ["tags"] });
+      }
       report(kind, name, true);
     } catch {
       report(kind, name, false);

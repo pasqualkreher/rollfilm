@@ -6,14 +6,16 @@ import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoEditor } from "../components/PhotoEditor";
 import { TagEditor } from "../components/TagEditor";
-import { AlbumPicker } from "../components/AlbumPicker";
+import { MembershipChips } from "../components/MembershipChips";
 import { AddToPicker } from "../components/AddToPicker";
+import { useAppDialogs } from "../components/AppDialogs";
 import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
 import { setDetailPanelOpen, useAskSaveCopyOptions, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
+import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
 import {
   VIRTUAL_COPY_TITLE,
@@ -22,7 +24,7 @@ import {
   fileTypeBadgeClass,
 } from "../components/ThumbnailGrid";
 import { editsFromImage } from "../utils/adjustments";
-import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconImage, IconPencil, IconPlay, IconTrash, IconX } from "../components/Icons";
+import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconTrash, IconX } from "../components/Icons";
 import { Slideshow } from "../components/Slideshow";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
@@ -37,15 +39,48 @@ import { formatShutterSpeed, splitFilename } from "../utils/photoMeta";
 import { useTransientMessage } from "../utils/transientMessage";
 import { errorText } from "../utils/apiError";
 import type { ColorLabel, ImageOut } from "../api/types";
+import { Presence } from "../components/Presence";
+import { MOTION } from "../utils/usePresence";
 
 export function ImageDetail() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
   const { withWait } = useWait();
   const [activeId, setActiveId] = useState(id!);
-  const [adjustOpen, setAdjustOpen] = useState(false);
+  // A grid's E (one photo selected) lands here with the editor already open.
+  const [adjustOpen, setAdjustOpen] = useState(
+    () => Boolean((location.state as { edit?: boolean } | null)?.edit)
+  );
+  // The editor has closed but is still on screen fading out (its saving is
+  // done by then - onClose runs after the save). Held for the length of the
+  // fade (.editor-overlay--closing), then the editor comes down for real.
+  const [adjustClosing, setAdjustClosing] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const closeAdjust = useCallback(() => {
+    setAdjustClosing(true);
+    clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = setTimeout(() => {
+      setAdjustOpen(false);
+      setAdjustClosing(false);
+    }, 140);
+  }, []);
+  // Opening while the last editor is still fading out must not wait for it
+  // (nor be swallowed): the fade is cut short and a fresh editor mounts in
+  // its place - the key forces the remount, the old one having already
+  // closed and saved.
+  const [editorKey, setEditorKey] = useState(0);
+  const openAdjust = useCallback(() => {
+    clearTimeout(closeTimerRef.current);
+    setAdjustClosing((closing) => {
+      if (closing) setEditorKey((k) => k + 1);
+      return false;
+    });
+    setAdjustOpen(true);
+  }, []);
+  useEffect(() => () => clearTimeout(closeTimerRef.current), []);
   const [exportOpen, setExportOpen] = useState(false);
   // Fullscreen slideshow over the browsed set (falls back to just this photo
   // when the view was opened without one).
@@ -221,6 +256,11 @@ export function ImageDetail() {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      // E while the editor is fading out reopens it at once (see openAdjust).
+      if (adjustClosing && (e.key === "e" || e.key === "E")) {
+        openAdjust();
+        return;
+      }
       // The editor and the slideshow own the keyboard while they're up (the
       // slideshow pages, pauses and closes with its own listener).
       if (adjustOpen || slideshowOpen) return;
@@ -274,7 +314,7 @@ export function ImageDetail() {
       // early while the editor is open, so it can't re-trigger itself; Esc and
       // Back close it.)
       if (!inControl && image && (e.key === "e" || e.key === "E")) {
-        setAdjustOpen(true);
+        openAdjust();
         return;
       }
 
@@ -297,7 +337,7 @@ export function ImageDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [goToOffset, adjustOpen, slideshowOpen, saveCopyOpen, image, paired, activeId, zoomed, renaming, panelOpen]);
+  }, [goToOffset, adjustOpen, adjustClosing, openAdjust, slideshowOpen, saveCopyOpen, image, paired, activeId, zoomed, renaming, panelOpen]);
 
   // The photo the user has actually SETTLED on: follows activeId only after a
   // short pause without further navigation. Holding an arrow key changes
@@ -552,6 +592,46 @@ export function ImageDetail() {
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
+  function invalidateCanvas(canvasId: string) {
+    queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+    queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
+    queryClient.invalidateQueries({ queryKey: ["canvas-layout", canvasId] });
+    queryClient.invalidateQueries({ queryKey: ["canvas", canvasId] });
+  }
+
+  // The photo side (image / images / tags) is refreshed by the AddToPicker.
+  async function addToCanvas(canvasId: string) {
+    await api.canvases.addImages(canvasId, [image!.id]);
+    invalidateCanvas(canvasId);
+  }
+
+  // The chip's ×. A canvas "holds" a photo while it is in the filmstrip OR in
+  // a frame on a page, so taking only the membership away would leave the
+  // chip standing - out means off the page too (drop_frames). That undoes
+  // layout work, so a photo that sits in a frame asks first.
+  async function removeFromCanvas(canvasId: string, name: string) {
+    const ids = idsWithPair();
+    const layout = await api.canvases.getLayout(canvasId);
+    const framed = layout.items.filter((item) => item.image_id && ids.includes(item.image_id)).length;
+    if (framed > 0) {
+      const ok = await dialogs.confirm({
+        title: `Remove from “${name}”?`,
+        message:
+          framed === 1
+            ? "This photo sits in a frame on the canvas. Removing it takes the frame off the page too."
+            : `This photo sits in ${framed} frames on the canvas. Removing it takes those frames off the page too.`,
+        confirmLabel: "Remove",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    await api.canvases.removeImages(canvasId, ids, true);
+    queryClient.invalidateQueries({ queryKey: ["image", activeId] });
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
+    invalidateCanvas(canvasId);
+  }
+
   async function toggleImageImmichSync() {
     if (!image) return;
     const ids = paired ? [image.id, paired.id] : [image.id];
@@ -641,7 +721,7 @@ export function ImageDetail() {
   return (
     <div className="page detail-page">
       {pairDeleteDialog}
-      <div className="detail-layout" style={{ marginTop: 16 }}>
+      <div className="detail-layout">
         <div className="detail-main">
           <div className={`detail-image lightbox-stage detail-image-${bgMode}`} ref={zoom.setBox}>
             {canPage && (
@@ -836,7 +916,7 @@ export function ImageDetail() {
                   title="Rename this photo. The file on disk is renamed as well."
                   aria-label="Rename photo"
                 >
-                  <IconPencil size={15} />
+                  <IconRename size={15} />
                 </button>
               </>
             )}
@@ -870,23 +950,17 @@ export function ImageDetail() {
           <div className="detail-action-row">
             <button
               className="btn primary"
-              onClick={() => setAdjustOpen(true)}
+              onClick={openAdjust}
               title="Edit this photo (E)"
             >
-              Edit
+              <IconPencil size={13} /> Edit
             </button>
             {immichConfigured && immich?.sync_mode === "selective" && (
-              <label
-                className="filter-field filter-field-inline"
+              <ImmichSyncToggle
+                on={image.immich_sync}
+                onToggle={toggleImageImmichSync}
                 title="Upload this photo to Immich automatically. RAW files only when “Also upload RAW files” is on in Settings."
-              >
-                <input
-                  type="checkbox"
-                  checked={image.immich_sync}
-                  onChange={toggleImageImmichSync}
-                />{" "}
-                Sync to Immich
-              </label>
+              />
             )}
             {/* Manual mode only: selective shows the sync checkbox instead, and
                 in full mode everything uploads automatically anyway. */}
@@ -897,7 +971,7 @@ export function ImageDetail() {
                 disabled={immichBusy}
                 title="Upload this photo to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
               >
-                {immichBusy ? "Uploading..." : "Add to Immich"}
+                <IconCloudUp size={13} /> {immichBusy ? "Uploading..." : "Add to Immich"}
               </button>
             )}
           </div>
@@ -962,15 +1036,21 @@ export function ImageDetail() {
           </div>
           <div className="detail-section">
             {/* "Add to" rather than "Albums": the picker below also covers
-                Selects and canvases, and the album chips are the memberships
-                it created. Selects used to be its own button in the action
-                row above, where three buttons ellipsized to "E… / + Add to …". */}
+                Selects and canvases, and the chips are the memberships it
+                created - albums and canvases, each a link into it. Selects
+                used to be its own button in the action row above, where three
+                buttons ellipsized to "E… / + Add to …". */}
             <div className="detail-section-label">Add to</div>
-            <AlbumPicker chipsOnly onAdd={addToAlbum} currentAlbumIds={image.album_ids} onRemove={removeFromAlbum} />
+            <MembershipChips
+              albumIds={image.album_ids}
+              tags={image.tags}
+              onRemoveAlbum={removeFromAlbum}
+              onRemoveCanvas={(canvasId, name) => void removeFromCanvas(canvasId, name)}
+            />
             <div>
               <AddToPicker
                 onAddToAlbum={addToAlbum}
-                onAddToCanvas={(canvasId) => api.canvases.addImages(canvasId, [image.id])}
+                onAddToCanvas={addToCanvas}
                 onAddToSelects={() => selects.add(image!.id)}
                 onRemoveFromSelects={() => selects.remove(image!.id)}
                 inSelects={selects.has(image.id)}
@@ -1027,7 +1107,7 @@ export function ImageDetail() {
               onClick={() => setExportOpen(true)}
               title="Export a JPEG with your edits applied, or download the original file unchanged"
             >
-              Export…
+              <IconExport size={13} /> Export…
             </button>
             <button
               className="btn"
@@ -1035,7 +1115,7 @@ export function ImageDetail() {
               onClick={() => setSaveCopyOpen(true)}
               title="Create a new photo from the saved edits: a new JPEG file or a virtual copy that shares the original file"
             >
-              Save copy
+              <IconSaveCopy size={13} /> Save copy
             </button>
           </div>
 
@@ -1095,36 +1175,42 @@ export function ImageDetail() {
         </div>
       </div>
 
-      {adjustOpen && <PhotoEditor image={image} onClose={() => setAdjustOpen(false)} />}
-      {slideshowOpen && (
-        <Slideshow
-          // Play the browsed set from the photo on screen; opened without one
-          // (a direct link), the show is just this photo.
-          imageIds={canPage ? imageIds! : [image.id]}
-          startId={id!}
-          onClose={(lastId) => {
-            setSlideshowOpen(false);
-            // Land on the photo the show ended on, exactly like paging there.
-            if (lastId !== id && imageIds?.includes(lastId)) {
-              navigate(`/image/${lastId}`, { replace: true, state: { imageIds } });
-            }
-          }}
-        />
-      )}
-      {saveCopyOpen && (
-        <SaveCopyDialog
-          onClose={() => setSaveCopyOpen(false)}
-          onSave={(req) => saveCopyRun(req)}
-          askOptions={askSaveCopyOptions}
-        />
-      )}
-      {exportOpen && (
-        <ExportDialog
-          imageIds={[image.id]}
-          singleFilename={image.original_filename}
-          onClose={() => setExportOpen(false)}
-        />
-      )}
+      {adjustOpen && <PhotoEditor key={editorKey} image={image} onClose={closeAdjust} closing={adjustClosing} />}
+      <Presence open={slideshowOpen} ms={MOTION.overlay}>
+        {slideshowOpen && (
+          <Slideshow
+            // Play the browsed set from the photo on screen; opened without one
+            // (a direct link), the show is just this photo.
+            imageIds={canPage ? imageIds! : [image.id]}
+            startId={id!}
+            onClose={(lastId) => {
+              setSlideshowOpen(false);
+              // Land on the photo the show ended on, exactly like paging there.
+              if (lastId !== id && imageIds?.includes(lastId)) {
+                navigate(`/image/${lastId}`, { replace: true, state: { imageIds } });
+              }
+            }}
+          />
+        )}
+      </Presence>
+      <Presence open={saveCopyOpen} ms={MOTION.modal}>
+        {saveCopyOpen && (
+          <SaveCopyDialog
+            onClose={() => setSaveCopyOpen(false)}
+            onSave={(req) => saveCopyRun(req)}
+            askOptions={askSaveCopyOptions}
+          />
+        )}
+      </Presence>
+      <Presence open={exportOpen} ms={MOTION.modal}>
+        {exportOpen && (
+          <ExportDialog
+            imageIds={[image.id]}
+            singleFilename={image.original_filename}
+            onClose={() => setExportOpen(false)}
+          />
+        )}
+      </Presence>
     </div>
   );
 }

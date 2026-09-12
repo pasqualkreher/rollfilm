@@ -8,8 +8,12 @@ import { collapsePairs, useMergePairs } from "../state/viewPrefs";
 import { groupPairsAdjacent } from "../utils/pairing";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { ExportDialog } from "../components/ExportDialog";
+import { IconCloudUp, IconExport } from "../components/Icons";
 import { AddToPicker, type AddToResult } from "../components/AddToPicker";
+import { modKeyLabel, useSelectionKeys } from "../utils/selection";
 import { useTransientMessage } from "../utils/transientMessage";
+import { Presence } from "../components/Presence";
+import { MOTION } from "../utils/usePresence";
 
 export function Selects() {
   const { ids, count, remove } = useSelects();
@@ -21,11 +25,11 @@ export function Selects() {
   const [immichBusy, setImmichBusy] = useState(false);
   const [immichMsg, setImmichMsg] = useTransientMessage();
   const [addMsg, setAddMsg] = useTransientMessage();
-  // Same select mode as the Library / Album / Import grids, but ON by default
-  // here with everything pre-selected: the set is already curated, so the
-  // common move is unticking a few photos and downloading the rest. No
-  // separate bulk bar - the toolbar's own actions apply to the selection.
-  const [selectMode, setSelectMode] = useState(true);
+  // Same selection as the Library / Album grids (Cmd/Ctrl-click, Shift-click
+  // for a range, checkboxes once something is picked), but with everything
+  // pre-selected: the set is already curated, so the common move is unticking
+  // a few photos and downloading the rest. No separate bulk bar - the
+  // toolbar's own actions apply to the selection.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [lastIndex, setLastIndex] = useState<number | null>(null);
 
@@ -136,6 +140,15 @@ export function Selects() {
     setLastIndex(null);
   }
 
+  // Cmd/Ctrl+A picks the whole list again, Escape drops the selection, E opens
+  // a single selected photo in the editor.
+  useSelectionKeys({
+    onSelectAll: selectAll,
+    onClear: clearSelection,
+    hasSelection,
+    edit: { selected, order: images.map((img) => img.id) },
+  });
+
   function removeSelectedFromSelects() {
     if (!hasSelection) return;
     // Merged view hides the RAW behind its JPEG - drop both halves of the shot.
@@ -205,6 +218,7 @@ export function Selects() {
                 disabled={actionIds.length === 0}
                 title="Export as JPEGs with edits applied, or download the original files unchanged"
               >
+                <IconExport size={13} />{" "}
                 {hasSelection
                   ? `Export ${selected.size} photo${selected.size === 1 ? "" : "s"}`
                   : `Export all ${count} photos`}
@@ -221,6 +235,7 @@ export function Selects() {
                       : "Upload all photos in Selects to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
                   }
                 >
+                  <IconCloudUp size={13} />{" "}
                   {immichBusy
                     ? "Uploading to Immich..."
                     : hasSelection
@@ -231,24 +246,12 @@ export function Selects() {
               <AddToPicker onAddToAlbum={addToAlbum} onAddToCanvas={addToCanvas} onResult={reportAddTo} />
             </div>
             <div className="control-group control-group--actions">
-              <button
-                className={`btn${selectMode ? " primary" : ""}`}
-                onClick={() => {
-                  setSelectMode((v) => !v);
-                  // Leaving select mode clears the picks; re-entering starts
-                  // from the default again - everything selected.
-                  if (selectMode) clearSelection();
-                  else selectAll();
-                }}
-              >
-                {selectMode ? "Done selecting" : "Select"}
-              </button>
-              {selectMode && (
+              {hasSelection && (
                 <>
-                  <button className="btn" onClick={selectAll}>
+                  <button className="btn" onClick={selectAll} title={`Select every photo (${modKeyLabel}+A)`}>
                     Select all
                   </button>
-                  <button className="btn" onClick={clearSelection} disabled={!hasSelection}>
+                  <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
                     Clear selection
                   </button>
                 </>
@@ -264,12 +267,10 @@ export function Selects() {
             {error && <span className="status-note status-note--error">{error}</span>}
           </div>
 
-          {selectMode && (
-            <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
-              Click photos to select them. Shift-click selects a range. Export, Immich and Add to…
-              then apply to the selection.
-            </p>
-          )}
+          <p style={{ color: "var(--text-muted)", marginTop: -8, marginBottom: 16 }}>
+            Tick photos to pick them ({modKeyLabel}-click or Shift-click for a range). Export, Immich
+            and Add to… then apply to the selection - or to the whole list when nothing is picked.
+          </p>
 
           {/* The shared grid handles justified tile sizing (--ar + filler) and
               the enlarged 1-2 photo layout - the previous hand-rolled grid
@@ -278,13 +279,14 @@ export function Selects() {
             images={images}
             selectedIds={selected}
             onToggleSelect={toggleSelect}
-            selectMode={selectMode}
             onRemove={remove}
             removeTitle="Remove from selects"
           />
         </>
       )}
-      {exportOpen && <ExportDialog imageIds={actionIds} onClose={() => setExportOpen(false)} />}
+      <Presence open={exportOpen} ms={MOTION.modal}>
+        {exportOpen && <ExportDialog imageIds={actionIds} onClose={() => setExportOpen(false)} />}
+      </Presence>
     </div>
   );
 }

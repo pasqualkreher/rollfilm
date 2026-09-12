@@ -12,6 +12,7 @@ import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { IconX, IconDuplicate } from "./Icons";
 import { usePhotoInfoCard } from "./PhotoInfoCard";
+import { usePhotoContextMenu } from "./PhotoContextMenu";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { thumbPx, thumbTier, useMergePairs, useThumbSize } from "../state/viewPrefs";
 import {
@@ -25,19 +26,26 @@ import {
   watchNearViewport,
 } from "../utils/preload";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
+import { isSelectClick } from "../utils/selection";
 
 interface Props {
   images: ImageOut[];
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string, index: number, shiftKey: boolean) => void;
-  selectMode?: boolean;
+  // A plain click normally opens the photo; selecting takes Cmd/Ctrl-click or
+  // Shift-click (see utils/selection). Grids with nothing to open - the Trash
+  // - set this so a plain click selects instead.
+  clickSelects?: boolean;
   // Immich-style timeline: break the grid into "Month Year" sections with
   // sticky headers. The list is expected to already be sorted newest-first.
   groupByDate?: boolean;
   // Optional per-photo remove (e.g. "remove from this album"); shown as an ×
-  // when not in select mode.
+  // while nothing is selected.
   onRemove?: (id: string) => void;
   removeTitle?: string;
+  // Right-click menu (Export / Save copy) on every tile; on by default. The
+  // Trash turns it off - its photos are on their way out, not to be copied.
+  contextMenu?: boolean;
 }
 
 // Short badge shown on every thumbnail so the file kind is obvious at a glance.
@@ -658,10 +666,11 @@ export function ThumbnailGrid({
   images,
   selectedIds,
   onToggleSelect,
-  selectMode,
+  clickSelects,
   groupByDate,
   onRemove,
   removeTitle = "Remove",
+  contextMenu = true,
 }: Props) {
   const navigate = useNavigate();
   const mergePairs = useMergePairs();
@@ -675,9 +684,16 @@ export function ThumbnailGrid({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
   const cardEls = useRef<Map<string, HTMLElement>>(new Map());
+  // Once a photo is picked every tile grows a checkbox, so the rest of the
+  // selection can be built with plain clicks on those - the modifier keys are
+  // only needed for the first pick.
+  const selecting = Boolean(onToggleSelect) && (clickSelects || (selectedIds?.size ?? 0) > 0);
   // The per-tile "i" that opens a photo's details. Hidden while selecting -
   // the tile's top-left corner is the checkbox's there.
-  const { infoButton, overlay: infoOverlay } = usePhotoInfoCard(!selectMode);
+  const { infoButton, overlay: infoOverlay } = usePhotoInfoCard(!selecting);
+  // Right-click: Export / Save copy for the photo, or the whole selection when
+  // the photo is part of it.
+  const { onContextMenu, overlay: menuOverlay } = usePhotoContextMenu(selectedIds, contextMenu);
 
   // Coming back from the detail view: scroll the photo the user was looking
   // at back into view instead of landing at the top. The marker is one-shot -
@@ -739,16 +755,17 @@ export function ThumbnailGrid({
           else cardEls.current.delete(image.id);
         }}
         style={tileStyle(image.width, image.height)}
-        className={`thumb-card${selectMode && selectedIds?.has(image.id) ? " selected" : ""}${
-          !selectMode && onRemove ? " has-remove" : ""
+        className={`thumb-card${selectedIds?.has(image.id) ? " selected" : ""}${
+          !selecting && onRemove ? " has-remove" : ""
         }`}
         onClick={(e) => {
-          if (selectMode && onToggleSelect) {
+          if (onToggleSelect && (clickSelects || isSelectClick(e))) {
             onToggleSelect(image.id, index, e.shiftKey);
           } else {
             navigate(`/image/${image.id}`, { state: { imageIds: allIds } });
           }
         }}
+        onContextMenu={(e) => onContextMenu(e, image)}
       >
         <Thumb
           src={api.images.thumbnailUrl(image.id, editVersion(image), tier)}
@@ -763,7 +780,7 @@ export function ThumbnailGrid({
           {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
         </span>
         {infoButton(image.id)}
-        {!selectMode && onRemove && (
+        {!selecting && onRemove && (
           <button
             className="card-remove"
             title={removeTitle}
@@ -776,7 +793,7 @@ export function ThumbnailGrid({
             <IconX size={12} />
           </button>
         )}
-        {selectMode && onToggleSelect && (
+        {selecting && onToggleSelect && (
           <input
             className="select-checkbox"
             type="checkbox"
@@ -810,6 +827,7 @@ export function ThumbnailGrid({
         {images.map((image, index) => renderCard(image, index))}
         <i className="grid-filler" aria-hidden />
         {infoOverlay}
+        {menuOverlay}
       </div>
     );
   }
@@ -860,6 +878,7 @@ export function ThumbnailGrid({
         )}
       />
       {infoOverlay}
+      {menuOverlay}
     </div>
   );
 }

@@ -1131,6 +1131,25 @@ function createWindow() {
   });
 }
 
+// "Show in Finder / Explorer": selects the file in the OS file manager. A
+// file that has gone missing gets its folder opened instead, so the user at
+// least lands where it used to be. Resolves { ok } / { ok: false, error }.
+ipcMain.handle("pm:reveal-file", async (_event, filePath) => {
+  if (typeof filePath !== "string" || !path.isAbsolute(filePath)) {
+    return { ok: false, error: "No file path" };
+  }
+  try {
+    if (fs.existsSync(filePath)) {
+      shell.showItemInFolder(filePath);
+      return { ok: true };
+    }
+    const error = await shell.openPath(path.dirname(filePath));
+    return error ? { ok: false, error } : { ok: true, missing: true };
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+});
+
 // Native folder picker: the app's core new capability. Returns an absolute host
 // path the native backend can read directly (no Docker mounts involved).
 ipcMain.handle("pm:pick-folder", async () => {

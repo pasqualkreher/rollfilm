@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
 import { IconInfo } from "./Icons";
+import { MembershipIcon, membershipPath, useMembershipTargets } from "./MembershipChips";
+import { isAutoTag, withoutMembershipNames } from "../utils/autoTags";
 import { formatShutterSpeed } from "../utils/photoMeta";
 
 // The card carries no thumbnail of its own - the photo is right there on the
@@ -40,7 +43,19 @@ function Row({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-function InfoCard({ anchor }: { anchor: Anchor }) {
+function InfoCard({
+  anchor,
+  onPointerEnter,
+  onPointerLeave,
+  onNavigate,
+}: {
+  anchor: Anchor;
+  // The pointer arriving on the card keeps it open; leaving it lets it go.
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+  // A chip was followed - the card has done its job.
+  onNavigate: () => void;
+}) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
 
@@ -51,11 +66,7 @@ function InfoCard({ anchor }: { anchor: Anchor }) {
     queryFn: () => api.images.get(anchor.id),
     staleTime: 60_000,
   });
-  const { data: albums } = useQuery({
-    queryKey: ["albums"],
-    queryFn: () => api.albums.list(),
-    staleTime: 5 * 60_000,
-  });
+  const { albums, albumsOf, canvasesOf } = useMembershipTargets();
 
   // Placed after the card has rendered, because where it fits depends on how
   // tall it turned out - which depends on how much metadata this photo has.
@@ -82,9 +93,11 @@ function InfoCard({ anchor }: { anchor: Anchor }) {
     setPlaced({ left, top });
   }, [anchor, image, albums]);
 
-  const albumNames = (albums ?? [])
-    .filter((a) => image?.album_ids.includes(a.id))
-    .map((a) => a.name);
+  // Where the photo is used - its albums and the canvases it lies on - shown
+  // as marks of their kind after the tags. The membership tags themselves
+  // ("album: …", "canvas: …") are those same facts, so they are not repeated.
+  const memberships = image ? [...albumsOf(image.album_ids), ...canvasesOf(image.tags)] : [];
+  const plainTags = withoutMembershipNames(image?.tags ?? []);
   const place =
     image?.gps_country ??
     (image?.gps_lat != null && image?.gps_lon != null
@@ -95,7 +108,13 @@ function InfoCard({ anchor }: { anchor: Anchor }) {
     <div
       ref={cardRef}
       className="info-card"
-      role="tooltip"
+      onMouseEnter={onPointerEnter}
+      onMouseLeave={onPointerLeave}
+      // The card is rendered inside the grid's React tree (the portal only
+      // moves the DOM), so presses on it would bubble into the grid and start
+      // a selection or open a tile. They belong to the card alone.
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
       style={{
         left: placed?.left ?? 0,
         top: placed?.top ?? 0,
@@ -138,17 +157,24 @@ function InfoCard({ anchor }: { anchor: Anchor }) {
           prose, not another key/value pair. */}
       {image?.description && <p className="info-card-description">{image.description}</p>}
 
-      {image?.tags.length || albumNames.length ? (
+      {plainTags.length || memberships.length ? (
         <div className="info-card-chips">
-          {image?.tags.map((tag) => (
-            <span key={tag} className="info-card-chip">
+          {plainTags.map((tag) => (
+            <span key={tag} className={`info-card-chip${isAutoTag(tag) ? " info-card-chip--auto" : ""}`}>
               {tag}
             </span>
           ))}
-          {albumNames.map((name) => (
-            <span key={name} className="info-card-chip info-card-chip--album">
-              {name}
-            </span>
+          {memberships.map((m) => (
+            <Link
+              key={`${m.kind}:${m.id}`}
+              to={membershipPath(m)}
+              className={`info-card-chip info-card-chip--${m.kind}`}
+              title={m.kind === "album" ? `Open the album “${m.name}”` : `Show the canvas “${m.name}”`}
+              onClick={onNavigate}
+            >
+              <MembershipIcon kind={m.kind} size={10} />
+              {m.name}
+            </Link>
           ))}
         </div>
       ) : null}
@@ -162,11 +188,12 @@ function InfoCard({ anchor }: { anchor: Anchor }) {
  * shows that photo's details - EXIF, place, its written description, tags and
  * albums. Text only; the photo itself is on the grid right underneath.
  *
- * Purely a hover affordance: rest on the "i" for a moment and the card
- * appears, move away and it is gone. Nothing to open and nothing to close, so
- * checking one photo's ISO costs a pause and no clicks. The card is inert to
- * the mouse - it must never come between the pointer and the grid, or it would
- * swallow the mouse-leave that dismisses it - and the "i" itself swallows
+ * A hover affordance: rest on the "i" for a moment and the card appears, move
+ * away and it is gone. Nothing to open and nothing to close, so checking one
+ * photo's ISO costs a pause and no clicks. The card itself can be reached,
+ * though: leaving the "i" towards the card keeps it open for a moment, long
+ * enough to cross the gap, and while the pointer rests on the card it stays -
+ * so the album and canvas chips on it can be followed. The "i" swallows
  * clicks so hitting it never opens the lightbox by accident.
  *
  * Returns the button to place inside each tile plus the overlay to render once
@@ -175,10 +202,15 @@ function InfoCard({ anchor }: { anchor: Anchor }) {
 // Long enough that sweeping the pointer across the grid on the way somewhere
 // else never summons a card, short enough to feel like an answer.
 const PEEK_DELAY_MS = 550;
+// How long the card survives the pointer leaving the "i" (or the card): the
+// time it takes to cross the gap between the two. Short, so that moving on to
+// the next tile still dismisses it promptly.
+const LINGER_MS = 220;
 
 export function usePhotoInfoCard(enabled: boolean) {
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const peekTimer = useRef<number | null>(null);
+  const lingerTimer = useRef<number | null>(null);
 
   const cancelPeekTimer = useCallback(() => {
     if (peekTimer.current !== null) {
@@ -187,12 +219,41 @@ export function usePhotoInfoCard(enabled: boolean) {
     }
   }, []);
 
+  const cancelLingerTimer = useCallback(() => {
+    if (lingerTimer.current !== null) {
+      window.clearTimeout(lingerTimer.current);
+      lingerTimer.current = null;
+    }
+  }, []);
+
   const close = useCallback(() => {
     cancelPeekTimer();
+    cancelLingerTimer();
     setAnchor(null);
-  }, [cancelPeekTimer]);
+  }, [cancelPeekTimer, cancelLingerTimer]);
 
-  useEffect(() => cancelPeekTimer, [cancelPeekTimer]);
+  // The pointer has left the "i" or the card: let the card go unless it comes
+  // back within the linger. Only this card - a peek already under way for
+  // another tile's "i" is left alone, and a card that replaced this one in
+  // the meantime is not knocked out by a stale timer.
+  const linger = useCallback(
+    (id: string) => {
+      cancelLingerTimer();
+      lingerTimer.current = window.setTimeout(() => {
+        lingerTimer.current = null;
+        setAnchor((current) => (current?.id === id ? null : current));
+      }, LINGER_MS);
+    },
+    [cancelLingerTimer]
+  );
+
+  useEffect(
+    () => () => {
+      cancelPeekTimer();
+      cancelLingerTimer();
+    },
+    [cancelPeekTimer, cancelLingerTimer]
+  );
 
   // Anything that moves the grid under the card, or takes the user elsewhere,
   // dismisses it - it is placed against a rectangle measured when it opened.
@@ -228,6 +289,11 @@ export function usePhotoInfoCard(enabled: boolean) {
           onMouseEnter={(e) => {
             const button = e.currentTarget;
             cancelPeekTimer();
+            // Back on the "i" whose card is open (or lingering): keep it.
+            if (anchor?.id === id) {
+              cancelLingerTimer();
+              return;
+            }
             peekTimer.current = window.setTimeout(() => {
               peekTimer.current = null;
               // Measured now, not on enter: the grid may have been re-laid out
@@ -237,7 +303,10 @@ export function usePhotoInfoCard(enabled: boolean) {
               setAnchor({ id, rect: button.getBoundingClientRect() });
             }, PEEK_DELAY_MS);
           }}
-          onMouseLeave={close}
+          onMouseLeave={() => {
+            cancelPeekTimer();
+            if (anchor?.id === id) linger(id);
+          }}
           // The card is a hover, so the "i" has nothing to do on a click -
           // except stop the tile underneath from opening the lightbox, and stop
           // the press from starting a selection on the grid.
@@ -250,8 +319,18 @@ export function usePhotoInfoCard(enabled: boolean) {
           <IconInfo size={12} />
         </button>
       ) : null,
-    [enabled, anchor, close, cancelPeekTimer]
+    [enabled, anchor, cancelPeekTimer, cancelLingerTimer, linger]
   );
 
-  return { infoButton, overlay: anchor ? <InfoCard key={anchor.id} anchor={anchor} /> : null };
+  const overlay = anchor ? (
+    <InfoCard
+      key={anchor.id}
+      anchor={anchor}
+      onPointerEnter={cancelLingerTimer}
+      onPointerLeave={() => linger(anchor.id)}
+      onNavigate={close}
+    />
+  ) : null;
+
+  return { infoButton, overlay };
 }
