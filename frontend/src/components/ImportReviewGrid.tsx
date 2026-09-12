@@ -7,6 +7,8 @@ import { TimelineScrubber } from "./TimelineScrubber";
 import { Thumb, fileTypeBadge, fileTypeBadgeClass, tileAspectRatio } from "./ThumbnailGrid";
 import { thumbPx, useThumbSize } from "../state/viewPrefs";
 import { GRID_PIN_LIMIT, preloadImage } from "../utils/preload";
+import { isSelectClick, modKeyLabel } from "../utils/selection";
+import type { ReviewScrollAnchor } from "../utils/importReviewState";
 import {
   overscanFor,
   buildJustifiedLayout,
@@ -21,9 +23,15 @@ import {
 // select them in the first place. Exception: a copy of a photo sitting in the
 // Trash may be imported (it restores that photo), so it stays selectable.
 // A flagged duplicate is always an identical file: nothing is flagged for
-// merely looking alike, so there is no "maybe" case to keep selectable.
+// merely looking alike, so there is no "maybe" case to keep selectable. A file
+// an earlier partial import of this session already added counts as one too.
 export function isDuplicate(f: StagedFileOut): boolean {
-  return Boolean(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && !f.duplicate_in_trash;
+  return flaggedDuplicate(f) && !f.duplicate_in_trash;
+}
+
+// Flagged at all - including the importable Trash case isDuplicate excludes.
+export function flaggedDuplicate(f: StagedFileOut): boolean {
+  return Boolean(f.duplicate_of_image_id || f.duplicate_of_staged_file_id || f.imported);
 }
 
 // Height reserved under each thumbnail for the rating stars and colour
@@ -76,7 +84,6 @@ interface Props {
   // Capture date used for sectioning; the wizard resolves it (EXIF, falling
   // back to the paired file's) so both halves of a pair sit under one day.
   takenAtOf: (file: StagedFileOut) => string | null;
-  selectMode: boolean;
   mergePairs: boolean;
   viewMode: ViewMode;
   onToggleSelect: (index: number, shiftKey: boolean) => void;
@@ -99,6 +106,13 @@ interface Props {
   // Changes when the review filters do - a filtered batch is a new list, so the
   // grid jumps to its top instead of chasing the photo that was on screen.
   resetKey?: string;
+  // Where the grid stood when it was last unmounted (the wizard keeps it per
+  // session): scrolled to once the first layout is built, so coming back to
+  // the review lands on the same photos.
+  initialScroll?: ReviewScrollAnchor | null;
+  // Reports the photo at the top of the viewport while scrolling (debounced)
+  // and once more on unmount - what `initialScroll` is fed from next time.
+  onScrollAnchor?: (anchor: ReviewScrollAnchor) => void;
 }
 
 // The import review grid, virtualized exactly like the library timeline
@@ -111,7 +125,6 @@ export function ImportReviewGrid({
   sessionId,
   files,
   takenAtOf,
-  selectMode,
   mergePairs,
   viewMode,
   onToggleSelect,
@@ -122,6 +135,8 @@ export function ImportReviewGrid({
   scrubberSections,
   getBottomInset,
   resetKey,
+  initialScroll,
+  onScrollAnchor,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
@@ -163,6 +178,65 @@ export function ImportReviewGrid({
     resetKey,
   });
 
+  // Coming back to the review: put the row that was at the top of the
+  // viewport back there. One-shot, on the first layout that has photos; the
+  // anchor's RAW/JPEG partner counts too, in case the pair merge or the view
+  // mode changed which half of the shot is in the list.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || !layout || !scrollerRef.current || files.length === 0) return;
+    restoredRef.current = true;
+    if (!initialScroll) return;
+    const anchorFile = files.find((f) => f.id === initialScroll.id);
+    const ids = new Set([initialScroll.id, anchorFile?.paired_staged_file_id ?? ""]);
+    for (const s of layout.sections) {
+      for (const r of s.rows) {
+        if (r.tiles.some((t) => ids.has(t.item.id))) {
+          const root = rootRef.current!;
+          const scroller = scrollerRef.current!;
+          const rootTop =
+            root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+          scroller.scrollTop = rootTop + s.top + r.top + initialScroll.frac * r.height;
+          return;
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, files.length]);
+
+  // The photo currently at the top of the viewport, in the form the restore
+  // above reads. Read at call time from the latest layout and scroll offset,
+  // so a debounced report always describes where the grid is NOW.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const onScrollAnchorRef = useRef(onScrollAnchor);
+  onScrollAnchorRef.current = onScrollAnchor;
+  const reportAnchor = () => {
+    const cur = layoutRef.current;
+    if (!cur || !restoredRef.current || !onScrollAnchorRef.current) return;
+    const top = lastScrollRef.current;
+    for (const s of cur.sections) {
+      if (s.top + s.height <= top) continue;
+      for (const r of s.rows) {
+        const rowTop = s.top + r.top;
+        if (rowTop + r.height > top && r.tiles.length > 0) {
+          const frac = Math.max(-0.5, Math.min(1, (top - rowTop) / r.height));
+          onScrollAnchorRef.current({ id: r.tiles[0].item.id, frac });
+          return;
+        }
+      }
+    }
+  };
+  const reportAnchorRef = useRef(reportAnchor);
+  reportAnchorRef.current = reportAnchor;
+  useEffect(() => {
+    const timer = window.setTimeout(() => reportAnchorRef.current(), 300);
+    return () => window.clearTimeout(timer);
+  }, [window_.top]);
+  // On unmount (the user left for another tab) the position must be exact,
+  // not up to a debounce old.
+  useEffect(() => () => reportAnchorRef.current(), []);
+
   // Warm the full-size preview of the cards on screen, so opening one has
   // nothing left to fetch. Only what is actually mounted, and only once the
   // import is done - see `warmPreviews`.
@@ -198,7 +272,7 @@ export function ImportReviewGrid({
   // actually has - clicking through 300 cards to keep one afternoon was the
   // slow path this replaces.
   function renderSectionSelect(label: string) {
-    if (!selectMode || !sectionSelect) return null;
+    if (!sectionSelect) return null;
     const info = sectionSelect.infoOf(label);
     if (!info) return null;
     return (
@@ -221,7 +295,7 @@ export function ImportReviewGrid({
   // an archive folder holding several years, where ticking day by day would be
   // hopeless.
   function renderScopeButtons(label: string) {
-    if (!selectMode || !sectionSelect) return null;
+    if (!sectionSelect) return null;
     const info = sectionSelect.infoOf(label);
     if (!info || (info.month === null && info.year === null)) return null;
     const button = (
@@ -282,15 +356,15 @@ export function ImportReviewGrid({
           // the photo about to be opened - warming here buys the preview the
           // moment before the click.
           onPointerEnter={() => preloadImage(api.import.stagedPreviewUrl(sessionId, f.id))}
-          onClick={(e) => (selectMode ? onToggleSelect(i, e.shiftKey) : onOpen(i))}
+          // Plain click previews; Cmd/Ctrl-click or Shift-click toggles the
+          // import tick (the checkbox does the same without a modifier).
+          onClick={(e) => (isSelectClick(e) ? onToggleSelect(i, e.shiftKey) : onOpen(i))}
           title={
-            selectMode
-              ? isDuplicate(f)
-                ? "Already in your library"
-                : f.duplicate_in_trash
-                  ? "This photo is in the Trash. Importing it restores it."
-                  : "Click to select. Shift-click selects a range."
-              : "Click to preview"
+            isDuplicate(f)
+              ? "Already in your library"
+              : f.duplicate_in_trash
+                ? "This photo is in the Trash. Importing it restores it."
+                : `Click to preview. ${modKeyLabel}-click to tick or untick, Shift-click for a range.`
           }
         >
           {f.processed ? (
@@ -305,12 +379,13 @@ export function ImportReviewGrid({
             // finishes this file. Shimmers like the album skeleton cards.
             <div className="thumb-analyzing" title="Analyzing…" />
           )}
-          {selectMode && (
+          {/* An exact duplicate can never be imported, so it gets no tick box -
+              its badge takes the corner instead. */}
+          {!isDuplicate(f) && (
             <input
               className="select-checkbox"
               type="checkbox"
               checked={f.selected}
-              disabled={isDuplicate(f)}
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleSelect(i, e.shiftKey);
@@ -318,7 +393,7 @@ export function ImportReviewGrid({
               onChange={() => {}}
             />
           )}
-          {(f.duplicate_of_image_id || f.duplicate_of_staged_file_id) && (
+          {flaggedDuplicate(f) && (
             <span className="duplicate-badge">
               {f.duplicate_in_trash ? "In Trash, will be restored" : "Already in library"}
             </span>
@@ -327,9 +402,9 @@ export function ImportReviewGrid({
             {fileTypeBadge(f.file_type, merged)}
           </span>
         </div>
-        {/* No per-card import checkbox: it's cramped at grid sizes and crowds
-            the stars. Toggle import via "Select" mode (overlay checkbox /
-            click) or in the large preview (Space key). */}
+        {/* No import checkbox in the footer: it's cramped at grid sizes and
+            crowds the stars. The tick lives as an overlay on the thumbnail
+            (above), or in the large preview (Space key). */}
         <div className="import-card-footer">
           <RatingStars rating={f.rating} onChange={(rating) => onPatch(f.id, { rating })} />
           <ColorLabelPicker

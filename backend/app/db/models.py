@@ -354,15 +354,55 @@ class ImportSession(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
+    # Display label of the source ("DCIM", "Uploaded folder") - not a path.
     source_path: Mapped[str] = mapped_column(String)
     status: Mapped[ImportSessionStatus] = mapped_column(
         Enum(ImportSessionStatus), default=ImportSessionStatus.staging
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # A session lives until the user ends it - import a hundred of a card's
+    # five thousand photos today, the next hundred tomorrow, and collect from
+    # more than one card or folder along the way. What it copies from is in
+    # ImportSessionSource, one row per folder.
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     staged_files: Mapped[list["ImportStagedFile"]] = relationship(
         back_populates="import_session", cascade="all, delete-orphan"
     )
+    sources: Mapped[list["ImportSessionSource"]] = relationship(
+        back_populates="import_session", cascade="all, delete-orphan"
+    )
+
+
+class ImportSessionSource(Base):
+    """One folder an import session copies from.
+
+    A session can collect from several - a card, a second card the next day, a
+    folder on the desktop - and each is remembered separately, so continuing
+    the session copies whatever of *each* source hasn't been copied yet.
+
+    The volume identity is what makes a card recognisable: macOS mounts every
+    unnamed card as /Volumes/Untitled, so the path alone can be a different
+    card tomorrow. `volume_mount` is where the volume was mounted when `root`
+    was recorded - root relative to it is the folder on the volume, which is
+    how it is found again under another mount name (see services/volumes.py)."""
+
+    __tablename__ = "import_session_sources"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    import_session_id: Mapped[str] = mapped_column(ForeignKey("import_sessions.id"), index=True)
+    # Display name, usually the folder's own name ("100FUJI", "DCIM").
+    label: Mapped[str] = mapped_column(String)
+    root: Mapped[str] = mapped_column(String)
+    volume_mount: Mapped[str | None] = mapped_column(String, nullable=True)
+    volume_uuid: Mapped[str | None] = mapped_column(String, nullable=True)
+    volume_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Importable files found here at the last scan - against the rows staged
+    # from this source, that is "N photos still on the card".
+    file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    import_session: Mapped["ImportSession"] = relationship(back_populates="sources")
 
 
 class AppSetting(Base):
@@ -385,6 +425,21 @@ class ImportStagedFile(Base):
     staged_path: Mapped[str] = mapped_column(String)
     original_filename: Mapped[str] = mapped_column(String)
     file_type: Mapped[FileType] = mapped_column(Enum(FileType))
+    # Which of the session's sources this file came from, where it sits under
+    # that source's root, and its size there. A rescan skips what matches, so
+    # continuing a session only copies what hasn't been copied yet. NULL for
+    # uploads and individually picked files (no source folder).
+    source_id: Mapped[str | None] = mapped_column(
+        ForeignKey("import_session_sources.id"), nullable=True, index=True
+    )
+    source_relpath: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Already committed by an earlier partial import of this (still open)
+    # session. The row stays so the session remembers the file; its staged
+    # bytes moved into the library, and duplicate_of_image_id points at the
+    # photo it became - so it reads, and is blocked, like any file that is
+    # already in the library.
+    imported: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     # NULL until the background analysis hashes the landed file - the copy
     # phase itself is a dumb native kernel copy and computes nothing.

@@ -4,6 +4,7 @@ import type { ColorLabel, StagedFileOut } from "../api/types";
 import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
+import { flaggedDuplicate } from "./ImportReviewGrid";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconImage } from "./Icons";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
@@ -26,6 +27,9 @@ interface Props {
   // The files list collapses RAW+JPEG pairs into one stand-in card - label that
   // card "RAW+JPG" instead of its own file type.
   pairsMerged?: boolean;
+  // Set by <Presence> while the lightbox fades out: keys are ignored, so an
+  // arrow pressed during the fade cannot reopen it on the neighbour.
+  closing?: boolean;
 }
 
 export function ImportLightbox({
@@ -37,6 +41,7 @@ export function ImportLightbox({
   onUpdate,
   showImmichSync = false,
   pairsMerged = false,
+  closing = false,
 }: Props) {
   const file = files[index];
   // The preview failed to load (damaged/unreadable file). Show a clean error
@@ -80,8 +85,9 @@ export function ImportLightbox({
 
   useEffect(() => {
     if (!file) return;
-    const duplicate = Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id);
+    const duplicate = flaggedDuplicate(file);
     function onKeyDown(e: KeyboardEvent) {
+      if (closing) return;
       // Don't hijack keys while a text/choice control (checkbox, select,
       // text field) has focus - let it handle its own Space/Enter natively.
       // BUTTONS are deliberately NOT exempt: after clicking the ‹/› arrows
@@ -111,7 +117,7 @@ export function ImportLightbox({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, files.length, onIndexChange, onClose, onUpdate, file, zoom.zoomed]);
+  }, [index, files.length, onIndexChange, onClose, onUpdate, file, zoom.zoomed, closing]);
 
   // Hold the 10 previous and 10 next staged previews pinned in memory while
   // this one is on screen (same sliding window as the library lightbox) -
@@ -142,14 +148,14 @@ export function ImportLightbox({
 
   if (!file) return null;
 
-  const isDuplicate = Boolean(file.duplicate_of_image_id || file.duplicate_of_staged_file_id);
+  const isDuplicate = flaggedDuplicate(file);
 
   return (
     // Styled like the library's photo view (opaque app surface, the same
     // elevated image box with the light/black background toggle and the Back
     // button in the stage toolbar) - just without the library's info panel;
     // the review controls bar below stays.
-    <div className="lightbox-overlay lightbox-overlay--page" onClick={onClose}>
+    <div className={`lightbox-overlay lightbox-overlay--page${closing ? " pm-closing" : ""}`} onClick={onClose}>
       <div className="detail-layout lightbox-detail-layout" onClick={(e) => e.stopPropagation()}>
         <div className="detail-main">
           {/* The review bar sits above the photo, in a band of its own - it

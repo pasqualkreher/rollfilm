@@ -1,6 +1,7 @@
-import { createContext, useContext, useRef, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import type { ImportSessionSummary } from "../api/types";
 
 interface ImportSessionState {
   sessionId: string | null;
@@ -56,6 +57,23 @@ interface ImportSessionState {
   startFilesImport: (files: { path: string; size: number }[], label: string) => void;
   cancelUpload: () => void;
   reset: () => void;
+  // The open session was started on a folder, so whatever of that folder it
+  // hasn't copied yet can be copied later (see continueSession).
+  sessionResumable: boolean;
+  // Why a continued session can't copy the rest right now (its card isn't
+  // connected) - a banner over the review.
+  sourceNotice: string | null;
+  // Sessions live until the user ends them. Open one from the Import page's
+  // list: the review comes back as it was left, and if its folder is
+  // reachable, whatever of it isn't copied yet is copied now.
+  continueSession: (s: ImportSessionSummary) => void;
+  // "Continue later": close the review and leave the session as it is. A copy
+  // still running finishes the batch in flight and stops.
+  leaveSession: () => void;
+  // Add more to the open session: another folder (which becomes a source of
+  // its own, continued like the first) or individually picked photos.
+  addFolderToSession: (folderPath: string) => void;
+  addFilesToSession: (files: { path: string; size: number }[]) => void;
 }
 
 const ImportSessionContext = createContext<ImportSessionState | null>(null);
@@ -69,6 +87,7 @@ const ImportSessionContext = createContext<ImportSessionState | null>(null);
  * backend received and staged everything.
  */
 export function ImportSessionProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState("");
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
@@ -90,12 +109,22 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const stopRef = useRef(false);
   const [stagingStopped, setStagingStopped] = useState(false);
   const [canStopStaging, setCanStopStaging] = useState(false);
+  const [sessionResumable, setSessionResumable] = useState(false);
+  const [sourceNotice, setSourceNotice] = useState<string | null>(null);
+  // The session on screen, for async work that must not act on a session the
+  // user has left in the meantime (continueSession's scan).
+  const activeSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeSessionRef.current = sessionId;
+  }, [sessionId]);
 
   function startUpload(files: File[], label: string) {
     const controller = new AbortController();
     abortRef.current = controller;
     uploadSessionRef.current = null;
     stopRef.current = false;
+    // A browser upload has no path to come back to.
+    setSessionResumable(false);
     setStagingStopped(false);
     setCanStopStaging(false);
     setImportMode("upload");
@@ -147,7 +176,9 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
       if (scan.files.length === 0) {
         throw new Error("No importable photos found in this folder");
       }
-      return scan.files;
+      // Every file of the folder is staged here, so its own count is the
+      // source's total - no sourceCounts override needed.
+      return scan.files.map((f) => ({ ...f, root: folderPath }));
     });
   }
 
@@ -158,18 +189,28 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     runPathsImport(label, async () => files);
   }
 
+  // `opts.sessionId` continues an existing session (appending to it) instead
+  // of creating one. Each file carries the folder it sits under (`root`), and
+  // `opts.sourceCounts` says how many importable files each of those folders
+  // holds - together that records the folders as the session's sources, to be
+  // continued from later.
   function runPathsImport(
     label: string,
-    getFiles: (signal: AbortSignal) => Promise<{ path: string; size: number }[]>
+    getFiles: (
+      signal: AbortSignal
+    ) => Promise<{ path: string; size: number; root?: string | null }[]>,
+    opts: { sessionId?: string; sourceCounts?: Record<string, number> } = {}
   ) {
     const controller = new AbortController();
     abortRef.current = controller;
-    uploadSessionRef.current = null;
+    const resuming = opts.sessionId != null;
+    uploadSessionRef.current = opts.sessionId ?? null;
     stopRef.current = false;
     setStagingStopped(false);
-    setCanStopStaging(false);
+    // A continued session exists already, so stopping keeps something.
+    setCanStopStaging(resuming);
     setImportMode("folder");
-    setStagingSessionId(null);
+    setStagingSessionId(opts.sessionId ?? null);
     setTotalFileCount(null);
     setStagedFileCount(0);
     setIsUploading(true);
@@ -189,24 +230,45 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     (async () => {
       const files = await getFiles(controller.signal);
       setTotalFileCount(files.length);
+      // How many importable files each folder holds, so the session records it
+      // as a source with its total. Staging everything a folder has (a fresh
+      // folder import) makes that the count of the files themselves;
+      // continuing a source passes its scanned total, which also covers what
+      // was copied from it before.
+      const counts: Record<string, number> = {};
+      for (const f of files) if (f.root) counts[f.root] = (counts[f.root] ?? 0) + 1;
+      Object.assign(counts, opts.sourceCounts ?? {});
+      if (!resuming) setSessionResumable(files.some((f) => f.root));
       const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1;
       let stagedBytes = 0;
       let stagedFiles = 0;
-      let session: Awaited<ReturnType<typeof api.import.stagePaths>> | null = null;
-      let reviewOpened = false;
+      let runSessionId: string | null = opts.sessionId ?? null;
+      // A continued session's review is already on screen.
+      let reviewOpened = resuming;
+      // Folders whose file count has been sent - it only creates the source.
+      const countedRoots = new Set<string>();
       let i = 0;
       while (i < files.length) {
         if (controller.signal.aborted) throw new DOMException("Upload cancelled", "AbortError");
         const size = i === 0 ? PRIME_PATHS : BATCH_PATHS;
-        const batch = files.slice(i, i + size);
-        i += size;
-        session = await api.import.stagePaths(
+        // A batch never mixes sources: one staging request carries the one
+        // folder its paths are under, which each file's recorded place on
+        // that source is relative to.
+        let batch = files.slice(i, i + size);
+        const root = batch[0].root ?? null;
+        const mixedAt = batch.findIndex((f) => (f.root ?? null) !== root);
+        if (mixedAt > 0) batch = batch.slice(0, mixedAt);
+        i += batch.length;
+        const session = await api.import.stagePaths(
           batch.map((f) => f.path),
           label,
-          session?.id ?? null,
+          runSessionId,
           totalBytes,
-          controller.signal
+          controller.signal,
+          root ? { root, fileCount: countedRoots.has(root) ? undefined : counts[root] } : undefined
         );
+        if (root) countedRoots.add(root);
+        runSessionId = session.id;
         if (!uploadSessionRef.current) {
           uploadSessionRef.current = session.id;
           setStagingSessionId(session.id);
@@ -216,6 +278,12 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         stagedFiles += batch.length;
         setStagedFileCount(stagedFiles);
         setUploadProgress(Math.min(100, Math.round((stagedBytes / totalBytes) * 100)));
+        // The review polls while a copy runs, but only on a timer: a few
+        // photos added to an open session are copied before that timer fires
+        // once, and the grid then sat on its old list until something else
+        // (a tab switch) refetched it. Refresh right as each batch lands.
+        queryClient.invalidateQueries({ queryKey: ["import-files", session.id] });
+        queryClient.invalidateQueries({ queryKey: ["import-progress", session.id] });
         // Incremental import: open the review as soon as the first batch is
         // staged, then keep staging the remaining batches in the background.
         // The user starts culling immediately instead of staring at a bar
@@ -237,8 +305,10 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     })()
       .catch((err: Error) => {
         if (controller.signal.aborted || err.name === "AbortError") {
+          // Cancel throws away a session this run created - never one it was
+          // only continuing, which can hold days of culling.
           const staged = uploadSessionRef.current;
-          if (staged) api.import.discard(staged).catch(() => {});
+          if (staged && !resuming) api.import.discard(staged).catch(() => {});
           reset();
         } else if (uploadSessionRef.current) {
           // The review was already open (at least one batch staged): keep those
@@ -257,6 +327,14 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         setTotalFileCount(null);
         setStagedFileCount(0);
         setCanStopStaging(false);
+        // Once more at the end: the last batch's analysis flags land after its
+        // copy, and the session list's counts have changed either way.
+        const id = uploadSessionRef.current;
+        if (id) {
+          queryClient.invalidateQueries({ queryKey: ["import-files", id] });
+          queryClient.invalidateQueries({ queryKey: ["import-progress", id] });
+        }
+        queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
       });
   }
 
@@ -315,6 +393,107 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setStagingStopped(true);
   }
 
+  async function continueSession(s: ImportSessionSummary) {
+    if (abortRef.current) return; // one copy at a time
+    // Set here as well as by the effect below: the scan starts before React
+    // has re-rendered, and it checks this to see whether the session is still
+    // the one on screen when it comes back.
+    activeSessionRef.current = s.id;
+    setSessionId(s.id);
+    setSourceLabel(s.source_path);
+    setSessionResumable(s.sources.length > 0);
+    setUploadError(null);
+    setStagingError(null);
+    setSourceNotice(null);
+    setStagingStopped(false);
+    if (s.sources.length === 0) return;
+    try {
+      const found = await api.import.rescan(s.id);
+      // Left again (or another copy started) while the scan ran.
+      if (activeSessionRef.current !== s.id || abortRef.current) return;
+
+      // Sources that aren't there right now, and still hold photos: say which,
+      // rather than silently copying only part of the session.
+      const remainingOf = new Map(s.sources.map((x) => [x.id, x.remaining]));
+      const missing = found.sources.filter(
+        (src) => !src.available && remainingOf.get(src.id ?? "") !== 0
+      );
+      if (missing.length > 0) {
+        const names = missing.map((m) => `“${m.label}”`).join(", ");
+        setSourceNotice(
+          `${names} ${missing.length === 1 ? "is" : "are"} not connected. Everything copied so ` +
+            `far is here. Connect ${missing.length === 1 ? "it" : "them"} and continue this ` +
+            "session again to copy the rest."
+        );
+      }
+
+      const toCopy = found.sources.flatMap((src) =>
+        src.available ? src.files.map((f) => ({ ...f, root: src.root })) : []
+      );
+      if (toCopy.length === 0) return;
+      const counts: Record<string, number> = {};
+      for (const src of found.sources) {
+        if (src.available && src.file_count != null) counts[src.root] = src.file_count;
+      }
+      runPathsImport(s.source_path, async () => toCopy, { sessionId: s.id, sourceCounts: counts });
+    } catch (err) {
+      if (activeSessionRef.current === s.id) setStagingError((err as Error).message);
+    }
+  }
+
+  // Collect from more than one place in one session: another card, another
+  // folder. The folder becomes a source of its own, continued like any other -
+  // and a folder the session already has only contributes what is new.
+  async function addFolderToSession(folderPath: string) {
+    const id = activeSessionRef.current;
+    if (!id || abortRef.current) return;
+    setSourceNotice(null);
+    setStagingError(null);
+    try {
+      const [source] = (await api.import.rescan(id, folderPath)).sources;
+      if (activeSessionRef.current !== id || abortRef.current) return;
+      if (!source || source.files.length === 0) {
+        setSourceNotice("Every photo in that folder is already in this session.");
+        return;
+      }
+      setSessionResumable(true);
+      runPathsImport(
+        source.label,
+        async () => source.files.map((f) => ({ ...f, root: source.root })),
+        {
+          sessionId: id,
+          sourceCounts: { [source.root]: source.file_count ?? source.files.length },
+        }
+      );
+    } catch (err) {
+      if (activeSessionRef.current === id) setStagingError((err as Error).message);
+    }
+  }
+
+  // Individually picked photos go into the session as they are - no folder to
+  // come back to, so they add no source.
+  function addFilesToSession(files: { path: string; size: number }[]) {
+    const id = activeSessionRef.current;
+    if (!id || abortRef.current || files.length === 0) return;
+    setSourceNotice(null);
+    runPathsImport(`${files.length} selected files`, async () => files, { sessionId: id });
+  }
+
+  function leaveSession() {
+    // Same as "Stop copying": the batch in flight lands, nothing is left
+    // half-copied, and what the copy didn't reach waits for the next continue.
+    if (abortRef.current) {
+      stopRef.current = true;
+      setStagingStopped(true);
+    }
+    activeSessionRef.current = null;
+    setSessionId(null);
+    setSourceLabel("");
+    setSessionResumable(false);
+    setStagingError(null);
+    setSourceNotice(null);
+  }
+
   function reset() {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -322,8 +501,11 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     stopRef.current = false;
     setStagingStopped(false);
     setCanStopStaging(false);
+    activeSessionRef.current = null;
     setSessionId(null);
     setSourceLabel("");
+    setSessionResumable(false);
+    setSourceNotice(null);
     setUploadError(null);
     setStagingError(null);
     setImportMode(null);
@@ -358,6 +540,12 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         startFilesImport,
         cancelUpload,
         reset,
+        sessionResumable,
+        sourceNotice,
+        continueSession,
+        leaveSession,
+        addFolderToSession,
+        addFilesToSession,
       }}
     >
       {children}

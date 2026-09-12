@@ -566,6 +566,44 @@ class ImportSessionOut(BaseModel):
     source_path: str
     status: ImportSessionStatus
     created_at: datetime
+    updated_at: datetime | None = None
+
+
+class ImportSourceOut(BaseModel):
+    """One folder an open session copies from - a session can collect from
+    several (see models.ImportSessionSource)."""
+
+    id: str
+    label: str
+    root: str
+    # Where that folder is reachable right now - differs from `root` when the
+    # card came back under another mount name; null when it isn't connected.
+    current_root: str | None
+    volume_name: str | None
+    # The folder, on the right volume, is reachable right now.
+    available: bool
+    # Copied from here so far, and what the last scan found still missing
+    # (null when this source was never scanned).
+    copied: int
+    remaining: int | None
+
+
+class ImportSessionSummaryOut(BaseModel):
+    """One open import session in the list the Import page offers to
+    continue."""
+
+    id: str
+    source_path: str
+    created_at: datetime
+    updated_at: datetime | None
+    # Staged rows, and of those: committed by an earlier partial import,
+    # blocked as duplicates, currently ticked, still being analyzed.
+    file_count: int
+    imported_count: int
+    duplicate_count: int
+    selected_count: int
+    pending_count: int
+    sources: list[ImportSourceOut]
 
 
 class StagedFileOut(BaseModel):
@@ -589,6 +627,9 @@ class StagedFileOut(BaseModel):
     height: int | None
     # Flagged for selective Immich sync during import review.
     immich_sync: bool = False
+    # Imported by an earlier partial import of this still-open session - it
+    # is in the library now (duplicate_of_image_id points at it).
+    imported: bool = False
     # RAW only: the background demosaiced grid thumbnail is ready - the review
     # grid busts its img URL on the flip, swapping the embedded-preview thumb
     # for the sensor-accurate render.
@@ -647,6 +688,34 @@ class FolderScanOut(BaseModel):
     total_bytes: int
 
 
+class ImportRescanRequest(BaseModel):
+    """Empty: scan every source of the session. With `path`: scan that folder
+    instead - what adding it to the session would bring in (and, if it is
+    already one of its sources, only what isn't copied yet)."""
+
+    path: str | None = None
+
+
+class ImportRescanSourceOut(BaseModel):
+    # Null for a folder that isn't a source of this session yet.
+    id: str | None
+    label: str
+    # The folder as reachable now - may differ from the recorded one when the
+    # card came back under another mount name. Staging passes this back.
+    root: str
+    available: bool
+    files: list[ScannedFileOut]
+    total_bytes: int
+    # Importable files there in total, for the source's "N still to copy".
+    file_count: int | None
+
+
+class ImportSessionRescanOut(BaseModel):
+    """Continuing a session: what of its sources hasn't been copied yet."""
+
+    sources: list[ImportRescanSourceOut]
+
+
 class StagePathsRequest(BaseModel):
     """One batch of a direct folder import: absolute paths of local files the
     backend reads itself. Mirrors the multipart upload's batching contract -
@@ -657,6 +726,11 @@ class StagePathsRequest(BaseModel):
     source_label: str = "Local folder"
     session_id: str | None = None
     total_bytes: int = 0
+    # Folder imports: the folder the paths are under (every batch - it is how
+    # each file's place on the source is recorded), and on the first batch how
+    # many importable files the scan found there. Makes the session resumable.
+    source_root: str | None = None
+    source_file_count: int | None = None
 
 
 class CommitImportRequest(BaseModel):

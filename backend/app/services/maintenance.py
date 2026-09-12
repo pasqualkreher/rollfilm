@@ -23,6 +23,7 @@ from app.db.models import (
     Image,
     ImageTag,
     ImportSession,
+    ImportSessionSource,
     ImportStagedFile,
     Tag,
 )
@@ -555,6 +556,11 @@ def wipe_library(db: Session, owner_id: int) -> None:
     if session_ids:
         db.query(ImportStagedFile).filter(
             ImportStagedFile.import_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        # The folders those sessions copied from - staged rows point at them,
+        # so they go after the files and before the sessions.
+        db.query(ImportSessionSource).filter(
+            ImportSessionSource.import_session_id.in_(session_ids)
         ).delete(synchronize_session=False)
         db.query(ImportSession).filter(ImportSession.owner_id == owner_id).delete(synchronize_session=False)
 

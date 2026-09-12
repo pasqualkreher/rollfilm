@@ -617,6 +617,20 @@ def _drop_session_state(session_id: str) -> None:
         _progress.pop(session_id, None)
 
 
+def _register_library_hashes(images: list[Image]) -> None:
+    """Tell every loaded dedup index about photos that just entered the
+    library. An index is loaded once per session, and sessions now stay open
+    for days - without this, a photo imported through one session would not
+    read as "already in library" in another one staging the same card."""
+    with _session_states_lock:
+        states = [s for s in _session_states.values() if s.loaded]
+    for state in states:
+        with state.lock:
+            for image in images:
+                if image.file_hash:
+                    state.image_by_hash.setdefault(image.file_hash, (image.id, None))
+
+
 def _load_dedup_state(state: _SessionDedupState, db: Session, session_id: str, owner_id: int) -> None:
     """Load the library's dedup index once per session, and seed the staged one
     with files of this session that are already processed (matters after a
@@ -963,40 +977,72 @@ def get_import_progress(session_id: str) -> dict | None:
 
 
 def stage_uploaded_files(
-    db: Session, owner_id: int, uploads: list[UploadedFile], source_label: str
+    db: Session,
+    owner_id: int,
+    uploads: list[UploadedFile],
+    source_label: str,
 ) -> ImportSession:
     """Handles photos picked via the browser's native folder dialog and
     uploaded over HTTP - the backend never needs filesystem access to
-    wherever the user's SD card/folder actually is."""
-    session = ImportSession(owner_id=owner_id, source_path=source_label or "Uploaded folder")
+    wherever the user's SD card/folder actually is. The session is created
+    empty of sources; a folder import adds one (see routes/import_.py) and
+    passes it to append_uploaded_files."""
+    session = ImportSession(
+        owner_id=owner_id,
+        source_path=source_label or "Uploaded folder",
+        updated_at=datetime.now(timezone.utc),
+    )
     db.add(session)
     db.flush()
     with _staging_lock:
         _copy_active.set()
         try:
-            _stage_uploads_into(db, session, owner_id, uploads)
+            _stage_uploads_into(db, session, owner_id, uploads, None)
             db.commit()
         finally:
             _copy_active.clear()
+    db.refresh(session)
+    return session
+
+
+def create_import_session(db: Session, owner_id: int, source_label: str) -> ImportSession:
+    """An empty session to stage into. A folder import creates it up front so
+    the source row its files are read from exists before the first batch (see
+    routes/import_.py); the multipart upload path stages straight away."""
+    session = ImportSession(
+        owner_id=owner_id,
+        source_path=source_label or "Import",
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.add(session)
+    db.commit()
     db.refresh(session)
     return session
 
 
 def append_uploaded_files(
-    db: Session, session: ImportSession, owner_id: int, uploads: list[UploadedFile]
+    db: Session,
+    session: ImportSession,
+    owner_id: int,
+    uploads: list[UploadedFile],
+    source: tuple[str, str] | None = None,
 ) -> ImportSession:
     """Stage another batch of uploads into an existing staging session. The
     multipart parser caps a single request at 1000 files, so big imports are
     sent as several requests all appending to one session - duplicate checks
-    and RAW+JPEG pairing still see the whole session, not just one batch."""
+    and RAW+JPEG pairing still see the whole session, not just one batch.
+    Continuing a session from one of its cards later - and adding another
+    folder to it - comes through here too. `source` is the session source the
+    batch is read from, as (id, root); None for uploads and single files."""
     with _staging_lock:
         # This request's read transaction began before the lock was acquired
         # (the route already loaded the session row). End it so the copy phase
         # below starts fresh against whatever a concurrent batch committed.
         db.rollback()
+        session.updated_at = datetime.now(timezone.utc)
         _copy_active.set()
         try:
-            _stage_uploads_into(db, session, owner_id, uploads)
+            _stage_uploads_into(db, session, owner_id, uploads, source)
             db.commit()
         finally:
             _copy_active.clear()
@@ -1004,8 +1050,24 @@ def append_uploaded_files(
     return session
 
 
+def _source_relpath(upload: UploadedFile, source_root: str | None) -> str | None:
+    """Where a folder-imported file sits under its source's root - the key a
+    later rescan skips already-copied files by."""
+    source_path = getattr(upload, "source_path", None)
+    if source_root is None or source_path is None:
+        return None
+    try:
+        return Path(source_path).relative_to(source_root).as_posix()
+    except ValueError:
+        return None
+
+
 def _stage_uploads_into(
-    db: Session, session: ImportSession, owner_id: int, uploads: list[UploadedFile]
+    db: Session,
+    session: ImportSession,
+    owner_id: int,
+    uploads: list[UploadedFile],
+    session_source: tuple[str, str] | None = None,
 ) -> None:
     """Copy phase only: stream each file into the staging folder (hashing
     in-flight, see _hash_and_copy), create its row unprocessed, and hand it to
@@ -1019,6 +1081,10 @@ def _stage_uploads_into(
     # once per copied file now that every file commits on its own.
     session_id = session.id
     session_dir = settings.import_staging_root / session_id
+    # The session source (id, root) these files are recorded under. Named
+    # apart from the per-file `source` tuple the loop hands to the analysis -
+    # sharing that name once overwrote the root with a file size.
+    source_id, source_root = session_source if session_source else (None, None)
     thumb_dir = session_dir / ".thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1067,6 +1133,7 @@ def _stage_uploads_into(
                 pass
 
         staged_id = str(uuid.uuid4())
+        source_relpath = _source_relpath(upload, source_root)
         db.add(
             ImportStagedFile(
                 id=staged_id,
@@ -1076,6 +1143,9 @@ def _stage_uploads_into(
                 file_type=FileType(file_type),
                 sha256=sha256,
                 processed=False,
+                source_id=source_id if source_relpath is not None else None,
+                source_relpath=source_relpath,
+                source_size=size if source_relpath is not None else None,
             )
         )
         _progress_copy_step(session_id)
@@ -1143,7 +1213,10 @@ def commit_import_session(
         return None
 
     def _is_duplicate(f: ImportStagedFile) -> bool:
-        return bool(f.duplicate_of_image_id or f.duplicate_of_staged_file_id)
+        # An earlier partial import's file counts as one even once its photo
+        # is gone for good (the trash nulls duplicate_of_image_id then): its
+        # staged bytes went into the library with it.
+        return bool(f.duplicate_of_image_id or f.duplicate_of_staged_file_id or f.imported)
 
     def _find_moved_library_copy(staged: ImportStagedFile, taken_at: datetime) -> Path | None:
         """Locate a staged file that a previous, mid-way-failed commit attempt
@@ -1387,6 +1460,12 @@ def commit_import_session(
             db.add(image)
         db.flush()
         new_images.append(image)
+        # The session may well stay open (see below): the file stays in it,
+        # now reading as "already in library" exactly like a duplicate found at
+        # analysis - unselected, blocked, hidden under "Hide duplicates".
+        staged.imported = True
+        staged.selected = False
+        staged.duplicate_of_image_id = image.id
         # Which staged file each imported photo came from, so its already
         # rendered review derivatives can be handed over below instead of being
         # rendered a second time.
@@ -1409,9 +1488,17 @@ def commit_import_session(
     # Resolve each new photo's GPS fix to a country (offline) so it's filterable
     # by region straight after import.
     geocode.annotate_images(new_images)
-    session.status = ImportSessionStatus.committed
+    # A session lives until nothing is left in it: a card culled a hundred
+    # photos a day stays open with the rest - including whatever of it hasn't
+    # been copied yet. Only once every file is in the library (or can't be
+    # imported) and the source has nothing more does it close like before.
+    session_done = session_is_exhausted(session)
+    session.updated_at = datetime.now(timezone.utc)
+    if session_done:
+        session.status = ImportSessionStatus.committed
     db.commit()
     _progress_done(session.id)
+    _register_library_hashes(new_images)
 
     # Decide whether freshly imported photos go to Immich. In "full" mode every
     # JPEG is synced automatically; in "manual" mode only when the user ticked
@@ -1461,9 +1548,29 @@ def commit_import_session(
                 image_id=image.id,
             )
 
-    shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
-    _drop_session_state(session.id)
+    if session_done:
+        shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
+        _drop_session_state(session.id)
     return new_images
+
+
+def session_is_exhausted(session: ImportSession) -> bool:
+    """Nothing left that the session could still import: every staged file is
+    in the library or a duplicate, and none of its sources holds a file that
+    hasn't been copied yet as of its last scan."""
+    files = session.staged_files
+    if any(
+        not (f.imported or f.duplicate_of_image_id or f.duplicate_of_staged_file_id)
+        for f in files
+    ):
+        return False
+    for source in session.sources:
+        if source.file_count is None:
+            continue
+        copied = sum(1 for f in files if f.source_id == source.id)
+        if copied < source.file_count:
+            return False
+    return True
 
 
 def discard_import_session(db: Session, session: ImportSession) -> None:

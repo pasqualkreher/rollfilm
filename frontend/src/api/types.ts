@@ -394,9 +394,58 @@ export interface FolderScanOut {
 
 export type ImportSessionStatus = "staging" | "committed" | "discarded";
 
+// One folder a session copies from - it can collect from several.
+export interface ImportSource {
+  id: string;
+  label: string;
+  root: string;
+  // Where it is reachable right now (the card can come back under another
+  // mount name); null when it isn't connected.
+  current_root: string | null;
+  volume_name: string | null;
+  // The folder, on the right volume, is reachable right now.
+  available: boolean;
+  copied: number;
+  // Not copied yet as of its last scan; null when never scanned.
+  remaining: number | null;
+}
+
+// An open import session as listed on the Import page, to continue it.
+export interface ImportSessionSummary {
+  id: string;
+  source_path: string;
+  created_at: string;
+  updated_at: string | null;
+  file_count: number;
+  imported_count: number;
+  duplicate_count: number;
+  selected_count: number;
+  pending_count: number;
+  sources: ImportSource[];
+}
+
+// One source in a rescan: what of it isn't copied yet. `id` is null for a
+// folder that isn't part of the session yet (scanned before adding it).
+export interface ImportRescanSource {
+  id: string | null;
+  label: string;
+  root: string;
+  available: boolean;
+  files: ScannedFile[];
+  total_bytes: number;
+  file_count: number | null;
+}
+
+export interface ImportSessionRescan {
+  sources: ImportRescanSource[];
+}
+
 export interface ImportSessionOut {
   id: string;
   source_path: string;
+  source_root?: string | null;
+  volume_name?: string | null;
+  updated_at?: string | null;
   status: ImportSessionStatus;
   created_at: string;
 }
@@ -420,6 +469,9 @@ export interface StagedFileOut {
   width: number | null;
   height: number | null;
   immich_sync: boolean;
+  // Added to the library by an earlier partial import of this session - it
+  // now reads as "already in library" (duplicate_of_image_id is that photo).
+  imported: boolean;
   // RAW only: the background demosaiced grid thumbnail is ready. The grid
   // appends it to the img URL, so the card swaps from the fast embedded
   // camera thumb to the sensor-accurate render when it lands.

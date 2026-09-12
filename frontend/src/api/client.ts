@@ -25,6 +25,8 @@ import type {
   ImmichUploadResult,
   ImportProgress,
   ImportSessionOut,
+  ImportSessionRescan,
+  ImportSessionSummary,
   LibraryFacets,
   LibraryFilters,
   LibraryIndexImage,
@@ -328,6 +330,11 @@ export const api = {
     },
     get(id: string): Promise<ImageOut> {
       return request(`/images/${id}`);
+    },
+    // The photo's absolute path on disk (a virtual copy: its source's file),
+    // for the desktop app's "Show in Finder / Explorer".
+    filePath(id: string): Promise<{ path: string; exists: boolean }> {
+      return request(`/images/${id}/file-path`);
     },
     update(
       id: string,
@@ -845,7 +852,7 @@ export const api = {
     deleteLayoutVersion(id: string, versionId: string): Promise<CanvasLayout> {
       return request(`/canvases/${id}/layout/versions/${versionId}`, { method: "DELETE" });
     },
-    // The Canvas Shelf (on the Albums page): every opted-in canvas's chosen
+    // The Canvas Shelf (on the Canvas page): every opted-in canvas's chosen
     // version, ready to draw.
     gallery(): Promise<CanvasGalleryOut[]> {
       return request(`/canvases/gallery`);
@@ -957,6 +964,19 @@ export const api = {
     get(id: string): Promise<ImportSessionOut> {
       return request(`/import/sessions/${id}`);
     },
+    // Every import session still open, most recently worked on first.
+    sessions(): Promise<ImportSessionSummary[]> {
+      return request(`/import/sessions`);
+    },
+    // Continuing a session: scan its sources again for what isn't copied yet.
+    // With `path`, scan that one folder instead - what adding it to the
+    // session would bring in (only the new files if it is already a source).
+    rescan(id: string, path?: string): Promise<ImportSessionRescan> {
+      return request(`/import/sessions/${id}/rescan`, {
+        method: "POST",
+        body: JSON.stringify({ path: path ?? null }),
+      });
+    },
     // Direct desktop import: the backend scans and reads the folder itself,
     // so nothing is pumped through a browser upload. Electron-only (needs a
     // native absolute folder path from the OS dialog).
@@ -972,7 +992,12 @@ export const api = {
       sourceLabel: string,
       sessionId: string | null,
       totalBytes: number,
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      // Folder imports: the folder these paths are under (every batch - one
+      // source per request), and the first time a folder is staged into a
+      // session, how many files its scan found. That is what records the
+      // folder as one of the session's sources to continue from later.
+      source?: { root: string | null; fileCount?: number }
     ): Promise<ImportSessionOut> {
       return request(`/import/sessions/stage-paths`, {
         method: "POST",
@@ -981,6 +1006,8 @@ export const api = {
           source_label: sourceLabel,
           session_id: sessionId,
           total_bytes: totalBytes,
+          source_root: source?.root ?? null,
+          source_file_count: source?.fileCount ?? null,
         }),
         signal,
       });
