@@ -2,6 +2,8 @@ import { useCallback, useRef, useState } from "react";
 import { api } from "../api/client";
 import { deleteConfirmMessage, membershipWarning } from "../utils/deleteMessage";
 import { useAskDeletePartner } from "../state/viewPrefs";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
 
 // Only the field deleteConfirmMessage needs, so the library's slim index
 // entries qualify alongside full ImageOut rows.
@@ -153,5 +155,13 @@ export function usePairDeleteConfirm() {
     );
   }
 
-  return { dialog, confirmDelete };
+  // Always an element (even while nothing is pending) so the Presence inside
+  // keeps its state across the exit; the caller renders it unconditionally.
+  const presentDialog = (
+    <Presence open={pending !== null} ms={MOTION.modal}>
+      {dialog}
+    </Presence>
+  );
+
+  return { dialog: presentDialog, confirmDelete };
 }

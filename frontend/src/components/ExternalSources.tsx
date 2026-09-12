@@ -4,6 +4,8 @@ import { api } from "../api/client";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { IconRotate, IconTrash } from "./Icons";
 import { useAppDialogs } from "./AppDialogs";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
 
 function formatScanned(iso: string | null): string {
   if (!iso) return "never scanned";
@@ -125,15 +127,17 @@ export function ExternalSources() {
         <p className="status-note status-note--error">{(addSource.error as Error).message}</p>
       )}
 
-      {picking && (
-        <DirectoryPicker
-          onClose={() => setPicking(false)}
-          onSelect={(chosen) => {
-            applyChosenFolder(chosen);
-            setPicking(false);
-          }}
-        />
-      )}
+      <Presence open={picking} ms={MOTION.modal}>
+        {picking && (
+          <DirectoryPicker
+            onClose={() => setPicking(false)}
+            onSelect={(chosen) => {
+              applyChosenFolder(chosen);
+              setPicking(false);
+            }}
+          />
+        )}
+      </Presence>
 
       {sources && sources.length > 0 && (
         <div className="source-list">

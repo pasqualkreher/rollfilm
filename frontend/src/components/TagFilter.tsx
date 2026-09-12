@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { IconChevronDown } from "./Icons";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
 
 interface Props {
   // All tag names the user can filter by.
@@ -73,45 +75,47 @@ export function TagFilter({ options, value, onChange, emptyLabel = "Any", title 
         <span className="tag-filter-caret"><IconChevronDown size={11} /></span>
       </button>
 
-      {open && options.length > 0 && (
-        <div className="tag-filter-pop">
-          {/* Always typeable, however short the list - the fingers land on
-              the keyboard before the eye finds the row. */}
-          <input
-            type="text"
-            className="tag-filter-search"
-            placeholder="Find a tag…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter takes the first match - type, Enter, type, Enter.
-              if (e.key === "Enter" && filtered.length > 0) {
-                e.preventDefault();
-                toggle(filtered[0]);
-              }
-            }}
-            ref={searchRef}
-            autoFocus
-          />
-          <div className="tag-filter-list">
-            {filtered.length === 0 ? (
-              <div className="tag-filter-empty">No matching tags</div>
-            ) : (
-              filtered.map((tag) => (
-                <label key={tag} className="tag-filter-item">
-                  <input type="checkbox" checked={value.includes(tag)} onChange={() => toggle(tag)} />
-                  <span>{tag}</span>
-                </label>
-              ))
+      <Presence open={open && options.length > 0} ms={MOTION.pop}>
+        {open && options.length > 0 && (
+          <div className="tag-filter-pop">
+            {/* Always typeable, however short the list - the fingers land on
+                the keyboard before the eye finds the row. */}
+            <input
+              type="text"
+              className="tag-filter-search"
+              placeholder="Find a tag…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter takes the first match - type, Enter, type, Enter.
+                if (e.key === "Enter" && filtered.length > 0) {
+                  e.preventDefault();
+                  toggle(filtered[0]);
+                }
+              }}
+              ref={searchRef}
+              autoFocus
+            />
+            <div className="tag-filter-list">
+              {filtered.length === 0 ? (
+                <div className="tag-filter-empty">No matching tags</div>
+              ) : (
+                filtered.map((tag) => (
+                  <label key={tag} className="tag-filter-item">
+                    <input type="checkbox" checked={value.includes(tag)} onChange={() => toggle(tag)} />
+                    <span>{tag}</span>
+                  </label>
+                ))
+              )}
+            </div>
+            {value.length > 0 && (
+              <button type="button" className="tag-filter-clear" onClick={() => onChange([])}>
+                Clear tags
+              </button>
             )}
           </div>
-          {value.length > 0 && (
-            <button type="button" className="tag-filter-clear" onClick={() => onChange([])}>
-              Clear tags
-            </button>
-          )}
-        </div>
-      )}
+        )}
+      </Presence>
     </div>
   );
 }

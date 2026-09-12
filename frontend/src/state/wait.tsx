@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { Presence } from "../components/Presence";
 
 // A full-screen "please wait" popup for actions the user must sit out - saving
 // edits, bulk resets, deletes and the like. withWait() blocks every click and
@@ -27,6 +28,32 @@ export function useWait(): WaitApi {
   const ctx = useContext(WaitContext);
   if (!ctx) throw new Error("useWait must be used within WaitProvider");
   return ctx;
+}
+
+// The popup itself. It mounts at opacity 0 and gets .is-shown a frame later,
+// which starts the delayed fade-in (index.css .wait-overlay); Presence adds
+// .pm-closing for the fade-out, which starts from wherever the fade-in got
+// to - so a wait that is over before the delay never shows at all.
+function WaitOverlay({ label, closing = false }: { label: string; closing?: boolean }) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  return (
+    <div
+      className={`wait-overlay${shown ? " is-shown" : ""}${closing ? " pm-closing" : ""}`}
+      role="alertdialog"
+      aria-modal="true"
+      aria-busy="true"
+      aria-label={label}
+    >
+      <div className="wait-overlay-box" role="status" aria-live="polite">
+        <span className="wait-overlay-spinner" aria-hidden="true" />
+        <span>{label}</span>
+      </div>
+    </div>
+  );
 }
 
 export function WaitProvider({ children }: { children: ReactNode }) {
@@ -67,14 +94,9 @@ export function WaitProvider({ children }: { children: ReactNode }) {
   return (
     <WaitContext.Provider value={{ withWait }}>
       {children}
-      {active && (
-        <div className="wait-overlay" role="alertdialog" aria-modal="true" aria-busy="true" aria-label={label ?? "Working"}>
-          <div className="wait-overlay-box" role="status" aria-live="polite">
-            <span className="wait-overlay-spinner" aria-hidden="true" />
-            <span>{label}</span>
-          </div>
-        </div>
-      )}
+      <Presence open={active} ms={150}>
+        {active && <WaitOverlay label={label ?? "Working"} />}
+      </Presence>
     </WaitContext.Provider>
   );
 }

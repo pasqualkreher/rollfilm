@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { IconChevronDown } from "./Icons";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
 
 export interface DropdownOption {
   value: string;
@@ -236,49 +238,55 @@ export function Dropdown({
           <IconChevronDown size={11} />
         </span>
       </button>
-      {open &&
-        !isEmpty &&
-        createPortal(
-          <div
-            className="dropdown-menu"
-            style={pos ?? { visibility: "hidden", left: 0, top: 0 }}
-            role="listbox"
-            ref={menuRef}
-          >
-            {searchable && (
-              <input
-                ref={searchRef}
-                type="text"
-                className="dropdown-search"
-                placeholder="Type to find…"
-                value={query}
-                aria-label={ariaLabel ? `Find ${ariaLabel.toLowerCase()}` : "Find"}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setCursor(0);
-                }}
-                onKeyDown={onSearchKey}
-              />
-            )}
-            {visible.length === 0 && <div className="dropdown-empty">No match</div>}
-            {visible.map((o) => (
-              <button
-                key={o.value}
-                type="button"
-                role="option"
-                aria-selected={o.value === value}
-                className={`dropdown-option${o.value === value ? " selected" : ""}${
-                  o.value === cursorValue ? " cursor" : ""
-                }`}
-                disabled={o.disabled}
-                onClick={() => pick(o)}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>,
-          document.body
-        )}
+      {/* The portal stays mounted (empty while shut) so Presence can hold the
+          menu through its exit; the frame it freezes keeps the measured
+          position, so the closing menu does not jump. .is-placed starts the
+          pop only once the invisible measuring frame is over. */}
+      {createPortal(
+        <Presence open={open && !isEmpty} ms={MOTION.pop}>
+          {open && !isEmpty && (
+            <div
+              className={`dropdown-menu${pos ? " is-placed" : ""}${pos && "bottom" in pos ? " dropdown-menu--up" : ""}`}
+              style={pos ?? { visibility: "hidden", left: 0, top: 0 }}
+              role="listbox"
+              ref={menuRef}
+            >
+              {searchable && (
+                <input
+                  ref={searchRef}
+                  type="text"
+                  className="dropdown-search"
+                  placeholder="Type to find…"
+                  value={query}
+                  aria-label={ariaLabel ? `Find ${ariaLabel.toLowerCase()}` : "Find"}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setCursor(0);
+                  }}
+                  onKeyDown={onSearchKey}
+                />
+              )}
+              {visible.length === 0 && <div className="dropdown-empty">No match</div>}
+              {visible.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="option"
+                  aria-selected={o.value === value}
+                  className={`dropdown-option${o.value === value ? " selected" : ""}${
+                    o.value === cursorValue ? " cursor" : ""
+                  }`}
+                  disabled={o.disabled}
+                  onClick={() => pick(o)}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </Presence>,
+        document.body
+      )}
     </div>
   );
 }

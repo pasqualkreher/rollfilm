@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTransientMessage } from "../utils/transientMessage";
+import { MOTION, usePresence } from "../utils/usePresence";
 import { ThemePicker } from "./ThemePicker";
 import { SETTINGS_TOUR_KEY } from "./SettingsTour";
 import { IconX } from "./Icons";
@@ -92,7 +93,9 @@ export function OnboardingWizard() {
   const clampedIndex = Math.min(stepIndex, steps.length - 1);
   const step = steps[clampedIndex];
 
-  if (!open) return null;
+  // Stays up for the dialog's exit animation after Done/Skip.
+  const presence = usePresence(open, MOTION.modal);
+  if (!presence.present) return null;
 
   function finish() {
     try {
@@ -127,7 +130,12 @@ export function OnboardingWizard() {
   const totalLegacyBytes = (legacy ?? []).reduce((sum, d) => sum + d.sizeBytes, 0);
 
   return (
-    <div className="modal-overlay" role="dialog" aria-label="Welcome to Rollfilm" aria-modal="true">
+    <div
+      className={`modal-overlay${presence.closing ? " pm-closing" : ""}`}
+      role="dialog"
+      aria-label="Welcome to Rollfilm"
+      aria-modal="true"
+    >
       <div className="modal onboarding">
         <div className="onboarding-header">
           <div>

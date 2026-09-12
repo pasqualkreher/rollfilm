@@ -6,11 +6,13 @@ import { IconArrowUp, IconFolder, IconX } from "./Icons";
 interface Props {
   onSelect: (path: string) => void;
   onClose: () => void;
+  // Set by <Presence> while the dialog animates out.
+  closing?: boolean;
 }
 
 // A server-side folder browser: navigates the backend's /sources mount so the
 // user can pick a folder to index without typing a container path by hand.
-export function DirectoryPicker({ onSelect, onClose }: Props) {
+export function DirectoryPicker({ onSelect, onClose, closing = false }: Props) {
   // undefined => let the backend start at its browse root (/sources).
   const [path, setPath] = useState<string | undefined>(undefined);
 
@@ -20,7 +22,7 @@ export function DirectoryPicker({ onSelect, onClose }: Props) {
   });
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={onClose}>
       <div className="modal dir-picker" onClick={(e) => e.stopPropagation()}>
         <div className="dir-picker-header">
           <h3 className="section-title" style={{ margin: 0, fontSize: 15 }}>

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconChevronDown } from "./Icons";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
 
 interface Props {
   // Chip text: the filter's name while inactive ("Color", "Date"), the chosen
@@ -65,15 +67,17 @@ export function FilterChip({ label, active = false, title, align = "left", drop 
           <IconChevronDown size={11} />
         </span>
       </button>
-      {open && (
-        <div
-          className={`filter-chip-pop${align === "right" ? " filter-chip-pop--right" : ""}${
-            drop === "up" ? " filter-chip-pop--up" : ""
-          }`}
-        >
-          {typeof children === "function" ? children(() => setOpen(false)) : children}
-        </div>
-      )}
+      <Presence open={open} ms={MOTION.pop}>
+        {open && (
+          <div
+            className={`filter-chip-pop${align === "right" ? " filter-chip-pop--right" : ""}${
+              drop === "up" ? " filter-chip-pop--up" : ""
+            }`}
+          >
+            {typeof children === "function" ? children(() => setOpen(false)) : children}
+          </div>
+        )}
+      </Presence>
     </div>
   );
 }

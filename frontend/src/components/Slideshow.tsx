@@ -24,11 +24,15 @@ export function Slideshow({
   imageIds,
   startId,
   onClose,
+  closing = false,
 }: {
   imageIds: string[];
   startId: string;
   /** Called once with the photo the show ended on, so the lightbox can follow. */
   onClose: (lastId: string) => void;
+  // Set by <Presence> while the show fades out: keys are ignored, so an
+  // arrow pressed during the fade cannot step a show that is already over.
+  closing?: boolean;
 }) {
   const queryClient = useQueryClient();
   const seconds = useSlideshowSeconds();
@@ -117,6 +121,7 @@ export function Slideshow({
   // on the slideshow being open too, but belt and braces.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (closing) return;
       if (e.key === "Escape") {
         e.stopPropagation();
         closeRef.current();
@@ -133,7 +138,7 @@ export function Slideshow({
     }
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [step]);
+  }, [step, closing]);
 
   // Controls (and the cursor) melt away while the show runs untouched; a mouse
   // move brings them back, pausing keeps them up.
@@ -154,7 +159,7 @@ export function Slideshow({
   return (
     <div
       ref={boxRef}
-      className={`slideshow${showControls ? "" : " slideshow--idle"}`}
+      className={`slideshow${showControls ? "" : " slideshow--idle"}${closing ? " pm-closing" : ""}`}
       onMouseMove={poke}
       role="dialog"
       aria-label="Slideshow"

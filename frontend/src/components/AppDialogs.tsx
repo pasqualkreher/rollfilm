@@ -8,6 +8,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
 
 // App-skinned replacements for window.confirm / window.alert. The native
 // dialogs render in the OS look, ignore the app's theme entirely and (in
@@ -163,53 +165,55 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   return (
     <DialogContext.Provider value={api}>
       {children}
-      {current && (
-        <div className="modal-overlay" onClick={() => close(current.kind === "alert")}>
-          <div
-            className="modal confirm-modal"
-            role="alertdialog"
-            aria-modal="true"
-            aria-label={current.title ?? current.message}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="confirm-modal-body">
-              {current.title && <h3>{current.title}</h3>}
-              {current.message && <p>{current.message}</p>}
-              {current.kind === "prompt" && (
-                <input
-                  type="text"
-                  className="confirm-modal-input"
-                  style={{ width: "100%", marginTop: 4 }}
-                  placeholder={current.placeholder}
-                  defaultValue={current.initial ?? ""}
-                  autoFocus
-                  onChange={(e) => (promptRef.current = e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") close(true);
-                  }}
-                  ref={(el) => {
-                    if (el) promptRef.current = el.value;
-                  }}
-                />
-              )}
-            </div>
-            <div className="confirm-modal-actions">
-              {current.kind !== "alert" && (
-                <button className="btn" onClick={() => close(false)}>
-                  {current.cancelLabel ?? "Cancel"}
+      <Presence open={current !== null} ms={MOTION.modal}>
+        {current && (
+          <div className="modal-overlay" onClick={() => close(current.kind === "alert")}>
+            <div
+              className="modal confirm-modal"
+              role="alertdialog"
+              aria-modal="true"
+              aria-label={current.title ?? current.message}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="confirm-modal-body">
+                {current.title && <h3>{current.title}</h3>}
+                {current.message && <p>{current.message}</p>}
+                {current.kind === "prompt" && (
+                  <input
+                    type="text"
+                    className="confirm-modal-input"
+                    style={{ width: "100%", marginTop: 4 }}
+                    placeholder={current.placeholder}
+                    defaultValue={current.initial ?? ""}
+                    autoFocus
+                    onChange={(e) => (promptRef.current = e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") close(true);
+                    }}
+                    ref={(el) => {
+                      if (el) promptRef.current = el.value;
+                    }}
+                  />
+                )}
+              </div>
+              <div className="confirm-modal-actions">
+                {current.kind !== "alert" && (
+                  <button className="btn" onClick={() => close(false)}>
+                    {current.cancelLabel ?? "Cancel"}
+                  </button>
+                )}
+                <button
+                  className={`btn ${current.danger ? "danger" : "primary"}`}
+                  autoFocus={current.kind !== "prompt"}
+                  onClick={() => close(true)}
+                >
+                  {current.confirmLabel ?? "OK"}
                 </button>
-              )}
-              <button
-                className={`btn ${current.danger ? "danger" : "primary"}`}
-                autoFocus={current.kind !== "prompt"}
-                onClick={() => close(true)}
-              >
-                {current.confirmLabel ?? "OK"}
-              </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Presence>
     </DialogContext.Provider>
   );
 }

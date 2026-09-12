@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
 import { createPortal } from "react-dom";
 
 interface Props {
@@ -157,32 +159,37 @@ export function TagSuggestInput({
         onClick={() => setOpen(true)}
         onKeyDown={onKey}
       />
-      {showMenu &&
-        createPortal(
-          <div
-            className="dropdown-menu"
-            style={pos ?? { visibility: "hidden", left: 0, top: 0 }}
-            role="listbox"
-            ref={menuRef}
-            // Keep the focus in the box while an entry is clicked, so the
-            // form's blur handlers don't fire in between.
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            {matches.map((t, i) => (
-              <button
-                key={t}
-                type="button"
-                role="option"
-                aria-selected={i === cursor}
-                className={`dropdown-option${i === cursor ? " cursor" : ""}`}
-                onClick={() => pick(t)}
-              >
-                {t}
-              </button>
-            ))}
-          </div>,
-          document.body
-        )}
+      {/* Same arrangement as Dropdown: a permanent portal, Presence inside it
+          holding the menu (at its measured spot) through the exit. */}
+      {createPortal(
+        <Presence open={showMenu} ms={MOTION.pop}>
+          {showMenu && (
+            <div
+              className={`dropdown-menu${pos ? " is-placed" : ""}${pos && "bottom" in pos ? " dropdown-menu--up" : ""}`}
+              style={pos ?? { visibility: "hidden", left: 0, top: 0 }}
+              role="listbox"
+              ref={menuRef}
+              // Keep the focus in the box while an entry is clicked, so the
+              // form's blur handlers don't fire in between.
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              {matches.map((t, i) => (
+                <button
+                  key={t}
+                  type="button"
+                  role="option"
+                  aria-selected={i === cursor}
+                  className={`dropdown-option${i === cursor ? " cursor" : ""}`}
+                  onClick={() => pick(t)}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          )}
+        </Presence>,
+        document.body
+      )}
     </>
   );
 }

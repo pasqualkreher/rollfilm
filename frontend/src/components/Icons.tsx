@@ -469,6 +469,19 @@ export function IconDuplicate(props: IconProps) {
   );
 }
 
+// A "T" with a small pencil - rename. Used wherever a name is edited in
+// place (album, canvas, photo), so renaming reads the same everywhere and is
+// distinct from the plain pencil, which means "edit the thing itself".
+export function IconRename(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 4.5V3h6v1.5M5.5 3v7.5M4.3 10.5h2.4" />
+      <path d="M12.1 7.4a1.1 1.1 0 0 1 1.6 1.6l-5.2 5.2-2.2.5.5-2.2 5.3-5.1z" />
+      <path d="M11.3 8.2l1.6 1.6" />
+    </svg>
+  );
+}
+
 // A "T" - text placed on the page.
 export function IconTextT(props: IconProps) {
   return (
@@ -522,6 +535,17 @@ export function IconGuide(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
       <rect x="2.5" y="3.5" width="11" height="9" rx="1" strokeDasharray="2.6 2.2" />
+    </svg>
+  );
+}
+
+// A viewfinder's corners round one point - focus mode, everything but the
+// picture put away.
+export function IconFocus(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 5.5v-2a1 1 0 0 1 1-1h2M13.5 5.5v-2a1 1 0 0 0-1-1h-2M2.5 10.5v2a1 1 0 0 0 1 1h2M13.5 10.5v2a1 1 0 0 1-1 1h-2" />
+      <circle cx="8" cy="8" r="1.6" />
     </svg>
   );
 }
@@ -651,6 +675,89 @@ export function IconAnchor(props: IconProps) {
       <path d="M8 4.75v9" />
       <path d="M5.25 7h5.5" />
       <path d="M3.5 9.25a4.5 4.5 0 0 0 9 0" />
+    </svg>
+  );
+}
+
+// A big skip with a heap piling out of it - the Trash PAGE, where deleted
+// photos collect, as opposed to IconTrash (the small bin), which every
+// "delete" action wears: the place is not the same thing as the act. The ribs
+// are the small bin's own, so it reads as "every bin empties into this one".
+export function IconLandfill(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M1 7.25h14" />
+      <path d="M2.25 7.25l1 7h9.5l1-7" />
+      <path d="M3.5 7.25c.3-1.6 1.1-2.6 2.1-2.6.55 0 1 .3 1.3.8.4-1.5 1.3-2.5 2.5-2.5 1.1 0 1.9.8 2.3 2 .3-.2.6-.3.9-.3.7 0 1.2.9 1.4 2.6" />
+      <path d="M6 9.75v2.5M8 9.75v2.5M10 9.75v2.5" />
+    </svg>
+  );
+}
+
+// Two stacked prints - an album, a collection of photos.
+export function IconAlbum(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="1.75" y="4.75" width="10.5" height="8.5" rx="1.25" />
+      <path d="M4.25 4.75V3.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v6.75a1 1 0 0 1-1 1h-1" />
+      <circle cx="4.6" cy="7.6" r=".9" />
+      <path d="M2.25 12l2.6-2.4 2 1.8 2-2 3.2 3.1" />
+    </svg>
+  );
+}
+
+// A sheet with a photo laid on it - a canvas, a page you design.
+export function IconCanvas(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.25" y="1.75" width="11.5" height="12.5" rx="1" />
+      <rect x="4.5" y="4" width="7" height="5" />
+      <path d="M4.5 8l1.8-1.6 1.6 1.3 1.6-1.7 2 2" />
+      <path d="M4.75 11.25h6.5" />
+    </svg>
+  );
+}
+
+// A tray with an arrow leaving upward - export, getting a photo out as a file.
+export function IconExport(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M8 10V2.5" />
+      <path d="M5.25 5.25 8 2.5l2.75 2.75" />
+      <path d="M2.75 9.75v2.5a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1v-2.5" />
+    </svg>
+  );
+}
+
+// Two stacked photos - save copy, a new photo made from this one.
+export function IconSaveCopy(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1" />
+      <path d="M5.25 10.5l2.2-2 1.8 1.6 1.6-1.7 2.9 2.8" />
+      <path d="M10.75 5.25V3.25a1 1 0 0 0-1-1h-6.5a1 1 0 0 0-1 1v6.5a1 1 0 0 0 1 1h2" />
+    </svg>
+  );
+}
+
+// A folder with a magnifier-like dot - show the file in the file manager.
+export function IconReveal(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.25 4.25a1 1 0 0 1 1-1h3l1.5 1.5h5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1z" />
+      <circle cx="7.5" cy="9" r="1.75" />
+      <path d="M8.8 10.3 10.5 12" />
+    </svg>
+  );
+}
+
+// A cloud with an arrow going up into it - upload to a server (Immich).
+export function IconCloudUp(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5 12.25H4.25a2.5 2.5 0 0 1-.4-4.97 3.75 3.75 0 0 1 7.2-1.28A2.75 2.75 0 0 1 11.75 12.25H11" />
+      <path d="M8 13.5V8.25" />
+      <path d="M5.9 10.35 8 8.25l2.1 2.1" />
     </svg>
   );
 }

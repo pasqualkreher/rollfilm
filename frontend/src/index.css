@@ -5,9 +5,9 @@
    data-theme on <html> before React renders, so exactly one block below is
    ever in play.
 
-   :root carries Graphite, the default light skin, because that is what paints
+   :root carries Stone, the default light skin, because that is what paints
    before any script runs; the media query right after does the same for
-   Graphite Dark on a system set to dark. Every skin defines the same
+   Stone Dark on a system set to dark. Every skin defines the same
    variables - only the values differ. color-scheme per skin keeps native
    controls (scrollbars, date pickers, form widgets) in step with the palette.
 
@@ -16,18 +16,18 @@
    swatches in state/theme.ts mirror --bg / --bg-elevated / --text / --accent
    from here. */
 :root {
-  --bg: #f3f3f4;
-  --bg-elevated: #fafafb;
+  --bg: #eaebec;
+  --bg-elevated: #f6f7f7;
   /* A quieter fill for hover/rest states that shouldn't read as a raised card. */
-  --hover: #e8e8ea;
-  --border: #dedee1;
-  --text: #2b2b2f;
-  --text-muted: #78787e;
-  --accent: #55555c;
+  --hover: #dfe1e2;
+  --border: #d2d4d6;
+  --text: #26282a;
+  --text-muted: #6e7377;
+  --accent: #5a6067;
   --accent-contrast: #ffffff;
   /* Translucent accent for soft-selected states (active nav, active segment). */
-  --accent-soft: rgba(85, 85, 92, 0.12);
-  --danger: #bf4a3e;
+  --accent-soft: rgba(90, 96, 103, 0.13);
+  --danger: #b34a3e;
   /* Surround behind a photo shown big (library photo view, import preview,
      editor), in three steps: light grey, the mid grey every darkroom and photo
      app judges against, and black. Greys are neutral by construction - they
@@ -47,6 +47,17 @@
      <html> with the chosen stack; the value here is Rollfilm, its default
      (the OS's own UI face), for the instant before that runs. */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* Focus mode's chip (components/FocusToggle.tsx): the toolbar button while
+     the mode is on and the canvas view's pill wear the same dark grey, a
+     little see-through. Like the stage greys above, deliberately NOT themed -
+     it reads as a thing laid over the picture, not as part of the app. */
+  --focus-chip-bg: rgba(34, 34, 37, 0.72);
+  --focus-chip-bg-hover: rgba(52, 52, 56, 0.85);
+  --focus-chip-border: rgba(255, 255, 255, 0.18);
+  /* ...and the same chip while focus mode is actually on: lighter, so the
+     button says at a glance which side of the switch you are on. */
+  --focus-chip-bg-on: rgba(104, 104, 112, 0.88);
+  --focus-chip-bg-on-hover: rgba(124, 124, 132, 0.94);
   --radius: calc(8px * var(--corner-scale));
   --radius-sm: calc(5px * var(--corner-scale));
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -55,21 +66,21 @@
 }
 
 /* First paint on a dark system, before state/theme.ts sets data-theme. Same
-   values as the Graphite Dark block below. */
+   values as the Stone Dark block below. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #2b2b2f;
-    --bg-elevated: #34343a;
-    --hover: #3d3d44;
-    --border: #45454c;
-    --text: #f3f3f4;
-    --text-muted: #9a9aa0;
-    --accent: #b4b4bc;
-    --accent-contrast: #26262a;
-    --accent-soft: rgba(180, 180, 188, 0.16);
-    --danger: #e0685b;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-    --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+    --bg: #26292d;
+    --bg-elevated: #2e3237;
+    --hover: #373c41;
+    --border: #424850;
+    --text: #e5e7ea;
+    --text-muted: #969ca3;
+    --accent: #aab1b8;
+    --accent-contrast: #1f2226;
+    --accent-soft: rgba(170, 177, 184, 0.16);
+    --danger: #dc6c5e;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.38);
+    --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.58);
     color-scheme: dark;
   }
 }
@@ -82,40 +93,28 @@
 
 
 /* ---- Skins ---------------------------------------------------------------
-   Four pairs, each a light and a dark cut of the same idea:
+   Seven pairs, each a light and a dark cut of the same idea:
 
-   Graphite - neutral greys with a light-black accent; the quietest of the
-              four and the default pair.
+   Stone    - muted greys with no colour in them at all: surfaces off-white
+              rather than white, type dark grey rather than black, the accent
+              a slate grey. The quietest of the four and the default pair.
    Slate    - the same restraint pulled cool, steel blue instead of grey.
    Ink      - high contrast: paper white against near-black, so the surround
               drops away and only the photo carries colour.
    Orange   - the warm one: barely-tinted surfaces and a burnt-orange accent,
-              the only skin whose colour you notice on the controls.
+              the skin whose colour you notice most on the controls.
+   Sand     - warm without the colour: greige surfaces and a taupe accent, for
+              those who find Stone cold and Orange loud.
+   Sage     - grey with a trace of green in it and a muted sage accent; sits
+              between Slate's cool and Sand's warm.
+   Blue     - Stone's neutral surfaces with one clean, classic blue on the
+              accent - the conventional "pro app" look.
 
-   data-theme="graphite" needs no block of its own - :root above already is
-   that palette. */
-
-/* Graphite Dark — soft "light black" charcoal surfaces with a muted light-grey
-   accent (buttons, active states, focus rings) instead of a saturated colour,
-   so it stays gentle and understated in the dark. */
-:root[data-theme="graphite-dark"] {
-  --bg: #2b2b2f;
-  --bg-elevated: #34343a;
-  --hover: #3d3d44;
-  --border: #45454c;
-  --text: #f3f3f4;
-  --text-muted: #9a9aa0;
-  --accent: #b4b4bc;
-  --accent-contrast: #26262a;
-  --accent-soft: rgba(180, 180, 188, 0.16);
-  --danger: #e0685b;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
+   data-theme="stone" needs no block of its own - :root above already is that
+   palette. */
 
 /* Slate — cool light greys with a blue cast, and a deep steel blue as the one
-   piece of colour. Reads a shade crisper than Graphite without going loud. */
+   piece of colour. Reads a shade crisper than Stone without going loud. */
 :root[data-theme="slate"] {
   --bg: #edeff2;
   --bg-elevated: #f8f9fb;
@@ -167,12 +166,12 @@
 /* Ink Dark — the near-black surround photographers ask for: the interface
    recedes almost to nothing and a near-white accent carries the controls. */
 :root[data-theme="ink-dark"] {
-  --bg: #0f0f11;
-  --bg-elevated: #17171a;
-  --hover: #202024;
-  --border: #2b2b31;
+  --bg: #18181b;
+  --bg-elevated: #212125;
+  --hover: #2a2a2f;
+  --border: #36363d;
   --text: #f4f4f5;
-  --text-muted: #8e8e96;
+  --text-muted: #94949c;
   --accent: #e6e6e9;
   --accent-contrast: #131316;
   --accent-soft: rgba(230, 230, 233, 0.14);
@@ -217,6 +216,132 @@
   --danger: #e4574a;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Sand - the warm neutral: surfaces a soft greige (grey with a little brown in
+   it, short of beige), type warm near-black, and the accent a taupe rather
+   than a colour. Warm like Orange, quiet like Stone. */
+:root[data-theme="sand"] {
+  --bg: #ece8e2;
+  --bg-elevated: #f7f5f1;
+  --hover: #e1dcd4;
+  --border: #d5cfc6;
+  --text: #2b2724;
+  --text-muted: #75695e;
+  --accent: #7a6b5d;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(122, 107, 93, 0.13);
+  --danger: #b3483b;
+  color-scheme: light;
+}
+
+/* Sand Dark - warm charcoal, a step more neutral than Orange Dark's, with the
+   accent lifted to a light taupe that reads as a pale wood tone. */
+:root[data-theme="sand-dark"] {
+  --bg: #2b2826;
+  --bg-elevated: #34302d;
+  --hover: #3e3935;
+  --border: #48423d;
+  --text: #ebe6e0;
+  --text-muted: #a1978d;
+  --accent: #b8a894;
+  --accent-contrast: #211e1b;
+  --accent-soft: rgba(184, 168, 148, 0.16);
+  --danger: #dc6a5c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.56);
+  color-scheme: dark;
+}
+
+/* Sage - greys with a trace of green, and a muted sage as the one piece of
+   colour: dark enough for white type, desaturated enough to stay out of the
+   photo's way. */
+:root[data-theme="sage"] {
+  --bg: #e9ece9;
+  --bg-elevated: #f5f7f5;
+  --hover: #dde2dd;
+  --border: #d0d6d0;
+  --text: #232825;
+  --text-muted: #6b746e;
+  --accent: #5b7160;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(91, 113, 96, 0.13);
+  --danger: #b6483c;
+  color-scheme: light;
+}
+
+/* Sage Dark - green-grey charcoal with the accent softened to a pale sage,
+   because the light skin's deeper green sinks into a dark surround. */
+:root[data-theme="sage-dark"] {
+  --bg: #242827;
+  --bg-elevated: #2c3130;
+  --hover: #353b39;
+  --border: #3e4542;
+  --text: #e5e9e6;
+  --text-muted: #96a09a;
+  --accent: #9cb5a1;
+  --accent-contrast: #1c201e;
+  --accent-soft: rgba(156, 181, 161, 0.16);
+  --danger: #dc6b5d;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.56);
+  color-scheme: dark;
+}
+
+/* Blue - Stone's neutral surfaces exactly, with a classic mid blue on the
+   accent: the look most photo and desktop apps default to. The blue is
+   deliberately dulled so it reads as a control, not as a highlight in the
+   picture. */
+:root[data-theme="blue"] {
+  --bg: #eaebec;
+  --bg-elevated: #f6f7f7;
+  --hover: #dfe1e2;
+  --border: #d2d4d6;
+  --text: #26282a;
+  --text-muted: #6e7377;
+  --accent: #3b6ea8;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(59, 110, 168, 0.13);
+  --danger: #b8463a;
+  color-scheme: light;
+}
+
+/* Blue Dark - neutral charcoal with the accent lifted to a soft sky blue
+   that keeps its legibility against dark grey. */
+:root[data-theme="blue-dark"] {
+  --bg: #25282c;
+  --bg-elevated: #2d3136;
+  --hover: #363b40;
+  --border: #41474f;
+  --text: #e5e7ea;
+  --text-muted: #969ca3;
+  --accent: #82abdc;
+  --accent-contrast: #171c22;
+  --accent-soft: rgba(130, 171, 220, 0.16);
+  --danger: #dd6a5c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.38);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.58);
+  color-scheme: dark;
+}
+
+/* Stone Dark - the working dark: a soft, lifted grey rather than a deep one,
+   well clear of Ink Dark's near-black, with the type off-white rather than
+   white so nothing in the chrome glares next to a photo. It is the pair's
+   dark cut; Stone light is :root itself. */
+:root[data-theme="stone-dark"] {
+  --bg: #26292d;
+  --bg-elevated: #2e3237;
+  --hover: #373c41;
+  --border: #424850;
+  --text: #e5e7ea;
+  --text-muted: #969ca3;
+  --accent: #aab1b8;
+  --accent-contrast: #1f2226;
+  --accent-soft: rgba(170, 177, 184, 0.16);
+  --danger: #dc6c5e;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.38);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.58);
   color-scheme: dark;
 }
 
@@ -328,7 +453,23 @@ button {
   position: sticky;
   top: 0;
   background: var(--bg-elevated);
-  z-index: 10;
+  /* Above the full-window workspaces (900-1000), which start under the bar:
+     its own popovers (the search field's suggestions, the burger menu) drop
+     down over them and must not vanish behind. Below dialogs. */
+  z-index: 1100;
+}
+
+/* The bar's carrier: the element App.tsx measures for --top-bar-height. */
+.top-bar-dock {
+  flex: none;
+}
+
+/* --chrome-top: how far down the window the app's own chrome reaches - where
+   a full-window workspace (photo editor, canvas editor, print view) starts,
+   so the bar stays in view above it instead of being covered. The bar's
+   height, measured in App.tsx (TopBar). */
+:root {
+  --chrome-top: var(--top-bar-height, 47px);
 }
 
 .brand {
@@ -461,6 +602,251 @@ button {
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Motion: one vocabulary for how surfaces come and go, so the app moves as one
+   thing. Menus and popovers pop from their anchor, dialogs settle in over a
+   fading backdrop, side panels slide in from their edge, the selection bar
+   rises from the bottom of the window, full-window overlays crossfade. Every
+   entrance has an exit that runs a little quicker (leaving should feel light,
+   arriving deliberate). React drops an element the instant its flag goes
+   false, so the exits need the element kept mounted for their length -
+   utils/usePresence.ts does that and hands the component a `closing` flag,
+   which it turns into .pm-closing (or a surface-specific --closing class).
+   The durations there (MOTION) match the exit durations here.
+   --------------------------------------------------------------------------- */
+:root {
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* Anchored surfaces hanging down from a trigger: grow out of its bottom edge. */
+@keyframes pm-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pm-pop-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+/* The same for surfaces that open upwards (a menu above a bottom bar). */
+@keyframes pm-pop-up-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pm-pop-up-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+/* Dialogs: a short rise and settle over the backdrop's fade. */
+@keyframes pm-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pm-modal-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+/* Bars pinned to the bottom edge rise into view and sink back out. */
+@keyframes pm-rise-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes pm-rise-out {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes pm-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Popovers and menus. The portalled ones (.dropdown-menu, .ctx-menu) render
+   one invisible frame first to measure themselves, and only start the pop
+   once placed (.is-placed) - otherwise the first frames of the animation ran
+   while the menu was still hidden. */
+.dropdown-menu.is-placed,
+.ctx-menu.is-placed,
+.filter-chip-pop,
+.tag-filter-pop,
+.nav-menu,
+.import-menu-dropdown,
+.reset-menu-pop {
+  /* Entrances fill `backwards` only: a forwards fill would pin the final
+     opacity/transform and beat any later class that wants to change them. */
+  animation: pm-pop-in 0.16s var(--ease-out) backwards;
+  transform-origin: top left;
+}
+
+.filter-chip-pop--right {
+  transform-origin: top right;
+}
+
+.dropdown-menu--up,
+.filter-chip-pop--up,
+.reset-menu-pop {
+  transform-origin: bottom left;
+  animation-name: pm-pop-up-in;
+}
+
+.dropdown-menu.pm-closing,
+.ctx-menu.pm-closing,
+.filter-chip-pop.pm-closing,
+.tag-filter-pop.pm-closing,
+.nav-menu.pm-closing,
+.import-menu-dropdown.pm-closing,
+.reset-menu-pop.pm-closing {
+  animation: pm-pop-out 0.12s var(--ease-in) both;
+  pointer-events: none;
+}
+
+.dropdown-menu--up.pm-closing,
+.filter-chip-pop--up.pm-closing,
+.reset-menu-pop.pm-closing {
+  animation-name: pm-pop-up-out;
+}
+
+/* Dialogs: the backdrop fades while the box rises into place; on the way out
+   both go together, a touch quicker. Clicks are off during the exit so a
+   second press cannot land on a dialog that is already leaving. */
+.modal-overlay {
+  animation: pm-fade-in 0.2s ease-out backwards;
+}
+
+.modal-overlay > .modal {
+  animation: pm-modal-in 0.24s var(--ease-out) backwards;
+}
+
+.modal-overlay.pm-closing {
+  animation: pm-fade-out 0.17s var(--ease-in) both;
+  pointer-events: none;
+}
+
+.modal-overlay.pm-closing > .modal {
+  animation: pm-modal-out 0.17s var(--ease-in) both;
+}
+
+/* Full-window overlays (slideshow, the import review's lightbox) crossfade -
+   no scale on a screen that is mostly one big photo. */
+.slideshow,
+.lightbox-overlay {
+  animation: pm-fade-in 0.22s ease-out backwards;
+}
+
+.slideshow.pm-closing,
+.lightbox-overlay.pm-closing {
+  animation: pm-fade-out 0.2s var(--ease-in) both;
+  pointer-events: none;
+}
+
+/* Banners and notes that appear inside a page: the same soft rise the pages
+   themselves use, so a status line arriving reads as part of the view. */
+.search-scope-banner,
+.import-staging-banner,
+.filter-dock,
+.status-note,
+.action-bar-messages,
+.nav-task {
+  animation: pm-page-in 0.22s var(--ease-out) backwards;
+}
+
+/* These two centre themselves with a translateX, which the rise above would
+   override for its length - so they only fade. */
+.canvas-mode-banner,
+.settings-tour-card {
+  animation: pm-fade-in 0.22s ease-out backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dropdown-menu.is-placed,
+  .ctx-menu.is-placed,
+  .filter-chip-pop,
+  .tag-filter-pop,
+  .nav-menu,
+  .import-menu-dropdown,
+  .reset-menu-pop,
+  .modal-overlay,
+  .modal-overlay > .modal,
+  .slideshow,
+  .lightbox-overlay,
+  .search-scope-banner,
+  .import-staging-banner,
+  .canvas-mode-banner,
+  .filter-dock,
+  .status-note,
+  .action-bar-messages,
+  .nav-task,
+  .settings-tour-card,
+  .action-bar--bottom,
+  .editor-accordion-body {
+    animation: none;
+  }
+
+  .detail-panel,
+  .detail-page,
+  .editor-panel,
+  .editor-body,
+  .page-scroll,
+  .wait-overlay {
+    transition: none;
   }
 }
 
@@ -787,11 +1173,25 @@ button {
   border-radius: 0;
   background: var(--bg-elevated);
   box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.14);
+  /* Rises from the window's bottom edge as the first photo is selected and
+     sinks back out when the selection clears (the page keeps it mounted for
+     the exit - see usePresence in Library/AlbumDetail). */
+  animation: pm-rise-in 0.26s var(--ease-out) backwards;
+}
+
+.action-bar--bottom.pm-closing {
+  animation: pm-rise-out 0.2s var(--ease-in) both;
+  pointer-events: none;
 }
 
 /* Reserve room at the foot of the scroll area so the last grid row can scroll
    clear of the fixed action bar instead of hiding behind it. The scroll region
-   is `.page-scroll`, so the padding goes there. */
+   is `.page-scroll`, so the padding goes there. The foot grows and shrinks in
+   step with the bar's slide instead of jumping. */
+.page-scroll {
+  transition: padding-bottom 0.26s var(--ease-out);
+}
+
 .page:has(.action-bar--bottom) .page-scroll {
   padding-bottom: 96px;
 }
@@ -1030,6 +1430,23 @@ select:hover,
 input:hover:not(:disabled),
 .filter-bar input[type="date"]:hover {
   border-color: var(--text-muted);
+}
+
+/* No browser focus ring on buttons, links and other clickable chrome: the
+   blue halo the platform draws after a click (Electron keeps it on buttons)
+   fights the app's own hover / pressed / selected states. Text fields and the
+   editor's sliders keep their own accent ring below, since there the focus is
+   the thing you need to see. */
+button:focus-visible,
+a:focus-visible,
+label:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="option"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
 }
 
 /* One clean accent ring on focus (no double browser + custom outline). */
@@ -1467,8 +1884,21 @@ textarea:focus-visible {
   padding: 24px;
   background: rgba(0, 0, 0, 0.45);
   cursor: wait;
+  /* Transitions rather than a keyframe so the exit can start from wherever
+     the fade-in got to: a wait that ends inside the delay simply never shows,
+     one that ends mid-fade turns around, a shown one fades out. */
   opacity: 0;
-  animation: pm-wait-in 0.2s ease-out 0.25s forwards;
+  transition: opacity 0.2s ease-out 0.25s;
+}
+
+.wait-overlay.is-shown {
+  opacity: 1;
+}
+
+.wait-overlay.pm-closing {
+  opacity: 0;
+  transition: opacity 0.15s var(--ease-in);
+  pointer-events: none;
 }
 
 .wait-overlay-box {
@@ -1491,12 +1921,6 @@ textarea:focus-visible {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: pm-spin 0.7s linear infinite;
-}
-
-@keyframes pm-wait-in {
-  to {
-    opacity: 1;
-  }
 }
 
 /* App-skinned confirm/alert dialogs (components/AppDialogs.tsx) - replace the
@@ -2190,6 +2614,7 @@ textarea:focus-visible {
   .thumb-card .thumb-skeleton::after,
   .page,
   .editor-overlay,
+  .editor-overlay:not(.editor-overlay--docked) .editor-panel,
   .detail-photo {
     animation: none;
   }
@@ -2254,6 +2679,12 @@ textarea:focus-visible {
   font-size: 10px;
   padding: 2px 6px;
   border-radius: calc(4px * var(--corner-scale));
+}
+
+/* A Trash-restore duplicate keeps its tick box (importing it restores the
+   photo), so its badge steps aside from the checkbox's corner. */
+.thumb-card .select-checkbox ~ .duplicate-badge {
+  left: 30px;
 }
 
 .thumb-card .select-checkbox {
@@ -2463,10 +2894,13 @@ textarea:focus-visible {
   opacity: 1;
 }
 
-/* When a remove button occupies the top-right, drop the RAW+JPG badge below it
-   so the two don't overlap. */
-.thumb-card.has-remove .badge {
-  top: 40px;
+/* When a tile has both, the file-type badge keeps its corner and the remove ×
+   sits under it - the badge is always there, the × only on hover, so the
+   badge shouldn't jump around to make room for it. Keyed on the badge
+   actually preceding the ×, so album / canvas cards without one keep their ×
+   in the corner. */
+.thumb-card .badge ~ .card-remove {
+  top: 30px;
 }
 
 .thumb-card .overlay-info {
@@ -2596,9 +3030,37 @@ textarea:focus-visible {
   flex-direction: column;
   background: var(--bg);
   color: var(--text);
-  /* Fade + a hair of scale so opening the editor eases in, matching the soft
-     page/lightbox transitions rather than popping over the view. */
-  animation: pm-overlay-in 0.25s ease both;
+  /* A plain crossfade over the photo view - no scale: the Back button and
+     the stage controls sit at the same spot in both views (see
+     .editor-bg-toggle), and a scale would have slid them during the fade.
+     The panel eases in from the right on top of it (below). */
+  animation: pm-fade-in 0.14s ease-out both;
+}
+
+/* Panel hidden (the switch in the stage's control row, or P): the rail
+   slides out past the right edge and the stage takes the whole width as it
+   goes, with the same inset on the right as on the left - exactly as the
+   photo view's panel collapses (.detail-panel--collapsed: negative margin of
+   the rail's own width, so nothing inside it reflows; the body clips it). */
+.editor-overlay--panel-hidden .editor-panel {
+  margin-right: -320px;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    margin-right 0.28s var(--ease-out),
+    opacity 0.16s var(--ease-in),
+    visibility 0s linear 0.28s;
+}
+
+.editor-overlay--panel-hidden .editor-body {
+  padding-right: 20px;
+}
+
+/* Leaving: the same fade in reverse. ImageDetail keeps the editor mounted
+   with this class for the animation's length, then takes it down. */
+.editor-overlay--closing {
+  animation: pm-fade-out 0.14s ease-in both;
+  pointer-events: none;
 }
 
 /* Slim top bar holding the back arrow, so it never overlaps the photo. */
@@ -2624,6 +3086,9 @@ textarea:focus-visible {
   display: flex;
   gap: 16px;
   padding: 0 0 0 20px;
+  /* Clips the rail while it slides out (see .editor-overlay--panel-hidden). */
+  overflow: hidden;
+  transition: padding-right 0.28s var(--ease-out);
 }
 
 .editor-stage {
@@ -2633,14 +3098,19 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* The vertical frame that used to sit on .editor-body. */
-  padding: 16px 0 28px;
+  /* The vertical frame that used to sit on .editor-body. The bottom is the
+     photo view's page inset, so the control row under the photo ends on the
+     same line there and here (see .editor-bg-toggle). */
+  padding: 16px 0 20px;
 }
 
 /* The image box - same treatment as the lightbox's .detail-image: rounded,
    elevated (or black), photo centered inside. The background toggle sits in
    its own row below it. */
 .editor-stage-main {
+  /* Anchors the "Rendering…" badge (.editor-rendering). Every other overlay
+     in here positions against the canvas wrap or a pane, not this box. */
+  position: relative;
   flex: 1;
   min-height: 0;
   width: 100%;
@@ -2649,7 +3119,11 @@ textarea:focus-visible {
   justify-content: center;
   overflow: hidden;
   border-radius: calc(12px * var(--corner-scale));
-  padding: 16px;
+  /* .detail-image's inset exactly: 16px above and below, and the 72px side
+     gutters the photo view keeps for its prev/next arrows. A landscape photo
+     is bound by the width, so with narrower sides here it came out wider in
+     the editor than in the photo view - a jump on every open and close. */
+  padding: 16px 72px;
   transition: background 0.15s ease;
 }
 
@@ -2694,6 +3168,17 @@ textarea:focus-visible {
 
 /* The baseline switch, a divider, then the compares it feeds - one unit, so the
    row wraps around it rather than through it. Same gap as the row itself. */
+/* Zoom + compares: the controls that need a rendered picture. Present from
+   the start so the row is complete; parked until the first render lands. */
+.editor-toolbar-live {
+  display: contents;
+}
+
+.editor-toolbar-live.is-waiting > * {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .editor-compare-group {
   display: flex;
   align-items: center;
@@ -2781,6 +3266,10 @@ textarea:focus-visible {
    stage - keep the two in step. */
 .editor-stage-main--pair {
   gap: 12px;
+  /* Side by side halves each picture already; the arrow gutters would only
+     shrink them further, and this view has no counterpart to match. */
+  padding-left: 16px;
+  padding-right: 16px;
 }
 
 /* The original's pane. Each pane clips its own contents so a zoomed photo can't
@@ -2928,6 +3417,28 @@ textarea:focus-visible {
    padding is the whole spacing, and nothing may show through it. */
 .editor-histogram-pinned .editor-histogram {
   margin: 0;
+}
+
+/* The plot plus its wait indicator: a spinner centred on the (still empty)
+   plot until the first frame's readback fills it. Same delayed fade-in as the
+   stage badge, so the two appear together and a fast render shows neither. */
+.editor-histogram-slot {
+  position: relative;
+}
+
+.editor-histogram-wait {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: editor-wait-in 0.15s ease 0.25s both;
+}
+
+.editor-histogram-wait .spinner {
+  border-color: rgba(255, 255, 255, 0.18);
+  border-top-color: #9a9aa0;
 }
 
 /* Live RGB histogram at the top of the edit panel (always a dark plot, like
@@ -3171,6 +3682,51 @@ input.editor-preset-select {
   font-size: 14px;
 }
 
+.editor-hint-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* While a photo's first frame is on its way and the box shows something else
+   meanwhile (the placeholder, or the previous photo): a small badge in the
+   top-left corner, in the side gutter, clear of the picture and of the split
+   view's tags. Held back 250ms then faded in, so a warm-cache render that
+   lands right away never flashes it. */
+.editor-rendering {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  background: rgba(20, 20, 22, 0.72);
+  color: #e6e6ea;
+  font-size: 12px;
+  pointer-events: none;
+  user-select: none;
+  animation: editor-wait-in 0.15s ease 0.25s both;
+}
+
+.editor-rendering .spinner {
+  width: 12px;
+  height: 12px;
+  border-color: rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+}
+
+@keyframes editor-wait-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* The library preview shown while the editor's first server render is on its
    way - same centred-and-contained fit the canvas will take, so the swap to
    the real render doesn't jump. */
@@ -3193,6 +3749,29 @@ input.editor-preset-select {
   color: var(--text);
   border-left: 1px solid var(--border);
   overflow: hidden;
+  transition:
+    margin-right 0.28s var(--ease-out),
+    opacity 0.2s ease-out,
+    visibility 0s;
+}
+
+/* The rail eases in from the right edge while the overlay fades - the one
+   part of the view that is new arrives as such. Not in the dock, which
+   slides in as a whole. Fill mode `backwards`, not `both`: a forwards fill
+   would pin opacity at 1 for good and beat the panel-hidden fade below. */
+.editor-overlay:not(.editor-overlay--docked) .editor-panel {
+  animation: pm-panel-in 0.18s ease-out backwards;
+}
+
+@keyframes pm-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* Only the controls scroll; the footer stays put, so the scrollbar ends at the
@@ -3235,6 +3814,26 @@ input.editor-preset-select {
   align-items: baseline;
   font-size: 12.5px;
   font-weight: 500;
+}
+
+/* "Something in here is off its default." Sits on a group header, a sub-heading
+   and on every changed slider label - deliberately quiet: it marks where the
+   work is, it isn't a control. */
+.editor-edited-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  flex: none;
+}
+
+/* On a collapsed group header the dot is the only sign of the edits inside, so
+   it keeps full strength; the open group shows its sliders anyway. */
+.editor-accordion-header.open .editor-edited-dot {
+  opacity: 0.55;
 }
 
 .editor-slider-val {
@@ -3299,7 +3898,7 @@ input.editor-preset-select {
   gap: 8px;
 }
 
-/* Save / Save copy fill the width evenly so they read as the main actions. */
+/* Save copy fills its half of the row so it reads as the main action. */
 .editor-footer-primary .btn {
   flex: 1;
   padding: 9px 12px;
@@ -3312,14 +3911,20 @@ input.editor-preset-select {
   margin: 0;
 }
 
-/* Docked (canvas) mode has no Save buttons - this note stands where they
-   were and says why: the edit keeps itself. */
+/* The editor has no Save button - this note stands where it was and says why:
+   the edit keeps itself. */
 .editor-autosave-note {
   flex: 1;
   text-align: center;
   color: var(--text-muted);
   font-size: 12px;
   padding: 9px 0;
+}
+
+/* A write that didn't land. Nothing is lost - closing the editor saves through
+   the mutation, which has somewhere to put the error - but say so. */
+.editor-autosave-note.failed {
+  color: var(--danger);
 }
 
 /* Narrow windows: the fixed 320px side panel would squeeze the photo into a
@@ -3338,6 +3943,12 @@ input.editor-preset-select {
      the frame goes back on the body and the two children give theirs up. */
   .editor-stage {
     padding: 0;
+  }
+
+  /* No arrows beside a stacked stage - the side gutters would only waste
+     the little width there is. */
+  .editor-stage-main {
+    padding: 16px;
   }
 
   /* No room for a reserved gutter here - Back rejoins the row as its first
@@ -4187,6 +4798,25 @@ input.editor-preset-select {
   filter: brightness(1.08);
 }
 
+/* "Sync to Immich" as a press-to-tick button (components/ImmichSyncToggle):
+   the same shape as "Add to Immich" next to it, tinted with the accent and a
+   tick at the end while the photo / album / import is marked for sync. */
+.btn.immich-sync-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn.immich-sync-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+
+.btn.immich-sync-toggle .immich-sync-toggle-check {
+  margin-left: 2px;
+  color: var(--accent);
+}
+
 /* A quieter button for secondary actions like "Clear filters". */
 .btn.ghost {
   background: transparent;
@@ -4241,6 +4871,13 @@ input.editor-preset-select {
    .detail-page is the flex-column page, this layout takes its remaining
    height (flex: 1) and its single line stretches (default align-content), so
    the photo column and side panel both get the full available height. */
+/* The photo view and the editor share one frame, measure for measure: the
+   page's 20px inset on the left only, 16px between the stage and the side
+   rail, the rail 320px wide running from the top bar to the bottom edge, the
+   stage's own 16px above and 20px below. Opening the editor over this view
+   then moves nothing but the panel's contents - the photo box, the Back
+   button and the stage controls stay on their pixels. Keep in step with
+   .editor-body, .editor-stage and .editor-panel. */
 .detail-layout {
   display: flex;
   /* No wrapping on desktop: in a wrapped flex container the line is sized to
@@ -4249,20 +4886,23 @@ input.editor-preset-select {
      container height instead, which is what keeps the photo fitted. The
      stacked small-screen layout re-enables wrapping (media query below). */
   flex-wrap: nowrap;
-  gap: 40px;
+  gap: 16px;
   flex: 1;
   min-height: 0;
 }
 
 /* The photo column: image area on top, background/zoom toolbar below. Takes
-   all width the side panel doesn't need (flex-grow 999 vs 1). */
+   all width the side panel doesn't need. */
 .detail-main {
-  flex: 999 1 400px;
+  flex: 1 1 400px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  /* .editor-bg-toggle's margin above the editor's control row. */
+  gap: 14px;
   min-width: 0;
   min-height: 0;
+  /* .editor-stage's vertical frame. */
+  padding: 16px 0 20px;
 }
 
 .detail-image {
@@ -4280,13 +4920,13 @@ input.editor-preset-select {
   /* Clips the zoomed-in photo to the frame (the loupe effect). */
   overflow: hidden;
   min-height: 0;
-  /* Bigger top/bottom inset than the sides so the light-table background shows
-     as a clear band above and below the photo instead of the image sitting
-     flush to the frame edges. The side inset also reserves the columns the
-     prev/next arrows live in (20px inset + 44px button + a little air), so a
-     wide photo fits BESIDE the arrows instead of running underneath them -
-     the fit maths subtracts this padding (see useImageZoomPan). */
-  padding: 40px 72px;
+  /* Top and bottom: the editor's inset (.editor-stage-main), so a photo that
+     is height-bound - nearly every photo on a wide screen - shows at the
+     same size here and there. The sides reserve the columns the prev/next
+     arrows live in (20px inset + 44px button + a little air), so a wide
+     photo fits BESIDE the arrows instead of running underneath them - the
+     fit maths subtracts this padding (see useImageZoomPan). */
+  padding: 16px 72px;
 }
 
 .detail-image-lightest {
@@ -4557,6 +5197,20 @@ input.editor-preset-select {
    scrolls internally instead (see .detail-panel max-height). */
 .detail-page {
   overflow: hidden;
+  /* The side rail runs to the top, right and bottom edges like the editor's
+     panel (.editor-body): only the left keeps the page inset. */
+  padding: 0 0 0 20px;
+}
+
+/* With the panel hidden nothing sits on the right edge, so the photo box
+   gets the same inset there as on the left instead of running to the edge.
+   The inset arrives in step with the panel's slide. */
+.detail-page {
+  transition: padding-right 0.28s var(--ease-out);
+}
+
+.detail-page:has(.detail-panel--collapsed) {
+  padding-right: 20px;
 }
 
 /* Filename header of the detail sidebar, with the delete trash can pinned to
@@ -4754,6 +5408,70 @@ input.editor-preset-select {
   background: rgba(28, 28, 32, 0.62);
 }
 
+/* Grid right-click menu (Export / Save copy). Portals onto <body> like the
+   info card, opens at the pointer, nudged back inside the window at the edges. */
+.ctx-menu {
+  position: fixed;
+  z-index: 3500;
+  min-width: 200px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+}
+
+.ctx-menu-head {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ctx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctx-menu-item .icon {
+  color: var(--text-muted);
+}
+
+.ctx-menu-item:hover,
+.ctx-menu-item:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+/* What a menu action without a dialog has to say ("file is gone"): a note
+   floating at the bottom of the window, gone again after a moment. */
+.ctx-menu-note {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 3500;
+  transform: translateX(-50%);
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+  animation: info-card-in 0.12s ease-out;
+}
+
 .info-card {
   position: fixed;
   z-index: 3500;
@@ -4763,9 +5481,6 @@ input.editor-preset-select {
   background: var(--bg-elevated);
   box-shadow: var(--shadow-pop);
   animation: info-card-in 0.12s ease-out;
-  /* Inert: it must never come between the pointer and the grid, or it would
-     take the mouse-leave that is supposed to dismiss it. */
-  pointer-events: none;
 }
 
 @keyframes info-card-in {
@@ -4888,14 +5603,29 @@ input.editor-preset-select {
   white-space: nowrap;
 }
 
-/* Collapsed: the panel is out of the layout entirely (not just narrowed), so
-   the photo column takes the freed width and the 40px gap goes with it. Kept
-   mounted rather than unmounted so its scroll position - and a half-typed
-   description - survive a hide/show. The doubled class keeps this ahead of
-   the plain .detail-panel rule below, which sets display: flex and would
-   otherwise win on source order. */
+/* Collapsed: the panel slides out past the right edge and the photo column
+   takes the freed width as it goes. A negative right margin of the panel's
+   own width takes it out of the layout without changing its size, so its
+   contents never reflow mid-slide (the page clips it), and the photo grows
+   smoothly rather than snapping. Kept mounted rather than unmounted so its
+   scroll position - and a half-typed description - survive a hide/show;
+   visibility: hidden (after the slide) keeps it out of the tab order. The
+   doubled class keeps this ahead of the plain .detail-panel rule below. */
+.detail-panel {
+  transition:
+    margin-right 0.28s var(--ease-out),
+    opacity 0.2s ease-out,
+    visibility 0s;
+}
+
 .detail-panel.detail-panel--collapsed {
-  display: none;
+  margin-right: -320px;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    margin-right 0.28s var(--ease-out),
+    opacity 0.16s var(--ease-in),
+    visibility 0s linear 0.28s;
 }
 
 /* The handle that does it. Mirror of .stage-back-btn: flush with the right
@@ -4914,19 +5644,23 @@ input.editor-preset-select {
   transform: translateY(-50%);
 }
 
+/* The editor's rail, exactly (.editor-panel + .editor-panel-body): the same
+   width, the same chrome tone, the same hairline down its left edge from the
+   top bar to the bottom of the window, the same inner padding - so the switch
+   between looking and developing swaps what is in the panel, not the panel. */
 .detail-panel {
-  flex: 1 1 280px;
-  max-width: 320px;
+  flex: 0 0 320px;
+  width: 320px;
   min-width: 0;
   /* Cap to the layout height so long metadata/similar lists scroll *inside* the
      panel rather than growing the row and scrolling the whole page. */
   max-height: 100%;
   overflow-y: auto;
-  /* Small horizontal padding so selection outlines on flush-left controls (the
-     color swatches) aren't clipped by overflow-x: hidden at the content edge.
-     The left hairline marks it off as a side rail, like the editor panel. */
+  /* Horizontal padding also keeps selection outlines on flush-left controls
+     (the color swatches) clear of the overflow-x: hidden content edge. */
   overflow-x: hidden;
-  padding: 0 4px 0 20px;
+  padding: 20px 20px 18px;
+  background: var(--bg-elevated);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -4982,6 +5716,13 @@ input.editor-preset-select {
      don't get clipped when they can't sit side by side. */
   .detail-page {
     overflow-y: auto;
+    /* Stacked, the panel is a block under the photo rather than a side rail,
+       so the frame goes back on the page (as in the stacked editor). */
+    padding: 10px;
+  }
+
+  .detail-main {
+    padding: 0;
   }
 
   /* Re-enable wrapping (desktop is nowrap) so the panel drops below the photo. */
@@ -5032,11 +5773,12 @@ input.editor-preset-select {
   }
 
   .detail-panel {
-    flex-basis: 100%;
-    max-width: none;
+    flex: 1 1 100%;
+    width: auto;
     max-height: 50vh;
     border-left: none;
-    padding-left: 4px;
+    border-top: 1px solid var(--border);
+    padding: 14px 10px 14px;
   }
 }
 
@@ -5248,6 +5990,21 @@ input.editor-preset-select {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+/* "Add folder / Add photos" in the review head: one session can collect from
+   several cards and folders (pages/ImportWizard.tsx). */
+.import-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0 0;
+}
+
+.import-add-hint {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 /* Inside a panel the toolbar shouldn't add its own bottom gap. */
@@ -5828,8 +6585,8 @@ input.editor-preset-select {
 /* Every topic has the same shape: rule, heading, where-line, lead, detail. */
 .help-topic {
   border-top: 1px solid var(--border);
-  margin-top: 30px;
-  padding-top: 22px;
+  margin-top: 36px;
+  padding-top: 26px;
 }
 
 .help-page h3 {
@@ -5866,8 +6623,9 @@ input.editor-preset-select {
 /* The one sentence that says what this topic is. Set slightly larger than the
    detail below it, so a chapter can be skimmed by reading only these. */
 .help-lead {
-  margin: 0 0 10px;
+  margin: 0 0 14px;
   font-size: 15px;
+  line-height: 1.55;
 }
 
 /* The single thing worth remembering about the topic above it. */
@@ -5882,8 +6640,13 @@ input.editor-preset-select {
   line-height: 1.55;
 }
 
+/* Sub-sections inside a topic. A little air above each one and a hairline
+   under the heading, so a long topic (the editor, the canvas) reads as a
+   stack of short blocks rather than one run of text. */
 .help-page h4 {
-  margin: 20px 0 6px;
+  margin: 26px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
   font-size: 14px;
   font-weight: 650;
   color: var(--text);
@@ -5891,16 +6654,27 @@ input.editor-preset-select {
 
 .help-page p,
 .help-page li {
-  line-height: 1.55;
+  line-height: 1.6;
+}
+
+.help-page p {
+  margin: 0 0 10px;
 }
 
 .help-page ul,
 .help-page ol {
+  margin: 0 0 10px;
   padding-left: 22px;
 }
 
 .help-page li + li {
-  margin-top: 5px;
+  margin-top: 8px;
+}
+
+/* Bullets that open with a bold phrase: the phrase is the point, the rest is
+   the explanation. Keep the two on the same line, no extra styling. */
+.help-page li > strong:first-child {
+  color: var(--text);
 }
 
 kbd {
@@ -5932,6 +6706,21 @@ kbd {
 .help-shortcuts th {
   color: var(--text-muted);
   font-weight: 600;
+}
+
+/* Key column: never wrap a key combination. */
+.help-shortcuts td:first-child {
+  white-space: nowrap;
+}
+
+.help-shortcuts kbd {
+  margin: 0 1px;
+}
+
+/* The shortcut list is split into one small table per screen, each under
+   its own h4; pull the table up to the heading it belongs to. */
+.help-page h4 + .help-shortcuts {
+  margin-top: 2px;
 }
 
 /* ---- Phase-2 editing UI: tone curves, colour-grading wheels, calibration ---- */
@@ -6466,6 +7255,8 @@ kbd {
 
 .editor-accordion-body {
   padding-block: 4px 8px;
+  /* An opened group's controls ease in rather than appear in a block. */
+  animation: pm-page-in 0.18s var(--ease-out) backwards;
 }
 
 /* ---- Settings: appearance picker ----------------------------------------- */
@@ -7679,9 +8470,14 @@ button.smart-card {
    with the light/black toggle - no info panel. The review controls bar keeps
    its layout but swaps the dark-glass look for app-surface tokens so it works
    on every skin. */
+/* No vertical padding of its own: .detail-main inside it already carries the
+   photo view's frame (16px above, 20px below), which is the same frame the
+   editor's stage uses. Adding the overlay's own on top pushed the review bar
+   down and lifted the control row, so the two rows sat at different heights
+   here than in the editor and the light table. Sides match .editor-body. */
 .lightbox-overlay--page {
   background: var(--bg);
-  padding: 16px 20px 18px;
+  padding: 0 20px;
 }
 
 .lightbox-detail-layout {
@@ -7903,6 +8699,22 @@ button.smart-card {
   font-size: 14px;
   line-height: 1.4;
   text-align: center;
+  color: rgba(128, 128, 128, 0.75);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Panning is the one canvas gesture with nothing on screen to point at, so it
+   says its own name in the corner of the stage - small and grey enough to stop
+   being read after the first time, and out of the way of the page itself. */
+.canvas-pan-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  z-index: 5;
+  max-width: calc(100% - 24px);
+  font-size: 11px;
+  line-height: 1.3;
   color: rgba(128, 128, 128, 0.75);
   pointer-events: none;
   user-select: none;
@@ -8298,6 +9110,15 @@ button.smart-card {
   contain: paint;
 }
 
+/* The stage is focusable (tabIndex -1) so that clicking the canvas takes the
+   keyboard off the last toolbar button - a focused button owns Space, and
+   Space is the pan gesture. Nothing to draw a ring around: the click that
+   focused it is all the feedback there is. */
+.canvas-viewport:focus,
+.canvas-viewport:focus-visible {
+  outline: none;
+}
+
 /* The scroll surface: the world at its on-screen size, which is what the
    scrollbars are measured against.
    `margin: auto` inside the flex viewport centres it whenever it is smaller
@@ -8373,7 +9194,7 @@ button.smart-card {
   color: var(--text-muted);
 }
 
-[data-theme="graphite-dark"] .canvas-viewport,
+[data-theme="stone-dark"] .canvas-viewport,
 [data-theme="dark"] .canvas-viewport {
   background: #3a3a3d;
 }
@@ -8688,6 +9509,57 @@ button.smart-card {
 .canvas-print.is-idle .canvas-print-chrome {
   opacity: 0;
   pointer-events: none;
+}
+
+/* Focus mode (F): the bar gone, the whole screen taken, a black ground, and
+   only the page arrows plus the focus toggle, fading with the pointer. Two
+   classes, so top: 0 outranks the --chrome-top rule at the end of the file
+   and the page covers the top bar even where fullscreen is refused. */
+.canvas-print.is-focus {
+  top: 0;
+  background: #000;
+}
+
+.canvas-print.is-focus .canvas-print-sheet {
+  box-shadow: none;
+}
+
+/* Focus mode's one remaining control in the canvas view
+   (components/FocusToggle.tsx): a small dark-grey pill centred at the bottom
+   of the picture, half there until the pointer finds it. It sits low enough
+   to clear the sheet's bottom edge - straddling it, the blur behind the pill
+   picked up the white paper and the grey turned pale. Dark in every theme:
+   it belongs to the picture's surround, not to the app. */
+.focus-toggle {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--focus-chip-border);
+  border-radius: 999px;
+  background: var(--focus-chip-bg);
+  backdrop-filter: blur(8px);
+  color: rgba(255, 255, 255, 0.85);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.2s ease;
+}
+
+.focus-toggle:hover,
+.focus-toggle:focus-visible {
+  opacity: 1;
+}
+
+/* In the canvas view the pill fades with the rest of its chrome instead. */
+.canvas-print:not(.is-idle) .focus-toggle {
+  opacity: 0.8;
 }
 
 /* Alignment guides: only ever drawn while something is being dragged, and only
@@ -9371,6 +10243,20 @@ button.smart-card {
   opacity: 1;
 }
 
+/* Over the paper a see-through Delete reads as a white/pink patch - it wears
+   the same dark ground as its neighbours, only its icon turns red on hover. */
+.canvas-list-actions .btn.quiet-danger {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.canvas-list-actions .btn.quiet-danger:hover:not(:disabled) {
+  border-color: var(--text-muted);
+  background: var(--hover);
+  color: var(--danger);
+}
+
 /* --- The editor, docked beside the canvas ---------------------------------
    Same editor, stripped to its panel: it becomes the right-hand column of
    .canvas-stage while the photo is developed LIVE in its frame on the page
@@ -9393,7 +10279,24 @@ button.smart-card {
   border-radius: 0;
   overflow: hidden;
   background: var(--bg);
-  animation: pm-dock-in 0.22s ease both;
+  animation: pm-dock-in 0.22s ease backwards;
+}
+
+/* Leaving the dock: back out the way it came. CanvasEditor keeps it mounted
+   through <Presence> for the animation's length (PhotoEditor's `closing`). */
+.editor-overlay--docked.editor-overlay--closing {
+  animation: pm-dock-out 0.14s var(--ease-in) both;
+}
+
+@keyframes pm-dock-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(24px);
+  }
 }
 
 .editor-overlay--docked .editor-stage {
@@ -9402,16 +10305,9 @@ button.smart-card {
   display: none;
 }
 
-/* Crop and masks are worked ON the picture: while Transform or Masks is the
-   open group, the dock widens and brings the stage back so there is a photo
-   to drag the crop box or the mask over. Everything else stays panel-only. */
-.editor-overlay--docked.editor-needs-stage {
-  flex-basis: min(64vw, 1100px);
-}
-
-.editor-overlay--docked.editor-needs-stage .editor-stage {
-  display: flex;
-}
+/* Masks are drawn ON the page: the editor lays its guides and pointer
+   surface over the edited frame's photo (.canvas-mask-host below), so the
+   dock never widens and nothing opens beside the canvas. */
 
 
 
@@ -9571,4 +10467,234 @@ button.smart-card {
 
 .canvas-workspace .canvas-filmstrip-note {
   padding: 0;
+}
+
+/* --- Masks drawn on the canvas frame ---------------------------------------
+   The host sits over the frame's photo exactly as the photo does - same box,
+   same content transform (set inline) - and is a size container, so the
+   surface inside can fit the picture the way object-fit: cover fits it. It
+   never takes the pointer itself; only the surface does, and only while a
+   mask is being drawn, so selecting and moving the frame keep working. */
+.canvas-mask-host {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  container-type: size;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.canvas-mask-surface {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  touch-action: none;
+}
+
+.canvas-mask-surface.is-drawing {
+  pointer-events: auto;
+}
+
+.canvas-mask-hit {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* --- Where a photo is used: album and canvas chips ------------------------
+   Both are links into the album / canvas. An album is a collection (filled,
+   the accent), a canvas a page the photo lies on (outlined, warm): the icon
+   and the colour tell them apart before the name is read. */
+.membership-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.tag-chip.membership-chip {
+  text-decoration: none;
+  padding-left: 8px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.tag-chip.membership-chip .icon {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.tag-chip.membership-chip .membership-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.tag-chip.membership-chip--album {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
+}
+
+.tag-chip.membership-chip--album:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+}
+
+.tag-chip.membership-chip--canvas {
+  border-style: solid;
+  border-color: color-mix(in srgb, #d9822b 55%, var(--border));
+  background: none;
+}
+
+.tag-chip.membership-chip--canvas:hover {
+  border-color: #d9822b;
+  background: color-mix(in srgb, #d9822b 12%, var(--bg-elevated));
+}
+
+.tag-chip.membership-chip--canvas .icon {
+  color: #d9822b;
+}
+
+/* The info card's small marks follow the same code: album filled on the
+   accent, canvas outlined in the warm tone, plain tags as they were. */
+.info-card-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.info-card-chip--auto {
+  opacity: 0.8;
+}
+
+.info-card-chip--canvas {
+  background: none;
+  border: 1px solid color-mix(in srgb, #d9822b 55%, var(--border));
+}
+
+.info-card-chip--canvas .icon {
+  color: #d9822b;
+}
+
+.info-card-chip--album {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* The album and canvas chips are links into their album or canvas - they
+   answer a hover like the photo view's membership chips do. */
+a.info-card-chip {
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+a.info-card-chip--album:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+a.info-card-chip--canvas:hover {
+  border-color: #d9822b;
+  background: color-mix(in srgb, #d9822b 12%, transparent);
+}
+
+/* --- The canvas view --------------------------------------------------- */
+/* The pencil in the view's bottom bar: white on the always-dark ground, like
+   the bar's Back. */
+.btn.canvas-view-edit {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.btn.canvas-view-edit:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* A page with nothing on it says so, quietly, in the middle of the paper. */
+.canvas-view-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* The Trash page's title wears the page's own icon, like the nav. */
+.trash-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* The full-window workspaces start under the app's top bar (--chrome-top,
+   see the top bar's section) rather than covering it. Last in the file so it
+   wins over each workspace's own inset: 0. The docked editor is a column
+   inside the canvas workspace, not a layer, and keeps its place.
+
+   The import photo view belongs here too: the top bar is painted above it
+   (z-index 1100 against 1000), so starting at the very top only hid its own
+   padding and pushed the review bar tight against the bar. */
+.editor-overlay:not(.editor-overlay--docked),
+.canvas-workspace,
+.canvas-print,
+.lightbox-overlay--page {
+  top: var(--chrome-top);
+}
+
+/* Focus mode (F - components/FocusToggle.tsx): the app's top bar goes, and
+   nothing else. <html data-focus> hides it, and with --chrome-top at zero
+   every full-window workspace (the rule above) starts at the very top, so
+   the editors get that height for the picture while keeping their own panel,
+   toolbar, rail and filmstrip - focus mode is for working, not for looking.
+   (The canvas view is the exception and hides its own chrome as well; that
+   lives with the rest of .canvas-print.is-focus above.) Last in the file so
+   these win over the panel-hidden rules above. */
+:root[data-focus] {
+  --chrome-top: 0px;
+}
+
+:root[data-focus] .top-bar-dock {
+  display: none;
+}
+
+/* Focus mode's button, in the photo editor's toolbar and the canvas
+   editor's: the way in, and - since the toolbars stay - the way back out.
+   Dark grey and a little see-through rather than the accent, the same chip
+   in every theme and in every view, matching the canvas view's pill. */
+.btn.focus-btn {
+  background: var(--focus-chip-bg);
+  border-color: var(--focus-chip-border);
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.btn.focus-btn:hover:not(:disabled) {
+  background: var(--focus-chip-bg-hover);
+  border-color: var(--focus-chip-border);
+  color: #fff;
+}
+
+/* On, and it has to look it: the grey lightens, the edge turns bright and
+   the label goes fully white, with a soft halo around the chip. Still the
+   same dark-grey chip - lit, not recoloured. */
+.btn.focus-btn.active {
+  background: var(--focus-chip-bg-on);
+  border-color: rgba(255, 255, 255, 0.6);
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12);
+}
+
+.btn.focus-btn.active:hover:not(:disabled) {
+  background: var(--focus-chip-bg-on-hover);
+  border-color: rgba(255, 255, 255, 0.75);
+  color: #fff;
 }
