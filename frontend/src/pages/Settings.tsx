@@ -25,6 +25,8 @@ import {
   recordRate,
   useElapsed,
 } from "../utils/rebuildEstimate";
+import { Presence } from "../components/Presence";
+import { MOTION } from "../utils/usePresence";
 
 // localStorage key for the self-calibrating rebuild rate. ".v2" = the
 // parallelised rebuild; the old sequential key's rate would overestimate ~3x.
@@ -289,34 +291,36 @@ function AppearanceSetting() {
         </div>
       </div>
 
-      {open && (
-        <div className="modal-overlay" onClick={() => setOpen(false)}>
-          <div
-            className="modal theme-modal"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Choose appearance"
-          >
-            <div className="dir-picker-header">
-              <h3 className="section-title" style={{ margin: 0, fontSize: 15 }}>
-                Appearance
-              </h3>
-              <button className="modal-close" onClick={() => setOpen(false)} aria-label="Close">
-                <IconX size={14} />
-              </button>
-            </div>
-            <div className="theme-modal-body">
-              <ThemePicker />
-            </div>
-            <div className="theme-modal-footer">
-              <button className="btn primary" onClick={() => setOpen(false)}>
-                Done
-              </button>
+      <Presence open={open} ms={MOTION.modal}>
+        {open && (
+          <div className="modal-overlay" onClick={() => setOpen(false)}>
+            <div
+              className="modal theme-modal"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Choose appearance"
+            >
+              <div className="dir-picker-header">
+                <h3 className="section-title" style={{ margin: 0, fontSize: 15 }}>
+                  Appearance
+                </h3>
+                <button className="modal-close" onClick={() => setOpen(false)} aria-label="Close">
+                  <IconX size={14} />
+                </button>
+              </div>
+              <div className="theme-modal-body">
+                <ThemePicker />
+              </div>
+              <div className="theme-modal-footer">
+                <button className="btn primary" onClick={() => setOpen(false)}>
+                  Done
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Presence>
     </>
   );
 }
