@@ -231,8 +231,18 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     // album pages hang their Back/name/delete row UNDER the scroller, and the
     // row's right-anchored Delete must not sit beneath the rail's tail.
     const top = scrollerTop + RAIL_GAP;
+    // The page's own fixed bottom bar (the selection action bar in the Library
+    // and the album): the rail ends above it too. One that is on its way out
+    // (.pm-closing) no longer counts, so the rail grows back as the bar sinks.
+    // Re-measured as it comes and goes: its rise/sink animations end on the
+    // window (animationend below), and the status bar it replaces resizes the
+    // scroller.
+    const pageBar = scroller
+      .closest(".page")
+      ?.querySelector<HTMLElement>(".action-bar--bottom:not(.pm-closing)");
+    const bottomInset = Math.max(getBottomInset?.() ?? 0, pageBar?.offsetHeight ?? 0);
     const bottom = Math.max(
-      RAIL_GAP + (getBottomInset?.() ?? 0),
+      RAIL_GAP + bottomInset,
       window.innerHeight - scrollerRect.bottom + RAIL_GAP
     );
     setRailTop(top);

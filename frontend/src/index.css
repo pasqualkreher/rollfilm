@@ -11010,7 +11010,10 @@ input[type="radio"]:disabled {
   font-size: 10px;
   line-height: 16px;
 }
-/* The selection bar rises above the status bar, not over it. */
-body:has(.status-bar) .action-bar--bottom {
-  bottom: 24px;
+/* With photos selected the action bar takes the foot of the window and says
+   "N selected" itself; the status bar steps aside instead of doubling it (and
+   the timeline scrubber ends above the action bar - TimelineScrubber measures
+   it). Back the moment the bar is unmounted. */
+.page:has(.action-bar--bottom) .status-bar {
+  display: none;
 }
