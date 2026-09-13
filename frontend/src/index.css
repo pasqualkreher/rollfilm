@@ -10946,3 +10946,38 @@ input[type="radio"]:disabled {
 .tooltip--above {
   transform: translateY(-100%);
 }
+
+/* ---- Canvas: the stage column and the hand ------------------------------- */
+/* The stage plus the one-line caption under it. */
+.canvas-frame-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.canvas-pan-caption {
+  flex: none;
+  height: 18px;
+  padding: 2px 4px 0;
+  font-size: var(--text-xs);
+  line-height: 16px;
+  color: var(--text-muted);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+  pointer-events: none;
+}
+/* The hand while a pan modifier (Space, Alt) is held, and the closed hand
+   during the drag - on everything in the viewport, over the photos' own move
+   cursor too, so the stage says what the next drag will do. */
+.canvas-viewport.is-pan-ready,
+.canvas-viewport.is-pan-ready * {
+  cursor: grab !important;
+}
+.canvas-viewport.is-panning,
+.canvas-viewport.is-panning * {
+  cursor: grabbing !important;
+}

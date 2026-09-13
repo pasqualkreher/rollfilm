@@ -446,6 +446,9 @@ export function CanvasEditor({
   // way, and once the paper is covered in photos it is the only place left to
   // grab: dragging the background would otherwise always mean "select".
   const [panKey, setPanKey] = useState(false);
+  // Alt held: the other pan modifier. Tracked only for the hand cursor, so the
+  // stage shows the grab before the drag starts, as it does for Space.
+  const [altHeld, setAltHeld] = useState(false);
 
   // Undo history of whole documents. A canvas edit is rarely one field - a
   // drag moves several items, a delete removes them - so snapshots are both
@@ -964,20 +967,6 @@ export function CanvasEditor({
     [world.x, world.y, world.w, world.h]
   );
   const origin = originAt(zoom);
-  // Panning is the one canvas gesture with nothing on screen to point at. It
-  // is said once - a quiet banner for a few seconds the first time the view
-  // can move - not a caption sitting on the stage all session; the "How this
-  // works" menu keeps it for later.
-  const viewCanPan = origin.w > view.width + 1 || origin.h > view.height + 1;
-  const [panHint, setPanHint] = useState(false);
-  const panHintSaidRef = useRef(false);
-  useEffect(() => {
-    if (!viewCanPan || panHintSaidRef.current) return;
-    panHintSaidRef.current = true;
-    setPanHint(true);
-    const timer = window.setTimeout(() => setPanHint(false), 3500);
-    return () => window.clearTimeout(timer);
-  }, [viewCanPan]);
 
   // The print view: nothing but the paper, the whole window, and Escape to
   // come back. The number is the sheet it opened on - the one centred in the
@@ -2131,6 +2120,7 @@ export function CanvasEditor({
         fitToView(true);
         return;
       }
+      if (event.key === "Alt") setAltHeld(true);
       if (event.key === " ") {
         if (onButton) return;
         // Held, not tapped: a canvas that scrolls the page when you reach for
@@ -2195,11 +2185,13 @@ export function CanvasEditor({
     }
     function onKeyUp(event: KeyboardEvent) {
       if (event.key === " ") setPanKey(false);
+      if (event.key === "Alt") setAltHeld(false);
     }
     // A window that loses focus mid-gesture would otherwise never see the
     // keyup, leaving the canvas stuck in pan mode.
     function onBlur() {
       setPanKey(false);
+      setAltHeld(false);
     }
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -2452,6 +2444,7 @@ export function CanvasEditor({
             onRemove={removePage}
           />
         )}
+        <div className="canvas-frame-col">
         <div
           className={`canvas-frame${croppingId ? " is-cropping" : ""}`}
           data-canvas-frame
@@ -2481,7 +2474,12 @@ export function CanvasEditor({
             />
           )}
           <div
-            className="canvas-viewport"
+            // The hand: grab while a pan modifier is held, grabbing during the
+            // drag - as classes, so it also wins over the photos' own cursors
+            // (index.css .is-pan-ready / .is-panning).
+            className={`canvas-viewport${
+              drag.kind === "pan" ? " is-panning" : panKey || altHeld ? " is-pan-ready" : ""
+            }`}
             ref={viewportRef}
             // Focusable, but never in the tab order: it is only ever focused by
             // a click on the canvas itself (see onBackgroundPointerDown), so
@@ -2501,7 +2499,6 @@ export function CanvasEditor({
               jumpToWork();
             }}
             style={{
-              cursor: drag.kind === "pan" ? "grabbing" : panKey ? "grab" : undefined,
               // The free canvas's colour is painted by the frame behind, so
               // the grid layer in between can show through.
               background: endless ? "transparent" : undefined,
@@ -2802,14 +2799,6 @@ export function CanvasEditor({
             </div>
           )}
 
-          {/* Said once, briefly (see panHint), and only while the view has
-              somewhere to go; it steps aside for the mode banners above. */}
-          {panHint && canPan && !panKey && !croppingItem && (
-            <div className="canvas-mode-banner canvas-mode-banner--quiet">
-              Hold Space and drag to move the view · Alt-drag does the same
-            </div>
-          )}
-
           {/* A blank canvas says, in one quiet line on the paper, how to get
               a photo onto it. Gone the moment the first item lands. */}
           {items.length === 0 && !croppingItem && (
@@ -2819,6 +2808,14 @@ export function CanvasEditor({
                 : "Drag a photo from the filmstrip onto the page to add it"}
             </div>
           )}
+        </div>
+        {/* Panning is the one canvas gesture with nothing on screen to point
+            at, so it is named in a quiet line under the stage - only while the
+            view actually has somewhere to go; at fit it would be a lie. The
+            line keeps its height either way so the stage doesn't jump. */}
+        <div className="canvas-pan-caption" aria-hidden={!canPan}>
+          {canPan ? "Hold Space and drag to move the view · Alt-drag does the same" : ""}
+        </div>
         </div>
       </div>
 
