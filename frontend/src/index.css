@@ -3195,7 +3195,7 @@ textarea:focus-visible {
   /* As on the photo view: anchors the left-flush Back button, side padding
      keeps the centred controls clear of it. */
   position: relative;
-  padding: 0 12px 0 96px;
+  padding: 0 96px;
 }
 
 /* The baseline switch, a divider, then the compares it feeds - one unit, so the
@@ -5047,7 +5047,7 @@ input.editor-preset-select {
   /* Anchors the left-flush Back button; the side padding keeps the centred
      controls clear of it. */
   position: relative;
-  padding: 0 12px 0 96px;
+  padding: 0 96px;
 }
 
 /* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps and
@@ -5659,7 +5659,8 @@ input.editor-preset-select {
   gap: 5px;
   flex-shrink: 0;
   position: absolute;
-  right: 0;
+  /* The same inset from the edge as .stage-back-btn keeps on the left. */
+  right: 12px;
   top: 50%;
   transform: translateY(-50%);
 }
