@@ -35,7 +35,6 @@ import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
-import { LibraryStatusBar, summarizeFilters } from "../components/LibraryStatusBar";
 
 // Browse mode works on slim index entries (the whole library in one query),
 // search mode on full rows - the shared selection/bulk handlers only touch
@@ -693,25 +692,6 @@ export function Library() {
         />
       )}
       </div>
-      <LibraryStatusBar
-        shown={isLoading ? undefined : orderedImages.length}
-        selected={selected.size}
-        filters={summarizeFilters({
-          q,
-          viewMode,
-          ratingMin,
-          colorLabel,
-          albumName: albumId ? albums?.find((a) => String(a.id) === albumId)?.name ?? null : null,
-          canvasName: canvasId ? canvases?.find((c) => String(c.id) === canvasId)?.name ?? null : null,
-          tags: selectedTags,
-          camera,
-          lens,
-          focalMin: Number(focalMin) || null,
-          focalMax: Number(focalMax) || null,
-          dateFrom,
-          dateTo,
-        })}
-      />
     </div>
   );
 }

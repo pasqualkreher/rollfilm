@@ -235,8 +235,7 @@ export function TimelineScrubber({ getScroller, getSectionEl, sections, getBotto
     // and the album): the rail ends above it too. One that is on its way out
     // (.pm-closing) no longer counts, so the rail grows back as the bar sinks.
     // Re-measured as it comes and goes: its rise/sink animations end on the
-    // window (animationend below), and the status bar it replaces resizes the
-    // scroller.
+    // window (animationend below).
     const pageBar = scroller
       .closest(".page")
       ?.querySelector<HTMLElement>(".action-bar--bottom:not(.pm-closing)");

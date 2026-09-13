@@ -1063,9 +1063,7 @@ button {
      detail view before the photo is fitted) grows past the app shell and gets
      clipped by its overflow:hidden - the flex chain must be allowed to shrink. */
   min-height: 0;
-  /* The inset, also read by .status-bar to run flush to the window edge. */
-  --page-pad: 16px;
-  padding: var(--page-pad);
+  padding: 16px;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -1135,9 +1133,6 @@ button {
    doesn't scroll (headers stay put); only the inner .page-scroll does. */
 .page:has(.filter-bar--sticky) {
   padding: 0;
-  /* No inset to undo: the status bar (.status-bar) reads these. */
-  --page-pad: 0px;
-  --page-pad-right: 0px;
   overflow: hidden;
 }
 
@@ -1164,8 +1159,7 @@ button {
    the window edge. */
 .page-timeline .page-scroll {
   padding-right: 58px;
-  /* The status bar below is the room at the foot now. */
-  padding-bottom: 20px;
+  padding-bottom: 56px;
 }
 
 /* Same page, no scrubber (a search or a flat grid): the wide gutter would be
@@ -2369,7 +2363,6 @@ textarea:focus-visible {
    sit underneath it. */
 .page-timeline {
   padding-right: 54px;
-  --page-pad-right: 54px;
 }
 
 /* Right-edge date scrubber, pinned to the viewport so it stays put while the
@@ -2893,8 +2886,6 @@ textarea:focus-visible {
    carry the frame, so both album pages line up exactly. */
 .page:has(> .album-bottom-bar):not(:has(.filter-bar--sticky)) {
   padding: 0;
-  --page-pad: 0px;
-  --page-pad-right: 0px;
 }
 
 .album-bottom-delete {
@@ -10970,50 +10961,4 @@ input[type="radio"]:disabled {
 }
 .tooltip--above {
   transform: translateY(-100%);
-}
-
-/* ---- Library status bar: the thin strip under the grid ------------------ */
-.status-bar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  height: 24px;
-  padding: 0 var(--space-3);
-  /* Flush with the window: undo the page inset on three sides. */
-  margin: 0 calc(-1 * var(--page-pad-right, var(--page-pad, 16px))) calc(-1 * var(--page-pad, 16px))
-    calc(-1 * var(--page-pad, 16px));
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  background: var(--bg-elevated);
-  border-top: 1px solid var(--border);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.status-bar-count {
-  color: var(--text);
-}
-.status-bar-filters {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.status-bar-spacer {
-  flex: 1;
-}
-.status-bar .segmented {
-  height: 18px;
-}
-.status-bar .segmented button {
-  padding: 0 6px;
-  font-size: 10px;
-  line-height: 16px;
-}
-/* With photos selected the action bar takes the foot of the window and says
-   "N selected" itself; the status bar steps aside instead of doubling it (and
-   the timeline scrubber ends above the action bar - TimelineScrubber measures
-   it). Back the moment the bar is unmounted. */
-.page:has(.action-bar--bottom) .status-bar {
-  display: none;
 }
