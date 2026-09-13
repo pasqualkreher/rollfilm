@@ -964,6 +964,20 @@ export function CanvasEditor({
     [world.x, world.y, world.w, world.h]
   );
   const origin = originAt(zoom);
+  // Panning is the one canvas gesture with nothing on screen to point at. It
+  // is said once - a quiet banner for a few seconds the first time the view
+  // can move - not a caption sitting on the stage all session; the "How this
+  // works" menu keeps it for later.
+  const viewCanPan = origin.w > view.width + 1 || origin.h > view.height + 1;
+  const [panHint, setPanHint] = useState(false);
+  const panHintSaidRef = useRef(false);
+  useEffect(() => {
+    if (!viewCanPan || panHintSaidRef.current) return;
+    panHintSaidRef.current = true;
+    setPanHint(true);
+    const timer = window.setTimeout(() => setPanHint(false), 3500);
+    return () => window.clearTimeout(timer);
+  }, [viewCanPan]);
 
   // The print view: nothing but the paper, the whole window, and Escape to
   // come back. The number is the sheet it opened on - the one centred in the
@@ -2788,12 +2802,12 @@ export function CanvasEditor({
             </div>
           )}
 
-          {/* The one gesture the canvas has nothing on screen to point at, in
-              a quiet line in the corner. Only while the view actually has
-              somewhere to go - at fit, where nothing can move, it would be a
-              lie - and it steps aside for the mode banners above. */}
-          {canPan && !panKey && !croppingItem && (
-            <div className="canvas-pan-hint">Hold Space and drag to move the view · Alt-drag does the same</div>
+          {/* Said once, briefly (see panHint), and only while the view has
+              somewhere to go; it steps aside for the mode banners above. */}
+          {panHint && canPan && !panKey && !croppingItem && (
+            <div className="canvas-mode-banner canvas-mode-banner--quiet">
+              Hold Space and drag to move the view · Alt-drag does the same
+            </div>
           )}
 
           {/* A blank canvas says, in one quiet line on the paper, how to get

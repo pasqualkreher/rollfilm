@@ -8767,22 +8767,6 @@ button.smart-card {
   user-select: none;
 }
 
-/* Panning is the one canvas gesture with nothing on screen to point at, so it
-   says its own name in the corner of the stage - small and grey enough to stop
-   being read after the first time, and out of the way of the page itself. */
-.canvas-pan-hint {
-  position: absolute;
-  left: 12px;
-  bottom: 10px;
-  z-index: 5;
-  max-width: calc(100% - 24px);
-  font-size: 11px;
-  line-height: 1.3;
-  color: rgba(128, 128, 128, 0.75);
-  pointer-events: none;
-  user-select: none;
-}
-
 .canvas-action-what {
   font-weight: 600;
   color: var(--text);
