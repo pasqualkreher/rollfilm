@@ -10962,6 +10962,7 @@ input[type="radio"]:disabled {
   padding: 2px 4px 0;
   font-size: var(--text-xs);
   line-height: 16px;
+  text-align: center;
   color: var(--text-muted);
   opacity: 0.7;
   white-space: nowrap;
