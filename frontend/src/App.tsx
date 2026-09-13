@@ -13,6 +13,7 @@ import { TasksProvider, useTasks } from "./state/tasks";
 import { WaitProvider } from "./state/wait";
 import { Presence } from "./components/Presence";
 import { MOTION } from "./utils/usePresence";
+import { TooltipLayer } from "./components/TooltipLayer";
 
 // Every screen except the Library is code-split. The app used to ship as one
 // bundle, so each launch parsed and compiled the photo editor (by far the
@@ -323,9 +324,6 @@ function TopBar() {
       </div>
       <SearchBar />
       <div className="top-bar-side top-bar-side--right">
-      <span className="app-version" title={`Rollfilm ${__APP_VERSION__}`}>
-        v{__APP_VERSION__}
-      </span>
       <nav
         className={`top-icon-links${locked ? " nav-links--locked" : ""}`}
         aria-label="Trash, statistics, settings, help and contact"
@@ -422,6 +420,7 @@ export default function App() {
             <SourceScanWatcher />
             <EmptyLibraryRedirect />
             <TopBar />
+            <TooltipLayer />
 
             {/* Same wording and styling as a page waiting on its own data, so a
                 chunk that isn't in memory yet reads as the page loading rather

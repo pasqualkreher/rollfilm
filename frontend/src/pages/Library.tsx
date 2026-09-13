@@ -35,6 +35,7 @@ import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
+import { LibraryStatusBar, summarizeFilters } from "../components/LibraryStatusBar";
 
 // Browse mode works on slim index entries (the whole library in one query),
 // search mode on full rows - the shared selection/bulk handlers only touch
@@ -379,9 +380,14 @@ export function Library() {
   async function resetSelected(opts: BulkResetOptions) {
     if (selected.size === 0) return;
     await api.images.bulkReset(Array.from(selected), opts);
-    queryClient.invalidateQueries({ queryKey: ["images"] });
-    queryClient.invalidateQueries({ queryKey: ["tags"] });
-    queryClient.invalidateQueries({ queryKey: ["albums"] });
+    // Awaited: the wait popup has to stay up until the grid actually holds the
+    // reset rows - a reset that re-renders photos would otherwise hand back an
+    // unblocked light table whose thumbnails change a moment later.
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["images"] }),
+      queryClient.invalidateQueries({ queryKey: ["tags"] }),
+      queryClient.invalidateQueries({ queryKey: ["albums"] }),
+    ]);
   }
 
   // Auto-develop every selected photo (each learns its own suggestion). Photos
@@ -687,6 +693,25 @@ export function Library() {
         />
       )}
       </div>
+      <LibraryStatusBar
+        shown={isLoading ? undefined : orderedImages.length}
+        selected={selected.size}
+        filters={summarizeFilters({
+          q,
+          viewMode,
+          ratingMin,
+          colorLabel,
+          albumName: albumId ? albums?.find((a) => String(a.id) === albumId)?.name ?? null : null,
+          canvasName: canvasId ? canvases?.find((c) => String(c.id) === canvasId)?.name ?? null : null,
+          tags: selectedTags,
+          camera,
+          lens,
+          focalMin: Number(focalMin) || null,
+          focalMax: Number(focalMax) || null,
+          dateFrom,
+          dateTo,
+        })}
+      />
     </div>
   );
 }

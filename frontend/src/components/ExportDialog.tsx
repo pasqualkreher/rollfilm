@@ -3,6 +3,7 @@ import { api, saveDownload } from "../api/client";
 import { useTransientMessage } from "../utils/transientMessage";
 import { Dropdown } from "./Dropdown";
 import { IconExport } from "./Icons";
+import { rangeFillStyle } from "../utils/rangeFill";
 
 // Long-edge presets for the size dropdown; null = keep the original size.
 // Shared with the editor's Save-copy dialog, which offers the same choices.
@@ -177,6 +178,7 @@ export function ExportDialog({
                   step={1}
                   value={quality}
                   disabled={busy}
+                  style={rangeFillStyle(quality, 60, 100)}
                   onChange={(e) => setQuality(Number(e.target.value))}
                 />
               </label>

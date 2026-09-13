@@ -8,6 +8,7 @@ import { IconArrowLeft, IconCamera, IconCheck, IconChevronLeft, IconChevronRight
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import { FocusButton, useFocusChrome } from "./FocusToggle";
+import { isBipolar, rangeFillStyle } from "../utils/rangeFill";
 import {
   adjustmentsFromImage,
   BAND_SWATCH,
@@ -393,26 +394,33 @@ function Slider({
           {format ? format(uiValue) : min < 0 && uiShown > 0 ? `+${uiShown}` : uiShown}
         </span>
       </span>
-      <input
-        type="range"
-        min={min / uiScale}
-        max={max / uiScale}
-        step={step}
-        value={uiValue}
-        onChange={(e) => queueChange(Number(e.target.value) * uiScale)}
-        onDoubleClick={() => {
-          pendingRef.current = null; // the reset must not be overwritten by a queued drag value
-          onChange(resetValue);
-        }}
-        onKeyDown={(e) => {
-          // Up/down walk the slider list; left/right keep the native "nudge
-          // the value" behaviour of a focused range input.
-          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-          e.preventDefault();
-          focusAdjacentSlider(e.currentTarget, e.key === "ArrowDown" ? 1 : -1);
-        }}
-        title="Double-click to reset"
-      />
+      {/* The wrapper carries the drawn track's fill stops and the zero tick
+          (index.css range block); the input inherits them. */}
+      <span
+        className={`pm-range-wrap${isBipolar(min, max) ? " pm-range-wrap--bipolar" : ""}`}
+        style={rangeFillStyle(uiValue, min / uiScale, max / uiScale)}
+      >
+        <input
+          type="range"
+          min={min / uiScale}
+          max={max / uiScale}
+          step={step}
+          value={uiValue}
+          onChange={(e) => queueChange(Number(e.target.value) * uiScale)}
+          onDoubleClick={() => {
+            pendingRef.current = null; // the reset must not be overwritten by a queued drag value
+            onChange(resetValue);
+          }}
+          onKeyDown={(e) => {
+            // Up/down walk the slider list; left/right keep the native "nudge
+            // the value" behaviour of a focused range input.
+            if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+            e.preventDefault();
+            focusAdjacentSlider(e.currentTarget, e.key === "ArrowDown" ? 1 : -1);
+          }}
+          title="Double-click to reset"
+        />
+      </span>
     </label>
   );
 }
@@ -2176,15 +2184,27 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   }
 
   const saveEdits = useMutation({
-    mutationFn: () => withWait("Saving edits…", () => api.images.saveEdits(image.id, edits)),
+    mutationFn: () =>
+      withWait("Saving edits…", async () => {
+        // An autosave can still be in the air (Back hit right after a slider
+        // came to rest) - let it land instead of racing a second write for the
+        // same photo onto the server.
+        await autosaveInflightRef.current;
+        await api.images.saveEdits(image.id, edits);
+        // What this write put on the server - the autosave below compares
+        // against it, so a save-then-close never writes twice.
+        lastWrittenKeyRef.current = editsKey;
+        deferredWriteRef.current = false;
+        unseenWriteRef.current = false;
+        // Awaited, so the popup stays up until the grid and the photo view
+        // actually hold the new row: leaving the editor must not drop you on a
+        // thumbnail that catches up a moment later.
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["image", image.id] }),
+          queryClient.invalidateQueries({ queryKey: ["images"] }),
+        ]);
+      }),
     onSuccess: () => {
-      // What this write put on the server - the autosave below compares
-      // against it, so a save-then-close never writes twice.
-      lastWrittenKeyRef.current = editsKey;
-      deferredWriteRef.current = false;
-      unseenWriteRef.current = false;
-      queryClient.invalidateQueries({ queryKey: ["image", image.id] });
-      queryClient.invalidateQueries({ queryKey: ["images"] });
       onClose();
     },
   });
@@ -2204,8 +2224,9 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const onEditsSettledRef = useRef(onEditsSettled);
   onEditsSettledRef.current = onEditsSettled;
   // One write at a time - a second change during a write re-arms the timer from
-  // the finally below instead of racing the first one onto the server.
-  const autosavingRef = useRef(false);
+  // the finally below instead of racing the first one onto the server. It is
+  // the promise rather than a flag because leaving waits for it as well.
+  const autosaveInflightRef = useRef<Promise<void> | null>(null);
   const autosaveTimerRef = useRef(0);
   // An autosave deliberately does NOT invalidate the queries: refetching the
   // image would swap the `image` prop mid-edit (new edit_rev -> new preview
@@ -2225,34 +2246,39 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }, [queryClient, image.id]);
 
-  const runAutosave = useCallback(async () => {
-    if (autosavingRef.current) return;
+  const runAutosave = useCallback((): Promise<void> => {
+    if (autosaveInflightRef.current) return autosaveInflightRef.current;
     const pending = autosaveRef.current;
-    if (pending.editsKey === lastWrittenKeyRef.current) return;
-    autosavingRef.current = true;
-    setAutosaveState("saving");
-    let ok = false;
-    try {
-      await api.images.saveEdits(image.id, pending.edits, { deferDerivatives: true });
-      lastWrittenKeyRef.current = pending.editsKey;
-      deferredWriteRef.current = true;
-      unseenWriteRef.current = true;
-      ok = true;
-      setAutosaveState("saved");
-    } catch {
-      // The key is left alone, so the state is still pending: the next edit
-      // re-arms the timer and closing saves it through the mutation (which has
-      // somewhere to show the error). Deliberately no timer retry - a backend
-      // that is down would turn into a write every second.
-      setAutosaveState("failed");
-    } finally {
-      autosavingRef.current = false;
-      // Changed again while that write was in flight - come back for it.
-      if (ok && autosaveRef.current.editsKey !== lastWrittenKeyRef.current) {
-        window.clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = window.setTimeout(() => void runAutosave(), AUTOSAVE_IDLE_MS);
+    if (pending.editsKey === lastWrittenKeyRef.current) return Promise.resolve();
+    // Never rejects: a failed write is shown in the footer note, and whoever
+    // awaits this (closing) carries on and writes it properly itself.
+    const write = (async () => {
+      setAutosaveState("saving");
+      let ok = false;
+      try {
+        await api.images.saveEdits(image.id, pending.edits, { deferDerivatives: true });
+        lastWrittenKeyRef.current = pending.editsKey;
+        deferredWriteRef.current = true;
+        unseenWriteRef.current = true;
+        ok = true;
+        setAutosaveState("saved");
+      } catch {
+        // The key is left alone, so the state is still pending: the next edit
+        // re-arms the timer and closing saves it through the mutation (which has
+        // somewhere to show the error). Deliberately no timer retry - a backend
+        // that is down would turn into a write every second.
+        setAutosaveState("failed");
+      } finally {
+        autosaveInflightRef.current = null;
+        // Changed again while that write was in flight - come back for it.
+        if (ok && autosaveRef.current.editsKey !== lastWrittenKeyRef.current) {
+          window.clearTimeout(autosaveTimerRef.current);
+          autosaveTimerRef.current = window.setTimeout(() => void runAutosave(), AUTOSAVE_IDLE_MS);
+        }
       }
-    }
+    })();
+    autosaveInflightRef.current = write;
+    return write;
   }, [image.id]);
 
   useEffect(() => {
@@ -2285,8 +2311,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       lastWrittenKeyRef.current = pending.editsKey;
       deferredWriteRef.current = false;
       unseenWriteRef.current = true;
-      void api.images
-        .saveEdits(imageId, pending.edits)
+      void (autosaveInflightRef.current ?? Promise.resolve())
+        .then(() => api.images.saveEdits(imageId, pending.edits))
         .then(() => {
           // The editor is gone, so nothing here re-renders - but the grid and
           // the photo view it went back to are showing the old derivatives.
@@ -2393,14 +2419,33 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // without coming through here are caught by the autosave effect above.
   function requestClose() {
     if (busy) return;
-    if (editsKey !== lastWrittenKeyRef.current) {
+    // Everything still owed to the server goes through the mutation - so the
+    // wait popup is up while it lands - instead of being left to the unmount
+    // cleanup's silent background write. `deferredWriteRef` counts as owed:
+    // an autosave writes the values only, so the thumbnail the grid is about
+    // to show is still the old one. So does a write still in flight, whose
+    // key has not landed in lastWrittenKeyRef yet.
+    if (
+      editsKey !== lastWrittenKeyRef.current ||
+      deferredWriteRef.current ||
+      autosaveInflightRef.current
+    ) {
       saveEdits.mutate();
       return;
     }
-    // Autosave already wrote it - just let the rest of the app see it.
+    // Nothing owed - just let the rest of the app see the last write.
     flushQueries();
     onClose();
   }
+
+  // The key handler below re-subscribes only when its deps change, so it must
+  // not close over requestClose itself: `editsKey` is not among those deps, and
+  // a stale copy carrying the edits as they were at mount thinks there is
+  // nothing to write - Escape right after a slider move then closed the editor
+  // with no popup and left the write to the silent unmount cleanup. The refs
+  // requestClose reads are live; only this one binding has to be kept fresh.
+  const requestCloseRef = useRef(requestClose);
+  requestCloseRef.current = requestClose;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -2418,7 +2463,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         else if (saveCopyOpen) {
           if (!saveCopy.isPending) setSaveCopyOpen(false);
         } else if (focusMode) setFocusMode(false);
-        else if (!busy) requestClose();
+        else if (!busy) requestCloseRef.current();
         return;
       }
 
@@ -4672,7 +4717,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             {MASK_SUBJECTS.map((s) => (
               <button
                 key={s.value}
-                className="btn btn-sm"
+                className="btn btn-sm mask-add-item"
                 disabled={segmenting !== null}
                 onClick={() => addSemanticMask(s.value)}
               >
@@ -4687,7 +4732,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           <span className="mask-add-label">Add mask</span>
           <div className="mask-add-btns">
             {MASK_TYPES.map((t) => (
-              <button key={t.value} className="btn btn-sm" onClick={() => addMask(t.value)}>
+              <button key={t.value} className="btn btn-sm mask-add-item" onClick={() => addMask(t.value)}>
                 + {t.label}
               </button>
             ))}

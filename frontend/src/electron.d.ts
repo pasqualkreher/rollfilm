@@ -54,6 +54,12 @@ declare global {
         widthMm: number;
         heightMm: number;
       }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+      /** Whether the window is fullscreen. Absent in older builds. */
+      isFullScreen?: () => Promise<boolean>;
+      /** Fullscreen changes; returns the unsubscribe. Absent in older builds. */
+      onFullScreen?: (callback: (on: boolean) => void) => () => void;
+      /** macOS: show/hide the traffic lights (focus mode). Absent in older builds. */
+      setWindowButtonsVisible?: (visible: boolean) => Promise<void>;
     };
   }
 }

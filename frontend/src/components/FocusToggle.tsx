@@ -19,9 +19,15 @@ export function useFocusChrome(on: boolean) {
     if (!on) return;
     active += 1;
     document.documentElement.setAttribute("data-focus", "");
+    // With the bar gone the macOS traffic lights would float over the
+    // picture: they go with it (a no-op off macOS and in the web build).
+    window.photoManager?.setWindowButtonsVisible?.(false);
     return () => {
       active -= 1;
-      if (active === 0) document.documentElement.removeAttribute("data-focus");
+      if (active === 0) {
+        document.documentElement.removeAttribute("data-focus");
+        window.photoManager?.setWindowButtonsVisible?.(true);
+      }
     };
   }, [on]);
 }

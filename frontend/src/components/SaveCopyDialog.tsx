@@ -3,6 +3,7 @@ import { useTransientMessage } from "../utils/transientMessage";
 import { Dropdown } from "./Dropdown";
 import { SIZE_OPTIONS } from "./ExportDialog";
 import { IconDisk, IconDuplicate } from "./Icons";
+import { rangeFillStyle } from "../utils/rangeFill";
 
 // The quality a copy is baked at when nobody picks one: the maximum JPEG
 // quality, which is also this dialog's starting point. A copy is a photo you
@@ -127,6 +128,7 @@ export function SaveCopyDialog({
                   step={1}
                   value={quality}
                   disabled={busy}
+                  style={rangeFillStyle(quality, 60, 100)}
                   onChange={(e) => setQuality(Number(e.target.value))}
                 />
               </label>

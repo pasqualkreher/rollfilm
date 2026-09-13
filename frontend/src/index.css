@@ -58,10 +58,44 @@
      button says at a glance which side of the switch you are on. */
   --focus-chip-bg-on: rgba(104, 104, 112, 0.88);
   --focus-chip-bg-on-hover: rgba(124, 124, 132, 0.94);
+  /* Radii: five steps, all riding --corner-scale so Settings > Corners >
+     Square flattens every one of them. */
+  --radius-xs: calc(4px * var(--corner-scale));
+  --radius-sm: calc(6px * var(--corner-scale));
   --radius: calc(8px * var(--corner-scale));
-  --radius-sm: calc(5px * var(--corner-scale));
+  --radius-lg: calc(10px * var(--corner-scale));
+  --radius-pill: calc(999px * var(--corner-scale));
+  /* Shadows: a hairline for raised controls, one for menus and popovers,
+     one for dialogs; --shadow-pop stays for the few floats over photos. */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.18);
+  --shadow-menu: 0 6px 20px rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.28);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.18);
+  /* Type scale for chrome. Headings stay free; everything else picks one. */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  /* The small-caps section label used across the editor, the info rail and
+     the settings pages (see .label-micro). */
+  --label-micro-size: 10.5px;
+  --label-micro-tracking: 0.08em;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  /* Stacking order, lowest to highest. */
+  --z-bar: 25;
+  --z-popover: 60;
+  --z-workspace: 1000;
+  --z-chrome: 1100;
+  --z-modal: 1200;
+  --z-ctx: 3500;
+  --z-menu: 4000;
+  --z-tooltip: 6000;
   color-scheme: light;
 }
 
@@ -390,7 +424,7 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--text) 16%, transparent);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
@@ -446,9 +480,12 @@ button {
 .top-bar {
   display: flex;
   align-items: center;
-  gap: 20px;
-  min-height: 46px;
-  padding: 6px 16px;
+  gap: 16px;
+  /* Title-bar height: on macOS the traffic lights sit in here (see
+     :root[data-titlebar="inset"]), so 40px is the native toolbar height, and
+     the bar stays that tall everywhere else for one consistent chrome. */
+  min-height: 40px;
+  padding: 2px 12px 2px 16px;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
@@ -515,9 +552,9 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: calc(6px * var(--corner-scale));
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   transition: background 0.12s ease, color 0.12s ease;
 }
@@ -530,15 +567,6 @@ button {
 .top-icon-link.active {
   background: var(--hover);
   color: var(--text);
-}
-
-/* Small version tag pinned to the far right of the top bar. */
-.app-version {
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
-  white-space: nowrap;
-  user-select: none;
 }
 
 .spinner {
@@ -836,7 +864,7 @@ button {
   .nav-task,
   .settings-tour-card,
   .action-bar--bottom,
-  .editor-accordion-body {
+  .tooltip {
     animation: none;
   }
 
@@ -855,10 +883,10 @@ button {
    pill - the chrome stays monochrome so the photos keep all the colour. */
 .nav-links a {
   position: relative;
-  padding: 9px 11px;
-  border-radius: calc(4px * var(--corner-scale));
+  padding: 7px 10px;
+  border-radius: var(--radius-xs);
   text-decoration: none;
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -873,7 +901,7 @@ button {
   right: 11px;
   bottom: 3px;
   height: 2px;
-  border-radius: 1px;
+  border-radius: 1px; /* deliberately not scaled: hairline */
   background: transparent;
   transition: background 0.12s ease;
 }
@@ -910,7 +938,7 @@ button {
   height: 30px;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   font-size: 16px;
@@ -936,7 +964,7 @@ button {
 }
 
 .nav-current {
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -955,13 +983,13 @@ button {
   padding: 5px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: calc(8px * var(--corner-scale));
-  box-shadow: var(--shadow-pop);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-menu);
 }
 
 .nav-menu a {
   padding: 8px 12px;
-  border-radius: calc(5px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   text-decoration: none;
   font-size: 13px;
   font-weight: 500;
@@ -989,7 +1017,7 @@ button {
 .top-bar-side {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 14px;
   flex: 1 1 0;
 }
 
@@ -1011,7 +1039,7 @@ button {
 .search-bar input[type="text"] {
   width: 100%;
   padding: 6px 28px 6px 30px;
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -1035,21 +1063,14 @@ button {
      detail view before the photo is fitted) grows past the app shell and gets
      clipped by its overflow:hidden - the flex chain must be allowed to shrink. */
   min-height: 0;
-  padding: 20px;
+  /* The inset, also read by .status-bar to run flush to the window edge. */
+  --page-pad: 16px;
+  padding: var(--page-pad);
   overflow: auto;
   display: flex;
   flex-direction: column;
-  /* Ease each page (incl. the lightbox and back-navigation) in gently instead
-     of it snapping into place. Opacity + a tiny rise; the scroller and timeline
-     root translate together, so this never disturbs the virtual grid's
-     measurements. */
-  /* No fill-mode: with `both`, Chromium keeps applying the final keyframe's
-     transform as an identity MATRIX (not `none`) forever - and a transformed
-     ancestor becomes the containing block for position:fixed descendants, so
-     the timeline scrubber was anchored ~60px too low (to .page's top instead
-     of the viewport). Without fill, the transform stops applying once the
-     animation ends and fixed children anchor to the viewport again. */
-  animation: pm-page-in 0.28s ease;
+  /* No entrance animation: a desktop app switches views instantly. (Banners
+     and dialogs keep theirs - they arrive, a page is already there.) */
 }
 
 /* Hide the native OS scrollbar on the app's scroll containers - the timeline
@@ -1084,8 +1105,8 @@ button {
      clusters related controls without needing dividers. */
   gap: 10px 16px;
   align-items: center;
-  margin-bottom: 16px;
-  padding: 10px 14px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1132,7 +1153,7 @@ button {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 20px 20px;
+  padding: 12px 16px 16px;
 }
 
 /* Timeline pages reserve a right gutter so the grid clears the fixed scrubber,
@@ -1140,14 +1161,15 @@ button {
    the window edge. */
 .page-timeline .page-scroll {
   padding-right: 58px;
-  padding-bottom: 56px;
+  /* The status bar below is the room at the foot now. */
+  padding-bottom: 20px;
 }
 
 /* Same page, no scrubber (a search or a flat grid): the wide gutter would be
    dead space, so the grid goes back to the normal page inset and ends beside
    the scrollbar instead of 40px short of it. */
 .page-timeline .page-scroll:not(:has(> .has-scrubber)) {
-  padding-right: 20px;
+  padding-right: 16px;
 }
 
 /* The album's grid is followed by its own Back/name/delete bar, which already
@@ -1348,7 +1370,7 @@ button {
 .count-pill {
   margin-left: 10px;
   padding: 2px 9px;
-  border-radius: calc(999px * var(--corner-scale));
+  border-radius: var(--radius-pill);
   background: var(--bg);
   border: 1px solid var(--border);
   font-size: 11px;
@@ -1367,7 +1389,7 @@ button {
 }
 
 .segmented button {
-  padding: 5px 11px;
+  padding: 4px 10px;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -1422,7 +1444,7 @@ select,
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -1497,8 +1519,8 @@ textarea:focus-visible {
   padding: 14px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: calc(8px * var(--corner-scale));
-  box-shadow: var(--shadow-pop);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-menu);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1570,7 +1592,7 @@ textarea:focus-visible {
   height: 24px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -1824,7 +1846,7 @@ textarea:focus-visible {
   padding: 10px 16px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: calc(12px * var(--corner-scale));
+  border-radius: var(--radius-lg);
   font-size: 14px;
   color: var(--text);
 }
@@ -1846,8 +1868,8 @@ textarea:focus-visible {
 .modal {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: calc(14px * var(--corner-scale));
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
   width: min(560px, 100%);
   max-height: 80vh;
   display: flex;
@@ -1908,8 +1930,8 @@ textarea:focus-visible {
   padding: 18px 26px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: calc(14px * var(--corner-scale));
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
   font-size: 14px;
 }
 
@@ -2053,7 +2075,7 @@ textarea:focus-visible {
   background: transparent;
   color: var(--text);
   padding: 9px 12px;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   font-size: 14px;
   cursor: pointer;
 }
@@ -2095,7 +2117,7 @@ textarea:focus-visible {
   padding: 10px 14px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: calc(10px * var(--corner-scale));
+  border-radius: var(--radius-lg);
 }
 
 .source-row-main {
@@ -2126,7 +2148,7 @@ textarea:focus-visible {
   letter-spacing: 0.03em;
   color: var(--danger);
   border: 1px solid var(--danger);
-  border-radius: calc(999px * var(--corner-scale));
+  border-radius: var(--radius-pill);
   padding: 1px 8px;
 }
 
@@ -2277,7 +2299,7 @@ textarea:focus-visible {
   font-size: 13px;
   font-weight: 650;
   color: var(--text);
-  border-radius: calc(10px * var(--corner-scale));
+  border-radius: var(--radius-lg);
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   backdrop-filter: blur(6px);
@@ -2319,7 +2341,7 @@ textarea:focus-visible {
   font-weight: 600;
   line-height: 1;
   padding: 3px 7px;
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -2344,6 +2366,7 @@ textarea:focus-visible {
    sit underneath it. */
 .page-timeline {
   padding-right: 54px;
+  --page-pad-right: 54px;
 }
 
 /* Right-edge date scrubber, pinned to the viewport so it stays put while the
@@ -2359,7 +2382,7 @@ textarea:focus-visible {
   z-index: 20;
   cursor: ns-resize;
   touch-action: none;
-  border-radius: calc(16px * var(--corner-scale));
+  border-radius: var(--radius-pill);
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   backdrop-filter: blur(6px);
@@ -2412,7 +2435,7 @@ textarea:focus-visible {
   left: 4px;
   right: 4px;
   height: 3px;
-  border-radius: calc(3px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   background: var(--accent);
   transform: translateY(-50%);
   pointer-events: none;
@@ -2448,7 +2471,7 @@ textarea:focus-visible {
   transform: translateY(-50%);
   white-space: nowrap;
   padding: 5px 11px;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   background: var(--accent);
   color: var(--accent-contrast);
   font-size: 12px;
@@ -2469,7 +2492,7 @@ textarea:focus-visible {
    the image plus the overlay info fading in. */
 .thumb-card {
   position: relative;
-  border-radius: calc(5px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--bg-elevated);
   height: 220px;
@@ -2631,7 +2654,7 @@ textarea:focus-visible {
   color: var(--bg);
   font-size: 10px;
   padding: 2px 6px;
-  border-radius: calc(4px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   letter-spacing: 0.02em;
 }
 
@@ -2678,7 +2701,7 @@ textarea:focus-visible {
   color: #fff;
   font-size: 10px;
   padding: 2px 6px;
-  border-radius: calc(4px * var(--corner-scale));
+  border-radius: var(--radius-xs);
 }
 
 /* A Trash-restore duplicate keeps its tick box (importing it restores the
@@ -2691,9 +2714,11 @@ textarea:focus-visible {
   position: absolute;
   top: 6px;
   left: 6px;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   z-index: 1;
+  /* Over a photo the box needs an edge of its own. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 /* Quick add-to-selects button, revealed on hover so it doesn't clutter the
@@ -2708,7 +2733,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-size: 18px;
@@ -2738,7 +2763,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.6);
   color: #fff;
   font-size: 18px;
@@ -2776,7 +2801,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.6);
   color: #fff;
   z-index: 1;
@@ -2934,7 +2959,7 @@ textarea:focus-visible {
 .import-card {
   display: flex;
   flex-direction: column;
-  border-radius: calc(10px * var(--corner-scale));
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -2950,7 +2975,7 @@ textarea:focus-visible {
      card's overflow clip, which Chromium skips while the img is composited
      (fade-in/hover filter) - square image corners poked over the card frame.
      The img inherits this radius and rounds itself in every state. */
-  border-radius: calc(10px * var(--corner-scale)) calc(10px * var(--corner-scale)) 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   border: none;
 }
 
@@ -3058,7 +3083,7 @@ textarea:focus-visible {
 }
 
 .editor-overlay--panel-hidden .editor-body {
-  padding-right: 20px;
+  padding-right: 0;
 }
 
 /* Leaving: the same fade in reverse. ImageDetail keeps the editor mounted
@@ -3081,16 +3106,16 @@ textarea:focus-visible {
 /* Framed like the detail lightbox: page-like padding around everything, the
    back-arrow column left of the image box, and the image in a rounded elevated
    box (below: .editor-stage-main) rather than a full-bleed grey stage. */
-/* Only the left edge is framed here. The develop panel is chrome, not page, so
-   it runs to the top, right and bottom edges of the window (see .editor-panel)
-   - the frame the photo needs is carried by .editor-stage's own padding
-   instead, which keeps the image inset exactly as it was. */
+/* No frame at all: the stage runs edge to edge (top bar to toolbar, window
+   edge to develop panel) the way Lightroom and Capture One lay out the
+   develop view. The photo's own breathing room is .editor-stage-main's
+   padding, which the fit maths subtracts. */
 .editor-body {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 16px;
-  padding: 0 0 0 20px;
+  gap: 0;
+  padding: 0;
   /* Clips the rail while it slides out (see .editor-overlay--panel-hidden). */
   overflow: hidden;
 }
@@ -3102,15 +3127,13 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* The vertical frame that used to sit on .editor-body. The bottom is the
-     photo view's page inset, so the control row under the photo ends on the
-     same line there and here (see .editor-bg-toggle). */
-  padding: 16px 0 20px;
+  /* Full bleed: the stage box and the toolbar row below it fill the column. */
+  padding: 0;
 }
 
-/* The image box - same treatment as the lightbox's .detail-image: rounded,
-   elevated (or black), photo centered inside. The background toggle sits in
-   its own row below it. */
+/* The image box - same treatment as the lightbox's .detail-image: the stage
+   shade (paper, gray or black) runs to every edge, photo centred inside. The
+   background toggle sits in its own toolbar row below it. */
 .editor-stage-main {
   /* Anchors the "Rendering…" badge (.editor-rendering). Every other overlay
      in here positions against the canvas wrap or a pane, not this box. */
@@ -3122,12 +3145,11 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: calc(12px * var(--corner-scale));
-  /* .detail-image's inset exactly: 16px above and below, and the 72px side
+  /* .detail-image's inset exactly: 20px above and below, and the 72px side
      gutters the photo view keeps for its prev/next arrows. A landscape photo
      is bound by the width, so with narrower sides here it came out wider in
      the editor than in the photo view - a jump on every open and close. */
-  padding: 16px 72px;
+  padding: 20px 72px;
   transition: background 0.15s ease;
 }
 
@@ -3163,11 +3185,17 @@ textarea:focus-visible {
      on a "wide" window and wrapped the row anyway. */
   container-type: inline-size;
   container-name: stage-toolbar;
-  margin-top: 14px;
+  /* A toolbar strip under the stage, on the chrome tone with a hairline above:
+     the same bar the photo view has (.detail-image-toolbar). */
+  flex: none;
+  min-height: 40px;
+  margin: 0;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
   /* As on the photo view: anchors the left-flush Back button, side padding
      keeps the centred controls clear of it. */
   position: relative;
-  padding: 0 96px;
+  padding: 0 12px 0 96px;
 }
 
 /* The baseline switch, a divider, then the compares it feeds - one unit, so the
@@ -3261,7 +3289,7 @@ textarea:focus-visible {
 }
 
 .editor-stage-dark .editor-canvas {
-  border-radius: calc(3px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
 }
 
@@ -3297,7 +3325,7 @@ textarea:focus-visible {
 }
 
 .editor-stage-dark .editor-pane-canvas {
-  border-radius: calc(3px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
 }
 
@@ -3363,7 +3391,7 @@ textarea:focus-visible {
   top: 8px;
   z-index: 3;
   padding: 2px 7px;
-  border-radius: calc(4px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-size: 10.5px;
@@ -3453,7 +3481,7 @@ textarea:focus-visible {
   height: 72px;
   margin: 8px 0 2px;
   border: 1px solid var(--border);
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   background: #141416;
 }
 
@@ -3498,7 +3526,7 @@ input.editor-preset-select {
   height: 12px;
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.35);
-  border-radius: calc(2px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   pointer-events: none;
 }
 
@@ -3548,7 +3576,7 @@ input.editor-preset-select {
 
 .editor-field-label {
   flex: 0 0 46px;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-muted);
 }
@@ -3588,9 +3616,9 @@ input.editor-preset-select {
   margin-bottom: 2px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
-  font-size: 10.5px;
+  font-size: var(--label-micro-size);
   font-weight: 600;
-  letter-spacing: 0.09em;
+  letter-spacing: var(--label-micro-tracking);
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -3649,7 +3677,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -3706,7 +3734,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 7px;
   padding: 4px 10px 4px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgba(20, 20, 22, 0.72);
   color: #e6e6ea;
   font-size: 12px;
@@ -3764,13 +3792,16 @@ input.editor-preset-select {
    slides in as a whole. Fill mode `backwards`, not `both`: a forwards fill
    would pin opacity at 1 for good and beat the panel-hidden fade below. */
 .editor-overlay:not(.editor-overlay--docked) .editor-panel {
-  animation: pm-panel-in 0.18s ease-out backwards;
+  /* Unhurried on purpose: the rail takes longer than the overlay's own fade
+     (0.14s) and starts a beat after it, so the photo is there first and the
+     controls settle in behind it instead of snapping into place with it. */
+  animation: pm-panel-in 0.34s var(--ease-out) 0.06s backwards;
 }
 
 @keyframes pm-panel-in {
   from {
     opacity: 0;
-    transform: translateX(20px);
+    transform: translateX(28px);
   }
   to {
     opacity: 1;
@@ -3816,7 +3847,7 @@ input.editor-preset-select {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 
@@ -3846,19 +3877,15 @@ input.editor-preset-select {
   font-size: 12px;
 }
 
+/* The track and thumb are drawn (see the range block at the end of the file),
+   shared with the crop zoom and the dual range. */
 .editor-slider input[type="range"] {
   width: 100%;
-  accent-color: var(--accent);
   cursor: pointer;
 }
 
 /* Keyboard focus: mark the slider the arrow keys are on (up/down walk the
-   list, left/right nudge the value). */
-.editor-slider input[type="range"]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: calc(4px * var(--corner-scale));
-}
+   list, left/right nudge the value) - the ring is on the thumb (range block). */
 .editor-slider:has(input[type="range"]:focus-visible) .editor-slider-head > span:first-child {
   color: var(--accent);
 }
@@ -4010,7 +4037,7 @@ input.editor-preset-select {
   min-height: 0;
   max-width: 100%;
   object-fit: contain;
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 
@@ -4027,7 +4054,7 @@ input.editor-preset-select {
   padding: 12px 18px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: calc(12px * var(--corner-scale));
+  border-radius: var(--radius-lg);
   backdrop-filter: blur(8px);
 }
 
@@ -4070,7 +4097,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 6px;
   padding: 5px 12px;
-  border-radius: calc(999px * var(--corner-scale));
+  border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.1);
   cursor: pointer;
   white-space: nowrap;
@@ -4084,7 +4111,7 @@ input.editor-preset-select {
 .badge-inline {
   background: rgba(255, 255, 255, 0.15);
   padding: 2px 8px;
-  border-radius: calc(4px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   font-size: 11px;
 }
 
@@ -4096,7 +4123,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   color: var(--text);
   padding: 3px 6px 3px 10px;
-  border-radius: calc(999px * var(--corner-scale));
+  border-radius: var(--radius-pill);
   font-size: 12px;
 }
 
@@ -4161,7 +4188,7 @@ input.editor-preset-select {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-menu);
 }
 
 .tag-filter-search {
@@ -4244,7 +4271,7 @@ input.editor-preset-select {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--shadow-menu);
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -4283,7 +4310,7 @@ input.editor-preset-select {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 6px 8px;
+  padding: 5px 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: none;
@@ -4348,7 +4375,7 @@ input.editor-preset-select {
   top: 50%;
   height: 3px;
   transform: translateY(-50%);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--border);
 }
 
@@ -4357,7 +4384,7 @@ input.editor-preset-select {
   top: 50%;
   height: 3px;
   transform: translateY(-50%);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
 }
 
@@ -4379,26 +4406,10 @@ input.editor-preset-select {
   background: transparent;
 }
 
+/* Painted by the shared range block at the end of the file; only the hit
+   test differs (the track itself lets clicks through to the other thumb). */
 .dual-range input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
   pointer-events: auto;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--bg-elevated);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-}
-
-.dual-range input[type="range"]::-moz-range-thumb {
-  pointer-events: auto;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--bg-elevated);
-  cursor: pointer;
 }
 
 .dual-range input[type="range"]:focus-visible {
@@ -4425,7 +4436,7 @@ input.editor-preset-select {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-menu);
 }
 
 .reset-menu-list {
@@ -4494,7 +4505,7 @@ input.editor-preset-select {
   background: var(--bg-elevated);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   cursor: pointer;
   font: inherit;
 }
@@ -4606,11 +4617,11 @@ input.editor-preset-select {
 }
 
 .lightbox-nav-prev {
-  left: 20px;
+  left: 16px;
 }
 
 .lightbox-nav-next {
-  right: 20px;
+  right: 16px;
 }
 
 .lightbox-nav-btn:disabled {
@@ -4687,7 +4698,7 @@ input.editor-preset-select {
    right in both themes; there is nothing left to override. */
 
 .btn {
-  padding: 6px 12px;
+  padding: 5px 11px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
@@ -4704,7 +4715,7 @@ input.editor-preset-select {
 
 /* Compact variant for inline secondary actions (e.g. "Clear"). */
 .btn-sm {
-  padding: 4px 9px;
+  padding: 3px 8px;
   font-size: 12px;
 }
 
@@ -4714,14 +4725,14 @@ input.editor-preset-select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border-radius: calc(999px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 18px;
+  font-size: 15px;
   line-height: 1;
   transition: border-color 0.12s ease, background 0.12s ease, transform 0.1s ease;
 }
@@ -4761,7 +4772,7 @@ input.editor-preset-select {
    it (below), so the two can't collide. */
 .stage-back-btn {
   position: absolute;
-  left: 0;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -4866,7 +4877,8 @@ input.editor-preset-select {
 
 .empty-state {
   color: var(--text-muted);
-  padding: 40px;
+  padding: 32px;
+  font-size: var(--text-base);
   text-align: center;
 }
 
@@ -4890,7 +4902,7 @@ input.editor-preset-select {
      container height instead, which is what keeps the photo fitted. The
      stacked small-screen layout re-enables wrapping (media query below). */
   flex-wrap: nowrap;
-  gap: 16px;
+  gap: 0;
   flex: 1;
   min-height: 0;
 }
@@ -4901,12 +4913,11 @@ input.editor-preset-select {
   flex: 1 1 400px;
   display: flex;
   flex-direction: column;
-  /* .editor-bg-toggle's margin above the editor's control row. */
-  gap: 14px;
+  gap: 0;
   min-width: 0;
   min-height: 0;
-  /* .editor-stage's vertical frame. */
-  padding: 16px 0 20px;
+  /* Full bleed, as .editor-stage. */
+  padding: 0;
 }
 
 .detail-image {
@@ -4920,7 +4931,6 @@ input.editor-preset-select {
      appearance between browsing it, reviewing it in the import and developing
      it. Gray is the default; the modifier classes carry the other two. */
   background: var(--stage-light);
-  border-radius: calc(12px * var(--corner-scale));
   /* Clips the zoomed-in photo to the frame (the loupe effect). */
   overflow: hidden;
   min-height: 0;
@@ -4930,7 +4940,7 @@ input.editor-preset-select {
      arrows live in (20px inset + 44px button + a little air), so a wide
      photo fits BESIDE the arrows instead of running underneath them - the
      fit maths subtracts this padding (see useImageZoomPan). */
-  padding: 16px 72px;
+  padding: 20px 72px;
 }
 
 .detail-image-lightest {
@@ -4948,7 +4958,7 @@ input.editor-preset-select {
 /* On a black background, lift the photo with a soft shadow and a hairline edge
    instead of a heavy white mat - cleaner and more modern. */
 .detail-image img.framed {
-  border-radius: calc(3px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   box-shadow: 0 6px 32px rgba(0, 0, 0, 0.7);
 }
 
@@ -5028,10 +5038,16 @@ input.editor-preset-select {
   flex-wrap: wrap;
   container-type: inline-size;
   container-name: stage-toolbar;
+  /* A toolbar strip under the stage, on the chrome tone with a hairline above
+     (the editor's .editor-bg-toggle is the same bar). */
+  flex: none;
+  min-height: 40px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
   /* Anchors the left-flush Back button; the side padding keeps the centred
      controls clear of it. */
   position: relative;
-  padding: 0 96px;
+  padding: 0 12px 0 96px;
 }
 
 /* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps and
@@ -5138,7 +5154,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 6px;
   padding: 8px 14px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgba(18, 18, 18, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: rgba(255, 255, 255, 0.9);
@@ -5159,7 +5175,7 @@ input.editor-preset-select {
   color: inherit;
   cursor: pointer;
   padding: 5px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .slideshow-controls button:hover {
@@ -5181,14 +5197,14 @@ input.editor-preset-select {
   gap: 2px;
   margin: 0 2px;
   padding: 2px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.08);
 }
 
 .slideshow-speeds button {
   font-size: 11px;
   padding: 3px 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: rgba(255, 255, 255, 0.65);
 }
 
@@ -5201,9 +5217,9 @@ input.editor-preset-select {
    scrolls internally instead (see .detail-panel max-height). */
 .detail-page {
   overflow: hidden;
-  /* The side rail runs to the top, right and bottom edges like the editor's
-     panel (.editor-body): only the left keeps the page inset. */
-  padding: 0 0 0 20px;
+  /* Full bleed like the editor (.editor-body): the stage runs to the window
+     edge and to the rail. */
+  padding: 0;
 }
 
 /* With the panel hidden nothing sits on the right edge, so the photo box
@@ -5214,7 +5230,7 @@ input.editor-preset-select {
 }
 
 .detail-page:has(.detail-panel--collapsed) {
-  padding-right: 20px;
+  padding-right: 0;
 }
 
 /* Filename header of the detail sidebar, with the delete trash can pinned to
@@ -5424,7 +5440,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--shadow-menu);
 }
 
 .ctx-menu-head {
@@ -5438,7 +5454,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 5px 10px;
   border: none;
   border-radius: var(--radius-sm);
   background: none;
@@ -5472,7 +5488,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--shadow-menu);
   animation: info-card-in 0.12s ease-out;
 }
 
@@ -5504,7 +5520,7 @@ input.editor-preset-select {
 .info-card-filename {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: var(--text-base);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5533,7 +5549,7 @@ input.editor-preset-select {
   gap: 3px 10px;
   align-content: start;
   margin: 10px 0 0;
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   line-height: 1.35;
 }
 
@@ -5573,7 +5589,7 @@ input.editor-preset-select {
 
 .info-card-chip {
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--hover);
   color: var(--text-muted);
   font-size: 10.5px;
@@ -5684,9 +5700,9 @@ input.editor-preset-select {
 }
 
 .detail-section-label {
-  font-size: 10.5px;
+  font-size: var(--label-micro-size);
   font-weight: 600;
-  letter-spacing: 0.09em;
+  letter-spacing: var(--label-micro-tracking);
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 10px;
@@ -5906,7 +5922,7 @@ input.editor-preset-select {
   gap: 8px;
   margin: 8px 0 0;
   padding: 6px 10px;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   background: var(--accent-soft, rgba(80, 120, 255, 0.12));
   color: var(--text);
   font-size: 13px;
@@ -6038,7 +6054,7 @@ input.editor-preset-select {
   z-index: 30;
   min-width: 220px;
   padding: 6px;
-  border-radius: calc(10px * var(--corner-scale));
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
@@ -6055,7 +6071,7 @@ input.editor-preset-select {
   text-align: left;
   padding: 9px 12px;
   border: none;
-  border-radius: calc(7px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -6073,7 +6089,7 @@ input.editor-preset-select {
 .import-toolbar input[type="text"] {
   flex: 1;
   padding: 8px 12px;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text);
@@ -6103,7 +6119,7 @@ input.editor-preset-select {
 .map-container {
   width: 100%;
   height: 100%;
-  border-radius: calc(12px * var(--corner-scale));
+  border-radius: var(--radius-lg);
   overflow: hidden;
   border: 1px solid var(--border);
 }
@@ -6115,7 +6131,7 @@ input.editor-preset-select {
   transform: translateX(-50%);
   z-index: 500;
   padding: 10px 16px;
-  border-radius: calc(999px * var(--corner-scale));
+  border-radius: var(--radius-pill);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-muted);
@@ -6137,7 +6153,7 @@ input.editor-preset-select {
   width: 46px;
   height: 46px;
   object-fit: cover;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   border: 2px solid #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   transform-origin: center center;
@@ -6156,7 +6172,7 @@ input.editor-preset-select {
   min-width: 18px;
   height: 18px;
   padding: 0 4px;
-  border-radius: calc(9px * var(--corner-scale));
+  border-radius: var(--radius);
   background: var(--accent, #3b82f6);
   color: #fff;
   font-size: 11px;
@@ -6208,7 +6224,7 @@ input.editor-preset-select {
 .map-pin-overflow {
   width: 46px;
   height: 46px;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   border: 2px solid #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   background: var(--accent, #3b82f6);
@@ -6226,7 +6242,7 @@ input.editor-preset-select {
   position: relative;
   width: 100%;
   height: 150px;
-  border-radius: calc(10px * var(--corner-scale));
+  border-radius: var(--radius-lg);
   overflow: hidden;
   border: 1px solid var(--border);
   cursor: pointer;
@@ -6299,7 +6315,7 @@ input.editor-preset-select {
 .onboarding-dot {
   width: 22px;
   height: 4px;
-  border-radius: calc(2px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   background: var(--border);
   transition: background 0.2s ease;
 }
@@ -6432,7 +6448,7 @@ input.editor-preset-select {
 .setup-card {
   width: min(520px, 100%);
   border: 1px solid var(--border);
-  border-radius: calc(14px * var(--corner-scale));
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-pop);
   padding: 32px 30px;
@@ -6577,7 +6593,7 @@ input.editor-preset-select {
 
 .help-jump-link {
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-elevated);
   color: var(--text-muted);
   font: inherit;
@@ -6622,7 +6638,7 @@ input.editor-preset-select {
   flex: none;
   padding: 1px 7px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-elevated);
   font-size: 11px;
   letter-spacing: 0.06em;
@@ -6692,7 +6708,7 @@ kbd {
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
@@ -6801,7 +6817,7 @@ kbd {
   width: 100%;
   height: 100%;
   border: 1px solid var(--border);
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   background: var(--bg-elevated);
   touch-action: none;
   cursor: crosshair;
@@ -6850,7 +6866,7 @@ kbd {
   top: 6px;
   left: 8px;
   padding: 2px 6px;
-  border-radius: calc(4px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   color: var(--text-muted);
   font-size: 10.5px;
@@ -7170,14 +7186,33 @@ kbd {
 }
 
 .mask-add-label {
-  font-size: 12px;
+  font-size: var(--label-micro-size);
+  font-weight: 600;
+  letter-spacing: var(--label-micro-tracking);
+  text-transform: uppercase;
   color: var(--text-muted);
 }
 
+/* Two columns of quiet, left-aligned rows: a list to pick from, not a cloud of
+   bordered buttons. Fits the 320px panel without doubling its height. */
 .mask-add-btns {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+}
+
+.mask-add-item {
+  justify-content: flex-start;
+  text-align: left;
+  padding: 5px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+}
+
+.mask-add-item:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: transparent;
 }
 
 /* Mask editor block */
@@ -7200,9 +7235,9 @@ kbd {
 
 .mask-subhead {
   margin-top: 4px;
-  font-size: 10.5px;
+  font-size: var(--label-micro-size);
   font-weight: 600;
-  letter-spacing: 0.09em;
+  letter-spacing: var(--label-micro-tracking);
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -7218,7 +7253,7 @@ kbd {
   flex-shrink: 0;
   width: 26px;
   height: 26px;
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
 }
 
@@ -7240,9 +7275,9 @@ kbd {
   margin-top: 4px;
   padding: 13px 6px 12px;
   border-top: 1px solid var(--border);
-  font-size: 10.5px;
+  font-size: var(--label-micro-size);
   font-weight: 600;
-  letter-spacing: 0.09em;
+  letter-spacing: var(--label-micro-tracking);
   text-transform: uppercase;
   color: var(--text-muted);
   cursor: pointer;
@@ -7280,8 +7315,6 @@ kbd {
 
 .editor-accordion-body {
   padding-block: 4px 8px;
-  /* An opened group's controls ease in rather than appear in a block. */
-  animation: pm-page-in 0.18s var(--ease-out) backwards;
 }
 
 /* ---- Settings: appearance picker ----------------------------------------- */
@@ -7345,7 +7378,7 @@ kbd {
   gap: 6px;
   height: 74px;
   padding: 8px;
-  border-radius: calc(8px * var(--corner-scale));
+  border-radius: var(--radius);
   border: 1px solid rgba(128, 128, 128, 0.28);
   overflow: hidden;
 }
@@ -7360,14 +7393,14 @@ kbd {
 .tp-line {
   height: 6px;
   width: 42%;
-  border-radius: calc(3px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   opacity: 0.9;
 }
 
 .tp-pill {
   height: 12px;
   width: 24px;
-  border-radius: calc(6px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 
@@ -7380,7 +7413,7 @@ kbd {
 
 .tp-swatch {
   flex: 1;
-  border-radius: calc(4px * var(--corner-scale));
+  border-radius: var(--radius-xs);
 }
 
 /* "System" tile: a light half beside a dark half so it reads as "follows OS". */
@@ -7439,7 +7472,7 @@ kbd {
    editable, it just won't change anything until the mode switches. */
 .theme-group-badge {
   padding: 2px 7px;
-  border-radius: calc(999px * var(--corner-scale));
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
   font-size: 10px;
@@ -7469,7 +7502,7 @@ kbd {
   height: 44px;
   flex-shrink: 0;
   padding: 8px;
-  border-radius: calc(7px * var(--corner-scale));
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(128, 128, 128, 0.28);
   overflow: hidden;
 }
@@ -7614,7 +7647,7 @@ kbd {
 .settings-section.tour-highlight {
   outline: 2px solid var(--accent);
   outline-offset: 10px;
-  border-radius: calc(10px * var(--corner-scale));
+  border-radius: var(--radius-lg);
 }
 
 .settings-tour-card {
@@ -7626,8 +7659,8 @@ kbd {
   width: min(440px, calc(100vw - 32px));
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: calc(14px * var(--corner-scale));
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
   padding: 16px 18px;
   display: flex;
   flex-direction: column;
@@ -7727,6 +7760,11 @@ kbd {
   cursor: pointer;
 }
 
+/* The drawn box lines up with the bold title's first line. */
+.settings-option > input {
+  margin-top: 2px;
+}
+
 /* Corner-style row in Appearance: title + description on the left, the
    Rounded/Square segmented switch on the right. */
 .settings-corners {
@@ -7816,7 +7854,7 @@ kbd {
 .settings-progress {
   height: 6px;
   max-width: 420px;
-  border-radius: calc(3px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   background: var(--border);
   overflow: hidden;
   margin-top: 4px;
@@ -8053,7 +8091,7 @@ button.smart-card {
 .smart-title--skeleton {
   width: 90px;
   height: 15px;
-  border-radius: calc(4px * var(--corner-scale));
+  border-radius: var(--radius-xs);
   margin-bottom: 8px;
 }
 
@@ -8155,7 +8193,7 @@ button.smart-card {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -8182,7 +8220,7 @@ button.smart-card {
   display: block;
   height: 4px;
   margin-top: 7px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--text) 8%, transparent);
   overflow: hidden;
 }
@@ -8190,7 +8228,7 @@ button.smart-card {
 .stat-tile-meter-fill {
   display: block;
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
   animation: stats-grow-x 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
   transform-origin: left center;
@@ -8281,7 +8319,7 @@ button.smart-card {
 .stats-bar-track {
   display: block;
   height: 10px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text) 7%, transparent);
   overflow: hidden;
 }
@@ -8290,7 +8328,7 @@ button.smart-card {
   display: block;
   height: 100%;
   min-width: 3px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   /* Single accent series, lit slightly along its length so a wide bar isn't a
      flat slab. The per-row opacity (set inline) fades the ranking downwards. */
   background: linear-gradient(
@@ -8407,7 +8445,7 @@ button.smart-card {
 .stats-col-bar {
   display: block;
   width: min(28px, 100%);
-  border-radius: 4px 4px 0 0;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   /* Denser at the base, lighter towards the data end - reads as a column
      standing on the baseline rather than a floating block. */
   background: linear-gradient(
@@ -8502,7 +8540,7 @@ button.smart-card {
    here than in the editor and the light table. Sides match .editor-body. */
 .lightbox-overlay--page {
   background: var(--bg);
-  padding: 0 20px;
+  padding: 0;
 }
 
 .lightbox-detail-layout {
@@ -8549,6 +8587,9 @@ button.smart-card {
   color: var(--text);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
+  /* A flat band across the top of the stage, not a floating card. */
+  border-radius: 0;
+  border-width: 0 0 1px;
   backdrop-filter: none;
 }
 
@@ -8678,7 +8719,7 @@ button.smart-card {
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--bg);
   font-size: 10px;
@@ -8976,7 +9017,7 @@ button.smart-card {
   position: relative;
   width: 100%;
   overflow: hidden;
-  border-radius: 1px;
+  border-radius: 1px; /* deliberately not scaled: paper edge */
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
 
@@ -9566,7 +9607,7 @@ button.smart-card {
   gap: 6px;
   padding: 5px 12px;
   border: 1px solid var(--focus-chip-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--focus-chip-bg);
   backdrop-filter: blur(8px);
   color: rgba(255, 255, 255, 0.85);
@@ -9833,7 +9874,7 @@ button.smart-card {
   align-items: center;
   gap: 6px;
   padding: 3px 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
 }
 
@@ -9955,7 +9996,7 @@ button.smart-card {
   /* The cqw unit the text items are set in measures this box's width, so type
      keeps its size on the page however small the page is drawn. */
   container-type: inline-size;
-  border-radius: 2px;
+  border-radius: 2px; /* deliberately not scaled: paper edge */
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
   transition: box-shadow 120ms ease, transform 120ms ease;
 }
@@ -9982,7 +10023,7 @@ button.smart-card {
    its footprint stays, quietly. */
 .canvas-shelf-mark {
   background: rgba(128, 128, 128, 0.16);
-  border-radius: 1px;
+  border-radius: 1px; /* deliberately not scaled: hairline */
 }
 
 .canvas-shelf-caption {
@@ -10002,7 +10043,7 @@ button.smart-card {
 }
 
 .canvas-shelf-meta {
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
@@ -10042,7 +10083,7 @@ button.smart-card {
   width: 44px;
   height: 3px;
   margin-left: -22px;
-  border-radius: 2px;
+  border-radius: 2px; /* deliberately not scaled: grip hairline */
   background: var(--text-muted);
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -10722,4 +10763,248 @@ a.info-card-chip--canvas:hover {
   background: var(--focus-chip-bg-on-hover);
   border-color: rgba(255, 255, 255, 0.75);
   color: #fff;
+}
+
+
+/* ==== Native chrome pass ================================================== */
+
+/* ---- macOS: the traffic lights sit inside the top bar (main.js hiddenInset) */
+:root[data-titlebar="inset"] .top-bar {
+  /* 12px offset + three 12px buttons with 8px gaps + air. */
+  padding-left: 78px;
+  /* The bar is the title bar now: drag it to move the window. */
+  -webkit-app-region: drag;
+}
+/* Fullscreen hides the lights, so the inset goes. */
+:root[data-titlebar="inset"][data-fullscreen] .top-bar {
+  padding-left: 16px;
+}
+/* Everything you click in the bar opts out of the drag region, or the click
+   would move the window instead. */
+:root[data-titlebar="inset"] .top-bar :is(a, button, input, .nav-burger-wrap, .search-bar, .nav-task) {
+  -webkit-app-region: no-drag;
+}
+/* First-run setup has no top bar: the whole screen drags, the card doesn't. */
+:root[data-titlebar="inset"] .setup-screen {
+  -webkit-app-region: drag;
+}
+:root[data-titlebar="inset"] .setup-card {
+  -webkit-app-region: no-drag;
+}
+
+/* ---- The small-caps section label, as one class -------------------------- */
+.label-micro {
+  font-size: var(--label-micro-size);
+  font-weight: 600;
+  letter-spacing: var(--label-micro-tracking);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ---- Range inputs: one drawn track, one thumb ----------------------------- */
+/* Chromium's default range is the loudest "web page" element in the develop
+   panel: fat rounded track, big round thumb, nothing else on screen like it.
+   A 3px track with the accent filled from zero to the value (the fill stops
+   come from React, utils/rangeFill.ts) and a small ringed thumb. */
+.editor-slider input[type="range"],
+.canvas-crop-zoom input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  --pm-fill-a: 0%;
+  --pm-fill-b: 0%;
+}
+.editor-slider input[type="range"]::-webkit-slider-runnable-track,
+.canvas-crop-zoom input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(
+    to right,
+    var(--border) var(--pm-fill-a),
+    var(--accent) var(--pm-fill-a),
+    var(--accent) var(--pm-fill-b),
+    var(--border) var(--pm-fill-b)
+  );
+}
+.editor-slider input[type="range"]::-webkit-slider-thumb,
+.canvas-crop-zoom input[type="range"]::-webkit-slider-thumb,
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--accent);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  /* The dual range lays its inputs over its own drawn track. */
+  margin-top: 0;
+}
+.editor-slider input[type="range"]:active::-webkit-slider-thumb,
+.canvas-crop-zoom input[type="range"]:active::-webkit-slider-thumb,
+.dual-range input[type="range"]:active::-webkit-slider-thumb {
+  background: var(--accent);
+}
+.editor-slider input[type="range"]:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.editor-slider input[type="range"]:focus-visible,
+.canvas-crop-zoom input[type="range"]:focus-visible {
+  outline: none;
+}
+.editor-slider input[type="range"]:focus-visible::-webkit-slider-thumb,
+.canvas-crop-zoom input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Centre detent on a slider that swings both ways: a tick where zero sits
+   (--pm-zero is the zero point as a fraction, from rangeFill.ts). */
+.pm-range-wrap {
+  position: relative;
+  display: block;
+}
+.pm-range-wrap--bipolar::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 1px;
+  height: 9px;
+  left: calc(6px + (100% - 12px) * var(--pm-zero, 0.5));
+  transform: translate(-50%, -50%);
+  background: var(--text-muted);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* ---- Checkboxes and radios: themed, one rule for every site --------------- */
+/* Chromium's blue tick ignored all fourteen skins. */
+input[type="checkbox"],
+input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: none;
+  display: inline-grid;
+  place-content: center;
+  vertical-align: -3px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+input[type="radio"] {
+  border-radius: 50%;
+}
+input[type="checkbox"]:hover,
+input[type="radio"]:hover {
+  border-color: var(--text);
+}
+input[type="checkbox"]:checked,
+input[type="checkbox"]:indeterminate,
+input[type="radio"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+input[type="checkbox"]:checked::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  background: var(--accent-contrast);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+input[type="checkbox"]:indeterminate::before {
+  content: "";
+  width: 8px;
+  height: 2px;
+  background: var(--accent-contrast);
+}
+input[type="radio"]:checked::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-contrast);
+}
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+input[type="checkbox"]:disabled,
+input[type="radio"]:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- Tooltip (components/TooltipLayer.tsx) ------------------------------- */
+.tooltip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  max-width: 280px;
+  padding: 4px 8px;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-menu);
+  pointer-events: none;
+  white-space: pre-line;
+  animation: pm-fade-in 0.1s ease both;
+}
+.tooltip--above {
+  transform: translateY(-100%);
+}
+
+/* ---- Library status bar: the thin strip under the grid ------------------ */
+.status-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: 24px;
+  padding: 0 var(--space-3);
+  /* Flush with the window: undo the page inset on three sides. */
+  margin: 0 calc(-1 * var(--page-pad-right, var(--page-pad, 16px))) calc(-1 * var(--page-pad, 16px))
+    calc(-1 * var(--page-pad, 16px));
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.status-bar-count {
+  color: var(--text);
+}
+.status-bar-filters {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.status-bar-spacer {
+  flex: 1;
+}
+.status-bar .segmented {
+  height: 18px;
+}
+.status-bar .segmented button {
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+}
+/* The selection bar rises above the status bar, not over it. */
+body:has(.status-bar) .action-bar--bottom {
+  bottom: 24px;
 }

@@ -72,6 +72,7 @@ import {
 import { ExportChip } from "./CanvasExportChip";
 import { FocusButton, FocusToggle, useFocusChrome } from "./FocusToggle";
 import { Presence } from "./Presence";
+import { rangeFillStyle } from "../utils/rangeFill";
 
 // How long after the last edit the canvas writes itself.
 const AUTOSAVE_MS = 700;
@@ -2767,6 +2768,7 @@ export function CanvasEditor({
                   max={6}
                   step={0.02}
                   value={croppingItem.content_scale}
+                  style={rangeFillStyle(croppingItem.content_scale, 1, 6)}
                   onChange={(event) => setCropScale(Number(event.target.value))}
                 />
                 {croppingItem.content_scale.toFixed(1)}×

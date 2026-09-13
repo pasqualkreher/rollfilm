@@ -28,6 +28,7 @@ import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
+import { LibraryStatusBar, summarizeFilters } from "../components/LibraryStatusBar";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
@@ -303,10 +304,13 @@ export function AlbumDetail() {
   async function resetSelected(opts: BulkResetOptions) {
     if (selected.size === 0) return;
     await api.images.bulkReset(Array.from(selected), opts);
-    queryClient.invalidateQueries({ queryKey: ["images"] });
-    queryClient.invalidateQueries({ queryKey: ["tags"] });
-    queryClient.invalidateQueries({ queryKey: ["album", id] });
-    queryClient.invalidateQueries({ queryKey: ["albums"] });
+    // Awaited, like the library's - the popup stays up until the rows are back.
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["images"] }),
+      queryClient.invalidateQueries({ queryKey: ["tags"] }),
+      queryClient.invalidateQueries({ queryKey: ["album", id] }),
+      queryClient.invalidateQueries({ queryKey: ["albums"] }),
+    ]);
   }
 
   async function autoDevelopSelected() {
@@ -612,6 +616,11 @@ export function AlbumDetail() {
       )}
       </div>
       {albumBar}
+      <LibraryStatusBar
+        shown={isLoading ? undefined : orderedImages.length}
+        selected={selected.size}
+        filters={summarizeFilters({ q, viewMode, ratingMin, colorLabel, tags: selectedTags, dateFrom, dateTo })}
+      />
     </div>
   );
 }

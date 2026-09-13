@@ -72,7 +72,7 @@ const SETTINGS_TABS: { id: string; label: string; sections: string[] }[] = [
   {
     id: "maintenance",
     label: "Maintenance",
-    sections: ["Library maintenance", "Backup & restore"],
+    sections: ["Library maintenance", "Backup & restore", "About"],
   },
 ];
 
@@ -408,6 +408,8 @@ export function Settings() {
     const absent = new Set<string>();
     if (!desktop?.changeLibraryRoot) absent.add("Library folder");
     if (!desktop?.getDataRoot) absent.add("Library data");
+    // "About" has nothing to show around.
+    absent.add("About");
     return SETTINGS_TABS.flatMap((tab) => tab.sections.filter((title) => !absent.has(title)));
   }, [desktop]);
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
@@ -1569,6 +1571,21 @@ export function Settings() {
           {restoreResult && <Note>{restoreResult}</Note>}
           {restore.isError && <Note error>{(restore.error as Error).message}</Note>}
         </div>
+      </Section>
+
+      {/* The version used to ride in the top bar; it is the first thing a
+          bug report needs, so it lives here with the contact address. */}
+      <Section {...sectionProps("About")}>
+        <Desc>
+          Rollfilm {__APP_VERSION__}
+          {desktop?.platform ? ` · ${desktop.platform === "darwin" ? "macOS" : desktop.platform === "win32" ? "Windows" : desktop.platform}` : " · web"}
+        </Desc>
+        <Desc>
+          Questions, problems, ideas:{" "}
+          <a href={`mailto:contact@rollfilm.org?subject=${encodeURIComponent(`Rollfilm v${__APP_VERSION__}`)}`}>
+            contact@rollfilm.org
+          </a>
+        </Desc>
       </Section>
 
       <SettingsTour

@@ -39,4 +39,15 @@ contextBridge.exposeInMainWorld("photoManager", {
   // Prints a finished HTML document (the album canvas) to a PDF the user
   // picks a place for. Resolves { ok, path } / { ok: false, canceled | error }.
   exportPdf: (payload) => ipcRenderer.invoke("pm:export-pdf", payload),
+  // Window chrome (macOS: the traffic lights live in the app's top bar).
+  // Whether the window is fullscreen right now, and a subscription to changes;
+  // the callback gets true/false, the return value unsubscribes.
+  isFullScreen: () => ipcRenderer.invoke("pm:is-full-screen"),
+  onFullScreen: (callback) => {
+    const handler = (_event, on) => callback(Boolean(on));
+    ipcRenderer.on("pm:fullscreen", handler);
+    return () => ipcRenderer.removeListener("pm:fullscreen", handler);
+  },
+  // Hide/show the traffic lights (focus mode takes the top bar away).
+  setWindowButtonsVisible: (visible) => ipcRenderer.invoke("pm:set-window-buttons", visible),
 });

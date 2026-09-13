@@ -22,6 +22,7 @@ const {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeTheme,
   net: electronNet,
   powerMonitor,
   protocol,
@@ -1085,6 +1086,19 @@ function createWindow() {
     title: "Rollfilm",
     show: false, // shown once the page has loaded (did-finish-load), replacing the splash
     icon: windowIconPath(),
+    // macOS: no separate title bar - the traffic lights sit inside the app's
+    // own top bar (index.css, :root[data-titlebar="inset"] .top-bar), one
+    // strip of chrome like Photos or Lightroom. y centres 12px buttons in the
+    // 40px bar. Windows and Linux keep the native frame.
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 12, y: 14 } }
+      : {}),
+    minWidth: 960,
+    minHeight: 600,
+    // Paint before the renderer's theme runs (it lives in localStorage, out of
+    // reach here): the default Stone skins by the OS mode, the same pair
+    // index.css paints for the same instant. Seen only during resize lag.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#26292d" : "#eaebec",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -1129,6 +1143,16 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  // Fullscreen hides the traffic lights, so the renderer drops the inset it
+  // keeps for them (data-fullscreen). Both the window kind and the HTML kind
+  // (the slideshow and the canvas view use the latter).
+  for (const ev of ["enter-full-screen", "enter-html-full-screen"]) {
+    mainWindow.on(ev, () => mainWindow?.webContents.send("pm:fullscreen", true));
+  }
+  for (const ev of ["leave-full-screen", "leave-html-full-screen"]) {
+    mainWindow.on(ev, () => mainWindow?.webContents.send("pm:fullscreen", false));
+  }
 }
 
 // "Show in Finder / Explorer": selects the file in the OS file manager. A
@@ -1149,6 +1173,15 @@ ipcMain.handle("pm:reveal-file", async (_event, filePath) => {
     return { ok: false, error: String((err && err.message) || err) };
   }
 });
+
+// Focus mode (F) hides the app's top bar; the traffic lights would float over
+// the picture, so they go with it. macOS only - a no-op elsewhere.
+ipcMain.handle("pm:set-window-buttons", (_event, visible) => {
+  if (process.platform === "darwin" && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setWindowButtonVisibility(Boolean(visible));
+  }
+});
+ipcMain.handle("pm:is-full-screen", () => Boolean(mainWindow?.isFullScreen()));
 
 // Native folder picker: the app's core new capability. Returns an absolute host
 // path the native backend can read directly (no Docker mounts involved).

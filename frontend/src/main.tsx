@@ -17,6 +17,17 @@ initTheme();
 initCorners();
 initFont();
 
+// Electron on macOS: the window has no title bar of its own, the traffic
+// lights sit inside the app's top bar (index.css, data-titlebar rules). The
+// attribute goes on before React renders so the bar never paints without its
+// inset; fullscreen hides the lights, so the inset follows data-fullscreen.
+if (window.photoManager?.platform === "darwin") {
+  document.documentElement.setAttribute("data-titlebar", "inset");
+  const setFs = (on: boolean) => document.documentElement.toggleAttribute("data-fullscreen", on);
+  window.photoManager.isFullScreen?.().then(setFs).catch(() => {});
+  window.photoManager.onFullScreen?.(setFs);
+}
+
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
 });
