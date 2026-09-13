@@ -1135,6 +1135,9 @@ button {
    doesn't scroll (headers stay put); only the inner .page-scroll does. */
 .page:has(.filter-bar--sticky) {
   padding: 0;
+  /* No inset to undo: the status bar (.status-bar) reads these. */
+  --page-pad: 0px;
+  --page-pad-right: 0px;
   overflow: hidden;
 }
 
@@ -2890,6 +2893,8 @@ textarea:focus-visible {
    carry the frame, so both album pages line up exactly. */
 .page:has(> .album-bottom-bar):not(:has(.filter-bar--sticky)) {
   padding: 0;
+  --page-pad: 0px;
+  --page-pad-right: 0px;
 }
 
 .album-bottom-delete {
