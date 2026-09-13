@@ -2719,11 +2719,13 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
 
     A size that is not cached is DERIVED from any larger cached base of the same
     file rather than decoded again. That is what makes the editor's quality
-    ladder cheap: measured on a 27MP JPEG, decoding the 2600px base costs 753ms
-    and the 3900px one 2924ms, while the pipeline on top of a warm base is
-    143ms and 510ms. Climbing the ladder used to pay a fresh decode per rung -
-    seconds of nothing happening between two frames that each take a fraction of
-    that to render. Downscaling a base already in hand costs milliseconds.
+    ladder cheap: measured on a 40MP JPEG (M3), decoding the 2600px base costs
+    ~230ms and the 3900px one ~350ms (it was 430ms and 1.8s before the 8-bit
+    linearisation became a table lookup - see raw._SRGB8_TO_LINEAR), while the
+    pipeline on top of a warm base is 112ms and ~300ms. Climbing the ladder
+    used to pay a fresh decode per rung - seconds of nothing happening between
+    two frames that each take a fraction of that to render. Downscaling a base
+    already in hand costs milliseconds.
     """
     key = (image_id, path_str, mtime_ns, max_px)
     # Single-flight: one decode per base, however many ask for it. Without this
@@ -2822,11 +2824,12 @@ _cached_editor_base.cache_clear = _base_cache_clear
 #
 # The quality ladder climbs to bigger bases as the user stops moving, and each
 # rung used to pay its own decode in the middle of the editing session -
-# measured on a 27MP JPEG, 753ms for the 2600px base and 2924ms for the 3900px
-# one, against 143ms and 510ms for the pipeline that runs on top of them. So the
-# decode does not belong in the ladder at all: it happens once, on a background
-# thread, from the moment the image is opened. Every rung then derives its base
-# from that one (see _cached_editor_base) and costs only its pipeline.
+# measured on a 40MP JPEG (M3), ~230ms for the 2600px base and ~350ms for the
+# 3900px one (a 40MP raw is ~1.1s of LibRaw either way), against 112ms and
+# ~300ms for the pipeline that runs on top of them. So the decode does not
+# belong in the ladder at all: it happens once, on a background thread, from
+# the moment the image is opened. Every rung then derives its base from that
+# one (see _cached_editor_base) and costs only its pipeline.
 _warm_lock = threading.Lock()
 _warming: set[str] = set()
 
