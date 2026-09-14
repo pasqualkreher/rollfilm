@@ -195,33 +195,20 @@ const CHAPTERS: Chapter[] = [
               The mode is <strong>Light</strong>, <strong>Dark</strong>, or <strong>Auto</strong>,
               which follows your operating system and switches along with it while the app is open.
             </p>
-            <h4>Seven skins per side</h4>
-            <p>All deliberately quiet, so nothing competes with the photos:</p>
+            <h4>Three skins per side</h4>
+            <p>All deliberately colourless, so nothing competes with the photos:</p>
             <ul>
               <li>
                 <strong>Stone</strong> — muted gray with the contrast taken down a step: nothing is
-                pure white or near-black. The default, and the deep one for a dim room.
+                pure white or near-black. The default.
               </li>
               <li>
-                <strong>Slate</strong> — cooler, with a steel-blue accent.
+                <strong>Pebble</strong> — Stone a step lighter, and a lighter charcoal in the dark for
+                anyone who finds Stone Dark too deep.
               </li>
               <li>
-                <strong>Ink</strong> — high contrast: paper white, or a near-black surround in the
+                <strong>Paper</strong> — warm off-white like print paper, a soft warm charcoal in the
                 dark.
-              </li>
-              <li>
-                <strong>Orange</strong> — warm surfaces with a burnt orange accent, amber in the
-                dark.
-              </li>
-              <li>
-                <strong>Sand</strong> — warm grey without the colour: greige surfaces and a taupe
-                accent.
-              </li>
-              <li>
-                <strong>Sage</strong> — grey with a trace of green and a muted sage accent.
-              </li>
-              <li>
-                <strong>Blue</strong> — neutral grey with a classic blue accent, sky blue in the dark.
               </li>
             </ul>
             <p>Each tile previews its own colors.</p>

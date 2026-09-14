@@ -127,242 +127,22 @@
 
 
 /* ---- Skins ---------------------------------------------------------------
-   Seven pairs, each a light and a dark cut of the same idea:
+   Three pairs, each a light and a dark cut of the same idea, all of them
+   colourless so only the photo carries colour:
 
-   Stone    - muted greys with no colour in them at all: surfaces off-white
-              rather than white, type dark grey rather than black, the accent
-              a slate grey. The quietest of the four and the default pair.
-   Slate    - the same restraint pulled cool, steel blue instead of grey.
-   Ink      - high contrast: paper white against near-black, so the surround
-              drops away and only the photo carries colour.
-   Orange   - the warm one: barely-tinted surfaces and a burnt-orange accent,
-              the skin whose colour you notice most on the controls.
-   Sand     - warm without the colour: greige surfaces and a taupe accent, for
-              those who find Stone cold and Orange loud.
-   Sage     - grey with a trace of green in it and a muted sage accent; sits
-              between Slate's cool and Sand's warm.
-   Blue     - Stone's neutral surfaces with one clean, classic blue on the
-              accent - the conventional "pro app" look.
+   Stone    - muted greys: surfaces off-white rather than white, type dark grey
+              rather than black, the accent a slate grey. The default pair.
+   Pebble   - Stone a step lighter: brighter surfaces by day, and a dark cut
+              lifted well clear of Stone Dark for anyone who finds it too deep.
+   Paper    - Stone moved towards paper: warm off-white surfaces and a warm
+              graphite accent; a soft warm charcoal at night.
 
    data-theme="stone" needs no block of its own - :root above already is that
    palette. */
 
-/* Slate — cool light greys with a blue cast, and a deep steel blue as the one
-   piece of colour. Reads a shade crisper than Stone without going loud. */
-:root[data-theme="slate"] {
-  --bg: #edeff2;
-  --bg-elevated: #f8f9fb;
-  --hover: #e2e5ea;
-  --border: #d3d8de;
-  --text: #23272d;
-  --text-muted: #6d7480;
-  --accent: #4c6079;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(76, 96, 121, 0.13);
-  --danger: #b8493c;
-  color-scheme: light;
-}
-
-/* Slate Dark — the same cool cast at night: blue-grey charcoal with a softened
-   steel-blue accent that stays legible against it. */
-:root[data-theme="slate-dark"] {
-  --bg: #22262c;
-  --bg-elevated: #2a2f36;
-  --hover: #333941;
-  --border: #3c434c;
-  --text: #e7eaee;
-  --text-muted: #97a0ab;
-  --accent: #8fa8c4;
-  --accent-contrast: #1b1f24;
-  --accent-soft: rgba(143, 168, 196, 0.16);
-  --danger: #dd6a5c;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Ink — white paper, near-black type, and the accent is that same near-black:
-   the most contrasted of the three, for bright rooms and for judging prints. */
-:root[data-theme="ink"] {
-  --bg: #ffffff;
-  --bg-elevated: #f7f7f8;
-  --hover: #ececee;
-  --border: #dcdcdf;
-  --text: #121214;
-  --text-muted: #6a6a70;
-  --accent: #1c1c1f;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(28, 28, 31, 0.1);
-  --danger: #c0392b;
-  color-scheme: light;
-}
-
-/* Ink Dark — the near-black surround photographers ask for: the interface
-   recedes almost to nothing and a near-white accent carries the controls. */
-:root[data-theme="ink-dark"] {
-  --bg: #18181b;
-  --bg-elevated: #212125;
-  --hover: #2a2a2f;
-  --border: #36363d;
-  --text: #f4f4f5;
-  --text-muted: #94949c;
-  --accent: #e6e6e9;
-  --accent-contrast: #131316;
-  --accent-soft: rgba(230, 230, 233, 0.14);
-  --danger: #e5675a;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6);
-  color-scheme: dark;
-}
-
-/* Orange - warm off-white surfaces (a trace of ochre, well short of sepia) with
-   burnt orange doing the work of the accent. The one skin with visible colour
-   in the chrome, kept dark and unsaturated enough that white sits legibly on
-   it and it never reads as part of the photo. --danger is pushed towards red
-   so a destructive button still separates from the accent. */
-:root[data-theme="orange"] {
-  --bg: #f6f2ee;
-  --bg-elevated: #fdfbf9;
-  --hover: #ece4dc;
-  --border: #e0d6cc;
-  --text: #2e2823;
-  --text-muted: #7b7169;
-  --accent: #b35a1f;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(179, 90, 31, 0.13);
-  --danger: #b03027;
-  color-scheme: light;
-}
-
-/* Orange Dark - the same warmth at night: charcoal warmed just off neutral,
-   and the accent lifted to a soft amber, because burnt orange goes muddy
-   against a dark surround. */
-:root[data-theme="orange-dark"] {
-  --bg: #2a2421;
-  --bg-elevated: #332c28;
-  --hover: #3d3530;
-  --border: #473d37;
-  --text: #f4efea;
-  --text-muted: #a09389;
-  --accent: #e08a4a;
-  --accent-contrast: #241c17;
-  --accent-soft: rgba(224, 138, 74, 0.16);
-  --danger: #e4574a;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-
-/* Sand - the warm neutral: surfaces a soft greige (grey with a little brown in
-   it, short of beige), type warm near-black, and the accent a taupe rather
-   than a colour. Warm like Orange, quiet like Stone. */
-:root[data-theme="sand"] {
-  --bg: #ece8e2;
-  --bg-elevated: #f7f5f1;
-  --hover: #e1dcd4;
-  --border: #d5cfc6;
-  --text: #2b2724;
-  --text-muted: #75695e;
-  --accent: #7a6b5d;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(122, 107, 93, 0.13);
-  --danger: #b3483b;
-  color-scheme: light;
-}
-
-/* Sand Dark - warm charcoal, a step more neutral than Orange Dark's, with the
-   accent lifted to a light taupe that reads as a pale wood tone. */
-:root[data-theme="sand-dark"] {
-  --bg: #2b2826;
-  --bg-elevated: #34302d;
-  --hover: #3e3935;
-  --border: #48423d;
-  --text: #ebe6e0;
-  --text-muted: #a1978d;
-  --accent: #b8a894;
-  --accent-contrast: #211e1b;
-  --accent-soft: rgba(184, 168, 148, 0.16);
-  --danger: #dc6a5c;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.56);
-  color-scheme: dark;
-}
-
-/* Sage - greys with a trace of green, and a muted sage as the one piece of
-   colour: dark enough for white type, desaturated enough to stay out of the
-   photo's way. */
-:root[data-theme="sage"] {
-  --bg: #e9ece9;
-  --bg-elevated: #f5f7f5;
-  --hover: #dde2dd;
-  --border: #d0d6d0;
-  --text: #232825;
-  --text-muted: #6b746e;
-  --accent: #5b7160;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(91, 113, 96, 0.13);
-  --danger: #b6483c;
-  color-scheme: light;
-}
-
-/* Sage Dark - green-grey charcoal with the accent softened to a pale sage,
-   because the light skin's deeper green sinks into a dark surround. */
-:root[data-theme="sage-dark"] {
-  --bg: #242827;
-  --bg-elevated: #2c3130;
-  --hover: #353b39;
-  --border: #3e4542;
-  --text: #e5e9e6;
-  --text-muted: #96a09a;
-  --accent: #9cb5a1;
-  --accent-contrast: #1c201e;
-  --accent-soft: rgba(156, 181, 161, 0.16);
-  --danger: #dc6b5d;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.56);
-  color-scheme: dark;
-}
-
-/* Blue - Stone's neutral surfaces exactly, with a classic mid blue on the
-   accent: the look most photo and desktop apps default to. The blue is
-   deliberately dulled so it reads as a control, not as a highlight in the
-   picture. */
-:root[data-theme="blue"] {
-  --bg: #eaebec;
-  --bg-elevated: #f6f7f7;
-  --hover: #dfe1e2;
-  --border: #d2d4d6;
-  --text: #26282a;
-  --text-muted: #6e7377;
-  --accent: #3b6ea8;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(59, 110, 168, 0.13);
-  --danger: #b8463a;
-  color-scheme: light;
-}
-
-/* Blue Dark - neutral charcoal with the accent lifted to a soft sky blue
-   that keeps its legibility against dark grey. */
-:root[data-theme="blue-dark"] {
-  --bg: #25282c;
-  --bg-elevated: #2d3136;
-  --hover: #363b40;
-  --border: #41474f;
-  --text: #e5e7ea;
-  --text-muted: #969ca3;
-  --accent: #82abdc;
-  --accent-contrast: #171c22;
-  --accent-soft: rgba(130, 171, 220, 0.16);
-  --danger: #dd6a5c;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.38);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.58);
-  color-scheme: dark;
-}
-
 /* Stone Dark - the working dark: a soft, lifted grey rather than a deep one,
-   well clear of Ink Dark's near-black, with the type off-white rather than
-   white so nothing in the chrome glares next to a photo. It is the pair's
-   dark cut; Stone light is :root itself. */
+   with the type off-white rather than white so nothing in the chrome glares
+   next to a photo. It is the pair's dark cut; Stone light is :root itself. */
 :root[data-theme="stone-dark"] {
   --bg: #26292d;
   --bg-elevated: #2e3237;
@@ -376,6 +156,75 @@
   --danger: #dc6c5e;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.38);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.58);
+  color-scheme: dark;
+}
+
+/* Pebble - Stone's greys and accent, surfaces lifted a step towards white
+   (cards nearly white) with borders and hover eased to match. */
+:root[data-theme="pebble"] {
+  --bg: #f1f2f3;
+  --bg-elevated: #fbfbfc;
+  --hover: #e6e8e9;
+  --border: #d9dbdd;
+  --text: #26282a;
+  --text-muted: #6c7175;
+  --accent: #5a6067;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(90, 96, 103, 0.12);
+  --danger: #b34a3e;
+  color-scheme: light;
+}
+
+/* Pebble Dark - a mid charcoal, noticeably lighter than Stone Dark, with
+   shadows eased off because a heavy shadow on a light-ish dark looks dirty. */
+:root[data-theme="pebble-dark"] {
+  --bg: #313438;
+  --bg-elevated: #3a3d42;
+  --hover: #43474c;
+  --border: #4e5258;
+  --text: #eceef0;
+  --text-muted: #a5abb1;
+  --accent: #b8bec5;
+  --accent-contrast: #26292d;
+  --accent-soft: rgba(184, 190, 197, 0.17);
+  --danger: #e27466;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.48);
+  color-scheme: dark;
+}
+
+/* Paper - Stone's restraint on warm off-white: the surfaces of an uncoated
+   print paper, near-black warm type and a warm graphite accent. No colour,
+   only warmth. */
+:root[data-theme="paper"] {
+  --bg: #f3f0e9;
+  --bg-elevated: #fbf9f4;
+  --hover: #e8e4da;
+  --border: #dcd6ca;
+  --text: #2b2824;
+  --text-muted: #736d64;
+  --accent: #5e5850;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(94, 88, 80, 0.12);
+  --danger: #b0443a;
+  color-scheme: light;
+}
+
+/* Paper Dark - the same warmth at night: a soft warm charcoal and a pale
+   warm-grey accent. */
+:root[data-theme="paper-dark"] {
+  --bg: #302e2a;
+  --bg-elevated: #393632;
+  --hover: #423f3a;
+  --border: #4d4943;
+  --text: #eeeae2;
+  --text-muted: #a8a298;
+  --accent: #c8c1b5;
+  --accent-contrast: #26241f;
+  --accent-soft: rgba(200, 193, 181, 0.17);
+  --danger: #e27466;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.48);
   color-scheme: dark;
 }
 
@@ -11031,7 +10880,7 @@ a.info-card-chip--canvas:hover {
 }
 
 /* ---- Checkboxes and radios: themed, one rule for every site --------------- */
-/* Chromium's blue tick ignored all fourteen skins. */
+/* Chromium's blue tick ignored every skin. */
 input[type="checkbox"],
 input[type="radio"] {
   appearance: none;

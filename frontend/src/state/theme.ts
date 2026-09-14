@@ -10,15 +10,8 @@
 import { useSyncExternalStore } from "react";
 
 export type Mode = "light" | "dark" | "auto";
-export type LightSkin = "stone" | "slate" | "ink" | "orange" | "sand" | "sage" | "blue";
-export type DarkSkin =
-  | "stone-dark"
-  | "slate-dark"
-  | "ink-dark"
-  | "orange-dark"
-  | "sand-dark"
-  | "sage-dark"
-  | "blue-dark";
+export type LightSkin = "stone" | "pebble" | "paper";
+export type DarkSkin = "stone-dark" | "pebble-dark" | "paper-dark";
 export type Skin = LightSkin | DarkSkin;
 
 // Metadata the Settings picker renders. `bg`/`elevated`/`text`/`accent` mirror
@@ -35,29 +28,20 @@ export interface SkinInfo {
   accent: string;
 }
 
-// Seven pairs, kept deliberately quiet: neutral surfaces and desaturated
-// accents, because a photo is the only thing on screen that should carry
-// colour. Orange, Sage and Blue put a little colour on the controls, and even
-// there only on the accent. Same order in both lists so a pair sits in the
-// same column.
+// Three pairs, all colourless, because a photo is the only thing on screen
+// that should carry colour: Stone, Stone a step lighter, and Stone moved
+// towards warm paper. Same order in both lists so a pair sits in the same
+// column.
 export const LIGHT_SKINS: SkinInfo[] = [
   { value: "stone", label: "Stone", hint: "Muted grey, the default", bg: "#eaebec", elevated: "#f6f7f7", text: "#26282a", accent: "#5a6067" },
-  { value: "slate", label: "Slate", hint: "Cool grey, steel blue", bg: "#edeff2", elevated: "#f8f9fb", text: "#23272d", accent: "#4c6079" },
-  { value: "ink", label: "Ink", hint: "Paper white, high contrast", bg: "#ffffff", elevated: "#f7f7f8", text: "#121214", accent: "#1c1c1f" },
-  { value: "orange", label: "Orange", hint: "Warm white, burnt orange", bg: "#f6f2ee", elevated: "#fdfbf9", text: "#2e2823", accent: "#b35a1f" },
-  { value: "sand", label: "Sand", hint: "Warm grey, taupe accent", bg: "#ece8e2", elevated: "#f7f5f1", text: "#2b2724", accent: "#7a6b5d" },
-  { value: "sage", label: "Sage", hint: "Grey-green, muted sage", bg: "#e9ece9", elevated: "#f5f7f5", text: "#232825", accent: "#5b7160" },
-  { value: "blue", label: "Blue", hint: "Neutral grey, classic blue", bg: "#eaebec", elevated: "#f6f7f7", text: "#26282a", accent: "#3b6ea8" },
+  { value: "pebble", label: "Pebble", hint: "Stone, a step lighter", bg: "#f1f2f3", elevated: "#fbfbfc", text: "#26282a", accent: "#5a6067" },
+  { value: "paper", label: "Paper", hint: "Warm off-white, like print paper", bg: "#f3f0e9", elevated: "#fbf9f4", text: "#2b2824", accent: "#5e5850" },
 ];
 
 export const DARK_SKINS: SkinInfo[] = [
   { value: "stone-dark", label: "Stone Dark", hint: "Soft muted grey", bg: "#26292d", elevated: "#2e3237", text: "#e5e7ea", accent: "#aab1b8" },
-  { value: "slate-dark", label: "Slate Dark", hint: "Cool charcoal, steel blue", bg: "#22262c", elevated: "#2a2f36", text: "#e7eaee", accent: "#8fa8c4" },
-  { value: "ink-dark", label: "Ink Dark", hint: "Near-black surround", bg: "#18181b", elevated: "#212125", text: "#f4f4f5", accent: "#e6e6e9" },
-  { value: "orange-dark", label: "Orange Dark", hint: "Warm charcoal, amber", bg: "#2a2421", elevated: "#332c28", text: "#f4efea", accent: "#e08a4a" },
-  { value: "sand-dark", label: "Sand Dark", hint: "Warm charcoal, light taupe", bg: "#2b2826", elevated: "#34302d", text: "#ebe6e0", accent: "#b8a894" },
-  { value: "sage-dark", label: "Sage Dark", hint: "Green-grey charcoal, soft sage", bg: "#242827", elevated: "#2c3130", text: "#e5e9e6", accent: "#9cb5a1" },
-  { value: "blue-dark", label: "Blue Dark", hint: "Neutral charcoal, sky blue", bg: "#25282c", elevated: "#2d3136", text: "#e5e7ea", accent: "#82abdc" },
+  { value: "pebble-dark", label: "Pebble Dark", hint: "Lighter charcoal, not too dark", bg: "#313438", elevated: "#3a3d42", text: "#eceef0", accent: "#b8bec5" },
+  { value: "paper-dark", label: "Paper Dark", hint: "Soft warm charcoal", bg: "#302e2a", elevated: "#393632", text: "#eeeae2", accent: "#c8c1b5" },
 ];
 
 export const SKINS: SkinInfo[] = [...LIGHT_SKINS, ...DARK_SKINS];
@@ -106,20 +90,15 @@ const LEGACY_DARK = new Set([
   "rose-pine", "gruvbox-dark", "ember",
 ]);
 const LEGACY_LIGHT_MAP: Record<string, LightSkin> = {
-  graphite: "stone",
-  fog: "slate",
-  sky: "slate",
-  light: "ink",
-  "ember-light": "orange",
+  fog: "pebble",
+  sky: "pebble",
+  light: "paper",
+  "ember-light": "paper",
 };
 const LEGACY_DARK_MAP: Record<string, DarkSkin> = {
-  "graphite-dark": "stone-dark",
-  slate: "slate-dark",
-  nord: "slate-dark",
-  midnight: "slate-dark",
-  dark: "ink-dark",
-  ember: "orange-dark",
-  darkroom: "ink-dark",
+  slate: "pebble-dark",
+  nord: "pebble-dark",
+  ember: "paper-dark",
 };
 
 function migrateLegacy(): void {
@@ -140,9 +119,27 @@ function migrateLegacy(): void {
   }
 }
 
+// The 0.1.72 skins cut down to three pairs: the warm ones and Ink's paper white
+// land on Paper, the rest on Stone. Keyed by the light name; the dark name is
+// the same with "-dark".
+const REMOVED_SKIN_MAP: Record<string, LightSkin> = {
+  ink: "paper",
+  orange: "paper",
+  sand: "paper",
+  slate: "stone",
+  sage: "stone",
+  blue: "stone",
+};
+
 function read<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
-  const v = localStorage.getItem(key);
-  return (allowed as readonly string[]).includes(v ?? "") ? (v as T) : fallback;
+  let v = localStorage.getItem(key) ?? "";
+  const dark = v.endsWith("-dark");
+  const mapped = REMOVED_SKIN_MAP[dark ? v.slice(0, -5) : v];
+  if (mapped) {
+    v = dark ? `${mapped}-dark` : mapped;
+    localStorage.setItem(key, v);
+  }
+  return (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
 }
 
 function load(): Appearance {
