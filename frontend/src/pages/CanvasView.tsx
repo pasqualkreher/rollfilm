@@ -78,8 +78,9 @@ export function CanvasView() {
       start={0}
       title={canvas.name}
       caption={canvas.name}
-      onClose={() => navigate("/canvas")}
-      closeTitle="Back to the canvas list (Escape)"
+      // Escape steps back through the history, like the top bar's Back.
+      onClose={() => navigate(-1)}
+      showBack={false}
       onEdit={() => navigate(`/canvas/${id}`)}
     />
   );

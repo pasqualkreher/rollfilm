@@ -569,6 +569,31 @@ button {
   color: var(--text);
 }
 
+/* The history pair at the bar's left end (NavHistoryButtons): the same quiet
+   icon boxes as the utility links on the right, as buttons. Disabled is a
+   state you look at often (the ends of the history), so it dims rather than
+   disappears - the pair keeps its place either way. */
+.nav-history {
+  display: inline-flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.nav-history-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.nav-history-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: none;
+  color: var(--text-muted);
+}
+
 .spinner {
   display: inline-block;
   width: 14px;
@@ -3188,10 +3213,10 @@ textarea:focus-visible {
   margin: 0;
   background: var(--bg-elevated);
   border-top: 1px solid var(--border);
-  /* As on the photo view: anchors the left-flush Back button, side padding
-     keeps the centred controls clear of it. */
+  /* As on the photo view: anchors the right-flush pair (.stage-end), side
+     padding keeps the centred controls clear of it. */
   position: relative;
-  padding: 0 96px;
+  padding: 0 160px;
 }
 
 /* The baseline switch, a divider, then the compares it feeds - one unit, so the
@@ -4751,9 +4776,9 @@ input.editor-preset-select {
   cursor: not-allowed;
 }
 
-/* The app's way out of a view: an arrow and a word, not a bare glyph. One
-   look everywhere it appears - the photo view, the import review, the editor
-   and the album pages - so leaving a screen always looks the same. */
+/* An icon and a word, not a bare glyph: the Edit/View switch of the canvas
+   pages, the import review's and the editor's print view's Back - layers
+   that are not history entries. Leaving a page is the top bar's Back. */
 .back-btn {
   display: inline-flex;
   align-items: center;
@@ -4761,9 +4786,9 @@ input.editor-preset-select {
   flex-shrink: 0;
 }
 
-/* Placement for the three photo stages, whose Back rides in the control row
-   under the picture: flush with the left edge of the photo above it, while the
-   background/zoom controls stay centred - so it's taken out of the row's flow
+/* Placement for the stages whose way out (or in) rides in the control row
+   under the picture: flush with the left edge of the picture above it, while
+   the centred controls stay centred - so it's taken out of the row's flow
    rather than pushing that group off-centre. The row reserves side padding for
    it (below), so the two can't collide. */
 .stage-back-btn {
@@ -5040,10 +5065,11 @@ input.editor-preset-select {
   min-height: 40px;
   background: var(--bg-elevated);
   border-top: 1px solid var(--border);
-  /* Anchors the left-flush Back button; the side padding keeps the centred
-     controls clear of it. */
+  /* Anchors the right-flush pair (.stage-end: Edit/View + Panel); the side
+     padding, the same on both sides, keeps the centred controls clear of it
+     without pulling them off-centre. */
   position: relative;
-  padding: 0 96px;
+  padding: 0 160px;
 }
 
 /* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps and
@@ -5654,11 +5680,30 @@ input.editor-preset-select {
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
+}
+
+/* The right end of the photo stages' control row: the Edit/View switch and
+   the panel toggle, as one pair pinned to the edge (the same inset
+   .stage-back-btn keeps on the left) - the same two buttons in the same
+   spot in the photo view and the editor, so switching between them moves
+   nothing. */
+.stage-end {
   position: absolute;
-  /* The same inset from the edge as .stage-back-btn keeps on the left. */
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The switch between looking and editing - Edit on the view, View on the
+   editor - on the photo stages and the canvas pages alike. */
+.stage-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
 }
 
 /* The editor's rail, exactly (.editor-panel + .editor-panel-body): the same
@@ -5775,7 +5820,7 @@ input.editor-preset-select {
   }
 
   .detail-image-toolbar .stage-back-btn,
-  .detail-image-toolbar .detail-panel-toggle {
+  .detail-image-toolbar .stage-end {
     position: static;
     transform: none;
   }
@@ -9493,7 +9538,10 @@ button.smart-card {
   position: absolute;
   left: 20px;
   right: 20px;
-  bottom: 18px;
+  /* The same foot room the editor's filmstrip head gives its View (14px), so
+     the canvas page's Edit (last on the right) and the editor's View land on
+     the same pixels - and neither sits pressed against the window's edge. */
+  bottom: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10504,12 +10552,13 @@ button.smart-card {
 .canvas-workspace .canvas-filmstrip-head {
   align-items: center;
   gap: 6px 14px;
-  /* Symmetric top/bottom so the Back row sits vertically centred in the bar. */
-  padding: 8px 10px;
+  /* The right and bottom insets match the canvas page's foot (20px, 14px),
+     so View here and Edit there share the same pixels. */
+  padding: 8px 20px 14px 10px;
 }
 
-.canvas-workspace .canvas-filmstrip-head .back-btn {
-  margin-right: 6px;
+.canvas-workspace .canvas-filmstrip-head .canvas-view-switch {
+  margin-left: auto;
 }
 
 .canvas-workspace .canvas-filmstrip-note {
@@ -10705,13 +10754,52 @@ a.info-card-chip--canvas:hover {
    toolbar, rail and filmstrip - focus mode is for working, not for looking.
    (The canvas view is the exception and hides its own chrome as well; that
    lives with the rest of .canvas-print.is-focus above.) Last in the file so
-   these win over the panel-hidden rules above. */
+   these win over the panel-hidden rules above.
+
+   Eased both ways, like the side panel: the bar slides up out of the window
+   while the workspace's top edge rises with it - same length, same curve, so
+   the edge stays on the bar's bottom the whole way and the picture grows with
+   the slide (the editor refits inside its ResizeObserver, frame for frame).
+   The bar's dock keeps its place in the layout: the workspace covers that
+   strip anyway, and collapsing it would reflow the page underneath (the
+   library grid) for nothing. */
+.editor-overlay:not(.editor-overlay--docked),
+.canvas-workspace,
+.canvas-print {
+  transition: top 0.28s var(--ease-out);
+}
+
+.top-bar {
+  transition:
+    transform 0.28s var(--ease-out),
+    opacity 0.2s ease-out,
+    visibility 0s;
+}
+
 :root[data-focus] {
   --chrome-top: 0px;
 }
 
-:root[data-focus] .top-bar-dock {
-  display: none;
+:root[data-focus] .top-bar {
+  transform: translateY(-100%);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    transform 0.28s var(--ease-out),
+    opacity 0.16s var(--ease-in),
+    visibility 0s linear 0.28s;
+}
+
+/* Here rather than in the reduced-motion block at the top: the rules above
+   come later and would win over it. */
+@media (prefers-reduced-motion: reduce) {
+  .editor-overlay:not(.editor-overlay--docked),
+  .canvas-workspace,
+  .canvas-print,
+  .top-bar,
+  :root[data-focus] .top-bar {
+    transition: none;
+  }
 }
 
 /* Focus mode's button, in the photo editor's toolbar and the canvas

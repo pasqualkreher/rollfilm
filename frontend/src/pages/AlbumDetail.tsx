@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { withoutMembershipNames } from "../utils/autoTags";
@@ -13,7 +13,7 @@ import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { AlbumNameField } from "../components/AlbumNameField";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
-import { IconArrowLeft, IconCloudUp, IconRename, IconTrash } from "../components/Icons";
+import { IconCloudUp, IconRename, IconTrash } from "../components/Icons";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { Dropdown } from "../components/Dropdown";
@@ -400,11 +400,8 @@ export function AlbumDetail() {
      both out of the row's flow so the centre stays centred. */
   const albumBar = (
     <h2 className="section-title album-bottom-bar">
-      {/* Same Back button as the photo view, the import review and the
-          editor - one look for leaving any view. */}
-      <Link to="/albums" className="btn btn-sm back-btn stage-back-btn" title="Back to albums">
-        <IconArrowLeft size={13} /> Back
-      </Link>
+      {/* No Back of its own: the top bar's Back leads to wherever the album
+          was opened from. */}
       {album ? (
         /* The album's name is the user's own - the pencil next to it renames
            it right here. */

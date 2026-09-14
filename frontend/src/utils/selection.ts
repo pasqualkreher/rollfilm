@@ -18,8 +18,10 @@ export function isSelectClick(e: ModifierKeys): boolean {
   return e.metaKey || e.ctrlKey || e.shiftKey;
 }
 
+export const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
 // The platform's toggle-select key, for hints and tooltips.
-export const modKeyLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
+export const modKeyLabel = isMac ? "⌘" : "Ctrl";
 
 // Cmd/Ctrl+A selects everything in the grid and Escape clears the selection -
 // the two keys every file browser answers to. Text boxes keep both keys for
@@ -57,7 +59,7 @@ export function useSelectionKeys(opts: {
       ) {
         const [id] = edit.selected;
         e.preventDefault();
-        navigate(`/image/${id}`, { state: { imageIds: edit.order, edit: true } });
+        navigate(`/image/${id}/edit`, { state: { imageIds: edit.order } });
       }
     }
     window.addEventListener("keydown", onKeyDown);

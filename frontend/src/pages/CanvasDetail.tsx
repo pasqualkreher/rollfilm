@@ -7,11 +7,22 @@ import { api } from "../api/client";
 import { CanvasEditor } from "../components/CanvasEditor";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { collapsePairs } from "../state/viewPrefs";
+import { useNavHistory } from "../state/navHistory";
 
 export function CanvasDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { previousPath } = useNavHistory();
+  // Back to the view - the same rule as the photo editor's (see leaveEditor
+  // in ImageDetail). Came here from the view: step back to it, so the stack
+  // reads list → view again and Forward can reopen the editor. Came here
+  // straight from the list's pencil or a freshly made canvas: the view takes
+  // the editor's slot, so Back from the view is the list - not the editor.
+  const leaveEditor = () => {
+    if (previousPath === `/canvas/${id}/view`) navigate(-1);
+    else navigate(`/canvas/${id}/view`, { replace: true });
+  };
 
   const { data: canvas } = useQuery({
     queryKey: ["canvas", id],
@@ -35,7 +46,7 @@ export function CanvasDetail() {
           <CanvasEditor
             canvasId={id}
             title={canvas?.name ?? "Canvas"}
-            onExit={() => navigate(`/canvas/${id}/view`)}
+            onExit={leaveEditor}
             files={files ?? []}
             stripImages={collapsePairs(files ?? [])}
             imagesLoading={isLoading || !files}

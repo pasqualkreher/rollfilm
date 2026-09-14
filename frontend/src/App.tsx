@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
-import { IconChart, IconGear, IconHelp, IconLandfill, IconMail, IconMenu } from "./components/Icons";
+import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconLandfill, IconMail, IconMenu } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
@@ -14,6 +14,8 @@ import { WaitProvider } from "./state/wait";
 import { Presence } from "./components/Presence";
 import { MOTION } from "./utils/usePresence";
 import { TooltipLayer } from "./components/TooltipLayer";
+import { NavHistoryTracker, runLeaveGuards, useNavHistory } from "./state/navHistory";
+import { isMac } from "./utils/selection";
 
 // Every screen except the Library is code-split. The app used to ship as one
 // bundle, so each launch parsed and compiled the photo editor (by far the
@@ -219,6 +221,93 @@ function currentPageTitle(pathname: string): string {
 }
 
 
+// The app's one way back: a browser-style Back/Forward pair that steps through
+// the history exactly as it was walked - Library to an album to a photo to
+// the editor and back out the same way - instead of each view deciding where
+// its own Back should lead. Views therefore carry no Back of their own
+// (Escape stays as the keyboard way out where a view had one). Before a step,
+// whatever the current view still owes (the editor's save) runs to
+// completion - see state/navHistory.ts. Shortcuts: ⌘[ / ⌘] on macOS, Alt+←/→
+// elsewhere, plus the mouse's back/forward buttons. They stay live in focus
+// mode, where the bar itself is hidden.
+function NavHistoryButtons({ locked }: { locked: boolean }) {
+  const navigate = useNavigate();
+  const { canGoBack, canGoForward } = useNavHistory();
+  const canBack = canGoBack && !locked;
+  const canForward = canGoForward && !locked;
+  // A guard can take a moment (the save popup); a second press meanwhile
+  // must not queue a second step.
+  const steppingRef = useRef(false);
+  const step = async (delta: -1 | 1) => {
+    if (steppingRef.current) return;
+    steppingRef.current = true;
+    try {
+      await runLeaveGuards();
+      navigate(delta);
+    } finally {
+      steppingRef.current = false;
+    }
+  };
+  // Read through a ref so the window listeners are wired once.
+  const latest = useRef({ canBack, canForward, step });
+  latest.current = { canBack, canForward, step };
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      const chord = isMac
+        ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+        : e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey;
+      if (!chord) return;
+      const back = isMac ? e.key === "[" : e.key === "ArrowLeft";
+      const forward = isMac ? e.key === "]" : e.key === "ArrowRight";
+      if (!back && !forward) return;
+      e.preventDefault();
+      const { canBack, canForward, step } = latest.current;
+      if (back && canBack) void step(-1);
+      if (forward && canForward) void step(1);
+    }
+    // The extra mouse buttons: 3 is back, 4 is forward on every platform.
+    function onMouseUp(e: MouseEvent) {
+      if (e.button !== 3 && e.button !== 4) return;
+      e.preventDefault();
+      const { canBack, canForward, step } = latest.current;
+      if (e.button === 3 && canBack) void step(-1);
+      if (e.button === 4 && canForward) void step(1);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+  const backKey = isMac ? "⌘[" : "Alt+←";
+  const forwardKey = isMac ? "⌘]" : "Alt+→";
+  return (
+    <div className="nav-history" role="group" aria-label="History">
+      <button
+        className="top-icon-link nav-history-btn"
+        onClick={() => void step(-1)}
+        disabled={!canBack}
+        title={`Back (${backKey})`}
+        aria-label="Back"
+      >
+        <IconChevronLeft size={16} />
+      </button>
+      <button
+        className="top-icon-link nav-history-btn"
+        onClick={() => void step(1)}
+        disabled={!canForward}
+        title={`Forward (${forwardKey})`}
+        aria-label="Forward"
+      >
+        <IconChevronRight size={16} />
+      </button>
+    </div>
+  );
+}
+
 // Top bar: while a blocking Settings task runs, the nav is locked (you can't
 // switch tabs) and a spinner + label shows what's happening. On narrow windows
 // the tab row collapses into a burger menu instead of wrapping onto extra rows.
@@ -274,6 +363,9 @@ function TopBar() {
           the bar's midpoint - and shrinks instead of overlapping when a zone
           needs the room. */}
       <div className="top-bar-side top-bar-side--left">
+      {/* First thing after the traffic lights, where Finder and Music keep
+          theirs. */}
+      <NavHistoryButtons locked={locked} />
       <span className="brand">
         {/* BASE_URL ("./" in builds) keeps the path working under file:// in Electron,
     where an absolute "/rollfilm.svg" would point at the filesystem root. */}
@@ -418,6 +510,7 @@ export default function App() {
           <DialogProvider>
           <div className="app-shell">
             <SourceScanWatcher />
+            <NavHistoryTracker />
             <EmptyLibraryRedirect />
             <TopBar />
             <TooltipLayer />
@@ -437,7 +530,11 @@ export default function App() {
             <Route path="/canvas/:id" element={<CanvasDetail />} />
             <Route path="/canvas/:id/view" element={<CanvasView />} />
             <Route path="/smart-albums/:id" element={<SmartAlbumDetail />} />
-            <Route path="/image/:id" element={<ImageDetail />} />
+            {/* The editor is the photo view's second mode and its own history
+                entry (/image/:id/edit): Back closes it, Forward reopens it.
+                One route, so the view underneath stays mounted across the
+                two. */}
+            <Route path="/image/:id/:mode?" element={<ImageDetail />} />
             <Route path="/map" element={<MapView />} />
             <Route path="/selects" element={<Selects />} />
             <Route path="/trash" element={<Trash />} />

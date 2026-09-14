@@ -2141,7 +2141,16 @@ export function CanvasEditor({
         else void requestExit();
         return;
       }
-      if (selected.size === 0) return;
+      if (selected.size === 0) {
+        // E with nothing picked is the other half of the canvas page's E:
+        // back to the view, so one key flips between looking and editing
+        // (with a frame picked, E opens its photo in the editor - below).
+        if (!meta && !event.altKey && !onButton && (event.key === "e" || event.key === "E")) {
+          event.preventDefault();
+          void requestExit();
+        }
+        return;
+      }
       // E opens the photo editor on the selected frame's photo - the same as
       // the toolbar's Edit (it does nothing unless one photo frame is picked).
       if (!meta && !event.altKey && !onButton && (event.key === "e" || event.key === "E")) {
@@ -2826,11 +2835,11 @@ export function CanvasEditor({
         backButton={
           onExit && (
             <button
-              className="btn btn-sm back-btn"
+              className="btn btn-sm primary stage-switch-btn canvas-view-switch"
               onClick={() => void requestExit()}
               title="Back to the canvas view (Esc)"
             >
-              <IconArrowLeft size={14} /> Back
+              <IconImage size={13} /> View
             </button>
           )
         }
@@ -2939,6 +2948,7 @@ export function PrintView({
   title,
   onClose,
   closeTitle = "Back to the canvas (Escape)",
+  showBack = true,
   caption,
   onEdit,
 }: {
@@ -2949,6 +2959,10 @@ export function PrintView({
   title: string;
   onClose: () => void;
   closeTitle?: string;
+  // The editor's own print view is a layer over the editor and closes with
+  // this Back; the canvas view is a page, whose way back is the top bar's
+  // Back (and Escape), so it shows none.
+  showBack?: boolean;
   // What the bottom bar says about the whole document, before the page
   // count: the canvas view puts the canvas's name here; the editor's own
   // print view says "Print view".
@@ -3286,29 +3300,35 @@ export function PrintView({
           fading with the rest of the chrome. */}
       {focused && <FocusToggle onToggle={leaveFocus} className="canvas-print-chrome" />}
 
-      {/* One bottom bar, like the photo stages' toolbars: the standard Back
-          flush left, the caption centred, the pencil and Export flush right. */}
+      {/* One bottom bar, like the photo stages' toolbars: the way out of the
+          editor's print view (Back) flush left, the caption centred, Focus
+          and Export flush right - and on the canvas page, last on the right,
+          the way into the editor (Edit): the exact spot the editor's View
+          sits in (bottom right of its filmstrip), so the two read as one
+          switch that stays put. */}
       {!focused && (
       <div className="canvas-print-foot canvas-print-chrome" aria-live="polite">
-        <button className="btn btn-sm back-btn stage-back-btn" onClick={onClose} title={closeTitle}>
-          <IconArrowLeft size={13} /> Back
-        </button>
+        {showBack && (
+          <button className="btn btn-sm back-btn stage-back-btn" onClick={onClose} title={closeTitle}>
+            <IconArrowLeft size={13} /> Back
+          </button>
+        )}
         {caption ?? "Print view"}
         {sheets.length > 1 ? ` · Page ${index + 1} of ${sheets.length}` : ""}
         <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to go back</span>
         <span className="canvas-print-export">
           <FocusButton onClick={enterFocus} className="canvas-tool canvas-view-edit" />
+          <ExportChip doc={doc} byId={byId} title={title} drop="up" />
           {onEdit && (
             <button
-              className="btn btn-sm canvas-tool canvas-view-edit"
+              className="btn btn-sm primary stage-switch-btn"
               onClick={onEdit}
-              title="Edit this canvas"
+              title="Edit this canvas (E)"
               aria-label="Edit this canvas"
             >
-              <IconPencil size={14} /> Edit
+              <IconPencil size={13} /> Edit
             </button>
           )}
-          <ExportChip doc={doc} byId={byId} title={title} drop="up" />
         </span>
       </div>
       )}
@@ -4791,8 +4811,9 @@ function Filmstrip({
   // frame on the page - a placed photo would just stay (frames keep it).
   onRemove: (id: string) => void;
   onDragStart: (event: React.PointerEvent, id: string) => void;
-  // The workspace's Back, docked into the strip's bottom row so the way out
-  // sits bottom-left like in every other view.
+  // The workspace's View, docked into the strip's bottom row at its right end
+  // - the spot the canvas page keeps its Edit in, so the two read as one
+  // switch that stays put.
   backButton?: React.ReactNode;
 }) {
   const remaining = images.filter((image) => !placed.has(image.id)).length;
@@ -4904,7 +4925,6 @@ function Filmstrip({
         </div>
       )}
       <div className="canvas-filmstrip-head">
-        {backButton}
         <button className="btn btn-sm ghost canvas-filmstrip-toggle" onClick={onToggle}>
           <span className="canvas-filmstrip-caret" style={{ transform: open ? "rotate(180deg)" : "none" }}>
             <IconChevronDown size={13} />
@@ -4919,6 +4939,7 @@ function Filmstrip({
             Drag a photo onto the page, or click it to place it on the current page.
           </span>
         )}
+        {backButton}
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ import { MiniMap } from "../components/MiniMap";
 import { useSelects } from "../state/selects";
 import { setDetailPanelOpen, useAskSaveCopyOptions, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
 import { useWait } from "../state/wait";
+import { useNavHistory } from "../state/navHistory";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
@@ -24,7 +25,7 @@ import {
   fileTypeBadgeClass,
 } from "../components/ThumbnailGrid";
 import { editsFromImage } from "../utils/adjustments";
-import { IconArrowLeft, IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconTrash, IconX } from "../components/Icons";
+import { IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconTrash, IconX } from "../components/Icons";
 import { Slideshow } from "../components/Slideshow";
 import { PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
@@ -43,44 +44,61 @@ import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 
 export function ImageDetail() {
-  const { id } = useParams<{ id: string }>();
+  const { id, mode } = useParams<{ id: string; mode?: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const { withWait } = useWait();
+  const { previousPath } = useNavHistory();
   const [activeId, setActiveId] = useState(id!);
-  // A grid's E (one photo selected) lands here with the editor already open.
-  const [adjustOpen, setAdjustOpen] = useState(
-    () => Boolean((location.state as { edit?: boolean } | null)?.edit)
-  );
-  // The editor has closed but is still on screen fading out (its saving is
-  // done by then - onClose runs after the save). Held for the length of the
-  // fade (.editor-overlay--closing), then the editor comes down for real.
+  // Passed from the Library grid so arrow keys can zap through the same
+  // filtered/ordered set of photos you were browsing, not the whole library.
+  const imageIds = (location.state as { imageIds?: string[] } | null)?.imageIds;
+  // The editor is this view's second mode, and its own history entry:
+  // /image/:id/edit. Opening pushes it, so the app's Back closes the editor
+  // and Forward brings it back; a grid's E (one photo selected) lands here
+  // with it open directly.
+  const adjustOpen = mode === "edit";
+  // The editor has left the route but is still on screen fading out (its
+  // saving is done by then - it leaves after the save). Held for the length
+  // of the fade (.editor-overlay--closing), then the editor comes down for
+  // real.
   const [adjustClosing, setAdjustClosing] = useState(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const closeAdjust = useCallback(() => {
-    setAdjustClosing(true);
-    clearTimeout(closeTimerRef.current);
-    closeTimerRef.current = setTimeout(() => {
-      setAdjustOpen(false);
-      setAdjustClosing(false);
-    }, 140);
-  }, []);
   // Opening while the last editor is still fading out must not wait for it
   // (nor be swallowed): the fade is cut short and a fresh editor mounts in
   // its place - the key forces the remount, the old one having already
   // closed and saved.
   const [editorKey, setEditorKey] = useState(0);
+  // Derived during render, not in an effect: the editor must stay mounted in
+  // the very frame the route leaves it, or it would unmount (and autosave,
+  // and lose its state) once and mount again just to fade.
+  const [seenOpen, setSeenOpen] = useState(adjustOpen);
+  if (seenOpen !== adjustOpen) {
+    setSeenOpen(adjustOpen);
+    if (!adjustOpen) setAdjustClosing(true);
+    else if (adjustClosing) {
+      setAdjustClosing(false);
+      setEditorKey((k) => k + 1);
+    }
+  }
+  useEffect(() => {
+    if (!adjustClosing) return;
+    closeTimerRef.current = setTimeout(() => setAdjustClosing(false), 140);
+    return () => clearTimeout(closeTimerRef.current);
+  }, [adjustClosing]);
   const openAdjust = useCallback(() => {
-    clearTimeout(closeTimerRef.current);
-    setAdjustClosing((closing) => {
-      if (closing) setEditorKey((k) => k + 1);
-      return false;
-    });
-    setAdjustOpen(true);
-  }, []);
-  useEffect(() => () => clearTimeout(closeTimerRef.current), []);
+    navigate(`/image/${id}/edit`, { state: { imageIds } });
+  }, [navigate, id, imageIds]);
+  // Back to the view. Came here from the view (E, the Edit button): step back
+  // to it, so the stack reads grid → view again and Forward can reopen the
+  // editor. Came here straight from a grid's E: the view takes the editor's
+  // slot, so Back from the view is the grid - not a second copy of the view.
+  const leaveEditor = useCallback(() => {
+    if (previousPath === `/image/${id}`) navigate(-1);
+    else navigate(`/image/${id}`, { replace: true, state: { imageIds } });
+  }, [navigate, id, imageIds, previousPath]);
   const [exportOpen, setExportOpen] = useState(false);
   // Fullscreen slideshow over the browsed set (falls back to just this photo
   // when the view was opened without one).
@@ -144,16 +162,10 @@ export function ImageDetail() {
   const selects = useSelects();
   const { zoomed, resetZoom } = zoom;
 
-  // Passed from the Library grid so arrow keys can zap through the same
-  // filtered/ordered set of photos you were browsing, not the whole library.
-  const imageIds = (location.state as { imageIds?: string[] } | null)?.imageIds;
-  // Where the back arrow should lead. Set e.g. after "Save copy" (which jumps
-  // here directly) so back goes to the Library instead of replaying history.
-  const backTo = (location.state as { backTo?: string } | null)?.backTo;
-
+  // Escape's way out: one step back through the history, the same step the
+  // top bar's Back takes.
   function goBack() {
-    if (backTo) navigate(backTo);
-    else navigate(-1);
+    navigate(-1);
   }
 
   // Where this photo sits in the browsed set, and the one step through it that
@@ -674,7 +686,7 @@ export function ImageDetail() {
   // Bake the photo's saved edits into a new library JPEG tagged "edit copy",
   // then jump to it - mirroring the editor's Save copy, including slotting the
   // new photo into the browsed set right after its original so the arrow keys
-  // keep working, and pointing Back at the Library instead of replaying history.
+  // keep working.
   async function saveCopyRun(req: SaveCopyRequest) {
     const created =
       req.kind === "virtual"
@@ -694,7 +706,7 @@ export function ImageDetail() {
         ? [...imageIds, created.id]
         : [...imageIds.slice(0, at + 1), created.id, ...imageIds.slice(at + 1)]
       : undefined;
-    navigate(`/image/${created.id}`, { state: { backTo: "/", imageIds: nextIds } });
+    navigate(`/image/${created.id}`, { state: { imageIds: nextIds } });
   }
 
   async function deletePhoto() {
@@ -823,12 +835,8 @@ export function ImageDetail() {
             )}
           </div>
           <div className="detail-image-toolbar">
-            {/* Back sits with the other stage controls under the photo rather
-                than as a bare arrow in a column of its own - labelled, so it
-                reads as the way out. */}
-            <button className="btn btn-sm back-btn stage-back-btn" onClick={goBack} title="Back (Esc)">
-              <IconArrowLeft size={13} /> Back
-            </button>
+            {/* No Back of its own: the way out is the top bar's Back (and
+                Escape), which lead to wherever this photo was opened from. */}
             <StageBackgroundToggle />
             <ZoomReadout zoom={zoom} />
             {/* Hairline between the look-at-it controls (background, zoom) and
@@ -841,21 +849,32 @@ export function ImageDetail() {
             >
               <IconPlay size={13} /> Slideshow
             </button>
-            {/* Mirror of Back on the other end of the row: the collapse handle
+            {/* Flush right at the end of the row, next to the panel: the way
+                into the editor - whose View sits in exactly this spot, so the
+                two read as one switch - and the collapse handle. The handle
                 used to sit in a slim column right of the panel, which cost a
                 strip of width in BOTH states. Riding in the stage's control
                 row it costs none, and it stays reachable with the panel
                 hidden - which a control inside the panel could not. */}
-            <button
-              className="btn btn-sm detail-panel-toggle"
-              onClick={() => setDetailPanelOpen(!panelOpen)}
-              title={panelOpen ? "Hide the side panel (P)" : "Show the side panel (P)"}
-              aria-label={panelOpen ? "Hide the side panel" : "Show the side panel"}
-              aria-expanded={panelOpen}
-              aria-controls="detail-side-panel"
-            >
-              Panel {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
-            </button>
+            <span className="stage-end">
+              <button
+                className="btn btn-sm primary stage-switch-btn"
+                onClick={openAdjust}
+                title="Edit this photo (E)"
+              >
+                <IconPencil size={13} /> Edit
+              </button>
+              <button
+                className="btn btn-sm detail-panel-toggle"
+                onClick={() => setDetailPanelOpen(!panelOpen)}
+                title={panelOpen ? "Hide the side panel (P)" : "Show the side panel (P)"}
+                aria-label={panelOpen ? "Hide the side panel" : "Show the side panel"}
+                aria-expanded={panelOpen}
+                aria-controls="detail-side-panel"
+              >
+                Panel {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
+              </button>
+            </span>
           </div>
         </div>
         <div id="detail-side-panel" className={`detail-panel${panelOpen ? "" : " detail-panel--collapsed"}`}>
@@ -961,14 +980,11 @@ export function ImageDetail() {
           )}
           {renameNote && <p className="status-note detail-rename-hint">{renameNote}</p>}
 
+          {/* Edit lives in the stage row under the photo (bottom left, with
+              the editor's View in the same spot); this row is left to the
+              Immich controls, and only exists while there are any. */}
+          {immichConfigured && (immich?.sync_mode === "selective" || immich?.sync_mode === "manual") && (
           <div className="detail-action-row">
-            <button
-              className="btn primary"
-              onClick={openAdjust}
-              title="Edit this photo (E)"
-            >
-              <IconPencil size={13} /> Edit
-            </button>
             {immichConfigured && immich?.sync_mode === "selective" && (
               <ImmichSyncToggle
                 on={image.immich_sync}
@@ -989,6 +1005,7 @@ export function ImageDetail() {
               </button>
             )}
           </div>
+          )}
           {immichMsg && (
             <p className="status-note" style={{ marginTop: -8, marginBottom: 16 }}>{immichMsg}</p>
           )}
@@ -1189,7 +1206,9 @@ export function ImageDetail() {
         </div>
       </div>
 
-      {adjustOpen && <PhotoEditor key={editorKey} image={image} onClose={closeAdjust} closing={adjustClosing} />}
+      {(adjustOpen || adjustClosing) && (
+        <PhotoEditor key={editorKey} image={image} onClose={leaveEditor} closing={!adjustOpen} />
+      )}
       <Presence open={slideshowOpen} ms={MOTION.overlay}>
         {slideshowOpen && (
           <Slideshow

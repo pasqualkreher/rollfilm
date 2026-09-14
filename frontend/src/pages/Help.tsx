@@ -1277,7 +1277,7 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Open one</strong> by clicking its card: the canvas is shown as it will
                 print, page by page, with nothing around it. The pencil in the bottom bar (or on
-                the card) opens it for editing; Back from the editor returns to this view. The
+                the card) opens it for editing; View in the editor returns to this view. The
                 rename button on the card renames it.
               </li>
               <li>
@@ -1931,6 +1931,19 @@ const CHAPTERS: Chapter[] = [
         lead: <>Culling is a keyboard job — these are the keys that make it one, one table per screen.</>,
         body: (
           <>
+            <h4>Everywhere</h4>
+            <Keys
+              rows={[
+                {
+                  keys: (
+                    <>
+                      <kbd>⌘[</kbd> / <kbd>⌘]</kbd>
+                    </>
+                  ),
+                  does: "Back / forward through where you have been — the same as the two arrows at the left of the top bar (Alt+← / → on Windows and Linux; the mouse's back and forward buttons work too)",
+                },
+              ]}
+            />
             <h4>Any grid</h4>
             <Keys
               rows={[
@@ -2008,13 +2021,13 @@ const CHAPTERS: Chapter[] = [
                   ),
                   does: "Set the star rating (0 clears it)",
                 },
-                { keys: <kbd>E</kbd>, does: "Open the editor on this photo" },
+                { keys: <kbd>E</kbd>, does: "Open the editor on this photo (E in the editor brings you back)" },
                 { keys: <kbd>P</kbd>, does: "Show / hide the side panel, so the photo gets the whole window" },
                 {
                   keys: <kbd>S</kbd>,
                   does: "Start a fullscreen slideshow of the set you're browsing (Space pauses, Esc ends it)",
                 },
-                { keys: <kbd>Esc</kbd>, does: "Zoomed in: back to fit. Otherwise: back to the grid" },
+                { keys: <kbd>Esc</kbd>, does: "Zoomed in: back to fit. Otherwise: back to where the photo was opened from" },
               ]}
             />
             <h4>Editor</h4>
@@ -2059,14 +2072,14 @@ const CHAPTERS: Chapter[] = [
                 },
                 {
                   keys: <kbd>Esc</kbd>,
-                  does: "Step out: leave focus mode, close the Transform section and its crop box, or close the editor",
+                  does: "Step out: leave focus mode, close the Transform section and its crop box, or back to the photo view (the View button)",
                 },
               ]}
             />
             <h4>Canvas editor</h4>
             <Keys
               rows={[
-                { keys: <kbd>E</kbd>, does: "Open the photo editor on the selected photo frame" },
+                { keys: <kbd>E</kbd>, does: "Open the photo editor on the selected photo frame; with nothing selected: back to the canvas view" },
                 {
                   keys: (
                     <>
@@ -2128,9 +2141,9 @@ const CHAPTERS: Chapter[] = [
                   does: "Previous / next page (Space also goes forward; Home / End jump to the first / last)",
                 },
                 { keys: <kbd>0</kbd>, does: "Fit the page again" },
-                { keys: <kbd>E</kbd>, does: "Edit this canvas" },
+                { keys: <kbd>E</kbd>, does: "Edit this canvas (E in the editor brings you back)" },
                 { keys: <kbd>F</kbd>, does: "Focus mode — full screen, only the pages on black; F or Esc ends it" },
-                { keys: <kbd>Esc</kbd>, does: "Back to the canvas list" },
+                { keys: <kbd>Esc</kbd>, does: "Back to where the canvas was opened from" },
               ]}
             />
           </>

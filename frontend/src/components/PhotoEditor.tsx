@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconArrowLeft, IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSaveCopy, IconSideBySide, IconSplit, IconTarget, IconTrash, IconUndo, IconX } from "./Icons";
+import { IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSaveCopy, IconSideBySide, IconSplit, IconTarget, IconTrash, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import { FocusButton, useFocusChrome } from "./FocusToggle";
@@ -69,6 +69,7 @@ import { StageBackgroundToggle } from "./StageBackgroundToggle";
 import { useStageBg, useAskSaveCopyOptions } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
 import { useWait } from "../state/wait";
+import { useLeaveGuard } from "../state/navHistory";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
 
@@ -2228,7 +2229,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         ]);
       }),
     onSuccess: () => {
-      onClose();
+      if (!leavingRef.current) onClose();
     },
   });
 
@@ -2370,13 +2371,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         setSaveCopyOpen(false);
         return;
       }
-      onClose();
       // Jump to the freshly created edited photo rather than staying on the
-      // original - and make its back arrow lead to the Library, not back
-      // through the editing history. The set being browsed comes along, with
-      // the copy slotted in right after its original: without it the new photo
-      // lands with no neighbours and the arrow keys stay dead until you step
-      // back out to the grid and re-enter.
+      // original: its view takes the editor's place in the history (one
+      // navigation, not a close and a jump - the close is a history step of
+      // its own now, and the two would race), so Back from the copy is the
+      // original's view. The set being browsed comes along, with the copy
+      // slotted in right after its original: without it the new photo lands
+      // with no neighbours and the arrow keys stay dead until you step back
+      // out to the grid and re-enter.
       const browsed = (location.state as { imageIds?: string[] } | null)?.imageIds;
       const at = browsed ? browsed.indexOf(image.id) : -1;
       const imageIds = browsed
@@ -2384,7 +2386,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           ? [...browsed, created.id]
           : [...browsed.slice(0, at + 1), created.id, ...browsed.slice(at + 1)]
         : undefined;
-      navigate(`/image/${created.id}`, { state: { backTo: "/", imageIds } });
+      navigate(`/image/${created.id}`, { replace: true, state: { imageIds } });
     },
   });
 
@@ -2436,23 +2438,22 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
 
   const busy = saveEdits.isPending || saveCopy.isPending;
 
-  // Leaving saves. Escape and the Back button both route through here; the
+  // Everything still owed to the server goes through the mutation - so the
+  // wait popup is up while it lands - instead of being left to the unmount
+  // cleanup's silent background write. `deferredWriteRef` counts as owed:
+  // an autosave writes the values only, so the thumbnail the grid is about
+  // to show is still the old one. So does a write still in flight, whose
+  // key has not landed in lastWrittenKeyRef yet.
+  const owesWrite = () =>
+    editsKey !== lastWrittenKeyRef.current || deferredWriteRef.current || autosaveInflightRef.current;
+
+  // Leaving saves. Escape and the View button both route through here; the
   // save mutation's onSuccess closes once the write has landed, so nothing is
   // ever dropped and nothing has to be confirmed. Paths that unmount the editor
   // without coming through here are caught by the autosave effect above.
   function requestClose() {
     if (busy) return;
-    // Everything still owed to the server goes through the mutation - so the
-    // wait popup is up while it lands - instead of being left to the unmount
-    // cleanup's silent background write. `deferredWriteRef` counts as owed:
-    // an autosave writes the values only, so the thumbnail the grid is about
-    // to show is still the old one. So does a write still in flight, whose
-    // key has not landed in lastWrittenKeyRef yet.
-    if (
-      editsKey !== lastWrittenKeyRef.current ||
-      deferredWriteRef.current ||
-      autosaveInflightRef.current
-    ) {
+    if (owesWrite()) {
       saveEdits.mutate();
       return;
     }
@@ -2460,6 +2461,33 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     flushQueries();
     onClose();
   }
+
+  // The top bar's Back/Forward (and their shortcuts) leave the editor by
+  // moving the history, not by closing it - so the same save runs first, as
+  // a leave guard (state/navHistory.ts), and the step waits for it. The
+  // mutation's onSuccess would also close; the flag keeps that quiet, since
+  // the navigation that follows is the close.
+  const leavingRef = useRef(false);
+  // Stable callback (the guard re-registers when it changes); the live
+  // values come through refs.
+  const owesWriteRef = useRef(owesWrite);
+  owesWriteRef.current = owesWrite;
+  const saveEditsRef = useRef(saveEdits);
+  saveEditsRef.current = saveEdits;
+  const flushBeforeLeave = useCallback(async () => {
+    if (!owesWriteRef.current()) {
+      flushQueries();
+      return;
+    }
+    leavingRef.current = true;
+    try {
+      await saveEditsRef.current.mutateAsync();
+    } finally {
+      leavingRef.current = false;
+    }
+  }, [flushQueries]);
+  // Docked on the canvas the editor is a panel, not a history entry.
+  useLeaveGuard(docked ? null : flushBeforeLeave);
 
   // The key handler below re-subscribes only when its deps change, so it must
   // not close over requestClose itself: `editsKey` is not among those deps, and
@@ -2520,6 +2548,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       // name or a slider value must never switch sections or hide the panel.
       if (tag === "TEXTAREA" || tag === "SELECT") return;
       if (tag === "INPUT" && !["range", "checkbox"].includes((target as HTMLInputElement).type)) return;
+
+      // E: the other half of the photo view's E - back to the view (or, on
+      // the canvas, the docked panel closed), so one key flips between
+      // looking and editing. Same path as the View button: leaving saves.
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "e" || e.key === "E")) {
+        if (!busy) requestCloseRef.current();
+        return;
+      }
 
       // F: focus mode (see focusMode).
       if (!docked && (e.key === "f" || e.key === "F")) {
@@ -4113,19 +4149,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           )}
         </div>
         </div>
-        {/* The stage's control row. Back leads it - labelled, with the other
-            stage controls, the same as the photo view's toolbar - and the row
-            is rendered even while the photo is still loading or failed to
-            load, so there's always a visible way out. */}
+        {/* The stage's control row - the same bar the photo view has. The
+            way back to the view rides at its right end next to the panel
+            (below), in the spot the photo view keeps its Edit. The row is
+            rendered even while the photo is still loading or failed to load,
+            so there's always a visible way out. */}
         <div className="editor-bg-toggle">
-          <button
-            className="btn btn-sm back-btn stage-back-btn"
-            onClick={() => requestClose()}
-            disabled={busy}
-            title={busy ? "Saving…" : "Back (Esc)"}
-          >
-            <IconArrowLeft size={13} /> Back
-          </button>
           {/* The whole row is there from the first frame - the editor must
               look complete the moment it opens, not assemble itself as the
               first render lands. The background switch works right away (it
@@ -4219,17 +4248,31 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               </span>
             </span>
           </span>
-          {/* Same switch, same spot as in the photo view (P as well). */}
-          <button
-            className="btn btn-sm detail-panel-toggle"
-            onClick={() => setPanelOpen((open) => !open)}
-            title={panelOpen ? "Hide the edit panel (P)" : "Show the edit panel (P)"}
-            aria-label={panelOpen ? "Hide the edit panel" : "Show the edit panel"}
-            aria-expanded={panelOpen}
-            aria-controls="editor-side-panel"
-          >
-            Panel {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
-          </button>
+          {/* The row's right end, next to the panel - the same pair, the same
+              spot as in the photo view: the other half of its Edit button
+              (View - leaving saves first, requestClose; docked on the canvas
+              there is no view to return to, so the same button closes the
+              panel) and the panel switch (P as well). */}
+          <span className="stage-end">
+            <button
+              className="btn btn-sm primary stage-switch-btn"
+              onClick={() => requestClose()}
+              disabled={busy}
+              title={busy ? "Saving…" : docked ? "Close the editor (Esc)" : "Back to the photo view (Esc)"}
+            >
+              {docked ? <IconX size={13} /> : <IconImage size={13} />} {docked ? "Close" : "View"}
+            </button>
+            <button
+              className="btn btn-sm detail-panel-toggle"
+              onClick={() => setPanelOpen((open) => !open)}
+              title={panelOpen ? "Hide the edit panel (P)" : "Show the edit panel (P)"}
+              aria-label={panelOpen ? "Hide the edit panel" : "Show the edit panel"}
+              aria-expanded={panelOpen}
+              aria-controls="editor-side-panel"
+            >
+              Panel {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
+            </button>
+          </span>
           {!docked && <FocusButton active={focusMode} onClick={() => setFocusMode((on) => !on)} />}
         </div>
       </div>

@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { withoutMembershipNames } from "../utils/autoTags";
 import type { ColorLabel, ImageOut, SmartAlbumOut, ViewMode } from "../api/types";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { PhotoFilters } from "../components/PhotoFilters";
-import { IconArrowLeft } from "../components/Icons";
 import { collapsePairs } from "../state/viewPrefs";
 
 // Read-only view of one smart album's photos. Smart albums are virtual (no
@@ -148,11 +147,8 @@ export function SmartAlbumDetail() {
           manual albums' row and the stage rows of the editor and photo view:
           the name centred, Back flush left and out of the row's flow. */}
       <h2 className="section-title album-bottom-bar">
-        {/* Same Back button as the photo view, the import review and the
-            editor - one look for leaving any view. */}
-        <Link to="/albums" className="btn btn-sm back-btn stage-back-btn" title="Back to albums">
-          <IconArrowLeft size={13} /> Back
-        </Link>
+        {/* No Back of its own: the top bar's Back leads to wherever the album
+            was opened from. */}
         {meta?.name ?? "Smart album"}
         {meta && <span className="count-pill">{meta.image_count} photos</span>}
       </h2>
