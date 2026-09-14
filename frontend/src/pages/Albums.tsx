@@ -6,7 +6,14 @@ import { withoutMembershipNames } from "../utils/autoTags";
 import { useAppDialogs } from "../components/AppDialogs";
 import { TagFilter } from "../components/TagFilter";
 import { errorText } from "../utils/apiError";
-import { IconChevronDown, IconRename, IconTrash } from "../components/Icons";
+import {
+  IconAlbum,
+  IconChevronDown,
+  IconPlus,
+  IconRename,
+  IconTag,
+  IconTrash,
+} from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
 import type { AlbumOut, SmartAlbumOut } from "../api/types";
 
@@ -298,13 +305,24 @@ export function Albums() {
 
       <h3 className="smart-row-title">My albums</h3>
       <form
-        className="import-toolbar"
+        className="import-toolbar album-create-form"
         onSubmit={(e) => {
           e.preventDefault();
           if (name.trim()) createAlbum.mutate();
         }}
       >
-        <input type="text" placeholder="New album name" value={name} onChange={(e) => setName(e.target.value)} />
+        <label className="name-field">
+          <span className="name-field-icon" aria-hidden>
+            <IconAlbum size={16} />
+          </span>
+          <input
+            type="text"
+            placeholder="New album name"
+            aria-label="New album name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </label>
         {/* Optional tag rule: photos carrying any checked tag belong to the
             album automatically (and keep joining it as they get tagged).
             Rendered even with no tags in the library (disabled "No tags"),
@@ -315,16 +333,19 @@ export function Albums() {
           onChange={setNewTags}
           emptyLabel="Tags (optional)"
           title="Optional: photos with any of the selected tags are added to the album automatically"
+          icon={<IconTag size={14} />}
         />
         <button className="btn primary" type="submit">
-          Create album
+          <IconPlus size={14} /> Create album
         </button>
-        {newTags.length > 0 && (
-          <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
-            Auto-includes photos tagged {newTags.join(", ")}
-          </span>
-        )}
       </form>
+      {/* Under the row, not in it, and always there: picking tags changes the
+          words, never the size of the field or where the albums start. */}
+      <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "-8px 0 16px" }}>
+        {newTags.length > 0
+          ? `Auto-includes photos tagged ${newTags.join(", ")}`
+          : "Pick tags to add matching photos to the album automatically."}
+      </p>
 
       {albums && albums.length === 0 && <div className="empty-state">No albums yet. Create one above.</div>}
 

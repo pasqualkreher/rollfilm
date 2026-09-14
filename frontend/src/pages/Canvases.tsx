@@ -10,7 +10,7 @@ import { api } from "../api/client";
 import type { CanvasPreview, CanvasSummary } from "../api/types";
 import { useAppDialogs } from "../components/AppDialogs";
 import { EMPTY_SHEET_DOC, shelfSheets, ShelfSheetItems } from "../components/CanvasSheet";
-import { IconPencil, IconRename, IconTrash } from "../components/Icons";
+import { IconCanvas, IconPencil, IconPlus, IconRename, IconTrash } from "../components/Icons";
 import { errorText } from "../utils/apiError";
 
 // The card's preview: the working layout's first sheet - the paper itself
@@ -120,18 +120,23 @@ export function Canvases() {
       </p>
 
       <div className="album-create-row" style={{ display: "flex", gap: 8, margin: "16px 0" }}>
-        <input
-          type="text"
-          placeholder="New canvas name"
-          value={name}
-          style={{ flex: 1 }}
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") createCanvas.mutate();
-          }}
-        />
+        <label className="name-field">
+          <span className="name-field-icon" aria-hidden>
+            <IconCanvas size={16} />
+          </span>
+          <input
+            type="text"
+            placeholder="New canvas name"
+            aria-label="New canvas name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") createCanvas.mutate();
+            }}
+          />
+        </label>
         <button className="btn primary" onClick={() => createCanvas.mutate()} disabled={createCanvas.isPending}>
-          Create canvas
+          <IconPlus size={14} /> Create canvas
         </button>
       </div>
 

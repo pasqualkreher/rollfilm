@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconChevronDown } from "./Icons";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
@@ -13,11 +13,21 @@ interface Props {
   // pickers reusing this component pass their own, e.g. "Pick tags…").
   emptyLabel?: string;
   title?: string;
+  // Drawn before the label - pickers in a form pass one, the compact filter
+  // bars go without.
+  icon?: ReactNode;
 }
 
 // Multi-select tag filter: a compact button that opens a checkbox popover.
 // Selecting several tags narrows the grid to photos carrying all of them.
-export function TagFilter({ options, value, onChange, emptyLabel = "Any", title = "Filter by tags" }: Props) {
+export function TagFilter({
+  options,
+  value,
+  onChange,
+  emptyLabel = "Any",
+  title = "Filter by tags",
+  icon,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -71,6 +81,7 @@ export function TagFilter({ options, value, onChange, emptyLabel = "Any", title 
         title={title}
         disabled={options.length === 0}
       >
+        {icon}
         <span className="tag-filter-btn-label">{options.length === 0 ? "No tags" : label}</span>
         <span className="tag-filter-caret"><IconChevronDown size={11} /></span>
       </button>

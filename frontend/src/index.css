@@ -87,6 +87,9 @@
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  /* One height for every small control that shares a bar: .btn-sm, and the
+     chips and segmented tools that sit beside them. */
+  --control-h-sm: 24px;
   /* Stacking order, lowest to highest. */
   --z-bar: 25;
   --z-popover: 60;
@@ -1257,10 +1260,12 @@ button {
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--bg);
+  /* The same height as .btn-sm beside it; the segments stretch to fill it. */
+  height: var(--control-h-sm);
 }
 
 .segmented button {
-  padding: 4px 10px;
+  padding: 0 10px;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -1287,7 +1292,7 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 7px;
+  padding: 0 7px;
 }
 
 /* Shared text-input styling so every input (album name, Immich, etc.) matches. */
@@ -2789,13 +2794,35 @@ textarea:focus-visible {
   opacity: 1;
 }
 
-/* When a tile has both, the file-type badge keeps its corner and the remove ×
-   sits under it - the badge is always there, the × only on hover, so the
-   badge shouldn't jump around to make room for it. Keyed on the badge
-   actually preceding the ×, so album / canvas cards without one keep their ×
-   in the corner. */
-.thumb-card .badge ~ .card-remove {
-  top: 30px;
+/* A tile with a remove × (an album's photos): on hover the file-type badge
+   glides down out of the corner and the × fades and grows in where it was,
+   so the action sits in the corner while the pointer is on the tile. The
+   badge moves by transform only - nothing reflows. */
+.thumb-card.has-remove .badge {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.thumb-card.has-remove:hover .badge {
+  transform: translateY(32px);
+}
+
+.thumb-card.has-remove .card-remove {
+  transform: scale(0.8);
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background 0.1s ease;
+}
+
+.thumb-card.has-remove:hover .card-remove {
+  transform: scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thumb-card.has-remove .badge,
+  .thumb-card.has-remove .card-remove {
+    transition: opacity 120ms ease, background 0.1s ease;
+  }
 }
 
 .thumb-card .overlay-info {
@@ -3205,7 +3232,7 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 5px 9px;
+  padding: 0 9px;
 }
 
 .editor-compare-modes button:disabled {
@@ -3468,6 +3495,8 @@ input.editor-preset-select {
   align-items: center;
   justify-content: center;
   width: var(--field-action-w);
+  /* As tall as the select they trail, not .btn-sm's fixed height. */
+  height: auto;
   padding: 0;
 }
 
@@ -4119,6 +4148,19 @@ input.editor-preset-select {
   white-space: nowrap;
 }
 
+/* The album form's tag picker keeps one width whatever it says ("Tags
+   (optional)", "2 tags", a long tag name), so the name field beside it never
+   resizes. Wide enough for "Tags (optional)" next to its icon. */
+.album-create-form .tag-filter-btn {
+  width: 148px;
+  max-width: none;
+}
+
+.album-create-form .tag-filter-btn-label {
+  flex: 1;
+  text-align: left;
+}
+
 .tag-filter-caret,
 .reset-menu-caret {
   display: inline-flex;
@@ -4664,7 +4706,10 @@ input.editor-preset-select {
 
 /* Compact variant for inline secondary actions (e.g. "Clear"). */
 .btn-sm {
-  padding: 3px 8px;
+  /* A fixed height, not padding, so an icon, a word or both come out the same
+     size; a <button> centres its content vertically on its own. */
+  height: var(--control-h-sm);
+  padding: 0 8px;
   font-size: 12px;
 }
 
@@ -4728,8 +4773,14 @@ input.editor-preset-select {
 
 /* An on/off toggle that reads as "enabled" via a soft accent tint, not a heavy
    solid-blue button - so it doesn't compete with real primary actions. */
+/* Same height as .segmented, so the chip sits flush with the segmented
+   controls beside it in the filter bar. */
 .toggle-chip {
-  padding: 5px 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--control-h-sm);
+  padding: 0 11px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
@@ -5355,11 +5406,11 @@ input.editor-preset-select {
   width: 20px;
   height: 20px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 50%;
-  background: rgba(38, 38, 42, 0.42);
+  background: rgba(38, 38, 42, 0.52);
   backdrop-filter: blur(6px);
-  color: rgba(255, 255, 255, 0.88);
+  color: rgba(255, 255, 255, 0.96);
   opacity: 0;
   transition: opacity 0.12s ease, background 0.12s ease;
 }
@@ -6062,6 +6113,38 @@ input.editor-preset-select {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
+  color: var(--text);
+}
+
+/* A "New … name" field with the icon of what it creates (album, canvas)
+   inside its left edge; the icon lights up while the field has focus. */
+.name-field {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+
+/* Comes after .import-toolbar's input rule on purpose: same specificity, so
+   source order keeps the room the icon needs. */
+.name-field input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding-left: 36px;
+}
+
+.name-field-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  color: var(--text-muted);
+  pointer-events: none;
+  transition: color 120ms ease;
+}
+
+.name-field:focus-within .name-field-icon {
   color: var(--text);
 }
 
@@ -8637,6 +8720,15 @@ button.smart-card {
   max-width: none;
 }
 
+/* The chips in the canvas bars (page, paper, Export) stand between .btn-sm
+   tools and the Edit switch: the same height and type size as those. */
+.canvas-toolbar .tag-filter-btn,
+.canvas-print-export .tag-filter-btn {
+  height: var(--control-h-sm);
+  padding-block: 0;
+  font-size: 12px;
+}
+
 /* Tools: an icon with its name beside it and the explanation in the
    tooltip. Toggles get the segmented control's soft accent tint when on, so
    "active" reads the same way everywhere in the bar. */
@@ -8646,7 +8738,7 @@ button.smart-card {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 5px 9px;
+  padding: 0 9px;
   white-space: nowrap;
 }
 
@@ -8671,7 +8763,7 @@ button.smart-card {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 9px;
+  padding: 0 9px;
   white-space: nowrap;
 }
 

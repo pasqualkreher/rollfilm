@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { useTransientValue } from "../utils/transientMessage";
 import { useAppDialogs } from "./AppDialogs";
 import { Dropdown } from "./Dropdown";
-import { IconCheck, IconPlus } from "./Icons";
+import { IconAlbum, IconCanvas, IconCheck, IconPlus } from "./Icons";
 
 export interface AddToResult {
   kind: "album" | "canvas" | "selects";
@@ -158,7 +158,15 @@ export function AddToPicker({
         ]
       : []),
     { value: "h-albums", label: <span className="dropdown-group-label">Albums</span>, disabled: true },
-    ...(albums ?? []).map((a) => ({ value: `album:${a.id}`, label: a.name })),
+    ...(albums ?? []).map((a) => ({
+      value: `album:${a.id}`,
+      label: (
+        <>
+          <IconAlbum size={13} /> {a.name}
+        </>
+      ),
+      search: a.name,
+    })),
     {
       value: "new-album",
       label: (
@@ -168,7 +176,15 @@ export function AddToPicker({
       ),
     },
     { value: "h-canvas", label: <span className="dropdown-group-label">Canvas</span>, disabled: true },
-    ...(canvases ?? []).map((c) => ({ value: `canvas:${c.id}`, label: c.name })),
+    ...(canvases ?? []).map((c) => ({
+      value: `canvas:${c.id}`,
+      label: (
+        <>
+          <IconCanvas size={13} /> {c.name}
+        </>
+      ),
+      search: c.name,
+    })),
     {
       value: "new-canvas",
       label: (
