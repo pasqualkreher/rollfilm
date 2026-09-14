@@ -71,10 +71,11 @@ GROUP_FIELDS: dict[str, tuple[str, ...]] = {
 
 # Every develop field must be assigned to exactly one group - a new slider that
 # isn't grouped would silently never be suggested, so fail loudly at import
-# instead. The exceptions are compositional/spatial fields that don't transfer
-# between photos: masks (spatial regions) and frame_width (a presentation border);
-# both are deliberately left out of every group so they're never suggested.
-_UNGROUPED = {"masks", "frame_width"}
+# instead. The exceptions are fields that don't transfer between photos: masks
+# (spatial regions), frame_width (a presentation border) and the lens correction
+# (a property of the lens a photo was taken with, not of a style); all are
+# deliberately left out of every group so they're never suggested.
+_UNGROUPED = {"masks", "frame_width", *develop.LENS_KEYS}
 assert set(GROUP_FIELDS) == set(AUTO_DEVELOP_GROUP_NAMES)
 _grouped = [f for fields in GROUP_FIELDS.values() for f in fields]
 assert sorted(_grouped) == sorted(set(develop.defaults()) - _UNGROUPED), (

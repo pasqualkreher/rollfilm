@@ -60,6 +60,7 @@ from app.services.filesystem import (
     resolve_image_path,
 )
 from app.services.hashing import perceptual_hash
+from app.services import lens_profile
 from app.services.immich_sync import immich_album_names as _immich_album_names
 from app.services.borg_backup import run_backup_soon
 from app.services.immich_sync import run_immich_sync_soon, with_immich_partners
@@ -2551,6 +2552,24 @@ def _embedding_for_image(image: Image):
         except Exception:
             logger.exception("On-demand embedding generation failed for %s", image.id)
     return vector
+
+
+@router.get("/{image_id}/lens-profile")
+def get_lens_profile(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Whether the photo's file carries lens correction data (see
+    services/lens_profile.py). The editor offers the Lens profile switch only
+    when it does, and names the lens it was recorded for."""
+    image = get_owned_image(db, current_user.id, image_id)
+    try:
+        available = lens_profile.profile_for(resolve_image_path(image)) is not None
+    except Exception:
+        logger.exception("Lens profile lookup failed for %s", image_id)
+        available = False
+    return {"available": available, "lens_model": image.lens_model}
 
 
 @router.get("/{image_id}/auto-adjust", response_model=schemas.AutoAdjustOut)

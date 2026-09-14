@@ -87,7 +87,19 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     # equally thick on portrait/landscape). Compositional rather than tonal, so
     # it's excluded from auto-develop style transfer (see auto_develop.GROUP_FIELDS).
     "frame_width": (0, 0, 20, False),
+    # Lens profile correction from the correction data the camera embeds in its
+    # RAW (see services/lens_profile.py): on by default, like the camera's own
+    # JPEG. `lens_profile` is the 0/1 switch; the other two scale the geometric
+    # and the vignetting half (CA is always corrected fully while it's on).
+    "lens_profile": (1, 0, 1, False),
+    "lens_distortion": (100, 0, 100, False),
+    "lens_vignetting": (100, 0, 100, False),
 }
+
+# The keys above that belong to the lens correction. A photo with only these
+# changed still counts as edited (they must be stored), but not as *developed*:
+# see thumbnails._browsing_gain.
+LENS_KEYS: tuple[str, ...] = ("lens_profile", "lens_distortion", "lens_vignetting")
 
 # Enumerated (string) adjustments: key -> (default, allowed values).
 # Film-simulation looks live in services/film_sims.py; the value list here must
@@ -327,10 +339,10 @@ def normalize(raw: Any) -> dict[str, Any]:
 _DEFAULTS_NORM = normalize({})
 
 
-def is_neutral(adj: dict[str, Any]) -> bool:
+def is_neutral(adj: dict[str, Any], ignore: tuple[str, ...] = ()) -> bool:
     """True when the develop object has no visible effect (equals the defaults and
     carries no masks). Used to decide whether to store anything and to tag the
-    photo as edited."""
+    photo as edited. Keys in `ignore` don't count."""
     n = normalize(adj)
     # A mask counts only if it's visible, actually selects a region (has a
     # sub-mask) and carries at least one non-default local adjustment.
@@ -338,7 +350,7 @@ def is_neutral(adj: dict[str, Any]) -> bool:
         if m.get("visible", True) and m.get("sub_masks") and m.get("adjustments"):
             return False
     for k in n:
-        if k == "masks":
+        if k == "masks" or k in ignore:
             continue
         if n[k] != _DEFAULTS_NORM[k]:
             return False

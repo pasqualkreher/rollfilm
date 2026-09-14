@@ -663,6 +663,10 @@ export const api = {
     },
     // Develop suggestion learned from the user's own saved edits (CLIP k-NN
     // over edited photos). Pure suggestion - nothing is stored server-side.
+    // Whether the photo's RAW carries lens correction data the editor can apply.
+    lensProfile(id: string): Promise<{ available: boolean; lens_model: string | null }> {
+      return request(`/images/${id}/lens-profile`);
+    },
     autoAdjust(id: string): Promise<AutoAdjustResult> {
       return request(`/images/${id}/auto-adjust`);
     },

@@ -18,7 +18,7 @@ import numpy as np
 from PIL import Image as PILImage, ImageOps
 
 from app.config import settings
-from app.services import develop, develop_color, develop_effects, film_sims, masks
+from app.services import develop, develop_color, develop_effects, film_sims, lens_profile, masks
 from app.services import raw as raw_service
 
 
@@ -2415,8 +2415,10 @@ def _browsing_gain(base_gain: float, adjustments: dict | None) -> float:
     editor is authoritative: drop the browsing lift back to the un-lifted base
     (gain 1.0) so grid/lightbox match exactly what the editor showed. This is the
     deliberate consequence the user accepted - a crop-only edit on a dark raw
-    stops auto-exposing it. JPEG/PNG bases are already gain 1.0, so unaffected."""
-    if adjustments is None or develop.is_neutral(adjustments):
+    stops auto-exposing it. JPEG/PNG bases are already gain 1.0, so unaffected.
+    The lens correction settings don't count: switching the profile off isn't
+    developing the photo, and must not drop it 2-3 stops in the grid."""
+    if adjustments is None or develop.is_neutral(adjustments, ignore=develop.LENS_KEYS):
         return base_gain
     return 1.0
 
@@ -2473,6 +2475,7 @@ def generate_derivatives(
         # The un-edited display rendering, built before geometry: returned to the
         # caller so the post-import worker can feed CLIP without a second decode.
         base = PILImage.fromarray(raw_service.default_tone_to_srgb(lin, gain))
+        lin = lens_profile.correct(lin, source_path, adjustments)
         if distortion:
             lin = apply_distortion_array(lin, distortion)
         lin = apply_edits_array(lin, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
@@ -3352,8 +3355,10 @@ def _render_editor_bytes(
     # perspective, flips, distortion) the mapping from the finished frame back
     # into the base is not a plain slice, so those renders take the long way and
     # cut afterwards - correctness first; the fast path is the common one.
+    # The lens profile correction warps the whole frame as well.
+    lens_on = lens_profile.is_active(path, adjustments)
     geometry_moves_pixels = bool(
-        distortion or rotation or crop or flip_h or flip_v or straighten or persp_h or persp_v
+        lens_on or distortion or rotation or crop or flip_h or flip_v or straighten or persp_h or persp_v
     )
     early_cut: tuple[int, int, int, int] | None = None
     early_box: tuple[int, int, int, int] | None = None
@@ -3410,6 +3415,8 @@ def _render_editor_bytes(
     # A prepared tile is float32 already (and this render's own copy); the
     # whole-frame bases are float16 and convert here.
     arr = lin16.astype(np.float32, copy=False)
+    if lens_on:
+        arr = lens_profile.correct(arr, path, adjustments)
     if distortion:
         arr = apply_distortion_array(arr, distortion)
     arr = apply_edits_array(arr, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
@@ -3482,6 +3489,7 @@ def _render_editor_bytes(
     tone_key = None if (native and early_cut is None) else json.dumps(
         [image.id, mtime_ns, base_px, rotation, crop, distortion, flip_h, flip_v,
          straighten, persp_h, persp_v, browse, region, native, early_cut,
+         lens_profile.strengths(adjustments) if lens_on else None,
          list(lin16.shape[:2]) if early_cut is not None else None],
         sort_keys=True, separators=(",", ":"), default=str,
     )
@@ -3524,9 +3532,11 @@ def render_framed_base_image(
     persp_h: int = 0,
     persp_v: int = 0,
     max_px: int = EDITOR_PREVIEW_PX,
+    adjustments: dict | None = None,
 ) -> PILImage.Image:
     """The photo with its geometry applied but *no* tonal edits - the exact frame
-    a mask lives in, in its neutral rendering.
+    a mask lives in, in its neutral rendering. `adjustments` only decides the
+    lens correction (part of the geometry); None = the photo's saved edits.
 
     This is what semantic segmentation runs on. Geometry has to be applied (the
     mask is stored in the framed image's coordinates, like every other mask), but
@@ -3540,6 +3550,9 @@ def render_framed_base_image(
     path = resolve_image_path(image)
     lin16, gain = _cached_editor_base(image.id, str(path), path.stat().st_mtime_ns, max_px)
     arr = lin16.astype(np.float32)
+    arr = lens_profile.correct(
+        arr, path, adjustments if adjustments is not None else adjustments_from_image(image)
+    )
     if distortion:
         arr = apply_distortion_array(arr, distortion)
     arr = apply_edits_array(arr, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
@@ -3617,6 +3630,7 @@ def render_edited_image(
                 dims = raw_service.raw_dimensions(path)
                 half_size = bool(dims and max(dims) // 2 >= decode_px)
             lin, gain = raw_service.load_linear_base(path, half_size=half_size, max_px=decode_px)
+        lin = lens_profile.correct(lin, path, adjustments)
         if distortion:
             lin = apply_distortion_array(lin, distortion)
         lin = apply_edits_array(lin, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)

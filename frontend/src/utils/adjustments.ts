@@ -78,9 +78,18 @@ export const SCALAR_SPEC = {
   // Frame: white border width as a % of the shorter edge, composited last
   // (compositional, not tonal - lives under Transform, kept out of auto-develop).
   frame_width: { def: 0, min: 0, max: 20 },
+  // Lens profile correction from the correction data the camera embeds in its
+  // RAW (backend services/lens_profile.py): a 0/1 switch, on by default like the
+  // camera's own JPEG, and the strength of its distortion and vignetting halves.
+  // Lives under Transform, kept out of auto-develop.
+  lens_profile: { def: 1, min: 0, max: 1 },
+  lens_distortion: { def: 100, min: 0, max: 100 },
+  lens_vignetting: { def: 100, min: 0, max: 100 },
 } satisfies Record<string, ScalarDef>;
 
 export type ScalarKey = keyof typeof SCALAR_SPEC;
+
+export const LENS_KEYS = ["lens_profile", "lens_distortion", "lens_vignetting"] as const satisfies readonly ScalarKey[];
 
 // ---- Nested adjustment groups (curves / grading / calibration / masks).
 // Present in the object for round-trip preservation; Phase-1 UI only edits the
@@ -744,7 +753,8 @@ export function editedGroups(a: Adjustments, g: GeometryEditState): Record<strin
       g.perspH !== 0 ||
       g.perspV !== 0 ||
       g.distortion !== 0 ||
-      scalarIsEdited("frame_width", a.frame_width),
+      scalarIsEdited("frame_width", a.frame_width) ||
+      LENS_KEYS.some((k) => scalarIsEdited(k, a[k])),
     filmsim: a.film_sim !== "none",
     basic: a.tone_mapper !== "basic" || fieldsEdited("Basic"),
     curves: !same(a.point_curves, identityPointCurves()) || !same(a.parametric_curve, neutralParametricCurve()),

@@ -48,6 +48,8 @@ import {
   type SubMask,
   type SubMaskParams,
   type SubMaskType,
+  LENS_KEYS,
+  scalarIsEdited,
 } from "../utils/adjustments";
 import {
   PARAM_BASES,
@@ -3601,6 +3603,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     () => editedGroups(adj, { rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion }),
     [adj, rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion]
   );
+  // Whether this photo's RAW carries lens correction data - the Lens profile
+  // switch under Transform is only offered when it does.
+  const lensProfile = useQuery({
+    queryKey: ["lens-profile", image.id],
+    queryFn: () => api.images.lensProfile(image.id),
+    staleTime: Infinity,
+  });
   // A group of scalar sliders bound straight to adj[key] (Basic/Color/Details/
   // Effects control blocks - unchanged behaviour, just factored out).
   function scalarSliders(fields: FieldDef[]) {
@@ -4463,6 +4472,67 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 format={(v) => `${v}%`}
               />
             </div>
+
+            {/* Lens profile: the distortion, vignetting and colour-fringe
+                correction the camera recorded in the RAW for the mounted lens.
+                On by default - it's what the camera's own JPEG gets - and only
+                offered when the file carries the data. */}
+            {lensProfile.data?.available && (
+              <>
+                {/* A sub-heading like the Color group's, then a row shaped like
+                    a slider's head: what it is on the left, the switch where a
+                    slider shows its value. */}
+                <div className="editor-section-title">
+                  Lens correction
+                  {LENS_KEYS.some((k) => scalarIsEdited(k, adj[k])) && (
+                    <span className="editor-edited-dot" title="This group contains edits" />
+                  )}
+                </div>
+                <div className="editor-switch-row">
+                  <span className="editor-switch-text">
+                    <span>Profile correction</span>
+                    <span
+                      className="editor-switch-sub"
+                      title={`${lensProfile.data.lens_model ?? "Lens"} - correction data from the camera`}
+                    >
+                      {lensProfile.data.lens_model ?? "Correction data from the camera"}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!adj.lens_profile}
+                    aria-label="Profile correction"
+                    className={`editor-switch${adj.lens_profile ? " on" : ""}`}
+                    onClick={() => setAdj((a) => ({ ...a, lens_profile: a.lens_profile ? 0 : 1 }))}
+                    disabled={busy}
+                    title="Correct distortion, vignetting and colour fringes with the lens data stored in the RAW"
+                  />
+                </div>
+                {!!adj.lens_profile && (
+                  <div className="editor-sliders">
+                    <Slider
+                      label="Distortion correction"
+                      value={adj.lens_distortion}
+                      onChange={(v) => setAdj((a) => ({ ...a, lens_distortion: v }))}
+                      min={SCALAR_SPEC.lens_distortion.min}
+                      max={SCALAR_SPEC.lens_distortion.max}
+                      resetValue={SCALAR_SPEC.lens_distortion.def}
+                      format={(v) => `${v}%`}
+                    />
+                    <Slider
+                      label="Vignetting correction"
+                      value={adj.lens_vignetting}
+                      onChange={(v) => setAdj((a) => ({ ...a, lens_vignetting: v }))}
+                      min={SCALAR_SPEC.lens_vignetting.min}
+                      max={SCALAR_SPEC.lens_vignetting.max}
+                      resetValue={SCALAR_SPEC.lens_vignetting.def}
+                      format={(v) => `${v}%`}
+                    />
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 

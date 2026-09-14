@@ -32,7 +32,13 @@ from app.services.filesystem import VIRTUAL_PATH_MARKER, resolve_image_path
 from app.services.hashing import sha256_file
 from app.services.membership_tags import sync_membership_tags
 from app.services.raw import classify_file_type, raw_dimensions
-from app.services.thumbnails import derivative_dir, editor_recently_active, regenerate_for_image
+from app.services import lens_profile
+from app.services.thumbnails import (
+    adjustments_from_image,
+    derivative_dir,
+    editor_recently_active,
+    regenerate_for_image,
+)
 from app.services.trash import hard_delete_images
 from app.workers.queue import enqueue_post_import
 
@@ -113,12 +119,53 @@ def start_background_sync() -> None:
                 logger.info(
                     "Startup lens backfill: %d filled, %d unreachable", filled, skipped
                 )
+            # One-shot re-render for the automatic lens profile correction: the
+            # thumbnails of RAWs imported before it were rendered uncorrected.
+            # Last on purpose - it's the long one.
+            if get_setting(db, "lens_profile_derivatives_v1") != "1":
+                rendered, skipped = regenerate_lens_profile_derivatives(db, LOCAL_USER_ID)
+                if skipped == 0:
+                    set_setting(db, "lens_profile_derivatives_v1", "1")
+                logger.info(
+                    "Startup lens profile re-render: %d re-rendered, %d unreachable", rendered, skipped
+                )
         except Exception:
             logger.exception("Startup library sync failed")
         finally:
             db.close()
 
     threading.Thread(target=_run, name="startup-library-sync", daemon=True).start()
+
+
+def regenerate_lens_profile_derivatives(db: Session, owner_id: int) -> tuple[int, int]:
+    """Re-render the thumbnail/preview of every RAW photo whose file carries an
+    embedded lens profile (services/lens_profile.py) and that has the correction
+    on - derivatives rendered before the correction existed show the lens
+    uncorrected. One photo at a time, yielding to a live editing session like
+    rebuild_all_thumbnails. Returns (re-rendered, unreachable); a photo whose
+    render fails is logged and counts as done."""
+    rendered = 0
+    skipped = 0
+    raws = (
+        db.query(Image)
+        .filter(Image.owner_id == owner_id, Image.file_type == FileType.raw)
+        .all()
+    )
+    for image in raws:
+        path = resolve_image_path(image)
+        if not path.exists():
+            skipped += 1
+            continue
+        if not lens_profile.is_active(path, adjustments_from_image(image)):
+            continue
+        while editor_recently_active(_REBUILD_EDITOR_IDLE_S):
+            time.sleep(0.5)
+        try:
+            regenerate_for_image(image)
+            rendered += 1
+        except Exception:
+            logger.exception("lens profile re-render failed for %s", path)
+    return rendered, skipped
 
 
 def repair_raw_dimensions(db: Session, owner_id: int) -> tuple[int, int]:
