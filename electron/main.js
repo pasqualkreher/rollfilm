@@ -1151,8 +1151,30 @@ function createWindow() {
     mainWindow.on(ev, () => mainWindow?.webContents.send("pm:fullscreen", true));
   }
   for (const ev of ["leave-full-screen", "leave-html-full-screen"]) {
-    mainWindow.on(ev, () => mainWindow?.webContents.send("pm:fullscreen", false));
+    mainWindow.on(ev, () => {
+      mainWindow?.webContents.send("pm:fullscreen", false);
+      reapplyWindowButtons();
+    });
   }
+}
+
+// Whether the traffic lights should show (focus mode hides them). Kept here
+// because macOS drops a visibility change made while the window is still in
+// fullscreen or animating out of it - leaving the canvas view's focus mode
+// does exactly that - and the lights stayed gone while the top bar kept
+// their inset. So the wish is applied again once fullscreen has ended, and
+// once more after the exit animation has settled.
+let windowButtonsVisible = true;
+
+function applyWindowButtons() {
+  if (process.platform === "darwin" && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setWindowButtonVisibility(windowButtonsVisible);
+  }
+}
+
+function reapplyWindowButtons() {
+  applyWindowButtons();
+  setTimeout(applyWindowButtons, 400);
 }
 
 // "Show in Finder / Explorer": selects the file in the OS file manager. A
@@ -1177,9 +1199,8 @@ ipcMain.handle("pm:reveal-file", async (_event, filePath) => {
 // Focus mode (F) hides the app's top bar; the traffic lights would float over
 // the picture, so they go with it. macOS only - a no-op elsewhere.
 ipcMain.handle("pm:set-window-buttons", (_event, visible) => {
-  if (process.platform === "darwin" && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.setWindowButtonVisibility(Boolean(visible));
-  }
+  windowButtonsVisible = Boolean(visible);
+  applyWindowButtons();
 });
 ipcMain.handle("pm:is-full-screen", () => Boolean(mainWindow?.isFullScreen()));
 

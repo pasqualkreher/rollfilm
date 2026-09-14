@@ -21,11 +21,33 @@ initFont();
 // lights sit inside the app's top bar (index.css, data-titlebar rules). The
 // attribute goes on before React renders so the bar never paints without its
 // inset; fullscreen hides the lights, so the inset follows data-fullscreen.
+//
+// Fullscreen is read two ways and either one counts: the shell's word over
+// IPC (enter/leave-full-screen), and the window itself - in fullscreen it is
+// exactly the screen's size, with no menu bar left over, and Chromium
+// reports the display mode as fullscreen. The shell's events have been seen
+// to miss (the bar kept its inset in fullscreen), and the page can tell on
+// its own.
 if (window.photoManager?.platform === "darwin") {
   document.documentElement.setAttribute("data-titlebar", "inset");
-  const setFs = (on: boolean) => document.documentElement.toggleAttribute("data-fullscreen", on);
+  let shellSaysFullscreen = false;
+  const fillsScreen = () =>
+    window.innerWidth === window.screen.width && window.innerHeight === window.screen.height;
+  const displayModeFullscreen = window.matchMedia("(display-mode: fullscreen)");
+  const apply = () =>
+    document.documentElement.toggleAttribute(
+      "data-fullscreen",
+      shellSaysFullscreen || displayModeFullscreen.matches || fillsScreen()
+    );
+  const setFs = (on: boolean) => {
+    shellSaysFullscreen = on;
+    apply();
+  };
   window.photoManager.isFullScreen?.().then(setFs).catch(() => {});
   window.photoManager.onFullScreen?.(setFs);
+  window.addEventListener("resize", apply);
+  displayModeFullscreen.addEventListener("change", apply);
+  apply();
 }
 
 const queryClient = new QueryClient({
