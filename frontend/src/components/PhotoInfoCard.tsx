@@ -185,7 +185,7 @@ function InfoCard({
 
 /**
  * The grid's per-photo info card: a small "i" in each tile's top-left corner
- * shows that photo's details - EXIF, place, its written description, tags and
+ * shows that photo's details - EXIF, place, its written notes, tags and
  * albums. Text only; the photo itself is on the grid right underneath.
  *
  * A hover affordance: rest on the "i" for a moment and the card appears, move

@@ -770,7 +770,7 @@ const CHAPTERS: Chapter[] = [
                 name deletes the photo.
               </li>
               <li>
-                <strong>Description:</strong> a free-text box, saved when you click out of it. It
+                <strong>Notes:</strong> a free-text box, saved when you click out of it. It
                 lives in the database like everything else; the file is not rewritten. While you
                 type in it, the keyboard belongs to the box, not to paging.
               </li>

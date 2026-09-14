@@ -581,7 +581,7 @@ export function ImageDetail() {
       // Only this photo's row: the library index doesn't carry the note, and
       // invalidating ["images"] would refetch the whole library for nothing.
       queryClient.invalidateQueries({ queryKey: ["image", activeId] });
-      setDescNote(next ? "Description saved." : "Description cleared.");
+      setDescNote(next ? "Notes saved." : "Notes cleared.");
     } catch (e) {
       setDescNote(errorText(e));
     } finally {
@@ -1044,13 +1044,13 @@ export function ImageDetail() {
             <ColorLabelPicker value={image.color_label} onChange={setColor} />
           </div>
           <div className="detail-section">
-            <div className="detail-section-label">Description</div>
+            <div className="detail-section-label">Notes</div>
             <textarea
               className="detail-description"
               value={descDraft}
               disabled={descBusy}
-              placeholder="Add a description…"
-              aria-label="Description"
+              placeholder="Add notes…"
+              aria-label="Notes"
               onChange={(e) => setDescDraft(e.target.value)}
               onBlur={saveDescription}
               onKeyDown={(e) => {
