@@ -1089,8 +1089,11 @@ export const api = {
         }),
       });
     },
-    discard(id: string): Promise<void> {
-      return request(`/import/sessions/${id}`, { method: "DELETE" });
+    // keepFolder leaves a copy session's collection folder on disk.
+    discard(id: string, keepFolder = false): Promise<void> {
+      return request(`/import/sessions/${id}${keepFolder ? "?keep_folder=true" : ""}`, {
+        method: "DELETE",
+      });
     },
   },
   search: {

@@ -410,7 +410,7 @@ def test_a_copy_session_collects_in_its_own_folder_and_cleans_up(db, dirs, monke
     # per session, named after the source.
     folder = Path(session.staging_dir)
     assert folder.parent == settings.library_root / "Import"
-    assert folder.name.startswith("DCIM ")
+    assert folder.name == "DCIM"
     rows = db.query(ImportStagedFile).order_by(ImportStagedFile.original_filename).all()
     assert [r.staged_path for r in rows] == [str(folder / "A.JPG"), str(folder / "B.JPG")]
     assert (folder / "A.JPG").read_bytes() == (card / "A.JPG").read_bytes()
@@ -461,6 +461,25 @@ def test_the_collection_folder_can_live_elsewhere_and_dies_with_a_discard(db, di
     assert not folder.exists() and elsewhere.exists()
 
 
+def test_closing_a_copy_session_can_keep_its_collection_folder(db, dirs, monkeypatch):
+    card = _folder(dirs, "card")
+    monkeypatch.setattr(routes, "_free_disk_bytes", lambda *a: 10**15)
+
+    session = routes.stage_local_paths(
+        schemas.StagePathsRequest(paths=[str(card / "A.JPG")], source_label="DCIM", mode="copy"),
+        db,
+        _User(),
+    )
+    folder = Path(session.staging_dir)
+
+    routes.discard_session(session.id, keep_folder=True, db=db, current_user=_User())
+    db.expire_all()
+    assert db.get(ImportSession, session.id).status == ImportSessionStatus.discarded
+    # The copies stay; only the review's derivatives are gone.
+    assert (folder / "A.JPG").read_bytes() == (card / "A.JPG").read_bytes()
+    assert not (settings.import_staging_root / session.id).exists()
+
+
 def test_a_missing_collection_base_is_refused(db, dirs):
     card = _folder(dirs, "card")
     with pytest.raises(routes.HTTPException) as refused:
@@ -482,3 +501,39 @@ def test_a_session_can_be_renamed(db, dirs):
     assert renamed.source_path == "Norway trip"
     with pytest.raises(routes.HTTPException):
         routes.rename_import_session(session.id, schemas.ImportSessionUpdate(name="  "), db, _User())
+
+
+def test_renaming_a_copy_session_renames_its_folder(db, dirs, monkeypatch):
+    card = _folder(dirs, "card")
+    monkeypatch.setattr(routes, "_free_disk_bytes", lambda *a: 10**15)
+
+    def stage(label):
+        return routes.stage_local_paths(
+            schemas.StagePathsRequest(paths=[str(card / "A.JPG")], source_label=label, mode="copy"),
+            db,
+            _User(),
+        )
+
+    first, second = stage("DCIM"), stage("DCIM")
+    imports = settings.library_root / "Import"
+    assert Path(first.staging_dir) == imports / "DCIM"
+    assert Path(second.staging_dir) == imports / "DCIM 2"
+
+    def rename(name):
+        return routes.rename_import_session(second.id, schemas.ImportSessionUpdate(name=name), db, _User())
+
+    # Not while the copies are still being analyzed (stubbed out here).
+    with pytest.raises(routes.HTTPException) as busy:
+        rename("Norway")
+    assert busy.value.status_code == 409
+    import_pipeline._progress_done(second.id)
+    for f in db.get(ImportSession, second.id).staged_files:
+        f.processed = True
+    db.commit()
+
+    folder = Path(rename("Norway").staging_dir)
+    assert folder == imports / "Norway" and not (imports / "DCIM 2").exists()
+    [row] = db.get(ImportSession, second.id).staged_files
+    assert Path(row.staged_path) == folder / "A.JPG" and (folder / "A.JPG").exists()
+    # A name another session's folder has gets a number.
+    assert Path(rename("DCIM").staging_dir) == imports / "DCIM 2"

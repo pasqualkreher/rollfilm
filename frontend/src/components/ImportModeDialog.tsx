@@ -56,7 +56,7 @@ export function ImportModeDialog({
               autoFocus
             />
           </label>
-          <p className="settings-desc" style={{ margin: 0 }}>Where should these photos live?</p>
+          <p className="settings-desc" style={{ margin: 0 }}>How do you want to import?</p>
           <div className="copy-kind-choice" role="radiogroup" aria-label="How to import">
             <button
               type="button"
@@ -69,12 +69,11 @@ export function ImportModeDialog({
                 <IconDisk size={16} />
               </span>
               <span className="copy-kind-text">
-                <strong>Collect and copy into the library</strong>
+                <strong>Collect and copy to…</strong>
                 <span>
-                  Every card or folder you add to this session is copied into one collection folder
-                  of its own, so the cards can be put away as soon as they are read. The photos you
-                  keep are sorted into your library by date; the collection folder is removed when
-                  the session closes. The originals are not changed.
+                  The photos are copied into a folder first, so you can put the card away right
+                  away. The ones you keep go into your library. When you're done, you decide whether
+                  to keep the folder.
                 </span>
               </span>
             </button>
@@ -91,10 +90,8 @@ export function ImportModeDialog({
               <span className="copy-kind-text">
                 <strong>Leave them where they are</strong>
                 <span>
-                  Nothing is copied. The photos you keep are added from their current location,
-                  and their folders are listed under External photo sources. Collect from as many
-                  folders as you like in one session. For folders that stay put - an archive, a
-                  NAS - not for a memory card.
+                  Nothing is copied. The photos you keep are added from where they are. Good for an
+                  archive or a NAS, not for a memory card.
                 </span>
               </span>
             </button>
@@ -111,7 +108,7 @@ export function ImportModeDialog({
                 <button
                   type="button"
                   className="btn btn-slim"
-                  title="Create this session's collection folder somewhere else, e.g. on a faster or bigger disk"
+                  title="Put the folder somewhere else, e.g. on a bigger disk"
                   onClick={pickFolder}
                 >
                   Choose folder…
@@ -122,7 +119,7 @@ export function ImportModeDialog({
                   type="button"
                   className="btn btn-slim"
                   onClick={() => setStagingFolder(null)}
-                  title="Collect inside the library's Import folder instead"
+                  title="Use the Import folder in your library instead"
                 >
                   Use library folder
                 </button>
@@ -131,7 +128,7 @@ export function ImportModeDialog({
           )}
           <label className="filter-field filter-field-inline">
             <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />{" "}
-            Don't ask again (change this under Settings → Library)
+            Don't ask again (you can change this in Settings)
           </label>
           <div className="pair-delete-actions">
             <button

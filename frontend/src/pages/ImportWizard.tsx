@@ -14,7 +14,7 @@ import { ImportLightbox } from "../components/ImportLightbox";
 import { ImportReviewGrid, dayLabel, isDuplicate } from "../components/ImportReviewGrid";
 import { ExternalSources } from "../components/ExternalSources";
 import { ImportLibrary } from "../components/ImportLibrary";
-import { ImportSessions } from "../components/ImportSessions";
+import { ImportSessions, askToCloseSession } from "../components/ImportSessions";
 import { ImportModeDialog } from "../components/ImportModeDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
@@ -32,7 +32,15 @@ import {
   updateReviewState,
   type ReviewScrollAnchor,
 } from "../utils/importReviewState";
-import { IconCheck, IconChevronDown, IconFolder, IconImage, IconImport } from "../components/Icons";
+import {
+  IconCheck,
+  IconChevronDown,
+  IconFolder,
+  IconImage,
+  IconBookmark,
+  IconImport,
+  IconLeave,
+} from "../components/Icons";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 
@@ -466,7 +474,8 @@ export function ImportWizard() {
   // or resetting them, so it's clear the app is working and nothing else can be
   // clicked into the half-deleted session meanwhile.
   const discard = useMutation({
-    mutationFn: () => withWait("Closing this session…", () => api.import.discard(sessionId!)),
+    mutationFn: (keepFolder: boolean) =>
+      withWait("Closing this session…", () => api.import.discard(sessionId!, keepFolder)),
     // Always reset locally, even if the delete itself failed (e.g. the
     // session was already committed/discarded) - the point of Discard is to
     // get back to a clean import screen, and a stale server-side session is
@@ -1360,7 +1369,7 @@ export function ImportWizard() {
           disabled={commit.isPending || discard.isPending}
           title="Close this session. Your selection and ratings are kept, and you can continue it from the Import page."
         >
-          Continue later
+          <IconBookmark size={14} /> Continue later
         </button>
         <button
           className="btn"
@@ -1368,23 +1377,11 @@ export function ImportWizard() {
             // Throwing away a whole reviewed batch (ratings, selection work)
             // deserves a confirmation - and the dialog doubles as the place to
             // reassure that the original files are untouched.
-            if (
-              await dialogs.confirm({
-                title: `Close the session “${sourceLabel}”?`,
-                message:
-                  (importedCount > 0
-                    ? `The ${importedCount.toLocaleString()} photo(s) already added stay in your library. `
-                    : "Nothing has been added to your library. ") +
-                  "Everything else in this session is removed, with its collection folder. The original files stay where they are.",
-                confirmLabel: "Close session",
-                danger: true,
-              })
-            ) {
-              discard.mutate();
-            }
+            const answer = await askToCloseSession(dialogs, sourceLabel, importedCount, sessionFolder);
+            if (answer) discard.mutate(answer.keepFolder);
           }}
           disabled={discard.isPending}
-          title="Close this session. Photos already added stay in your library; everything else and its collection folder are removed."
+          title="Close this session. Photos already added stay in your library; a collection folder can be kept or deleted."
         >
           {discard.isPending ? (
             <>
@@ -1392,7 +1389,9 @@ export function ImportWizard() {
               Closing…
             </>
           ) : (
-            "Close session"
+            <>
+              <IconLeave size={14} /> Close session
+            </>
           )}
         </button>
       </div>

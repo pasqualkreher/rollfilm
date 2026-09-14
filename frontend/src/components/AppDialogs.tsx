@@ -29,6 +29,12 @@ interface ConfirmOptions {
   danger?: boolean;
 }
 
+// A confirm with a second way through: its extra button sits between Cancel
+// and the main action.
+interface ChooseOptions extends ConfirmOptions {
+  altLabel: string;
+}
+
 interface AlertOptions {
   title?: string;
   message: string;
@@ -53,12 +59,17 @@ interface DialogRequest {
   placeholder?: string;
   initial?: string;
   resolve: (ok: boolean) => void;
+  // Choose only: the extra button and what it resolves.
+  altLabel?: string;
+  onAlt?: () => void;
   // Prompt only: where the typed text lands when OK resolves true.
   resolveText?: (text: string | null) => void;
 }
 
 interface DialogApi {
   confirm: (opts: ConfirmOptions) => Promise<boolean>;
+  // Resolves "confirm" for the main action, "alt" for the extra one, null on cancel.
+  choose: (opts: ChooseOptions) => Promise<"confirm" | "alt" | null>;
   alert: (opts: AlertOptions) => Promise<void>;
   // App-skinned window.prompt: resolves the typed text, or null on cancel.
   // (window.prompt is a no-op in Electron, so this is the only way to ask
@@ -107,9 +118,29 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     [show]
   );
 
+  const closeAlt = useCallback(() => {
+    const cur = currentRef.current;
+    if (!cur?.onAlt) return;
+    cur.onAlt();
+    show(queueRef.current.shift() ?? null);
+  }, [show]);
+
   const confirm = useCallback(
     (opts: ConfirmOptions) =>
       new Promise<boolean>((resolve) => request({ ...opts, kind: "confirm", resolve })),
+    [request]
+  );
+
+  const choose = useCallback(
+    (opts: ChooseOptions) =>
+      new Promise<"confirm" | "alt" | null>((resolve) =>
+        request({
+          ...opts,
+          kind: "confirm",
+          resolve: (ok) => resolve(ok ? "confirm" : null),
+          onAlt: () => resolve("alt"),
+        })
+      ),
     [request]
   );
 
@@ -160,7 +191,10 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [current, close]);
 
-  const api = useMemo(() => ({ confirm, alert, prompt }), [confirm, alert, prompt]);
+  const api = useMemo(
+    () => ({ confirm, choose, alert, prompt }),
+    [confirm, choose, alert, prompt]
+  );
 
   return (
     <DialogContext.Provider value={api}>
@@ -200,6 +234,11 @@ export function DialogProvider({ children }: { children: ReactNode }) {
                 {current.kind !== "alert" && (
                   <button className="btn" onClick={() => close(false)}>
                     {current.cancelLabel ?? "Cancel"}
+                  </button>
+                )}
+                {current.altLabel && (
+                  <button className="btn" onClick={closeAlt}>
+                    {current.altLabel}
                   </button>
                 )}
                 <button

@@ -762,6 +762,46 @@ export function IconReveal(props: IconProps) {
   );
 }
 
+// A price tag with its eyelet - photo tags.
+export function IconTag(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.75 3.75v3.6a1 1 0 0 0 .3.7l5.4 5.4a1 1 0 0 0 1.4 0l3.6-3.6a1 1 0 0 0 0-1.4l-5.4-5.4a1 1 0 0 0-.7-.3h-3.6a1 1 0 0 0-1 1z" />
+      <circle cx="5.75" cy="5.75" r="0.9" fill="currentColor" strokeWidth={1} />
+    </svg>
+  );
+}
+
+// A solid play mark in a ring - pick a paused import session back up.
+export function IconResume(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="8" cy="8" r="5.75" />
+      <path d="M6.9 5.9v4.2L10.2 8z" fill="currentColor" strokeWidth={1} />
+    </svg>
+  );
+}
+
+// A bookmark ribbon - keep your place and come back to it later.
+export function IconBookmark(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M4.5 2.75h7a.75.75 0 0 1 .75.75v9.25L8 10.1l-4.25 2.65V3.5a.75.75 0 0 1 .75-.75z" />
+    </svg>
+  );
+}
+
+// An arrow walking out through a door frame - end a session for good.
+export function IconLeave(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M9.25 2.75h-4.5a1 1 0 0 0-1 1v8.5a1 1 0 0 0 1 1h4.5" />
+      <path d="M7 8h6.25" />
+      <path d="M10.75 5.5 13.25 8l-2.5 2.5" />
+    </svg>
+  );
+}
+
 // A cloud with an arrow going up into it - upload to a server (Immich).
 export function IconCloudUp(props: IconProps) {
   return (

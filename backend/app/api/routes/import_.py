@@ -41,6 +41,7 @@ from app.services.import_pipeline import (
     get_import_progress,
     render_review_derivatives,
     render_staged_full,
+    session_has_active_work,
     stage_uploaded_files,
     staged_demosaic_path,
     staged_file_path,
@@ -257,12 +258,27 @@ def _scan_importable(root: Path) -> list[schemas.ScannedFileOut]:
     return files
 
 
-def _session_folder(base: str | None, label: str, session_id: str) -> Path:
+def _folder_name(label: str) -> str:
+    return "".join(c if c.isalnum() or c in " -_." else "_" for c in label).strip(" .") or "Import"
+
+
+def _unused_folder(root: Path, label: str, current: Path | None = None) -> Path:
+    """`root/<label>`, or `<label> 2`, `<label> 3`... while that name is taken -
+    several sessions from the same card never share a folder. `current` is the
+    folder being renamed, which doesn't count as taking its own name."""
+    name = _folder_name(label)
+    folder, n = root / name, 1
+    while folder.exists() and not (current is not None and folder.samefile(current)):
+        n += 1
+        folder = root / f"{name} {n}"
+    return folder
+
+
+def _session_folder(base: str | None, label: str) -> Path:
     """Create the collection folder of a new copy session: a folder of its own
     under `base` - the chosen folder, or "Import" inside the library folder by
-    default. Every card added to the session is copied in here; the folder is
-    removed when the session closes. Named after the source plus a bit of the
-    id, so several sessions from the same card never share a folder."""
+    default - named like the session. Every card added to the session is copied
+    in here; closing the session keeps or deletes it, as the user chooses."""
     if base and base.strip():
         root = Path(base.strip())
         if not root.is_absolute() or not root.is_dir():
@@ -274,8 +290,7 @@ def _session_folder(base: str | None, label: str, session_id: str) -> Path:
             raise HTTPException(status_code=400, detail="That folder is the app's own data area.")
     else:
         root = settings.library_root / "Import"
-    safe = "".join(c if c.isalnum() or c in " -_." else "_" for c in label).strip() or "Import"
-    folder = root / f"{safe} {session_id[:8]}"
+    folder = _unused_folder(root, label)
     try:
         folder.mkdir(parents=True, exist_ok=False)
     except OSError as exc:
@@ -357,7 +372,7 @@ def stage_local_paths(
         mode = ImportMode(payload.mode)
         session_id = str(uuid.uuid4())
         staging_dir = (
-            _session_folder(payload.staging_folder, payload.source_label, session_id)
+            _session_folder(payload.staging_folder, payload.source_label)
             if mode == ImportMode.copy
             else None
         )
@@ -618,16 +633,44 @@ def rename_import_session(
     current_user: User = Depends(get_current_user),
 ):
     """Give the session a name of the user's own ("Norway trip") in place of
-    the source folder's name it was opened with. The collection folder on
-    disk keeps its name - it is tied to the session id, not the label."""
+    the source folder's name it was opened with. A copy session's collection
+    folder is renamed with it."""
     session = get_owned_import_session(db, current_user.id, session_id)
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="A session needs a name")
+    if session.staging_dir:
+        _rename_collection_folder(session, name)
     session.source_path = name
     db.commit()
     db.refresh(session)
     return session
+
+
+def _rename_collection_folder(session: ImportSession, name: str) -> None:
+    """Move the collection folder to the session's new name, next to where it
+    is. The staged rows record their copies by absolute path, so they move
+    with it (the caller commits)."""
+    old = Path(session.staging_dir)
+    if not old.is_dir():
+        return
+    new = _unused_folder(old.parent, name, current=old)
+    if new == old:
+        return
+    if session_has_active_work(session):
+        raise HTTPException(
+            status_code=409,
+            detail="This session is still copying or analyzing photos. Rename it once that has finished.",
+        )
+    try:
+        old.rename(new)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not rename the folder to “{new.name}”: {exc}")
+    for f in session.staged_files:
+        path = Path(f.staged_path)
+        if path.is_absolute() and path.is_relative_to(old):
+            f.staged_path = str(new / path.relative_to(old))
+    session.staging_dir = str(new)
 
 
 @router.get("/sessions/{session_id}/files", response_model=list[schemas.StagedFileOut])
@@ -982,9 +1025,12 @@ def import_session_progress(
 
 @router.delete("/sessions/{session_id}", status_code=204)
 def discard_session(
-    session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    session_id: str,
+    keep_folder: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     session = get_owned_import_session(db, current_user.id, session_id)
     if session.status != ImportSessionStatus.staging:
         raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
-    discard_import_session(db, session)
+    discard_import_session(db, session, keep_folder=keep_folder)

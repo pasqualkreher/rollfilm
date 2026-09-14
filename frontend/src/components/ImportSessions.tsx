@@ -4,7 +4,7 @@ import type { ImportSessionSummary } from "../api/types";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "./AppDialogs";
 import { useWait } from "../state/wait";
-import { IconRename } from "./Icons";
+import { IconFolder, IconLeave, IconRename, IconResume } from "./Icons";
 
 function lastWorkedOn(s: ImportSessionSummary): string {
   return new Date(s.updated_at ?? s.created_at).toLocaleString(undefined, {
@@ -15,6 +15,43 @@ function lastWorkedOn(s: ImportSessionSummary): string {
 
 function plural(n: number, one: string, many: string): string {
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
+}
+
+// Closing a session ends it for good: what was added stays in the library, the
+// review goes. A copy session's collection folder is the user's call - kept
+// with the copies that weren't added, or deleted with them. Null when the user
+// backs out.
+export async function askToCloseSession(
+  dialogs: ReturnType<typeof useAppDialogs>,
+  label: string,
+  importedCount: number,
+  collectionFolder: string | null
+): Promise<{ keepFolder: boolean } | null> {
+  const title = `Close the session “${label}”?`;
+  const added =
+    importedCount > 0
+      ? `The ${plural(importedCount, "photo", "photos")} you added stay in your library. `
+      : "Nothing was added to your library. ";
+  if (!collectionFolder) {
+    const ok = await dialogs.confirm({
+      title,
+      message: added + "Your original files are not touched.",
+      confirmLabel: "Close session",
+      danger: true,
+    });
+    return ok ? { keepFolder: false } : null;
+  }
+  const choice = await dialogs.choose({
+    title,
+    message:
+      added +
+      `Keep the folder ${collectionFolder} with the rest of the copies, or delete it? ` +
+      "Your original files are not touched.",
+    altLabel: "Keep folder",
+    confirmLabel: "Delete folder",
+    danger: true,
+  });
+  return choice === null ? null : { keepFolder: choice === "alt" };
 }
 
 // Import sessions live until the user ends them - a card culled a hundred
@@ -35,22 +72,11 @@ export function ImportSessions() {
 
   if (!sessions || sessions.length === 0) return null;
 
-  // Closing a session ends it for good: what was added stays in the library,
-  // the rest - the review, and the collection folder with its copies - goes.
   async function close(s: ImportSessionSummary) {
-    const confirmed = await dialogs.confirm({
-      title: `Close the session “${s.source_path}”?`,
-      message:
-        (s.imported_count > 0
-          ? `The ${plural(s.imported_count, "photo", "photos")} already added stay in your library. `
-          : "Nothing has been added to your library. ") +
-        "Everything else in this session is removed, with its collection folder. The original files stay where they are.",
-      confirmLabel: "Close session",
-      danger: true,
-    });
-    if (!confirmed) return;
+    const answer = await askToCloseSession(dialogs, s.source_path, s.imported_count, s.staging_dir);
+    if (!answer) return;
     try {
-      await withWait("Closing this session…", () => api.import.discard(s.id));
+      await withWait("Closing this session…", () => api.import.discard(s.id, answer.keepFolder));
     } finally {
       queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
     }
@@ -64,7 +90,15 @@ export function ImportSessions() {
     });
     const trimmed = next?.trim();
     if (!trimmed || trimmed === s.source_path) return;
-    await api.import.rename(s.id, trimmed);
+    try {
+      // Renames a copy session's collection folder too.
+      await api.import.rename(s.id, trimmed);
+    } catch (e) {
+      await dialogs.alert({
+        title: "Could not rename this session",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
     queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
   }
 
@@ -116,9 +150,12 @@ export function ImportSessions() {
                   </span>
                 )}
                 {s.sources.length > 0 && (
+                  // Said outright: once the session has a name of its own, a bare
+                  // folder name here read like a leftover second title.
                   <span className="source-meta">
+                    <IconFolder size={12} /> {s.sources.length === 1 ? "Source: " : "Sources: "}
                     {s.sources.map((src, i) => (
-                      <span key={src.id}>
+                      <span key={src.id} title={src.current_root ?? src.root}>
                         {i > 0 && " · "}
                         {src.label}
                         {!src.available
@@ -142,7 +179,7 @@ export function ImportSessions() {
                       : "Open this session where you left off"
                   }
                 >
-                  Continue
+                  <IconResume size={14} /> Continue
                 </button>
                 <button
                   className="btn btn-sm"
@@ -155,11 +192,11 @@ export function ImportSessions() {
                 </button>
                 <button
                   className="btn btn-sm quiet-danger"
-                  title="Close this session. Photos already added stay in your library; everything else and its collection folder are removed."
+                  title="Close this session. Photos already added stay in your library; a collection folder can be kept or deleted."
                   onClick={() => close(s)}
                   disabled={isUploading}
                 >
-                  Close session
+                  <IconLeave size={14} /> Close session
                 </button>
               </div>
             </div>

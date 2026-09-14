@@ -979,6 +979,20 @@ def has_active_import_work() -> bool:
 register_import_activity_probe(has_active_import_work)
 
 
+def session_has_active_work(session: ImportSession) -> bool:
+    """Whether this session is copying, analyzing or committing right now -
+    its collection folder must not move while that work reads from it."""
+    if any(not f.processed for f in session.staged_files):
+        return True
+    with _progress_lock:
+        p = _progress.get(session.id)
+        if p is None:
+            return False
+        if p["phase"] == "staging":
+            return p["copied"] < p["total"] or p["processed"] < p["total"]
+        return p["phase"] == "commit" and p["processed"] < p["total"]
+
+
 def get_import_progress(session_id: str) -> dict | None:
     """Live progress for the given import session, or None if nothing is (or was
     recently) running. `eta_seconds` is a rolling estimate from the observed
@@ -1745,20 +1759,23 @@ def session_is_exhausted(session: ImportSession) -> bool:
     return True
 
 
-def discard_import_session(db: Session, session: ImportSession) -> None:
+def discard_import_session(db: Session, session: ImportSession, keep_folder: bool = False) -> None:
+    """Close the session for good. `keep_folder` leaves a copy session's
+    collection folder on disk with whatever wasn't imported from it - the user
+    asked for it when closing; the review itself goes either way."""
     # Flip the status first: in-flight background analysis jobs re-check it
     # before touching the row, so they turn into no-ops instead of racing the
     # rmtree below.
     session.status = ImportSessionStatus.discarded
     db.commit()
-    _remove_session_folders(session)
+    _remove_session_folders(session, keep_collection=keep_folder)
     _drop_session_state(session.id)
 
 
-def _remove_session_folders(session: ImportSession) -> None:
+def _remove_session_folders(session: ImportSession, keep_collection: bool = False) -> None:
     """A closed session leaves nothing behind: its review derivatives in the
-    hidden staging area, and its collection folder (whatever wasn't imported
-    from it is gone with it - that is what closing the session means)."""
+    hidden staging area, and - unless the user chose to keep it - its
+    collection folder with whatever wasn't imported from it."""
     shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
-    if session.staging_dir:
+    if session.staging_dir and not keep_collection:
         shutil.rmtree(session.staging_dir, ignore_errors=True)
