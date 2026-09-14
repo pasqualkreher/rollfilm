@@ -825,16 +825,28 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // scaled up or down to fill the box's content area, the same fit the photo
   // view gives its photo (useImageZoomPan), so a picture shown here is the
   // size it was there.
-  function fitIntoStage(pxW: number, pxH: number): { w: string; h: string } | null {
+  // `content` is the box's content size when the caller already has it (the
+  // ResizeObserver's contentRect) - then nothing needs measuring.
+  function fitIntoStage(
+    pxW: number,
+    pxH: number,
+    content?: { width: number; height: number }
+  ): { w: string; h: string } | null {
     const box = stageMainRef.current;
     if (!box || !pxW || !pxH) return null;
     // Fit into the box's CONTENT area: getBoundingClientRect includes the
     // box's padding, so fitting against it pressed the photo flush against
     // the frame's edges instead of leaving the padding visible.
-    const rect = box.getBoundingClientRect();
-    const cs = getComputedStyle(box);
-    let width = rect.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-    const height = rect.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    let width: number;
+    let height: number;
+    if (content) {
+      ({ width, height } = content);
+    } else {
+      const rect = box.getBoundingClientRect();
+      const cs = getComputedStyle(box);
+      width = rect.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      height = rect.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    }
     if (width < 2 || height < 2) return null;
     // Side by side puts two panes of equal size in this one box.
     if (pairRef.current) width = Math.max(2, (width - PAIR_GAP) / 2);
@@ -845,7 +857,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     return { w: `${pxW * s}px`, h: `${pxH * s}px` };
   }
 
-  function fitCanvasToStage() {
+  function fitCanvasToStage(content?: { width: number; height: number }) {
     // The placeholder (the photo view's own preview, shown until the first
     // render lands) is fitted the same way, so opening the editor leaves the
     // photo exactly where the photo view had it - and the render then takes
@@ -858,8 +870,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       // natural size. The stored shape is the original's; after a crop the
       // onLoad refit corrects it a frame later.
       const size = placeholder.naturalWidth
-        ? fitIntoStage(placeholder.naturalWidth, placeholder.naturalHeight)
-        : fitIntoStage(image.width ?? 0, image.height ?? 0);
+        ? fitIntoStage(placeholder.naturalWidth, placeholder.naturalHeight, content)
+        : fitIntoStage(image.width ?? 0, image.height ?? 0, content);
       if (size) {
         placeholder.style.width = size.w;
         placeholder.style.height = size.h;
@@ -867,7 +879,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     }
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const size = fitIntoStage(canvas.width, canvas.height);
+    const size = fitIntoStage(canvas.width, canvas.height, content);
     if (!size) return;
     const { w, h } = size;
     canvas.style.width = w;
@@ -892,21 +904,32 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     // A refit changes how big the photo is shown, and therefore how much
     // resolution it needs - a wider window (or a move to a hi-dpi screen) can
     // leave the settled frame upscaled. Re-settle so it never stays soft.
-    // Coalesced to one refit per frame: the panel's slide and a window drag
-    // fire this many times a frame, and each refit is a forced layout
-    // (getBoundingClientRect + getComputedStyle).
+    // Only worth a render if the new fit actually leaves the photo stretched -
+    // this fires on every accordion open and window-drag tick too (and the
+    // settle is debounced, so a slide asks for one render at its end).
+    const settleIfUpscaled = () => {
+      if (isUpscaled()) scheduleSettleRef.current();
+    };
+    // The observer refits right away, from the content size it was handed:
+    // no measuring, so no forced layout, and the new size lands in the same
+    // frame as the layout that caused it - the photo tracks the panel's slide
+    // frame for frame, as the photo view's does (useImageZoomPan).
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[entries.length - 1]?.contentRect;
+      fitCanvasToStage(rect ? { width: rect.width, height: rect.height } : undefined);
+      settleIfUpscaled();
+    });
+    // A window resize carries no size, so it measures - coalesced to one
+    // refit per frame, as a window drag fires many times a frame.
     let raf = 0;
     const onResize = () => {
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
         fitCanvasToStage();
-        // Only worth a render if the new fit actually leaves the photo stretched -
-        // this fires on every accordion open and window-drag tick too.
-        if (isUpscaled()) scheduleSettleRef.current();
+        settleIfUpscaled();
       });
     };
-    const ro = new ResizeObserver(onResize);
     ro.observe(box);
     window.addEventListener("resize", onResize);
     return () => {
@@ -3773,7 +3796,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               src={placeholderUrl}
               alt=""
               draggable={false}
-              onLoad={fitCanvasToStage}
+              onLoad={() => fitCanvasToStage()}
               onError={() => setPlaceholderFailed(true)}
             />
           ) : (

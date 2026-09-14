@@ -3064,16 +3064,16 @@ textarea:focus-visible {
    photo view's panel collapses (.detail-panel--collapsed: negative margin of
    the rail's own width, so nothing inside it reflows; the body clips it). */
 .editor-overlay--panel-hidden .editor-panel {
-  /* The rail leaves the flow at once (one layout, one refit of the stage) and
-     slides out on the compositor: animating the margin instead laid the
-     stage out on every frame of the slide and refitted the canvas each
-     time - a forced layout per frame that hitched with a big photo open. */
+  /* The margin itself eases, as in the photo view, so the photo grows (and
+     shrinks) with the slide instead of snapping to its new size at the first
+     frame. The refit that follows every frame of it is cheap: it runs inside
+     the stage's ResizeObserver from the size the observer hands over, so it
+     neither forces a layout nor lags a frame behind (see fitCanvasToStage). */
   margin-right: -320px;
-  transform: translateX(100%);
   opacity: 0;
   visibility: hidden;
   transition:
-    transform 0.28s var(--ease-out),
+    margin-right 0.28s var(--ease-out),
     opacity 0.16s var(--ease-in),
     visibility 0s linear 0.28s;
 }
@@ -3778,7 +3778,7 @@ input.editor-preset-select {
   border-left: 1px solid var(--border);
   overflow: hidden;
   transition:
-    transform 0.28s var(--ease-out),
+    margin-right 0.28s var(--ease-out),
     opacity 0.2s ease-out,
     visibility 0s;
 }
