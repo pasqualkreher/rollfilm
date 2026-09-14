@@ -87,6 +87,24 @@ export interface RawDecodeSettings {
   native_decode: boolean;
 }
 
+// What an import does with the picked files: copy them into the library
+// folder, or leave them where they are and index the chosen ones in place.
+export type ImportMode = "copy" | "reference";
+
+// The answer to the import question: the mode, and for a copy where the
+// session's collection folder is created (null = "Import" in the library).
+export interface ImportChoice {
+  mode: ImportMode;
+  stagingFolder: string | null;
+  // The session's name; the source folder's name unless the user typed one.
+  name: string;
+}
+
+export interface ImportSettings {
+  // "ask" = the Import page asks each time; otherwise the remembered answer.
+  mode_default: "ask" | ImportMode;
+}
+
 export interface AutoDevelopSettings {
   // Whether the editor shows the Auto develop button.
   enabled: boolean;
@@ -414,6 +432,9 @@ export interface ImportSource {
 export interface ImportSessionSummary {
   id: string;
   source_path: string;
+  mode: ImportMode;
+  // Copy sessions: the collection folder its cards are copied into.
+  staging_dir: string | null;
   created_at: string;
   updated_at: string | null;
   file_count: number;
@@ -443,6 +464,8 @@ export interface ImportSessionRescan {
 export interface ImportSessionOut {
   id: string;
   source_path: string;
+  mode: ImportMode;
+  staging_dir: string | null;
   source_root?: string | null;
   volume_name?: string | null;
   updated_at?: string | null;
@@ -576,6 +599,9 @@ export interface SourceRoot {
   // False when the source folder isn't currently reachable (external drive
   // unplugged / NAS unmounted); its photos are hidden from the library.
   available: boolean;
+  // False for a root an import created by leaving photos in place: not
+  // scanned at startup, so only the photos chosen then are indexed.
+  auto_scan: boolean;
 }
 
 export interface ScanStatus {

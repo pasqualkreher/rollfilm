@@ -43,6 +43,7 @@ def _to_source_out(db: Session, source: SourceRoot) -> schemas.SourceRootOut:
         image_count=count,
         scanning=bool(status.get("running")),
         available=sources_service.is_path_available(source.path),
+        auto_scan=source.auto_scan,
     )
 
 

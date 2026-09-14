@@ -2,13 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ColorLabel, ImportSessionSummary, StagedFileOut, ViewMode } from "../api/types";
+import type {
+  ColorLabel,
+  ImportChoice,
+  ImportSessionSummary,
+  StagedFileOut,
+  ViewMode,
+} from "../api/types";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
 import { ImportReviewGrid, dayLabel, isDuplicate } from "../components/ImportReviewGrid";
 import { ExternalSources } from "../components/ExternalSources";
 import { ImportLibrary } from "../components/ImportLibrary";
 import { ImportSessions } from "../components/ImportSessions";
+import { ImportModeDialog } from "../components/ImportModeDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
@@ -97,6 +104,8 @@ export function ImportWizard() {
     startUpload,
     startFolderImport,
     startFilesImport,
+    sessionMode,
+    sessionFolder,
     cancelUpload,
     canStopStaging,
     stagingStopped,
@@ -112,6 +121,9 @@ export function ImportWizard() {
   // The native pickers: adding to a session needs paths the backend can read,
   // which a browser file input can't give.
   const nativePick = typeof window !== "undefined" ? window.photoManager : undefined;
+  // The session leaves its photos where they are: nothing is copied, so the
+  // review says "reading"/"adding" where it otherwise says "copying".
+  const inPlace = sessionMode === "reference";
   // Review is open (sessionId set) but the remaining batches are still copying
   // in the background: keep the grid refreshing and block commit until done.
   const stagingInBackground = !!sessionId && isUploading;
@@ -454,7 +466,7 @@ export function ImportWizard() {
   // or resetting them, so it's clear the app is working and nothing else can be
   // clicked into the half-deleted session meanwhile.
   const discard = useMutation({
-    mutationFn: () => withWait("Discarding this import…", () => api.import.discard(sessionId!)),
+    mutationFn: () => withWait("Closing this session…", () => api.import.discard(sessionId!)),
     // Always reset locally, even if the delete itself failed (e.g. the
     // session was already committed/discarded) - the point of Discard is to
     // get back to a clean import screen, and a stale server-side session is
@@ -840,6 +852,44 @@ export function ImportWizard() {
     [startUpload]
   );
 
+  // Copy into the library, or leave the photos where they are? Asked once per
+  // fresh import (appends follow the session's mode), unless Settings remember
+  // an answer. The dialog is a promise the choose screen renders; it resolves
+  // null when the user cancels, and nothing is read then.
+  const { data: importSettings } = useQuery({
+    queryKey: ["import-settings"],
+    queryFn: () => api.settings.getImport(),
+  });
+  const [modeAsk, setModeAsk] = useState<{
+    defaultName: string;
+    resolve: (choice: ImportChoice | null) => void;
+  } | null>(null);
+  const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
+  useEffect(() => {
+    nativePick?.getLibraryRoot?.().then(setLibraryRoot).catch(() => {});
+  }, [nativePick]);
+
+  function askImportMode(defaultName: string): Promise<ImportChoice | null> {
+    const remembered = importSettings?.mode_default;
+    // A remembered copy collects in the library's Import folder; choosing
+    // another place per session (and naming it) is what the dialog is for.
+    if (remembered === "copy" || remembered === "reference") {
+      return Promise.resolve({ mode: remembered, stagingFolder: null, name: defaultName });
+    }
+    return new Promise((resolve) => setModeAsk({ defaultName, resolve }));
+  }
+
+  function chooseImportMode(choice: ImportChoice, remember: boolean) {
+    modeAsk?.resolve(choice);
+    setModeAsk(null);
+    if (remember) {
+      api.settings
+        .updateImport(choice.mode)
+        .then((saved) => queryClient.setQueryData(["import-settings"], saved))
+        .catch(() => {});
+    }
+  }
+
   // Add another card or folder to the session on screen. Each folder becomes
   // a source of its own, so it can be continued later like the first one;
   // individually picked photos just join the review.
@@ -878,7 +928,8 @@ export function ImportWizard() {
       continueSession(same);
       return;
     }
-    startFolderImport(folder);
+    const choice = await askImportMode(folder.split("/").filter(Boolean).pop() || folder);
+    if (choice) startFolderImport(folder, choice);
   }
 
   // File inputs use plain native listeners, not React's onChange: React's
@@ -949,11 +1000,25 @@ export function ImportWizard() {
         <h2 className="section-title">Import photos</h2>
         <ImportSteps current={1} />
         <p className="import-intro">
-          <strong>Import</strong> copies photos into your library. An <strong>external source</strong>{" "}
-          shows photos from a folder without copying them.
+          <strong>Import</strong> copies photos into your library, or adds them from where they are -
+          you are asked which. An <strong>external source</strong> shows a whole folder without
+          copying it.
         </p>
         <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} />
         <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
+        <Presence open={modeAsk !== null} ms={MOTION.modal}>
+          {modeAsk && (
+            <ImportModeDialog
+              libraryRoot={libraryRoot}
+              defaultName={modeAsk.defaultName}
+              onChoose={chooseImportMode}
+              onClose={() => {
+                modeAsk.resolve(null);
+                setModeAsk(null);
+              }}
+            />
+          )}
+        </Presence>
 
         <div className="import-panels">
           <ImportSessions />
@@ -961,7 +1026,7 @@ export function ImportWizard() {
           <div className="import-panel import-panel--menu">
             <h3 className="section-title">Import into library</h3>
             <p className="import-panel-desc">
-              Copy photos from an SD card, camera, or folder into your library.
+              Bring photos from an SD card, camera, or folder into your library.
             </p>
             <div className="import-menu" ref={importMenuRef}>
               <button
@@ -1053,7 +1118,8 @@ export function ImportWizard() {
                               picked.length === 1
                                 ? picked[0].path.split("/").filter(Boolean).pop() || picked[0].path
                                 : `${picked.length} selected files`;
-                            startFilesImport(picked, label);
+                            const choice = await askImportMode(label);
+                            if (choice) startFilesImport(picked, label, choice);
                           }
                           return;
                         }
@@ -1070,7 +1136,7 @@ export function ImportWizard() {
               <p className="import-panel-desc" style={{ color: "var(--text-muted)" }}>
                 {folderImportActive
                   ? totalFileCount
-                    ? "Photos are being copied and analyzed in the background. Nothing is added to your library until you have reviewed them."
+                    ? `Photos are being ${inPlace ? "read" : "copied"} and analyzed in the background. Nothing is added to your library until you have reviewed them.`
                     : "Looking for photos in the selected folder…"
                   : "Photos are being received. The review screen opens as soon as they are copied."}
               </p>
@@ -1096,9 +1162,15 @@ export function ImportWizard() {
         <h2 className="section-title">Review &amp; choose what to keep</h2>
         <p className="import-review-sub">
           From <strong>{sourceLabel}</strong>.{" "}
+          {sessionFolder && (
+            <>
+              Collected in <strong>{sessionFolder}</strong>.{" "}
+            </>
+          )}
           {importedCount > 0
             ? `${importedCount.toLocaleString()} photo(s) from this session are already in your library.`
             : "Nothing is in your library yet."}{" "}
+          {inPlace && "The photos stay where they are; the ones you keep are added from there. "}
           Rate, compare and select, then click "Add to library". You can add a few at a time and
           continue later.
         </p>
@@ -1117,7 +1189,7 @@ export function ImportWizard() {
             )}
             <span className="import-add-hint">
               {isUploading
-                ? "Available once copying has finished."
+                ? `Available once ${inPlace ? "reading" : "copying"} has finished.`
                 : "Collect from several cards or folders in this session."}
             </span>
           </div>
@@ -1126,7 +1198,7 @@ export function ImportWizard() {
             commit button below stays disabled until this finishes. */}
         {stagingInBackground && (
           <p className="import-staging-banner" role="status" aria-live="polite">
-            <span className="spinner" aria-hidden="true" /> Still copying photos in the background…{" "}
+            <span className="spinner" aria-hidden="true" /> Still {inPlace ? "reading" : "copying"} photos in the background…{" "}
             {liveStagedCount != null && totalFileCount != null
               ? `${liveStagedCount.toLocaleString()} / ${totalFileCount.toLocaleString()}${
                   copyEta != null ? ` · ~${formatEta(copyEta)} left` : ""
@@ -1137,9 +1209,9 @@ export function ImportWizard() {
               className="btn btn-slim"
               onClick={stopStaging}
               disabled={stagingStopped}
-              title="Stop copying and keep the photos copied so far"
+              title={`Stop ${inPlace ? "reading" : "copying"} and keep the photos ${inPlace ? "read" : "copied"} so far`}
             >
-              {stagingStopped ? "Stopping…" : "Stop copying"}
+              {stagingStopped ? "Stopping…" : inPlace ? "Stop" : "Stop copying"}
             </button>
           </p>
         )}
@@ -1148,10 +1220,10 @@ export function ImportWizard() {
             the card. */}
         {stoppedEarly && (
           <p className="import-staging-banner" role="status">
-            Copying stopped. The {(files?.length ?? 0).toLocaleString()} photo(s) copied so far are
-            shown below.{" "}
+            {inPlace ? "Reading" : "Copying"} stopped. The {(files?.length ?? 0).toLocaleString()}{" "}
+            photo(s) {inPlace ? "read" : "copied"} so far are shown below.{" "}
             {sessionResumable
-              ? "Continue this session later to copy the rest."
+              ? `Continue this session later to ${inPlace ? "add" : "copy"} the rest.`
               : "To get the rest, import the same source again later."}
           </p>
         )}
@@ -1256,10 +1328,12 @@ export function ImportWizard() {
           disabled={selectedCount === 0 || commit.isPending || stagingInBackground || analysisPending}
           title={
             stagingInBackground
-              ? "Available when all photos have been copied"
+              ? `Available when all photos have been ${inPlace ? "read" : "copied"}`
               : analysisPending
                 ? "Available when all photos have been analyzed"
-                : "Copy the selected photos into your library"
+                : inPlace
+                  ? "Add the selected photos to your library from where they are"
+                  : "Copy the selected photos into your library"
           }
         >
           {commit.isPending ? (
@@ -1268,7 +1342,7 @@ export function ImportWizard() {
               {`Adding to library...${progressSuffix}`}
             </>
           ) : stagingInBackground ? (
-            "Copying photos…"
+            inPlace ? "Reading photos…" : "Copying photos…"
           ) : analysisPending ? (
             `Analyzing… ${analysisProcessed}/${analysisTotal}`
           ) : (
@@ -1296,13 +1370,13 @@ export function ImportWizard() {
             // reassure that the original files are untouched.
             if (
               await dialogs.confirm({
-                title: "Discard this import session?",
+                title: `Close the session “${sourceLabel}”?`,
                 message:
-                  importedCount > 0
-                    ? `The ${importedCount.toLocaleString()} photo(s) already added stay in your library. ` +
-                      "Everything else in this session is removed. The original files stay where they are."
-                    : "Nothing has been added to your library, and the original files stay where they are.",
-                confirmLabel: "Discard session",
+                  (importedCount > 0
+                    ? `The ${importedCount.toLocaleString()} photo(s) already added stay in your library. `
+                    : "Nothing has been added to your library. ") +
+                  "Everything else in this session is removed, with its collection folder. The original files stay where they are.",
+                confirmLabel: "Close session",
                 danger: true,
               })
             ) {
@@ -1310,14 +1384,15 @@ export function ImportWizard() {
             }
           }}
           disabled={discard.isPending}
+          title="Close this session. Photos already added stay in your library; everything else and its collection folder are removed."
         >
           {discard.isPending ? (
             <>
               <span className="btn-spinner" aria-hidden="true" />
-              Discarding…
+              Closing…
             </>
           ) : (
-            "Discard session"
+            "Close session"
           )}
         </button>
       </div>

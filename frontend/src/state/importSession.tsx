@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ImportSessionSummary } from "../api/types";
+import type { ImportChoice, ImportMode, ImportSessionSummary } from "../api/types";
 
 interface ImportSessionState {
   sessionId: string | null;
@@ -50,11 +50,23 @@ interface ImportSessionState {
   stopStaging: () => void;
   startUpload: (files: File[], label: string) => void;
   // Desktop-only: import a folder by absolute path - the backend reads the
-  // files itself (no browser upload). Same progress/cancel plumbing.
-  startFolderImport: (folderPath: string) => void;
+  // files itself (no browser upload). Same progress/cancel plumbing. `choice`
+  // says whether the photos are copied (and into which folder) or left where
+  // they are; it is fixed for the session's life.
+  startFolderImport: (folderPath: string, choice?: ImportChoice) => void;
   // Desktop-only: import individually picked files by absolute path, through
   // the same incremental staging pipeline as a folder import.
-  startFilesImport: (files: { path: string; size: number }[], label: string) => void;
+  startFilesImport: (
+    files: { path: string; size: number }[],
+    label: string,
+    choice?: ImportChoice
+  ) => void;
+  // Whether the session on screen copies photos into the library or leaves
+  // them where they are - null while there is none. The review words itself
+  // by this ("copying" vs "reading").
+  sessionMode: ImportMode | null;
+  // Copy sessions: the collection folder the cards are copied into.
+  sessionFolder: string | null;
   cancelUpload: () => void;
   reset: () => void;
   // The open session was started on a folder, so whatever of that folder it
@@ -90,6 +102,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState("");
+  const [sessionMode, setSessionMode] = useState<ImportMode | null>(null);
+  const [sessionFolder, setSessionFolder] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -123,8 +137,11 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     abortRef.current = controller;
     uploadSessionRef.current = null;
     stopRef.current = false;
-    // A browser upload has no path to come back to.
+    // A browser upload has no path to come back to - and nothing it could
+    // leave in place: it always copies.
     setSessionResumable(false);
+    setSessionMode("copy");
+    setSessionFolder(null);
     setStagingStopped(false);
     setCanStopStaging(false);
     setImportMode("upload");
@@ -169,41 +186,57 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
       });
   }
 
-  function startFolderImport(folderPath: string) {
-    const label = folderPath.split("/").filter(Boolean).pop() || folderPath;
-    runPathsImport(label, async (signal) => {
-      const scan = await api.import.scanFolder(folderPath, signal);
-      if (scan.files.length === 0) {
-        throw new Error("No importable photos found in this folder");
-      }
-      // Every file of the folder is staged here, so its own count is the
-      // source's total - no sourceCounts override needed.
-      return scan.files.map((f) => ({ ...f, root: folderPath }));
-    });
+  function startFolderImport(folderPath: string, choice?: ImportChoice) {
+    const label = choice?.name || folderPath.split("/").filter(Boolean).pop() || folderPath;
+    runPathsImport(
+      label,
+      async (signal) => {
+        const scan = await api.import.scanFolder(folderPath, signal);
+        if (scan.files.length === 0) {
+          throw new Error("No importable photos found in this folder");
+        }
+        // Every file of the folder is staged here, so its own count is the
+        // source's total - no sourceCounts override needed.
+        return scan.files.map((f) => ({ ...f, root: folderPath }));
+      },
+      { choice }
+    );
   }
 
   // Desktop-only: import individually picked files by absolute path - the exact
   // same incremental staging pipeline as a folder import (review opens after
   // the first batch, live per-photo progress), just without the folder scan.
-  function startFilesImport(files: { path: string; size: number }[], label: string) {
-    runPathsImport(label, async () => files);
+  function startFilesImport(
+    files: { path: string; size: number }[],
+    label: string,
+    choice?: ImportChoice
+  ) {
+    runPathsImport(choice?.name || label, async () => files, { choice });
   }
 
   // `opts.sessionId` continues an existing session (appending to it) instead
   // of creating one. Each file carries the folder it sits under (`root`), and
   // `opts.sourceCounts` says how many importable files each of those folders
   // holds - together that records the folders as the session's sources, to be
-  // continued from later.
+  // continued from later. `opts.choice` (a fresh session only) is whether the
+  // photos are copied - and into which folder - or left where they are.
   function runPathsImport(
     label: string,
     getFiles: (
       signal: AbortSignal
     ) => Promise<{ path: string; size: number; root?: string | null }[]>,
-    opts: { sessionId?: string; sourceCounts?: Record<string, number> } = {}
+    opts: { sessionId?: string; sourceCounts?: Record<string, number>; choice?: ImportChoice } = {}
   ) {
     const controller = new AbortController();
     abortRef.current = controller;
     const resuming = opts.sessionId != null;
+    const mode: ImportMode = opts.choice?.mode ?? "copy";
+    const stagingFolder = opts.choice?.stagingFolder ?? null;
+    if (!resuming) {
+      setSessionMode(mode);
+      // The real folder (named after the session) comes with the first reply.
+      setSessionFolder(stagingFolder);
+    }
     uploadSessionRef.current = opts.sessionId ?? null;
     stopRef.current = false;
     setStagingStopped(false);
@@ -265,7 +298,9 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
           runSessionId,
           totalBytes,
           controller.signal,
-          root ? { root, fileCount: countedRoots.has(root) ? undefined : counts[root] } : undefined
+          root ? { root, fileCount: countedRoots.has(root) ? undefined : counts[root] } : undefined,
+          mode,
+          stagingFolder
         );
         if (root) countedRoots.add(root);
         runSessionId = session.id;
@@ -292,6 +327,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         if (!reviewOpened) {
           reviewOpened = true;
           setSourceLabel(session.source_path);
+          setSessionMode(session.mode);
+          setSessionFolder(session.staging_dir ?? null);
           setSessionId(session.id);
         }
         // "Stop copying, keep these": checked here rather than at the top of
@@ -401,6 +438,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     activeSessionRef.current = s.id;
     setSessionId(s.id);
     setSourceLabel(s.source_path);
+    setSessionMode(s.mode);
+    setSessionFolder(s.staging_dir ?? null);
     setSessionResumable(s.sources.length > 0);
     setUploadError(null);
     setStagingError(null);
@@ -489,6 +528,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     activeSessionRef.current = null;
     setSessionId(null);
     setSourceLabel("");
+    setSessionMode(null);
+    setSessionFolder(null);
     setSessionResumable(false);
     setStagingError(null);
     setSourceNotice(null);
@@ -504,6 +545,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     activeSessionRef.current = null;
     setSessionId(null);
     setSourceLabel("");
+    setSessionMode(null);
+    setSessionFolder(null);
     setSessionResumable(false);
     setSourceNotice(null);
     setUploadError(null);
@@ -538,6 +581,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         startUpload,
         startFolderImport,
         startFilesImport,
+        sessionMode,
+        sessionFolder,
         cancelUpload,
         reset,
         sessionResumable,

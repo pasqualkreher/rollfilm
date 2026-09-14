@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from app.db.models import ColorLabel, FileType, ImportSessionStatus
+from app.db.models import ColorLabel, FileType, ImportMode, ImportSessionStatus
 
 
 class ImageOut(BaseModel):
@@ -565,6 +565,10 @@ class ImportSessionOut(BaseModel):
     id: str
     source_path: str
     status: ImportSessionStatus
+    # Copy into the library, or reference the originals where they are.
+    mode: ImportMode = ImportMode.copy
+    # Copy sessions: the collection folder the cards are copied into.
+    staging_dir: str | None = None
     created_at: datetime
     updated_at: datetime | None = None
 
@@ -594,6 +598,8 @@ class ImportSessionSummaryOut(BaseModel):
 
     id: str
     source_path: str
+    mode: ImportMode = ImportMode.copy
+    staging_dir: str | None = None
     created_at: datetime
     updated_at: datetime | None
     # Staged rows, and of those: committed by an earlier partial import,
@@ -731,6 +737,20 @@ class StagePathsRequest(BaseModel):
     # many importable files the scan found there. Makes the session resumable.
     source_root: str | None = None
     source_file_count: int | None = None
+    # Copy the files into the library, or leave them where they are and index
+    # the chosen ones in place. Read on the first batch only (it creates the
+    # session); later batches follow the session's stored mode.
+    mode: Literal["copy", "reference"] = "copy"
+    # Copy mode: where the session's collection folder is created (absolute,
+    # must exist); null = "Import" inside the library folder. First batch
+    # only, like `mode`.
+    staging_folder: str | None = None
+
+
+class ImportSessionUpdate(BaseModel):
+    # The session's name, as shown in the open-sessions list and the review
+    # (stored as ImportSession.source_path, which is a label, not a path).
+    name: str
 
 
 class CommitImportRequest(BaseModel):
@@ -792,6 +812,17 @@ class RawDecodeSettingsOut(BaseModel):
 
 class RawDecodeSettingsUpdate(BaseModel):
     native_decode: bool
+
+
+class ImportSettingsOut(BaseModel):
+    # What the Import page does when photos are picked: "ask" each time whether
+    # to copy them into the library or leave them where they are, or go with
+    # one of the two without asking.
+    mode_default: Literal["ask", "copy", "reference"]
+
+
+class ImportSettingsUpdate(BaseModel):
+    mode_default: Literal["ask", "copy", "reference"]
 
 
 class TrashSettingsOut(BaseModel):
@@ -882,6 +913,9 @@ class SourceRootOut(BaseModel):
     # unplugged / NAS unmounted). Its photos are hidden from the library while
     # unavailable, but the index is kept so they return when it reconnects.
     available: bool = True
+    # False for a root an in-place import created: not scanned at startup, so
+    # only the photos chosen in that import are indexed until a manual scan.
+    auto_scan: bool = True
 
 
 class ScanStatusOut(BaseModel):

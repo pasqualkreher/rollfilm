@@ -4,7 +4,7 @@ import type { ImportSessionSummary } from "../api/types";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "./AppDialogs";
 import { useWait } from "../state/wait";
-import { IconTrash } from "./Icons";
+import { IconRename } from "./Icons";
 
 function lastWorkedOn(s: ImportSessionSummary): string {
   return new Date(s.updated_at ?? s.created_at).toLocaleString(undefined, {
@@ -35,23 +35,37 @@ export function ImportSessions() {
 
   if (!sessions || sessions.length === 0) return null;
 
-  async function discard(s: ImportSessionSummary) {
+  // Closing a session ends it for good: what was added stays in the library,
+  // the rest - the review, and the collection folder with its copies - goes.
+  async function close(s: ImportSessionSummary) {
     const confirmed = await dialogs.confirm({
-      title: `Discard the session “${s.source_path}”?`,
+      title: `Close the session “${s.source_path}”?`,
       message:
         (s.imported_count > 0
-          ? `The ${plural(s.imported_count, "photo", "photos")} already added from it stay in your library. `
-          : "Nothing from it is in your library yet. ") +
-        "Its review, selection and copied files are removed. The original files stay where they are.",
-      confirmLabel: "Discard session",
+          ? `The ${plural(s.imported_count, "photo", "photos")} already added stay in your library. `
+          : "Nothing has been added to your library. ") +
+        "Everything else in this session is removed, with its collection folder. The original files stay where they are.",
+      confirmLabel: "Close session",
       danger: true,
     });
     if (!confirmed) return;
     try {
-      await withWait("Discarding this import…", () => api.import.discard(s.id));
+      await withWait("Closing this session…", () => api.import.discard(s.id));
     } finally {
       queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
     }
+  }
+
+  async function rename(s: ImportSessionSummary) {
+    const next = await dialogs.prompt({
+      title: "Rename this session",
+      initial: s.source_path,
+      confirmLabel: "Rename",
+    });
+    const trimmed = next?.trim();
+    if (!trimmed || trimmed === s.source_path) return;
+    await api.import.rename(s.id, trimmed);
+    queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
   }
 
   return (
@@ -70,10 +84,21 @@ export function ImportSessions() {
           const remaining = s.sources.reduce((sum, src) => sum + (src.remaining ?? 0), 0);
           const toReview = s.file_count - s.imported_count - s.duplicate_count;
           return (
-            <div key={s.id} className={`source-row${waiting.length > 0 ? " disconnected" : ""}`}>
-              <div className="source-row-main">
+            // The actions stay on the right whatever the text does: the row
+            // must not wrap them under a long collection-folder path.
+            <div
+              key={s.id}
+              className={`source-row${waiting.length > 0 ? " disconnected" : ""}`}
+              style={{ flexWrap: "nowrap" }}
+            >
+              <div className="source-row-main" style={{ flex: 1, minWidth: 0 }}>
                 <span className="source-name">
                   {s.source_path}
+                  {s.mode === "reference" && (
+                    <span className="badge-inline" title="Photos are added from where they are, nothing is copied">
+                      In place
+                    </span>
+                  )}
                   {waiting.length > 0 && (
                     <span className="source-disconnected-badge">Not connected</span>
                   )}
@@ -81,9 +106,15 @@ export function ImportSessions() {
                 <span className="source-meta">
                   {plural(toReview, "photo", "photos")} to review
                   {s.imported_count > 0 && ` · ${s.imported_count.toLocaleString()} in library`}
-                  {remaining > 0 && ` · ${remaining.toLocaleString()} not copied yet`}
+                  {remaining > 0 &&
+                    ` · ${remaining.toLocaleString()} not ${s.mode === "reference" ? "added" : "copied"} yet`}
                   {` · last worked on ${lastWorkedOn(s)}`}
                 </span>
+                {s.staging_dir && (
+                  <span className="source-path" title="This session's collection folder">
+                    {s.staging_dir}
+                  </span>
+                )}
                 {s.sources.length > 0 && (
                   <span className="source-meta">
                     {s.sources.map((src, i) => (
@@ -114,13 +145,21 @@ export function ImportSessions() {
                   Continue
                 </button>
                 <button
-                  className="btn btn-sm quiet-danger"
-                  aria-label={`Discard session "${s.source_path}"`}
-                  title="Discard this session. Photos already added to the library stay."
-                  onClick={() => discard(s)}
+                  className="btn btn-sm"
+                  aria-label={`Rename session "${s.source_path}"`}
+                  title="Rename this session"
+                  onClick={() => rename(s)}
                   disabled={isUploading}
                 >
-                  <IconTrash size={14} />
+                  <IconRename size={14} />
+                </button>
+                <button
+                  className="btn btn-sm quiet-danger"
+                  title="Close this session. Photos already added stay in your library; everything else and its collection folder are removed."
+                  onClick={() => close(s)}
+                  disabled={isUploading}
+                >
+                  Close session
                 </button>
               </div>
             </div>

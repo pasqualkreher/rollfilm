@@ -22,9 +22,12 @@ from app.db.models import (
     ColorLabel,
     FileType,
     Image,
+    ImportMode,
     ImportSession,
+    ImportSessionSource,
     ImportSessionStatus,
     ImportStagedFile,
+    SourceRoot,
 )
 from app.db.session import SessionLocal
 from app.services import geocode
@@ -36,7 +39,7 @@ from app.services.exif import (
     to_float,
     to_int,
 )
-from app.services.filesystem import library_relative_path
+from app.services.filesystem import library_relative_path, resolve_image_path
 from app.services.hashing import perceptual_hash, sha256_file
 from app.services.immich_sync import immich_flagged
 from app.services.pairing import pair_library, pair_siblings
@@ -139,6 +142,15 @@ _derivative_executor = ThreadPoolExecutor(
 
 def staged_thumb_dir(session_id: str) -> Path:
     return settings.import_staging_root / session_id / ".thumbnails"
+
+
+def session_staging_dir(session: ImportSession) -> Path:
+    """Where a copy session collects the files copied from its cards: its own
+    collection folder when it has one (see routes.import_._session_folder),
+    else the app's hidden staging area, as before that existed."""
+    if session.staging_dir:
+        return Path(session.staging_dir)
+    return settings.import_staging_root / session.id
 
 
 def staged_demosaic_path(thumb_dir: Path, staged_id: str) -> Path:
@@ -345,6 +357,14 @@ def _enqueue_review_derivatives(
         logger.exception("Could not queue RAW review derivatives for %s", staged_id)
 
 
+def staged_file_path(staged: ImportStagedFile) -> Path:
+    """Where a staged row's bytes are: the copy under the staging root, or -
+    for a session that leaves photos in place - the original itself, recorded
+    by its absolute path (see ImportStagedFile.staged_path)."""
+    path = Path(staged.staged_path)
+    return path if path.is_absolute() else settings.import_staging_root / path
+
+
 @dataclass
 class _Analyzed:
     """The result of the heavy, per-file staging work (hashing, preview, phash,
@@ -377,6 +397,9 @@ class _CommitEntry:
     # A previous commit attempt that failed after its move phase already
     # placed this file in the library - don't move it again.
     already_moved: bool = False
+    # Set when the photo is referenced in place: the source root it is
+    # recorded under (relative_dest is then its absolute path).
+    source_root_id: str | None = None
 
 
 def _analyze_file(
@@ -456,7 +479,12 @@ def _analyze_file(
 
     return _Analyzed(
         id=staged_id,
-        staged_rel_path=str(staged_path.relative_to(settings.import_staging_root)),
+        # An in-place session's row points at the original, outside staging.
+        staged_rel_path=(
+            str(staged_path.relative_to(settings.import_staging_root))
+            if staged_path.is_relative_to(settings.import_staging_root)
+            else str(staged_path)
+        ),
         original_filename=original_filename,
         file_type=file_type,
         sha256=sha256,
@@ -628,7 +656,9 @@ def _register_library_hashes(images: list[Image]) -> None:
         with state.lock:
             for image in images:
                 if image.file_hash:
-                    state.image_by_hash.setdefault(image.file_hash, (image.id, None))
+                    state.image_by_hash.setdefault(
+                        image.file_hash, (image.id, image.source_root_id)
+                    )
 
 
 def _load_dedup_state(state: _SessionDedupState, db: Session, session_id: str, owner_id: int) -> None:
@@ -691,9 +721,14 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
                 # index): the user may well have trashed the photo just before
                 # re-importing it.
                 dup_row = db.get(Image, image_id) if source_root_id is None else None
-                if source_root_id is None and (dup_row is None or dup_row.deleted_at is None):
+                if session.mode == ImportMode.reference or (
+                    source_root_id is None and (dup_row is None or dup_row.deleted_at is None)
+                ):
                     # Byte-identical to a visible managed-library photo - don't
                     # re-import by default (the API also rejects re-selecting it).
+                    # A session that leaves photos in place blocks every exact
+                    # match: it makes no library copy, so the two exceptions
+                    # below (promotion, restore) have nothing to work with.
                     staged.selected = False
                 # else: the only copy is indexed in place from an external source
                 # root (importing promotes it) or sits in the Trash (importing
@@ -759,7 +794,7 @@ def _run_analysis(
             ):
                 return
             owner_id = session.owner_id
-            staged_full_path = settings.import_staging_root / staged.staged_path
+            staged_full_path = staged_file_path(staged)
             original_filename = staged.original_filename
             file_type = staged.file_type.value
             sha256 = staged.sha256
@@ -1005,15 +1040,29 @@ def stage_uploaded_files(
     return session
 
 
-def create_import_session(db: Session, owner_id: int, source_label: str) -> ImportSession:
+def create_import_session(
+    db: Session,
+    owner_id: int,
+    source_label: str,
+    mode: ImportMode = ImportMode.copy,
+    session_id: str | None = None,
+    staging_dir: str | None = None,
+) -> ImportSession:
     """An empty session to stage into. A folder import creates it up front so
     the source row its files are read from exists before the first batch (see
-    routes/import_.py); the multipart upload path stages straight away."""
+    routes/import_.py); the multipart upload path stages straight away. `mode`
+    is fixed here for the session's life: copy into the library, or reference
+    the originals in place - and for a copy, `staging_dir` is the session's
+    collection folder (created by the route, named after `session_id`)."""
     session = ImportSession(
         owner_id=owner_id,
         source_path=source_label or "Import",
+        mode=mode,
+        staging_dir=staging_dir,
         updated_at=datetime.now(timezone.utc),
     )
+    if session_id:
+        session.id = session_id
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -1080,13 +1129,19 @@ def _stage_uploads_into(
     # session object, so touching session.id afterwards would re-SELECT it -
     # once per copied file now that every file commits on its own.
     session_id = session.id
-    session_dir = settings.import_staging_root / session_id
+    # Leaving photos in place: no copy, the row points at the original.
+    reference = session.mode == ImportMode.reference
+    # The copies go to the session's collection folder; rows record a copy
+    # there by its absolute path (the hidden default area by a relative one).
+    session_dir = session_staging_dir(session)
+    own_folder = bool(session.staging_dir)
     # The session source (id, root) these files are recorded under. Named
     # apart from the per-file `source` tuple the loop hands to the analysis -
     # sharing that name once overwrote the root with a file size.
     source_id, source_root = session_source if session_source else (None, None)
-    thumb_dir = session_dir / ".thumbnails"
+    thumb_dir = staged_thumb_dir(session_id)
     thumb_dir.mkdir(parents=True, exist_ok=True)
+    session_dir.mkdir(parents=True, exist_ok=True)
 
     # Filter down to importable files first so the progress total covers the
     # whole batch before the first byte is copied.
@@ -1110,27 +1165,36 @@ def _stage_uploads_into(
     # Copying stays serial: sequential reads are what source media (SD card,
     # NAS, upload spool) do best, and the analysis pool works alongside.
     for upload, original_filename, file_type in incoming:
-        staged_path = session_dir / original_filename
-        counter = 1
-        while staged_path.exists():
-            staged_path = (
-                session_dir
-                / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
-            )
-            counter += 1
+        original = getattr(upload, "source_path", None)
+        in_place = reference and original is not None
+        if in_place:
+            # Nothing is copied: the row records the original by its absolute
+            # path, and only its hash is read now (the duplicate check's key).
+            staged_path = Path(original)
+            sha256 = sha256_file(staged_path)
+            size = staged_path.stat().st_size
+        else:
+            staged_path = session_dir / original_filename
+            counter = 1
+            while staged_path.exists():
+                staged_path = (
+                    session_dir
+                    / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
+                )
+                counter += 1
 
-        sha256, size = _hash_and_copy(upload.file, staged_path)
+            sha256, size = _hash_and_copy(upload.file, staged_path)
+            # Carry the source file's modification time onto the staged
+            # copy. Without this the staged mtime is "just now", and the
+            # commit-time fallback for photos lacking an EXIF capture date
+            # would date them to the import instead of the original file.
+            source_mtime = getattr(upload, "mtime", None)
+            if source_mtime:
+                try:
+                    os.utime(staged_path, (source_mtime, source_mtime))
+                except OSError:
+                    pass
         total_bytes += size
-        # Carry the source file's modification time onto the staged
-        # copy. Without this the staged mtime is "just now", and the
-        # commit-time fallback for photos lacking an EXIF capture date
-        # would date them to the import instead of the original file.
-        source_mtime = getattr(upload, "mtime", None)
-        if source_mtime:
-            try:
-                os.utime(staged_path, (source_mtime, source_mtime))
-            except OSError:
-                pass
 
         staged_id = str(uuid.uuid4())
         source_relpath = _source_relpath(upload, source_root)
@@ -1138,7 +1202,11 @@ def _stage_uploads_into(
             ImportStagedFile(
                 id=staged_id,
                 import_session_id=session_id,
-                staged_path=str(staged_path.relative_to(settings.import_staging_root)),
+                staged_path=(
+                    str(staged_path)
+                    if in_place or own_folder
+                    else str(staged_path.relative_to(settings.import_staging_root))
+                ),
                 original_filename=original_filename,
                 file_type=FileType(file_type),
                 sha256=sha256,
@@ -1195,6 +1263,12 @@ def commit_import_session(
     upload_to_immich: bool = False,
     sync_all_to_immich: bool = False,
 ) -> list[Image]:
+    # Leaving photos in place: nothing moves, each chosen file becomes a row
+    # at its own absolute path under a source root for its folder.
+    reference = session.mode == ImportMode.reference
+    reference_roots: dict[str, SourceRoot] = {}
+    library_resolved = settings.library_root.resolve()
+
     def _referenced_duplicate(f: ImportStagedFile) -> Image | None:
         """The existing image this staged file is a byte-identical copy of, if
         importing it again is allowed. Two cases qualify: a scan-in-place
@@ -1203,7 +1277,8 @@ def commit_import_session(
         row sitting in the Trash, where importing the same bytes is the explicit
         way to bring the photo back (it's restored at commit instead of staying
         invisibly trashed forever)."""
-        if not f.duplicate_of_image_id:
+        if not f.duplicate_of_image_id or reference:
+            # In place there is no library copy to promote to or restore from.
             return None
         existing = db.get(Image, f.duplicate_of_image_id)
         if existing is None:
@@ -1288,7 +1363,7 @@ def commit_import_session(
             continue
 
         exif_dict = json.loads(staged.exif_json) if staged.exif_json else {}
-        staged_full_path = settings.import_staging_root / staged.staged_path
+        staged_full_path = staged_file_path(staged)
 
         # A managed photo sitting in the Trash whose original is still in the
         # library folder (trash keeps files on disk until permanent deletion):
@@ -1334,6 +1409,58 @@ def commit_import_session(
                 )
                 continue
             taken_at = datetime.fromtimestamp(staged_full_path.stat().st_mtime, tz=timezone.utc)
+
+        if reference:
+            # A file that already sits inside the library folder simply
+            # becomes a managed photo at the path it has (no copy, no date
+            # sorting); anywhere else it is recorded by its absolute path
+            # under a source root for its folder.
+            resolved = staged_full_path.resolve()
+            inside_library = resolved.is_relative_to(library_resolved)
+            dest = (
+                str(resolved.relative_to(library_resolved))
+                if inside_library
+                else str(staged_full_path)
+            )
+            if staged_missing:
+                logger.warning(
+                    "commit: skipping %s - the original is no longer at %s",
+                    staged.original_filename,
+                    dest,
+                )
+                continue
+            if (
+                dest in planned_dests
+                or db.query(Image.id).filter(Image.file_path == dest).first() is not None
+            ):
+                # Indexed at this very path already (a source scan got there
+                # first, or an earlier commit of this session did).
+                logger.warning(
+                    "commit: skipping %s - already indexed at %s", staged.original_filename, dest
+                )
+                continue
+            root_id = (
+                None
+                if inside_library
+                else _reference_source_root(
+                    db, owner_id, staged, staged_full_path, reference_roots
+                ).id
+            )
+            planned_dests.add(dest)
+            plan.append(
+                _CommitEntry(
+                    staged,
+                    None,
+                    exif_dict,
+                    taken_at,
+                    dest,
+                    staged_full_path,
+                    staged_full_path,
+                    already_moved=True,
+                    source_root_id=root_id,
+                )
+            )
+            continue
 
         if staged_missing:
             # A previous commit attempt failed after moving this file into the
@@ -1428,6 +1555,7 @@ def commit_import_session(
             image = Image(
                 owner_id=owner_id,
                 file_path=relative_dest,
+                source_root_id=entry.source_root_id,
                 original_filename=staged.original_filename,
                 file_hash=staged.sha256,
                 perceptual_hash=staged.perceptual_hash,
@@ -1520,7 +1648,7 @@ def commit_import_session(
     # post-import work below doesn't care about the order).
     for image in sorted(new_images, key=lambda im: im.file_type == FileType.raw):
         db.refresh(image)
-        image_path = settings.library_root / image.file_path
+        image_path = resolve_image_path(image)
         # Hand over the thumbnail and preview the review already rendered. The
         # post-import worker skips a photo that has both (has_derivatives), so
         # this turns the whole re-render pass into a no-op for everything the
@@ -1549,9 +1677,53 @@ def commit_import_session(
             )
 
     if session_done:
-        shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
+        _remove_session_folders(session)
         _drop_session_state(session.id)
     return new_images
+
+
+def _reference_source_root(
+    db: Session,
+    owner_id: int,
+    staged: ImportStagedFile,
+    file_path: Path,
+    cache: dict[str, SourceRoot],
+) -> SourceRoot:
+    """The source root an in-place import records a file under: the folder the
+    session read it from when it has one, else the file's own folder. Found or
+    created - created without startup scanning, so only the photos chosen in
+    the review are indexed until the user asks for a full scan of the folder.
+    A root that already exists (however it came about) is used as it is."""
+    root_dir: Path | None = None
+    if staged.source_id:
+        source = db.get(ImportSessionSource, staged.source_id)
+        if source is not None:
+            root_dir = Path(source.root)
+    if root_dir is None or not file_path.is_relative_to(root_dir):
+        root_dir = file_path.parent
+    return _source_root_for(db, owner_id, root_dir, cache)
+
+
+def _source_root_for(
+    db: Session, owner_id: int, root_dir: Path, cache: dict[str, SourceRoot]
+) -> SourceRoot:
+    """The source root for a folder, found or created. Created without startup
+    scanning: an import records only the photos it chose (or copied) there,
+    and a startup sweep would quietly add whatever else the folder holds."""
+    key = str(root_dir)
+    root = cache.get(key)
+    if root is None:
+        root = (
+            db.query(SourceRoot)
+            .filter(SourceRoot.owner_id == owner_id, SourceRoot.path == key)
+            .first()
+        )
+    if root is None:
+        root = SourceRoot(owner_id=owner_id, name=root_dir.name or key, path=key, auto_scan=False)
+        db.add(root)
+        db.flush()
+    cache[key] = root
+    return root
 
 
 def session_is_exhausted(session: ImportSession) -> bool:
@@ -1579,5 +1751,14 @@ def discard_import_session(db: Session, session: ImportSession) -> None:
     # rmtree below.
     session.status = ImportSessionStatus.discarded
     db.commit()
-    shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
+    _remove_session_folders(session)
     _drop_session_state(session.id)
+
+
+def _remove_session_folders(session: ImportSession) -> None:
+    """A closed session leaves nothing behind: its review derivatives in the
+    hidden staging area, and its collection folder (whatever wasn't imported
+    from it is gone with it - that is what closing the session means)."""
+    shutil.rmtree(settings.import_staging_root / session.id, ignore_errors=True)
+    if session.staging_dir:
+        shutil.rmtree(session.staging_dir, ignore_errors=True)

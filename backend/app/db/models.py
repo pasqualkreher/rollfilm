@@ -49,6 +49,15 @@ class ImportSessionStatus(str, enum.Enum):
     discarded = "discarded"
 
 
+class ImportMode(str, enum.Enum):
+    """What an import session does with the files it stages: copy them into
+    the library folder (the default), or leave them where they are and index
+    the chosen ones in place, like an external source root."""
+
+    copy = "copy"
+    reference = "reference"
+
+
 class User(Base):
     """The single local user (id=1), seeded on first access. This is a
     single-user desktop app; the owner_id columns below all point at this row.
@@ -78,6 +87,10 @@ class SourceRoot(Base):
     last_scanned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # False for a root created by an import that left its photos in place:
+    # only the photos chosen in that review are indexed, so the startup scan
+    # must not sweep in the rest of the folder. A manual "Scan now" still can.
+    auto_scan: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
 
 class Image(Base):
@@ -359,6 +372,18 @@ class ImportSession(Base):
     status: Mapped[ImportSessionStatus] = mapped_column(
         Enum(ImportSessionStatus), default=ImportSessionStatus.staging
     )
+    # Copy into the library, or reference the originals where they are (see
+    # ImportMode). Fixed when the session is created; every batch follows it.
+    mode: Mapped[ImportMode] = mapped_column(
+        Enum(ImportMode), default=ImportMode.copy, server_default="copy"
+    )
+    # Copy sessions: the session's collection folder - every card or folder
+    # added to the session is copied in here, and the photos chosen at commit
+    # move from here into the library (by date, as always). Removed when the
+    # session closes. Absolute path; NULL for sessions from before this
+    # existed (they collected under settings.import_staging_root/<id>) and
+    # for sessions that leave photos in place.
+    staging_dir: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     # A session lives until the user ends it - import a hundred of a card's
     # five thousand photos today, the next hundred tomorrow, and collect from
@@ -422,6 +447,9 @@ class ImportStagedFile(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     import_session_id: Mapped[str] = mapped_column(ForeignKey("import_sessions.id"), index=True)
 
+    # Relative to settings.import_staging_root for a copied file; the ABSOLUTE
+    # original path in a session that leaves photos in place (nothing is
+    # copied). Resolve either via import_pipeline.staged_file_path.
     staged_path: Mapped[str] = mapped_column(String)
     original_filename: Mapped[str] = mapped_column(String)
     file_type: Mapped[FileType] = mapped_column(Enum(FileType))

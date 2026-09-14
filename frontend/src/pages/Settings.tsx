@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
-import type { BorgTestResult, ImmichSyncMode, ImmichTestResult } from "../api/types";
+import type { BorgTestResult, ImmichSyncMode, ImmichTestResult, ImportSettings } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
 import { IconCheck, IconX } from "../components/Icons";
 import { useAppDialogs } from "../components/AppDialogs";
@@ -712,6 +712,18 @@ export function Settings() {
     return progressText(rebuildElapsed, estimateSeconds(photoCount, REBUILD_EST_KEY));
   }
 
+  // Import: ask each time whether photos are copied into the library or left
+  // where they are, or remember one answer (the dialog's "don't ask again").
+  const { data: importSettings } = useQuery({
+    queryKey: ["import-settings"],
+    queryFn: () => api.settings.getImport(),
+  });
+  const setImportMode = useMutation({
+    mutationFn: (mode_default: ImportSettings["mode_default"]) =>
+      api.settings.updateImport(mode_default),
+    onSuccess: (result) => queryClient.setQueryData(["import-settings"], result),
+  });
+
   // RAW decoding: whether RAWs load with no brightness processing (native
   // sensor exposure) or are self-normalized to a consistent brightness.
   const { data: rawDecode } = useQuery({
@@ -852,6 +864,43 @@ export function Settings() {
           <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
             Change library folder…
           </button>
+          <div className="settings-subgroup">
+            <h4 className="settings-subhead">When importing</h4>
+            <Desc>
+              Photos you pick for import are either collected in a folder of the session's own
+              (inside this folder's "Import" folder, or wherever you choose) and sorted into the
+              library when you add them, or added from where they are without copying (their
+              folder is then listed under External photo sources). A remembered answer skips the
+              question; sessions then collect in the library's Import folder.
+            </Desc>
+            {(
+              [
+                ["ask", "Ask every time", "A dialog asks before anything is read."],
+                [
+                  "copy",
+                  "Always collect and copy into the library",
+                  "Each session collects its cards in the library's Import folder; the photos you keep are sorted into the library by date.",
+                ],
+                [
+                  "reference",
+                  "Always leave photos where they are",
+                  "Nothing is copied; the photos you keep are added from their current folder.",
+                ],
+              ] as const
+            ).map(([value, title, desc]) => (
+              <OptionRow
+                key={value}
+                type="radio"
+                name="import-mode"
+                checked={(importSettings?.mode_default ?? "ask") === value}
+                disabled={!importSettings}
+                busy={setImportMode.isPending}
+                onChange={() => setImportMode.mutate(value)}
+                title={title}
+                desc={desc}
+              />
+            ))}
+          </div>
         </Section>
       )}
 

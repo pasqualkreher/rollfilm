@@ -105,7 +105,14 @@ def scan_all_sources() -> None:
     try:
         db = SessionLocal()
         try:
-            ids = [row[0] for row in db.query(SourceRoot.id).all()]
+            # Roots an in-place import created are left alone here: only the
+            # photos chosen in that review are indexed, and a startup sweep
+            # would quietly add the rest of the folder. Their manual "Scan
+            # now" still does exactly that, on request.
+            ids = [
+                row[0]
+                for row in db.query(SourceRoot.id).filter(SourceRoot.auto_scan.is_(True)).all()
+            ]
         finally:
             db.close()
         for source_root_id in ids:

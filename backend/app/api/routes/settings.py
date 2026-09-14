@@ -22,6 +22,7 @@ from app.services.settings_store import (
     IMMICH_MODES,
     IMMICH_SYNC_MODE,
     IMMICH_SYNC_PAUSED,
+    IMPORT_MODE_DEFAULT,
     RAW_NATIVE_DECODE,
     SMART_ALBUM_PLACE_RADIUS_KM,
     SMART_ALBUM_SECTION_NAMES,
@@ -33,6 +34,7 @@ from app.services.settings_store import (
     get_immich_include_raw,
     get_immich_sync_mode,
     get_immich_sync_paused,
+    get_import_mode_default,
     get_raw_native_decode,
     get_setting,
     get_smart_album_config,
@@ -162,6 +164,27 @@ def update_immich_settings(
         enabled=get_immich_enabled(db),
         include_raw=get_immich_include_raw(db),
     )
+
+
+@router.get("/import", response_model=schemas.ImportSettingsOut)
+def get_import_settings(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    return schemas.ImportSettingsOut(mode_default=get_import_mode_default(db))
+
+
+@router.put("/import", response_model=schemas.ImportSettingsOut)
+def update_import_settings(
+    payload: schemas.ImportSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Whether the Import page asks, each time photos are picked, if they are
+    copied into the library or left where they are - or remembers one answer
+    ("don't ask again" in that dialog lands here)."""
+    set_setting(db, IMPORT_MODE_DEFAULT, payload.mode_default)
+    db.commit()
+    return schemas.ImportSettingsOut(mode_default=payload.mode_default)
 
 
 @router.get("/raw", response_model=schemas.RawDecodeSettingsOut)

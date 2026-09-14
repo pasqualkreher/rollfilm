@@ -315,12 +315,14 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
     }
     # The database, thumbnails and staging live in a ".photomanager" subfolder
     # of the library; skip it so its JPG thumbnails aren't counted as untracked
-    # photos.
+    # photos. "Import" holds the collection folders of open import sessions
+    # (cards copied in, not yet reviewed) - not library photos either.
     untracked_paths = [
         path
         for path in settings.library_root.rglob("*")
         if path.is_file()
         and ".photomanager" not in path.relative_to(settings.library_root).parts
+        and path.relative_to(settings.library_root).parts[0] != "Import"
         and classify_file_type(path) is not None
         and str(path.resolve()) not in tracked
     ]

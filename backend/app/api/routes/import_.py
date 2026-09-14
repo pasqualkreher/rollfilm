@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import threading
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -19,6 +20,7 @@ from app.config import settings
 from app.db.models import (
     FileType,
     Image,
+    ImportMode,
     ImportSession,
     ImportSessionSource,
     ImportSessionStatus,
@@ -26,6 +28,7 @@ from app.db.models import (
     User,
 )
 from app.db.session import get_db
+from app.services.filesystem import resolve_image_path
 from app.services.import_pipeline import (
     STAGED_PREVIEW_PX,
     StagedFullSuperseded,
@@ -40,6 +43,7 @@ from app.services.import_pipeline import (
     render_staged_full,
     stage_uploaded_files,
     staged_demosaic_path,
+    staged_file_path,
     staged_preview_path,
     staged_thumb_dir,
 )
@@ -64,13 +68,16 @@ _STAGED_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
 _STAGED_FULL_CACHE_HEADERS = {"Cache-Control": "private, max-age=31536000, immutable"}
 
 
-def _trashed_duplicate_ids(db: Session, files: list[ImportStagedFile]) -> set[str]:
+def _trashed_duplicate_ids(
+    db: Session, session: ImportSession, files: list[ImportStagedFile]
+) -> set[str]:
     """Ids of Trash-dwelling managed images referenced by these staged files'
     exact-duplicate links, resolved in one query - the review UI shows those
     files as "restores from Trash" (importable) rather than "already in
-    library" (blocked)."""
+    library" (blocked). Never for a session that leaves photos in place: a
+    restore would need the library copy, which such a session doesn't make."""
     ids = {f.duplicate_of_image_id for f in files if f.duplicate_of_image_id}
-    if not ids:
+    if not ids or session.mode == ImportMode.reference:
         return set()
     rows = db.query(Image.id).filter(Image.id.in_(ids), Image.deleted_at.isnot(None)).all()
     return {row.id for row in rows}
@@ -119,8 +126,10 @@ def _imported_derivative(staged: ImportStagedFile, name: str) -> Path | None:
 _DISK_SPACE_RESERVE_BYTES = 10 * 1024**3
 
 
-def _free_disk_bytes() -> int:
-    return shutil.disk_usage(settings.import_staging_root).free
+def _free_disk_bytes(path: Path | None = None) -> int:
+    """Free space where the copies land: the session's collection folder, or
+    the hidden staging area for uploads and sessions without one."""
+    return shutil.disk_usage(path or settings.import_staging_root).free
 
 
 @router.post("/sessions/upload", response_model=schemas.ImportSessionOut)
@@ -248,6 +257,34 @@ def _scan_importable(root: Path) -> list[schemas.ScannedFileOut]:
     return files
 
 
+def _session_folder(base: str | None, label: str, session_id: str) -> Path:
+    """Create the collection folder of a new copy session: a folder of its own
+    under `base` - the chosen folder, or "Import" inside the library folder by
+    default. Every card added to the session is copied in here; the folder is
+    removed when the session closes. Named after the source plus a bit of the
+    id, so several sessions from the same card never share a folder."""
+    if base and base.strip():
+        root = Path(base.strip())
+        if not root.is_absolute() or not root.is_dir():
+            raise HTTPException(
+                status_code=400,
+                detail="That folder doesn't exist. Choose a folder that is connected.",
+            )
+        if root.resolve().is_relative_to(settings.import_staging_root.resolve()):
+            raise HTTPException(status_code=400, detail="That folder is the app's own data area.")
+    else:
+        root = settings.library_root / "Import"
+    safe = "".join(c if c.isalnum() or c in " -_." else "_" for c in label).strip() or "Import"
+    folder = root / f"{safe} {session_id[:8]}"
+    try:
+        folder.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Could not create the session folder at {folder}: {exc}"
+        )
+    return folder
+
+
 def _match_source(session: ImportSession, root: Path) -> ImportSessionSource | None:
     """The session's source for this folder, if it has one. Matched by path
     first, then by volume: the same card remounted under another name is the
@@ -305,25 +342,50 @@ def stage_local_paths(
     if not payload.paths:
         raise HTTPException(status_code=400, detail="No files given")
 
-    free = _free_disk_bytes()
-    if (
-        not payload.session_id
-        and payload.total_bytes
-        and payload.total_bytes + _DISK_SPACE_RESERVE_BYTES > free
-    ):
-        raise HTTPException(
-            status_code=507,
-            detail=(
-                f"Not enough disk space for this import: it needs about "
-                f"{payload.total_bytes / 1e9:.0f} GB, but only "
-                f"{max(free - _DISK_SPACE_RESERVE_BYTES, 0) / 1e9:.0f} GB are usable."
-            ),
+    # The session decides the mode: the first batch carries the user's choice
+    # and creates the session with it, every later batch follows the session
+    # it appends to.
+    session: ImportSession | None = None
+    if payload.session_id:
+        session = get_owned_import_session(db, current_user.id, payload.session_id)
+        if session.status != ImportSessionStatus.staging:
+            raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
+        mode = session.mode
+        staging_dir = Path(session.staging_dir) if session.staging_dir else None
+        session_id = session.id
+    else:
+        mode = ImportMode(payload.mode)
+        session_id = str(uuid.uuid4())
+        staging_dir = (
+            _session_folder(payload.staging_folder, payload.source_label, session_id)
+            if mode == ImportMode.copy
+            else None
         )
-    if free < _DISK_SPACE_RESERVE_BYTES:
-        raise HTTPException(
-            status_code=507,
-            detail="The disk is almost full - the import was stopped so the system stays usable.",
-        )
+
+    if mode == ImportMode.copy:
+        # The copies land in the collection folder, so that is the disk that
+        # has to hold them (the library volume for the default location).
+        free = _free_disk_bytes(staging_dir)
+        if (
+            not payload.session_id
+            and payload.total_bytes
+            and payload.total_bytes + _DISK_SPACE_RESERVE_BYTES > free
+        ):
+            raise HTTPException(
+                status_code=507,
+                detail=(
+                    f"Not enough disk space for this import: it needs about "
+                    f"{payload.total_bytes / 1e9:.0f} GB, but only "
+                    f"{max(free - _DISK_SPACE_RESERVE_BYTES, 0) / 1e9:.0f} GB are usable."
+                ),
+            )
+        if free < _DISK_SPACE_RESERVE_BYTES:
+            raise HTTPException(
+                status_code=507,
+                detail="The disk is almost full - the import was stopped so the system stays usable.",
+            )
+    # Leaving photos in place writes nothing but review derivatives, so the
+    # disk preflight doesn't apply there.
 
     uploads: list[_LocalUpload] = []
     try:
@@ -347,14 +409,17 @@ def stage_local_paths(
         if source_root is not None and not (source_root.is_absolute() and source_root.is_dir()):
             source_root = None
 
-        if payload.session_id:
-            session = get_owned_import_session(db, current_user.id, payload.session_id)
-            if session.status != ImportSessionStatus.staging:
-                raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
-        else:
+        if session is None:
             # Created before the first batch so its source row exists to stage
             # against (every staged file records which source it came from).
-            session = create_import_session(db, current_user.id, payload.source_label)
+            session = create_import_session(
+                db,
+                current_user.id,
+                payload.source_label,
+                mode=mode,
+                session_id=session_id,
+                staging_dir=str(staging_dir) if staging_dir else None,
+            )
         source = (
             _source_row(db, session, source_root, payload.source_file_count)
             if source_root is not None
@@ -427,6 +492,8 @@ def list_open_sessions(db: Session = Depends(get_db), current_user: User = Depen
             schemas.ImportSessionSummaryOut(
                 id=s.id,
                 source_path=s.source_path,
+                mode=s.mode,
+                staging_dir=s.staging_dir,
                 created_at=s.created_at,
                 updated_at=s.updated_at,
                 file_count=total,
@@ -543,6 +610,26 @@ def get_import_session(
     return get_owned_import_session(db, current_user.id, session_id)
 
 
+@router.patch("/sessions/{session_id}", response_model=schemas.ImportSessionOut)
+def rename_import_session(
+    session_id: str,
+    payload: schemas.ImportSessionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Give the session a name of the user's own ("Norway trip") in place of
+    the source folder's name it was opened with. The collection folder on
+    disk keeps its name - it is tied to the session id, not the label."""
+    session = get_owned_import_session(db, current_user.id, session_id)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A session needs a name")
+    session.source_path = name
+    db.commit()
+    db.refresh(session)
+    return session
+
+
 @router.get("/sessions/{session_id}/files", response_model=list[schemas.StagedFileOut])
 def list_staged_files(
     session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
@@ -553,7 +640,7 @@ def list_staged_files(
     # polls this route, so a stuck session recovers as soon as it's looked at.
     ensure_session_processing(session)
     pairs = compute_staged_pairs(session.staged_files)
-    trashed = _trashed_duplicate_ids(db, session.staged_files)
+    trashed = _trashed_duplicate_ids(db, session, session.staged_files)
     return [
         _to_staged_file_out(f, pairs.get(f.id), f.duplicate_of_image_id in trashed)
         for f in session.staged_files
@@ -586,7 +673,7 @@ def get_staged_file_thumbnail(
     if staged is not None and staged.import_session_id == session_id and staged.file_type == FileType.raw:
         demosaic_path = staged_demosaic_path(thumb_dir, file_id)
         if not demosaic_path.exists():
-            source_path = settings.import_staging_root / staged.staged_path
+            source_path = staged_file_path(staged)
             if source_path.exists():
                 try:
                     # Thumbnail only: a grid scroll must not queue behind the
@@ -636,7 +723,7 @@ def get_staged_file_preview(
     if preview_path.exists():
         return FileResponse(preview_path, headers=_STAGED_CACHE_HEADERS)
 
-    staged_full_path = settings.import_staging_root / staged.staged_path
+    staged_full_path = staged_file_path(staged)
     if not staged_full_path.exists():
         raise HTTPException(status_code=404, detail="Staged file missing from disk")
 
@@ -700,12 +787,12 @@ def get_staged_file_full(
         # Its bytes are in the library now. A JPEG is its own full size; a RAW
         # isn't rendered again here - the lightbox stays on the preview.
         image = db.get(Image, staged.duplicate_of_image_id) if staged.duplicate_of_image_id else None
-        library_file = settings.library_root / image.file_path if image else None
+        library_file = resolve_image_path(image) if image else None
         if staged.file_type == FileType.raw or library_file is None or not library_file.exists():
             raise HTTPException(status_code=404, detail="Full-resolution image not available")
         return FileResponse(library_file, headers=_STAGED_FULL_CACHE_HEADERS)
 
-    source_path = settings.import_staging_root / staged.staged_path
+    source_path = staged_file_path(staged)
     if not source_path.exists():
         raise HTTPException(status_code=404, detail="Staged file missing from disk")
 
@@ -766,8 +853,12 @@ def update_staged_file(
         dup_image = (
             db.get(Image, staged.duplicate_of_image_id) if staged.duplicate_of_image_id else None
         )
-        reimportable = dup_image is not None and (
-            dup_image.source_root_id is not None or dup_image.deleted_at is not None
+        # Neither applies to a session that leaves photos in place: it makes
+        # no library copy, so there is nothing to promote to or restore from.
+        reimportable = (
+            session.mode != ImportMode.reference
+            and dup_image is not None
+            and (dup_image.source_root_id is not None or dup_image.deleted_at is not None)
         )
         if not reimportable:
             raise HTTPException(
@@ -788,7 +879,7 @@ def update_staged_file(
     db.refresh(staged)
 
     pairs = compute_staged_pairs(session.staged_files)
-    trashed = _trashed_duplicate_ids(db, [staged])
+    trashed = _trashed_duplicate_ids(db, session, [staged])
     return _to_staged_file_out(staged, pairs.get(staged.id), staged.duplicate_of_image_id in trashed)
 
 
@@ -820,8 +911,10 @@ def bulk_update_staged_files(
                 # Same exceptions as the per-file route: source-root promotions
                 # and restores from the Trash may be (re)selected.
                 dup_image = db.get(Image, staged.duplicate_of_image_id)
-                allowed = dup_image is not None and (
-                    dup_image.source_root_id is not None or dup_image.deleted_at is not None
+                allowed = (
+                    session.mode != ImportMode.reference
+                    and dup_image is not None
+                    and (dup_image.source_root_id is not None or dup_image.deleted_at is not None)
                 )
             if allowed:
                 staged.selected = payload.selected
@@ -834,7 +927,7 @@ def bulk_update_staged_files(
     db.commit()
     db.refresh(session)
     pairs = compute_staged_pairs(session.staged_files)
-    trashed = _trashed_duplicate_ids(db, session.staged_files)
+    trashed = _trashed_duplicate_ids(db, session, session.staged_files)
     return [
         _to_staged_file_out(f, pairs.get(f.id), f.duplicate_of_image_id in trashed)
         for f in session.staged_files

@@ -55,6 +55,13 @@ BORG_PASSPHRASE = "borg_passphrase"
 # the true raw data themselves.
 RAW_NATIVE_DECODE = "raw_native_decode"
 
+# What the Import page does when photos are picked: "ask" each time whether to
+# copy them into the library or leave them where they are, or always do one of
+# the two. Unset counts as "ask". The client sends the chosen mode with the
+# first staging request; the backend never reads this key for itself.
+IMPORT_MODE_DEFAULT = "import_mode_default"
+IMPORT_MODE_DEFAULTS = ("ask", "copy", "reference")
+
 # "1" when the Auto develop button is shown in the editor. Off by default: the
 # suggestion only becomes useful once the user has saved a few edits, so it's
 # an explicit opt-in from Settings (which explains how it learns).
@@ -156,6 +163,11 @@ def get_trash_retention_days(db: Session) -> int:
 
 def get_raw_native_decode(db: Session) -> bool:
     return get_setting(db, RAW_NATIVE_DECODE) == "1"
+
+
+def get_import_mode_default(db: Session) -> str:
+    value = get_setting(db, IMPORT_MODE_DEFAULT)
+    return value if value in IMPORT_MODE_DEFAULTS else "ask"
 
 
 def get_auto_develop_enabled(db: Session) -> bool:

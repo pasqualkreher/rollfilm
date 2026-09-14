@@ -24,7 +24,9 @@ import type {
   ImmichTestResult,
   ImmichUploadResult,
   ImportProgress,
+  ImportMode,
   ImportSessionOut,
+  ImportSettings,
   ImportSessionRescan,
   ImportSessionSummary,
   LibraryFacets,
@@ -1011,7 +1013,14 @@ export const api = {
       // source per request), and the first time a folder is staged into a
       // session, how many files its scan found. That is what records the
       // folder as one of the session's sources to continue from later.
-      source?: { root: string | null; fileCount?: number }
+      source?: { root: string | null; fileCount?: number },
+      // Copy into the library or leave the photos where they are. Read by
+      // the first batch only (it creates the session); appends follow the
+      // session's mode.
+      mode: ImportMode = "copy",
+      // Copy mode: where the session's collection folder is created; null =
+      // "Import" inside the library folder. First batch only, like `mode`.
+      stagingFolder: string | null = null
     ): Promise<ImportSessionOut> {
       return request(`/import/sessions/stage-paths`, {
         method: "POST",
@@ -1022,9 +1031,14 @@ export const api = {
           total_bytes: totalBytes,
           source_root: source?.root ?? null,
           source_file_count: source?.fileCount ?? null,
+          mode,
+          staging_folder: stagingFolder,
         }),
         signal,
       });
+    },
+    rename(id: string, name: string): Promise<ImportSessionOut> {
+      return request(`/import/sessions/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
     },
     progress(id: string): Promise<ImportProgress> {
       return request(`/import/sessions/${id}/progress`);
@@ -1203,6 +1217,14 @@ export const api = {
     },
     getRawDecode(): Promise<RawDecodeSettings> {
       return request(`/settings/raw`);
+    },
+    // Whether the Import page asks each time if photos are copied into the
+    // library or left where they are, or remembers one answer.
+    getImport(): Promise<ImportSettings> {
+      return request(`/settings/import`);
+    },
+    updateImport(mode_default: ImportSettings["mode_default"]): Promise<ImportSettings> {
+      return request(`/settings/import`, { method: "PUT", body: JSON.stringify({ mode_default }) });
     },
     updateRawDecode(native_decode: boolean): Promise<RawDecodeSettings> {
       return request(`/settings/raw`, { method: "PUT", body: JSON.stringify({ native_decode }) });

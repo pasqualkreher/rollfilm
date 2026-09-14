@@ -95,7 +95,8 @@ export function ExternalSources() {
       <p className="import-panel-desc">
         Show photos from a folder, such as a NAS or an archive, without copying them. The files
         stay where they are. Each source is scanned at startup and when you click its scan
-        button.
+        button - except a folder an import added by leaving its photos in place, which only
+        scans when you ask.
       </p>
       <div className="import-toolbar" style={{ flexWrap: "wrap" }}>
         <input
@@ -152,6 +153,7 @@ export function ExternalSources() {
                 <span className="source-meta">
                   {s.image_count} photo{s.image_count === 1 ? "" : "s"} · {formatScanned(s.last_scanned_at)}
                   {s.scanning && <span className="source-scanning"> · scanning…</span>}
+                  {!s.auto_scan && " · added by an import, not scanned at startup"}
                   {!s.available && (
                     <span className="source-disconnected-note">
                       {" "}· not connected. Its photos are hidden until you reconnect it.
@@ -168,7 +170,9 @@ export function ExternalSources() {
                   title={
                     !s.available
                       ? "Connect the drive or folder to scan it"
-                      : "Scan the folder again. New files are added and photos you removed from this source reappear."
+                      : !s.auto_scan
+                        ? "Scan the whole folder. Every photo in it is added, including the ones left out of the import."
+                        : "Scan the folder again. New files are added and photos you removed from this source reappear."
                   }
                 >
                   <IconRotate size={14} />
