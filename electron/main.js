@@ -62,6 +62,15 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let backendProc = null;
+// A backend that dies mid-session (an out-of-memory kill during a big import
+// is the usual way) used to leave the window up with every request failing
+// and nothing to say why - the only dialog for a dead backend runs during the
+// launch. Now it is relaunched, a couple of times at most: a backend that
+// keeps dying is reported with the log path instead of restarted forever.
+const BACKEND_RELAUNCH_LIMIT = 2;
+let backendRelaunches = 0;
+let backendEverHealthy = false;
+
 let apiPort = 0;
 let apiBaseUrl = "";
 let mainWindow = null;
@@ -612,7 +621,10 @@ async function waitForHealth(timeoutMs = 180000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!backendProc || backendProc.exitCode !== null) return "died";
-    if (await pingOnce(`${apiBaseUrl}/health`)) return "ok";
+    if (await pingOnce(`${apiBaseUrl}/health`)) {
+      backendEverHealthy = true;
+      return "ok";
+    }
     await new Promise((r) => setTimeout(r, 500));
   }
   return "timeout";
@@ -680,28 +692,50 @@ function startBackend() {
   const { cmd, args, cwd, env } = resolveBackendCommand();
   const log = openBackendLogStream();
   log.write(`[main] ${new Date().toISOString()} launching: ${cmd} ${args.join(" ")}\n`);
-  backendProc = spawn(cmd, args, { cwd, env });
+  const proc = spawn(cmd, args, { cwd, env });
+  backendProc = proc;
 
-  backendProc.stdout.on("data", (d) => {
+  proc.stdout.on("data", (d) => {
     process.stdout.write(`[backend] ${d}`);
     log.write(d);
   });
-  backendProc.stderr.on("data", (d) => {
+  proc.stderr.on("data", (d) => {
     process.stderr.write(`[backend] ${d}`);
     log.write(d);
   });
-  backendProc.on("error", (err) => {
+  proc.on("error", (err) => {
     log.write(`[main] failed to launch backend: ${err.message}\n`);
     dialog.showErrorBox(
       "Backend failed to start",
       `Could not launch the backend process:\n\n${cmd}\n\n${err.message}\n\nLog file:\n${backendLogPath()}`
     );
   });
-  backendProc.on("exit", (code, signal) => {
+  proc.on("exit", (code, signal) => {
     process.stderr.write(`[backend] exited (code=${code}, signal=${signal})\n`);
     log.write(`[main] backend exited (code=${code}, signal=${signal})\n`);
     log.end();
-    backendProc = null;
+    // stopBackend() clears backendProc BEFORE killing: an exit that still
+    // finds itself registered was not asked for.
+    const unexpected = backendProc === proc;
+    if (backendProc === proc) backendProc = null;
+    if (!unexpected || !backendEverHealthy) return;
+    if (backendRelaunches < BACKEND_RELAUNCH_LIMIT) {
+      backendRelaunches++;
+      const delay = 2000 * backendRelaunches;
+      process.stderr.write(`[main] relaunching backend in ${delay}ms (attempt ${backendRelaunches})\n`);
+      setTimeout(() => {
+        if (backendProc) return; // something else already started one
+        startBackend();
+        // The renderer notices the backend is back through its own health
+        // polling; nothing to signal here.
+      }, delay);
+      return;
+    }
+    dialog.showErrorBox(
+      "Backend stopped",
+      `The Rollfilm backend stopped unexpectedly and could not be restarted.\n\n` +
+        `Quit and reopen Rollfilm. The log usually shows why:\n${backendLogPath()}`
+    );
   });
 }
 

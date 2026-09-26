@@ -122,11 +122,28 @@ def raise_open_files_limit() -> None:
         pass
 
 
+def cap_native_thread_pools() -> None:
+    """Keep the BLAS / OpenMP pools inside torch, numpy and OpenCV from each
+    spawning one thread per logical core. On an 8-core M3 that is 4
+    performance + 4 efficiency cores, and torch's own set_num_threads() does
+    not reach Accelerate (VECLIB) or OpenMP - so a CLIP batch and a render
+    could fan out to 8 threads *each* while the UI fought for the same cores.
+    Must be set before the first import of numpy/torch/cv2; a value the user
+    set themselves wins."""
+    cores = os.cpu_count() or 4
+    perf = str(max(2, cores // 2))
+    for var in ("OMP_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        os.environ.setdefault(var, perf)
+    # The HF tokenizers fork-warning + its own thread pool are noise here.
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+
 def main() -> None:
     # Make the backend package importable when frozen or launched from elsewhere.
     if str(BASE_DIR) not in sys.path:
         sys.path.insert(0, str(BASE_DIR))
 
+    cap_native_thread_pools()
     use_bundled_ca_certificates()
     raise_open_files_limit()
     rehydrate_database()
@@ -163,4 +180,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # In the PyInstaller bundle every multiprocessing helper (the resource
+    # tracker torch's segmentation load starts, a forkserver) is spawned as a
+    # fresh copy of THIS executable. Without freeze_support() that copy simply
+    # ran main(): a second backend booted, re-ran the alembic migrations on the
+    # live database and died on "address already in use" - seen in the desktop
+    # log the moment the masks model was loaded. PyInstaller's runtime hook
+    # turns this call into the check that diverts those helpers.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()
