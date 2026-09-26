@@ -30,6 +30,7 @@ from app.db.models import (
 from app.db.session import get_db
 from app.services.filesystem import resolve_image_path
 from app.services.import_pipeline import (
+    ReviewRenderBusy,
     STAGED_PREVIEW_PX,
     StagedFullSuperseded,
     append_uploaded_files,
@@ -735,6 +736,13 @@ def get_staged_file_thumbnail(
     return FileResponse(thumb_path, headers=_STAGED_CACHE_HEADERS)
 
 
+# How long a lightbox request may queue for a review render slot before it is
+# shed with 503 (the browser retries). Long enough that the common case - one
+# demosaic ahead of it - is simply waited out, short enough that a burst of
+# openings can't tie up uvicorn's thread pool.
+_REVIEW_RENDER_WAIT_S = 8.0
+
+
 @router.get("/sessions/{session_id}/files/{file_id}/preview")
 def get_staged_file_preview(
     session_id: str,
@@ -776,7 +784,18 @@ def get_staged_file_preview(
     try:
         # Shares the render gate with the background pass (and produces a RAW's
         # grid thumbnail in the same decode, if that pass hasn't got there yet).
-        render_review_derivatives(staged_full_path, file_id, thumb_dir, is_raw=is_raw)
+        # The wait for a slot is bounded: a lightbox opened while the review
+        # pass has every slot busy used to park this request's server thread
+        # for as long as the queue took, and a handful of those starved the
+        # /files and /progress polls - the whole review looked frozen. Now the
+        # request sheds with 503 + Retry-After and the lightbox asks again.
+        render_review_derivatives(
+            staged_full_path, file_id, thumb_dir, is_raw=is_raw, slot_timeout=_REVIEW_RENDER_WAIT_S
+        )
+    except ReviewRenderBusy:
+        raise HTTPException(
+            status_code=503, detail="Preview is still rendering", headers={"Retry-After": "2"}
+        )
     except Exception:
         logger.exception("Staged preview render failed for %s", staged.original_filename)
     if preview_path.exists():
@@ -858,7 +877,12 @@ def get_staged_file_full(
 
     try:
         full_path = render_staged_full(
-            source_path, file_id, staged_thumb_dir(session_id), is_stale=_is_stale
+            source_path, file_id, staged_thumb_dir(session_id), is_stale=_is_stale,
+            lock_timeout=_REVIEW_RENDER_WAIT_S,
+        )
+    except ReviewRenderBusy:
+        raise HTTPException(
+            status_code=503, detail="Full-resolution render is still busy", headers={"Retry-After": "2"}
         )
     except StagedFullSuperseded:
         # The client aborted this fetch when the user moved on; the status only

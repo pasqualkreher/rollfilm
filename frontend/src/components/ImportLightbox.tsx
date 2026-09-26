@@ -48,6 +48,21 @@ export function ImportLightbox({
   // state instead of the browser's broken-image icon; rating, the import
   // toggle and arrow-key navigation keep working.
   const [loadFailed, setLoadFailed] = useState(false);
+  // Whether the <img> currently on the stage has decoded. Until it has, the
+  // stage shows a "Developing…" hint instead of nothing: a staged RAW whose
+  // preview the import's render pass hasn't reached yet is rendered on this
+  // very request, which is seconds - an empty stage read as "the photo doesn't
+  // show". Reset with the photo and with the preview/full swap.
+  const [photoLoaded, setPhotoLoaded] = useState(false);
+  // Bumped to re-mount the <img> for a retry - a fresh request rather than the
+  // browser's cached failure. The server answers 503 while every render slot
+  // is busy (and the browser reports that as an error), so a failed preview is
+  // asked for again a few times before it counts as unreadable.
+  const [retryNonce, setRetryNonce] = useState(0);
+  const retriesRef = useRef(0);
+  const retryTimerRef = useRef<number | undefined>(undefined);
+  const PREVIEW_RETRIES = 6;
+  const PREVIEW_RETRY_MS = 2000;
   // Swap the review preview for the full-resolution render once the user zooms
   // in, so 100% shows the photo's own pixels (which is what judging critical
   // focus needs) instead of an upscaled 2048px preview. If that render can't be
@@ -69,6 +84,9 @@ export function ImportLightbox({
     setLoadFailed(false);
     setHiRes(false);
     setFullFailed(false);
+    setPhotoLoaded(false);
+    retriesRef.current = 0;
+    window.clearTimeout(retryTimerRef.current);
     // A new photo always opens at fit - carrying a 400% view over to the next
     // frame would show a random corner of it.
     zoom.resetZoom();
@@ -82,6 +100,7 @@ export function ImportLightbox({
   useEffect(() => {
     if (zoom.zoomed && !fullFailed) setHiRes(true);
   }, [zoom.zoomed, fullFailed]);
+  useEffect(() => () => window.clearTimeout(retryTimerRef.current), []);
 
   useEffect(() => {
     if (!file) return;
@@ -132,6 +151,10 @@ export function ImportLightbox({
     return () => pins.clear();
   }, []);
   useEffect(() => {
+    // The photo on screen goes first: its request must not share the
+    // browser's few connections with a dozen low-priority neighbours while
+    // the user is looking at an empty stage.
+    if (!photoLoaded) return;
     const order: string[] = [];
     // Bounded window: each pinned preview holds ~11MB decoded, and an
     // unbounded one fed system-wide swapping during imports. The depth scales
@@ -144,7 +167,7 @@ export function ImportLightbox({
       if (behind) order.push(behind.id);
     }
     pinnedNeighbors.current.update(order, (id) => api.import.stagedPreviewUrl(sessionId, id));
-  }, [files, index, sessionId]);
+  }, [files, index, sessionId, photoLoaded]);
 
   if (!file) return null;
 
@@ -233,10 +256,25 @@ export function ImportLightbox({
               <div className="detail-photo-error">
                 <span className="detail-photo-error-icon" aria-hidden="true"><IconImage size={40} /></span>
                 <p>This photo cannot be displayed. The file may be damaged or unreadable.</p>
+                <p className="detail-photo-error-name">{file.original_filename}</p>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    retriesRef.current = 0;
+                    setLoadFailed(false);
+                    setRetryNonce((n) => n + 1);
+                  }}
+                >
+                  Retry
+                </button>
               </div>
             ) : (
               <img
+                key={retryNonce}
                 ref={zoom.setImg}
+                // The photo the user is looking at always wins the connection
+                // pool over the neighbour prefetches and the grid's thumbnails.
+                {...({ fetchpriority: "high" } as Record<string, string>)}
                 className={`detail-photo${bgMode === "dark" ? " framed" : ""}${
                   zoom.zoomed ? " zoomed" : ""
                 }${zoom.zoomAnim ? " zoom-anim" : ""}`}
@@ -248,21 +286,38 @@ export function ImportLightbox({
                     : api.import.stagedPreviewUrl(sessionId, file.id)
                 }
                 alt={file.original_filename}
-                onLoad={() => zoom.refit()}
+                onLoad={() => {
+                  zoom.refit();
+                  setPhotoLoaded(true);
+                }}
                 onError={() => {
                   // The full render is unavailable (or was superseded because
                   // the user zapped on): drop back to the preview so the photo
                   // never shows as a broken image. Only a failing PREVIEW is a
-                  // real "can't display this file".
+                  // real "can't display this file" - and only after the
+                  // retries the busy-server case is given (see retryNonce).
                   if (hiRes) {
                     setFullFailed(true);
                     setHiRes(false);
+                  } else if (retriesRef.current < PREVIEW_RETRIES) {
+                    retriesRef.current++;
+                    window.clearTimeout(retryTimerRef.current);
+                    retryTimerRef.current = window.setTimeout(
+                      () => setRetryNonce((n) => n + 1),
+                      PREVIEW_RETRY_MS
+                    );
                   } else {
                     setLoadFailed(true);
                   }
                 }}
                 {...zoom.imageHandlers}
               />
+            )}
+            {!loadFailed && !photoLoaded && (
+              <div className="lightbox-wait-spinner lightbox-developing" aria-live="polite">
+                <span className="spinner" aria-hidden="true" />
+                {file.file_type === "raw" && !file.processed ? "Analysing…" : "Developing preview…"}
+              </div>
             )}
             <button
               className="lightbox-nav-btn lightbox-nav-next"

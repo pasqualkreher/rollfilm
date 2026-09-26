@@ -56,7 +56,7 @@ from app.services.settings_store import (
     IMMICH_MODE_SELECTIVE,
     get_immich_config,
 )
-from app.services.thumbnails import THUMBNAIL_MAX_PX, THUMBNAIL_SCALE, derivative_dir
+from app.services.thumbnails import RENDER_SLOTS, THUMBNAIL_MAX_PX, THUMBNAIL_SCALE, derivative_dir
 from app.workers.queue import (
     enqueue_immich_upload,
     enqueue_post_import,
@@ -128,7 +128,12 @@ STAGED_PREVIEW_PX = 2048
 # One decode of a big sensor's RAW is expensive in memory, so both the
 # background pass and the routes' fallback share this one gate - a grid full of
 # RAWs can't multiply it, and the two paths can't stack on top of each other.
-RAW_RENDER_SLOTS = threading.BoundedSemaphore(min(4, max(2, (os.cpu_count() or 4) // 2)))
+# Never more than the library's RAM-budgeted render slots (thumbnails.RENDER_SLOTS):
+# a review demosaic costs the same memory as a library render, and on an 8GB
+# machine the two gates stacked to more concurrent decodes than the RAM holds.
+RAW_RENDER_SLOTS = threading.BoundedSemaphore(
+    max(1, min(RENDER_SLOTS, min(4, max(2, (os.cpu_count() or 4) // 2))))
+)
 
 # Kept off the analysis pool: a demosaic takes ~100x longer than the embedded-
 # preview work, and letting it occupy those workers would delay the fast
@@ -184,8 +189,24 @@ def _save_atomic(image: PILImage.Image, dest: Path, quality: int = 88) -> None:
         tmp.unlink(missing_ok=True)
 
 
+class ReviewRenderBusy(Exception):
+    """No review render slot came free within the caller's patience. Raised only
+    for callers that passed a timeout - the lightbox routes, which would rather
+    shed the request (503, the browser retries) than hold a server thread for
+    the length of the queue. The background pass passes none and waits."""
+
+
+def _acquire(gate, timeout: float | None) -> bool:
+    return gate.acquire(timeout=timeout) if timeout is not None else gate.acquire()
+
+
 def render_review_derivatives(
-    read_path: Path, staged_id: str, thumb_dir: Path, is_raw: bool, want_preview: bool = True
+    read_path: Path,
+    staged_id: str,
+    thumb_dir: Path,
+    is_raw: bool,
+    want_preview: bool = True,
+    slot_timeout: float | None = None,
 ) -> None:
     """Write the review derivatives of one staged file.
 
@@ -210,7 +231,9 @@ def render_review_derivatives(
     if not any(_todo()):
         return
 
-    with RAW_RENDER_SLOTS:
+    if not _acquire(RAW_RENDER_SLOTS, slot_timeout):
+        raise ReviewRenderBusy()
+    try:
         # Re-checked inside the gate: while queuing, the other path may have
         # produced exactly this file.
         need_thumb, need_preview = _todo()
@@ -229,6 +252,8 @@ def render_review_derivatives(
             th = min(max(1, round(rendered.height * 0.5)), THUMBNAIL_MAX_PX)
             rendered.thumbnail((tw, th), PILImage.LANCZOS)
             _save_atomic(rendered, demosaic_path)
+    finally:
+        RAW_RENDER_SLOTS.release()
 
 
 # Only one full-resolution staged render at a time. It is by far the memory-
@@ -251,6 +276,7 @@ def render_staged_full(
     staged_id: str,
     thumb_dir: Path,
     is_stale: Callable[[], bool] | None = None,
+    lock_timeout: float | None = None,
 ) -> Path:
     """Render + cache the full-resolution JPEG of a staged RAW, for true 100%
     zoom in the import review lightbox, and return its path.
@@ -275,7 +301,12 @@ def render_staged_full(
             raise StagedFullSuperseded()
 
     _bail_if_stale()
-    with _staged_full_render_lock:
+    # `lock_timeout` bounds the queue on the single slot the same way
+    # `slot_timeout` does for the review pass: the route sheds with 503 rather
+    # than parking a server thread behind somebody else's 40MP render.
+    if not _acquire(_staged_full_render_lock, lock_timeout):
+        raise ReviewRenderBusy()
+    try:
         # While queuing, another request for the same photo may have finished it.
         if out.exists():
             return out
@@ -287,6 +318,8 @@ def render_staged_full(
         del lin
         thumb_dir.mkdir(parents=True, exist_ok=True)
         _save_atomic(rendered, out, quality=90)
+    finally:
+        _staged_full_render_lock.release()
     return out
 
 
@@ -338,6 +371,14 @@ def _enqueue_review_derivatives(
     path is usable is decided when the job *runs*, not when it is queued: it
     may start minutes later, by which time the card can be gone."""
 
+    # One queued job per file: the session self-heal below re-offers every
+    # preview-less row on each poll of the review, and without this a slow
+    # render would pile up a duplicate no-op job per second behind it.
+    with _review_queued_lock:
+        if staged_id in _review_queued:
+            return
+        _review_queued.add(staged_id)
+
     def _work() -> None:
         try:
             if not thumb_dir.is_dir():
@@ -350,11 +391,20 @@ def _enqueue_review_derivatives(
             # The routes still render on demand, so a failure here costs speed,
             # never correctness.
             logger.exception("Review derivatives failed for %s", staged_id)
+        finally:
+            with _review_queued_lock:
+                _review_queued.discard(staged_id)
 
     try:
         _derivative_executor.submit(_work)
     except Exception:
+        with _review_queued_lock:
+            _review_queued.discard(staged_id)
         logger.exception("Could not queue RAW review derivatives for %s", staged_id)
+
+
+_review_queued: set[str] = set()
+_review_queued_lock = threading.Lock()
 
 
 def staged_file_path(staged: ImportStagedFile) -> Path:
@@ -853,6 +903,21 @@ def ensure_session_processing(session: ImportSession) -> None:
     if session.status != ImportSessionStatus.staging:
         return
     pending = [f.id for f in session.staged_files if not f.processed]
+    # The lightbox preview is rendered at the tail of a file's analysis. A row
+    # that was analysed before a restart (processed, grid thumbnail present)
+    # but whose render job died with the old process would otherwise never
+    # get one in the background - every opening of it in the lightbox was a
+    # cold demosaic on the request. Offer those again here; the queue
+    # deduplicates, and a preview that exists is a stat() and nothing else.
+    thumb_dir = staged_thumb_dir(session.id)
+    for f in session.staged_files:
+        if not f.processed or f.imported:
+            continue
+        if staged_preview_path(thumb_dir, f.id).exists():
+            continue
+        _enqueue_review_derivatives(
+            None, staged_file_path(f), f.id, thumb_dir, f.file_type == FileType.raw
+        )
     if not pending:
         return
     # Rebuild the in-memory progress entry after a restart, so the UI's

@@ -354,8 +354,13 @@ export function ImportReviewGrid({
           style={{ height: row.height, flex: "none" }}
           // The pointer landing on a card is the earliest signal that this is
           // the photo about to be opened - warming here buys the preview the
-          // moment before the click.
-          onPointerEnter={() => preloadImage(api.import.stagedPreviewUrl(sessionId, f.id))}
+          // moment before the click. Only once the import's own render pass is
+          // done (same gate as the batch warmer above): while it runs, every
+          // card the mouse sweeps over would otherwise queue a demosaic of its
+          // own on the request path.
+          onPointerEnter={() => {
+            if (warmPreviews) preloadImage(api.import.stagedPreviewUrl(sessionId, f.id));
+          }}
           // Plain click previews; Cmd/Ctrl-click or Shift-click toggles the
           // import tick (the checkbox does the same without a modifier).
           onClick={(e) => (isSelectClick(e) ? onToggleSelect(i, e.shiftKey) : onOpen(i))}
