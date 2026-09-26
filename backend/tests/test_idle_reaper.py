@@ -27,10 +27,23 @@ def test_caches_survive_while_the_editor_is_busy(monkeypatch):
 def test_caches_are_released_after_the_idle_period(monkeypatch):
     _fill_editor_caches()
     monkeypatch.setattr(thumbnails, "_editor_last_activity", time.monotonic() - 1000.0)
+    monkeypatch.setattr(thumbnails, "_caches_touched_at", time.monotonic() - 1000.0)
     assert thumbnails.release_editor_caches_if_idle(60.0) is True
     assert thumbnails.editor_caches_empty()
     # Nothing left: a second sweep reports nothing to do.
     assert thumbnails.release_editor_caches_if_idle(60.0) is False
+
+
+def test_a_freshly_warmed_cache_is_not_released(monkeypatch):
+    """The lightbox warms the editor base before any editor render happens;
+    judged by renders alone that base looked idle the moment it landed."""
+    _fill_editor_caches()
+    monkeypatch.setattr(thumbnails, "_editor_last_activity", time.monotonic() - 1000.0)
+    thumbnails._note_cache_touch()
+    assert thumbnails.release_editor_caches_if_idle(60.0) is False
+    assert not thumbnails.editor_caches_empty()
+    monkeypatch.setattr(thumbnails, "_caches_touched_at", time.monotonic() - 1000.0)
+    assert thumbnails.release_editor_caches_if_idle(60.0) is True
 
 
 def test_the_sweep_clears_the_mask_fields_with_the_bases(monkeypatch):
@@ -38,6 +51,7 @@ def test_the_sweep_clears_the_mask_fields_with_the_bases(monkeypatch):
     with masks._field_cache_lock:
         masks._FIELD_CACHE[("t", "{}", 4, 4, None)] = np.zeros((4, 4), np.float32)
     monkeypatch.setattr(thumbnails, "_editor_last_activity", time.monotonic() - 1000.0)
+    monkeypatch.setattr(thumbnails, "_caches_touched_at", time.monotonic() - 1000.0)
     idle_reaper.sweep_once()
     assert thumbnails.editor_caches_empty()
     assert not masks._FIELD_CACHE

@@ -691,6 +691,12 @@ export const api = {
     editorWarm(id: string): Promise<void> {
       return request<unknown>(`/images/${id}/editor-warm`, { method: "POST" }).then(() => undefined);
     },
+    // Render a raw's 100%-zoom full.jpg in the background (the lightbox calls
+    // this once the user has rested on a raw), so the zoom that follows is a
+    // file read. Answers at once; a no-op for JPEGs and cached photos.
+    fullWarm(id: string): Promise<void> {
+      return request<unknown>(`/images/${id}/full-warm`, { method: "POST" }).then(() => undefined);
+    },
     segmentPrepare(id: string, edits: ImageEdits): Promise<void> {
       return request(`/images/${id}/segment/prepare`, {
         method: "POST",

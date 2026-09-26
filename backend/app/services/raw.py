@@ -134,7 +134,21 @@ def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool) -> np.ndarray:
     half_size only affects output resolution, not colour rendering; the editor
     bases are capped well below even the half-size resolution, so they pass
     half_size=True and only the final full-resolution renders pay for a full
-    demosaic."""
+    demosaic.
+
+    That full demosaic is the single biggest cost in the app, and for Fuji's
+    X-Trans sensors LibRaw's default is its most expensive option: Markesteijn
+    3-pass. Measured on a 40MP RAF (M3): 13.8s. The 1-pass variant renders in
+    6.8s and is, on the same file, indistinguishable (76dB PSNR, not one pixel
+    off by more than 8/255) - it is what darktable ships as its default too.
+    dcraw's quality ladder reaches it through PPG (`quality 2`: for an X-Trans
+    filter layout that is `xtrans_interpolate(1)`; the real PPG only runs on
+    Bayer). Bayer sensors keep LibRaw's default (AHD), where the trade-off is
+    a different one and nothing was measured. half_size=True skips the
+    demosaic altogether, so the option is only passed for full decodes."""
+    kwargs: dict = {}
+    if not half_size and _is_xtrans(raw):
+        kwargs["demosaic_algorithm"] = rawpy.DemosaicAlgorithm.PPG
     rgb16 = raw.postprocess(
         use_camera_wb=True,
         half_size=half_size,
@@ -142,8 +156,18 @@ def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool) -> np.ndarray:
         highlight_mode=rawpy.HighlightMode.Blend,
         gamma=(1, 1),
         output_bps=16,
+        **kwargs,
     )
     return np.asarray(rgb16, dtype=np.float32) / 65535.0
+
+
+def _is_xtrans(raw: "rawpy.RawPy") -> bool:
+    """Fuji's 6x6 colour filter layout (Bayer is 2x2)."""
+    try:
+        pattern = raw.raw_pattern
+        return pattern is not None and tuple(pattern.shape) == (6, 6)
+    except Exception:
+        return False
 
 
 def raw_dimensions(path: Path) -> tuple[int, int] | None:

@@ -475,6 +475,20 @@ export function ImageDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restedId, adjustOpen]);
 
+  // And the raw's 100%-zoom render, a little later still: a raw the user has
+  // looked at for a second and a half is one they may zoom into, and that
+  // zoom used to be a 7-9s render on the spot. JPEGs need nothing (their
+  // full size is the file itself); moving on cancels the timer, and a warm
+  // already queued on the server is superseded by the next photo's.
+  useEffect(() => {
+    if (restedId !== activeId || adjustOpen || image?.file_type !== "raw" || hiRes) return;
+    const t = setTimeout(() => {
+      void api.images.fullWarm(restedId).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restedId, adjustOpen, image?.file_type]);
+
   // Similar-photos strip: a CLIP search per photo is the most expensive
   // per-view request the lightbox makes - only run it for the rested photo,
   // never for photos zapped past.

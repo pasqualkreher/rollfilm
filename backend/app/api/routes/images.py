@@ -2470,6 +2470,17 @@ def get_full(image_id: str, db: Session = Depends(get_db), current_user: User = 
     with _full_zoom_lock:
         seq = next(_full_zoom_seq)
         _full_zoom_latest = seq
+    # An unedited JPEG/PNG IS its full resolution: the develop pipeline on a
+    # neutral gain-1.0 source is an exact identity, so rendering a full.jpg
+    # for it was a full decode plus re-encode of a 40MP frame for a copy of
+    # the file it started from. Hand the original over (the browser applies
+    # its EXIF orientation, as it does for any image).
+    if image.file_type != FileType.raw and thumbnails.is_untouched(image):
+        original = resolve_image_path(image)
+        if original.exists():
+            return FileResponse(
+                original, headers={"Cache-Control": "private, max-age=31536000, immutable"}
+            )
     path = thumbnails.derivative_dir(image.id) / "full.jpg"
     if not path.exists():
 
@@ -2492,6 +2503,68 @@ def get_full(image_id: str, db: Session = Depends(get_db), current_user: User = 
     return FileResponse(
         path, headers={"Cache-Control": "private, max-age=31536000, immutable"}
     )
+
+
+# One background full.jpg warm at a time; a second request for the same photo
+# while it runs is a no-op.
+_full_warm_lock = threading.Lock()
+_full_warm_inflight: set[str] = set()
+
+
+@router.post("/{image_id}/full-warm", status_code=202)
+def full_warm(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Render the 100%-zoom full.jpg of a raw now, in the background - the
+    lightbox asks for this once the user has rested on a photo for a moment,
+    so the zoom that follows is a file read instead of a 7-9s render. Only
+    for raws (an unedited JPEG is served as its own file, see get_full),
+    never while the editor is rendering or an import is producing
+    derivatives, and one at a time. Claims "newest zoom" like a real /full
+    request: paging on makes a warm still queued on the render lock bail,
+    the same way abandoned zooms do. A render that is already running finishes
+    - it also fills the editor's native base for that photo."""
+    from app.workers.queue import derivatives_pending
+
+    image = get_owned_image(db, current_user.id, image_id)
+    if image.file_type != FileType.raw:
+        return {"status": "not-needed"}
+    if (thumbnails.derivative_dir(image.id) / "full.jpg").exists():
+        return {"status": "cached"}
+    if thumbnails.editor_recently_active(2.0) or derivatives_pending() > 0:
+        return {"status": "busy"}
+    with _full_warm_lock:
+        if image_id in _full_warm_inflight:
+            return {"status": "running"}
+        _full_warm_inflight.add(image_id)
+    global _full_zoom_latest
+    with _full_zoom_lock:
+        seq = next(_full_zoom_seq)
+        _full_zoom_latest = seq
+
+    def _is_stale() -> bool:
+        with _full_zoom_lock:
+            return _full_zoom_latest != seq
+
+    def run() -> None:
+        try:
+            with SessionLocal() as bg_db:
+                bg_image = bg_db.get(Image, image_id)
+                if bg_image is None or bg_image.owner_id != current_user.id:
+                    return
+                thumbnails.generate_full(bg_image, is_stale=_is_stale)
+        except thumbnails.PreviewSuperseded:
+            pass  # the user moved on before the render lock came free
+        except Exception:
+            logger.info("Full-resolution warm-up for %s did not complete", image_id, exc_info=True)
+        finally:
+            with _full_warm_lock:
+                _full_warm_inflight.discard(image_id)
+
+    threading.Thread(target=run, name=f"full-warm-{image_id[:8]}", daemon=True).start()
+    return {"status": "started"}
 
 
 @router.get("/{image_id}/original")

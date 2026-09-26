@@ -2796,6 +2796,7 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
 
     try:
         out = _compute_editor_base(image_id, path_str, mtime_ns, max_px, source)
+        _note_cache_touch()
         with _base_cache_lock:
             _BASE_CACHE[key] = out
             _BASE_CACHE.move_to_end(key)
@@ -2885,17 +2886,27 @@ def _wait_for_same_image_decodes(image_id: str, path_str: str, mtime_ns: int) ->
             ev.wait(timeout=60)
 
 
-def warm_editor_base(image_id: str, path_str: str, mtime_ns: int) -> None:
+def warm_editor_base(image_id: str, path_str: str, mtime_ns: int, then_native: bool = False) -> None:
     """Decode the biggest preview base for this image in the background.
 
     Cheap to call on every preview request: it returns at once if the base is
     already there or is on its way. One thread per image, and the work is the
-    decode the ladder would otherwise do while the user waits."""
+    decode the ladder would otherwise do while the user waits.
+
+    `then_native`: once the preview base is there, go on to the full-
+    resolution one (warm_native_base) - the editor asks for this, so a user
+    who opens a raw, works the sliders for a few seconds and then zooms to
+    100% lands on a decoded base instead of a 7s wait behind a 2.5s poll.
+    The lightbox's rest warm-up (editor-warm) does NOT: a full decode for
+    every photo merely looked at would be that wait paid for nothing."""
     key = f"{image_id}:{mtime_ns}"
     top = ULTRA_EDITOR_PREVIEW_PX
     with _base_cache_lock:
-        if (image_id, path_str, mtime_ns, top) in _BASE_CACHE:
-            return
+        have_top = (image_id, path_str, mtime_ns, top) in _BASE_CACHE
+    if have_top:
+        if then_native and not native_base_ready(image_id, mtime_ns):
+            warm_native_base(image_id, path_str, mtime_ns)
+        return
     with _warm_lock:
         if key in _warming:
             return
@@ -2906,6 +2917,8 @@ def warm_editor_base(image_id: str, path_str: str, mtime_ns: int) -> None:
             time.sleep(_WARM_DELAY_S)
             _wait_for_same_image_decodes(image_id, path_str, mtime_ns)
             _cached_editor_base(image_id, path_str, mtime_ns, top)
+            if then_native and not native_base_ready(image_id, mtime_ns):
+                warm_native_base(image_id, path_str, mtime_ns)
         except Exception:
             # A failed warm-up costs nothing: the ladder decodes as it always
             # did. Not worth a stack trace in the log for a photo that is
@@ -2949,6 +2962,7 @@ def _cached_native_base(image_id: str, path_str: str, mtime_ns: int) -> tuple[np
         out = lin.astype(np.float16)
         out.flags.writeable = False
         _native_editor_base = (image_id, mtime_ns, out, gain)
+        _note_cache_touch()
         return out, gain
 
 
@@ -3028,6 +3042,19 @@ def clear_editor_base_caches() -> None:
     invalidate_tone_stage()
 
 
+# When an editor cache was last filled (base, native base, native rung). The
+# idle release below waits on this as well as on the editor's own activity
+# clock: the lightbox warms the editor base (editor-warm) BEFORE any editor
+# render has happened, and judged by renders alone that base was "idle" the
+# moment it landed - the reaper threw it away a minute after launch.
+_caches_touched_at = 0.0
+
+
+def _note_cache_touch() -> None:
+    global _caches_touched_at
+    _caches_touched_at = time.monotonic()
+
+
 def editor_caches_empty() -> bool:
     with _base_cache_lock:
         bases = bool(_BASE_CACHE)
@@ -3049,6 +3076,8 @@ def release_editor_caches_if_idle(idle_s: float) -> bool:
     next render decodes again - a second or two, paid once. Returns whether
     anything was released."""
     if editor_recently_active(idle_s) or editor_caches_empty():
+        return False
+    if time.monotonic() - _caches_touched_at < idle_s:
         return False
     clear_editor_base_caches()
     _grain_cache_clear()
@@ -3109,6 +3138,7 @@ def _native_budget_base(image_id: str, mtime_ns: int, lin16: np.ndarray, budget_
     out = _downscale_linear(lin16, budget_px).astype(np.float16)
     out.flags.writeable = False
     _native_rung_base = (image_id, mtime_ns, budget_px, out)
+    _note_cache_touch()
     return out
 
 
@@ -3443,7 +3473,13 @@ def _render_editor_bytes(
         # (fast=True): those frames arrive by the dozen and each one is being
         # waited on, so that is the worst possible moment to start a decode.
         if not fast:
-            warm_editor_base(image.id, str(path), mtime_ns)
+            # ...and the full-resolution base behind it, when the photo has
+            # more pixels than the ultra tier can show - the editor's 100%
+            # zoom is a sensor-resolution tile and wants that base ready.
+            long_edge = max(int(getattr(image, "width", 0) or 0), int(getattr(image, "height", 0) or 0))
+            warm_editor_base(
+                image.id, str(path), mtime_ns, then_native=long_edge > ULTRA_EDITOR_PREVIEW_PX
+            )
         lin16, gain = _cached_editor_base(image.id, str(path), mtime_ns, base_px)
     t0 = _mark(timing, "base", t0)
     if meta is not None:
@@ -3931,6 +3967,11 @@ def _encode_jpeg_file(path: Path, quality: int, max_size: int | None) -> bytes:
     return buf.getvalue()
 
 
+def is_untouched(image: "Image") -> bool:
+    """Public name of _is_untouched, for the /full route's original-file path."""
+    return _is_untouched(image)
+
+
 def _is_untouched(image: "Image") -> bool:
     """No geometry edits and a neutral develop object. For a gain-1.0 source
     (JPEG/PNG) the whole render pipeline is then an exact identity - the tone
@@ -3991,6 +4032,31 @@ def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None)
         return data
 
 
+def render_untouched_full(image: "Image") -> PILImage.Image:
+    """The 100%-zoom frame of a photo without edits: the native base, the
+    automatic lens correction (on by default, part of how the photo looks in
+    the grid) and the neutral tone curve - nothing else. The general path
+    (render_edited_image) runs the whole develop pipeline over the 40MP
+    frame for this: every stage a no-op, every one of them a pass over half
+    a gigabyte. This is the same rendering the import review's 100% zoom
+    uses (render_staged_full), on the editor's cached base."""
+    from app.services.filesystem import resolve_image_path
+
+    path = resolve_image_path(image)
+    adjustments = adjustments_from_image(image)
+    with _full_render_lock:
+        lin16, gain = _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
+        lin = lens_profile.correct(lin16.astype(np.float32), path, adjustments)
+        out = raw_service.default_tone_to_srgb(lin, _browsing_gain(gain, adjustments))
+        del lin
+    return PILImage.fromarray(out, "RGB")
+
+
+# Full renders slower than this are logged with their breakdown, like the
+# editor previews: this was the one slow path with no numbers at all.
+_SLOW_FULL_MS = 300.0
+
+
 def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) -> Path:
     """Render + cache the full-resolution edited JPEG (for true 100% zoom in the
     lightbox), returning its path. Cheap to serve once cached; cleared whenever
@@ -4018,8 +4084,19 @@ def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) ->
         if out.exists():
             return out
         _bail_if_stale()
-        rendered = render_full_from_stored_edits(image)
+        t0 = time.perf_counter()
+        untouched = _is_untouched(image)
+        rendered = render_untouched_full(image) if untouched else render_full_from_stored_edits(image)
+        t1 = time.perf_counter()
         _save_atomic(rendered, out, quality=90)
+        t2 = time.perf_counter()
+        total_ms = (t2 - t0) * 1000.0
+        if total_ms >= _SLOW_FULL_MS:
+            logger.info(
+                "full render took %.0f ms (%s) %s render=%.0f encode=%.0f px=%d",
+                total_ms, image.id, "untouched" if untouched else "edited",
+                (t1 - t0) * 1000.0, (t2 - t1) * 1000.0, max(rendered.size),
+            )
     return out
 
 
