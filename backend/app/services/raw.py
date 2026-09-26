@@ -37,6 +37,13 @@ def _srgb_to_linear(c: np.ndarray) -> np.ndarray:
 def _linear_to_srgb(c: np.ndarray) -> np.ndarray:
     return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
 
+
+# 16-bit linear value -> 8-bit sRGB, for the neutral full-frame render (see
+# default_tone_to_srgb). 64K entries, built once.
+_LINEAR16_TO_SRGB8 = np.clip(
+    _linear_to_srgb(np.arange(65536, dtype=np.float32) / 65535.0) * 255.0 + 0.5, 0, 255
+).astype(np.uint8)
+
 # When True, RAWs are loaded with NO brightness processing at all - just the
 # native (camera-white-balanced, no auto-bright) demosaic, exactly as the sensor
 # recorded it. Toggled from Settings ("load RAWs without processing"); the app
@@ -92,8 +99,12 @@ def default_tone_to_srgb(lin: np.ndarray, gain: float) -> np.ndarray:
     in-range values."""
     y = (lin @ _LUMA) * gain
     ratio = gain * reinhard_ratio(y, gain)
-    out = _linear_to_srgb(np.clip(lin * ratio[..., None], 0.0, 1.0))
-    return np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    # The sRGB transfer through a 16-bit table instead of np.power on every
+    # value: on a 40MP frame the pow alone was 1.0s of this function's 2.0s,
+    # and the table is within 1/255 of it everywhere (a 16-bit quantisation
+    # of the linear value is far below what 8-bit output can show).
+    q = (np.clip(lin * ratio[..., None], 0.0, 1.0) * 65535.0 + 0.5).astype(np.uint16)
+    return _LINEAR16_TO_SRGB8[q]
 
 RAW_EXTENSIONS = {
     ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw",
