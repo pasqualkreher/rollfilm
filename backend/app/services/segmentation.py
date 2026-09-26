@@ -36,6 +36,7 @@ import io
 import logging
 import os
 import threading
+import time
 from collections import OrderedDict
 
 import numpy as np
@@ -111,6 +112,34 @@ _norm: tuple[np.ndarray, np.ndarray] | None = None
 _label_ids: dict[str, tuple[int, ...]] = {}
 _device = "cpu"
 _model_lock = threading.Lock()
+# monotonic time of the last load or use, for unload_if_idle.
+_last_used = 0.0
+
+
+def unload_if_idle(idle_s: float) -> bool:
+    """Drop the model after `idle_s` without a mask being computed. The B4
+    checkpoint is ~250MB of weights plus the MPS/torch arena behind it, held
+    for the rest of the session after one AI mask. The next mask loads it
+    again from disk (a couple of seconds). Returns whether it was unloaded."""
+    global _model, _norm, _label_ids
+    with _model_lock:
+        if _model is None or time.monotonic() - _last_used < idle_s:
+            return False
+        _model = None
+        _norm = None
+        _label_ids = {}
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if _device == "mps" and hasattr(torch, "mps"):
+            torch.mps.empty_cache()
+    except Exception:  # pragma: no cover - torch missing or no MPS
+        pass
+    logger.info("Segmentation model released after %.0fs idle", idle_s)
+    return True
 
 
 def _from_cache(name: str, cache: str, local_only: bool):
@@ -158,7 +187,8 @@ class SegmentationUnavailable(RuntimeError):
 
 
 def _load():
-    global _model, _norm, _label_ids, _device
+    global _model, _norm, _label_ids, _device, _last_used
+    _last_used = time.monotonic()
     # Like the CLIP loader: several request threads can reach for the model at
     # once on first use, and without the lock each would start its own download.
     if _model is None:

@@ -23,6 +23,8 @@ from app.services.embeddings import ensure_embeddings_table
 from app.services.embeddings import start_background_warmup as start_background_clip_warmup
 from app.services.exif import reap_orphaned_helpers
 from app.services.geocode import warm_in_background as warm_geocoder
+from app.services import machine
+from app.services.idle_reaper import start_idle_reaper
 from app.services.hashing import warm_phash_in_background
 from app.services.immich_sync import start_background_immich_sync
 from app.services.maintenance import start_background_sync
@@ -112,7 +114,11 @@ def on_startup() -> None:
     # background thread once any import has settled, and only when the weights
     # are already on disk - warming up must not start a download on a fresh
     # install (see embeddings.start_background_warmup).
-    start_background_clip_warmup()
+    # Not on a low-RAM machine: there the resident model is what pushes the
+    # editor into swap, so it loads on the first search (or the backfill)
+    # and is released again when idle (see idle_reaper).
+    if not machine.LOW_RAM:
+        start_background_clip_warmup()
     # A hard stop of a previous backend (dev restart, crash) leaves its
     # exiftool -stay_open helpers orphaned forever - sweep them so they
     # can't pile up across restarts (78 accumulated on a dev machine).
@@ -134,8 +140,13 @@ def on_startup() -> None:
     # (the pre-backfill queue forgot its backlog on every restart). A no-op
     # beyond one cheap query when nothing is missing.
     schedule_embedding_backfill()
+    # Release the editor's caches and the ML models once they have sat idle
+    # (services/idle_reaper.py) - nothing held them back before except quitting.
+    start_idle_reaper()
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    # The shell reads the machine profile here (the renderer cannot see the
+    # real RAM: navigator.deviceMemory clamps at 8).
+    return {"status": "ok", "low_ram": machine.LOW_RAM, "ram_gb": machine.ram_gb()}

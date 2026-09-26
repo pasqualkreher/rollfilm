@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import threading
+
+from app.services import machine
 from collections import OrderedDict
 from typing import NamedTuple
 
@@ -37,8 +39,13 @@ _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 _FIELD_CACHE: OrderedDict[tuple[str, str, int, int, "FieldView"], np.ndarray] = OrderedDict()
 _FIELD_CACHE_MAX = 8
 _FIELD_CACHE_MAX_PX = 12_000_000  # 48MB float32 per entry
-_FIELD_CACHE_TOTAL_MAX_BYTES = 128 * 1024 * 1024
+_FIELD_CACHE_TOTAL_MAX_BYTES = machine.scaled_budget(128 * 1024 * 1024)
 _field_cache_lock = threading.Lock()
+
+
+def clear_field_cache() -> None:
+    with _field_cache_lock:
+        _FIELD_CACHE.clear()
 
 
 def _cached_spatial_field(t: str, p: dict, h: int, w: int, view: FieldView, compute) -> np.ndarray:

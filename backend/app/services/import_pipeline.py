@@ -30,7 +30,7 @@ from app.db.models import (
     SourceRoot,
 )
 from app.db.session import SessionLocal
-from app.services import geocode
+from app.services import geocode, machine
 from app.services.exif import (
     ExifData,
     capture_date_from_filename,
@@ -107,7 +107,10 @@ logger = logging.getLogger(__name__)
 # ~2x cores for that overlap, capped so a huge import can't spawn a runaway
 # number of exiftool processes (each worker holds one, plus a small decoded
 # preview).
-_STAGE_WORKERS = min(16, max(4, (os.cpu_count() or 4) * 2))
+# Low-RAM machines get one worker per core rather than two: sixteen exiftool
+# helpers plus sixteen decoded previews on an 8GB laptop was a visible chunk
+# of the swap an import ran into.
+_STAGE_WORKERS = min(16, max(4, (os.cpu_count() or 4) * (1 if machine.LOW_RAM else 2)))
 
 # --- RAW review derivatives ---------------------------------------------------
 # A RAW's staging thumbnail comes from the embedded camera JPEG (near-instant,

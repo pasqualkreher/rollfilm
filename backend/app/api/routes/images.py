@@ -40,6 +40,7 @@ from app.db.models import (
     User,
 )
 from app.db.session import SessionLocal, engine, get_db
+from app.services import machine
 from app.services import (
     auto_develop,
     develop,
@@ -2041,6 +2042,11 @@ def prepare_segmentation(
     real request will surface it."""
     if not segmentation.weights_are_cached():
         return {"status": "unavailable"}
+    # On a low-RAM machine the speculative pass is skipped: opening the panel
+    # would pull ~250MB of weights (and torch's arena) in on a hover, for a
+    # mask the user may never ask for. The click still loads it on demand.
+    if machine.LOW_RAM:
+        return {"status": "skipped"}
     geometry = _segment_geometry(payload)
     image = get_owned_image(db, current_user.id, image_id)
     cache_key = _segment_cache_key(image, geometry)

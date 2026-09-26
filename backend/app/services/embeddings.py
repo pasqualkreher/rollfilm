@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.config import settings
+from app.services import machine
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +53,13 @@ _model = None
 _preprocess = None
 _tokenizer = None
 _model_lock = threading.Lock()
+# monotonic time of the last use, for unload_if_idle.
+_last_used = 0.0
 
 
 def _get_model():
-    global _model, _preprocess, _tokenizer
+    global _model, _preprocess, _tokenizer, _last_used
+    _last_used = time.monotonic()
     # The post-import worker pool has multiple threads that can all reach for
     # the model at once on first use - without the lock they'd race and each
     # kick off their own multi-hundred-MB download/load.
@@ -69,7 +73,7 @@ def _get_model():
                 # otherwise take every core for each forward pass; two are
                 # left for the request thread and the renderer, the same
                 # courtesy the render pipeline extends (thumbnails._RENDER_THREADS).
-                torch.set_num_threads(max(1, (os.cpu_count() or 2) - 2))
+                torch.set_num_threads(max(1, min((os.cpu_count() or 2) - 2, machine.PERF_CORES)))
                 model, _, preprocess = open_clip.create_model_and_transforms(
                     settings.clip_model_name,
                     pretrained=settings.clip_model_pretrained,
@@ -80,6 +84,26 @@ def _get_model():
                 _preprocess = preprocess
                 _tokenizer = open_clip.get_tokenizer(settings.clip_model_name)
     return _model, _preprocess, _tokenizer
+
+
+def unload_if_idle(idle_s: float) -> bool:
+    """Drop the model after `idle_s` without a search or an embedding. The
+    weights plus torch's arena are ~1GB resident; on a low-RAM machine that
+    is the difference between the editor rendering from RAM and from swap.
+    The next use loads it again (~4s) - the trade the low-RAM profile makes.
+    Returns whether it was unloaded."""
+    global _model, _preprocess, _tokenizer
+    with _model_lock:
+        if _model is None or time.monotonic() - _last_used < idle_s:
+            return False
+        _model = None
+        _preprocess = None
+        _tokenizer = None
+    import gc
+
+    gc.collect()
+    logger.info("CLIP model released after %.0fs idle", idle_s)
+    return True
 
 
 def warm_up() -> bool:

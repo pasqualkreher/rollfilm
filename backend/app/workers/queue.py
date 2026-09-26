@@ -15,6 +15,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.db.models import Image
 from app.db.session import SessionLocal, engine
+from app.services import machine
 from app.services.filesystem import resolve_image_path
 from app.services.settings_store import get_immich_sync_paused
 from app.services.embeddings import (
@@ -49,7 +50,9 @@ logger = logging.getLogger(__name__)
 # (RENDER_SLOTS), not here - so size the pool to keep every render slot busy
 # plus a couple of workers overlapping the non-render work (JPEG writes, disk)
 # instead of a flat cap of 4 that left render slots idle on bigger machines.
-_POST_IMPORT_WORKERS = min(8, max(2, RENDER_SLOTS + 2))
+# One spare worker instead of two on a low-RAM machine: each holds a decoded
+# frame while it waits for a slot.
+_POST_IMPORT_WORKERS = min(8, max(2, RENDER_SLOTS + (1 if machine.LOW_RAM else 2)))
 _executor = ThreadPoolExecutor(
     max_workers=_POST_IMPORT_WORKERS, thread_name_prefix="post-import"
 )
@@ -483,7 +486,7 @@ def _images_missing_embeddings(limit: int) -> list[tuple[str, Path]]:
 _EMBED_BATCH = 16
 # Never the whole machine: on a 4-core laptop four decode threads plus the
 # encode left nothing for anything else.
-_EMBED_DECODE_WORKERS = max(1, min(4, (os.cpu_count() or 2) - 2))
+_EMBED_DECODE_WORKERS = max(1, min(2 if machine.LOW_RAM else 4, (os.cpu_count() or 2) - 2))
 
 
 def _decode_for_embedding(image_id: str, source_path: Path) -> PILImage.Image | None:

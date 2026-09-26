@@ -27,14 +27,16 @@ import {
 import { editsFromImage } from "../utils/adjustments";
 import { IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconTrash, IconX } from "../components/Icons";
 import { Slideshow } from "../components/Slideshow";
-import { PinnedImageWindow, preloadImage } from "../utils/preload";
+import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { ZoomReadout } from "../components/ZoomReadout";
 import { StageBackgroundToggle } from "../components/StageBackgroundToggle";
 
-// The lightbox keeps this many photos on EACH side of the current one pinned
-// in memory (see the pinned-neighbors effect) - 10 back + 10 ahead.
-const NEIGHBOR_WINDOW = 10;
+// The lightbox keeps LIGHTBOX_NEIGHBOR_DEPTH photos on EACH side of the
+// current one pinned in memory (see the pinned-neighbors effect). It used to
+// be a flat 10 back + 10 ahead here regardless of the machine - ~220MB of
+// decoded previews on an 8GB laptop - while the import lightbox already
+// scaled its window with RAM; both share the one tiered constant now.
 import { rememberLastViewedImage } from "../utils/lastViewed";
 import { formatShutterSpeed, splitFilename } from "../utils/photoMeta";
 import { useTransientMessage } from "../utils/transientMessage";
@@ -388,7 +390,7 @@ export function ImageDetail() {
     if (currentIndex === -1) return;
     let stale = false;
     const order: string[] = [];
-    for (let d = 1; d <= NEIGHBOR_WINDOW; d++) {
+    for (let d = 1; d <= LIGHTBOX_NEIGHBOR_DEPTH; d++) {
       const ahead = imageIds[currentIndex + d];
       const behind = imageIds[currentIndex - d];
       if (ahead) order.push(ahead);

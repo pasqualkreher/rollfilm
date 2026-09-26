@@ -5,21 +5,25 @@
 // the arrow keys then swaps instantly instead of waiting on a request.
 
 // The one place the preload footprint scales with the machine: every pinned
-// preview holds ~11MB of decoded pixels, and windows tuned for an 8GB laptop
-// (12 grid pins + 8 lightbox neighbors ≈ 220MB) fed system-wide swapping on
-// 4GB devices. navigator.deviceMemory is Chrome/Electron-only and clamps at
-// 8, which is exactly the resolution needed - "is this a small machine?" -
-// and 8 is the right default where the API is missing (desktop Electron
-// always has it).
+// preview holds ~11MB of decoded pixels, and windows tuned for a roomy desktop
+// (12 grid pins + 12 lightbox neighbors ≈ 260MB) fed system-wide swapping on
+// an 8GB laptop. The desktop shell reports the real RAM (photoManager.
+// totalMemoryGb); navigator.deviceMemory is the fallback in a plain browser,
+// and it clamps at 8 - so there "8" can mean anything from 8GB up, and the
+// lean tier is the safe reading of it.
+const bridgeMemoryGb = window.photoManager?.totalMemoryGb;
 const deviceMemoryGb =
-  (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8;
-const LOW_MEMORY_DEVICE = deviceMemoryGb <= 4;
+  typeof bridgeMemoryGb === "number" && bridgeMemoryGb > 0
+    ? bridgeMemoryGb
+    : ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8);
+const TINY_MEMORY_DEVICE = deviceMemoryGb <= 4;
+const LOW_MEMORY_DEVICE = deviceMemoryGb <= 8;
 
 // How many big previews the review grid keeps pinned for its visible cards
 // (~11MB decoded each): enough that the next photo the user opens is warm,
-// without ballooning the renderer - ~130MB on normal machines, ~65MB on 4GB
-// devices.
-export const GRID_PIN_LIMIT = LOW_MEMORY_DEVICE ? 6 : 12;
+// without ballooning the renderer - ~130MB on roomy machines, ~90MB on 8GB
+// laptops, ~65MB on 4GB devices.
+export const GRID_PIN_LIMIT = TINY_MEMORY_DEVICE ? 6 : LOW_MEMORY_DEVICE ? 8 : 12;
 
 // How many neighbors each side of the current photo the lightboxes keep
 // pinned for arrow-key zapping. Two still swaps instantly at human zapping
@@ -28,7 +32,8 @@ export const GRID_PIN_LIMIT = LOW_MEMORY_DEVICE ? 6 : 12;
 // than demosaiced per request, filling a wider window is a handful of file
 // reads instead of seconds of decoding. Still bounded by the renderer's RAM
 // (~11MB decoded each), which is what keeps this from simply growing.
-export const LIGHTBOX_NEIGHBOR_DEPTH = LOW_MEMORY_DEVICE ? 2 : 6;
+// Both lightboxes (library and import review) use this one window.
+export const LIGHTBOX_NEIGHBOR_DEPTH = TINY_MEMORY_DEVICE ? 2 : LOW_MEMORY_DEVICE ? 3 : 6;
 
 // URLs requested RECENTLY - a repeat new Image() for one of these would be
 // pure overhead, the browser's cache still holds the bytes. Deliberately a

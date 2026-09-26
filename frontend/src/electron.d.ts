@@ -9,6 +9,8 @@ declare global {
       apiBaseUrl: string | null;
       /** Node's process.platform ("darwin", "win32", "linux"). Absent in older builds. */
       platform?: string;
+      /** Physical RAM in GB (os.totalmem). Absent in older builds. */
+      totalMemoryGb?: number;
       /** Opens the native folder dialog; resolves to an absolute path or null. */
       pickFolder: () => Promise<string | null>;
       /** Native multi-file dialog; resolves to picked files (absolute path + size) or null. */

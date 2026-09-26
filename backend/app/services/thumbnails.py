@@ -19,6 +19,7 @@ from PIL import Image as PILImage, ImageOps
 
 from app.config import settings
 from app.services import develop, develop_color, develop_effects, film_sims, lens_profile, masks
+from app.services import machine
 from app.services import raw as raw_service
 
 
@@ -51,9 +52,12 @@ class _LazyCV2:
         return getattr(_LazyCV2._mod, name)
 
 
-# How many threads the render pipeline may spread over: every core but one.
-# Shared by cv2's internal pool and the tone-band pool below.
-_RENDER_THREADS = max(1, (os.cpu_count() or 2) - 1)
+# How many threads the render pipeline may spread over: every core but one,
+# and never more than the performance cores (see machine.PERF_CORES - on an
+# 8-core M3 that is 4, where "every core but one" ran seven numpy threads on
+# four cores that could carry them). Shared by cv2's internal pool and the
+# tone-band pool below.
+_RENDER_THREADS = max(1, min((os.cpu_count() or 2) - 1, machine.PERF_CORES))
 
 
 cv2 = _LazyCV2()
@@ -166,10 +170,7 @@ _PEAK_BYTES_PER_RENDER = 1024**3
 
 
 def _physical_ram_bytes() -> int | None:
-    try:
-        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
-    except (ValueError, OSError, AttributeError):
-        return None
+    return machine.physical_ram_bytes()
 
 
 # What the rest of the machine needs regardless of how much RAM it has: the
@@ -186,10 +187,18 @@ def _render_slot_count() -> int:
     slots = max(1, (os.cpu_count() or 4) - 2)
     ram = _physical_ram_bytes()
     if ram:
-        # Whichever is larger: a third of RAM (small machines) or what's left
-        # above the fixed floor (everything else). Still a hard cap - the
-        # unbounded version of this took the machine into swap.
-        budget = max(ram // 3, ram - _RAM_FLOOR_BYTES)
+        if ram <= machine.LOW_RAM_LIMIT_BYTES:
+            # A quarter of RAM: two slots on 8GB. The "larger of a third and
+            # what's above the floor" rule below gave three there, and three
+            # gigabyte renders on top of the OS, the shell and the models was
+            # the whole machine - measured as swap during every import. Two
+            # keeps a core's worth of throughput and stays out of swap.
+            budget = ram // 4
+        else:
+            # Whichever is larger: a third of RAM or what's left above the
+            # fixed floor. Still a hard cap - the unbounded version of this
+            # took the machine into swap.
+            budget = max(ram // 3, ram - _RAM_FLOOR_BYTES)
         slots = min(slots, max(1, int(budget // _PEAK_BYTES_PER_RENDER)))
     return slots
 
@@ -1608,7 +1617,15 @@ def _grain_field(h: int, w: int, particle_px: float, coarse: float, shape: float
 _GRAIN_CACHE: "OrderedDict[tuple[int, int, float, float, float], np.ndarray]" = OrderedDict()
 _GRAIN_CACHE_MAX = 8
 _GRAIN_CACHE_MAX_PX = 8_000_000
+# Byte-bounded like the other stage caches: eight 8MP float32 fields were a
+# quarter gigabyte that nothing ever asked back.
+_GRAIN_CACHE_TOTAL_MAX_BYTES = machine.scaled_budget(64 * 1024 * 1024)
 _grain_cache_lock = threading.Lock()
+
+
+def _grain_cache_clear() -> None:
+    with _grain_cache_lock:
+        _GRAIN_CACHE.clear()
 
 
 def _cached_grain_field(
@@ -1627,7 +1644,10 @@ def _cached_grain_field(
     with _grain_cache_lock:
         _GRAIN_CACHE[key] = f
         _GRAIN_CACHE.move_to_end(key)
-        while len(_GRAIN_CACHE) > _GRAIN_CACHE_MAX:
+        while len(_GRAIN_CACHE) > _GRAIN_CACHE_MAX or (
+            len(_GRAIN_CACHE) > 1
+            and sum(a.nbytes for a in _GRAIN_CACHE.values()) > _GRAIN_CACHE_TOTAL_MAX_BYTES
+        ):
             _GRAIN_CACHE.popitem(last=False)
     return f
 
@@ -1938,13 +1958,13 @@ _tone_stage_lock = threading.Lock()
 # Don't store frames bigger than the ultra tier (122MB). The native 100%-zoom
 # render is ~480MB per copy, where holding one to save a second of denoise is a
 # bad trade against the rest of the process; it recomputes like it always did.
-_TONE_STAGE_MAX_BYTES = 160 * 1024 * 1024
+_TONE_STAGE_MAX_BYTES = machine.scaled_budget(160 * 1024 * 1024)
 # Depth and total budget of the stage cache: three slots cover the tier ladder
 # of the image being edited (or edited+original in compare view) and the budget
 # keeps the worst case near two settled-tier frames on the 8GB machines this
 # has to share with the browser.
 _TONE_STAGE_MAX_ENTRIES = 3
-_TONE_STAGE_TOTAL_MAX_BYTES = 192 * 1024 * 1024
+_TONE_STAGE_TOTAL_MAX_BYTES = machine.scaled_budget(192 * 1024 * 1024)
 
 
 def _tone_stage_key(base_key: str, base_gain: float, adj: dict, fast: bool) -> str:
@@ -2028,9 +2048,9 @@ _detail_stage: "OrderedDict[str, np.ndarray]" = OrderedDict()
 # Sized for the interactive frames this exists for (scrub/accurate frames and
 # budget-capped zoomed tiles are ~5-25MB); the settle tier's 2600px stage still
 # fits, the ultra/native ones do not and recompute like they always did.
-_DETAIL_STAGE_MAX_BYTES = 64 * 1024 * 1024
+_DETAIL_STAGE_MAX_BYTES = machine.scaled_budget(64 * 1024 * 1024)
 _DETAIL_STAGE_MAX_ENTRIES = 3
-_DETAIL_STAGE_TOTAL_MAX_BYTES = 128 * 1024 * 1024
+_DETAIL_STAGE_TOTAL_MAX_BYTES = machine.scaled_budget(128 * 1024 * 1024)
 
 
 def _detail_stage_key(base_key: str, base_gain: float, adj: dict, fast: bool) -> str:
@@ -2074,9 +2094,9 @@ def _detail_stage_put(key: str | None, arr: np.ndarray) -> None:
 # are: three slots, copied out on use (see _stage_get). Sized for the
 # interactive tiles (a 1600px tile is ~20MB); a settle-sized one is left out.
 _tile_cache: "OrderedDict[str, np.ndarray]" = OrderedDict()
-_TILE_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_TILE_CACHE_MAX_BYTES = machine.scaled_budget(64 * 1024 * 1024)
 _TILE_CACHE_MAX_ENTRIES = 3
-_TILE_CACHE_TOTAL_MAX_BYTES = 128 * 1024 * 1024
+_TILE_CACHE_TOTAL_MAX_BYTES = machine.scaled_budget(128 * 1024 * 1024)
 
 
 def _tile_cache_get(key: str | None) -> np.ndarray | None:
@@ -2699,7 +2719,8 @@ _BASE_CACHE: "OrderedDict[tuple[str, str, int, int], tuple[np.ndarray, float]]" 
 # frames add up to 730MB on a machine that may have 8GB total. The budget holds
 # roughly three images' full tier ladders, and small bases no longer get
 # evicted just to make room for a count.
-_BASE_CACHE_MAX_BYTES = 320 * 1024 * 1024
+# Halved on low-RAM machines (machine.LOW_RAM).
+_BASE_CACHE_MAX_BYTES = machine.scaled_budget(320 * 1024 * 1024)
 _base_cache_lock = threading.Lock()
 # Bases being computed right now, so a second asker waits instead of decoding
 # the same thing beside the first. Guarded by _base_cache_lock.
@@ -3004,6 +3025,31 @@ def clear_editor_base_caches() -> None:
     # The tone/denoise stage was computed from one of those bases, so it has to
     # go with them - its own key can't see a decode setting change.
     invalidate_tone_stage()
+
+
+def editor_caches_empty() -> bool:
+    with _base_cache_lock:
+        bases = bool(_BASE_CACHE)
+    with _tone_stage_lock:
+        stages = bool(_tone_stage or _detail_stage or _tile_cache)
+    with _grain_cache_lock:
+        grain = bool(_GRAIN_CACHE)
+    return not (bases or stages or grain or _native_editor_base is not None)
+
+
+def release_editor_caches_if_idle(idle_s: float) -> bool:
+    """Let go of everything the editor cached once it has been quiet for
+    `idle_s`. The bases, stages, tiles and grain fields exist to make the
+    NEXT slider move cheap; after a few minutes without one they are only a
+    gigabyte of the process (the native base of a 40MP raw alone is a quarter
+    of it) that the grid, an import or the rest of the machine could use. The
+    next render decodes again - a second or two, paid once. Returns whether
+    anything was released."""
+    if editor_recently_active(idle_s) or editor_caches_empty():
+        return False
+    clear_editor_base_caches()
+    _grain_cache_clear()
+    return True
 
 
 # The settle tiers (full / ultra) render at the size the picture is SHOWN at,

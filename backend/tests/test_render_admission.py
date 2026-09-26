@@ -67,6 +67,18 @@ def test_render_slots_bounded_by_ram(monkeypatch):
         assert slots < (os.cpu_count() or 4) - 2
 
 
+def test_an_8gb_machine_gets_two_slots(monkeypatch):
+    """Three gigabyte renders on 8GB (the old "larger of a third and what's
+    above the floor" rule) was the whole machine, measured as swap during
+    every import; a quarter of RAM keeps it at two."""
+    if (os.cpu_count() or 4) < 4:
+        pytest.skip("core rule binds first on this machine")
+    assert _slots_for_ram(monkeypatch, 8 * 1024**3) == 2
+    # Above the low-RAM line the old rule still applies (16GB: 11 above the
+    # floor, capped by the cores).
+    assert _slots_for_ram(monkeypatch, 16 * 1024**3) >= 2
+
+
 def test_a_tiny_machine_still_gets_one_slot(monkeypatch):
     """The budget may round to zero; rendering must never become impossible."""
     assert _slots_for_ram(monkeypatch, 1024**3) == 1

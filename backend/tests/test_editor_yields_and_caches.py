@@ -109,11 +109,15 @@ def test_the_embedding_backfill_waits_for_the_same_pause(monkeypatch):
 
 
 def test_the_render_pipeline_leaves_a_core_for_the_ui():
-    """Every core but one for cv2 and the tone bands (capped at four, where the
-    banded block plateaus) - a 4-core machine keeps one for the request thread
-    and the renderer."""
+    """Every core but one for cv2 - and never more than the performance cores
+    (an 8-core M3 is 4+4; seven numpy threads on its four fast cores starved
+    the request thread and the renderer). The tone bands cap at four, where
+    the banded block plateaus - a 4-core machine keeps one for the request
+    thread and the renderer."""
+    from app.services import machine
+
     cpu = thumbnails.os.cpu_count() or 2
-    assert thumbnails._RENDER_THREADS == max(1, cpu - 1)
+    assert thumbnails._RENDER_THREADS == max(1, min(cpu - 1, machine.PERF_CORES))
     assert thumbnails._TONE_BAND_WORKERS == max(1, min(4, cpu - 1))
     thumbnails.cv2.getNumThreads  # forces the lazy import, which applies the cap
     if "GCD" not in thumbnails.cv2.getBuildInformation():

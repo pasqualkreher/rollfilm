@@ -3,6 +3,7 @@
 // ExternalSources calls `pickFolder()` to add an existing photo folder.
 
 const { contextBridge, ipcRenderer } = require("electron");
+const os = require("os");
 
 function readApiBase() {
   const prefix = "--pm-api-base=";
@@ -14,6 +15,10 @@ contextBridge.exposeInMainWorld("photoManager", {
   apiBaseUrl: readApiBase(),
   // "darwin" | "win32" | "linux": the context menu names Finder or Explorer by it.
   platform: process.platform,
+  // Physical RAM in GB. The renderer's navigator.deviceMemory clamps at 8, so
+  // an 8GB laptop and a 64GB workstation looked the same to the preload
+  // budgets (utils/preload.ts) - this is what tells them apart.
+  totalMemoryGb: Math.round(os.totalmem() / 1024 ** 3),
   // Opens the native OS folder dialog; resolves to an absolute host path or null.
   pickFolder: () => ipcRenderer.invoke("pm:pick-folder"),
   // Native multi-file dialog; resolves to [{ path, size }] or null when dismissed.
