@@ -2535,6 +2535,12 @@ def full_warm(
         return {"status": "cached"}
     if thumbnails.editor_recently_active(2.0) or derivatives_pending() > 0:
         return {"status": "busy"}
+    # Never queue behind a render that is already running: a user zapping
+    # through photos rests on several in a row, and warms stacked behind one
+    # another (each ~8s) were exactly what a zoom on the next photo then had
+    # to wait out. The lightbox asks again on the next rest.
+    if thumbnails.full_render_busy() or thumbnails.native_decode_busy():
+        return {"status": "busy"}
     with _full_warm_lock:
         if image_id in _full_warm_inflight:
             return {"status": "running"}
@@ -2556,7 +2562,7 @@ def full_warm(
                     return
                 thumbnails.generate_full(bg_image, is_stale=_is_stale)
         except thumbnails.PreviewSuperseded:
-            pass  # the user moved on before the render lock came free
+            logger.debug("Full-resolution warm-up for %s superseded", image_id)
         except Exception:
             logger.info("Full-resolution warm-up for %s did not complete", image_id, exc_info=True)
         finally:

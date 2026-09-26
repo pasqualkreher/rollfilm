@@ -475,16 +475,20 @@ export function ImageDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restedId, adjustOpen]);
 
-  // And the raw's 100%-zoom render, a little later still: a raw the user has
-  // looked at for a second and a half is one they may zoom into, and that
-  // zoom used to be a 7-9s render on the spot. JPEGs need nothing (their
-  // full size is the file itself); moving on cancels the timer, and a warm
-  // already queued on the server is superseded by the next photo's.
+  // And the raw's 100%-zoom render, a good while later: a raw the user has
+  // looked at for a few seconds is one they may zoom into, and that zoom
+  // used to be a 7-9s render on the spot. Not sooner - zapping through a set
+  // at a photo every second or two must not start a render per photo, since
+  // each one holds the render for ~8s and the zoom that follows waits behind
+  // it (the server also refuses a warm while any render runs). JPEGs need
+  // nothing (their full size is the file itself); moving on cancels the
+  // timer, and a warm still queued on the server is superseded by the next
+  // photo's.
   useEffect(() => {
     if (restedId !== activeId || adjustOpen || image?.file_type !== "raw" || hiRes) return;
     const t = setTimeout(() => {
       void api.images.fullWarm(restedId).catch(() => {});
-    }, 1500);
+    }, 3000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restedId, adjustOpen, image?.file_type]);

@@ -4039,7 +4039,12 @@ def render_untouched_full(image: "Image") -> PILImage.Image:
     (render_edited_image) runs the whole develop pipeline over the 40MP
     frame for this: every stage a no-op, every one of them a pass over half
     a gigabyte. This is the same rendering the import review's 100% zoom
-    uses (render_staged_full), on the editor's cached base."""
+    uses (render_staged_full), on the editor's cached base.
+
+    The caller (generate_full) decodes the base BEFORE taking the render
+    lock, so the lock is held for the ~1.3s of tone + encode, never for the
+    7s decode - that decode used to sit inside it, and every settle of the
+    editor and every other photo's zoom queued behind it."""
     from app.services.filesystem import resolve_image_path
 
     path = resolve_image_path(image)
@@ -4050,6 +4055,27 @@ def render_untouched_full(image: "Image") -> PILImage.Image:
         out = raw_service.default_tone_to_srgb(lin, _browsing_gain(gain, adjustments))
         del lin
     return PILImage.fromarray(out, "RGB")
+
+
+# Full renders in flight (generate_full, decode included). A counter rather
+# than a probe of _full_render_lock: that lock is re-entrant, so a probe from
+# the rendering thread itself would see it free.
+_full_renders_inflight = 0
+_full_renders_lock = threading.Lock()
+
+
+def full_render_busy() -> bool:
+    """Whether a full-resolution render (its decode included) is running."""
+    with _full_renders_lock:
+        return _full_renders_inflight > 0
+
+
+def native_decode_busy() -> bool:
+    """Whether a full-resolution decode is running right now."""
+    if _native_decode_lock.acquire(blocking=False):
+        _native_decode_lock.release()
+        return False
+    return True
 
 
 # Full renders slower than this are logged with their breakdown, like the
@@ -4078,25 +4104,52 @@ def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) ->
         if is_stale is not None and is_stale():
             raise PreviewSuperseded()
 
-    if not out.exists():
-        _bail_if_stale()
-    with _full_render_lock:
-        if out.exists():
-            return out
-        _bail_if_stale()
+    if out.exists():
+        return out
+    _bail_if_stale()
+    global _full_renders_inflight
+    with _full_renders_lock:
+        _full_renders_inflight += 1
+    try:
         t0 = time.perf_counter()
-        untouched = _is_untouched(image)
-        rendered = render_untouched_full(image) if untouched else render_full_from_stored_edits(image)
-        t1 = time.perf_counter()
-        _save_atomic(rendered, out, quality=90)
-        t2 = time.perf_counter()
-        total_ms = (t2 - t0) * 1000.0
-        if total_ms >= _SLOW_FULL_MS:
-            logger.info(
-                "full render took %.0f ms (%s) %s render=%.0f encode=%.0f px=%d",
-                total_ms, image.id, "untouched" if untouched else "edited",
-                (t1 - t0) * 1000.0, (t2 - t1) * 1000.0, max(rendered.size),
-            )
+        try:
+            untouched = _is_untouched(image)
+        except Exception:
+            untouched = False  # not a real image row: the general path reports it
+        if untouched:
+            # The decode first, outside the render lock (decodes serialise on
+            # their own lock): the lock then covers tone + encode only, so a
+            # zoom on the next photo, or the editor's settle, never waits out
+            # a 7s demosaic that is not theirs. And a render the user has
+            # zapped past bails HERE, after the decode - the decoded base
+            # stays cached, so coming back to that photo is a 1.3s render
+            # instead of 8s.
+            from app.services.filesystem import resolve_image_path
+
+            try:
+                path = resolve_image_path(image)
+                _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
+            except Exception:
+                pass  # the locked render below raises the real error
+            _bail_if_stale()
+        with _full_render_lock:
+            if out.exists():
+                return out
+            _bail_if_stale()
+            rendered = render_untouched_full(image) if untouched else render_full_from_stored_edits(image)
+            t1 = time.perf_counter()
+            _save_atomic(rendered, out, quality=90)
+            t2 = time.perf_counter()
+            total_ms = (t2 - t0) * 1000.0
+            if total_ms >= _SLOW_FULL_MS:
+                logger.info(
+                    "full render took %.0f ms (%s) %s render=%.0f encode=%.0f px=%d",
+                    total_ms, image.id, "untouched" if untouched else "edited",
+                    (t1 - t0) * 1000.0, (t2 - t1) * 1000.0, max(rendered.size),
+                )
+    finally:
+        with _full_renders_lock:
+            _full_renders_inflight -= 1
     return out
 
 

@@ -58,3 +58,37 @@ def test_generate_full_takes_the_short_path_for_an_untouched_photo(photo, monkey
     photo.edit_rotation = 90
     thumbnails.generate_full(photo)
     assert taken == ["fast", "slow"]
+
+
+def test_a_superseded_untouched_render_bails_after_the_decode_and_keeps_the_base(photo, monkeypatch):
+    """Zapping past a photo whose 100% render is in flight: the decode cannot
+    be stopped, but nothing after it runs, no file is written, and the decoded
+    base stays cached - coming back is a short render, not another decode."""
+    calls = {"stale": 0}
+
+    def stale_after_decode() -> bool:
+        calls["stale"] += 1
+        return calls["stale"] > 1  # the entry check passes; the post-decode one trips
+
+    with pytest.raises(thumbnails.PreviewSuperseded):
+        thumbnails.generate_full(photo, is_stale=stale_after_decode)
+    assert not (thumbnails.derivative_dir(photo.id) / "full.jpg").exists()
+    assert thumbnails.native_base_ready(photo.id, thumbnails.editor_mtime_ns(photo))
+    # And now it is a cache hit: no decode, just the render.
+    monkeypatch.setattr(thumbnails.raw_service, "load_linear_base", lambda *a, **k: pytest.fail("decoded again"))
+    assert thumbnails.generate_full(photo).exists()
+
+
+def test_busy_probes_see_a_running_render():
+    assert not thumbnails.full_render_busy()
+    with thumbnails._full_renders_lock:
+        thumbnails._full_renders_inflight += 1
+    try:
+        assert thumbnails.full_render_busy()
+    finally:
+        with thumbnails._full_renders_lock:
+            thumbnails._full_renders_inflight -= 1
+    assert not thumbnails.full_render_busy()
+    assert not thumbnails.native_decode_busy()
+    with thumbnails._native_decode_lock:
+        assert thumbnails.native_decode_busy()
