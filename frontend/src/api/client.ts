@@ -586,8 +586,10 @@ export const api = {
       // native tier exists for is untouched). Without a region it is the
       // whole-frame scrub tier's adaptive resolution (`px=`) - the editor
       // walks it down when drag frames stop keeping up with the pointer - or,
-      // on a full/ultra settle, the canvas's on-screen size, so the settle
-      // renders what the screen can show instead of the tier's ceiling.
+      // on a full/ultra/native settle, the canvas's on-screen size, so the
+      // settle renders what the screen can show instead of the tier's ceiling
+      // (a whole-frame native settle is rendered from the native base at that
+      // size, never at sensor resolution).
       regionPx: number | null = null,
       // Native settle polling: the caller already painted this edit state from
       // the fallback tier and only waits for the full-resolution base. With
@@ -616,9 +618,7 @@ export const api = {
         peek ? `peek=${encodeURIComponent(peek)}` : "",
         regionParam,
         regionParam && regionPx ? `region_px=${Math.round(regionPx)}` : "",
-        !regionParam && regionPx && (mode === "scrub" || mode === "full" || mode === "ultra")
-          ? `px=${Math.round(regionPx)}`
-          : "",
+        !regionParam && regionPx && mode !== "fast" ? `px=${Math.round(regionPx)}` : "",
         mode === "native" && nativeOnly ? "native_only=1" : "",
         zoomed && mode === "scrub" ? "zoomed=1" : "",
       ]

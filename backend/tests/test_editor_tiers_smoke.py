@@ -343,6 +343,52 @@ def test_the_settle_tiers_render_at_the_on_screen_size(tmp_path, monkeypatch):
     assert long_edge(full_quality=True, settle_px=2100) == 2200
 
 
+def test_a_native_settle_renders_at_the_on_screen_size_and_a_crop_keeps_its_budget(tmp_path, monkeypatch):
+    """Above the ultra ceiling the settle asks for native WITH the on-screen
+    size: the native base is downscaled to it before the pipeline (a whole
+    40MP frame through it was why native used to be gated on zooming in).
+    And a budget is the size of the finished picture: with a crop the base
+    is sized so the cropped output covers the screen - the old rung maths
+    gave a half-frame crop half the pixels it asked for, on every tier."""
+    from io import BytesIO
+
+    path = tmp_path / "huge.jpg"
+    ys, xs = np.mgrid[0:3000, 0:4000].astype(np.float32)
+    g = 0.5 + 0.3 * np.sin(xs / 41.0) * np.cos(ys / 37.0)
+    PILImage.fromarray(
+        (np.clip(np.dstack([g, g * 0.9, g * 0.8]), 0, 1) * 255).astype(np.uint8), "RGB"
+    ).save(path, "JPEG", quality=80)
+    image = Image(
+        id="native-px", owner_id=1, file_path=str(path), original_filename="huge.jpg",
+        file_hash="hash4", file_type=FileType.jpeg, file_size=path.stat().st_size,
+        taken_at=datetime(2026, 9, 26, 12, 0, 0), width=4000, height=3000,
+    )
+    monkeypatch.setattr("app.services.filesystem.resolve_image_path", lambda img: path)
+    thumbnails.clear_editor_base_caches()
+    _warm_native(image)
+    adj = develop.normalize({"exposure": 0.2})
+    half = (0.25, 0.25, 0.5, 0.5)
+
+    def long_edge(crop=None, **kw) -> int:
+        data = thumbnails.render_editor_preview_bytes(image, 0, crop, adj, **kw)
+        return max(PILImage.open(BytesIO(data)).size)
+
+    assert long_edge(native=True) == 4000                      # no budget: the photo's pixels
+    assert long_edge(native=True, settle_px=3400) == 3400      # the budget, from the native base
+    assert long_edge(native=True, settle_px=9999) == 4000      # never upscaled
+    # A half-frame crop shown at 1800px needs a 3600px base, not an 1800px one.
+    assert long_edge(crop=half, native=True, settle_px=1800) == 1800
+    # The same correction on the preview tiers: 1500px of a half crop is the
+    # 3000 rung, whose cropped output covers the screen (it used to be 900).
+    assert long_edge(crop=half, ultra=True, settle_px=1500) == 1500
+    assert long_edge(crop=half, full_quality=True, settle_px=1000) == 1100  # 2200 rung, halved
+    # The cropped ultra frame can't exceed the tier's ceiling - that is the
+    # case the native budget exists for: native gives the crop the photo's own
+    # pixels (here 2000 - the base is 4000 and is never upscaled).
+    assert long_edge(crop=half, ultra=True, settle_px=2800) == thumbnails.ULTRA_EDITOR_PREVIEW_PX // 2
+    assert long_edge(crop=half, native=True, settle_px=2800) == 2000
+
+
 def test_the_scrub_tier_honours_an_adaptive_budget(tmp_path, monkeypatch):
     """`scrub_px` is the editor's adaptive drag resolution: when its measured
     frame times say the fixed scrub tier can no longer track the pointer, it

@@ -1844,9 +1844,16 @@ def editor_preview(
     # The same `px` on a full/ultra request is the canvas's on-screen size: the
     # settle renders at the ladder rung covering it instead of the tier's
     # ceiling (see thumbnails._SETTLE_PX_LADDER). Clamped like the rest.
+    # A native settle carries it too, above the ultra ceiling: the frame is
+    # rendered from the native base at that size rather than at sensor
+    # resolution. Rounded up to 200s so a window resized by a few pixels
+    # doesn't derive a new base per pixel (the preview tiers have their ladder).
     settle_px = (
         max(thumbnails.EDITOR_PREVIEW_PX, min(thumbnails.ULTRA_EDITOR_PREVIEW_PX, px))
-        if px and (full or ultra) else None
+        if px and (full or ultra)
+        else max(thumbnails.EDITOR_PREVIEW_PX, min(16384, -(-px // 200) * 200))
+        if px and native
+        else None
     )
     # `?native_only=1`: the caller already has this edit state painted from the
     # fallback tier and is only waiting for the full-resolution base. Answering

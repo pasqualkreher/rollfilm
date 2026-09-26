@@ -142,6 +142,11 @@ const MIX_CHANNELS: [number, string][] = [
 // ask for the right one straight away instead of finding out by rendering.
 const FULL_TIER_PX = 2600;
 const ULTRA_TIER_PX = 3900;
+// Rank of what a whole-frame render was served as (the X-Rollfilm-Tier the
+// server answers with), so "is the frame on the canvas good enough" can ask
+// about quality as well as size: a scrub frame is the fast pipeline, and no
+// amount of on-screen pixels turns it into the settle.
+const TIER_RANK: Record<string, number> = { scrub: 0, accurate: 1, full: 2, ultra: 3, native: 4 };
 
 // The adaptive scrub resolution ladder (see scrubLevelRef): what a drag frame
 // renders at, per rung, for each of the three interactive frame kinds. Rung 0
@@ -646,9 +651,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // the editor stop rendering the moment the first tile landed, and panning to
   // an unsharpened area then stayed soft forever.
   const paintedPxRef = useRef(0);
+  // Which tier that whole frame came from, and for which edit state - so the
+  // settle knows a scrub frame is owed a real render however big it is, and
+  // that a native frame has nothing above it. Left alone by a native tile.
+  const paintedTierRef = useRef<{ tier: string; token: number }>({ tier: "", token: -1 });
   // The same for the compare view's other half (original / snapshot): reset on
   // every whole-frame paint of that canvas, left alone by a native tile.
   const origPaintedPxRef = useRef(0);
+  const origPaintedTierRef = useRef<{ tier: string; token: number }>({ tier: "", token: -1 });
   // Which edit state (dirtyToken) the canvas's whole-frame GROUND belongs to,
   // and whether region tiles of a NEWER state have been composited onto it.
   // Zoomed in, an edit only re-renders the visible tile - the ground outside
@@ -752,21 +762,62 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       ) + 2
     );
   }
-  function targetTier(paintedPx = paintedPxRef.current): "full" | "ultra" | "native" | null {
+  // The long edge of the finished picture at the photo's own resolution -
+  // the crop keeps a fraction of the frame. Nothing renders sharper than this.
+  function nativeLongEdge(): number {
+    const crop = previewEditsLatest.current?.crop;
+    return Math.max(image.width ?? 0, image.height ?? 0) * (crop ? Math.max(crop.width, crop.height) : 1);
+  }
+  // The most a preview tier can deliver of THIS photo, on screen: the tier's
+  // ceiling, or the photo's own pixels when it is smaller - for a raw the
+  // half-size demosaic the preview bases come from (a 40MP raw's ultra frame
+  // is 3876px, not 3900) - times the crop. Judging the tiers by their nominal
+  // ceilings alone re-rendered the same ultra frame of every raw on every
+  // settle: 3876 painted, 3900 wanted, never satisfied, never escalated.
+  function tierCeiling(tierPx: number): number {
+    const full = Math.max(image.width ?? 0, image.height ?? 0);
+    const source = image.file_type === "raw" ? full / 2 : full;
+    const crop = previewEditsLatest.current?.crop;
+    return Math.min(tierPx, source || tierPx) * (crop ? Math.max(crop.width, crop.height) : 1);
+  }
+  function targetTier(
+    paintedPx = paintedPxRef.current,
+    painted = paintedTierRef.current,
+    currentToken = dirtyToken.current
+  ): "full" | "ultra" | "native" | null {
     const cv = canvasRef.current;
     if (!cv || !paintedPx) return null;
     const shown = shownPx() - 2;
-    // A pixel of slack: rounding in fitCanvasToStage must not trigger a render.
-    if (shown <= paintedPx + 1) return null;
-    if (shown <= FULL_TIER_PX) return "full";
-    if (shown <= ULTRA_TIER_PX) return "ultra";
-    // Past ultra, but only worth the native tier when the user is actually
-    // zoomed IN. At fit view on a big hi-dpi screen the canvas can be shown
-    // wider than the ultra tier while the whole frame is still on screen -
-    // and then there is no region to cut the render down to, so "native" means
-    // the entire full-resolution frame: seconds of decode and pipeline for
-    // detail at a size nobody is inspecting. Ultra is the ceiling there.
-    return scaleRef.current > 1.001 ? "native" : "ultra";
+    const current = painted.token === currentToken;
+    const rank = TIER_RANK[painted.tier] ?? 0;
+    // Nothing sharper exists: the frame IS the photo's pixels, or the native
+    // render of this very state.
+    const maxedOut = paintedPx >= nativeLongEdge() * 0.99 || (current && painted.tier === "native");
+    // Big enough AND a settled render (a pixel of slack: rounding in
+    // fitCanvasToStage must not trigger a render). A scrub or accurate frame
+    // that happens to cover the screen - zoomed out, a small stage - is still
+    // owed the settle: it is the fast pipeline, or the 1600px one, and the
+    // resolution-dependent passes (denoise, sharpen, grain) only preview as
+    // they save on the larger base. That is the render the smallest zoom
+    // levels never got.
+    if (shown <= paintedPx + 1 && (rank >= TIER_RANK.full || maxedOut)) return null;
+    if (maxedOut) return null;
+    let tier: "full" | "ultra" | "native" =
+      shown <= tierCeiling(FULL_TIER_PX) + 1 ? "full" : shown <= tierCeiling(ULTRA_TIER_PX) + 1 ? "ultra" : "native";
+    // The tier already answered for this state and still came back smaller
+    // than the screen (the ceiling above is an estimate): the one above it,
+    // and past native there is nothing to ask for.
+    if (current && shown > paintedPx + 1 && rank >= TIER_RANK[tier]) {
+      if (painted.tier === "full") tier = "ultra";
+      else if (painted.tier === "ultra") tier = "native";
+      else return null;
+    }
+    // Native at any zoom, not only zoomed IN as before: shown whole it is
+    // rendered from the native base at the on-screen size (the settle sends
+    // its budget), which costs what an ultra settle does - not the whole
+    // sensor frame through the pipeline. Fit view on a 4K display at 1x, or
+    // any crop of a raw, is exactly where ultra runs out of pixels.
+    return tier;
   }
 
   // The dirty-token at the moment the pointer went down, so pointer-up can tell a
@@ -1495,6 +1546,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(bmp, 0, 0);
       paintedPxRef.current = Math.max(bmp.width, bmp.height);
+      paintedTierRef.current = {
+        tier: (blob as ServedBlob).servedTier ?? "accurate",
+        token: dirtyToken.current,
+      };
       setFramePending(false);
       // A whole frame replaces everything - the ground is this edit state now.
       groundTokenRef.current = dirtyToken.current;
@@ -1609,6 +1664,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       cv.height = bmp.height;
       cv.getContext("2d")!.drawImage(bmp, 0, 0);
       origPaintedPxRef.current = Math.max(bmp.width, bmp.height);
+      origPaintedTierRef.current = {
+        tier: (blob as ServedBlob).servedTier ?? "accurate",
+        token: origToken.current,
+      };
       fitCanvasToStage();
     } finally {
       bmp.close();
@@ -1704,27 +1763,20 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // on-screen size (region.px): between fit and 100% the native cut is
         // up to ~4x the pixels the screen shows, and the settle arrives that
         // much sooner without them; at true 100% the budget is a no-op.
-        let region = tier === "native" ? visibleRegion() : null;
-        // Native with no tile to cut is the WHOLE frame at sensor resolution
-        // - a 40MP raw through the entire pipeline (6s, half a gigabyte of
-        // temporaries, swap on an 8GB machine) for a view zoomed a hair past
-        // the ultra tier. Ultra is a few percent soft there and seconds
-        // cheaper; the native whole frame is kept for photos that are not
-        // much bigger than it, where it is both cheap and a real 1:1.
-        if (tier === "native" && !region) {
-          const cropNow = previewEditsLatest.current?.crop;
-          const nativeLong =
-            Math.max(image.width ?? 0, image.height ?? 0) * (cropNow ? Math.max(cropNow.width, cropNow.height) : 1);
-          if (nativeLong > ULTRA_TIER_PX * 1.15) {
-            // Already painted at ultra: nothing sharper is on offer here.
-            tier = paintedPxRef.current >= ULTRA_TIER_PX - 1 && !staleGround ? null : "ultra";
-            region = null;
-          }
-        }
+        const region = tier === "native" ? visibleRegion() : null;
+        // Native with no tile to cut is the whole frame - rendered from the
+        // native base at the on-screen size (the budget below), not at sensor
+        // resolution. It used to be downgraded to ultra here for any photo
+        // much bigger than the ultra tier, because the whole 40MP frame
+        // through the pipeline was 6s and half a gigabyte of temporaries;
+        // that downgrade is what left a cropped raw, or a 4K display at 1x,
+        // soft for good.
         // Which of the two halves still needs work: the settle is worth
         // running for the original alone, e.g. when a compare mode is entered
         // over an edit that is already sharp.
-        const otier = wantOrigRef.current ? targetTier(origPaintedPxRef.current) : null;
+        const otier = wantOrigRef.current
+          ? targetTier(origPaintedPxRef.current, origPaintedTierRef.current, origToken.current)
+          : null;
         let rearm = false;
         if (tier) {
           const dtoken = dirtyToken.current;
@@ -1755,7 +1807,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           // came to rest. The native tile carries its own (region.px).
           const blob = await api.images.editorPreview(
             image.id, previewEditsLatest.current!, fctrl.signal, tier, false, peekRef.current,
-            region, false, region ? region.px : tier === "native" ? null : shownPx(), nativeOnly
+            region, false, region ? region.px : shownPx(), nativeOnly
           );
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
           if (blob.servedTier === "pending") {
@@ -1785,7 +1837,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           const onativeOnly = otier === "native" && origPendingRef.current === otoken;
           const oblob = await api.images.editorPreview(
             image.id, baselineLatest.current, fctrl.signal, otier, baselineBrowseRef.current, null,
-            oregion, false, oregion ? oregion.px : otier === "native" ? null : shownPx(), onativeOnly
+            oregion, false, oregion ? oregion.px : shownPx(), onativeOnly
           );
           if ((scrubbing.current && !compareRef.current) || otoken !== origToken.current) return;
           if (oblob.servedTier === "pending") {

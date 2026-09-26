@@ -3019,9 +3019,10 @@ def warm_native_base(image_id: str, path_str: str, mtime_ns: int) -> None:
 def clear_editor_base_caches() -> None:
     """Drop every cached editor base (preview-sized LRU + the native frame).
     Called when a setting that changes the decode itself flips."""
-    global _native_editor_base
+    global _native_editor_base, _native_rung_base
     _cached_editor_base.cache_clear()
     _native_editor_base = None
+    _native_rung_base = None
     # The tone/denoise stage was computed from one of those bases, so it has to
     # go with them - its own key can't see a decode setting change.
     invalidate_tone_stage()
@@ -3034,7 +3035,9 @@ def editor_caches_empty() -> bool:
         stages = bool(_tone_stage or _detail_stage or _tile_cache)
     with _grain_cache_lock:
         grain = bool(_GRAIN_CACHE)
-    return not (bases or stages or grain or _native_editor_base is not None)
+    return not (
+        bases or stages or grain or _native_editor_base is not None or _native_rung_base is not None
+    )
 
 
 def release_editor_caches_if_idle(idle_s: float) -> bool:
@@ -3064,6 +3067,49 @@ def release_editor_caches_if_idle(idle_s: float) -> bool:
 # decode - see _cached_editor_base), and the tone/detail stages are keyed per
 # rung. Anything up to the accurate tier's size settles there already.
 _SETTLE_PX_LADDER = (1800, 2200, 2600, 3000, 3400, ULTRA_EDITOR_PREVIEW_PX)
+
+
+def _base_budget_px(settle_px: int | None, crop: CropBox | None) -> int | None:
+    """The base long edge that yields `settle_px` of OUTPUT. The editor's
+    budget is the size of the picture on screen - the finished, cropped
+    frame - while the ladder sizes the BASE the crop is cut from. Left
+    uncorrected, a half-frame crop shown at 2800px settled on the 3000 rung
+    and came back as a 1500px picture: forever softer than the screen, and
+    forever asked for again."""
+    if not settle_px or not crop:
+        return settle_px
+    frac = max(float(crop[2]), float(crop[3]))
+    if not 0.0 < frac < 1.0:
+        return settle_px
+    return int(math.ceil(settle_px / frac))
+
+
+# The native base downscaled to a settle budget, for exactly one (image,
+# budget) at a time - the whole-frame native settle. Between the ultra tier's
+# ceiling and true sensor resolution the screen wants a size no preview base
+# can give (a 4K display at 1x with the panel hidden; any crop of a raw, whose
+# ultra frame is the half-size demosaic times the crop), and the native base
+# is the only thing bigger. Rendering all of it - 40MP through the pipeline,
+# half a gigabyte of temporaries - was what kept this tier gated on being
+# zoomed in; rendering it AT the on-screen size costs what an ultra settle
+# does, on top of the native decode that happens once in the background.
+_native_rung_base: tuple[str, int, int, np.ndarray] | None = None
+
+
+def _native_budget_base(image_id: str, mtime_ns: int, lin16: np.ndarray, budget_px: int) -> np.ndarray:
+    global _native_rung_base
+    h, w = lin16.shape[:2]
+    # The slack keeps a base already at (or a hair over) the budget exact.
+    if max(h, w) <= budget_px * 1.05:
+        return lin16
+    hit = _native_rung_base
+    if hit and hit[0] == image_id and hit[1] == mtime_ns and hit[2] == budget_px:
+        return hit[3]
+    _native_rung_base = None  # free the old one before making the next
+    out = _downscale_linear(lin16, budget_px).astype(np.float16)
+    out.flags.writeable = False
+    _native_rung_base = (image_id, mtime_ns, budget_px, out)
+    return out
 
 
 def _settle_base_px(cap: int, settle_px: int | None) -> int:
@@ -3202,13 +3248,16 @@ def render_editor_preview_bytes(
         # can show, and rendering them stretched the "sharp version arrives"
         # wait for nothing visible. At (or past) 100% the budget equals the
         # cut and nothing changes - the zoom is still judged on real pixels.
+        # A whole-frame native settle carries the on-screen size as well
+        # (`settle_px`, the same budget the full/ultra settles get): the native
+        # base is downscaled to it before the pipeline - see _native_budget_base.
         with _full_render_lock:
             _bail_if_stale()
             return _render_editor_bytes(
                 image, path, 0, rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=90, fast=False, native=True,
-                region=region, region_px=region_px, meta=meta,
-                browse=browse, peek=peek, is_stale=is_stale,
+                region=region, region_px=region_px if region is not None else settle_px,
+                meta=meta, browse=browse, peek=peek, is_stale=is_stale,
             )
     if region is not None:
         # The interactive tile (see the gate above): scrub or accurate quality,
@@ -3238,7 +3287,10 @@ def render_editor_preview_bytes(
             _bail_if_stale()
             return _render_editor_bytes(
                 image, path,
-                _settle_base_px(ULTRA_EDITOR_PREVIEW_PX if ultra else FULL_EDITOR_PREVIEW_PX, settle_px),
+                _settle_base_px(
+                    ULTRA_EDITOR_PREVIEW_PX if ultra else FULL_EDITOR_PREVIEW_PX,
+                    _base_budget_px(settle_px, crop),
+                ),
                 rotation, crop, adjustments, distortion,
                 flip_h, flip_v, straighten, persp_h, persp_v, quality=95, fast=False, browse=browse,
                 peek=peek, is_stale=is_stale, meta=meta,
@@ -3380,6 +3432,10 @@ def _render_editor_bytes(
     mtime_ns = path.stat().st_mtime_ns
     if native:
         lin16, gain = _cached_native_base(image.id, str(path), mtime_ns)
+        if region is None and region_px:
+            budget = _base_budget_px(region_px, crop)
+            if budget:
+                lin16 = _native_budget_base(image.id, mtime_ns, lin16, budget)
     else:
         # Off the request path: this frame renders on whatever base is already
         # there while the biggest one decodes alongside, so the rungs above it
