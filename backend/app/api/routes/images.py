@@ -2505,6 +2505,20 @@ def get_full(image_id: str, db: Session = Depends(get_db), current_user: User = 
     )
 
 
+@router.get("/{image_id}/half")
+def get_half(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """The lightbox's intermediate zoom tier for raws (see thumbnails.
+    render_half_full): the photo at 3900px from the already-warm editor base,
+    served within a second while the true 100% render is still on its way."""
+    image = get_owned_image(db, current_user.id, image_id)
+    try:
+        path = thumbnails.generate_half(image)
+    except Exception:
+        logger.exception("Half render failed for image %s", image.id)
+        raise HTTPException(status_code=404, detail="Half-resolution image not available")
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
 # One background full.jpg warm at a time; a second request for the same photo
 # while it runs is a no-op.
 _full_warm_lock = threading.Lock()

@@ -106,6 +106,7 @@ def start_background_sync() -> None:
                 # pending, so they get their turn on a later start.
                 if skipped == 0:
                     set_setting(db, "raw_dimensions_repaired_v1", "1")
+                    db.commit()  # set_setting only stages the row
                 logger.info(
                     "Startup RAW dimension repair: %d corrected, %d unreachable", fixed, skipped
                 )
@@ -116,6 +117,7 @@ def start_background_sync() -> None:
                 filled, skipped = backfill_lens_metadata(db, LOCAL_USER_ID)
                 if skipped == 0:
                     set_setting(db, "lens_model_backfilled_v1", "1")
+                    db.commit()  # set_setting only stages the row
                 logger.info(
                     "Startup lens backfill: %d filled, %d unreachable", filled, skipped
                 )
@@ -126,6 +128,7 @@ def start_background_sync() -> None:
                 rendered, skipped = regenerate_lens_profile_derivatives(db, LOCAL_USER_ID)
                 if skipped == 0:
                     set_setting(db, "lens_profile_derivatives_v1", "1")
+                    db.commit()  # set_setting only stages the row
                 logger.info(
                     "Startup lens profile re-render: %d re-rendered, %d unreachable", rendered, skipped
                 )

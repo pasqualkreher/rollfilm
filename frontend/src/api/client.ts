@@ -747,6 +747,12 @@ export const api = {
     fullUrl(id: string, version?: string): string {
       return derivativeUrl(id, "full", version);
     },
+    // A raw's intermediate zoom tier (3900px, from the already-warm editor
+    // base): on screen within a second while the full render is still
+    // on its way.
+    halfUrl(id: string, version?: string): string {
+      return derivativeUrl(id, "half", version);
+    },
     // The photo as the layout exports take it: the saved bytes themselves for
     // a photo without edits, a lossless full-resolution PNG for one with.
     exportUrl(id: string, version?: string): string {

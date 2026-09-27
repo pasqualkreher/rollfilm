@@ -4,6 +4,7 @@ conftest.py sets PM_DATA_DIR before these imports, so importing app modules at
 module level is safe."""
 
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -92,3 +93,37 @@ def test_busy_probes_see_a_running_render():
     assert not thumbnails.native_decode_busy()
     with thumbnails._native_decode_lock:
         assert thumbnails.native_decode_busy()
+
+
+def test_the_banded_tone_stage_matches_the_formula_and_takes_float16():
+    from app.services import raw as raw_service
+
+    rng = np.random.default_rng(3)
+    lin = (rng.random((600, 70, 3), dtype=np.float32) * 1.3)  # spans several bands, past white
+    gain = 1.7
+    y = (lin @ raw_service._LUMA) * gain
+    ratio = gain * raw_service.reinhard_ratio(y, gain)
+    ref = np.clip(raw_service._linear_to_srgb(np.clip(lin * ratio[..., None], 0, 1)) * 255 + 0.5, 0, 255).astype(np.uint8)
+    out = raw_service.default_tone_to_srgb(lin, gain)
+    assert out.shape == ref.shape and out.dtype == np.uint8
+    assert np.abs(out.astype(np.int16) - ref.astype(np.int16)).max() <= 1
+    out16 = raw_service.default_tone_to_srgb(lin.astype(np.float16), gain)
+    assert np.abs(out16.astype(np.int16) - ref.astype(np.int16)).max() <= 2
+
+
+def test_the_half_tier_is_the_photo_at_the_editor_bases_size(photo):
+    out = thumbnails.generate_half(photo)
+    assert out.name == "half.jpg" and out.exists()
+    assert max(PILImage.open(out).size) == 400  # the photo is smaller than the tier: its own size
+    fast = np.asarray(thumbnails.render_untouched_full(photo)).astype(np.float32)
+    half = np.asarray(PILImage.open(out).convert("RGB")).astype(np.float32)
+    assert np.mean(np.abs(fast - half)) < 2.0  # same rendering, JPEG apart
+
+
+def test_a_saved_edit_clears_the_half_tier_with_the_full_one(photo, monkeypatch):
+    d = thumbnails.derivative_dir(photo.id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "full.jpg").write_bytes(b"x")
+    (d / "half.jpg").write_bytes(b"x")
+    thumbnails.generate_derivatives(photo.id, Path(photo.file_path))
+    assert not (d / "full.jpg").exists() and not (d / "half.jpg").exists()

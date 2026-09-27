@@ -97,14 +97,26 @@ def default_tone_to_srgb(lin: np.ndarray, gain: float) -> np.ndarray:
     L=y*g, W=g), so unedited RAWs render exactly as before the linear-pipeline
     refactor. With gain 1.0 (native decode / JPEG) the shoulder is a no-op for
     in-range values."""
-    y = (lin @ _LUMA) * gain
-    ratio = gain * reinhard_ratio(y, gain)
-    # The sRGB transfer through a 16-bit table instead of np.power on every
-    # value: on a 40MP frame the pow alone was 1.0s of this function's 2.0s,
-    # and the table is within 1/255 of it everywhere (a 16-bit quantisation
-    # of the linear value is far below what 8-bit output can show).
-    q = (np.clip(lin * ratio[..., None], 0.0, 1.0) * 65535.0 + 0.5).astype(np.uint16)
-    return _LINEAR16_TO_SRGB8[q]
+    # In bands of rows, into one preallocated output: whole-frame temporaries
+    # (luma, ratio, the scaled copy, the 16-bit index) added ~1.2GB to a 40MP
+    # render, on machines where that is the difference between rendering from
+    # RAM and from swap. Takes a float16 base as well - each band converts,
+    # so no whole-frame float32 copy is needed either.
+    h = lin.shape[0]
+    out = np.empty(lin.shape[:2] + (3,), dtype=np.uint8)
+    band = 256
+    for y0 in range(0, h, band):
+        rows = lin[y0 : y0 + band].astype(np.float32, copy=False)
+        y = (rows @ _LUMA) * gain
+        ratio = gain * reinhard_ratio(y, gain)
+        # The sRGB transfer through a 16-bit table instead of np.power on
+        # every value: on a 40MP frame the pow alone was 1.0s of this
+        # function's 2.0s, and the table is within 1/255 of it everywhere (a
+        # 16-bit quantisation of the linear value is far below what 8-bit
+        # output can show).
+        q = (np.clip(rows * ratio[..., None], 0.0, 1.0) * 65535.0 + 0.5).astype(np.uint16)
+        out[y0 : y0 + band] = _LINEAR16_TO_SRGB8[q]
+    return out
 
 RAW_EXTENSIONS = {
     ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw",

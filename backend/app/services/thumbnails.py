@@ -2540,6 +2540,7 @@ def generate_derivatives(
         # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
         # is regenerated on next request with the new edits.
         (out_dir / "full.jpg").unlink(missing_ok=True)
+        (out_dir / "half.jpg").unlink(missing_ok=True)
         return base
 
 
@@ -4051,10 +4052,70 @@ def render_untouched_full(image: "Image") -> PILImage.Image:
     adjustments = adjustments_from_image(image)
     with _full_render_lock:
         lin16, gain = _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
-        lin = lens_profile.correct(lin16.astype(np.float32), path, adjustments)
+        # The float16 base goes in as it is: the lens correction makes its own
+        # float32 planes only when a profile applies, and the tone stage
+        # converts band by band - no whole-frame float32 copy up front.
+        lin = lens_profile.correct(lin16, path, adjustments)
         out = raw_service.default_tone_to_srgb(lin, _browsing_gain(gain, adjustments))
         del lin
     return PILImage.fromarray(out, "RGB")
+
+
+# The lightbox's intermediate zoom tier for raws: the photo at the ultra base's
+# size (3900px, the half-size demosaic), rendered the same way full.jpg is.
+# It exists because the full render of a 40MP raw is 7-9s (and more under
+# memory pressure) during which the zoomed lightbox showed nothing new; this
+# comes from the editor base the lightbox has ALREADY warmed for the rested
+# photo (editor-warm), so it is on screen in well under a second - twice the
+# preview's pixels - while the true 100% render follows behind it.
+_half_render_lock = threading.Lock()
+
+
+def render_half_full(image: "Image") -> PILImage.Image:
+    from app.services.filesystem import resolve_image_path
+
+    if not _is_untouched(image):
+        # Edits: the bounded full render (half-size decode + the pipeline at
+        # this size), a few seconds at most.
+        return render_full_from_stored_edits(image, max_size=ULTRA_EDITOR_PREVIEW_PX)
+    path = resolve_image_path(image)
+    adjustments = adjustments_from_image(image)
+    lin16, gain = _cached_editor_base(
+        image.id, str(path), path.stat().st_mtime_ns, ULTRA_EDITOR_PREVIEW_PX
+    )
+    lin = lens_profile.correct(lin16, path, adjustments)
+    out = raw_service.default_tone_to_srgb(lin, _browsing_gain(gain, adjustments))
+    return PILImage.fromarray(out, "RGB")
+
+
+def generate_half(image: "Image") -> Path:
+    """Render + cache half.jpg (see render_half_full). Cleared with full.jpg
+    whenever the edit changes (generate_derivatives)."""
+    out = derivative_dir(image.id) / "half.jpg"
+    if out.exists():
+        return out
+    with _half_render_lock:
+        if out.exists():
+            return out
+        t0 = time.perf_counter()
+        rendered = render_half_full(image)
+        _save_atomic(rendered, out, quality=90)
+        ms = (time.perf_counter() - t0) * 1000.0
+        if ms >= _SLOW_FULL_MS:
+            logger.info("half render took %.0f ms (%s) px=%d", ms, image.id, max(rendered.size))
+    return out
+
+
+def _drop_native_base_if_idle() -> None:
+    """After a lightbox full render on a low-RAM machine: the 240MB native
+    base is only worth keeping for an editor that is about to zoom - and a
+    user zapping through the lightbox has no such editor. Let it go (the
+    next editor zoom decodes again); on roomy machines it stays."""
+    global _native_editor_base, _native_rung_base
+    if not machine.LOW_RAM or editor_recently_active(30.0):
+        return
+    _native_editor_base = None
+    _native_rung_base = None
 
 
 # Full renders in flight (generate_full, decode included). A counter rather
@@ -4147,6 +4208,8 @@ def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) ->
                     total_ms, image.id, "untouched" if untouched else "edited",
                     (t1 - t0) * 1000.0, (t2 - t1) * 1000.0, max(rendered.size),
                 )
+            del rendered
+            _drop_native_base_if_idle()
     finally:
         with _full_renders_lock:
             _full_renders_inflight -= 1

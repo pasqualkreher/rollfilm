@@ -8627,6 +8627,22 @@ button.smart-card {
   z-index: 2;
 }
 
+/* "Loading…" where the photo goes, while the next photo's row or pixels are
+   still on their way (fast paging); the previous photo stays underneath,
+   dimmed. Never catches the pointer - the nav arrows and zoom keep working. */
+.lightbox-loading-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 2;
+  pointer-events: none;
+  font-size: 13px;
+  color: var(--text-muted, inherit);
+}
+
 /* Nav arrows anchor to the image box (nearest positioned ancestor); the chip
    itself is opaque, so no per-stage-shade tinting is needed. */
 

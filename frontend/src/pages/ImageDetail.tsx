@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
@@ -132,7 +132,17 @@ export function ImageDetail() {
     queryKey: ["image", activeId],
     queryFn: () => api.images.get(activeId),
     enabled: !!activeId,
+    // Paging fast through a set: the next photo's row is a moment away, and
+    // dropping to a bare "Loading..." page for that moment threw the whole
+    // layout - panel and all - away and back on every step. The previous
+    // photo's data stays in place; the stage shows that the next one is on
+    // its way (see pixelsPending), and the keys that act on "the photo"
+    // wait until it is really the one on screen (see imageStale).
+    placeholderData: keepPreviousData,
   });
+  // The row on screen belongs to the photo the user just LEFT: the next one's
+  // hasn't arrived yet.
+  const imageStale = !!image && image.id !== activeId;
 
   // Scroll / trackpad-pinch to zoom (toward the cursor), drag to pan, and the
   // fit-to-frame sizing underneath it - shared with the import review's preview
@@ -147,6 +157,12 @@ export function ImageDetail() {
   // full render can't be fetched we fall back to the preview (never a broken img).
   const [hiRes, setHiRes] = useState(false);
   const [fullFailed, setFullFailed] = useState(false);
+  // A raw's full render is seconds away (7-9s for a 40MP file, more on a
+  // machine short of memory). Zooming shows its half tier at once (see
+  // api.images.halfUrl) and fetches the full render off-screen; only once
+  // that has arrived does the <img> switch to it - one swap, no blank stage.
+  // JPEGs need none of this: their full size is the file itself.
+  const [fullReady, setFullReady] = useState(false);
   // The preview itself failed to load (damaged/unreadable file). Shows a clean
   // error state instead of the browser's broken-image icon; navigation, rating
   // and the info panel keep working. Retry remounts the <img> (keyed by the
@@ -157,6 +173,11 @@ export function ImageDetail() {
   // instead of it snapping in. Reset per shown photo, not per src change, so a
   // hi-res upgrade while zoomed doesn't blink.
   const [photoLoaded, setPhotoLoaded] = useState(false);
+  // Which photo's pixels the <img> has actually decoded. Paging keeps the
+  // previous photo on the stage until the next one's have arrived; while they
+  // haven't (fast zapping outruns the neighbour prefetch), the stage says so
+  // instead of silently showing the wrong photo at full strength.
+  const [loadedId, setLoadedId] = useState<string | null>(null);
   // True once any photo has been shown. Gates the fade-in to the very first
   // open (from the grid): while paging through a set we keep the current frame
   // on screen and swap in place, so there's no fade-out/in wash between photos.
@@ -208,6 +229,7 @@ export function ImageDetail() {
     resetZoom();
     setHiRes(false);
     setFullFailed(false);
+    setFullReady(false);
     setPreviewFailed(false);
     setRetryNonce(0);
     // Only blank + fade for the first open. When paging through a set, keep the
@@ -252,8 +274,33 @@ export function ImageDetail() {
     resetZoom();
     setHiRes(false);
     setFullFailed(false);
+    setFullReady(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRev]);
+
+  // The raw's full render, fetched off-screen once zoomed: the <img> shows the
+  // half tier meanwhile and switches when this has landed (the response is
+  // cached immutable, so the switch is instant). A failure keeps the half tier
+  // - never a broken image, never a blank stage.
+  const isRaw = image?.file_type === "raw";
+  useEffect(() => {
+    if (!hiRes || !isRaw || fullReady || fullFailed || !image) return;
+    const loader = new Image();
+    let gone = false;
+    loader.onload = () => {
+      if (!gone) setFullReady(true);
+    };
+    loader.onerror = () => {
+      if (!gone) setFullFailed(true);
+    };
+    loader.src = api.images.fullUrl(image.id, editVersion(image));
+    return () => {
+      gone = true;
+      loader.onload = null;
+      loader.onerror = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hiRes, isRaw, fullReady, fullFailed, image?.id, editRev]);
 
   const { data: paired } = useQuery({
     queryKey: ["image", image?.paired_image_id],
@@ -309,7 +356,7 @@ export function ImageDetail() {
         return;
       }
 
-      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && image && paired) {
+      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && image && !imageStale && paired) {
         setActiveId(activeId === image.id ? paired.id : image.id);
         return;
       }
@@ -318,7 +365,7 @@ export function ImageDetail() {
       // import lightbox. Skipped while a control has focus, so a keystroke
       // meant for it never rates the photo (text fields already returned above).
       const inControl = tagName === "BUTTON" || tagName === "SELECT";
-      if (!inControl && image && e.key >= "0" && e.key <= "5") {
+      if (!inControl && image && !imageStale && e.key >= "0" && e.key <= "5") {
         setRating(Number(e.key));
         return;
       }
@@ -327,7 +374,7 @@ export function ImageDetail() {
       // Edit button does, without going for the mouse. (The handler returns
       // early while the editor is open, so it can't re-trigger itself; Esc and
       // Back close it.)
-      if (!inControl && image && (e.key === "e" || e.key === "E")) {
+      if (!inControl && image && !imageStale && (e.key === "e" || e.key === "E")) {
         openAdjust();
         return;
       }
@@ -351,7 +398,7 @@ export function ImageDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [goToOffset, adjustOpen, adjustClosing, openAdjust, slideshowOpen, saveCopyOpen, image, paired, activeId, zoomed, renaming, panelOpen]);
+  }, [goToOffset, adjustOpen, adjustClosing, openAdjust, slideshowOpen, saveCopyOpen, image, imageStale, paired, activeId, zoomed, renaming, panelOpen]);
 
   // The photo the user has actually SETTLED on: follows activeId only after a
   // short pause without further navigation. Holding an arrow key changes
@@ -529,6 +576,8 @@ export function ImageDetail() {
   }, [similar, image?.paired_image_id]);
 
   if (!image) return <div className="page empty-state">Loading...</div>;
+
+  const pixelsPending = imageStale || loadedId !== image.id;
 
   // With "Merge RAW+JPG" on, rating/coloring the shown file also writes the
   // partner - and we refresh its cached copy so the other tab reflects it.
@@ -809,16 +858,19 @@ export function ImageDetail() {
               // pool over similar-strip thumbs and neighbor prefetches.
               {...({ fetchpriority: "high" } as Record<string, string>)}
               className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}${zoom.zoomAnim ? " zoom-anim" : ""}`}
-              style={{ ...zoom.imageStyle, opacity: photoLoaded ? 1 : 0 }}
+              style={{ ...zoom.imageStyle, opacity: photoLoaded ? (pixelsPending ? 0.35 : 1) : 0 }}
               onLoad={() => {
                 zoom.refit();
                 setPhotoLoaded(true);
+                setLoadedId(image.id);
                 shownOnceRef.current = true;
               }}
               draggable={false}
               src={
                 hiRes
-                  ? api.images.fullUrl(image.id, editVersion(image))
+                  ? isRaw && !fullReady
+                    ? api.images.halfUrl(image.id, editVersion(image))
+                    : api.images.fullUrl(image.id, editVersion(image))
                   : api.images.previewUrl(image.id, editVersion(image))
               }
               alt={image.original_filename}
@@ -836,6 +888,18 @@ export function ImageDetail() {
               }}
               {...zoom.imageHandlers}
             />
+            )}
+            {pixelsPending && !previewFailed && (
+              <div className="lightbox-loading-stage" aria-live="polite">
+                <span className="spinner" aria-hidden="true" />
+                Loading…
+              </div>
+            )}
+            {hiRes && isRaw && !fullReady && !fullFailed && !pixelsPending && (
+              <div className="lightbox-wait-spinner lightbox-developing" aria-live="polite">
+                <span className="spinner" aria-hidden="true" />
+                Rendering 100%…
+              </div>
             )}
             {canPage && (
               <button
