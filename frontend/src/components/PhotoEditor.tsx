@@ -4568,9 +4568,15 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                     <span>Profile correction</span>
                     <span
                       className="editor-switch-sub"
-                      title={`${lensProfile.data.lens_model ?? "Lens"} - correction data from the camera`}
+                      title={
+                        lensProfile.data.source === "lensfun"
+                          ? `${lensProfile.data.lens_model ?? "Lens"} - ${lensProfile.data.label} (Lensfun database)`
+                          : `${lensProfile.data.lens_model ?? "Lens"} - correction data from the camera`
+                      }
                     >
-                      {lensProfile.data.lens_model ?? "Correction data from the camera"}
+                      {lensProfile.data.source === "lensfun"
+                        ? lensProfile.data.label
+                        : lensProfile.data.lens_model ?? "Correction data from the camera"}
                     </span>
                   </span>
                   <button
@@ -4581,7 +4587,11 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                     className={`editor-switch${adj.lens_profile ? " on" : ""}`}
                     onClick={() => setAdj((a) => ({ ...a, lens_profile: a.lens_profile ? 0 : 1 }))}
                     disabled={busy}
-                    title="Correct distortion, vignetting and colour fringes with the lens data stored in the RAW"
+                    title={
+                      lensProfile.data.source === "lensfun"
+                        ? "Correct distortion, vignetting and colour fringes with the lens's Lensfun profile"
+                        : "Correct distortion, vignetting and colour fringes with the lens data stored in the RAW"
+                    }
                   />
                 </div>
                 {!!adj.lens_profile && (

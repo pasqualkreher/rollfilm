@@ -132,6 +132,20 @@ def start_background_sync() -> None:
                 logger.info(
                     "Startup lens profile re-render: %d re-rendered, %d unreachable", rendered, skipped
                 )
+            # And again for the RAWs the correction reached later: every
+            # other maker's camera data and the Lensfun fallback. RAFs were
+            # covered by the first pass.
+            if get_setting(db, "lens_profile_derivatives_v2") != "1":
+                rendered, skipped = regenerate_lens_profile_derivatives(
+                    db, LOCAL_USER_ID, skip_suffixes=(".raf",)
+                )
+                if skipped == 0:
+                    set_setting(db, "lens_profile_derivatives_v2", "1")
+                    db.commit()
+                logger.info(
+                    "Startup lens profile re-render (all makers): %d re-rendered, %d unreachable",
+                    rendered, skipped,
+                )
         except Exception:
             logger.exception("Startup library sync failed")
         finally:
@@ -140,7 +154,9 @@ def start_background_sync() -> None:
     threading.Thread(target=_run, name="startup-library-sync", daemon=True).start()
 
 
-def regenerate_lens_profile_derivatives(db: Session, owner_id: int) -> tuple[int, int]:
+def regenerate_lens_profile_derivatives(
+    db: Session, owner_id: int, skip_suffixes: tuple[str, ...] = ()
+) -> tuple[int, int]:
     """Re-render the thumbnail/preview of every RAW photo whose file carries an
     embedded lens profile (services/lens_profile.py) and that has the correction
     on - derivatives rendered before the correction existed show the lens
@@ -156,6 +172,8 @@ def regenerate_lens_profile_derivatives(db: Session, owner_id: int) -> tuple[int
     )
     for image in raws:
         path = resolve_image_path(image)
+        if path.suffix.lower() in skip_suffixes:
+            continue
         if not path.exists():
             skipped += 1
             continue

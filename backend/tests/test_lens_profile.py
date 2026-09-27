@@ -125,3 +125,157 @@ def test_lens_settings_are_stored_but_do_not_count_as_developing():
     assert develop.is_neutral(adj, ignore=develop.LENS_KEYS)
     # An unedited raw keeps its browsing auto-exposure with the profile off.
     assert thumbnails._browsing_gain(3.0, adj) == 3.0
+
+
+# ---- The other camera-data sources -------------------------------------------
+# Values from real files (raw.pixls.us samples); the formulas are darktable's.
+
+
+def test_parses_sony_splines():
+    d = "16 -2 0 3 5 9 13 17 22 26 30 33 35 37 37 37 36"
+    c = "32 " + " ".join(["-128"] * 16) + " " + " ".join(["256"] * 16)
+    v = "16 0 0 128 416 800 1248 1760 2304 2848 3424 4000 4544 5312 6496 8288 9856"
+    p = lens_profile.parse_sony(d, c, v)
+    assert isinstance(p, lens_profile.RadialProfile)
+    assert len(p.knots) == 16 and abs(p.knots[0] - 0.5 / 15) < 1e-9
+    assert abs(p.dist[-1] - (36 * 2**-14 + 1)) < 1e-12
+    assert abs(p.ca_r[0] - (-128 * 2**-21)) < 1e-12 and abs(p.ca_b[0] - 256 * 2**-21) < 1e-12
+    assert p.vig[0] == 1.0 and 0.6 < p.vig[-1] < 0.7  # ~0.65 EV in the corner
+    # Counts that don't agree are not Sony's layout.
+    assert lens_profile.parse_sony(d, "31 " + c[3:], v) is None
+    assert lens_profile.parse_sony(None, c, v) is None
+
+
+def test_parses_olympus_polynomials():
+    p = lens_profile.parse_olympus(
+        "0.0451074987649918 -0.0530162751674652 0.0142785906791687 0.98828125",
+        "0.000173 0.00034 -0.000237 0.00044 -0.0001 0.00002",
+    )
+    assert isinstance(p, lens_profile.RadialProfile)
+    # At the corner: drs * (1 + drs^2 (k2 + drs^2 (k4 + drs^2 k6))).
+    drs = 0.98828125
+    rs2 = drs * drs
+    expect = drs * (1 + rs2 * (0.0451074987649918 + rs2 * (-0.0530162751674652 + rs2 * 0.0142785906791687)))
+    assert abs(p.dist[-1] - expect) < 1e-12
+    assert p.ca_r[0] == 0.000173 and not p.vig
+    assert lens_profile.parse_olympus("0 0 0 1", "0 0 0 0 0 0") is None
+
+
+def test_parses_panasonic_and_inverts_it():
+    p = lens_profile.parse_panasonic(1, 1.01351643933067, -0.00469970703125, -0.010833740234375, 0.003173828125)
+    assert isinstance(p, lens_profile.RadialProfile)
+    # dist[i] * r is the source radius Rd whose forward map lands on r.
+    sc, a, b, c = 1.01351643933067, -0.010833740234375, -0.00469970703125, 0.003173828125
+    for r, m in zip(p.knots[1:], p.dist[1:]):
+        rd = r * m
+        ru = rd * (1 + sc * (a * rd**2 + b * rd**4 + c * rd**6))
+        assert abs(ru - r) < 1e-9
+    assert lens_profile.parse_panasonic(0, 1.0, 0.1, 0.1, 0.1) is None  # switched off in the file
+
+
+def _opcode(opcode_id: int, params: bytes) -> bytes:
+    import struct
+
+    return struct.pack(">IIII", opcode_id, 0x01030000, 0, len(params)) + params
+
+
+def _opcode_list(*ops: bytes) -> bytes:
+    import struct
+
+    return struct.pack(">I", len(ops)) + b"".join(ops)
+
+
+def test_parses_dng_warp_vignette_and_gain_maps():
+    import struct
+
+    warp = _opcode(1, struct.pack(">I", 1) + struct.pack(">6d", 0.99, 0.01, -0.003, 0.003, 0, 0) + struct.pack(">2d", 0.5, 0.5))
+    vig = _opcode(3, struct.pack(">5d", 0.5, 0, 0, 0, 0) + struct.pack(">2d", 0.5, 0.5))
+    gains = [1.0, 1.5, 1.5, 2.0]
+    gmap = _opcode(9, struct.pack(">10I", 0, 0, 100, 200, 0, 1, 2, 2, 2, 2) + struct.pack(">4d", 1.0, 1.0, 0.0, 0.0)
+                   + struct.pack(">I", 1) + struct.pack(">4f", *gains))
+    radial, maps = lens_profile.parse_dng(_opcode_list(gmap), _opcode_list(warp, vig))
+    assert radial is not None and len(maps) == 1
+    assert abs(radial.dist[-1] - (0.99 + 0.01 - 0.003 + 0.003)) < 1e-12
+    assert abs(radial.vig[-1] - 1 / 1.5) < 1e-12 and radial.ca_r[-1] == 0
+    assert maps[0].rows == 2 and maps[0].gains == tuple(gains)
+    assert lens_profile.parse_dng(None, None) == (None, ())
+    # A truncated list is dropped, not read past its end.
+    assert lens_profile.parse_dng(None, _opcode_list(warp)[:-9]) == (None, ())
+
+
+def test_gain_maps_land_on_the_right_channel_and_orientation():
+    """A red-site map (CFA RGGB, site 0,0) brightens only red, grows along the
+    raw's rows, and follows LibRaw's 180-degree flip onto the decoded frame."""
+    gm = lens_profile.GainMap(0, 0, 40, 60, 0, 1, 2, 2, 2, 1, 1.0, 1.0, 0.0, 0.0, 1, (1.0, 3.0))
+    corr = lens_profile.Correction("dng", "Camera data", gain_maps=(gm,), raw_size=(60, 40), cfa=((0, 1), (1, 2)))
+    arr = np.ones((40, 60, 3), dtype=np.float32)
+    out = lens_profile.apply_gain_maps(arr, corr)
+    assert np.allclose(out[..., 1:], 1.0) and out[0, 0, 0] < 1.1 and out[-1, 0, 0] > 2.9
+    flipped = lens_profile.apply_gain_maps(arr, lens_profile.Correction(**{**corr.__dict__, "flip": 3}))
+    assert flipped[0, 0, 0] > 2.9 and flipped[-1, 0, 0] < 1.1
+    # A half-size decode covers the same raw area.
+    half = lens_profile.apply_gain_maps(np.ones((20, 30, 3), np.float32), corr)
+    assert half[0, 0, 0] < 1.1 and half[-1, 0, 0] > 2.8
+    assert arr.max() == 1.0  # never modified in place
+
+
+def test_lensfun_fills_in_for_files_without_camera_data():
+    ref = lens_profile.find_lensfun_lens(
+        "NIKON CORPORATION", "NIKON Z 6", ["NIKKOR Z 24-70mm f/4 S"], 52, 6.7, 0.88
+    )
+    assert ref is not None and ref.lens_model == "NIKKOR Z 24-70mm f/4 S"
+    p = lens_profile.lensfun_profile(ref, 1.5)
+    assert isinstance(p, lens_profile.RadialProfile)
+    assert p.knots[0] == 0 and p.knots[-1] > 0.99
+    assert all(b > a for a, b in zip(p.knots, p.knots[1:]))
+    assert 1.0 < p.dist[-1] < 1.1  # this zoom's pincushion at 52mm
+    assert p.vig and min(p.vig) < 0.9
+    # An unknown lens gives no match rather than a wrong one.
+    assert lens_profile.find_lensfun_lens("SONY", "ILCE-7M4", ["Totally Unknown 33mm F1.1"], 33, 1.1, None) is None
+    # A compact's built-in lens, without a usable lens name.
+    gr = lens_profile.find_lensfun_lens("RICOH IMAGING COMPANY, LTD.", "RICOH GR III", ["18.3mm F2.8"], 18.3, 5, None)
+    assert gr is not None and "GR III" in gr.lens_model and " with " not in gr.lens_model
+
+
+def test_camera_data_wins_over_lensfun(tmp_path: Path, monkeypatch):
+    raw = tmp_path / "shot.ARW"
+    raw.write_bytes(b"x")
+    sony = {
+        "EXIF:DistortionCorrParams": "16 " + " ".join(["10"] * 16),
+        "EXIF:ChromaticAberrationCorrParams": "32 " + " ".join(["0"] * 32),
+        "EXIF:VignettingCorrParams": "16 " + " ".join(["0"] * 16),
+        "EXIF:Make": "SONY", "EXIF:Model": "ILCE-7M4", "EXIF:LensModel": "FE 50mm F2.5 G", "EXIF:FocalLength": 50,
+    }
+    monkeypatch.setattr(lens_profile, "_read_tags", lambda p: sony)
+    lens_profile._cached_profile.cache_clear()
+    corr = lens_profile.profile_for(raw)
+    assert corr.source == "sony" and corr.label == "Camera data"
+    monkeypatch.setattr(lens_profile, "_read_tags", lambda p: {k: v for k, v in sony.items() if "Corr" not in k})
+    lens_profile._cached_profile.cache_clear()
+    raw.write_bytes(b"xy")  # a new file version
+    import os
+
+    os.utime(raw, ns=(raw.stat().st_mtime_ns + 10**9, raw.stat().st_mtime_ns + 10**9))
+    corr = lens_profile.profile_for(raw)
+    assert corr.source == "lensfun" and corr.label.startswith("Lensfun: ")
+    # JPEGs are never corrected, whatever their tags say.
+    jpg = tmp_path / "shot.jpg"
+    jpg.write_bytes(b"x")
+    assert lens_profile.profile_for(jpg) is None
+    lens_profile._cached_profile.cache_clear()
+
+
+def test_a_radial_profile_corrects_like_the_fuji_tables():
+    """The same barrel described both ways gives the same picture."""
+    fuji = _profile(dist=-3.0)
+    # Fuji: a source point at rs belongs at ro = rs / m, m = 1 + d/100 - so
+    # in darktable's form the knot sits at ro and its multiplier is m.
+    m = [1 + d / 100 for d in fuji.distortion]
+    ro = [k / mm for k, mm in zip(fuji.knots, m)]
+    n = len(ro)
+    radial = lens_profile.RadialProfile(tuple(ro), tuple(m), (0.0,) * n, (0.0,) * n)
+    ys, xs = np.mgrid[0:120, 0:180].astype(np.float32)
+    arr = np.dstack([xs / 180, ys / 120, (xs + ys) / 300]).astype(np.float32)
+    a = lens_profile.apply_profile(arr, fuji, 1.0, 0.0)
+    b = lens_profile.apply_profile(arr, radial, 1.0, 0.0)
+    assert np.abs(a - b).max() < 2e-3

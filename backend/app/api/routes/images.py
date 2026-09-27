@@ -2666,16 +2666,22 @@ def get_lens_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Whether the photo's file carries lens correction data (see
-    services/lens_profile.py). The editor offers the Lens profile switch only
-    when it does, and names the lens it was recorded for."""
+    """Whether the photo has a lens correction (see services/lens_profile.py):
+    the camera's own data in the RAW, or a Lensfun profile. The editor offers
+    the Lens profile switch only when it does, and names the lens and where
+    the correction comes from."""
     image = get_owned_image(db, current_user.id, image_id)
     try:
-        available = lens_profile.profile_for(resolve_image_path(image)) is not None
+        corr = lens_profile.profile_for(resolve_image_path(image))
     except Exception:
         logger.exception("Lens profile lookup failed for %s", image_id)
-        available = False
-    return {"available": available, "lens_model": image.lens_model}
+        corr = None
+    return {
+        "available": corr is not None,
+        "lens_model": image.lens_model,
+        "source": corr.source if corr else None,
+        "label": corr.label if corr else None,
+    }
 
 
 @router.get("/{image_id}/auto-adjust", response_model=schemas.AutoAdjustOut)

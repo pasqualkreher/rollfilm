@@ -42,6 +42,7 @@ for pkg in (
     "reverse_geocoder",  # bundled cities k-d tree dataset (rg_cities1000.csv)
     "pycountry",  # ISO country-code → name tables (JSON data files)
     "certifi",  # cacert.pem - the trust store run_server.py falls back to
+    "lensfunpy",  # liblensfun + its XML lens database (data files)
 ):
     d, b, h = collect_all(pkg)
     datas += d

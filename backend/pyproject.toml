@@ -29,6 +29,9 @@ dependencies = [
     # wheel looks for its build machine's trust store, which no user has.
     "certifi>=2024.7.4",
     "pycountry>=24.0",
+    # Lens profiles for RAWs that carry no correction data of their own
+    # (Canon, Nikon, Pentax, Ricoh, adapted lenses); bundles the database.
+    "lensfunpy>=1.18",
 ]
 
 [project.optional-dependencies]

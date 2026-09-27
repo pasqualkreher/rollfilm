@@ -927,6 +927,14 @@ const CHAPTERS: Chapter[] = [
                 grid, diagonals.
               </li>
               <li>
+                <strong>Lens correction:</strong> RAWs are corrected for distortion, vignetting
+                and colour fringes automatically, from the correction data the camera stores in the
+                file (Fujifilm, Sony, OM System/Olympus, Panasonic, DNG) or, where there is none,
+                from the Lensfun lens database (Canon, Nikon, Pentax, Ricoh and many more). Switch
+                it off or dial it back per photo under <em>Lens correction</em>. JPEGs are left
+                alone — the camera has corrected them already.
+              </li>
+              <li>
                 <strong>White frame:</strong> a matte border that saves and exports like any other
                 adjustment.
               </li>
