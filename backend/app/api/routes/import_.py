@@ -854,16 +854,21 @@ def get_staged_file_full(
         raise HTTPException(status_code=404, detail="Staged file not found")
     if staged.imported:
         # Its bytes are in the library now. A JPEG is its own full size; a RAW
-        # isn't rendered again here - the lightbox stays on the preview.
+        # renders from the library copy exactly as it would have from the
+        # staged one (same neutral look as the review preview). A session
+        # stays open after "Add to library", and answering 404 here left
+        # every kept raw stuck on its 2048px preview when zoomed.
         image = db.get(Image, staged.duplicate_of_image_id) if staged.duplicate_of_image_id else None
         library_file = resolve_image_path(image) if image else None
-        if staged.file_type == FileType.raw or library_file is None or not library_file.exists():
+        if library_file is None or not library_file.exists():
             raise HTTPException(status_code=404, detail="Full-resolution image not available")
-        return FileResponse(library_file, headers=_STAGED_FULL_CACHE_HEADERS)
-
-    source_path = staged_file_path(staged)
-    if not source_path.exists():
-        raise HTTPException(status_code=404, detail="Staged file missing from disk")
+        if staged.file_type != FileType.raw:
+            return FileResponse(library_file, headers=_STAGED_FULL_CACHE_HEADERS)
+        source_path = library_file
+    else:
+        source_path = staged_file_path(staged)
+        if not source_path.exists():
+            raise HTTPException(status_code=404, detail="Staged file missing from disk")
 
     # A staged JPEG/PNG already *is* the full resolution - hand the original
     # bytes over rather than re-encoding them into a second copy on the staging

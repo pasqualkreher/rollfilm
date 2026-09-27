@@ -29,6 +29,7 @@ import { IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, 
 import { Slideshow } from "../components/Slideshow";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
+import { useFullResUpgrade } from "../utils/useFullResUpgrade";
 import { ZoomReadout } from "../components/ZoomReadout";
 import { StageBackgroundToggle } from "../components/StageBackgroundToggle";
 
@@ -149,21 +150,35 @@ export function ImageDetail() {
   // fit-to-frame sizing underneath it - shared with the import review's preview
   // so a photo behaves the same wherever the app shows it big. Handed the
   // ORIGINAL's dimensions so 100% means its pixels: the lightbox shows a
-  // downscaled preview until you zoom, and 100% of that is not 100%.
-  const zoom = useImageZoomPan(
-    image?.width && image?.height ? { w: image.width, h: image.height } : null
-  );
+  // downscaled preview until you zoom, and 100% of that is not 100%. The
+  // saved crop is applied to it (as the editor does): full.jpg IS the cropped
+  // frame, so measuring 100% against the whole sensor upscaled every cropped
+  // photo by the crop factor.
+  const zoomSource = useMemo(() => {
+    if (!image?.width || !image?.height) return null;
+    const quarter = image.edit_rotation === 90 || image.edit_rotation === 270;
+    const w = quarter ? image.height : image.width;
+    const h = quarter ? image.width : image.height;
+    return { w: w * (image.edit_crop_width ?? 1), h: h * (image.edit_crop_height ?? 1) };
+  }, [image?.width, image?.height, image?.edit_rotation, image?.edit_crop_width, image?.edit_crop_height]);
+  const zoom = useImageZoomPan(zoomSource);
   // Swap the preview for the full-resolution render once the user zooms in, so
   // 100% shows true original pixels instead of an upscaled preview. If the
   // full render can't be fetched we fall back to the preview (never a broken img).
   const [hiRes, setHiRes] = useState(false);
+  // A JPEG's full-size <img> failed: it drops back to the preview for this visit.
   const [fullFailed, setFullFailed] = useState(false);
   // A raw's full render is seconds away (7-9s for a 40MP file, more on a
   // machine short of memory). Zooming shows its half tier at once (see
-  // api.images.halfUrl) and fetches the full render off-screen; only once
-  // that has arrived does the <img> switch to it - one swap, no blank stage.
-  // JPEGs need none of this: their full size is the file itself.
-  const [fullReady, setFullReady] = useState(false);
+  // api.images.halfUrl) and, once that is on the stage, fetches the full
+  // render off-screen (useFullResUpgrade); only once that has arrived and
+  // decoded does the <img> switch to it - one swap, no blank stage. The full
+  // request waits for the half one on purpose: for an edited raw both take
+  // the same render lock, and a full render that got there first held the
+  // "instant" half tier back for its whole 10+s. JPEGs need none of this:
+  // their full size is the file itself.
+  const [halfShown, setHalfShown] = useState(false);
+  const [halfFailed, setHalfFailed] = useState(false);
   // The preview itself failed to load (damaged/unreadable file). Shows a clean
   // error state instead of the browser's broken-image icon; navigation, rating
   // and the info panel keep working. Retry remounts the <img> (keyed by the
@@ -230,7 +245,8 @@ export function ImageDetail() {
     resetZoom();
     setHiRes(false);
     setFullFailed(false);
-    setFullReady(false);
+    setHalfShown(false);
+    setHalfFailed(false);
     setPreviewFailed(false);
     setRetryNonce(0);
     // Only blank + fade for the first open. When paging through a set, keep the
@@ -275,33 +291,22 @@ export function ImageDetail() {
     resetZoom();
     setHiRes(false);
     setFullFailed(false);
-    setFullReady(false);
+    setHalfShown(false);
+    setHalfFailed(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRev]);
 
-  // The raw's full render, fetched off-screen once zoomed: the <img> shows the
-  // half tier meanwhile and switches when this has landed (the response is
-  // cached immutable, so the switch is instant). A failure keeps the half tier
-  // - never a broken image, never a blank stage.
+  // The raw's full render, fetched off-screen once zoomed and the half tier is
+  // up: the <img> shows the half tier meanwhile and switches when this has
+  // landed. Busy/superseded answers are asked again; a real failure keeps the
+  // half tier - never a broken image, never a blank stage - and says so.
   const isRaw = image?.file_type === "raw";
-  useEffect(() => {
-    if (!hiRes || !isRaw || fullReady || fullFailed || !image) return;
-    const loader = new Image();
-    let gone = false;
-    loader.onload = () => {
-      if (!gone) setFullReady(true);
-    };
-    loader.onerror = () => {
-      if (!gone) setFullFailed(true);
-    };
-    loader.src = api.images.fullUrl(image.id, editVersion(image));
-    return () => {
-      gone = true;
-      loader.onload = null;
-      loader.onerror = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hiRes, isRaw, fullReady, fullFailed, image?.id, editRev]);
+  const full = useFullResUpgrade(
+    hiRes && isRaw && image && (halfShown || halfFailed)
+      ? api.images.fullUrl(image.id, editVersion(image))
+      : null
+  );
+  const fullReady = full.state === "ready";
 
   const { data: paired } = useQuery({
     queryKey: ["image", image?.paired_image_id],
@@ -533,13 +538,15 @@ export function ImageDetail() {
   // timer, and a warm still queued on the server is superseded by the next
   // photo's.
   useEffect(() => {
+    // Zooming cancels a warm still pending: the zoom's own /full request is
+    // on its way, and a warm fired after it would claim "newest" over it.
     if (restedId !== activeId || adjustOpen || image?.file_type !== "raw" || hiRes) return;
     const t = setTimeout(() => {
       void api.images.fullWarm(restedId).catch(() => {});
     }, 3000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restedId, adjustOpen, image?.file_type]);
+  }, [restedId, adjustOpen, image?.file_type, hiRes]);
 
   // Similar-photos strip: a CLIP search per photo is the most expensive
   // per-view request the lightbox makes - only run it for the rested photo,
@@ -865,22 +872,31 @@ export function ImageDetail() {
                 setPhotoLoaded(true);
                 setLoadedId(image.id);
                 shownOnceRef.current = true;
+                if (hiRes && isRaw && !fullReady) setHalfShown(true);
               }}
               draggable={false}
               src={
                 hiRes
-                  ? isRaw && !fullReady
-                    ? api.images.halfUrl(image.id, editVersion(image))
+                  ? isRaw
+                    ? fullReady && full.src
+                      ? full.src
+                      : halfFailed
+                        ? api.images.previewUrl(image.id, editVersion(image))
+                        : api.images.halfUrl(image.id, editVersion(image))
                     : api.images.fullUrl(image.id, editVersion(image))
                   : api.images.previewUrl(image.id, editVersion(image))
               }
               alt={image.original_filename}
               onError={() => {
-                // Full render unavailable - fall back to the preview so the
-                // photo never shows as a broken image. If the preview itself
-                // fails, switch to the error state instead of leaving the
-                // browser's broken-image icon behind.
-                if (hiRes) {
+                // A higher tier unavailable - fall back so the photo never
+                // shows as a broken image: a raw's half tier to the preview
+                // (the full render is still fetched), a JPEG's full size to
+                // the preview. If the preview itself fails, switch to the
+                // error state instead of leaving the browser's broken-image
+                // icon behind.
+                if (hiRes && isRaw && !fullReady && !halfFailed) {
+                  setHalfFailed(true);
+                } else if (hiRes && !isRaw) {
                   setFullFailed(true);
                   setHiRes(false);
                 } else {
@@ -896,10 +912,15 @@ export function ImageDetail() {
                 Loading…
               </div>
             )}
-            {hiRes && isRaw && !fullReady && !fullFailed && !pixelsPending && (
+            {hiRes && isRaw && full.state !== "ready" && full.state !== "failed" && !pixelsPending && (
               <div className="stage-rendering" role="status">
                 <span className="spinner" aria-hidden="true" />
                 Rendering full resolution…
+              </div>
+            )}
+            {hiRes && isRaw && full.state === "failed" && !pixelsPending && (
+              <div className="stage-rendering" role="status">
+                Full resolution unavailable – showing a reduced render
               </div>
             )}
             {canPage && (

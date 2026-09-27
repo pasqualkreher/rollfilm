@@ -4984,7 +4984,7 @@ input.editor-preset-select {
    inline: grab / grabbing when zoomed). */
 .detail-photo {
   transform-origin: center center;
-  will-change: transform;
+  /* will-change is set inline by useImageZoomPan, only while zooming/panning. */
   /* Only opacity eases by default (the soft fade on load / when paging through
      photos, driven by ImageDetail) - deliberately NOT transform, so wheel-zoom
      and pan still track the input directly with no lag. A gentle ease-out over

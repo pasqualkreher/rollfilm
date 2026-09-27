@@ -9,6 +9,7 @@ import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconImage } from "./Icons";
 import { ExifTable } from "./ExifTable";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
+import { useFullResUpgrade } from "../utils/useFullResUpgrade";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
 import { setImportInfoPanelOpen, useImportInfoPanelOpen, useStageBg } from "../state/viewPrefs";
@@ -104,6 +105,15 @@ export function ImportLightbox({
   useEffect(() => {
     if (zoom.zoomed && !fullFailed) setHiRes(true);
   }, [zoom.zoomed, fullFailed]);
+  // A staged RAW's full render is seconds away and the server sheds load (503
+  // while its single render slot stays busy, 409 once a newer zoom claimed
+  // it): fetched off-screen with retries while the preview stays up, then
+  // swapped in decoded - the same loader as the library lightbox. A JPEG's
+  // full size is the file itself and goes straight onto the <img>.
+  const isRaw = file?.file_type === "raw";
+  const full = useFullResUpgrade(
+    hiRes && isRaw && file ? api.import.stagedFullUrl(sessionId, file.id) : null
+  );
   useEffect(() => () => window.clearTimeout(retryTimerRef.current), []);
 
   useEffect(() => {
@@ -288,9 +298,11 @@ export function ImportLightbox({
                 style={zoom.imageStyle}
                 draggable={false}
                 src={
-                  hiRes
+                  hiRes && !isRaw
                     ? api.import.stagedFullUrl(sessionId, file.id)
-                    : api.import.stagedPreviewUrl(sessionId, file.id)
+                    : full.state === "ready" && full.src
+                      ? full.src
+                      : api.import.stagedPreviewUrl(sessionId, file.id)
                 }
                 alt={file.original_filename}
                 onLoad={() => {
@@ -303,7 +315,7 @@ export function ImportLightbox({
                   // never shows as a broken image. Only a failing PREVIEW is a
                   // real "can't display this file" - and only after the
                   // retries the busy-server case is given (see retryNonce).
-                  if (hiRes) {
+                  if (hiRes && !isRaw) {
                     setFullFailed(true);
                     setHiRes(false);
                   } else if (retriesRef.current < PREVIEW_RETRIES) {
@@ -324,6 +336,17 @@ export function ImportLightbox({
               <div className="stage-rendering" role="status">
                 <span className="spinner" aria-hidden="true" />
                 {file.file_type === "raw" && !file.processed ? "Analysing…" : "Developing preview…"}
+              </div>
+            )}
+            {!loadFailed && photoLoaded && hiRes && isRaw && full.state === "loading" && (
+              <div className="stage-rendering" role="status">
+                <span className="spinner" aria-hidden="true" />
+                Rendering full resolution…
+              </div>
+            )}
+            {!loadFailed && photoLoaded && hiRes && isRaw && full.state === "failed" && (
+              <div className="stage-rendering" role="status">
+                Full resolution unavailable – showing the preview
               </div>
             )}
             <button

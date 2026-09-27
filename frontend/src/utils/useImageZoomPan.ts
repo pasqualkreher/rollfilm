@@ -9,6 +9,11 @@
 // The unit is the FIT size, not pixels: scale 1 means "as large as the frame
 // allows", which is the size the photo opens at. Everything the user thinks in
 // - 100%, 200% - is derived from that through `nativeScale` below.
+//
+// 100% is one photo pixel per DEVICE pixel, not per CSS pixel. On a hi-dpi
+// screen (a scaled 4K monitor is devicePixelRatio 2) a CSS-pixel 100% drew
+// every photo pixel as a 2x2 block, so the full-resolution render looked soft
+// at "100%" although every one of its pixels had arrived.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -25,6 +30,22 @@ const MAX_NATIVE_ZOOM = 4;
 // magnification to play with. Also the ceiling before the first load, when
 // there is no natural size to relate 1:1 to yet.
 const MIN_MAX_FIT_ZOOM = 2;
+
+// Screen pixels per CSS pixel, tracked live: dragging the window to another
+// display changes it, and 100% has to follow.
+export function useDevicePixelRatio(): number {
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
+  useEffect(() => {
+    const mq = window.matchMedia(`(resolution: ${dpr}dppx)`);
+    const onChange = () => setDpr(window.devicePixelRatio || 1);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [dpr]);
+  return dpr;
+}
+
+// How long after the last wheel tick the photo still counts as "being zoomed".
+const GESTURE_IDLE_MS = 200;
 
 export interface Size {
   w: number;
@@ -61,12 +82,15 @@ export interface ZoomPan {
     onMouseLeave: () => void;
     onDoubleClick: (e: React.MouseEvent<HTMLImageElement>) => void;
   };
-  /** Style fragment for the <img> - size, transform and the grab cursor. */
+  /** Style fragment for the <img> - size, transform, the grab cursor and the
+   *  compositing hint (on only while the transform is moving, see below). */
   imageStyle: {
     width?: number;
     height?: number;
     transform: string;
     cursor: string;
+    willChange: string;
+    imageRendering: "auto" | "pixelated";
   };
 }
 
@@ -83,6 +107,11 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
   const [fit, setFit] = useState<Size | null>(null);
   const [natural, setNatural] = useState<Size | null>(null);
   const [dragging, setDragging] = useState(false);
+  // A wheel/pinch gesture is in progress (cleared GESTURE_IDLE_MS after its
+  // last tick).
+  const [wheeling, setWheeling] = useState(false);
+  const wheelIdleRef = useRef<number | undefined>(undefined);
+  const dpr = useDevicePixelRatio();
 
   // The frame is tracked in state as well as a ref: the wheel listener is a
   // native non-passive one (see below) and has to (re)attach the moment the
@@ -113,7 +142,7 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
         : sourceSize.w
       : null;
   const nativeW = sourceW ?? natural?.w ?? 0;
-  const nativeScale = nativeW && fit && fit.w > 0 ? nativeW / fit.w : 1;
+  const nativeScale = nativeW && fit && fit.w > 0 ? nativeW / (fit.w * dpr) : 1;
   const maxZoom = natural
     ? Math.max(MIN_MAX_FIT_ZOOM, nativeScale * MAX_NATIVE_ZOOM)
     : MIN_MAX_FIT_ZOOM;
@@ -159,6 +188,15 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
   }, []);
 
   const clearFit = useCallback(() => setFit(null), []);
+
+  // A discrete zoom's ease ends the "moving" phase too: drop the flag once the
+  // 0.24s transition (index.css .zoom-anim) has played, so the settled view
+  // loses will-change and re-rasters sharp.
+  useEffect(() => {
+    if (!zoomAnim) return;
+    const t = window.setTimeout(() => setZoomAnim(false), 320);
+    return () => window.clearTimeout(t);
+  }, [zoomAnim, scale]);
 
   // Clamp the pan so the view stays *inside the photo* - never past its edges
   // into the empty frame. The max offset is how far the scaled photo overhangs
@@ -239,9 +277,15 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
       liveRef.current.pan = shown;
       setScale(next);
       setPan(shown);
+      setWheeling(true);
+      window.clearTimeout(wheelIdleRef.current);
+      wheelIdleRef.current = window.setTimeout(() => setWheeling(false), GESTURE_IDLE_MS);
     }
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      window.clearTimeout(wheelIdleRef.current);
+    };
   }, [boxNode, clampPan]);
 
   const imageHandlers = {
@@ -307,6 +351,19 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
       ...(fit ? { width: fit.w, height: fit.h } : null),
       transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
       cursor: zoomed ? (dragging ? "grabbing" : "grab") : "default",
+      // `will-change: transform` makes Chromium raster the photo's layer once,
+      // at the size it had then (fit), and scale that texture on the GPU from
+      // there - smooth while the transform moves, but a settled 100% view
+      // then showed an upscaled fit-size raster instead of the full-res
+      // bitmap's own pixels. So the hint is only up while the transform is
+      // actually moving; once it rests, the photo re-rasters at its zoomed size.
+      willChange: wheeling || dragging || zoomAnim ? "transform" : "auto",
+      // Past 1:1 every photo pixel covers several screen pixels. Smoothed,
+      // that reads as a soft, out-of-focus photo at 200-400% however sharp
+      // the file is; drawn as crisp blocks (as Lightroom and Capture One do)
+      // it shows what the pixels really hold - which is the point of zooming
+      // that far. Up to 100% the normal (downscaling) filter stays.
+      imageRendering: natural && scale > nativeScale * 1.01 ? "pixelated" : "auto",
     },
   };
 }

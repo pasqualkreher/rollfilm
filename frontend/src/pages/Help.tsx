@@ -750,7 +750,8 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Zoom</strong> by scrolling or pinching toward the cursor, drag to pan,
                 double-click to jump between fit and 100%. The zoom control under the photo names
-                the current percentage and offers Fit / 100% / 200%.
+                the current percentage and offers Fit / 100% / 200%. 100% is one photo pixel per
+                screen pixel, on a Retina or scaled 4K display too.
               </li>
               <li>
                 <strong>Slideshow:</strong> the toolbar's <strong>Slideshow</strong> button (or{" "}

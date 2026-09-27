@@ -1339,7 +1339,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // Measured against the ORIGINAL file, not the canvas, because the canvas
   // swaps between the preview render and the full-resolution one as you zoom
   // (see the settle pass): tying the percentage to it would make the number
-  // jump while nothing on screen moved.
+  // jump while nothing on screen moved. In DEVICE pixels, like the lightbox
+  // (useImageZoomPan): on a hi-dpi screen a CSS-pixel 100% is a 2x upscale.
   function nativeScale(): number {
     const cv = canvasRef.current;
     const dispW = cv ? parseFloat(cv.style.width) || 0 : 0;
@@ -1349,7 +1350,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     const swap = rotation === 90 || rotation === 270;
     const baseW = (swap ? image.height : image.width) || cv.width;
     const shownW = baseW * (crop ? crop.width : 1);
-    return shownW > 0 ? shownW / dispW : 1;
+    return shownW > 0 ? shownW / (dispW * (window.devicePixelRatio || 1)) : 1;
   }
 
   // 400% of actual pixels, the same ceiling the lightbox uses. A photo smaller

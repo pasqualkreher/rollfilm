@@ -69,7 +69,8 @@ def test_a_superseded_untouched_render_bails_after_the_decode_and_keeps_the_base
 
     def stale_after_decode() -> bool:
         calls["stale"] += 1
-        return calls["stale"] > 1  # the entry check passes; the post-decode one trips
+        # The entry check and the one before the decode pass; the post-decode one trips.
+        return calls["stale"] > 2
 
     with pytest.raises(thumbnails.PreviewSuperseded):
         thumbnails.generate_full(photo, is_stale=stale_after_decode)
@@ -78,6 +79,41 @@ def test_a_superseded_untouched_render_bails_after_the_decode_and_keeps_the_base
     # And now it is a cache hit: no decode, just the render.
     monkeypatch.setattr(thumbnails.raw_service, "load_linear_base", lambda *a, **k: pytest.fail("decoded again"))
     assert thumbnails.generate_full(photo).exists()
+
+
+def test_a_render_superseded_while_queued_for_the_decode_never_decodes(photo, monkeypatch):
+    """A /full for a photo zapped past while it waited on the decode lock gives
+    up before the 7-20s decode, instead of making the next zoom wait it out."""
+    calls = {"stale": 0}
+
+    def stale_once_queued() -> bool:
+        calls["stale"] += 1
+        return calls["stale"] > 1  # the entry check passes; the one under the decode lock trips
+
+    monkeypatch.setattr(thumbnails.raw_service, "load_linear_base", lambda *a, **k: pytest.fail("decoded"))
+    with pytest.raises(thumbnails.PreviewSuperseded):
+        thumbnails.generate_full(photo, is_stale=stale_once_queued)
+    assert not (thumbnails.derivative_dir(photo.id) / "full.jpg").exists()
+    assert not thumbnails.native_base_ready(photo.id, thumbnails.editor_mtime_ns(photo))
+
+
+def test_the_edited_half_tier_takes_the_half_size_decode(photo, monkeypatch):
+    """The half tier of an edited raw is an interim picture: always the
+    half-size demosaic, never the full-sensor one its padded target asks for."""
+    seen = {}
+
+    def spy(path, half_size=False, **kw):
+        seen["half_size"] = half_size
+        return np.full((30, 40, 3), 0.3, np.float32), 1.0
+
+    monkeypatch.setattr(thumbnails.raw_service, "is_raw", lambda p: True)
+    monkeypatch.setattr(thumbnails.raw_service, "raw_dimensions", lambda p: (7728, 5152))
+    monkeypatch.setattr(thumbnails.raw_service, "load_linear_base", spy)
+    photo.edit_rotation = 90
+    thumbnails.render_full_from_stored_edits(photo, max_size=3900, half_decode=True)
+    assert seen["half_size"] is True
+    thumbnails.render_full_from_stored_edits(photo, max_size=3900)
+    assert seen["half_size"] is False
 
 
 def test_busy_probes_see_a_running_render():

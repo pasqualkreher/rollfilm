@@ -9,6 +9,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+import contextlib
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -2948,7 +2949,13 @@ _native_editor_base: tuple[str, int, np.ndarray, float] | None = None
 _native_decode_lock = threading.Lock()
 
 
-def _cached_native_base(image_id: str, path_str: str, mtime_ns: int) -> tuple[np.ndarray, float]:
+def _cached_native_base(
+    image_id: str, path_str: str, mtime_ns: int, is_stale: Callable[[], bool] | None = None
+) -> tuple[np.ndarray, float]:
+    """`is_stale` is checked once the decode lock is ours and the cache has
+    missed: a /full for a photo the user zapped past while it queued here
+    raises PreviewSuperseded instead of starting a 7-20s decode nobody will
+    look at - those queued decodes were what the next zoom's badge waited out."""
     global _native_editor_base
     hit = _native_editor_base
     if hit and hit[0] == image_id and hit[1] == mtime_ns:
@@ -2958,6 +2965,8 @@ def _cached_native_base(image_id: str, path_str: str, mtime_ns: int) -> tuple[np
         hit = _native_editor_base
         if hit and hit[0] == image_id and hit[1] == mtime_ns:
             return hit[2], hit[3]
+        if is_stale is not None and is_stale():
+            raise PreviewSuperseded()
         _native_editor_base = None  # free the old frame before decoding the next
         lin, gain = raw_service.load_linear_base(Path(path_str), half_size=False)
         out = lin.astype(np.float16)
@@ -3727,6 +3736,7 @@ def render_edited_image(
     persp_h: int = 0,
     persp_v: int = 0,
     max_px: int | None = None,
+    half_decode: bool = False,
 ) -> PILImage.Image:
     """TRUE full-resolution RGB render with the given lens/geometry and tonal
     edits baked in - the only path that demosaics a RAW at full sensor size
@@ -3752,7 +3762,14 @@ def render_edited_image(
             pad = 1.0 / max(0.05, min(float(crop[2]), float(crop[3])))
         decode_px = int(max_px * pad * 1.3)
 
-    with _full_render_lock:
+    # `half_decode` (the lightbox's half tier, bounded by max_px): a RAW always
+    # takes the half-size demosaic, even where the padded decode target asks
+    # for more - the tier is an interim picture on the way to full.jpg, and a
+    # full-sensor decode made it arrive with (or after) the full render it was
+    # meant to cover for. At a quarter of the frame it also stays off
+    # _full_render_lock (callers serialise it on their own lock), so it no
+    # longer queues behind a running full render or warm-up.
+    with contextlib.nullcontext() if half_decode and max_px else _full_render_lock:
         if decode_px is None:
             # Unbounded render: reuse (and fill) the editor's native-base cache
             # - the full-resolution linear decode kept for 100% zoom. "Save
@@ -3767,7 +3784,7 @@ def render_edited_image(
             half_size = False
             if raw_service.is_raw(path):
                 dims = raw_service.raw_dimensions(path)
-                half_size = bool(dims and max(dims) // 2 >= decode_px)
+                half_size = half_decode or bool(dims and max(dims) // 2 >= decode_px)
             lin, gain = raw_service.load_linear_base(path, half_size=half_size, max_px=decode_px)
         lin = lens_profile.correct(lin, path, adjustments)
         if distortion:
@@ -3782,7 +3799,9 @@ def render_edited_image(
         return source.convert("RGB")
 
 
-def render_full_from_stored_edits(image: "Image", max_size: int | None = None) -> PILImage.Image:
+def render_full_from_stored_edits(
+    image: "Image", max_size: int | None = None, half_decode: bool = False
+) -> PILImage.Image:
     """Full-resolution render of a photo with its *saved* edits baked in,
     optionally downscaled so the long edge fits max_size. Backs the cached
     100%-zoom full.jpg and the user-facing export."""
@@ -3801,6 +3820,7 @@ def render_full_from_stored_edits(image: "Image", max_size: int | None = None) -
         persp_h=int(getattr(image, "edit_persp_h", 0) or 0),
         persp_v=int(getattr(image, "edit_persp_v", 0) or 0),
         max_px=max_size,
+        half_decode=half_decode,
     )
     if max_size and max(rendered.size) > max_size:
         rendered.thumbnail((max_size, max_size), PILImage.LANCZOS)
@@ -4077,7 +4097,7 @@ def render_half_full(image: "Image") -> PILImage.Image:
     if not _is_untouched(image):
         # Edits: the bounded full render (half-size decode + the pipeline at
         # this size), a few seconds at most.
-        return render_full_from_stored_edits(image, max_size=ULTRA_EDITOR_PREVIEW_PX)
+        return render_full_from_stored_edits(image, max_size=ULTRA_EDITOR_PREVIEW_PX, half_decode=True)
     path = resolve_image_path(image)
     adjustments = adjustments_from_image(image)
     lin16, gain = _cached_editor_base(
@@ -4189,7 +4209,9 @@ def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) ->
 
             try:
                 path = resolve_image_path(image)
-                _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
+                _cached_native_base(image.id, str(path), path.stat().st_mtime_ns, is_stale=is_stale)
+            except PreviewSuperseded:
+                raise
             except Exception:
                 pass  # the locked render below raises the real error
             _bail_if_stale()
