@@ -828,12 +828,15 @@ class ImportSettingsOut(BaseModel):
     # What happens to a session after photos were added to the library: "ask"
     # each time whether it stays open, or always keep it / always close it.
     after_commit: Literal["ask", "keep", "close"]
+    # Whether photos arriving in a review start out selected for import.
+    select_default: Literal["select", "deselect"]
 
 
 class ImportSettingsUpdate(BaseModel):
     # Partial: only the fields sent are changed.
     mode_default: Literal["ask", "copy", "reference"] | None = None
     after_commit: Literal["ask", "keep", "close"] | None = None
+    select_default: Literal["select", "deselect"] | None = None
 
 
 class TrashSettingsOut(BaseModel):

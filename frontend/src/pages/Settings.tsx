@@ -936,6 +936,39 @@ export function Settings() {
               />
             ))}
           </div>
+          <div className="settings-subgroup">
+            <h4 className="settings-subhead">New photos in an import</h4>
+            <Desc>
+              Whether each photo that arrives in the review starts out selected for import. Photos
+              you pick while a card is still loading stay as you left them either way.
+            </Desc>
+            {(
+              [
+                [
+                  "select",
+                  "Selected",
+                  "Every new photo is marked for import; you deselect the ones you don't want.",
+                ],
+                [
+                  "deselect",
+                  "Not selected",
+                  "Nothing is marked for import; you select the ones you want.",
+                ],
+              ] as const
+            ).map(([value, title, desc]) => (
+              <OptionRow
+                key={value}
+                type="radio"
+                name="import-select-default"
+                checked={(importSettings?.select_default ?? "select") === value}
+                disabled={!importSettings}
+                busy={updateImportSettings.isPending}
+                onChange={() => updateImportSettings.mutate({ select_default: value })}
+                title={title}
+                desc={desc}
+              />
+            ))}
+          </div>
         </Section>
       )}
 

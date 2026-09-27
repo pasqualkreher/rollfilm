@@ -24,6 +24,7 @@ from app.services.settings_store import (
     IMMICH_SYNC_PAUSED,
     IMPORT_AFTER_COMMIT,
     IMPORT_MODE_DEFAULT,
+    IMPORT_SELECT_DEFAULT,
     RAW_NATIVE_DECODE,
     SMART_ALBUM_PLACE_RADIUS_KM,
     SMART_ALBUM_SECTION_NAMES,
@@ -37,6 +38,7 @@ from app.services.settings_store import (
     get_immich_sync_paused,
     get_import_after_commit,
     get_import_mode_default,
+    get_import_select_default,
     get_raw_native_decode,
     get_setting,
     get_smart_album_config,
@@ -168,13 +170,19 @@ def update_immich_settings(
     )
 
 
+def _import_settings_out(db: Session) -> schemas.ImportSettingsOut:
+    return schemas.ImportSettingsOut(
+        mode_default=get_import_mode_default(db),
+        after_commit=get_import_after_commit(db),
+        select_default=get_import_select_default(db),
+    )
+
+
 @router.get("/import", response_model=schemas.ImportSettingsOut)
 def get_import_settings(
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
-    return schemas.ImportSettingsOut(
-        mode_default=get_import_mode_default(db), after_commit=get_import_after_commit(db)
-    )
+    return _import_settings_out(db)
 
 
 @router.put("/import", response_model=schemas.ImportSettingsOut)
@@ -192,10 +200,10 @@ def update_import_settings(
         set_setting(db, IMPORT_MODE_DEFAULT, payload.mode_default)
     if payload.after_commit is not None:
         set_setting(db, IMPORT_AFTER_COMMIT, payload.after_commit)
+    if payload.select_default is not None:
+        set_setting(db, IMPORT_SELECT_DEFAULT, payload.select_default)
     db.commit()
-    return schemas.ImportSettingsOut(
-        mode_default=get_import_mode_default(db), after_commit=get_import_after_commit(db)
-    )
+    return _import_settings_out(db)
 
 
 @router.get("/raw", response_model=schemas.RawDecodeSettingsOut)

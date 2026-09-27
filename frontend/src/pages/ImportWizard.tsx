@@ -1322,19 +1322,21 @@ export function ImportWizard() {
             visibleFiles), so with a filter active it selects exactly the
             filtered photos - same as the library. No separate "only
             filtered" button needed. */}
+        {/* "Select all" stays up with nothing selected - that is where a
+            review starts when new photos arrive unselected (Settings). */}
+        {(files?.length ?? 0) > 0 && (
+          <button
+            className="btn"
+            onClick={() => selectAll(true)}
+            title={`Import every photo shown (${modKeyLabel}+A)`}
+          >
+            Select all
+          </button>
+        )}
         {selectedCount > 0 && (
-          <>
-            <button
-              className="btn"
-              onClick={() => selectAll(true)}
-              title={`Import every photo shown (${modKeyLabel}+A)`}
-            >
-              Select all
-            </button>
-            <button className="btn" onClick={() => selectAll(false)} title="Import none of the photos">
-              Clear selection
-            </button>
-          </>
+          <button className="btn" onClick={() => selectAll(false)} title="Import none of the photos">
+            Clear selection
+          </button>
         )}
       </PhotoFilters>
       <div className="page-scroll">

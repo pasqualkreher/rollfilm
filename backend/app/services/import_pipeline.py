@@ -55,6 +55,7 @@ from app.services.settings_store import (
     IMMICH_MODE_MANUAL,
     IMMICH_MODE_SELECTIVE,
     get_immich_config,
+    get_import_select_default,
 )
 from app.services.thumbnails import RENDER_SLOTS, THUMBNAIL_MAX_PX, THUMBNAIL_SCALE, derivative_dir
 from app.workers.queue import (
@@ -1221,6 +1222,9 @@ def _stage_uploads_into(
     # apart from the per-file `source` tuple the loop hands to the analysis -
     # sharing that name once overwrote the root with a file size.
     source_id, source_root = session_source if session_source else (None, None)
+    # Whether new rows start selected (Settings -> Library). Set at insert so
+    # the review's own picks, made while this batch is still copying, stand.
+    select_new = get_import_select_default(db) == "select"
     thumb_dir = staged_thumb_dir(session_id)
     thumb_dir.mkdir(parents=True, exist_ok=True)
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -1293,6 +1297,7 @@ def _stage_uploads_into(
                 file_type=FileType(file_type),
                 sha256=sha256,
                 processed=False,
+                selected=select_new,
                 source_id=source_id if source_relpath is not None else None,
                 source_relpath=source_relpath,
                 source_size=size if source_relpath is not None else None,

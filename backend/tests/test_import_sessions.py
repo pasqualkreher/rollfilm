@@ -347,6 +347,31 @@ def test_a_whole_batch_from_a_source_records_every_file_under_it(db, dirs, tmp_p
     assert {r.source_id for r in rows} == {source.id}
 
 
+@pytest.mark.parametrize("choice, selected", [(None, True), ("select", True), ("deselect", False)])
+def test_new_photos_start_selected_or_not_as_set(db, dirs, tmp_path, monkeypatch, choice, selected):
+    """Settings -> Library decides whether arriving photos start selected; it is
+    applied as each row is created, so picks made while a card is still
+    loading are never undone by the next batch."""
+    from app.services.settings_store import IMPORT_SELECT_DEFAULT, set_setting
+
+    monkeypatch.setattr(import_pipeline, "_enqueue_analysis", lambda *a, **k: None)
+    if choice:
+        set_setting(db, IMPORT_SELECT_DEFAULT, choice)
+        db.commit()
+    session = _session(db)
+    card = _card(tmp_path)
+    uploads = [routes._LocalUpload(p) for p in sorted((card / "100FUJI").iterdir())]
+    try:
+        import_pipeline.append_uploaded_files(db, session, 1, uploads)
+    finally:
+        for upload in uploads:
+            upload.file.close()
+
+    rows = db.query(ImportStagedFile).filter_by(import_session_id=session.id).all()
+    assert len(rows) == 3
+    assert {r.selected for r in rows} == {selected}
+
+
 def test_a_source_is_recorded_once_per_folder(db, dirs, tmp_path):
     session = _session(db)
     first = _card(tmp_path, "card-one")

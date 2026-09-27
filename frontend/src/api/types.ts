@@ -101,6 +101,7 @@ export interface ImportChoice {
 }
 
 export type ImportAfterCommit = "ask" | "keep" | "close";
+export type ImportSelectDefault = "select" | "deselect";
 
 export interface ImportSettings {
   // "ask" = the Import page asks each time; otherwise the remembered answer.
@@ -108,6 +109,9 @@ export interface ImportSettings {
   // After photos were added to the library: ask whether the session stays
   // open, or always keep / always close it.
   after_commit: ImportAfterCommit;
+  // Whether photos arriving in a review start out selected for import. The
+  // backend applies it as each photo is staged.
+  select_default: ImportSelectDefault;
 }
 
 export interface AutoDevelopSettings {
