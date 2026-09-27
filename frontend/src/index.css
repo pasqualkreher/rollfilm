@@ -3032,7 +3032,7 @@ textarea:focus-visible {
    shade (paper, gray or black) runs to every edge, photo centred inside. The
    background toggle sits in its own toolbar row below it. */
 .editor-stage-main {
-  /* Anchors the "Rendering…" badge (.editor-rendering). Every other overlay
+  /* Anchors the "Rendering…" badge (.stage-rendering). Every other overlay
      in here positions against the canvas wrap or a pane, not this box. */
   position: relative;
   flex: 1;
@@ -3362,7 +3362,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  animation: editor-wait-in 0.15s ease 0.25s both;
+  animation: stage-wait-in 0.15s ease 0.25s both;
 }
 
 .editor-histogram-wait .spinner {
@@ -3624,7 +3624,13 @@ input.editor-preset-select {
    top-left corner, in the side gutter, clear of the picture and of the split
    view's tags. Held back 250ms then faded in, so a warm-cache render that
    lands right away never flashes it. */
-.editor-rendering {
+/* The wait badge in a stage's top-left corner - the editor's "Rendering…" /
+   "Rendering full resolution…" and the lightboxes' "Rendering full
+   resolution…" / "Developing preview…" are one and the same pill, in the same
+   place, so a wait reads the same wherever a photo is shown big. A corner
+   badge, not a centred hint: the picture underneath is still worth looking
+   at. Faded in after a short delay so a warm-cache render never flashes it. */
+.stage-rendering {
   position: absolute;
   top: 12px;
   left: 12px;
@@ -3639,17 +3645,17 @@ input.editor-preset-select {
   font-size: 12px;
   pointer-events: none;
   user-select: none;
-  animation: editor-wait-in 0.15s ease 0.25s both;
+  animation: stage-wait-in 0.15s ease 0.25s both;
 }
 
-.editor-rendering .spinner {
+.stage-rendering .spinner {
   width: 12px;
   height: 12px;
   border-color: rgba(255, 255, 255, 0.25);
   border-top-color: #fff;
 }
 
-@keyframes editor-wait-in {
+@keyframes stage-wait-in {
   from {
     opacity: 0;
   }
@@ -8603,28 +8609,6 @@ button.smart-card {
 
 .lightbox-stage {
   position: relative;
-}
-
-/* "Developing RAW…" hint while the sensor render is still being produced -
-   inline with the lightbox meta, spinner scaled to the text. */
-.lightbox-developing {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.lightbox-developing .spinner {
-  width: 11px;
-  height: 11px;
-}
-
-/* Wait indicator while the next photo decodes off-screen (the current one
-   stays visible, dimmed) - top corner, clear of the nav arrows. */
-.lightbox-wait-spinner {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 2;
 }
 
 /* "Loading…" where the photo goes, while the next photo's row or pixels are

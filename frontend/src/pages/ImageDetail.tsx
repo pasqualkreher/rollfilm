@@ -896,9 +896,9 @@ export function ImageDetail() {
               </div>
             )}
             {hiRes && isRaw && !fullReady && !fullFailed && !pixelsPending && (
-              <div className="lightbox-wait-spinner lightbox-developing" aria-live="polite">
+              <div className="stage-rendering" role="status">
                 <span className="spinner" aria-hidden="true" />
-                Rendering 100%…
+                Rendering full resolution…
               </div>
             )}
             {canPage && (

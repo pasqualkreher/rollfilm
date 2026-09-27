@@ -314,7 +314,7 @@ export function ImportLightbox({
               />
             )}
             {!loadFailed && !photoLoaded && (
-              <div className="lightbox-wait-spinner lightbox-developing" aria-live="polite">
+              <div className="stage-rendering" role="status">
                 <span className="spinner" aria-hidden="true" />
                 {file.file_type === "raw" && !file.processed ? "Analysing…" : "Developing preview…"}
               </div>

@@ -827,7 +827,9 @@ const CHAPTERS: Chapter[] = [
                 <strong>The histogram stays visible</strong> above them all, whichever section is
                 open. It shows a spinner while the first frame is on its way, and a small{" "}
                 <em>Rendering…</em> badge sits in the corner of the photo meanwhile — an empty
-                histogram is waiting, not broken.
+                histogram is waiting, not broken. Zoomed in, the same corner says{" "}
+                <em>Rendering full resolution…</em> while the sharp pixels of that view are
+                still being rendered; the softer frame underneath is what you see meanwhile.
               </li>
               <li>
                 <strong>A dot says where the work is.</strong> A slider off its default carries

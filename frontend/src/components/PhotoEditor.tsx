@@ -594,6 +594,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // spent looking at the library placeholder, on a photo switch at the
   // previous photo - neither says anything is happening without it.
   const [framePending, setFramePending] = useState(true);
+  // True while a settle is owed at the native tier - the sharp pixels of a
+  // zoomed-in view (or a 4K fit view), rendered from the full-resolution base
+  // - and hasn't painted them yet. The canvas shows a softer tier meanwhile,
+  // which says nothing about the seconds of decode behind it; this drives the
+  // "Rendering full resolution…" badge, the lightbox's twin (ImageDetail).
+  const [nativePending, setNativePending] = useState(false);
   const applyHistBins = useCallback((bins: Uint32Array[]) => histStore.set(bins), [histStore]);
   // When the histogram last updated - scrub frames throttle it (see drawBlob).
   const histAtRef = useRef(0);
@@ -1754,6 +1760,11 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // it re-tiles the visible part and the flag simply stays up.
         const staleGround = !tier && groundStaleRef.current;
         if (staleGround) tier = targetTier(1);
+        // Anything short of native is quick and paints unannounced; a native
+        // settle can be seconds of decode, so it says so. Cleared below once
+        // the sharp frame is on the canvas (or by a later settle that finds
+        // nothing owed: zoomed back out, or already sharp).
+        setNativePending(tier === "native");
         // Native is the only tier the user can be zoomed far enough into for
         // most of the frame to be off screen, and the only one where that
         // matters: it renders at true resolution, where the whole frame of a
@@ -1823,6 +1834,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             else await drawBlob(blob, seq, false, previewEditsLatest.current!.crop);
             nativePendingRef.current = downgraded ? dtoken : -1;
             rearm ||= downgraded;
+            if (tier === "native" && !downgraded) setNativePending(false);
           }
         }
         // The compare view's other half is held to the same standard: whatever
@@ -2055,6 +2067,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     origPendingRef.current = -1;
     histStore.set(null);
     setFramePending(true);
+    setNativePending(false);
   }, [image.id]);
 
   // Geometry moved, so the compare view's original no longer matches the frame
@@ -3909,9 +3922,18 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             the picture underneath is still worth looking at. Faded in after a
             short delay so a warm-cache render never flashes it. */}
         {framePending && !error && (loading ? placeholderShown : true) && (
-          <div className="editor-rendering" role="status">
+          <div className="stage-rendering" role="status">
             <span className="spinner" aria-hidden />
             Rendering…
+          </div>
+        )}
+        {/* The frame is up but soft: the native render of this view is on its
+            way (a zoomed-in raw, or a 4K fit view). Same badge, and only once
+            the first frame is in - never two of them in the corner. */}
+        {!framePending && nativePending && !error && (
+          <div className="stage-rendering" role="status">
+            <span className="spinner" aria-hidden />
+            Rendering full resolution…
           </div>
         )}
         {/* Side by side: the original gets a pane of its own, left of the edited
