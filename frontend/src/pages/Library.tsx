@@ -375,8 +375,8 @@ export function Library() {
     if (selected.size === 0) return;
     await api.images.bulkReset(Array.from(selected), opts);
     // Awaited: the wait popup has to stay up until the grid actually holds the
-    // reset rows - a reset that re-renders photos would otherwise hand back an
-    // unblocked light table whose thumbnails change a moment later.
+    // reset rows. The re-rendered pictures don't hold it up - the backend
+    // renders those in the background and their tiles shimmer until they land.
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["images"] }),
       queryClient.invalidateQueries({ queryKey: ["tags"] }),

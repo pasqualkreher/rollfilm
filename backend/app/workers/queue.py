@@ -37,6 +37,7 @@ from app.services.raw import extract_preview
 from app.services.thumbnails import (
     RENDER_SLOTS,
     editor_recently_active,
+    ensure_derivatives,
     generate_derivatives,
     has_derivatives,
 )
@@ -97,6 +98,55 @@ def enqueue_post_import(image_id: str, source_path: Path) -> None:
         with _pending_derivatives_lock:
             _pending_derivatives -= 1
         raise
+
+
+def enqueue_rerender(image_id: str) -> None:
+    """Re-render one photo's derivatives after a bulk edit (reset, preset, auto
+    develop) on the post-import pool. Those used to render inline, one photo
+    after another, while the request - and the wait popup - held on: ~1s per
+    raw, minutes for a big selection, on one core while the others idled. Here
+    they run RENDER_SLOTS-wide in the background; the caller drops the stale
+    files first (thumbnails.drop_derivatives) so the grid shimmers those tiles
+    and picks the new pictures up through its retry, as after an import."""
+    global _pending_derivatives
+    with _pending_derivatives_lock:
+        _pending_derivatives += 1
+    try:
+        _executor.submit(_rerender, image_id)
+    except Exception:
+        with _pending_derivatives_lock:
+            _pending_derivatives -= 1
+        raise
+
+
+def _rerender(image_id: str) -> None:
+    try:
+        # Read the row now, not at enqueue time: whatever the photo holds when
+        # its turn comes is what the picture has to show.
+        db = SessionLocal()
+        try:
+            image = db.get(Image, image_id)
+            # ensure_, not regenerate_: a tile on screen may have rendered it
+            # on demand already, and then there is nothing left to do.
+            if image is not None and image.deleted_at is None:
+                ensure_derivatives(image)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Re-render after bulk edit failed for image %s", image_id)
+    finally:
+        _derivative_job_done()
+
+
+def _derivative_job_done() -> None:
+    global _pending_derivatives
+    with _pending_derivatives_lock:
+        _pending_derivatives -= 1
+        drained = _pending_derivatives <= 0
+    if drained:
+        # The render queue just went quiet - good moment to catch up on
+        # search embeddings for whatever was imported.
+        schedule_embedding_backfill()
 
 
 def _sync_paused() -> bool:
@@ -357,14 +407,7 @@ def _process(image_id: str, source_path: Path) -> None:
     except Exception:
         logger.exception("Thumbnail/preview generation failed for image %s", image_id)
     finally:
-        global _pending_derivatives
-        with _pending_derivatives_lock:
-            _pending_derivatives -= 1
-            drained = _pending_derivatives <= 0
-        if drained:
-            # The import's render queue just went quiet - good moment to catch
-            # up on search embeddings for whatever was imported.
-            schedule_embedding_backfill()
+        _derivative_job_done()
 
 
 # --- Deferred search embeddings ----------------------------------------------

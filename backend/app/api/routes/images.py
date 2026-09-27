@@ -69,6 +69,7 @@ from app.services.settings_store import get_auto_develop_groups, get_immich_conf
 from app.workers.queue import (
     enqueue_immich_upload,
     enqueue_post_import,
+    enqueue_rerender,
     schedule_embedding_backfill,
     store_immich_asset_id,
 )
@@ -137,13 +138,18 @@ def _add_tag_to_image(db: Session, owner_id: int, image: Image, name: str) -> No
         db.add(ImageTag(image_id=image.id, tag_id=tag.id))
 
 
-def _remove_tag_from_image(db: Session, owner_id: int, image: Image, name: str) -> None:
+def _remove_tag_from_image(
+    db: Session, owner_id: int, image: Image, name: str, prune: bool = True
+) -> None:
     tag = db.query(Tag).filter(Tag.owner_id == owner_id, Tag.name == name).first()
     if tag is None:
         return
     db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
-    # The last photo dropping a tag takes the tag with it.
-    prune_unused_tags(db, owner_id)
+    # The last photo dropping a tag takes the tag with it. Bulk paths pass
+    # prune=False and prune once at the end: the check scans every tag link in
+    # the library, and once per selected photo added up to seconds.
+    if prune:
+        prune_unused_tags(db, owner_id)
 
 
 def _has_any_edit(image: Image) -> bool:
@@ -163,19 +169,52 @@ def _has_any_edit(image: Image) -> bool:
     )
 
 
-def _sync_edit_state(db: Session, owner_id: int, image: Image) -> None:
+def _sync_edit_state(db: Session, owner_id: int, image: Image, prune: bool = True) -> None:
     """After a develop/geometry change, refresh the edit_rev cache-buster and the
     auto-managed "edit" tag from the image's current state (drops both back to
-    the un-edited baseline when nothing is left)."""
+    the un-edited baseline when nothing is left). prune=False leaves an emptied
+    "edit" tag for the caller's own prune_unused_tags (see _remove_tag_from_image)."""
     if _has_any_edit(image):
         image.edit_rev = (image.edit_rev or 0) + 1
         _add_tag_to_image(db, owner_id, image, "edit")
     else:
         image.edit_rev = 0
-        _remove_tag_from_image(db, owner_id, image, "edit")
+        _remove_tag_from_image(db, owner_id, image, "edit", prune=prune)
     # The library changed - schedule an incremental Borg backup (debounced; a
     # no-op unless the user has configured one). Covers all bulk develop paths.
     run_backup_soon()
+
+
+def _edit_state(image: Image) -> tuple:
+    """Everything the rendered pixels depend on that a bulk edit can change -
+    compared before and after, so only photos whose look actually moved get
+    re-rendered (resetting 200 photos of which 5 were edited renders 5)."""
+    return (
+        image.edit_adjustments,
+        image.edit_rotation,
+        image.edit_crop_x,
+        image.edit_crop_y,
+        image.edit_crop_width,
+        image.edit_crop_height,
+        image.edit_flip_h,
+        image.edit_flip_v,
+        image.edit_straighten,
+        image.edit_persp_h,
+        image.edit_persp_v,
+        image.edit_distortion,
+    )
+
+
+def _rerender_later(images: list[Image]) -> None:
+    """Re-render the derivatives of bulk-edited photos in the background instead
+    of inside the request (see workers.queue.enqueue_rerender). The stale files
+    go first, synchronously - they are cheap to delete and must not be served
+    under the new edit revision. No full.jpg warm-up here, unlike a single
+    edit: a whole selection's worth of full-resolution renders would keep the
+    machine busy long after the user has moved on."""
+    for image in images:
+        thumbnails.drop_derivatives(image.id)
+        enqueue_rerender(image.id)
 
 
 def _filtered_images_query(
@@ -1233,9 +1272,11 @@ def bulk_reset_metadata(
     """Reset the selected aspects of each photo back to its just-imported state.
     Which aspects are cleared is chosen per-flag (see BulkResetRequest): rating,
     colour label, tags, develop sliders, geometry (crop/rotation/...), and album
-    membership. Photos whose develop or geometry was reset get re-rendered."""
+    membership. Photos whose look actually changed are re-rendered in the
+    background (see _rerender_later) - the request itself only writes rows."""
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     image_ids = [image.id for image in images]
+    before = {image.id: _edit_state(image) for image in images}
 
     if payload.tags:
         # Auto-managed tags describe what the photo is (an edit copy, a
@@ -1272,14 +1313,15 @@ def bulk_reset_metadata(
         # when a tag reset may have stripped the auto "edit" tag off a still-edited
         # photo.
         if payload.develop or payload.geometry or payload.tags:
-            _sync_edit_state(db, current_user.id, image)
+            _sync_edit_state(db, current_user.id, image, prune=False)
+    if payload.develop or payload.geometry or payload.tags:
+        prune_unused_tags(db, current_user.id)
 
+    changed = [image for image in images if _edit_state(image) != before[image.id]]
     db.commit()
-    edited = payload.develop or payload.geometry
     for image in images:
         db.refresh(image)
-        if edited:
-            _try_regenerate_derivatives(image)
+    _rerender_later(changed)
     return images
 
 
@@ -1290,17 +1332,22 @@ def bulk_develop(
     current_user: User = Depends(get_current_user),
 ):
     """Apply one develop object (e.g. an editor preset) to every selected photo
-    in place and re-render them. Geometry is left untouched - a preset is a look,
-    not a composition - and a neutral object simply clears the develop sliders."""
+    in place and re-render them (in the background). Geometry is left untouched
+    - a preset is a look, not a composition - and a neutral object simply clears
+    the develop sliders."""
     blob = develop.dumps(develop.normalize(payload.adjustments))
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    changed: list[Image] = []
     for image in images:
+        if image.edit_adjustments != blob:
+            changed.append(image)
         image.edit_adjustments = blob
-        _sync_edit_state(db, current_user.id, image)
+        _sync_edit_state(db, current_user.id, image, prune=False)
+    prune_unused_tags(db, current_user.id)
     db.commit()
     for image in images:
         db.refresh(image)
-        _try_regenerate_derivatives(image)
+    _rerender_later(changed)
     return images
 
 
@@ -1322,6 +1369,8 @@ def bulk_auto_develop(
         )
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     changed: list[Image] = []
+    # The subset whose develop object actually moved - the only ones to re-render.
+    rendered: list[Image] = []
     for image in images:
         vector = _embedding_for_image(image)
         if vector is None:
@@ -1335,14 +1384,17 @@ def bulk_auto_develop(
         # editor spreads the suggestion over its live sliders (defaults when the
         # photo is un-edited); unchecked groups keep whatever was there.
         merged = {**develop.loads(image.edit_adjustments), **partial}
-        image.edit_adjustments = develop.dumps(develop.normalize(merged))
-        _sync_edit_state(db, current_user.id, image)
+        blob = develop.dumps(develop.normalize(merged))
+        if image.edit_adjustments != blob:
+            rendered.append(image)
+        image.edit_adjustments = blob
+        _sync_edit_state(db, current_user.id, image, prune=False)
         changed.append(image)
+    prune_unused_tags(db, current_user.id)
     db.commit()
     for image in images:
         db.refresh(image)
-    for image in changed:
-        _try_regenerate_derivatives(image)
+    _rerender_later(rendered)
     return schemas.BulkAutoDevelopResult(
         images=images, applied=len(changed), skipped=len(images) - len(changed)
     )

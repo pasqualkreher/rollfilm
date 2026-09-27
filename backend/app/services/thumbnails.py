@@ -2560,6 +2560,18 @@ def has_derivatives(image_id: str) -> bool:
     return (out_dir / "thumbnail.jpg").exists() and (out_dir / "preview.jpg").exists()
 
 
+def drop_derivatives(image_id: str) -> None:
+    """Delete every rendered tier of a photo whose edits just changed, so it is
+    re-rendered instead of served stale. Needed whenever the re-render happens
+    *later* than the edit: the desktop shell reads these files straight off
+    disk and the grid caches them under the new edit revision for good, so an
+    old file left in place would stick. A missing file takes the normal
+    on-demand path (render, or 503 + the grid's retry)."""
+    out_dir = settings.thumbnail_cache_root / image_id
+    for name in ("thumbnail.jpg", "preview.jpg", "small.jpg", "full.jpg", "half.jpg"):
+        (out_dir / name).unlink(missing_ok=True)
+
+
 def ensure_derivatives(image: "Image", slot_timeout: float | None = None) -> None:
     """Generate thumbnail/preview only if they're missing. Used by the serve
     path: if the post-import worker is generating this image right now, this
