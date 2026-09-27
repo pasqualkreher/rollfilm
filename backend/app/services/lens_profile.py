@@ -787,6 +787,38 @@ def _autoscale(luts: _Luts, w2: float, h2: float) -> float:
     return z
 
 
+def windowable(path: Path, adjustments: dict | None) -> bool:
+    """Whether correct_window can produce this photo's correction (no DNG
+    gain maps in play - those run over the whole frame)."""
+    st = strengths(adjustments)
+    corr = profile_for(path) if st is not None else None
+    return not (corr is not None and corr.gain_maps and st[1] > 0)
+
+
+def correct_window(
+    base: np.ndarray, path: Path, adjustments: dict | None, box: tuple[int, int, int, int]
+) -> np.ndarray | None:
+    """correct(base)[y0:y1, x0:x1] as float32 (box = x0, y0, x1, y1 in `base`'s
+    pixels), computed from the box's own neighbourhood - see
+    apply_profile_window. None when the correction can't be windowed (DNG
+    gain maps, which are applied over the whole frame): the caller then takes
+    the whole-frame path."""
+    x0, y0, x1, y1 = box
+    st = strengths(adjustments)
+    corr = profile_for(path) if st is not None else None
+    if st is None or corr is None:
+        return base[y0:y1, x0:x1].astype(np.float32)
+    fd, fv = st
+    if corr.gain_maps and fv > 0:
+        return None
+    radial = corr.radial
+    if radial is None and corr.lensfun is not None and base.shape[0] > 1:
+        radial = lensfun_profile(corr.lensfun, round(base.shape[1] / base.shape[0], 3))
+    if radial is None:
+        return base[y0:y1, x0:x1].astype(np.float32)
+    return apply_profile_window(base, radial, box, fd, fv)
+
+
 def correct(arr: np.ndarray, path: Path, adjustments: dict | None) -> np.ndarray:
     """The linear HxWx3 float32 `arr` with the photo's lens correction applied,
     as a new array of the same size - or `arr` itself when the file has no
@@ -881,68 +913,155 @@ def apply_gain_maps(arr: np.ndarray, corr: Correction, fv: float = 1.0) -> np.nd
     return out
 
 
+class _ProfileMaps:
+    """A profile's warp (and CA / vignetting) for one frame size, on the
+    coarse grid apply_profile upsamples from. `window` hands out any rectangle
+    of the full-resolution maps; a rectangle is the same pixels the whole-frame
+    upsample would give there (an integer-factor INTER_LINEAR resize is shift
+    invariant, and the one-sample margins keep every window edge off the
+    resize's own clamped border)."""
+
+    def __init__(self, h: int, w: int, profile: LensProfile | RadialProfile, fd: float, fv: float):
+        no_vig = isinstance(profile, RadialProfile) and not profile.vig
+        self.noop = h < 2 or w < 2 or (
+            fd <= 0 and (fv <= 0 or no_vig) and not any(profile.ca_r) and not any(profile.ca_b)
+        )
+        if self.noop:
+            return
+        luts = _luts(profile, round(fd, 4), round(fv, 4))
+        w2, h2 = w / 2.0, h / 2.0
+        diag = math.hypot(w2, h2)
+        z = _autoscale(luts, w2, h2)
+        # A sub-pixel-everywhere CA shift isn't worth two more remaps.
+        ca_px = max(float(np.max(np.abs(luts.ca_r))), float(np.max(np.abs(luts.ca_b)))) * diag
+        self.ca = ca_px >= 0.1
+        self.vignette = fv > 0 and not no_vig
+
+        # The maps are smooth radial functions, so they're computed on a coarse
+        # grid and upsampled with cv2.resize - pixel-exact numpy maps cost ~1s at
+        # 40MP. The grid starts a full step outside the frame so every pixel lies
+        # between samples (a resize clamps, it doesn't extrapolate, at its edges).
+        self.step = step = 8 if min(h, w) >= 512 else max(1, min(h, w) // 64)
+        self.pad = pad = step
+        self.gw = gw = -(-(w + 2 * pad) // step)
+        self.gh = gh = -(-(h + 2 * pad) // step)
+        # Centre-relative position of each coarse sample, in fine pixels.
+        xs = ((np.arange(gw) + 0.5) * step - 0.5 - pad) + 0.5 - w2
+        ys = ((np.arange(gh) + 0.5) * step - 0.5 - pad) + 0.5 - h2
+        X = np.broadcast_to(xs[None, :] / z, (gh, gw))
+        Y = np.broadcast_to(ys[:, None] / z, (gh, gw))
+        r = np.hypot(X, Y) / diag
+        s = _lookup(luts.scale, r)
+        self.coarse: dict[str, np.ndarray] = {
+            "gx": (X * s + w2 - 0.5).astype(np.float32),
+            "gy": (Y * s + h2 - 0.5).astype(np.float32),
+        }
+        if self.ca:
+            for ch, table in (("r", luts.ca_r), ("b", luts.ca_b)):
+                k = s * (1.0 + _lookup(table, r))
+                self.coarse[ch + "x"] = (X * k + w2 - 0.5).astype(np.float32)
+                self.coarse[ch + "y"] = (Y * k + h2 - 0.5).astype(np.float32)
+        if self.vignette:
+            self.coarse["gain"] = _lookup(luts.gain, r)
+
+    def window(self, name: str, y0: int, y1: int, x0: int, x1: int) -> np.ndarray:
+        step, pad = self.step, self.pad
+        k0 = max(0, (y0 + pad) // step - 1)
+        k1 = min(self.gh, (y1 - 1 + pad) // step + 2)
+        j0 = max(0, (x0 + pad) // step - 1)
+        j1 = min(self.gw, (x1 - 1 + pad) // step + 2)
+        r0 = y0 + pad - k0 * step
+        c0 = x0 + pad - j0 * step
+        b = cv2.resize(
+            self.coarse[name][k0:k1, j0:j1],
+            ((j1 - j0) * step, (k1 - k0) * step),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        return np.ascontiguousarray(b[r0 : r0 + (y1 - y0), c0 : c0 + (x1 - x0)])
+
+    def channel_maps(self, y0: int, y1: int, x0: int, x1: int) -> list[tuple[np.ndarray, np.ndarray]]:
+        """(map_x, map_y) for R, G, B over the window."""
+        gx, gy = self.window("gx", y0, y1, x0, x1), self.window("gy", y0, y1, x0, x1)
+        maps = []
+        for prefix in ("r", "g", "b"):
+            if self.ca and prefix != "g":
+                maps.append((self.window(prefix + "x", y0, y1, x0, x1), self.window(prefix + "y", y0, y1, x0, x1)))
+            else:
+                maps.append((gx, gy))
+        return maps
+
+
+# The maps of the last few frame sizes: a zoomed editor asks for the native
+# frame's maps once per tile (and once per noise-probe block), and the coarse
+# grid is ~0.6M samples per map there. A handful of MB each.
+@functools.lru_cache(maxsize=3)
+def _profile_maps(h: int, w: int, profile: LensProfile | RadialProfile, fd: float, fv: float) -> _ProfileMaps:
+    return _ProfileMaps(h, w, profile, fd, fv)
+
+
 def apply_profile(arr: np.ndarray, profile: LensProfile | RadialProfile, fd: float = 1.0, fv: float = 1.0) -> np.ndarray:
     h, w = arr.shape[:2]
-    no_vig = isinstance(profile, RadialProfile) and not profile.vig
-    if h < 2 or w < 2 or (fd <= 0 and (fv <= 0 or no_vig) and not any(profile.ca_r) and not any(profile.ca_b)):
+    maps = _profile_maps(h, w, profile, round(fd, 4), round(fv, 4))
+    if maps.noop:
         return arr
-    luts = _luts(profile, round(fd, 4), round(fv, 4))
-    w2, h2 = w / 2.0, h / 2.0
-    diag = math.hypot(w2, h2)
-    z = _autoscale(luts, w2, h2)
-    # A sub-pixel-everywhere CA shift isn't worth two more remaps.
-    ca_px = max(float(np.max(np.abs(luts.ca_r))), float(np.max(np.abs(luts.ca_b)))) * diag
-    ca = ca_px >= 0.1
-    vignette = fv > 0 and not no_vig
-
-    # The maps are smooth radial functions, so they're computed on a coarse
-    # grid and upsampled with cv2.resize - pixel-exact numpy maps cost ~1s at
-    # 40MP. The grid starts a full step outside the frame so every pixel lies
-    # between samples (a resize clamps, it doesn't extrapolate, at its edges).
-    step = 8 if min(h, w) >= 512 else max(1, min(h, w) // 64)
-    pad = step
-    gw = -(-(w + 2 * pad) // step)
-    gh = -(-(h + 2 * pad) // step)
-    # Centre-relative position of each coarse sample, in fine pixels.
-    xs = ((np.arange(gw) + 0.5) * step - 0.5 - pad) + 0.5 - w2
-    ys = ((np.arange(gh) + 0.5) * step - 0.5 - pad) + 0.5 - h2
-    X = np.broadcast_to(xs[None, :] / z, (gh, gw))
-    Y = np.broadcast_to(ys[:, None] / z, (gh, gw))
-    r = np.hypot(X, Y) / diag
-    s = _lookup(luts.scale, r)
-    coarse: dict[str, np.ndarray] = {
-        "gx": (X * s + w2 - 0.5).astype(np.float32),
-        "gy": (Y * s + h2 - 0.5).astype(np.float32),
-    }
-    if ca:
-        for ch, table in (("r", luts.ca_r), ("b", luts.ca_b)):
-            k = s * (1.0 + _lookup(table, r))
-            coarse[ch + "x"] = (X * k + w2 - 0.5).astype(np.float32)
-            coarse[ch + "y"] = (Y * k + h2 - 0.5).astype(np.float32)
-    if vignette:
-        coarse["gain"] = _lookup(luts.gain, r)
-
     planes = cv2.split(np.ascontiguousarray(arr, dtype=np.float32))
     out = np.empty((h, w, 3), dtype=np.float32)
     # Bands bound the maps' memory on a native frame; an editor-sized frame
     # goes in one piece, where the per-band overhead would dominate.
-    band = h if h * w <= 6_000_000 else max(1, 512 // step) * step
+    band = h if h * w <= 6_000_000 else max(1, 512 // maps.step) * maps.step
     for y0 in range(0, h, band):
         y1 = min(h, y0 + band)
-        k0 = max(0, (y0 + pad) // step - 1)
-        k1 = min(gh, (y1 - 1 + pad) // step + 2)
-        r0 = y0 + pad - k0 * step
-
-        def up(name: str) -> np.ndarray:
-            b = cv2.resize(coarse[name][k0:k1], (gw * step, (k1 - k0) * step), interpolation=cv2.INTER_LINEAR)
-            return np.ascontiguousarray(b[r0 : r0 + (y1 - y0), pad : pad + w])
-
-        gx, gy = up("gx"), up("gy")
-        for c, prefix in ((0, "r"), (1, "g"), (2, "b")):
-            mx, my = (up(prefix + "x"), up(prefix + "y")) if ca and prefix != "g" else (gx, gy)
+        for c, (mx, my) in enumerate(maps.channel_maps(y0, y1, 0, w)):
             out[y0:y1, :, c] = cv2.remap(
                 planes[c], mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
             )
-        if vignette:
-            out[y0:y1] *= up("gain")[:, :, None]
+        if maps.vignette:
+            out[y0:y1] *= maps.window("gain", y0, y1, 0, w)[:, :, None]
+    return out
+
+
+def apply_profile_window(
+    base: np.ndarray,
+    profile: LensProfile | RadialProfile,
+    box: tuple[int, int, int, int],
+    fd: float = 1.0,
+    fv: float = 1.0,
+) -> np.ndarray:
+    """apply_profile(base)[y0:y1, x0:x1] (box = x0, y0, x1, y1), without
+    touching the rest of the frame: the maps are upsampled over the box only,
+    and only the source rectangle they reach is converted to float32. The
+    editor's zoomed tiles use it - the whole-frame path converted and warped
+    all 40MP (a ~480MB float32 copy, 0.6-4s) per slider frame to keep a
+    screenful of it. `base` may be float16."""
+    x0, y0, x1, y1 = box
+    h, w = base.shape[:2]
+    maps = _profile_maps(h, w, profile, round(fd, 4), round(fv, 4))
+    if maps.noop:
+        return base[y0:y1, x0:x1].astype(np.float32)
+    channel_maps = maps.channel_maps(y0, y1, x0, x1)
+    # The source rectangle every sample of every channel reads from, with the
+    # bilinear neighbour on each side. Clamped to the frame, where the cut's
+    # edge IS the frame's edge, so BORDER_REPLICATE replicates the same pixels.
+    sx0 = max(0, int(math.floor(min(float(mx.min()) for mx, _ in channel_maps))) - 1)
+    sx1 = min(w, int(math.ceil(max(float(mx.max()) for mx, _ in channel_maps))) + 2)
+    sy0 = max(0, int(math.floor(min(float(my.min()) for _, my in channel_maps))) - 1)
+    sy1 = min(h, int(math.ceil(max(float(my.max()) for _, my in channel_maps))) + 2)
+    if sx1 <= sx0 or sy1 <= sy0:  # the box maps entirely outside the frame
+        sx0, sx1 = (0, w) if sx1 <= sx0 else (sx0, sx1)
+        sy0, sy1 = (0, h) if sy1 <= sy0 else (sy0, sy1)
+    src = np.ascontiguousarray(base[sy0:sy1, sx0:sx1], dtype=np.float32)
+    out = np.empty((y1 - y0, x1 - x0, 3), dtype=np.float32)
+    # Shifting a float32 map by an integer is exact (the map values' ulp is
+    # below 1), so the remap samples the very positions the full one does.
+    shifted: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for c, (mx, my) in enumerate(channel_maps):
+        key = id(mx)
+        if key not in shifted:
+            shifted[key] = (mx - np.float32(sx0), my - np.float32(sy0))
+        smx, smy = shifted[key]
+        out[:, :, c] = cv2.remap(
+            src[:, :, c], smx, smy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+        )
+    if maps.vignette:
+        out *= maps.window("gain", y0, y1, x0, x1)[:, :, None]
     return out

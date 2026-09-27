@@ -420,3 +420,49 @@ def test_the_scrub_tier_honours_an_adaptive_budget(tmp_path, monkeypatch):
     assert max(scrub_size(scrub_px=1)) == 480                # clamped, no error
     # A budget past the accurate tier is a ceiling, and never an upscale.
     assert max(scrub_size(scrub_px=99999)) == 1200
+
+
+def test_the_lens_correction_runs_in_the_tile(photo, monkeypatch):
+    """The lens correction is on by default for raws. It used to send every
+    zoomed frame the long way - the whole native base converted and warped
+    (0.6-4s per slider frame at 40MP) to keep a screenful of it. It keeps the
+    frame size, so the tile corrects its own box instead: the whole-frame
+    correction must not run, and the tile must still be that part of the
+    whole corrected render."""
+    from io import BytesIO
+
+    from app.services import lens_profile
+
+    prof = lens_profile.parse_fujifilm(
+        " ".join(str(v) for v in [515.9, *[0.35, 0.5, 0.61, 0.71, 0.79, 0.87, 0.94, 1.0, 1.06], *[-3.0] * 9]),
+        " ".join(str(v) for v in [515.9, *[0.35, 0.5, 0.61, 0.71, 0.79, 0.87, 0.94, 1.0, 1.06], *[2e-3] * 18, 515.9]),
+        " ".join(str(v) for v in [515.9, *[0.35, 0.5, 0.61, 0.71, 0.79, 0.87, 0.94, 1.0, 1.06], *[80.0] * 9]),
+    )
+    corr = lens_profile.Correction(source="fujifilm", label="Camera data", radial=prof)
+    monkeypatch.setattr(lens_profile, "profile_for", lambda path: corr)
+    _warm_native(photo)
+    adj = develop.normalize({"exposure": 0.2})
+    region = (0.3, 0.3, 0.3, 0.3)
+
+    whole = np.asarray(
+        PILImage.open(BytesIO(
+            thumbnails.render_editor_preview_bytes(photo, 0, None, adj, native=True)
+        )).convert("RGB"), dtype=np.int16
+    )
+    whole_frame_calls = []
+    real_correct = lens_profile.correct
+    monkeypatch.setattr(
+        lens_profile, "correct", lambda *a, **k: (whole_frame_calls.append(1), real_correct(*a, **k))[1]
+    )
+    thumbnails.invalidate_tone_stage()
+    tile = np.asarray(
+        PILImage.open(BytesIO(
+            thumbnails.render_editor_preview_bytes(photo, 0, None, adj, native=True, region=region)
+        )).convert("RGB"), dtype=np.int16
+    )
+    assert whole_frame_calls == []
+    h, w = whole.shape[:2]
+    x0, y0 = round(region[0] * w), round(region[1] * h)
+    expected = whole[y0 : y0 + tile.shape[0], x0 : x0 + tile.shape[1]].astype(int)
+    assert tile.shape == expected.shape
+    assert np.abs(expected - tile.astype(int)).mean() < 1.0

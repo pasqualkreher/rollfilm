@@ -279,3 +279,36 @@ def test_a_radial_profile_corrects_like_the_fuji_tables():
     a = lens_profile.apply_profile(arr, fuji, 1.0, 0.0)
     b = lens_profile.apply_profile(arr, radial, 1.0, 0.0)
     assert np.abs(a - b).max() < 2e-3
+
+
+def _structured(h: int, w: int) -> np.ndarray:
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    g = 0.5 + 0.3 * np.sin(xs / 7.0) * np.cos(ys / 5.0)
+    return np.clip(np.dstack([g, g * 0.9 + 0.05, (xs + ys) / (h + w)]), 0.0, 1.0).astype(np.float16)
+
+
+def test_a_window_is_the_same_pixels_as_the_whole_frame():
+    """The editor's zoomed tiles correct only their own box (from a float16
+    base, converting only the source rectangle the box reads). The box must
+    come out as exactly the whole-frame correction's pixels there - at the
+    corners and edges, where the remap replicates the frame border, too."""
+    prof = _profile(dist=-3.0, ca=2e-3, vig=80.0)
+    base = _structured(900, 1300)
+    whole = lens_profile.apply_profile(base.astype(np.float32), prof, 1.0, 1.0)
+    h, w = base.shape[:2]
+    for box in [(0, 0, 200, 150), (500, 300, 900, 620), (w - 173, h - 91, w, h), (0, 400, w, 460), (0, 0, w, h)]:
+        x0, y0, x1, y1 = box
+        tile = lens_profile.apply_profile_window(base, prof, box, 1.0, 1.0)
+        assert tile.dtype == np.float32
+        assert np.array_equal(tile, whole[y0:y1, x0:x1]), box
+
+
+def test_gain_maps_are_not_windowed(tmp_path: Path, monkeypatch):
+    """DNG lens-shading maps run over the whole frame: correct_window says so
+    (None) and the zoomed render takes the whole-frame path for them."""
+    corr = lens_profile.Correction(source="dng", label="Camera data", gain_maps=(object(),))
+    monkeypatch.setattr(lens_profile, "profile_for", lambda path: corr)
+    adj = develop.normalize({})
+    base = _structured(64, 96)
+    assert not lens_profile.windowable(tmp_path / "x.dng", adj)
+    assert lens_profile.correct_window(base, tmp_path / "x.dng", adj, (0, 0, 10, 10)) is None

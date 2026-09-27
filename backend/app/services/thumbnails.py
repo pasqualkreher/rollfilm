@@ -709,7 +709,11 @@ _NR_PROBE_BLOCK = 192
 _NR_PROBE_GRID = (6, 8)
 
 
-def _noise_probe(arr: np.ndarray, scale: float = 1.0) -> np.ndarray:
+def _noise_probe(
+    arr: np.ndarray,
+    scale: float = 1.0,
+    block: Callable[[int, int, int], np.ndarray] | None = None,
+) -> np.ndarray:
     """A fixed grid of blocks from the whole frame, stacked into one tall
     image. Deterministic in the frame's size, so a tile render (which samples
     the linear base before cutting) and a whole-frame render (which samples
@@ -717,16 +721,22 @@ def _noise_probe(arr: np.ndarray, scale: float = 1.0) -> np.ndarray:
     per-pixel, so toning the blocks equals sampling the toned frame. `scale`
     shrinks each block the way a budget-capped tile was shrunk (INTER_AREA),
     so the probe sees the noise at the tile's resolution. Frames smaller than
-    the grid are their own probe."""
+    the grid are their own probe. `block(y, x, size)` fetches one block when
+    the frame's pixels aren't `arr` itself yet (a zoomed tile whose lens
+    correction runs in the tile: the blocks come lens-corrected, as the
+    whole-frame render sees them)."""
     h, w = arr.shape[:2]
     rows, cols = _NR_PROBE_GRID
     b = _NR_PROBE_BLOCK
     if h < rows * b or w < cols * b:
-        blocks = [arr]
+        blocks = [arr if block is None else block(0, 0, 0)]
     else:
         ys = np.linspace(0, h - b, rows).round().astype(int)
         xs = np.linspace(0, w - b, cols).round().astype(int)
-        blocks = [arr[y:y + b, x:x + b] for y in ys for x in xs]
+        if block is None:
+            blocks = [arr[y:y + b, x:x + b] for y in ys for x in xs]
+        else:
+            blocks = [block(int(y), int(x), b) for y in ys for x in xs]
     if scale < 0.999:
         blocks = [
             cv2.resize(
@@ -3505,9 +3515,19 @@ def _render_editor_bytes(
     # cut afterwards - correctness first; the fast path is the common one.
     # The lens profile correction warps the whole frame as well.
     lens_on = lens_profile.is_active(path, adjustments)
-    geometry_moves_pixels = bool(
-        lens_on or distortion or rotation or crop or flip_h or flip_v or straighten or persp_h or persp_v
+    edits_move_pixels = bool(
+        distortion or rotation or crop or flip_h or flip_v or straighten or persp_h or persp_v
     )
+    # The lens correction alone doesn't need the long way: it keeps the frame
+    # size, and correct_window produces exactly the whole-frame result's cut
+    # from the box's own neighbourhood. It is on by default for raws, so
+    # without this every zoomed slider frame of a raw converted and warped the
+    # whole 40MP base (0.6-4s of "geom") to keep a screenful of it.
+    lens_in_tile = bool(
+        region is not None and lens_on and not edits_move_pixels
+        and lens_profile.windowable(path, adjustments)
+    )
+    geometry_moves_pixels = bool((lens_on and not lens_in_tile) or edits_move_pixels)
     early_cut: tuple[int, int, int, int] | None = None
     early_box: tuple[int, int, int, int] | None = None
     tile_scale = 1.0
@@ -3530,16 +3550,36 @@ def _render_editor_bytes(
         # the whole frame before the cut - at the tile's scale, so it sees the
         # noise the way the tile does.
         if _denoise_wanted(adjustments, fast):
-            noise_probe = _noise_probe(lin16, tile_scale)
+            if lens_in_tile:
+                base_for_probe = lin16
+
+                def probe_block(y: int, x: int, size: int) -> np.ndarray:
+                    if size == 0:  # a frame smaller than the probe grid
+                        bh, bw = base_for_probe.shape[:2]
+                        return lens_profile.correct_window(base_for_probe, path, adjustments, (0, 0, bw, bh))
+                    return lens_profile.correct_window(
+                        base_for_probe, path, adjustments, (x, y, x + size, y + size)
+                    )
+
+                noise_probe = _noise_probe(lin16, tile_scale, block=probe_block)
+            else:
+                noise_probe = _noise_probe(lin16, tile_scale)
         tile_key = json.dumps(
-            [image.id, mtime_ns, native, base_px, early_cut, round(tile_scale, 5)],
+            [
+                image.id, mtime_ns, native, base_px, early_cut, round(tile_scale, 5),
+                lens_profile.strengths(adjustments) if lens_in_tile else None,
+            ],
             separators=(",", ":"),
         )
         tile = _tile_cache_get(tile_key)
         if tile is not None:
             lin16 = tile
         else:
-            lin16 = lin16[py0:py1, px0:px1]
+            if lens_in_tile:
+                # float32 already; the downscale below takes it as it is.
+                lin16 = lens_profile.correct_window(lin16, path, adjustments, early_cut)
+            else:
+                lin16 = lin16[py0:py1, px0:px1]
             # Downscale to the on-screen budget before anything expensive sees the
             # pixels - INTER_AREA, same as _downscale_linear. Via float32: the base
             # is float16, which cv2.resize can't take, and the float32 copy of the
@@ -3563,7 +3603,7 @@ def _render_editor_bytes(
     # A prepared tile is float32 already (and this render's own copy); the
     # whole-frame bases are float16 and convert here.
     arr = lin16.astype(np.float32, copy=False)
-    if lens_on:
+    if lens_on and not lens_in_tile:
         arr = lens_profile.correct(arr, path, adjustments)
     if distortion:
         arr = apply_distortion_array(arr, distortion)
