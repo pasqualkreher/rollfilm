@@ -19,10 +19,10 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
+import { EditPicker } from "../components/EditPicker";
 import { IconCloudUp, IconTrash } from "../components/Icons";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
-import { Dropdown } from "../components/Dropdown";
 import { loadPresets } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
@@ -129,11 +129,6 @@ export function Library() {
   // the tag note appears. Carries its own error flag since a failed add must not
   // read like a success.
   const [albumMsg, setAlbumMsg] = useTransientValue<{ text: string; error: boolean }>();
-  // Read once per MOUNT rather than per render: this parses localStorage, and
-  // the editor lives on its own route (/image/:id), so returning from it
-  // remounts this page anyway - the dropdown still picks up presets saved
-  // there, without paying for the parse on every unrelated re-render.
-  const presetNames = useMemo(() => Object.keys(loadPresets()), []);
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Settings maintenance tasks.
@@ -611,27 +606,11 @@ export function Library() {
               </div>
             )}
             <div className="control-group">
-              <button
-                className="btn"
-                onClick={autoDevelopSelected}
-                disabled={developBusy}
-                title="Apply automatic edits to the selected photos, based on your own saved edits"
-              >
-                {developBusy ? "Working…" : "Auto develop"}
-              </button>
-              {presetNames.length > 0 && (
-                <Dropdown
-                  value=""
-                  placeholder="Apply preset…"
-                  disabled={developBusy}
-                  title="Apply a saved editor preset to the selected photos"
-                  ariaLabel="Apply preset"
-                  onChange={(v) => {
-                    if (v) applyPresetToSelected(v);
-                  }}
-                  options={presetNames.map((name) => ({ value: name, label: name }))}
-                />
-              )}
+              <EditPicker
+                onAutoEdit={autoDevelopSelected}
+                onApplyPreset={applyPresetToSelected}
+                busy={developBusy}
+              />
               <ResetMenu count={selected.size} onReset={resetSelected} />
             </div>
             <button

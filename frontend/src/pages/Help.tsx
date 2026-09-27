@@ -519,8 +519,8 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>The bar at the bottom acts on all of them:</strong> set stars or a color
                 label, add a tag, <strong>Add to…</strong> an album, a canvas or Selects (with "+
-                New" right in the list), send to Immich, <strong>Auto develop</strong> the whole
-                selection, <strong>apply a saved preset</strong>, delete.
+                New" right in the list), send to Immich, <strong>Edit…</strong> the whole
+                selection (apply auto edit, or apply one of your saved presets), delete.
               </li>
               <li>
                 <strong>Reset…</strong> takes chosen aspects back to the just-imported state — any
@@ -1226,8 +1226,8 @@ const CHAPTERS: Chapter[] = [
                 drawn are kept.
               </li>
               <li>
-                <strong>On a selection:</strong> pick photos in the Library and press{" "}
-                <strong>Auto develop</strong> in the bulk bar to develop each one with its own
+                <strong>On a selection:</strong> pick photos in the Library and choose{" "}
+                <strong>Edit… → Apply auto edit</strong> in the bulk bar to develop each one with its own
                 suggestion. This one <em>does</em> change the photos, so it asks first if any of
                 them already have edits. Photos with nothing similar to learn from yet are skipped
                 and counted.
