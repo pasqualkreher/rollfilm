@@ -71,6 +71,11 @@ def on_startup() -> None:
     from app.services import raw as raw_service
     from app.services.settings_store import get_raw_native_decode
 
+    # Which LibRaw this build runs: the macOS bundle ships one rebuilt with
+    # OpenMP (build_rawpy_openmp.py), the 100%-zoom decode's main lever - a
+    # single-threaded one here means the raw zoom is ~3x slower than it should be.
+    raw_service.log_libraw_build()
+
     with SessionLocal() as _db:
         raw_service.set_native_decode(get_raw_native_decode(_db))
         # The membership tags ("album", "album: …", "canvas",

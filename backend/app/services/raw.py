@@ -1,6 +1,9 @@
 import io
 import logging
 import math
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
@@ -8,6 +11,8 @@ import numpy as np
 import rawpy
 from PIL import Image as PILImage
 from PIL import ImageOps
+
+from app.services import machine
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,21 @@ def set_native_decode(enabled: bool) -> None:
     _native_decode = bool(enabled)
 
 
+def log_libraw_build() -> None:
+    """One startup line: the LibRaw version and whether its demosaic runs on
+    several cores (OpenMP) and how many."""
+    try:
+        flags = rawpy.flags or {}
+        logger.info(
+            "LibRaw %s: OpenMP %s (OMP_NUM_THREADS=%s)",
+            ".".join(str(v) for v in rawpy.libraw_version),
+            "on" if flags.get("OPENMP") else "OFF",
+            os.environ.get("OMP_NUM_THREADS", "unset"),
+        )
+    except Exception:
+        logger.debug("Could not read the LibRaw build flags", exc_info=True)
+
+
 def native_decode_enabled() -> bool:
     return _native_decode
 
@@ -89,14 +109,38 @@ def reinhard_ratio(y: np.ndarray, white: float) -> np.ndarray:
     return np.where(y > 1e-6, y_out / np.maximum(y, 1e-6), 1.0).astype(np.float32)
 
 
-def default_tone_to_srgb(lin: np.ndarray, gain: float) -> np.ndarray:
+# The 100%-zoom render's tone pass runs its bands on this pool (opt-in, see
+# default_tone_to_srgb): numpy releases the GIL on every band-sized op, and the
+# pass is memory-bandwidth bound, flat from four workers on - the same cap as
+# the editor's tone bands (thumbnails._TONE_BAND_WORKERS).
+_TONE_SRGB_WORKERS = max(1, min(4, machine.PERF_CORES))
+_tone_srgb_pool: "ThreadPoolExecutor | None" = None
+_tone_srgb_pool_lock = threading.Lock()
+
+
+def _tone_srgb_executor() -> ThreadPoolExecutor:
+    global _tone_srgb_pool
+    with _tone_srgb_pool_lock:
+        if _tone_srgb_pool is None:
+            _tone_srgb_pool = ThreadPoolExecutor(
+                max_workers=_TONE_SRGB_WORKERS, thread_name_prefix="tone-srgb"
+            )
+        return _tone_srgb_pool
+
+
+def default_tone_to_srgb(lin: np.ndarray, gain: float, parallel: bool = False) -> np.ndarray:
     """The neutral (no-edits) rendering of a linear base: apply the base gain,
     roll the highlights off with a Reinhard shoulder whose white point is that
     same gain, and encode to 8-bit sRGB. Algebraically identical to the old
     baked _auto_expose (shoulder yg*(1+y/g)/(1+yg) == Reinhard-extended at
     L=y*g, W=g), so unedited RAWs render exactly as before the linear-pipeline
     refactor. With gain 1.0 (native decode / JPEG) the shoulder is a no-op for
-    in-range values."""
+    in-range values.
+
+    `parallel` spreads the bands over _TONE_SRGB_WORKERS threads - for the one
+    interactive caller that waits on a whole 40MP frame (the lightbox's 100%
+    zoom). Background callers (import, thumbnails) keep one core each: they
+    already run several photos side by side."""
     # In bands of rows, into one preallocated output: whole-frame temporaries
     # (luma, ratio, the scaled copy, the 16-bit index) added ~1.2GB to a 40MP
     # render, on machines where that is the difference between rendering from
@@ -105,7 +149,8 @@ def default_tone_to_srgb(lin: np.ndarray, gain: float) -> np.ndarray:
     h = lin.shape[0]
     out = np.empty(lin.shape[:2] + (3,), dtype=np.uint8)
     band = 256
-    for y0 in range(0, h, band):
+
+    def tone_band(y0: int) -> None:
         rows = lin[y0 : y0 + band].astype(np.float32, copy=False)
         y = (rows @ _LUMA) * gain
         ratio = gain * reinhard_ratio(y, gain)
@@ -116,6 +161,14 @@ def default_tone_to_srgb(lin: np.ndarray, gain: float) -> np.ndarray:
         # output can show).
         q = (np.clip(rows * ratio[..., None], 0.0, 1.0) * 65535.0 + 0.5).astype(np.uint16)
         out[y0 : y0 + band] = _LINEAR16_TO_SRGB8[q]
+
+    starts = range(0, h, band)
+    if parallel and _TONE_SRGB_WORKERS > 1 and len(starts) > 1:
+        # list() drains the map so a band's exception surfaces here.
+        list(_tone_srgb_executor().map(tone_band, starts))
+    else:
+        for y0 in starts:
+            tone_band(y0)
     return out
 
 RAW_EXTENSIONS = {

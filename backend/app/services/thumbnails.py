@@ -4076,7 +4076,7 @@ def render_untouched_full(image: "Image") -> PILImage.Image:
         # float32 planes only when a profile applies, and the tone stage
         # converts band by band - no whole-frame float32 copy up front.
         lin = lens_profile.correct(lin16, path, adjustments)
-        out = raw_service.default_tone_to_srgb(lin, _browsing_gain(gain, adjustments))
+        out = raw_service.default_tone_to_srgb(lin, _browsing_gain(gain, adjustments), parallel=True)
         del lin
     return PILImage.fromarray(out, "RGB")
 

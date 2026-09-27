@@ -20,6 +20,14 @@ VENV="$HERE/.venv"
   exit 1
 }
 
+if [ "$(uname)" = "Darwin" ]; then
+  # rawpy's macOS wheels run LibRaw's demosaic on one core; the 100% zoom of a
+  # raw is ~3x faster with it multi-threaded. Idempotent (skips a venv that
+  # already has it), so only the first build pays the ~2 min compile.
+  echo "==> rawpy with a multi-threaded (OpenMP) LibRaw"
+  "$VENV/bin/python" build_rawpy_openmp.py
+fi
+
 echo "==> Building backend with PyInstaller (this is slow — torch is large)"
 # `python -m PyInstaller` instead of the bin/pyinstaller entry script: the
 # script hardcodes the venv's absolute path in its shebang, which breaks
