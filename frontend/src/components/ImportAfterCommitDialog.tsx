@@ -8,6 +8,7 @@ import type { ImportAfterCommit } from "../api/types";
 // session - nothing is lost that way.
 export function ImportAfterCommitDialog({
   added,
+  albumName = null,
   collectionFolder,
   onChoose,
   onClose,
@@ -15,6 +16,8 @@ export function ImportAfterCommitDialog({
 }: {
   // How many photos this import just added.
   added: number;
+  // The album they also went into, when one was picked in the review.
+  albumName?: string | null;
   // A copy session's collection folder, when it has one: closing then asks
   // whether to keep it, and the dialog says so.
   collectionFolder: string | null;
@@ -29,7 +32,9 @@ export function ImportAfterCommitDialog({
     <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={onClose}>
       <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pair-delete-body">
-          <h3>{count} added to your library</h3>
+          <h3>
+            {count} added to your library{albumName && <> and to “{albumName}”</>}
+          </h3>
           <p className="settings-desc" style={{ margin: 0 }}>
             Keep this session open to add more later, or close it now? What you added stays in
             your library either way.

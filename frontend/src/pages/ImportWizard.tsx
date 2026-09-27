@@ -19,6 +19,7 @@ import { ImportSessions, askToCloseSession } from "../components/ImportSessions"
 import { ImportModeDialog } from "../components/ImportModeDialog";
 import { ImportAfterCommitDialog } from "../components/ImportAfterCommitDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
+import { ImportAlbumPicker } from "../components/ImportAlbumPicker";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
@@ -348,14 +349,25 @@ export function ImportWizard() {
   // renders. Backing out counts as keeping the session: nothing is lost.
   const [afterCommitAsk, setAfterCommitAsk] = useState<{
     added: number;
+    albumName: string | null;
     resolve: (choice: Exclude<ImportAfterCommit, "ask">) => void;
   } | null>(null);
 
-  function askAfterCommit(added: number): Promise<Exclude<ImportAfterCommit, "ask">> {
+  function askAfterCommit(
+    added: number,
+    albumName: string | null
+  ): Promise<Exclude<ImportAfterCommit, "ask">> {
     const remembered = importSettings?.after_commit;
     if (remembered === "keep" || remembered === "close") return Promise.resolve(remembered);
-    return new Promise((resolve) => setAfterCommitAsk({ added, resolve }));
+    return new Promise((resolve) => setAfterCommitAsk({ added, albumName, resolve }));
   }
+
+  // The album "Add to library" also puts the photos in (the picker next to
+  // the button). Kept across commits of the session: a card of one trip goes
+  // in a hundred at a time, into the same album each time.
+  const [targetAlbumId, setTargetAlbumId] = useState<string | null>(null);
+  const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
+  const targetAlbum = albums?.find((a) => a.id === targetAlbumId) ?? null;
 
   function chooseAfterCommit(choice: Exclude<ImportAfterCommit, "ask">, remember: boolean) {
     afterCommitAsk?.resolve(choice);
@@ -396,12 +408,37 @@ export function ImportWizard() {
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
       queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+      // Into the chosen album too. The commit returned the photos it added
+      // (both halves of a RAW+JPEG pair), so they go in by id - through the
+      // same call as the library's "Add to album", Immich album mirror and
+      // album tags included. The photos are in the library by now either way.
+      let albumName: string | null = null;
+      if (targetAlbum && added.length > 0) {
+        try {
+          await withWait(`Adding photos to “${targetAlbum.name}”…`, () =>
+            api.albums.addImages(
+              targetAlbum.id,
+              added.map((image) => image.id)
+            )
+          );
+          albumName = targetAlbum.name;
+          queryClient.invalidateQueries({ queryKey: ["albums"] });
+          queryClient.invalidateQueries({ queryKey: ["image"] });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await dialogs.alert({
+            title: "Could not add the photos to the album",
+            message: `${added.length.toLocaleString()} photo(s) were added to your library, but not to “${targetAlbum.name}”: ${message}\n\nYou can add them from the Library with “Add to…”.`,
+          });
+        }
+      }
+      const inAlbum = albumName ? ` and to “${albumName}”` : "";
       // A session outlives an import until the user ends it: what wasn't
       // added - and what of its card isn't copied yet - stays for another
       // day, and another card can join it. Whether it stays open now or
       // closes is asked each time (or remembered in Settings); closing goes
       // the same way as the Close session button, folder question included.
-      const choice = await askAfterCommit(added.length);
+      const choice = await askAfterCommit(added.length, albumName);
       const closing =
         choice === "close"
           ? await askToCloseSession(
@@ -414,7 +451,7 @@ export function ImportWizard() {
           : null;
       if (!closing) {
         setCommitNote(
-          `${added.length.toLocaleString()} photo(s) added to your library. This session stays open.`
+          `${added.length.toLocaleString()} photo(s) added to your library${inAlbum}. This session stays open.`
         );
         return;
       }
@@ -1373,6 +1410,11 @@ export function ImportWizard() {
             🔄 Immich full sync is on. Every imported photo is uploaded automatically.
           </span>
         )}
+        <ImportAlbumPicker
+          albumId={targetAlbum ? targetAlbum.id : null}
+          onChange={setTargetAlbumId}
+          disabled={commit.isPending}
+        />
         <button
           className="btn primary"
           onClick={handleCommitClick}
@@ -1477,6 +1519,7 @@ export function ImportWizard() {
         {afterCommitAsk && (
           <ImportAfterCommitDialog
             added={afterCommitAsk.added}
+            albumName={afterCommitAsk.albumName}
             collectionFolder={sessionFolder}
             onChoose={chooseAfterCommit}
             onClose={() => chooseAfterCommit("keep", false)}
