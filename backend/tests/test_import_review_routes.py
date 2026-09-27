@@ -180,3 +180,34 @@ def test_a_queued_review_render_is_not_queued_twice(dirs, monkeypatch, tmp_path)
     jobs[0]()  # the job ran: the file may be queued again afterwards
     import_pipeline._enqueue_review_derivatives(None, tmp_path / "src.jpg", "f1", thumb_dir, False)
     assert len(jobs) == 2
+
+
+# --- the lightbox's info panel ------------------------------------------------
+
+
+def test_the_review_list_carries_the_camera_settings(db, dirs):
+    from app.services.exif import ExifData
+
+    session = _session(db)
+    row = _staged(db, session, "A.JPG")
+    row.exif_json = ExifData(
+        camera_make="FUJIFILM",
+        camera_model="X-T5",
+        lens_model="XF33mmF1.4 R LM WR",
+        iso=400,
+        aperture=2.8,
+        shutter_speed="0.004",
+        focal_length=33.0,
+    ).to_json()
+    db.commit()
+
+    out = routes._to_staged_file_out(row)
+    assert (out.camera_model, out.lens_model, out.iso) == ("X-T5", "XF33mmF1.4 R LM WR", 400)
+    assert (out.aperture, out.shutter_speed, out.focal_length) == (2.8, "0.004", 33.0)
+
+
+def test_a_row_analysed_before_the_panel_has_no_settings_but_still_lists(db, dirs):
+    session = _session(db)
+    row = _staged(db, session, "A.JPG")  # exif_json "{}"
+    out = routes._to_staged_file_out(row)
+    assert (out.lens_model, out.iso, out.aperture, out.shutter_speed) == (None, None, None, None)

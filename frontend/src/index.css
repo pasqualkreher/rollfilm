@@ -8600,6 +8600,9 @@ button.smart-card {
 .lightbox-overlay--page {
   background: var(--bg);
   padding: 0;
+  /* The collapsed camera-settings panel slides out past the right edge (see
+     .detail-panel--collapsed); clip it here like .detail-page does. */
+  overflow: hidden;
 }
 
 .lightbox-detail-layout {

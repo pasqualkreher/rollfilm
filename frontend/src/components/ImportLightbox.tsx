@@ -7,10 +7,11 @@ import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
 import { flaggedDuplicate } from "./ImportReviewGrid";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconImage } from "./Icons";
+import { ExifTable } from "./ExifTable";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
-import { useStageBg } from "../state/viewPrefs";
+import { setImportInfoPanelOpen, useImportInfoPanelOpen, useStageBg } from "../state/viewPrefs";
 
 interface Props {
   sessionId: string;
@@ -72,6 +73,9 @@ export function ImportLightbox({
   // Light / mid grey / black surround - the same shared preference (and the
   // same control) as the library photo view and the editor.
   const bgMode = useStageBg();
+  // The camera-settings panel right of the photo (I, or the Info button).
+  // Closed until opened, then remembered like the library's side panel.
+  const infoOpen = useImportInfoPanelOpen();
   // Scroll/pinch zoom, drag pan, fit sizing - the same hook the library photo
   // view uses, so culling an import inspects photos exactly like browsing the
   // library does. The editor is deliberately NOT here: import review rates and
@@ -131,12 +135,14 @@ export function ImportLightbox({
         // are already in the library and can't be re-imported).
         e.preventDefault();
         if (!duplicate) onUpdate(file!.id, { selected: !file!.selected });
+      } else if (!inControl && (e.key === "i" || e.key === "I") && !e.metaKey && !e.ctrlKey) {
+        setImportInfoPanelOpen(!infoOpen);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, files.length, onIndexChange, onClose, onUpdate, file, zoom.zoomed, closing]);
+  }, [index, files.length, onIndexChange, onClose, onUpdate, file, zoom.zoomed, closing, infoOpen]);
 
   // Hold the 10 previous and 10 next staged previews pinned in memory while
   // this one is on screen (same sliding window as the library lightbox) -
@@ -176,8 +182,9 @@ export function ImportLightbox({
   return (
     // Styled like the library's photo view (opaque app surface, the same
     // elevated image box with the light/black background toggle and the Back
-    // button in the stage toolbar) - just without the library's info panel;
-    // the review controls bar below stays.
+    // button in the stage toolbar). Instead of the library's side panel there
+    // is an optional camera-settings panel in the same rail; the review
+    // controls bar above the photo stays.
     <div className={`lightbox-overlay lightbox-overlay--page${closing ? " pm-closing" : ""}`} onClick={onClose}>
       <div className="detail-layout lightbox-detail-layout" onClick={(e) => e.stopPropagation()}>
         <div className="detail-main">
@@ -200,7 +207,7 @@ export function ImportLightbox({
                 {index + 1} / {files.length}
               </span>
               <span className="lightbox-counter" title="Keyboard shortcuts">
-                0-5 rate · Space import · ←/→ navigate
+                0-5 rate · Space import · ←/→ navigate · I info
               </span>
             </div>
             <div className="lightbox-controls-actions">
@@ -346,6 +353,27 @@ export function ImportLightbox({
             </button>
             <StageBackgroundToggle />
             <ZoomReadout zoom={zoom} />
+            <span className="stage-end">
+              <button
+                className="btn btn-sm detail-panel-toggle"
+                onClick={() => setImportInfoPanelOpen(!infoOpen)}
+                title={infoOpen ? "Hide the camera settings (I)" : "Show the camera settings (I)"}
+                aria-label={infoOpen ? "Hide the camera settings" : "Show the camera settings"}
+                aria-expanded={infoOpen}
+                aria-controls="import-info-panel"
+              >
+                Info {infoOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
+              </button>
+            </span>
+          </div>
+        </div>
+        {/* Same rail as the library's side panel (width, slide, chrome), kept
+            mounted so opening it doesn't wait on anything. The settings come
+            from the analysis; until it has run the rows read "—". */}
+        <div id="import-info-panel" className={`detail-panel${infoOpen ? "" : " detail-panel--collapsed"}`}>
+          <div className="detail-section">
+            <div className="detail-section-label">Camera settings</div>
+            <ExifTable image={file} />
           </div>
         </div>
       </div>

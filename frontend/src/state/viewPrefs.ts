@@ -54,6 +54,10 @@ const ASK_SAVE_COPY_KEY = "pm.askSaveCopyOptions";
 // Stored inverted (only the closed state is written) so the default stays open
 // for anyone who has never touched it.
 const DETAIL_PANEL_KEY = "pm.detailPanel";
+// The import review lightbox's camera-settings panel. Its own preference, and
+// closed until opened: the review is about deciding fast, the settings are
+// there for whoever wants them.
+const IMPORT_INFO_PANEL_KEY = "pm.importInfoPanel";
 // How long the slideshow rests on each photo before moving on. A preference,
 // not per-run state: the pace that suits someone's photos suits their next
 // slideshow too, so the picker in the slideshow's control bar writes it here.
@@ -126,6 +130,10 @@ function readAskSaveCopyOptions(): boolean {
 
 function readDetailPanel(): boolean {
   return localStorage.getItem(DETAIL_PANEL_KEY) !== "0";
+}
+
+function readImportInfoPanel(): boolean {
+  return localStorage.getItem(IMPORT_INFO_PANEL_KEY) === "1";
 }
 
 function readSlideshowSeconds(): SlideshowSeconds {
@@ -205,6 +213,11 @@ export function setDetailPanelOpen(on: boolean) {
   emit();
 }
 
+export function setImportInfoPanelOpen(on: boolean) {
+  localStorage.setItem(IMPORT_INFO_PANEL_KEY, on ? "1" : "0");
+  emit();
+}
+
 export function setStageBg(bg: StageBg) {
   localStorage.setItem(STAGE_BG_KEY, bg);
   emit();
@@ -237,6 +250,10 @@ export function useAskSaveCopyOptions(): boolean {
 
 export function useDetailPanelOpen(): boolean {
   return useSyncExternalStore(subscribe, readDetailPanel, () => true);
+}
+
+export function useImportInfoPanelOpen(): boolean {
+  return useSyncExternalStore(subscribe, readImportInfoPanel, () => false);
 }
 
 export function useStageBg(): StageBg {

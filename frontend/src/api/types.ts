@@ -500,6 +500,15 @@ export interface StagedFileOut {
   camera_model: string | null;
   width: number | null;
   height: number | null;
+  // Camera settings from the analysis' EXIF record (the lightbox's info
+  // panel); null before analysis or where the file lacks them.
+  lens_model: string | null;
+  iso: number | null;
+  aperture: number | null;
+  shutter_speed: string | null;
+  focal_length: number | null;
+  gps_lat: number | null;
+  gps_lon: number | null;
   immich_sync: boolean;
   // Added to the library by an earlier partial import of this session - it
   // now reads as "already in library" (duplicate_of_image_id is that photo).

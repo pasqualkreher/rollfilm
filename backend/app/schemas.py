@@ -631,6 +631,15 @@ class StagedFileOut(BaseModel):
     camera_model: str | None
     width: int | None
     height: int | None
+    # The camera settings, for the review lightbox's info panel. All from the
+    # analysis' EXIF record; None before it ran or where the file lacks them.
+    lens_model: str | None = None
+    iso: int | None = None
+    aperture: float | None = None
+    shutter_speed: str | None = None
+    focal_length: float | None = None
+    gps_lat: float | None = None
+    gps_lon: float | None = None
     # Flagged for selective Immich sync during import review.
     immich_sync: bool = False
     # Imported by an earlier partial import of this still-open session - it

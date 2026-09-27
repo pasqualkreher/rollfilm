@@ -38,7 +38,8 @@ import { StageBackgroundToggle } from "../components/StageBackgroundToggle";
 // decoded previews on an 8GB laptop - while the import lightbox already
 // scaled its window with RAM; both share the one tiered constant now.
 import { rememberLastViewedImage } from "../utils/lastViewed";
-import { formatShutterSpeed, splitFilename } from "../utils/photoMeta";
+import { splitFilename } from "../utils/photoMeta";
+import { ExifTable } from "../components/ExifTable";
 import { useTransientMessage } from "../utils/transientMessage";
 import { errorText } from "../utils/apiError";
 import type { ColorLabel, ImageOut } from "../api/types";
@@ -1175,46 +1176,7 @@ export function ImageDetail() {
 
           <div className="detail-section">
             <div className="detail-section-label">Info</div>
-          <table className="exif-table">
-            <tbody>
-              <tr>
-                <td>Taken</td>
-                <td>{image.taken_at ? new Date(image.taken_at).toLocaleString() : "—"}</td>
-              </tr>
-              <tr>
-                <td>Camera</td>
-                <td>
-                  {image.camera_make} {image.camera_model}
-                </td>
-              </tr>
-              <tr>
-                <td>Lens</td>
-                <td>{image.lens_model ?? "—"}</td>
-              </tr>
-              <tr>
-                <td>Dimensions</td>
-                <td>
-                  {image.width}×{image.height}
-                </td>
-              </tr>
-              <tr>
-                <td>ISO</td>
-                <td>{image.iso ?? "—"}</td>
-              </tr>
-              <tr>
-                <td>Aperture</td>
-                <td>{image.aperture ? `f/${image.aperture}` : "—"}</td>
-              </tr>
-              <tr>
-                <td>Shutter</td>
-                <td>{formatShutterSpeed(image.shutter_speed)}</td>
-              </tr>
-              <tr>
-                <td>Focal length</td>
-                <td>{image.focal_length ? `${image.focal_length}mm` : "—"}</td>
-              </tr>
-            </tbody>
-          </table>
+            <ExifTable image={image} />
 
             <button
               className="btn"
