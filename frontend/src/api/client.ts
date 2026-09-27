@@ -1092,12 +1092,21 @@ export const api = {
         body: JSON.stringify({ file_ids: fileIds, ...patch }),
       });
     },
-    commit(id: string, uploadToImmich = false, syncAllToImmich = false): Promise<ImageOut[]> {
+    // keepSessionOpen leaves the session open even when nothing is left in
+    // it - the review asks the user afterwards; closing then goes through
+    // discard(), which knows the keep-the-folder question.
+    commit(
+      id: string,
+      uploadToImmich = false,
+      syncAllToImmich = false,
+      keepSessionOpen = false
+    ): Promise<ImageOut[]> {
       return request(`/import/sessions/${id}/commit`, {
         method: "POST",
         body: JSON.stringify({
           upload_to_immich: uploadToImmich,
           sync_all_to_immich: syncAllToImmich,
+          keep_session_open: keepSessionOpen,
         }),
       });
     },
@@ -1238,12 +1247,14 @@ export const api = {
       return request(`/settings/raw`);
     },
     // Whether the Import page asks each time if photos are copied into the
-    // library or left where they are, or remembers one answer.
+    // library or left where they are, and whether the review asks after an
+    // import if the session stays open - or remembers an answer to either.
     getImport(): Promise<ImportSettings> {
       return request(`/settings/import`);
     },
-    updateImport(mode_default: ImportSettings["mode_default"]): Promise<ImportSettings> {
-      return request(`/settings/import`, { method: "PUT", body: JSON.stringify({ mode_default }) });
+    // Partial: only the fields sent change.
+    updateImport(patch: Partial<ImportSettings>): Promise<ImportSettings> {
+      return request(`/settings/import`, { method: "PUT", body: JSON.stringify(patch) });
     },
     updateRawDecode(native_decode: boolean): Promise<RawDecodeSettings> {
       return request(`/settings/raw`, { method: "PUT", body: JSON.stringify({ native_decode }) });

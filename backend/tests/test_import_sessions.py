@@ -191,6 +191,26 @@ def test_the_session_closes_once_nothing_is_left(db, dirs):
     assert not (settings.import_staging_root / session.id).exists()
 
 
+def test_a_commit_can_keep_an_exhausted_session_open(db, dirs):
+    """The review asks the user afterwards whether the session stays; the
+    commit itself must then leave it - and its files - alone."""
+    session = _session(db)
+    _staged(db, session, "A.JPG", selected=True)
+    _staged(db, session, "B.JPG", selected=True)
+
+    images = import_pipeline.commit_import_session(db, session, 1, keep_open=True)
+
+    assert len(images) == 2
+    db.refresh(session)
+    assert session.status == ImportSessionStatus.staging
+    assert (settings.import_staging_root / session.id).exists()
+    # Closing is the user's call, through the usual discard.
+    import_pipeline.discard_import_session(db, session)
+    db.refresh(session)
+    assert session.status == ImportSessionStatus.discarded
+    assert not (settings.import_staging_root / session.id).exists()
+
+
 def test_a_session_with_photos_still_on_a_source_stays_open(db, dirs, tmp_path):
     session = _session(db)
     source = _source(db, session, _card(tmp_path), file_count=3)

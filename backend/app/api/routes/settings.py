@@ -22,6 +22,7 @@ from app.services.settings_store import (
     IMMICH_MODES,
     IMMICH_SYNC_MODE,
     IMMICH_SYNC_PAUSED,
+    IMPORT_AFTER_COMMIT,
     IMPORT_MODE_DEFAULT,
     RAW_NATIVE_DECODE,
     SMART_ALBUM_PLACE_RADIUS_KM,
@@ -34,6 +35,7 @@ from app.services.settings_store import (
     get_immich_include_raw,
     get_immich_sync_mode,
     get_immich_sync_paused,
+    get_import_after_commit,
     get_import_mode_default,
     get_raw_native_decode,
     get_setting,
@@ -170,7 +172,9 @@ def update_immich_settings(
 def get_import_settings(
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
-    return schemas.ImportSettingsOut(mode_default=get_import_mode_default(db))
+    return schemas.ImportSettingsOut(
+        mode_default=get_import_mode_default(db), after_commit=get_import_after_commit(db)
+    )
 
 
 @router.put("/import", response_model=schemas.ImportSettingsOut)
@@ -180,11 +184,18 @@ def update_import_settings(
     current_user: User = Depends(get_current_user),
 ):
     """Whether the Import page asks, each time photos are picked, if they are
-    copied into the library or left where they are - or remembers one answer
-    ("don't ask again" in that dialog lands here)."""
-    set_setting(db, IMPORT_MODE_DEFAULT, payload.mode_default)
+    copied into the library or left where they are - and whether the review
+    asks, after photos were added, if the session stays open. Either answer
+    can be remembered ("don't ask again" in those dialogs lands here); only
+    the fields sent change."""
+    if payload.mode_default is not None:
+        set_setting(db, IMPORT_MODE_DEFAULT, payload.mode_default)
+    if payload.after_commit is not None:
+        set_setting(db, IMPORT_AFTER_COMMIT, payload.after_commit)
     db.commit()
-    return schemas.ImportSettingsOut(mode_default=payload.mode_default)
+    return schemas.ImportSettingsOut(
+        mode_default=get_import_mode_default(db), after_commit=get_import_after_commit(db)
+    )
 
 
 @router.get("/raw", response_model=schemas.RawDecodeSettingsOut)

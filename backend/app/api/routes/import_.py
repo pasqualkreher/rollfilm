@@ -1027,6 +1027,7 @@ def commit_session(
         current_user.id,
         payload.upload_to_immich,
         sync_all_to_immich=payload.sync_all_to_immich,
+        keep_open=payload.keep_session_open,
     )
     # New photos landed in the library - schedule an incremental Borg backup
     # (debounced; a no-op unless the user configured one in Settings).

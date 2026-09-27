@@ -718,9 +718,8 @@ export function Settings() {
     queryKey: ["import-settings"],
     queryFn: () => api.settings.getImport(),
   });
-  const setImportMode = useMutation({
-    mutationFn: (mode_default: ImportSettings["mode_default"]) =>
-      api.settings.updateImport(mode_default),
+  const updateImportSettings = useMutation({
+    mutationFn: (patch: Partial<ImportSettings>) => api.settings.updateImport(patch),
     onSuccess: (result) => queryClient.setQueryData(["import-settings"], result),
   });
 
@@ -894,8 +893,44 @@ export function Settings() {
                 name="import-mode"
                 checked={(importSettings?.mode_default ?? "ask") === value}
                 disabled={!importSettings}
-                busy={setImportMode.isPending}
-                onChange={() => setImportMode.mutate(value)}
+                busy={updateImportSettings.isPending}
+                onChange={() => updateImportSettings.mutate({ mode_default: value })}
+                title={title}
+                desc={desc}
+              />
+            ))}
+          </div>
+          <div className="settings-subgroup">
+            <h4 className="settings-subhead">After adding photos to the library</h4>
+            <Desc>
+              An import session lives until you close it: the photos you didn't add stay in it,
+              and you can add more of the card, or another card, later. After each "Add to
+              library" the review asks whether the session stays open, unless an answer is
+              remembered here.
+            </Desc>
+            {(
+              [
+                ["ask", "Ask every time", "A dialog asks after the photos are in."],
+                [
+                  "keep",
+                  "Always keep the session open",
+                  "The session stays listed on the Import page until you close it yourself.",
+                ],
+                [
+                  "close",
+                  "Always close the session",
+                  "The session ends after each import. A collection folder still asks whether to keep it.",
+                ],
+              ] as const
+            ).map(([value, title, desc]) => (
+              <OptionRow
+                key={value}
+                type="radio"
+                name="import-after-commit"
+                checked={(importSettings?.after_commit ?? "ask") === value}
+                disabled={!importSettings}
+                busy={updateImportSettings.isPending}
+                onChange={() => updateImportSettings.mutate({ after_commit: value })}
                 title={title}
                 desc={desc}
               />

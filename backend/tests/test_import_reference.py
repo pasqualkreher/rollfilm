@@ -480,6 +480,34 @@ def test_closing_a_copy_session_can_keep_its_collection_folder(db, dirs, monkeyp
     assert not (settings.import_staging_root / session.id).exists()
 
 
+def test_a_copy_session_kept_open_after_its_last_commit_keeps_its_folder(db, dirs, monkeypatch):
+    card = _folder(dirs, "card")
+    monkeypatch.setattr(routes, "_free_disk_bytes", lambda *a: 10**15)
+
+    session = routes.stage_local_paths(
+        schemas.StagePathsRequest(paths=[str(card / "A.JPG")], source_label="DCIM", mode="copy"),
+        db,
+        _User(),
+    )
+    folder = Path(session.staging_dir)
+    [row] = db.query(ImportStagedFile).all()
+    row.processed = True
+    row.exif_json = '{"taken_at": "2026-07-01T12:00:00+00:00"}'
+    db.commit()
+
+    session_row = db.get(ImportSession, session.id)
+    [image] = import_pipeline.commit_import_session(db, session_row, 1, keep_open=True)
+    assert image.file_path == "2026/2026-07-01/A.JPG"
+    db.refresh(session_row)
+    # Nothing left to import, but the user has not closed it: the session and
+    # its (now empty) collection folder stay until they decide.
+    assert session_row.status == ImportSessionStatus.staging
+    assert folder.exists()
+    assert (settings.import_staging_root / session.id).exists()
+    routes.discard_session(session.id, keep_folder=False, db=db, current_user=_User())
+    assert not folder.exists()
+
+
 def test_a_missing_collection_base_is_refused(db, dirs):
     card = _folder(dirs, "card")
     with pytest.raises(routes.HTTPException) as refused:

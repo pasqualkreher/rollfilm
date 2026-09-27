@@ -100,9 +100,14 @@ export interface ImportChoice {
   name: string;
 }
 
+export type ImportAfterCommit = "ask" | "keep" | "close";
+
 export interface ImportSettings {
   // "ask" = the Import page asks each time; otherwise the remembered answer.
   mode_default: "ask" | ImportMode;
+  // After photos were added to the library: ask whether the session stays
+  // open, or always keep / always close it.
+  after_commit: ImportAfterCommit;
 }
 
 export interface AutoDevelopSettings {

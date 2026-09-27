@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type {
   ColorLabel,
+  ImportAfterCommit,
   ImportChoice,
   ImportSessionSummary,
   StagedFileOut,
@@ -16,6 +17,7 @@ import { ExternalSources } from "../components/ExternalSources";
 import { ImportLibrary } from "../components/ImportLibrary";
 import { ImportSessions, askToCloseSession } from "../components/ImportSessions";
 import { ImportModeDialog } from "../components/ImportModeDialog";
+import { ImportAfterCommitDialog } from "../components/ImportAfterCommitDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
@@ -335,6 +337,37 @@ export function ImportWizard() {
     },
   });
 
+  // The remembered answers to the two questions the Import page asks: copy
+  // or leave in place when photos are picked (askImportMode below), and keep
+  // or close the session after photos were added (askAfterCommit).
+  const { data: importSettings } = useQuery({
+    queryKey: ["import-settings"],
+    queryFn: () => api.settings.getImport(),
+  });
+  // The keep-or-close question after an import, as a promise the review
+  // renders. Backing out counts as keeping the session: nothing is lost.
+  const [afterCommitAsk, setAfterCommitAsk] = useState<{
+    added: number;
+    resolve: (choice: Exclude<ImportAfterCommit, "ask">) => void;
+  } | null>(null);
+
+  function askAfterCommit(added: number): Promise<Exclude<ImportAfterCommit, "ask">> {
+    const remembered = importSettings?.after_commit;
+    if (remembered === "keep" || remembered === "close") return Promise.resolve(remembered);
+    return new Promise((resolve) => setAfterCommitAsk({ added, resolve }));
+  }
+
+  function chooseAfterCommit(choice: Exclude<ImportAfterCommit, "ask">, remember: boolean) {
+    afterCommitAsk?.resolve(choice);
+    setAfterCommitAsk(null);
+    if (remember) {
+      api.settings
+        .updateImport({ after_commit: choice })
+        .then((saved) => queryClient.setQueryData(["import-settings"], saved))
+        .catch(() => {});
+    }
+  }
+
   const commit = useMutation({
     // Blocking wait overlay, like saving or resetting edits and like Discard:
     // the commit moves every selected photo into the library and there is
@@ -345,7 +378,10 @@ export function ImportWizard() {
         api.import.commit(
           sessionId!,
           uploadToImmich && immichConfigured,
-          syncAllToImmich && immichConfigured && immichMode === "selective"
+          syncAllToImmich && immichConfigured && immichMode === "selective",
+          // The server leaves the session open even when nothing is left in
+          // it: whether it lives on is the user's call, asked below.
+          true
         )
       ),
     onSuccess: async (added) => {
@@ -359,24 +395,32 @@ export function ImportWizard() {
       // Trashing or restoring photos changes which tags live photos carry.
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
-      // A session outlives a partial import: what wasn't added - and what of
-      // its card isn't copied yet - stays for another day, so the review stays
-      // on it. Only a session with nothing left in it closes.
-      const after = await api.import.get(sessionId!).catch(() => null);
-      if (after?.status === "staging") {
-        queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+      queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+      // A session outlives an import until the user ends it: what wasn't
+      // added - and what of its card isn't copied yet - stays for another
+      // day, and another card can join it. Whether it stays open now or
+      // closes is asked each time (or remembered in Settings); closing goes
+      // the same way as the Close session button, folder question included.
+      const choice = await askAfterCommit(added.length);
+      const closing =
+        choice === "close"
+          ? await askToCloseSession(
+              dialogs,
+              sourceLabel,
+              importedCount + added.length,
+              sessionFolder,
+              false
+            )
+          : null;
+      if (!closing) {
         setCommitNote(
-          `${added.length.toLocaleString()} photo(s) added to your library. The rest stays in this session.`
+          `${added.length.toLocaleString()} photo(s) added to your library. This session stays open.`
         );
         return;
       }
-      // Without this, the session tracked in context (see state/importSession)
-      // stays set after a successful commit, so revisiting /import re-opens
-      // this same now-committed session - and Discard then 400s because it's
-      // no longer in "staging" status, leaving no way back to a fresh import.
-      if (sessionId) clearReviewState(sessionId);
-      endedSession.current = sessionId;
-      reset();
+      // discard resets the review either way (see onSettled); the library is
+      // where the photos just went, so land there like a finished import.
+      await discard.mutateAsync(closing.keepFolder).catch(() => {});
       navigate("/");
     },
     // A failed commit used to be completely invisible (no state change, no
@@ -865,10 +909,6 @@ export function ImportWizard() {
   // fresh import (appends follow the session's mode), unless Settings remember
   // an answer. The dialog is a promise the choose screen renders; it resolves
   // null when the user cancels, and nothing is read then.
-  const { data: importSettings } = useQuery({
-    queryKey: ["import-settings"],
-    queryFn: () => api.settings.getImport(),
-  });
   const [modeAsk, setModeAsk] = useState<{
     defaultName: string;
     resolve: (choice: ImportChoice | null) => void;
@@ -893,7 +933,7 @@ export function ImportWizard() {
     setModeAsk(null);
     if (remember) {
       api.settings
-        .updateImport(choice.mode)
+        .updateImport({ mode_default: choice.mode })
         .then((saved) => queryClient.setQueryData(["import-settings"], saved))
         .catch(() => {});
     }
@@ -1430,6 +1470,17 @@ export function ImportWizard() {
         />
       )}
       </div>
+
+      <Presence open={afterCommitAsk !== null} ms={MOTION.modal}>
+        {afterCommitAsk && (
+          <ImportAfterCommitDialog
+            added={afterCommitAsk.added}
+            collectionFolder={sessionFolder}
+            onChoose={chooseAfterCommit}
+            onClose={() => chooseAfterCommit("keep", false)}
+          />
+        )}
+      </Presence>
 
       <Presence open={lightboxIndex !== null} ms={MOTION.overlay}>
         {lightboxIndex !== null && (

@@ -1344,6 +1344,7 @@ def commit_import_session(
     owner_id: int,
     upload_to_immich: bool = False,
     sync_all_to_immich: bool = False,
+    keep_open: bool = False,
 ) -> list[Image]:
     # Leaving photos in place: nothing moves, each chosen file becomes a row
     # at its own absolute path under a source root for its folder.
@@ -1701,8 +1702,11 @@ def commit_import_session(
     # A session lives until nothing is left in it: a card culled a hundred
     # photos a day stays open with the rest - including whatever of it hasn't
     # been copied yet. Only once every file is in the library (or can't be
-    # imported) and the source has nothing more does it close like before.
-    session_done = session_is_exhausted(session)
+    # imported) and the source has nothing more does it close like before -
+    # unless the caller keeps it open: the review then asks the user whether
+    # the session stays, and closing goes through discard_import_session,
+    # which knows the keep-the-folder question.
+    session_done = not keep_open and session_is_exhausted(session)
     session.updated_at = datetime.now(timezone.utc)
     if session_done:
         session.status = ImportSessionStatus.committed

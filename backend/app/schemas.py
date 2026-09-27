@@ -761,6 +761,12 @@ class CommitImportRequest(BaseModel):
     # action-bar checkbox); individual photos can instead be flagged one by
     # one during review (StagedFileUpdate.immich_sync).
     sync_all_to_immich: bool = False
+    # Leave the session open even when nothing is left in it to import. The
+    # review asks the user afterwards whether the session stays or closes;
+    # closing then goes through DELETE /sessions/{id}, which knows the
+    # keep-the-folder question. Off = the session closes by itself once it is
+    # exhausted (its collection folder goes with it, unasked).
+    keep_session_open: bool = False
 
 
 class ImportProgressOut(BaseModel):
@@ -819,10 +825,15 @@ class ImportSettingsOut(BaseModel):
     # to copy them into the library or leave them where they are, or go with
     # one of the two without asking.
     mode_default: Literal["ask", "copy", "reference"]
+    # What happens to a session after photos were added to the library: "ask"
+    # each time whether it stays open, or always keep it / always close it.
+    after_commit: Literal["ask", "keep", "close"]
 
 
 class ImportSettingsUpdate(BaseModel):
-    mode_default: Literal["ask", "copy", "reference"]
+    # Partial: only the fields sent are changed.
+    mode_default: Literal["ask", "copy", "reference"] | None = None
+    after_commit: Literal["ask", "keep", "close"] | None = None
 
 
 class TrashSettingsOut(BaseModel):

@@ -61,6 +61,11 @@ RAW_NATIVE_DECODE = "raw_native_decode"
 # first staging request; the backend never reads this key for itself.
 IMPORT_MODE_DEFAULT = "import_mode_default"
 IMPORT_MODE_DEFAULTS = ("ask", "copy", "reference")
+# What the review does with a session after "Add to library": "ask" each time
+# whether it stays open, or always "keep" it open / always "close" it. Unset
+# counts as "ask". Like the mode default, only the client reads it.
+IMPORT_AFTER_COMMIT = "import_after_commit"
+IMPORT_AFTER_COMMIT_CHOICES = ("ask", "keep", "close")
 
 # "1" when the Auto develop button is shown in the editor. Off by default: the
 # suggestion only becomes useful once the user has saved a few edits, so it's
@@ -168,6 +173,11 @@ def get_raw_native_decode(db: Session) -> bool:
 def get_import_mode_default(db: Session) -> str:
     value = get_setting(db, IMPORT_MODE_DEFAULT)
     return value if value in IMPORT_MODE_DEFAULTS else "ask"
+
+
+def get_import_after_commit(db: Session) -> str:
+    value = get_setting(db, IMPORT_AFTER_COMMIT)
+    return value if value in IMPORT_AFTER_COMMIT_CHOICES else "ask"
 
 
 def get_auto_develop_enabled(db: Session) -> bool:

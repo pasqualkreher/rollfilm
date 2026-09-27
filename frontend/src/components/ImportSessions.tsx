@@ -20,12 +20,15 @@ function plural(n: number, one: string, many: string): string {
 // Closing a session ends it for good: what was added stays in the library, the
 // review goes. A copy session's collection folder is the user's call - kept
 // with the copies that weren't added, or deleted with them. Null when the user
-// backs out.
+// backs out. `confirmClose` false skips the "close?" confirmation itself (the
+// user just chose to close, right after an import) and asks only about the
+// folder, if there is one.
 export async function askToCloseSession(
   dialogs: ReturnType<typeof useAppDialogs>,
   label: string,
   importedCount: number,
-  collectionFolder: string | null
+  collectionFolder: string | null,
+  confirmClose = true
 ): Promise<{ keepFolder: boolean } | null> {
   const title = `Close the session “${label}”?`;
   const added =
@@ -33,6 +36,7 @@ export async function askToCloseSession(
       ? `The ${plural(importedCount, "photo", "photos")} you added stay in your library. `
       : "Nothing was added to your library. ";
   if (!collectionFolder) {
+    if (!confirmClose) return { keepFolder: false };
     const ok = await dialogs.confirm({
       title,
       message: added + "Your original files are not touched.",
