@@ -90,6 +90,25 @@ interface ImportSessionState {
 
 const ImportSessionContext = createContext<ImportSessionState | null>(null);
 
+// Individually picked files arrive in whatever order the OS dialog hands them
+// over (click order, not name order), so staged as-is they landed in the
+// review out of capture order and jumped to their day one by one as their
+// analysis came in. Staging them in the order the folder scan uses - by
+// folder, then by file name, plain code-point comparison like Python's
+// sorted() - makes them append at the bottom exactly like a folder import.
+function inFolderScanOrder<T extends { path: string }>(files: T[]): T[] {
+  const split = (p: string) => {
+    const cut = p.lastIndexOf("/");
+    return [p.slice(0, cut), p.slice(cut + 1)] as const;
+  };
+  const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  return [...files].sort((a, b) => {
+    const [da, na] = split(a.path);
+    const [db, nb] = split(b.path);
+    return cmp(da, db) || cmp(na, nb);
+  });
+}
+
 /**
  * Lives above <Routes> in App.tsx so it survives switching nav tabs mid-upload
  * (e.g. clicking "Library" while an SD card is still uploading). The browser
@@ -211,7 +230,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     label: string,
     choice?: ImportChoice
   ) {
-    runPathsImport(choice?.name || label, async () => files, { choice });
+    const ordered = inFolderScanOrder(files);
+    runPathsImport(choice?.name || label, async () => ordered, { choice });
   }
 
   // `opts.sessionId` continues an existing session (appending to it) instead
@@ -515,7 +535,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     const id = activeSessionRef.current;
     if (!id || abortRef.current || files.length === 0) return;
     setSourceNotice(null);
-    runPathsImport(`${files.length} selected files`, async () => files, { sessionId: id });
+    const ordered = inFolderScanOrder(files);
+    runPathsImport(`${files.length} selected files`, async () => ordered, { sessionId: id });
   }
 
   function leaveSession() {
