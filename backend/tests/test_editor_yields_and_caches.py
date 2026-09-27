@@ -118,7 +118,8 @@ def test_the_render_pipeline_leaves_a_core_for_the_ui():
 
     cpu = thumbnails.os.cpu_count() or 2
     assert thumbnails._RENDER_THREADS == max(1, min(cpu - 1, machine.PERF_CORES))
-    assert thumbnails._TONE_BAND_WORKERS == max(1, min(4, cpu - 1))
+    # Within the render threads, so the performance-core cap holds here too.
+    assert thumbnails._TONE_BAND_WORKERS == max(1, min(4, thumbnails._RENDER_THREADS))
     thumbnails.cv2.getNumThreads  # forces the lazy import, which applies the cap
     if "GCD" not in thumbnails.cv2.getBuildInformation():
         # The GCD build (macOS wheel) ignores setNumThreads by design.
