@@ -600,23 +600,24 @@ export function ImageDetail() {
 
   const pixelsPending = imageStale || loadedId !== image.id;
 
-  // With "Merge RAW+JPG" on, rating/coloring/tagging the shown file also
-  // writes the partner - and we refresh its cached copy so the other tab reflects it.
+  // Rating/coloring/tagging the shown file also writes its RAW+JPEG partner
+  // (always - a pair shares them) - and we refresh the partner's cached copy
+  // so the other tab reflects it.
   function invalidateActiveAndPair() {
     queryClient.invalidateQueries({ queryKey: ["image", activeId] });
-    if (mergePairs && image!.paired_image_id) {
+    if (image!.paired_image_id) {
       queryClient.invalidateQueries({ queryKey: ["image", image!.paired_image_id] });
     }
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
   async function setRating(rating: number) {
-    await api.images.update(image!.id, { rating, apply_to_pair: mergePairs });
+    await api.images.update(image!.id, { rating });
     invalidateActiveAndPair();
   }
 
   async function setColor(color_label: ColorLabel) {
-    await api.images.update(image!.id, { color_label, apply_to_pair: mergePairs });
+    await api.images.update(image!.id, { color_label });
     invalidateActiveAndPair();
   }
 
@@ -668,9 +669,13 @@ export function ImageDetail() {
     setDescBusy(true);
     try {
       await api.images.update(image.id, { description: next });
-      // Only this photo's row: the library index doesn't carry the note, and
-      // invalidating ["images"] would refetch the whole library for nothing.
+      // Only this photo's row (and its RAW+JPEG partner's, which shares the
+      // note): the library index doesn't carry it, and invalidating
+      // ["images"] would refetch the whole library for nothing.
       queryClient.invalidateQueries({ queryKey: ["image", activeId] });
+      if (image.paired_image_id) {
+        queryClient.invalidateQueries({ queryKey: ["image", image.paired_image_id] });
+      }
       setDescNote(next ? "Notes saved." : "Notes cleared.");
     } catch (e) {
       setDescNote(errorText(e));
@@ -680,13 +685,13 @@ export function ImageDetail() {
   }
 
   async function addTag(name: string) {
-    await api.images.addTag(image!.id, name, mergePairs);
+    await api.images.addTag(image!.id, name);
     invalidateActiveAndPair();
     queryClient.invalidateQueries({ queryKey: ["tags"] });
   }
 
   async function removeTag(name: string) {
-    await api.images.removeTag(image!.id, name, mergePairs);
+    await api.images.removeTag(image!.id, name);
     invalidateActiveAndPair();
     queryClient.invalidateQueries({ queryKey: ["tags"] });
   }

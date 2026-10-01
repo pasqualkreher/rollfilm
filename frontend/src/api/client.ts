@@ -488,12 +488,10 @@ export const api = {
       }
       return res.blob();
     },
-    // applyToPair: with RAW+JPEG pairs merged, a tag goes onto both halves.
-    bulkAddTags(image_ids: string[], tag_names: string[], applyToPair = false): Promise<ImageOut[]> {
-      return request(`/images/bulk-tags`, {
-        method: "POST",
-        body: JSON.stringify({ image_ids, tag_names, apply_to_pair: applyToPair }),
-      });
+    // Like stars and colours, a tag always lands on a photo's RAW+JPEG
+    // partner too (the server does that).
+    bulkAddTags(image_ids: string[], tag_names: string[]): Promise<ImageOut[]> {
+      return request(`/images/bulk-tags`, { method: "POST", body: JSON.stringify({ image_ids, tag_names }) });
     },
     // Push already-imported library photos to Immich (only works when Immich is
     // configured in Settings). JPEGs upload; RAW/other files are skipped.
@@ -533,17 +531,11 @@ export const api = {
         body: JSON.stringify({ image_ids }),
       });
     },
-    addTag(id: string, name: string, applyToPair = false): Promise<ImageOut> {
-      return request(`/images/${id}/tags`, {
-        method: "POST",
-        body: JSON.stringify({ name, apply_to_pair: applyToPair }),
-      });
+    addTag(id: string, name: string): Promise<ImageOut> {
+      return request(`/images/${id}/tags`, { method: "POST", body: JSON.stringify({ name }) });
     },
-    removeTag(id: string, name: string, applyToPair = false): Promise<ImageOut> {
-      return request(
-        `/images/${id}/tags/${encodeURIComponent(name)}${applyToPair ? "?apply_to_pair=true" : ""}`,
-        { method: "DELETE" }
-      );
+    removeTag(id: string, name: string): Promise<ImageOut> {
+      return request(`/images/${id}/tags/${encodeURIComponent(name)}`, { method: "DELETE" });
     },
     similar(id: string, limit = 50): Promise<SearchResultOut[]> {
       return request(`/images/${id}/similar?limit=${limit}`);

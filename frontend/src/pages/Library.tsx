@@ -289,7 +289,7 @@ export function Library() {
     // When pairs are merged the grid only shows the JPEG, so fan the change out
     // to each hidden RAW partner too.
     await withWait(`Updating ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
-      api.images.bulkUpdate(Array.from(selected), { ...patch, apply_to_pair: mergePairs })
+      api.images.bulkUpdate(Array.from(selected), patch)
     );
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
@@ -325,7 +325,7 @@ export function Library() {
     if (selected.size === 0 || !name.trim()) return;
     const tag = name.trim();
     await withWait(`Tagging ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
-      api.images.bulkAddTags(Array.from(selected), [tag], mergePairs)
+      api.images.bulkAddTags(Array.from(selected), [tag])
     );
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });

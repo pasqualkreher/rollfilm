@@ -150,25 +150,82 @@ def _tag_names(db: Session, image_id: str) -> set[str]:
     return set(schemas.ImageOut.model_validate(db.get(Image, image_id)).tags)
 
 
-def test_tagging_a_merged_pair_tags_both_halves(pair):
+def test_tagging_one_half_of_a_pair_tags_both_files(pair):
     from app.api.routes.images import add_tag, bulk_add_tags, remove_tag
 
-    add_tag("jpg", schemas.AddTagRequest(name="beach", apply_to_pair=True), db=pair, current_user=_User())
+    add_tag("jpg", schemas.AddTagRequest(name="beach"), db=pair, current_user=_User())
     assert _tag_names(pair, "jpg") == {"beach"} and _tag_names(pair, "raw") == {"beach"}
     bulk_add_tags(
-        schemas.BulkTagRequest(image_ids=["raw"], tag_names=["sun"], apply_to_pair=True),
-        db=pair, current_user=_User(),
+        schemas.BulkTagRequest(image_ids=["raw"], tag_names=["sun"]), db=pair, current_user=_User()
     )
     assert _tag_names(pair, "jpg") == {"beach", "sun"}
-    remove_tag("raw", "beach", apply_to_pair=True, db=pair, current_user=_User())
+    remove_tag("raw", "beach", db=pair, current_user=_User())
     assert _tag_names(pair, "jpg") == {"sun"} and _tag_names(pair, "raw") == {"sun"}
 
 
-def test_tagging_one_half_alone_leaves_the_other_untouched(pair):
-    from app.api.routes.images import add_tag, remove_tag
+def test_a_photo_without_a_partner_is_tagged_and_rated_alone(pair):
+    from app.api.routes.images import add_tag, update_image
+
+    pair.add(_image("solo"))
+    pair.commit()
+    add_tag("solo", schemas.AddTagRequest(name="beach"), db=pair, current_user=_User())
+    update_image("solo", schemas.ImageUpdate(rating=3), db=pair, current_user=_User())
+    assert _tag_names(pair, "jpg") == set() and pair.get(Image, "raw").rating == 0
+
+
+def test_rating_one_half_rates_the_pair_without_being_asked_to(pair):
+    from app.api.routes.images import update_image
+
+    update_image("raw", schemas.ImageUpdate(rating=4, description="keeper"), db=pair, current_user=_User())
+    assert pair.get(Image, "jpg").rating == 4
+    assert pair.get(Image, "jpg").description == "keeper"
+
+
+def test_resetting_stars_and_tags_on_one_half_resets_the_pair(pair):
+    from app.api.routes.images import add_tag, bulk_reset_metadata, update_image
 
     add_tag("jpg", schemas.AddTagRequest(name="beach"), db=pair, current_user=_User())
-    assert _tag_names(pair, "jpg") == {"beach"} and _tag_names(pair, "raw") == set()
-    add_tag("raw", schemas.AddTagRequest(name="beach"), db=pair, current_user=_User())
-    remove_tag("raw", "beach", apply_to_pair=False, db=pair, current_user=_User())
-    assert _tag_names(pair, "jpg") == {"beach"} and _tag_names(pair, "raw") == set()
+    update_image("jpg", schemas.ImageUpdate(rating=5), db=pair, current_user=_User())
+    bulk_reset_metadata(schemas.BulkResetRequest(image_ids=["jpg"]), db=pair, current_user=_User())
+    assert pair.get(Image, "raw").rating == 0 and _tag_names(pair, "raw") == set()
+
+
+def test_the_migration_brings_pairs_that_disagree_in_line(pair):
+    import importlib.util
+    from pathlib import Path
+
+    from app.db.models import ColorLabel, ImageTag, Tag
+
+    path = next(
+        (Path(__file__).parents[1] / "app/db/migrations/versions").glob("*_pairs_share_rating_colour_tags_notes.py")
+    )
+    spec = importlib.util.spec_from_file_location("pair_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    pair.add(_image("solo", rating=2))
+    for name in ("beach", "sun", "edit"):
+        pair.add(Tag(owner_id=1, name=name))
+    pair.flush()
+    tag_id = {t.name: t.id for t in pair.query(Tag)}
+    pair.add_all([
+        ImageTag(image_id="jpg", tag_id=tag_id["beach"]),
+        ImageTag(image_id="raw", tag_id=tag_id["sun"]),
+        ImageTag(image_id="raw", tag_id=tag_id["edit"]),
+    ])
+    pair.get(Image, "jpg").rating = 4
+    pair.get(Image, "raw").color_label = ColorLabel.red
+    pair.get(Image, "raw").description = "print this one"
+    pair.commit()
+
+    migration.unify_pairs(pair.connection())
+    pair.commit()
+    pair.expire_all()
+
+    for half in ("jpg", "raw"):
+        assert pair.get(Image, half).rating == 4
+        assert pair.get(Image, half).color_label == ColorLabel.red
+        assert pair.get(Image, half).description == "print this one"
+    assert _tag_names(pair, "jpg") == {"beach", "sun"}
+    assert _tag_names(pair, "raw") == {"beach", "sun", "edit"}
+    assert pair.get(Image, "solo").rating == 2

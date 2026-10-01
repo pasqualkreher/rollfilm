@@ -81,8 +81,8 @@ class ImageUpdate(BaseModel):
     color_label: ColorLabel | None = None
     # Free-text note. "" clears it; omitted (null) leaves it alone.
     description: str | None = None
-    # When set, the same rating/color is also written to this image's RAW+JPEG
-    # partner - so rating the JPEG rates the RAW too.
+    # Ignored: a rating/color always goes onto the RAW+JPEG partner as well.
+    # Still accepted so an older renderer bundle's requests validate.
     apply_to_pair: bool = False
 
 
@@ -116,15 +116,11 @@ class TagUsage(BaseModel):
 
 class AddTagRequest(BaseModel):
     name: str
-    # See ImageUpdate.apply_to_pair - the tag also goes onto the RAW+JPEG partner.
-    apply_to_pair: bool = False
 
 
 class BulkTagRequest(BaseModel):
     image_ids: list[str]
     tag_names: list[str]
-    # See ImageUpdate.apply_to_pair - fans each tag out to RAW+JPEG partners.
-    apply_to_pair: bool = False
 
 
 class BulkResetRequest(BaseModel):
@@ -242,7 +238,7 @@ class BulkImageUpdate(BaseModel):
     image_ids: list[str]
     rating: int | None = None
     color_label: ColorLabel | None = None
-    # See ImageUpdate.apply_to_pair - fans each change out to RAW+JPEG partners.
+    # Ignored, see ImageUpdate.apply_to_pair.
     apply_to_pair: bool = False
 
 

@@ -267,7 +267,7 @@ export function useSlideshowSeconds(): SlideshowSeconds {
 // Collapse each RAW+JPEG pair down to a single representative card (the JPEG,
 // which is what everyone actually looks at). The RAW partner is dropped from the
 // list but the representative keeps `paired_image_id`, so it still shows the
-// "RAW+JPG" badge and rating it can fan out to the RAW (see apply_to_pair).
+// "RAW+JPG" badge (stars, colours, tags and notes are shared by a pair either way).
 export function collapsePairs(images: ImageOut[]): ImageOut[] {
   return collapsePairsBy(
     images,

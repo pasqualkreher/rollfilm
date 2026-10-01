@@ -201,7 +201,7 @@ export function AlbumDetail() {
     // With merged pairs only the JPEG is visible, so mirror the change to each
     // hidden RAW partner too.
     await withWait(`Updating ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
-      api.images.bulkUpdate(Array.from(selected), { ...patch, apply_to_pair: mergePairs })
+      api.images.bulkUpdate(Array.from(selected), patch)
     );
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
@@ -252,7 +252,7 @@ export function AlbumDetail() {
     if (selected.size === 0 || !name.trim()) return;
     const tag = name.trim();
     await withWait(`Tagging ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
-      api.images.bulkAddTags(Array.from(selected), [tag], mergePairs)
+      api.images.bulkAddTags(Array.from(selected), [tag])
     );
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });

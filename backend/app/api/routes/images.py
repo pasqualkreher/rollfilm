@@ -114,8 +114,11 @@ def _apply_to_pair(
     rating: int | None,
     color_label: ColorLabel | None,
 ) -> None:
-    """Mirror a rating/color change onto this image's RAW+JPEG partner, so users
-    can cull the merged pair by only touching the JPEG. No-op when the image has
+    """Mirror a rating/color change onto this image's RAW+JPEG partner: a pair
+    is one shot, so its stars, colour, tags and notes are always the same on both
+    files - whichever half was touched, and whether or not the view merges
+    pairs. (Clients used to opt in per request; the flag is still accepted
+    and ignored.) No-op when the image has
     no partner (or it isn't owned by the caller), and no-op across the Trash:
     while one half is deleted the pair is suspended everywhere else too, so
     rating the survivor must not reach into a photo the user threw away."""
@@ -784,8 +787,7 @@ def bulk_update_images(
             image.rating = update.rating
         if update.color_label is not None:
             image.color_label = update.color_label
-        if update.apply_to_pair:
-            _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
+        _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
     db.commit()
     for image in images:
         db.refresh(image)
@@ -1264,7 +1266,7 @@ def bulk_add_tags(
             raise HTTPException(status_code=400, detail=auto_tag_error(name))
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     for image in images:
-        partner = _pair_partner(db, current_user.id, image) if payload.apply_to_pair else None
+        partner = _pair_partner(db, current_user.id, image)
         for name in payload.tag_names:
             _add_tag_to_image(db, current_user.id, image, name)
             if partner is not None:
@@ -1289,6 +1291,16 @@ def bulk_reset_metadata(
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     image_ids = [image.id for image in images]
     before = {image.id: _edit_state(image) for image in images}
+    # Stars, colour and tags are shared by a RAW+JPEG pair (see _apply_to_pair),
+    # so resetting them on one half resets the other. Edits and album
+    # membership stay per file.
+    partners = [
+        partner
+        for image in images
+        if (partner := _pair_partner(db, current_user.id, image)) is not None
+        and partner.id not in before
+    ]
+    meta_ids = image_ids + [partner.id for partner in partners]
 
     if payload.tags:
         # Auto-managed tags describe what the photo is (an edit copy, a
@@ -1298,7 +1310,7 @@ def bulk_reset_metadata(
             t.id
             for t in db.query(Tag).filter(Tag.owner_id == current_user.id, auto_tag_criterion()).all()
         ]
-        query = db.query(ImageTag).filter(ImageTag.image_id.in_(image_ids))
+        query = db.query(ImageTag).filter(ImageTag.image_id.in_(meta_ids))
         if auto_ids:
             query = query.filter(ImageTag.tag_id.notin_(auto_ids))
         query.delete(synchronize_session=False)
@@ -1326,6 +1338,13 @@ def bulk_reset_metadata(
         # photo.
         if payload.develop or payload.geometry or payload.tags:
             _sync_edit_state(db, current_user.id, image, prune=False)
+    for partner in partners:
+        if payload.rating:
+            partner.rating = 0
+        if payload.color_label:
+            partner.color_label = ColorLabel.none
+        if payload.tags:
+            _sync_edit_state(db, current_user.id, partner, prune=False)
     if payload.develop or payload.geometry or payload.tags:
         prune_unused_tags(db, current_user.id)
 
@@ -1428,8 +1447,11 @@ def update_image(
         # "" means "cleared" - stored as NULL so an empty note and no note are
         # the same thing everywhere downstream.
         image.description = update.description.strip() or None
-    if update.apply_to_pair:
-        _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
+        # The notes are the shot's, like its stars and tags.
+        partner = _pair_partner(db, current_user.id, image)
+        if partner is not None:
+            partner.description = image.description
+    _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
     db.commit()
     db.refresh(image)
     return image
@@ -1623,10 +1645,9 @@ def add_tag(
     if is_auto_tag(payload.name):
         raise HTTPException(status_code=400, detail=auto_tag_error(payload.name))
     _add_tag_to_image(db, current_user.id, image, payload.name)
-    if payload.apply_to_pair:
-        partner = _pair_partner(db, current_user.id, image)
-        if partner is not None:
-            _add_tag_to_image(db, current_user.id, partner, payload.name)
+    partner = _pair_partner(db, current_user.id, image)
+    if partner is not None:
+        _add_tag_to_image(db, current_user.id, partner, payload.name)
     db.commit()
     db.refresh(image)
     return image
@@ -1638,7 +1659,6 @@ def remove_tag(
     tag_name: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    apply_to_pair: bool = False,
 ):
     image = get_owned_image(db, current_user.id, image_id)
     if is_auto_tag(tag_name):
@@ -1646,8 +1666,8 @@ def remove_tag(
     tag = db.query(Tag).filter(Tag.owner_id == current_user.id, Tag.name == tag_name).first()
     if tag:
         db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
-        # A merged RAW+JPEG pair is one shot: the tag comes off both halves.
-        partner = _pair_partner(db, current_user.id, image) if apply_to_pair else None
+        # A RAW+JPEG pair is one shot: the tag comes off both halves.
+        partner = _pair_partner(db, current_user.id, image)
         if partner is not None:
             db.query(ImageTag).filter(ImageTag.image_id == partner.id, ImageTag.tag_id == tag.id).delete()
         # A tag no photo carries any more disappears with its last photo.
