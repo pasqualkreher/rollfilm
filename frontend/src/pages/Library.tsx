@@ -3,6 +3,7 @@ import { Navigate, useSearchParams } from "react-router-dom";
 import { rememberLibraryFilters, rememberedLibraryFilters } from "../utils/libraryFilterMemory";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { CANCELLED_NOTE, pairUnits } from "../utils/batchUnits";
 import { withoutMembershipNames } from "../utils/autoTags";
 import { useAppDialogs } from "../components/AppDialogs";
 import type {
@@ -118,7 +119,7 @@ function LibraryPage() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
-  const { withWait } = useWait();
+  const { withBatches } = useWait();
   const selects = useSelects();
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
@@ -306,10 +307,13 @@ function LibraryPage() {
     if (selected.size === 0) return;
     // When pairs are merged the grid only shows the JPEG, so fan the change out
     // to each hidden RAW partner too.
-    await withWait(`Updating ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
-      api.images.bulkUpdate(Array.from(selected), patch)
-    );
-    queryClient.invalidateQueries({ queryKey: ["images"] });
+    try {
+      await withBatches("Updating photos…", Array.from(selected), (ids) =>
+        api.images.bulkUpdate(ids, patch)
+      );
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+    }
   }
 
   async function deleteSelected() {
@@ -329,25 +333,35 @@ function LibraryPage() {
       partnerItems: toItems(partnerIds),
     });
     if (!ids) return;
-    await withWait(`Moving ${ids.length} photo${ids.length === 1 ? "" : "s"} to trash…`, () =>
-      api.images.bulkDelete(ids)
-    );
-    clearSelection();
-    queryClient.invalidateQueries({ queryKey: ["images"] });
-    queryClient.invalidateQueries({ queryKey: ["trash"] });
-    // Trashing or restoring photos changes which tags live photos carry.
-    queryClient.invalidateQueries({ queryKey: ["tags"] });
+    try {
+      const { done, cancelled } = await withBatches(
+        "Moving photos to trash…",
+        pairUnits(ids, (x) => byId.get(x)?.paired_image_id),
+        (slice) => api.images.bulkDelete(slice)
+      );
+      // Cancelled: what is still in the grid stays selected.
+      if (cancelled) setSelected(new Set(baseIds.filter((x) => !done.includes(x))));
+      else clearSelection();
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["trash"] });
+      // Trashing or restoring photos changes which tags live photos carry.
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+    }
   }
 
   async function addTagToSelected(name: string) {
     if (selected.size === 0 || !name.trim()) return;
     const tag = name.trim();
-    await withWait(`Tagging ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
-      api.images.bulkAddTags(Array.from(selected), [tag])
-    );
-    queryClient.invalidateQueries({ queryKey: ["images"] });
-    queryClient.invalidateQueries({ queryKey: ["tags"] });
-    setDevelopMsg(`Added tag “${tag}” to ${selected.size} photo(s).`);
+    try {
+      const { done, cancelled } = await withBatches("Tagging photos…", Array.from(selected), (ids) =>
+        api.images.bulkAddTags(ids, [tag])
+      );
+      setDevelopMsg(`Added tag “${tag}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+    }
   }
 
   async function addSelectedToCanvas(canvasId: string) {
@@ -359,11 +373,21 @@ function LibraryPage() {
     queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
   }
 
+  // How many shots the last album add really covered, when it was cancelled
+  // part-way - read (and cleared) by the note that reports it.
+  const partialAddRef = useRef<number | null>(null);
+  function takeAddedCount(): number {
+    const n = partialAddRef.current ?? selected.size;
+    partialAddRef.current = null;
+    return n;
+  }
+
   function reportAddTo({ kind, name, ok }: AddToResult) {
+    const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
     const what = kind === "canvas" ? `canvas “${name}”` : kind === "selects" ? "selects" : `“${name}”`;
     setAlbumMsg(
       ok
-        ? { text: `Added ${selected.size} photo(s) to ${what}.`, error: false }
+        ? { text: `Added ${takeAddedCount()} photo(s) to ${what}.${cancelNote}`, error: false }
         : { text: `Could not add to ${what}.`, error: true }
     );
   }
@@ -372,26 +396,42 @@ function LibraryPage() {
     if (selected.size === 0) return;
     // In merged view the RAW partner is hidden behind the JPEG card - add it
     // too, so the album holds the whole shot and its own merge toggle works.
-    await withWait(`Adding ${selected.size} photo${selected.size === 1 ? "" : "s"} to album…`, () =>
-      api.albums.addImages(albumId, withPairedIds(Array.from(selected)))
-    );
-    queryClient.invalidateQueries({ queryKey: ["albums"] });
+    const byId = new Map((images ?? []).map((im) => [im.id, im]));
+    const units = pairUnits(withPairedIds(Array.from(selected)), (x) => byId.get(x)?.paired_image_id);
+    try {
+      const { done, cancelled } = await withBatches("Adding photos to album…", units, (slice) =>
+        api.albums.addImages(albumId, slice)
+      );
+      partialAddRef.current = cancelled ? done.filter((x) => selected.has(x)).length : null;
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ["albums"] });
+    }
   }
 
   // Counts the selection, not the ids actually sent: merged view silently adds
   // each shot's RAW partner too, and reporting that larger number would look
   // like a bug to someone who selected 3 photos. Mirrors the tag note's phrasing.
   function reportAlbumAdd({ name, ok }: { name: string; ok: boolean }) {
+    const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
     setAlbumMsg(
       ok
-        ? { text: `Added ${selected.size} photo(s) to “${name}”.`, error: false }
+        ? { text: `Added ${takeAddedCount()} photo(s) to “${name}”.${cancelNote}`, error: false }
         : { text: `Could not add to “${name}”.`, error: true }
     );
   }
 
   async function resetSelected(opts: BulkResetOptions) {
     if (selected.size === 0) return;
-    await api.images.bulkReset(Array.from(selected), opts);
+    try {
+      await withBatches("Resetting photos…", Array.from(selected), (ids) =>
+        api.images.bulkReset(ids, opts)
+      );
+    } finally {
+      await refreshAfterReset();
+    }
+  }
+
+  async function refreshAfterReset() {
     // Awaited: the wait popup has to stay up until the grid actually holds the
     // reset rows. The re-rendered pictures don't hold it up - the backend
     // renders those in the background and their tiles shimmer until they land.
@@ -421,14 +461,17 @@ function LibraryPage() {
     setDevelopBusy(true);
     setDevelopMsg(null);
     try {
-      const result = await withWait(
-        `Auto-developing ${selected.size} photo${selected.size === 1 ? "" : "s"}…`,
-        () => api.images.bulkAutoDevelop(Array.from(selected))
+      const { results, cancelled } = await withBatches(
+        "Auto-developing photos…",
+        Array.from(selected),
+        (ids) => api.images.bulkAutoDevelop(ids)
       );
+      const applied = results.reduce((n, r) => n + r.applied, 0);
+      const skipped = results.reduce((n, r) => n + r.skipped, 0);
       setDevelopMsg(
-        result.skipped > 0
-          ? `Auto-developed ${result.applied} photo(s). Skipped ${result.skipped} with no similar edits to learn from.`
-          : `Auto-developed ${result.applied} photo(s).`
+        (skipped > 0
+          ? `Auto-developed ${applied} photo(s). Skipped ${skipped} with no similar edits to learn from.`
+          : `Auto-developed ${applied} photo(s).`) + (cancelled ? CANCELLED_NOTE : "")
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
@@ -458,10 +501,10 @@ function LibraryPage() {
     setDevelopBusy(true);
     setDevelopMsg(null);
     try {
-      await withWait(`Applying preset to ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
-        api.images.bulkDevelop(Array.from(selected), preset.adjustments as Record<string, unknown>)
+      const { done, cancelled } = await withBatches("Applying preset…", Array.from(selected), (ids) =>
+        api.images.bulkDevelop(ids, preset.adjustments as Record<string, unknown>)
       );
-      setDevelopMsg(`Applied preset “${name}” to ${selected.size} photo(s).`);
+      setDevelopMsg(`Applied preset “${name}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
     } catch (e) {

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { pairUnits } from "../utils/batchUnits";
 import { membershipWarning } from "../utils/deleteMessage";
 import { useAppDialogs } from "../components/AppDialogs";
 import { IconLandfill, IconRestore, IconTrash } from "../components/Icons";
@@ -21,7 +22,7 @@ export function Trash() {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const mergePairs = useMergePairs();
-  const { withWait } = useWait();
+  const { withBatches } = useWait();
 
   const { data: trashed, isLoading } = useQuery({
     queryKey: ["trash"],
@@ -100,15 +101,18 @@ export function Trash() {
     queryClient.invalidateQueries({ queryKey: ["image"] });
   }
 
+  const partnerOf = (imageId: string) => images.find((im) => im.id === imageId)?.paired_image_id;
+
   async function restoreSelected() {
     if (selected.size === 0) return;
     const ids = withPairedIds(Array.from(selected));
     setActionError(null);
     try {
-      await withWait(`Restoring ${ids.length} photo${ids.length === 1 ? "" : "s"}…`, () =>
-        api.images.restoreFromTrash(ids)
-      );
-      removeFromCachedList(ids);
+      await withBatches("Restoring photos…", pairUnits(ids, partnerOf), async (slice) => {
+        await api.images.restoreFromTrash(slice);
+        // Slice by slice, so a cancel leaves exactly the restored ones gone.
+        removeFromCachedList(slice);
+      });
     } catch (e) {
       setActionError(`Restore failed: ${(e as Error).message}`);
     } finally {
@@ -142,10 +146,10 @@ export function Trash() {
     }
     setActionError(null);
     try {
-      await withWait(`Deleting ${ids.length} photo${ids.length === 1 ? "" : "s"}…`, () =>
-        api.images.deleteFromTrash(ids)
-      );
-      removeFromCachedList(ids);
+      await withBatches("Deleting photos…", pairUnits(ids, partnerOf), async (slice) => {
+        await api.images.deleteFromTrash(slice);
+        removeFromCachedList(slice);
+      });
     } catch (e) {
       setActionError(`Delete failed: ${(e as Error).message}`);
     } finally {

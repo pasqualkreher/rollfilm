@@ -1811,6 +1811,28 @@ textarea:focus-visible {
   font-size: 14px;
 }
 
+.wait-overlay-progress {
+  margin-left: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wait-overlay-count {
+  display: inline-block;
+  text-align: right;
+}
+
+.wait-overlay-cancel {
+  margin-left: 6px;
+  /* Wide enough for "Stopping…", so pressing Cancel does not resize the box. */
+  min-width: 88px;
+  cursor: pointer;
+}
+
+.wait-overlay-cancel:disabled {
+  cursor: wait;
+}
+
 .wait-overlay-spinner {
   flex: none;
   width: 22px;
