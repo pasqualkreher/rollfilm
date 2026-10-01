@@ -163,3 +163,31 @@ def test_a_saved_edit_clears_the_half_tier_with_the_full_one(photo, monkeypatch)
     (d / "half.jpg").write_bytes(b"x")
     thumbnails.generate_derivatives(photo.id, Path(photo.file_path))
     assert not (d / "full.jpg").exists() and not (d / "half.jpg").exists()
+
+
+def _derivative(image_id: str, name: str) -> np.ndarray:
+    return np.asarray(PILImage.open(thumbnails.derivative_dir(image_id) / name))
+
+
+def test_an_unedited_jpeg_gets_the_same_thumbnails_without_the_pipeline(photo, tmp_path):
+    """A library rebuild pushed every unedited JPEG through the float develop
+    pipeline to get back the pixels it started from. The plain path must write
+    the very same files."""
+    path = Path(photo.file_path)
+    thumbnails.generate_derivatives("slow", path)
+    thumbnails.generate_untouched_derivatives("plain", path)
+    for name in ("preview.jpg", "thumbnail.jpg", "small.jpg"):
+        assert np.array_equal(_derivative("slow", name), _derivative("plain", name)), name
+
+
+def test_a_rebuild_takes_the_plain_path_only_for_unedited_photos(photo, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        thumbnails, "generate_untouched_derivatives",
+        lambda *a, **k: calls.append("plain"),
+    )
+    monkeypatch.setattr(thumbnails, "generate_derivatives", lambda *a, **k: calls.append("pipeline"))
+    thumbnails.regenerate_for_image(photo)
+    photo.edit_rotation = 90
+    thumbnails.regenerate_for_image(photo)
+    assert calls == ["plain", "pipeline"]

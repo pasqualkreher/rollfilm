@@ -2467,7 +2467,8 @@ def generate_derivatives(
     persp_h: int = 0,
     persp_v: int = 0,
     slot_timeout: float | None = None,
-) -> PILImage.Image:
+    want_base: bool = True,
+) -> PILImage.Image | None:
     """Writes thumbnail.jpg (grid) and preview.jpg (lightbox) for an image, and
     returns the decoded full-resolution base image (before edits) so a caller
     can reuse it (e.g. for the CLIP embedding) instead of decoding the RAW again.
@@ -2476,6 +2477,10 @@ def generate_derivatives(
     already generating this same image; raises RenderBusy when it runs out (see
     _render_admission). None - the default, used by the background workers -
     waits as long as it takes.
+
+    `want_base=False` skips rendering the returned base (None comes back
+    instead): only the import's CLIP embedding uses it, and for a re-render it
+    was a whole tone pass over the frame, thrown away.
 
     Browsers can't render RAW files directly, so for RAW sources preview.jpg
     is the only viewable representation - it's a true demosaic (not the
@@ -2505,7 +2510,9 @@ def generate_derivatives(
         thumb_scale = THUMBNAIL_SCALE * raw_service.decode_reduction(source_path, lin.shape)
         # The un-edited display rendering, built before geometry: returned to the
         # caller so the post-import worker can feed CLIP without a second decode.
-        base = PILImage.fromarray(raw_service.default_tone_to_srgb(lin, gain))
+        base = (
+            PILImage.fromarray(raw_service.default_tone_to_srgb(lin, gain)) if want_base else None
+        )
         lin = lens_profile.correct(lin, source_path, adjustments)
         if distortion:
             lin = apply_distortion_array(lin, distortion)
@@ -2528,31 +2535,69 @@ def generate_derivatives(
             preview = add_frame(preview, adjustments)
         _save_atomic(preview, out_dir / "preview.jpg", quality=92)
 
-        thumb = source.copy()
-        # Grid thumbnail at a quarter of the original's dimensions (a lot cheaper to
-        # generate than a large fixed size, so a full-library rebuild stays quick),
-        # capped so huge originals don't still produce oversized thumbnails.
-        tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * thumb_scale)))
-        th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * thumb_scale)))
-        thumb.thumbnail((tw, th), PILImage.LANCZOS)
-        if adjustments:
-            thumb = _grain_pil(thumb, adjustments)
-            thumb = add_frame(thumb, adjustments)
-        _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=88)
-
-        # small.jpg is derived from the finished thumbnail (grain/frame
-        # included), so the dense grid sizes show exactly the same rendering,
-        # just fewer pixels. Written here so an edit can never leave a stale
-        # small tier behind a fresh thumbnail.
-        small = thumb.copy()
-        small.thumbnail((SMALL_MAX_PX, SMALL_MAX_PX), PILImage.LANCZOS)
-        _save_atomic(small, out_dir / "small.jpg", quality=85)
-
-        # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
-        # is regenerated on next request with the new edits.
-        (out_dir / "full.jpg").unlink(missing_ok=True)
-        (out_dir / "half.jpg").unlink(missing_ok=True)
+        _write_grid_tiers(source, thumb_scale, adjustments, out_dir)
         return base
+
+
+def _write_grid_tiers(
+    source: PILImage.Image, thumb_scale: float, adjustments: dict | None, out_dir: Path
+) -> None:
+    """thumbnail.jpg and small.jpg from the rendered frame, and the now-stale
+    zoom tiers dropped - the tail every derivative render shares."""
+    thumb = source.copy()
+    # Grid thumbnail at a quarter of the original's dimensions (a lot cheaper to
+    # generate than a large fixed size, so a full-library rebuild stays quick),
+    # capped so huge originals don't still produce oversized thumbnails.
+    tw = min(THUMBNAIL_MAX_PX, max(1, round(thumb.width * thumb_scale)))
+    th = min(THUMBNAIL_MAX_PX, max(1, round(thumb.height * thumb_scale)))
+    thumb.thumbnail((tw, th), PILImage.LANCZOS)
+    if adjustments:
+        thumb = _grain_pil(thumb, adjustments)
+        thumb = add_frame(thumb, adjustments)
+    _save_atomic(thumb, out_dir / "thumbnail.jpg", quality=88)
+
+    # small.jpg is derived from the finished thumbnail (grain/frame
+    # included), so the dense grid sizes show exactly the same rendering,
+    # just fewer pixels. Written here so an edit can never leave a stale
+    # small tier behind a fresh thumbnail.
+    small = thumb.copy()
+    small.thumbnail((SMALL_MAX_PX, SMALL_MAX_PX), PILImage.LANCZOS)
+    _save_atomic(small, out_dir / "small.jpg", quality=85)
+
+    # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
+    # is regenerated on next request with the new edits.
+    (out_dir / "full.jpg").unlink(missing_ok=True)
+    (out_dir / "half.jpg").unlink(missing_ok=True)
+
+
+def generate_untouched_derivatives(
+    image_id: str, source_path: Path, slot_timeout: float | None = None
+) -> None:
+    """thumbnail/preview for a JPEG or PNG without edits, straight from its
+    8-bit pixels. For such a photo the develop pipeline is an exact identity
+    (see _is_untouched) - yet it was decoded, linearised to float32, pushed
+    through every stage and encoded back, ~1.9s for a 40MP JPEG against ~0.3s
+    for decode + resize. Same decode budget, same resizes and same files as
+    generate_derivatives, so the two paths agree to the last rounding step.
+
+    No render slot: there is no float frame here, only the reduced 8-bit
+    decode, so these run on every worker instead of queueing for the two or
+    three slots the gigabyte renders are rationed to."""
+    with _locked(_gen_lock(image_id), slot_timeout):
+        out_dir = derivative_dir(image_id)
+        with PILImage.open(source_path) as im:
+            original = max(raw_service._oriented_size(im))
+            w, h = im.size
+            if max(w, h) > PREVIEW_RENDER_MAX_PX:
+                scale = PREVIEW_RENDER_MAX_PX / max(w, h)
+                im.draft("RGB", (max(1, round(w * scale)), max(1, round(h * scale))))
+            source = ImageOps.exif_transpose(im).convert("RGB")
+        decoded = max(source.size)
+        thumb_scale = THUMBNAIL_SCALE * (original / decoded if decoded and original else 1.0)
+        preview = source.copy()
+        preview.thumbnail((PREVIEW_RENDER_MAX_PX, PREVIEW_RENDER_MAX_PX), PILImage.LANCZOS)
+        _save_atomic(preview, out_dir / "preview.jpg", quality=92)
+        _write_grid_tiers(source, thumb_scale, None, out_dir)
 
 
 def has_derivatives(image_id: str) -> bool:
@@ -4337,9 +4382,19 @@ def regenerate_for_image(image: "Image", slot_timeout: float | None = None) -> N
     if image.edit_crop_x is not None:
         crop = (image.edit_crop_x, image.edit_crop_y, image.edit_crop_width, image.edit_crop_height)
     adjustments = adjustments_from_image(image)
+    path = resolve_image_path(image)
+    if not raw_service.is_raw(path) and _is_untouched(image):
+        try:
+            generate_untouched_derivatives(image.id, path, slot_timeout=slot_timeout)
+            return
+        except RenderBusy:
+            raise
+        except Exception:
+            # Anything odd about the file: the general path below decides.
+            logger.debug("plain derivative render failed for %s", image.id, exc_info=True)
     generate_derivatives(
         image.id,
-        resolve_image_path(image),
+        path,
         rotation=image.edit_rotation,
         crop=crop,
         adjustments=adjustments,
@@ -4350,4 +4405,5 @@ def regenerate_for_image(image: "Image", slot_timeout: float | None = None) -> N
         persp_h=int(getattr(image, "edit_persp_h", 0) or 0),
         persp_v=int(getattr(image, "edit_persp_v", 0) or 0),
         slot_timeout=slot_timeout,
+        want_base=False,
     )
