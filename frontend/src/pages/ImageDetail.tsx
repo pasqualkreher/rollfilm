@@ -366,8 +366,14 @@ export function ImageDetail() {
         return;
       }
 
-      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && image && !imageStale && paired) {
-        setActiveId(activeId === image.id ? paired.id : image.id);
+      // Up/Down switch between the RAW and the JPEG of a pair - and do nothing
+      // else: left to the browser they also scrolled the side panel (or the
+      // page) under the photo on every press.
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        e.preventDefault();
+        if (image && !imageStale && paired) {
+          setActiveId(activeId === image.id ? paired.id : image.id);
+        }
         return;
       }
 
