@@ -268,9 +268,10 @@ class ExportRequest(BaseModel):
 
 
 class ExportStartRequest(ExportRequest):
-    # "jpeg" renders the saved edits into fresh JPEGs; "original" hands out the
+    # "jpeg" renders the saved edits into fresh JPEGs; "tiff" into 16-bit sRGB
+    # TIFFs (for print or further retouching); "original" hands out the
     # library files byte-for-byte (RAW stays RAW, metadata untouched).
-    format: Literal["jpeg", "original"] = "jpeg"
+    format: Literal["jpeg", "tiff", "original"] = "jpeg"
 
 
 class ExportStartResponse(BaseModel):

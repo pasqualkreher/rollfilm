@@ -35,7 +35,7 @@ export function ExportDialog({
   const [maxSize, setMaxSize] = useState<number | null>(null);
   // "jpeg" renders the edits into fresh JPEGs; "original" hands out the
   // library files byte-for-byte (RAW stays RAW, EXIF/metadata untouched).
-  const [format, setFormat] = useState<"jpeg" | "original">("jpeg");
+  const [format, setFormat] = useState<"jpeg" | "tiff" | "original">("jpeg");
   const [busy, setBusy] = useState(false);
   // Per-photo progress of the running export job, for the bar.
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -73,14 +73,16 @@ export function ExportDialog({
         : "export.zip"
       : format === "original"
         ? (singleFilename ?? "photo")
-        : `${stem ?? "export"}.jpg`;
+        : `${stem ?? "export"}${format === "tiff" ? ".tif" : ".jpg"}`;
     const ext = suggestedName.includes(".") ? `.${suggestedName.split(".").pop()!.toLowerCase()}` : "";
     const accept: Record<string, string[]> =
       ext === ".zip"
         ? { "application/zip": [".zip"] }
         : ext === ".jpg" || ext === ".jpeg"
           ? { "image/jpeg": [".jpg", ".jpeg"] }
-          : { "application/octet-stream": ext ? [ext] : [] };
+          : ext === ".tif"
+            ? { "image/tiff": [".tif", ".tiff"] }
+            : { "application/octet-stream": ext ? [ext] : [] };
     let started = false;
     try {
       await saveDownload(suggestedName, accept, async () => {
@@ -148,9 +150,10 @@ export function ExportDialog({
               value={format}
               disabled={busy}
               ariaLabel="Export format"
-              onChange={(v) => setFormat(v as "jpeg" | "original")}
+              onChange={(v) => setFormat(v as "jpeg" | "tiff" | "original")}
               options={[
                 { value: "jpeg", label: "JPEG with edits applied" },
+                { value: "tiff", label: "TIFF, 16-bit, with edits applied" },
                 { value: "original", label: "Original files, unchanged" },
               ]}
             />
@@ -160,28 +163,34 @@ export function ExportDialog({
               ? `Downloads the files exactly as they are in your library, with all metadata${
                   imageIds.length === 1 ? "." : ". Several photos download as a zip."
                 }`
-              : `Exports a JPEG with your edits applied, at full resolution${
-                  imageIds.length === 1 ? "." : ". Several photos download as a zip."
-                }`}
+              : format === "tiff"
+                ? `Exports a 16-bit TIFF with your edits applied, for printing or further retouching. The files are large${
+                    imageIds.length === 1 ? "." : ". Several photos download as a zip."
+                  }`
+                : `Exports a JPEG with your edits applied, at full resolution${
+                    imageIds.length === 1 ? "." : ". Several photos download as a zip."
+                  }`}
           </p>
-          {format === "jpeg" && (
+          {format !== "original" && (
             <>
-              <label className="editor-slider">
-                <span className="editor-slider-head">
-                  <span>JPEG quality</span>
-                  <span className="editor-slider-val">{quality}</span>
-                </span>
-                <input
-                  type="range"
-                  min={60}
-                  max={100}
-                  step={1}
-                  value={quality}
-                  disabled={busy}
-                  style={rangeFillStyle(quality, 60, 100)}
-                  onChange={(e) => setQuality(Number(e.target.value))}
-                />
-              </label>
+              {format === "jpeg" && (
+                <label className="editor-slider">
+                  <span className="editor-slider-head">
+                    <span>JPEG quality</span>
+                    <span className="editor-slider-val">{quality}</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={60}
+                    max={100}
+                    step={1}
+                    value={quality}
+                    disabled={busy}
+                    style={rangeFillStyle(quality, 60, 100)}
+                    onChange={(e) => setQuality(Number(e.target.value))}
+                  />
+                </label>
+              )}
               <div className="editor-slider">
                 <span className="editor-slider-head">
                   <span>Size</span>

@@ -49,6 +49,61 @@ _LINEAR16_TO_SRGB8 = np.clip(
     _linear_to_srgb(np.arange(65536, dtype=np.float32) / 65535.0) * 255.0 + 0.5, 0, 255
 ).astype(np.uint8)
 
+# --- Embedded colour profiles -------------------------------------------------
+# The whole pipeline works in sRGB and writes untagged (= sRGB) derivatives. A
+# JPEG/PNG that carries another profile - every iPhone photo is Display P3,
+# some cameras write Adobe RGB - used to have its numbers taken as sRGB as they
+# stood, which renders it visibly desaturated. to_srgb() converts such a file
+# on load; a file with no profile or an sRGB one is returned untouched, so the
+# common case costs one dictionary lookup.
+_srgb_profile = None
+_srgb_profile_bytes: bytes | None = None
+_srgb_profile_lock = threading.Lock()
+
+
+def _srgb():
+    global _srgb_profile, _srgb_profile_bytes
+    with _srgb_profile_lock:
+        if _srgb_profile is None:
+            from PIL import ImageCms
+
+            _srgb_profile = ImageCms.createProfile("sRGB")
+            _srgb_profile_bytes = ImageCms.ImageCmsProfile(_srgb_profile).tobytes()
+        return _srgb_profile
+
+
+def srgb_icc_bytes() -> bytes:
+    """An sRGB profile to tag exported files with."""
+    _srgb()
+    return _srgb_profile_bytes  # type: ignore[return-value]
+
+
+def to_srgb(im: PILImage.Image) -> PILImage.Image:
+    """`im` with its pixels in sRGB: converted through its embedded ICC profile
+    when that is something other than sRGB, as it is otherwise. Never raises -
+    a profile LittleCMS cannot read leaves the picture as it was."""
+    icc = im.info.get("icc_profile")
+    if not icc:
+        return im
+    try:
+        from PIL import ImageCms
+
+        source = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+        if "srgb" in (ImageCms.getProfileDescription(source) or "").lower():
+            return im
+        if im.mode not in ("RGB", "RGBA", "L", "CMYK"):
+            im = im.convert("RGB")
+        out = ImageCms.profileToProfile(
+            im, source, _srgb(), renderingIntent=ImageCms.Intent.RELATIVE_COLORIMETRIC,
+            outputMode="RGB",
+        )
+        out.info.pop("icc_profile", None)
+        return out
+    except Exception:
+        logger.debug("Could not convert the embedded colour profile", exc_info=True)
+        return im
+
+
 # When True, RAWs are loaded with NO brightness processing at all - just the
 # native (camera-white-balanced, no auto-bright) demosaic, exactly as the sensor
 # recorded it. Toggled from Settings ("load RAWs without processing"); the app
@@ -289,7 +344,7 @@ def _linearise_pil(im: PILImage.Image) -> np.ndarray:
     A table lookup on the 8-bit values (see _SRGB8_TO_LINEAR): the only float32
     buffer is the result, which fancy indexing hands back as its own
     C-contiguous, writeable array."""
-    im = ImageOps.exif_transpose(im).convert("RGB")
+    im = to_srgb(ImageOps.exif_transpose(im)).convert("RGB")
     return _SRGB8_TO_LINEAR[np.asarray(im)]
 
 

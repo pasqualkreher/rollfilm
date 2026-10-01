@@ -1002,7 +1002,12 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
         images = [by_id[i] for i in payload.image_ids if i in by_id]
         quality = max(1, min(100, payload.quality))
 
+        tiff = payload.format == "tiff"
+        ext = ".tif" if tiff else ".jpg"
+
         def render_jpeg(image: Image) -> bytes:
+            if tiff:
+                return thumbnails.export_tiff_bytes(image, payload.max_size)
             return thumbnails.export_jpeg_bytes(image, quality, payload.max_size)
 
         if len(images) == 1:
@@ -1013,8 +1018,8 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
                 media = "image/jpeg" if image.file_type == FileType.jpeg else "application/octet-stream"
             else:
                 Path(tmp_path).write_bytes(render_jpeg(image))
-                filename = f"{Path(image.original_filename).stem}.jpg"
-                media = "image/jpeg"
+                filename = f"{Path(image.original_filename).stem}{ext}"
+                media = "image/tiff" if tiff else "image/jpeg"
             job["done"] = 1
         else:
             # ZIP_STORED like the synchronous endpoints: JPEGs (and compressed
@@ -1031,7 +1036,7 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
                             name = image.original_filename
                         else:
                             data = render_jpeg(image)
-                            name = f"{Path(image.original_filename).stem}.jpg"
+                            name = f"{Path(image.original_filename).stem}{ext}"
                     except Exception:
                         # One broken photo shouldn't sink the whole export.
                         logger.exception("Export job render failed for %s - skipping", image.id)
@@ -1049,7 +1054,7 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
                     else:
                         archive.writestr(name, data)
                     job["done"] += 1
-            filename = "export.zip" if payload.format == "jpeg" else "photos.zip"
+            filename = "photos.zip" if payload.format == "original" else "export.zip"
             media = "application/zip"
         if cancelled():
             return
@@ -1415,7 +1420,15 @@ def bulk_auto_develop(
         # editor spreads the suggestion over its live sliders (defaults when the
         # photo is un-edited); unchecked groups keep whatever was there.
         merged = {**develop.loads(image.edit_adjustments), **partial}
-        blob = develop.dumps(develop.normalize(merged))
+        if not image.edit_adjustments:
+            # A photo's first edit starts on the current process version, as
+            # it does in the editor.
+            merged["process"] = develop.CURRENT_PROCESS
+            # ...and on the standard raw base, unless the suggestion's tone
+            # group brought the base its exposure was set on.
+            if "raw_base" not in partial:
+                merged["raw_base"] = "standard"
+        blob =develop.dumps(develop.normalize(merged))
         if image.edit_adjustments != blob:
             rendered.append(image)
         image.edit_adjustments = blob
@@ -2753,6 +2766,51 @@ def _embedding_for_image(image: Image):
         except Exception:
             logger.exception("On-demand embedding generation failed for %s", image.id)
     return vector
+
+
+@router.get("/{image_id}/white-balance")
+def get_white_balance(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The colour temperature the photo was shot at (see services/
+    white_balance.py), so the editor can label its white-balance slider in
+    Kelvin. `kelvin` is null for JPEGs and for raws that give no hint - the
+    editor keeps the plain relative slider then. `gains` is the camera's own
+    calibration, where the file carries one: [[kelvin, red, blue], ...]."""
+    from app.services import white_balance
+
+    image = get_owned_image(db, current_user.id, image_id)
+    return white_balance.white_balance_info(resolve_image_path(image))
+
+
+@router.get("/{image_id}/auto-straighten")
+def get_auto_straighten(
+    image_id: str,
+    rotation: int = 0,
+    flip_h: bool = False,
+    flip_v: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The Straighten angle that levels the photo (see services/auto_level.py),
+    for the editor's Auto button. Measured on the picture as the editor has it
+    turned and mirrored (`rotation`, `flip_*` - the steps that come before
+    Straighten). `angle` is null when the picture has no clear horizon."""
+    from app.services import auto_level
+    from app.services.raw import extract_preview
+
+    image = get_owned_image(db, current_user.id, image_id)
+    try:
+        preview = thumbnails.apply_edits(
+            extract_preview(resolve_image_path(image)), rotation % 360, None, flip_h, flip_v
+        )
+        angle = auto_level.level_angle(preview)
+    except Exception:
+        logger.exception("Auto-straighten failed for %s", image_id)
+        angle = None
+    return {"angle": angle}
 
 
 @router.get("/{image_id}/lens-profile")

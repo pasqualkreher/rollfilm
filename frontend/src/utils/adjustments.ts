@@ -22,6 +22,9 @@ export interface ScalarDef {
   // range reads as the classic +-100) while the stored/rendered value keeps
   // the full range. Purely cosmetic - backend and saved edits are untouched.
   uiScale?: number;
+  // Stored with fractions although the slider moves in whole steps (no
+  // `step`): the value is also set by something finer than its own slider.
+  fractional?: boolean;
 }
 
 export const SCALAR_SPEC = {
@@ -36,8 +39,13 @@ export const SCALAR_SPEC = {
   whites: { def: 0, min: -200, max: 200, uiScale: 2 },
   blacks: { def: 0, min: -200, max: 200, uiScale: 2 },
   // White balance / presence
-  temperature: { def: 0, min: -250, max: 250 },
-  tint: { def: 0, min: -250, max: 250 },
+  // Fractional: the Kelvin slider writes both, and a 10 K step is a fraction
+  // of one unit.
+  temperature: { def: 0, min: -300, max: 300, fractional: true },
+  tint: { def: 0, min: -250, max: 250, fractional: true },
+  // The camera-style shift cross (components/WbShiftPad.tsx): whole steps.
+  wb_shift_r: { def: 0, min: -9, max: 9, step: 1 },
+  wb_shift_b: { def: 0, min: -9, max: 9, step: 1 },
   // Extended past the classic +-100: the backend clamps the chroma scale at
   // zero, so past -100 both settle at grayscale instead of inverting colours.
   vibrance: { def: 0, min: -200, max: 200, uiScale: 2 },
@@ -196,17 +204,41 @@ export type FilmSim =
   | "velvia"
   | "astia"
   | "classic_chrome"
+  | "reala_ace"
+  | "pro_neg_hi"
+  | "pro_neg_std"
   | "classic_neg"
   | "nostalgic_neg"
   | "eterna"
+  | "eterna_bleach_bypass"
   | "acros"
   | "acros_ye"
   | "acros_r"
   | "acros_g"
-  | "monochrome";
+  | "monochrome"
+  | "monochrome_ye"
+  | "monochrome_r"
+  | "monochrome_g"
+  | "sepia";
 
-// The full develop object. Scalars + three enums + nested groups.
+// Which generation of the backend's pixel maths renders an edit (see
+// develop.ENUM_SPEC["process"] and services/develop_v2.py). New edits start on
+// the current one; an edit saved before it existed keeps "1" and so keeps
+// looking exactly as it did.
+export type ProcessVersion = "1" | "2";
+export const CURRENT_PROCESS: ProcessVersion = "2";
+
+// Which exposure a RAW is developed from (see develop.ENUM_SPEC["raw_base"]).
+// "standard" opens every raw at the same brightness - the auto-exposed picture
+// the grid shows - and is where new edits start; "native" is the un-lifted
+// sensor exposure, switched per photo under Tone. An edit saved before the key
+// existed keeps "legacy", which renders native as it always did.
+export type RawBase = "legacy" | "standard" | "native";
+
+// The full develop object. Scalars + the enums + nested groups.
 export type Adjustments = { [K in ScalarKey]: number } & {
+  process: ProcessVersion;
+  raw_base: RawBase;
   tone_mapper: "basic" | "agx";
   curve_mode: "point" | "parametric";
   film_sim: FilmSim;
@@ -259,6 +291,8 @@ export function defaultAdjustments(): Adjustments {
   ) as { [K in ScalarKey]: number };
   return {
     ...scalars,
+    process: CURRENT_PROCESS,
+    raw_base: "standard",
     tone_mapper: "basic",
     curve_mode: "point",
     film_sim: "none",
@@ -278,6 +312,20 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+// Whether a stored edit WITHOUT a process key uses any control the current
+// process renders differently. If it does it stays on "1" (it must keep its
+// look); if it doesn't, both processes give the same picture and the edit
+// simply continues on the current one.
+function usesLegacyLook(raw: Partial<Adjustments>): boolean {
+  const nonZero = (v: unknown) => typeof v === "number" && v !== 0;
+  if (["highlights", "shadows", "saturation", "vibrance", "hue"].some((k) => nonZero(raw[k as ScalarKey]))) return true;
+  if (typeof raw.sharpness === "number" && raw.sharpness > 0) return true;
+  if (raw.hsl && COLOR_BANDS.some((b) => Array.isArray(raw.hsl![b]) && raw.hsl![b].some((v) => v !== 0))) return true;
+  const g = raw.color_grading;
+  if (g && [g.shadows, g.midtones, g.highlights, g.global].some((w) => w && (nonZero(w.saturation) || nonZero(w.luminance)))) return true;
+  return Array.isArray(raw.masks) && raw.masks.length > 0;
+}
+
 // Merge a partial/parsed object over the defaults, clamping scalars to range.
 // Nested groups are taken as-is when present (already server-normalized) or
 // defaulted. Mirrors develop.normalize() on the backend.
@@ -288,7 +336,8 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
     const v = raw[k];
     if (typeof v === "number" && Number.isFinite(v)) {
       const spec: ScalarDef = SCALAR_SPEC[k];
-      base[k] = spec.step ? clamp(v, spec.min, spec.max) : Math.round(clamp(v, spec.min, spec.max));
+      base[k] =
+        spec.step || spec.fractional ? clamp(v, spec.min, spec.max) : Math.round(clamp(v, spec.min, spec.max));
     }
   }
   // Legacy "denoise" master (removed): it fed luma 1:1 and chroma 1.3x, and the
@@ -300,6 +349,11 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
     base.luma_noise_reduction = Math.max(base.luma_noise_reduction, dn);
     base.color_noise_reduction = Math.max(base.color_noise_reduction, Math.min(100, Math.round(dn * 1.3)));
   }
+  base.process =
+    raw.process === "1" || raw.process === "2" ? raw.process : usesLegacyLook(raw) ? "1" : CURRENT_PROCESS;
+  // A stored edit without the key was developed on the native base and stays
+  // there: moving it to "standard" would brighten it by the auto-exposure gain.
+  base.raw_base = raw.raw_base === "standard" || raw.raw_base === "native" ? raw.raw_base : "legacy";
   if (raw.tone_mapper === "basic" || raw.tone_mapper === "agx") base.tone_mapper = raw.tone_mapper;
   if (raw.curve_mode === "point" || raw.curve_mode === "parametric") base.curve_mode = raw.curve_mode;
   if (raw.film_sim && FILM_SIMS.some((f) => f.value === raw.film_sim)) base.film_sim = raw.film_sim;
@@ -331,7 +385,13 @@ export function adjustmentsAreNeutral(a: Adjustments): boolean {
   for (const k of Object.keys(SCALAR_SPEC) as ScalarKey[]) {
     if (a[k] !== DEFAULT_ADJUSTMENTS[k]) return false;
   }
-  return JSON.stringify(a) === JSON.stringify(DEFAULT_ADJUSTMENTS);
+  // The process version says how sliders render, not that any was moved. Nor
+  // does the raw base, unless the photo was switched to its native exposure.
+  if (a.raw_base === "native") return false;
+  return (
+    JSON.stringify({ ...a, process: CURRENT_PROCESS, raw_base: DEFAULT_ADJUSTMENTS.raw_base }) ===
+    JSON.stringify(DEFAULT_ADJUSTMENTS)
+  );
 }
 
 export function adjustmentsFromImage(image: ImageOut): Adjustments {
@@ -348,6 +408,9 @@ export interface FieldDef {
   key: ScalarKey;
   label: string;
   format?: (v: number) => string;
+  // First slider of a sub-group within its section: the panel sets it off from
+  // the sliders above (a hairline), so a long column reads as a few blocks.
+  groupStart?: boolean;
 }
 export interface Section {
   title: string;
@@ -371,9 +434,9 @@ export const SECTIONS: Section[] = [
       { key: "exposure", label: "Exposure", format: evFmt },
       { key: "brightness", label: "Brightness" },
       { key: "contrast", label: "Contrast" },
-      { key: "highlights", label: "Highlights" },
+      { key: "highlights", label: "Highlights", groupStart: true },
       { key: "shadows", label: "Shadows" },
-      { key: "whites", label: "Whites" },
+      { key: "whites", label: "Whites", groupStart: true },
       { key: "blacks", label: "Blacks" },
     ],
   },
@@ -382,6 +445,10 @@ export const SECTIONS: Section[] = [
     fields: [
       { key: "temperature", label: "Temperature" },
       { key: "tint", label: "Tint" },
+      // Drawn as the shift cross, not as sliders (see PhotoEditor's Color
+      // group) - listed here so they count as part of the group's edits.
+      { key: "wb_shift_r", label: "WB shift red" },
+      { key: "wb_shift_b", label: "WB shift blue" },
       { key: "vibrance", label: "Vibrance" },
       { key: "saturation", label: "Saturation" },
       { key: "hue", label: "Hue", format: degFmt },
@@ -394,12 +461,12 @@ export const SECTIONS: Section[] = [
     fields: [
       { key: "sharpness", label: "Sharpness" },
       { key: "sharpness_threshold", label: "Sharpness Threshold" },
-      { key: "clarity", label: "Clarity" },
+      { key: "clarity", label: "Clarity", groupStart: true },
       { key: "dehaze", label: "Dehaze" },
-      { key: "luma_noise_reduction", label: "Luminance NR" },
+      { key: "luma_noise_reduction", label: "Luminance NR", groupStart: true },
       { key: "luma_noise_detail", label: "Luminance NR Detail" },
       { key: "color_noise_reduction", label: "Color NR" },
-      { key: "chromatic_aberration_red_cyan", label: "Red–Cyan CA" },
+      { key: "chromatic_aberration_red_cyan", label: "Red–Cyan CA", groupStart: true },
       { key: "chromatic_aberration_blue_yellow", label: "Blue–Yellow CA" },
     ],
   },
@@ -409,14 +476,14 @@ export const SECTIONS: Section[] = [
       { key: "glow_amount", label: "Glow" },
       { key: "halation_amount", label: "Halation" },
       { key: "flare_amount", label: "Light Flares" },
-      { key: "grain_amount", label: "Grain Amount" },
+      { key: "grain_amount", label: "Grain Amount", groupStart: true },
       { key: "grain_size", label: "Grain Size" },
       { key: "grain_roughness", label: "Grain Roughness" },
-      { key: "vignette_amount", label: "Vignette Amount" },
+      { key: "vignette_amount", label: "Vignette Amount", groupStart: true },
       { key: "vignette_midpoint", label: "Vignette Midpoint" },
       { key: "vignette_roundness", label: "Vignette Roundness" },
       { key: "vignette_feather", label: "Vignette Feather" },
-      { key: "mist", label: "Mist" },
+      { key: "mist", label: "Mist", groupStart: true },
     ],
   },
 ];
@@ -434,14 +501,22 @@ export const FILM_SIMS: { value: FilmSim; label: string; swatch: string }[] = [
   { value: "velvia", label: "Velvia · Vivid", swatch: "linear-gradient(135deg, #c8332e, #2e7d32)" },
   { value: "astia", label: "Astia · Soft", swatch: "linear-gradient(135deg, #6f9bd1, #e8b98a)" },
   { value: "classic_chrome", label: "Classic Chrome", swatch: "linear-gradient(135deg, #6b7d8a, #b09a7a)" },
+  { value: "reala_ace", label: "Reala Ace", swatch: "linear-gradient(135deg, #5b86b8, #d9a86a)" },
+  { value: "pro_neg_hi", label: "Pro Neg. Hi", swatch: "linear-gradient(135deg, #6f8496, #d6b08c)" },
+  { value: "pro_neg_std", label: "Pro Neg. Std", swatch: "linear-gradient(135deg, #8492a0, #dcc0a4)" },
   { value: "classic_neg", label: "Classic Neg.", swatch: "linear-gradient(135deg, #4e8f86, #d2954f)" },
   { value: "nostalgic_neg", label: "Nostalgic Neg.", swatch: "linear-gradient(135deg, #8a6f52, #e0b878)" },
   { value: "eterna", label: "Eterna · Cinema", swatch: "linear-gradient(135deg, #5a6a72, #a5a08e)" },
+  { value: "eterna_bleach_bypass", label: "Eterna Bleach Bypass", swatch: "linear-gradient(135deg, #3f474b, #b4b0a6)" },
   { value: "acros", label: "Acros", swatch: "linear-gradient(135deg, #2b2b2b, #d6d6d6)" },
   { value: "acros_ye", label: "Acros +Ye", swatch: "linear-gradient(135deg, #3a3628, #d9d3b8)" },
   { value: "acros_r", label: "Acros +R", swatch: "linear-gradient(135deg, #402c2c, #dcc9c9)" },
   { value: "acros_g", label: "Acros +G", swatch: "linear-gradient(135deg, #2c3a2e, #c9dccd)" },
   { value: "monochrome", label: "Monochrome", swatch: "linear-gradient(135deg, #1f1f1f, #cfcfcf)" },
+  { value: "monochrome_ye", label: "Monochrome +Ye", swatch: "linear-gradient(135deg, #2e2b20, #d4cfb6)" },
+  { value: "monochrome_r", label: "Monochrome +R", swatch: "linear-gradient(135deg, #352626, #d6c6c6)" },
+  { value: "monochrome_g", label: "Monochrome +G", swatch: "linear-gradient(135deg, #253027, #c6d6ca)" },
+  { value: "sepia", label: "Sepia", swatch: "linear-gradient(135deg, #3b2a1a, #d9bd94)" },
 ];
 
 // ---- The full non-destructive edit: geometry + the develop object.
@@ -756,7 +831,7 @@ export function editedGroups(a: Adjustments, g: GeometryEditState): Record<strin
       scalarIsEdited("frame_width", a.frame_width) ||
       LENS_KEYS.some((k) => scalarIsEdited(k, a[k])),
     filmsim: a.film_sim !== "none",
-    basic: a.tone_mapper !== "basic" || fieldsEdited("Basic"),
+    basic: a.tone_mapper !== "basic" || a.raw_base === "native" || fieldsEdited("Basic"),
     curves: !same(a.point_curves, identityPointCurves()) || !same(a.parametric_curve, neutralParametricCurve()),
     color: fieldsEdited("Color") || colorMixer || colorGrading || calibration,
     details: fieldsEdited("Details"),

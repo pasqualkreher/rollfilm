@@ -3345,6 +3345,31 @@ textarea:focus-visible {
   width: 100%;
 }
 
+/* A choice laid out like a slider's head (the tone mapper above the Tone
+   sliders): its name in the sliders' label type on the left, a compact select
+   on the right where a slider shows its value. */
+.editor-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.editor-select-inline {
+  flex: none;
+  min-width: 96px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.editor-select-inline .dropdown-btn {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
 /* The histogram's slot at the top of the edit panel. Sticky, so it stays in
    view while the panel scrolls through the groups below it - it is read WHILE
    the sliders move, which is only possible if it can't scroll away. The
@@ -3375,6 +3400,63 @@ textarea:focus-visible {
    stage badge, so the two appear together and a fast render shows neither. */
 .editor-histogram-slot {
   position: relative;
+}
+
+/* The clipping toggle: two corner marks on the plot, shadows left, highlights
+   right. Each lights up while its end is clipped; pressed, the photo shows
+   where. Spans the plot's top edge so either corner is a target. */
+.editor-clip-toggle {
+  position: absolute;
+  inset: 4px 4px auto 4px;
+  display: flex;
+  justify-content: space-between;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.editor-clip-mark {
+  width: 9px;
+  height: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 2px;
+  background: transparent;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.editor-clip-toggle:hover .editor-clip-mark {
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.editor-clip-mark.shadows.lit {
+  background: #2060ff;
+  border-color: #2060ff;
+}
+
+.editor-clip-mark.highlights.lit {
+  background: #ff2020;
+  border-color: #ff2020;
+}
+
+.editor-clip-toggle.on .editor-clip-mark {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+/* The white-balance eyedropper under the Kelvin slider, and the auto-level
+   button above Straighten: a small button with room for its answer. */
+.editor-wb-pick,
+.editor-auto-level {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+
+.editor-wb-pick-error {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .editor-histogram-wait {
@@ -3409,6 +3491,116 @@ textarea:focus-visible {
   align-items: center;
   gap: 6px;
   margin-top: 8px;
+}
+
+/* The presets, listed: a row each, the name applying it, a quiet delete at
+   the end. The active one is ringed like the active film simulation. */
+.editor-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 264px;
+  overflow-y: auto;
+}
+
+.editor-preset-item {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+
+.editor-preset-item:hover {
+  border-color: var(--text-muted);
+}
+
+.editor-preset-item.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.editor-preset-apply,
+.editor-preset-action {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.editor-preset-apply {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px 6px 8px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.editor-preset-item.active .editor-preset-apply {
+  font-weight: 600;
+}
+
+.editor-preset-tick {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+}
+
+.editor-preset-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The row's own actions (update with the current look, delete): quiet until
+   pointed at, always in place. */
+.editor-preset-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.editor-preset-action:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--text);
+}
+
+.editor-preset-delete:hover:not(:disabled) {
+  color: var(--danger, #d9534f);
+}
+
+.editor-preset-apply:focus-visible,
+.editor-preset-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.editor-preset-action:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
+.editor-preset-apply:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.editor-preset-empty {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .editor-preset-select {
@@ -3588,7 +3780,9 @@ input.editor-preset-select {
    swatch + name, with the same active treatment as the mixer bands. */
 .film-sim-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, ...): a bare 1fr never shrinks below its longest label, so one
+     long name ("Eterna Bleach Bypass") widened its column past the panel. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 6px;
   margin: 8px 0 4px;
 }
@@ -3742,6 +3936,9 @@ input.editor-preset-select {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* The panel scrolls one way only. Left to `auto` (what overflow-y: auto makes
+     of it), a control a pixel too wide puts a scrollbar across the bottom. */
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -3768,6 +3965,16 @@ input.editor-preset-select {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* The first slider of a sub-group inside one panel group (Tone: the exposure
+   sliders, then highlights/shadows, then the endpoints): a hairline and a
+   little more air above it, so the column reads as a few blocks to find your
+   way by rather than as one long run of identical rows. */
+.editor-slider--group {
+  margin-top: 4px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
 }
 
 .editor-slider-head {
@@ -3804,6 +4011,13 @@ input.editor-preset-select {
   font-size: 12px;
 }
 
+/* A number being typed for the slider (click the slider, type): shown in
+   place of the value until it is applied. */
+.editor-slider-val--typing {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* An on/off setting laid out like a slider's head (the lens profile switch):
    label - with a muted second line - on the left, the switch where a slider
    shows its value. Same type sizes as the slider rows around it. */
@@ -3833,6 +4047,21 @@ input.editor-preset-select {
   color: var(--text-muted);
 }
 
+/* A switch that belongs to one slider (Normalize, for Exposure): set in that
+   slider's head right after its name, in the quiet type of a slider's value,
+   so it reads as part of the control rather than as a row of its own. */
+.editor-slider-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  margin-right: auto;
+  align-self: center;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
 .editor-switch {
   appearance: none;
   flex: none;
@@ -3857,6 +4086,23 @@ input.editor-preset-select {
   border-radius: 50%;
   background: var(--text-muted);
   transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.editor-switch--sm {
+  width: 24px;
+  height: 14px;
+  border-radius: 7px;
+}
+
+.editor-switch--sm::after {
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+}
+
+.editor-switch--sm.on::after {
+  transform: translateX(10px);
 }
 
 .editor-switch:hover:not(:disabled) {
@@ -6992,6 +7238,108 @@ kbd {
 }
 
 /* Colour-grading wheels: 2x2 grid, each cell = disc + its luminance slider. */
+/* White-balance shift cross (components/WbShiftPad.tsx): the camera's
+   red/blue grid in place of the Temperature and Tint sliders. */
+.wb-pad-block {
+  margin: 12px 0 16px;
+}
+
+.wb-pad-frame {
+  position: relative;
+  width: 100%;
+  max-width: 168px;
+  margin: 8px auto 0;
+  /* Room for the axis letters above and to the right of the grid. */
+  padding: 16px 16px 0 0;
+}
+
+.wb-pad-axis {
+  position: absolute;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.wb-pad-axis--top {
+  top: 0;
+  left: calc(50% - 8px);
+  transform: translateX(-50%);
+}
+
+.wb-pad-axis--right {
+  right: 2px;
+  top: calc(50% + 8px);
+  transform: translateY(-50%);
+}
+
+.wb-pad {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  touch-action: none;
+  cursor: crosshair;
+  /* Top to bottom: the centre cross, the camera's fine grid, then the two
+     colour axes - cyan to red across, yellow to blue upwards - over grey. */
+  background:
+    linear-gradient(to right, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.7) calc(50% - 0.5px), rgba(255, 255, 255, 0.7) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.7) calc(50% - 0.5px), rgba(255, 255, 255, 0.7) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    repeating-linear-gradient(to right, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px calc(100% / 18)),
+    repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px calc(100% / 18)),
+    linear-gradient(to right, rgba(0, 190, 200, 0.6), rgba(128, 128, 128, 0) 50%, rgba(225, 45, 45, 0.6)),
+    linear-gradient(to top, rgba(235, 200, 30, 0.6), rgba(128, 128, 128, 0) 50%, rgba(45, 85, 230, 0.6)),
+    #808080;
+}
+
+.wb-pad-fields {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.wb-pad-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.wb-pad-field input {
+  width: 62px;
+  padding: 3px 4px 3px 7px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-pad:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.wb-pad.dragging {
+  cursor: grabbing;
+}
+
+.wb-pad-puck {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
 .grade-wheels {
   display: grid;
   grid-template-columns: 1fr 1fr;

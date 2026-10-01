@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useId, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -65,6 +65,8 @@ import { useEditHistory } from "../utils/editHistory";
 import { useTransientMessage } from "../utils/transientMessage";
 import { CurveEditor, MAX_CURVE_POINTS } from "./CurveEditor";
 import { ColorWheel } from "./ColorWheel";
+import { WbShiftPad } from "./WbShiftPad";
+import { whiteBalanceFromNeutral } from "../utils/kelvin";
 import { MaskOverlay } from "./MaskOverlay";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
@@ -347,6 +349,10 @@ function Slider({
   format,
   resetValue = 0,
   uiScale = 1,
+  onArrow,
+  parse,
+  headExtra,
+  groupStart,
 }: {
   label: string;
   value: number;
@@ -362,8 +368,59 @@ function Slider({
   // Display divisor (ScalarDef.uiScale): the slider shows value/uiScale while
   // onChange/value stay in the stored full-range units.
   uiScale?: number;
+  // Takes over the left/right keys (direction, Shift held) from the range
+  // input's own one-step nudge - for a slider whose natural step is not its
+  // scale's (the Kelvin slider: 100 K, with Shift 10 K).
+  onArrow?: (direction: 1 | -1, fine: boolean) => void;
+  // Typed text -> the slider's (displayed) value, for a slider whose readout
+  // is not its own scale (the Kelvin slider runs in mired). Default: the
+  // number in the text, whatever unit is written after it.
+  parse?: (text: string) => number | null;
+  // A small control that belongs to this slider, set in its head row next to
+  // the label (Normalize under Exposure).
+  headExtra?: ReactNode;
+  // Opens a sub-group: drawn with a hairline above (FieldDef.groupStart).
+  groupStart?: boolean;
 }) {
+  // The label names the range input explicitly: with a control in the head, the
+  // implicit "first control inside" would make a click on the name press that.
+  const inputId = useId();
   const uiValue = value / uiScale;
+  // The value can be typed: click the slider and type the number. `draft` is
+  // what has been typed so far (shown in place of the value); it is applied
+  // on Enter, when the slider loses the focus, or after a short pause.
+  const [draft, setDraft] = useState<string | null>(null);
+  const draftRef = useRef<string | null>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(draftTimerRef.current), []);
+  function setTyped(text: string | null) {
+    draftRef.current = text;
+    setDraft(text);
+    clearTimeout(draftTimerRef.current);
+    if (text !== null) draftTimerRef.current = setTimeout(applyTyped, 1200);
+  }
+  function applyTyped() {
+    const text = draftRef.current;
+    setTyped(null);
+    if (text !== null && /\d/.test(text)) commitDraft(text);
+  }
+  const shownText = format
+    ? format(uiValue)
+    : min < 0 && Math.round(uiValue) > 0
+      ? `+${Math.round(uiValue)}`
+      : String(Math.round(uiValue));
+  function commitDraft(text: string) {
+    const typed = parse
+      ? parse(text)
+      : Number.parseFloat(text.replace(",", ".").replace(/[^0-9.+-]/g, ""));
+    if (typed === null || !Number.isFinite(typed)) return; // not a number: keep the value
+    const lo = Math.min(min, max) / uiScale;
+    const hi = Math.max(min, max) / uiScale;
+    const ui = Math.max(lo, Math.min(hi, typed));
+    pendingRef.current = null; // a drag value still queued must not overwrite it
+    // Sliders without a step hold whole numbers; the others keep what was typed.
+    onChange(step || parse ? ui * uiScale : Math.round(ui * uiScale));
+  }
   // Off its default = this slider is part of the look. Marked on the label so
   // the panel says where the work is without you reading every number.
   const edited = Math.abs(value - resetValue) > 1e-6;
@@ -390,16 +447,23 @@ function Slider({
     });
   };
   return (
-    <label className="editor-slider">
+    <label className={`editor-slider${groupStart ? " editor-slider--group" : ""}`} htmlFor={inputId}>
       <span className="editor-slider-head">
         <span>
           {label}
-          {edited && <span className="editor-edited-dot" title="Changed from its default" />}
+          {/* Always in the row, only hidden while the slider is on its
+              default: appearing must not push the control beside the name. */}
+          <span
+            className="editor-edited-dot"
+            title="Changed from its default"
+            style={edited ? undefined : { visibility: "hidden" }}
+          />
         </span>
+        {headExtra}
         {/* A sign only where the slider swings both ways: "+15" on a 0..80
             threshold or a 0..100 amount reads as a direction that isn't there. */}
-        <span className="editor-slider-val">
-          {format ? format(uiValue) : min < 0 && uiShown > 0 ? `+${uiShown}` : uiShown}
+<span className={`editor-slider-val${draft !== null ? " editor-slider-val--typing" : ""}`}>
+          {draft ?? shownText}
         </span>
       </span>
       {/* The wrapper carries the drawn track's fill stops and the zero tick
@@ -409,6 +473,7 @@ function Slider({
         style={rangeFillStyle(uiValue, min / uiScale, max / uiScale)}
       >
         <input
+          id={inputId}
           type="range"
           min={min / uiScale}
           max={max / uiScale}
@@ -421,12 +486,39 @@ function Slider({
           }}
           onKeyDown={(e) => {
             // Up/down walk the slider list; left/right keep the native "nudge
-            // the value" behaviour of a focused range input.
+            // the value" behaviour of a focused range input, unless the
+            // slider brings its own step.
+            // Typing a number sets the value. Handled here and kept from the
+            // editor's own keys, where the digits open panel sections.
+            if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+              const typing = draftRef.current !== null;
+              if (/^[0-9]$/.test(e.key) || ((e.key === "." || e.key === ",") && typing) || (e.key === "-" && !typing)) {
+                e.preventDefault();
+                e.stopPropagation();
+                setTyped((draftRef.current ?? "") + e.key);
+                return;
+              }
+              if (typing && (e.key === "Enter" || e.key === "Backspace" || e.key === "Escape")) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.key === "Enter") applyTyped();
+                else if (e.key === "Escape") setTyped(null);
+                else setTyped(draftRef.current!.slice(0, -1) || null);
+                return;
+              }
+            }
+            if (onArrow && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+              e.preventDefault();
+              pendingRef.current = null;
+              onArrow(e.key === "ArrowRight" ? 1 : -1, e.shiftKey);
+              return;
+            }
             if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
             e.preventDefault();
             focusAdjacentSlider(e.currentTarget, e.key === "ArrowDown" ? 1 : -1);
           }}
-          title="Double-click to reset"
+          onBlur={applyTyped}
+          title="Double-click to reset. Click and type a number to set the value."
         />
       </span>
     </label>
@@ -473,6 +565,43 @@ function computeHistBinsFromBitmap(bmp: ImageBitmap | HTMLCanvasElement): Uint32
   if (!ctx) return null;
   ctx.drawImage(bmp, 0, 0, w, h);
   return computeHistBins(ctx.getImageData(0, 0, w, h));
+}
+
+// Clipping warning: the frame with its blown highlights marked red and its
+// crushed shadows marked blue, as a canvas to draw in the frame's place. The
+// marking is painted on a CPU-side copy - reading the display canvas back
+// every frame would stall a drag - and the histogram, the frame handed to the
+// lightbox and the server's render all stay clean: it only exists on screen.
+let clipScratch: HTMLCanvasElement | null = null;
+function markClipping(bmp: ImageBitmap): CanvasImageSource {
+  clipScratch ??= document.createElement("canvas");
+  if (clipScratch.width !== bmp.width || clipScratch.height !== bmp.height) {
+    clipScratch.width = bmp.width;
+    clipScratch.height = bmp.height;
+  }
+  const ctx = clipScratch.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return bmp;
+  ctx.drawImage(bmp, 0, 0);
+  const img = ctx.getImageData(0, 0, bmp.width, bmp.height);
+  const d = img.data;
+  let marked = false;
+  for (let i = 0; i < d.length; i += 4) {
+    const hi = Math.max(d[i], d[i + 1], d[i + 2]);
+    if (hi >= 254) {
+      d[i] = 255;
+      d[i + 1] = 32;
+      d[i + 2] = 32;
+      marked = true;
+    } else if (hi <= 1) {
+      d[i] = 32;
+      d[i + 1] = 96;
+      d[i + 2] = 255;
+      marked = true;
+    }
+  }
+  if (!marked) return bmp;
+  ctx.putImageData(img, 0, 0);
+  return clipScratch;
 }
 
 // The histogram bins live in a tiny store of their own rather than in the
@@ -566,6 +695,32 @@ function Histogram({ store }: { store: HistStore }) {
     ctx.globalCompositeOperation = "source-over";
   }, [bins]);
   return <canvas ref={ref} className="editor-histogram" width={256} height={64} />;
+}
+
+// The clipping toggle on the histogram: two corner marks, shadows left and
+// highlights right, each lit while its end of the photo is clipped - so the
+// plot says there IS clipping before you ask where. One click (or J) marks it
+// on the photo.
+function ClipToggle({ store, on, onToggle }: { store: HistStore; on: boolean; onToggle: () => void }) {
+  const bins = useHistBins(store);
+  let total = 0;
+  if (bins) for (let v = 0; v < 256; v++) total += bins[3][v];
+  // "Clipped" from a thousandth of the frame on: a few specular pixels are not
+  // a warning.
+  const clipped = (v: number) =>
+    !!bins && total > 0 && Math.max(bins[0][v], bins[1][v], bins[2][v]) / total > 0.001;
+  return (
+    <button
+      type="button"
+      className={`editor-clip-toggle${on ? " on" : ""}`}
+      onClick={onToggle}
+      aria-pressed={on}
+      title={on ? "Hide the clipping warning (J)" : "Show clipped highlights and shadows on the photo (J)"}
+    >
+      <span className={`editor-clip-mark shadows${clipped(0) ? " lit" : ""}`} aria-hidden />
+      <span className={`editor-clip-mark highlights${clipped(255) ? " lit" : ""}`} aria-hidden />
+    </button>
+  );
 }
 
 export function PhotoEditor({ image, onClose, docked = false, closing = false, onPreviewFrame, onEditsSettled, maskHost = null }: Props) {
@@ -1028,9 +1183,6 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const curvePickDrag = useRef<{ x: number; clientY: number; baseY: number; baseParam: number[] } | null>(null);
   const [gridOverlay, setGridOverlay] = useState<GridOverlay>("none");
   const [presets, setPresets] = useState<Record<string, EditPreset>>(() => loadPresets());
-  const [selectedPreset, setSelectedPreset] = useState("");
-  // Inline preset naming (Electron has no window.prompt).
-  const [namingPreset, setNamingPreset] = useState(false);
   // Save-copy dialog: asks for a physical (baked JPEG) or virtual copy, and -
   // when the user asked for it in Settings (see viewPrefs) - the physical
   // copy's quality/size. The render runs while it's open, so it doubles as
@@ -1093,6 +1245,19 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // Both use the same canvas gestures; this only says which sub-mask they write.
   const [limitEdit, setLimitEdit] = useState(false);
   const [colorPickMode, setColorPickMode] = useState(false);
+  // The white-balance eyedropper: the next click on the photo names an area
+  // that should be white.
+  const [wbPickMode, setWbPickMode] = useState(false);
+  const [wbPickError, setWbPickError] = useTransientMessage();
+  // Auto-straighten: the server measures the horizon, the slider takes the
+  // angle. The note answers a click that found nothing to go by.
+  const [levelling, setLevelling] = useState(false);
+  const [levelNote, setLevelNote] = useTransientMessage();
+  // Clipping warning on the photo (see markClipping). A ref as well, for the
+  // frame painters, which are not re-created per render.
+  const [clipWarn, setClipWarn] = useState(false);
+  const clipWarnRef = useRef(false);
+  clipWarnRef.current = clipWarn;
   // "Show mask": keep the selected mask's area marked while it is being set up.
   // Pointing at a mask in the list marks it too, but that can't help the case
   // this exists for - a luminance or edge mask is judged while you drag its own
@@ -1182,6 +1347,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     // on - so opening the group arms it. The toolbar button still disarms it,
     // and leaving the group puts it away (it only makes sense with the plot in
     // view). Arming takes the canvas pointer, so drop the other canvas modes.
+    if (openGroup !== "color") setWbPickMode(false);
     if (openGroup === "curves") {
       setCurvePickMode(true);
       setMaskDrawMode(false);
@@ -1219,9 +1385,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // editor opens so the stage never sits empty behind "Loading…" while the
   // first server render (a cold decode can be seconds) round-trips. The bytes
   // are warm in the browser - the detail view underneath shows this exact URL.
-  // Unedited raws skip it: their browsing preview is auto-exposed while the
-  // editor renders the native (darker) base, and that brightness snap would
-  // read as a bug. Edited photos and JPEGs match the editor's render.
+  // An unedited raw has it too: its browsing preview is the auto-exposed
+  // picture, and so is the editor's render on the standard raw base.
   const [placeholderFailed, setPlaceholderFailed] = useState(false);
   const placeholderRef = useRef<HTMLImageElement | null>(null);
   // Fit the placeholder BEFORE the first paint: the editor opens over the
@@ -1242,10 +1407,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const [focusMode, setFocusMode] = useState(false);
   useFocusChrome(focusMode && !docked);
   const placeholderUrl = useMemo(
-    () =>
-      image.file_type !== "raw" || image.edit_rev > 0
-        ? api.images.previewUrl(image.id, editVersion(image))
-        : null,
+    () => api.images.previewUrl(image.id, editVersion(image)),
     [image],
   );
   const placeholderShown = loading && !!placeholderUrl && !placeholderFailed;
@@ -1551,7 +1713,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         fitCanvasToStage();
       }
       const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(bmp, 0, 0);
+      ctx.drawImage(clipWarnRef.current ? markClipping(bmp) : bmp, 0, 0);
       paintedPxRef.current = Math.max(bmp.width, bmp.height);
       paintedTierRef.current = {
         tier: (blob as ServedBlob).servedTier ?? "accurate",
@@ -1631,7 +1793,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // Stretched into its box: a budget-capped tile (region_px) arrives
         // smaller than the frame pixels it stands for, and the stretch here is
         // the same downsample the display was doing to the native-sized tile.
-        ctx.drawImage(bmp, blob.box.x, blob.box.y, blob.box.w ?? bmp.width, blob.box.h ?? bmp.height);
+        ctx.drawImage(
+          clipWarnRef.current ? markClipping(bmp) : bmp,
+          blob.box.x, blob.box.y, blob.box.w ?? bmp.width, blob.box.h ?? bmp.height
+        );
         // The tile carries a newer edit state than the whole frame under it:
         // outside this rectangle the picture still shows the old edit. Flag
         // it, so zooming out / panning knows a re-render is owed.
@@ -2054,7 +2219,9 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     dirtyToken.current++;
     void pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image.id, previewEdits, peekMaskId]);
+    // clipWarn: the marking is painted as a frame lands, so switching it needs
+    // a frame to land.
+  }, [image.id, previewEdits, peekMaskId, clipWarn]);
 
   // A new photo starts with a clean slate: its first whole-frame render sets
   // the ground; nothing carried over from the previous photo's tiles. The
@@ -2249,30 +2416,59 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     setAdj(normalizeAdjustments(p.adjustments));
   }
 
-  function confirmSavePreset() {
-    const name = presetName.trim();
+  // Each preset as the develop object applying it gives, serialised once per
+  // preset list - what the live look is compared against (see activePreset).
+  const presetLooks = useMemo(
+    () =>
+      Object.keys(presets)
+        .sort((a, b) => a.localeCompare(b))
+        .map((name) => ({ name, look: JSON.stringify(normalizeAdjustments(presets[name].adjustments)) })),
+    [presets],
+  );
+  // The preset the photo is on right now: the one whose look IS the current
+  // one. Derived, not remembered - so it is marked when a photo that was
+  // saved on a preset is opened again, and stops being marked the moment a
+  // slider moves away from it. Only worked out while the list is on screen.
+  const presetsOpen = openGroup === "presets";
+  const activePreset = useMemo(() => {
+    if (!presetsOpen || presetLooks.length === 0) return null;
+    const look = JSON.stringify(adj);
+    return presetLooks.find((p) => p.look === look)?.name ?? null;
+  }, [presetsOpen, presetLooks, adj]);
+
+  // Saves the current look under `name`: the name typed below, or - from a
+  // preset's own update button - the preset that takes the new changes.
+  async function confirmSavePreset(target?: string) {
+    const name = (target ?? presetName).trim();
     if (!name) return;
+    // Saving under a name that exists replaces that preset - say so first.
+    if (
+      presets[name] &&
+      !(await dialogs.confirm({
+        title: `Replace preset “${name}”?`,
+        message: "The preset is overwritten with the current look. Photos it was applied to keep their edits.",
+        confirmLabel: "Replace preset",
+      }))
+    )
+      return;
     savePreset(name, { adjustments: adj });
     setPresets(loadPresets());
-    setSelectedPreset(name);
-    setNamingPreset(false);
-    setPresetName("");
+    if (target === undefined) setPresetName("");
   }
 
-  async function handleDeletePreset() {
-    if (!selectedPreset || !presets[selectedPreset]) return;
+  async function handleDeletePreset(name: string) {
+    if (!presets[name]) return;
     if (
       !(await dialogs.confirm({
-        title: `Delete preset “${selectedPreset}”?`,
+        title: `Delete preset “${name}”?`,
         message: "The preset is removed from this computer. Photos it was applied to keep their edits.",
         confirmLabel: "Delete preset",
         danger: true,
       }))
     )
       return;
-    deletePreset(selectedPreset);
+    deletePreset(name);
     setPresets(loadPresets());
-    setSelectedPreset("");
   }
 
   const saveEdits = useMutation({
@@ -2571,6 +2767,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       if (e.key === "Escape") {
         // Peel back the active on-canvas mode first, then close the editor.
         if (colorPickMode) setColorPickMode(false);
+        else if (wbPickMode) setWbPickMode(false);
         else if (curvePickMode) {
           setCurvePickMode(false);
           setCurveMarker(null);
@@ -2631,6 +2828,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         return;
       }
 
+      // J: the clipping warning, as in Lightroom.
+      if (e.key === "j" || e.key === "J") {
+        setClipWarn((on) => !on);
+        return;
+      }
+
       // P hides/shows the panel, as in the photo view.
       if (!docked && (e.key === "p" || e.key === "P")) {
         setPanelOpen((open) => !open);
@@ -2651,7 +2854,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, focusMode, undo, redo]);
+  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, wbPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, focusMode, undo, redo]);
 
   function fractionAt(clientX: number, clientY: number) {
     const clamp = (v: number) => Math.min(Math.max(v, 0), 1);
@@ -3207,9 +3410,9 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     return pickSnapRef.current;
   }
 
-  // The active channel's value (0..255) under the pointer, averaged over a
-  // small window so a single noisy pixel doesn't decide where the point lands.
-  function sampleToneAt(clientX: number, clientY: number): number | null {
+  // The colour (0..255 per channel) under the pointer, averaged over a small
+  // window so a single noisy pixel doesn't decide what was picked.
+  function sampleRgbAt(clientX: number, clientY: number): [number, number, number] | null {
     const snap = pickSnapshot();
     if (!snap) return null;
     const f = fractionAt(clientX, clientY);
@@ -3227,7 +3430,29 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       }
     }
     if (!n) return null;
-    const [rr, gg, bb] = [sr / n, sg / n, sb / n];
+    return [sr / n, sg / n, sb / n];
+  }
+
+  // White-balance eyedropper: make the white area under the pointer neutral. Stays
+  // armed after a point that could not be used, so the next click can try
+  // another; a point that worked puts the tool away.
+  function pickWhiteBalanceAt(clientX: number, clientY: number) {
+    const rgb = sampleRgbAt(clientX, clientY);
+    const next = rgb && whiteBalanceFromNeutral(rgb, adj);
+    if (!next) {
+      setWbPickError("That spot is blown out or too dark to measure. Pick a white area that still shows detail.");
+      return;
+    }
+    setWbPickError(null);
+    setAdj((a) => ({ ...a, ...next }));
+    setWbPickMode(false);
+  }
+
+  // The active channel's value (0..255) under the pointer.
+  function sampleToneAt(clientX: number, clientY: number): number | null {
+    const rgb = sampleRgbAt(clientX, clientY);
+    if (!rgb) return null;
+    const [rr, gg, bb] = rgb;
     if (curveChannel === "red") return rr;
     if (curveChannel === "green") return gg;
     if (curveChannel === "blue") return bb;
@@ -3669,6 +3894,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     () => editedGroups(adj, { rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion }),
     [adj, rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion]
   );
+  // The Tint slider shows once the photo carries a tint (the eyedropper sets
+  // one) and then stays for the session: resetting it to 0 must not make it
+  // vanish from under the pointer.
+  const [tintShown, setTintShown] = useState(() => adj.tint !== 0);
+  useEffect(() => {
+    if (adj.tint !== 0) setTintShown(true);
+  }, [adj.tint]);
   // Whether this photo's RAW carries lens correction data - the Lens profile
   // switch under Transform is only offered when it does.
   const lensProfile = useQuery({
@@ -3678,10 +3910,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   });
   // A group of scalar sliders bound straight to adj[key] (Basic/Color/Details/
   // Effects control blocks - unchanged behaviour, just factored out).
-  function scalarSliders(fields: FieldDef[]) {
+  // `extra` sets a control into the head of one of the sliders (the raw base
+  // switch beside Exposure).
+  function scalarSliders(fields: FieldDef[], extra?: { key: FieldDef["key"]; node: ReactNode }) {
     return (
       <div className="editor-sliders">
-        {fields.map((field) => {
+        {fields.map((field, i) => {
           // Narrow to ScalarDef: indexing SCALAR_SPEC by a union key gives a
           // union of value shapes; the union is assignable to ScalarDef.
           const spec: ScalarDef = SCALAR_SPEC[field.key];
@@ -3697,6 +3931,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               uiScale={spec.uiScale}
               format={field.format}
               onChange={(v) => setAdj((a) => ({ ...a, [field.key]: v }))}
+              headExtra={extra?.key === field.key ? extra.node : undefined}
+              groupStart={field.groupStart && i > 0}
             />
           );
         })}
@@ -3963,7 +4199,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             className="editor-canvas"
             style={{
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-              cursor: colorPickMode || curvePickMode
+              cursor: colorPickMode || curvePickMode || wbPickMode
                 ? "crosshair"
                 : maskDrawMode
                   ? maskCursor
@@ -3981,6 +4217,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               if (colorPickMode) {
                 pickColorAt(e.clientX, e.clientY);
                 setColorPickMode(false);
+                return;
+              }
+              if (wbPickMode) {
+                pickWhiteBalanceAt(e.clientX, e.clientY);
                 return;
               }
               // The curve picker stays armed across drags - shaping a curve
@@ -4383,6 +4623,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             {/* Empty until the photo's first frame is read back - a spinner
                 on the plot says so, where a bare black box looked broken. */}
             <HistogramWait store={histStore} hidden={!!error} />
+            <ClipToggle store={histStore} on={clipWarn} onToggle={() => setClipWarn((on) => !on)} />
           </div>
         </div>
 
@@ -4521,6 +4762,29 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
 
             {/* Straighten (rotation) + perspective / axis tilt. All auto-fill the
                 frame, so nothing shows empty corners. */}
+            <div className="editor-auto-level">
+              <button
+                className="btn btn-sm"
+                disabled={busy || levelling}
+                title="Level the horizon automatically"
+                onClick={() => {
+                  setLevelling(true);
+                  setLevelNote(null);
+                  api.images
+                    .autoStraighten(image.id, { rotation, flipH, flipV })
+                    .then(({ angle }) => {
+                      if (angle === null) setLevelNote("No clear horizon found.");
+                      else if (angle === straighten) setLevelNote("Already level.");
+                      else setStraighten(angle);
+                    })
+                    .catch(() => setLevelNote("Couldn't measure the horizon."))
+                    .finally(() => setLevelling(false));
+                }}
+              >
+                {levelling ? "Levelling…" : "Auto level"}
+              </button>
+              {levelNote && <span className="editor-wb-pick-error">{levelNote}</span>}
+            </div>
             <div className="editor-sliders">
               <Slider
                 label="Straighten"
@@ -4659,16 +4923,50 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         {accordionHeader("basic", "Tone")}
         {openGroup === "basic" && (
           <div className="editor-accordion-body">
-            {/* Base transfer curve the tonal sliders ride on. */}
-            <Dropdown
-              className="editor-grid-select"
-              value={adj.tone_mapper}
-              onChange={(v) => setAdj((a) => ({ ...a, tone_mapper: v as Adjustments["tone_mapper"] }))}
-              title="Tone mapper"
-              ariaLabel="Tone mapper"
-              options={TONE_MAPPERS.map((t) => ({ value: t.value, label: t.label }))}
-            />
-            {scalarSliders(sectionFields("Basic"))}
+            {/* Base transfer curve the tonal sliders ride on. Laid out like a
+                slider's head - name left, the choice where a value sits - so it
+                reads as the first row of the column, not a box above it. */}
+            <div className="editor-select-row">
+              <span>Tone mapper</span>
+              <Dropdown
+                className="editor-select-inline"
+                value={adj.tone_mapper}
+                onChange={(v) => setAdj((a) => ({ ...a, tone_mapper: v as Adjustments["tone_mapper"] }))}
+                title="Tone mapper"
+                ariaLabel="Tone mapper"
+                options={TONE_MAPPERS.map((t) => ({ value: t.value, label: t.label }))}
+              />
+            </div>
+            {/* The raw base: every RAW opens lifted to the same brightness, the
+                picture the grid shows, and Exposure works from there. Off is
+                the sensor's own exposure (a DR-mode file is 2-3 stops dark).
+                An edit from before the switch existed was made on the native
+                base, so it reads as off. */}
+            {scalarSliders(
+              sectionFields("Basic"),
+              image.file_type === "raw"
+                ? {
+                    key: "exposure",
+                    node: (
+                      <span className="editor-slider-extra">
+                        Normalize
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={adj.raw_base === "standard"}
+                          aria-label="Normalize exposure"
+                          className={`editor-switch editor-switch--sm${adj.raw_base === "standard" ? " on" : ""}`}
+                          onClick={() =>
+                            setAdj((a) => ({ ...a, raw_base: a.raw_base === "standard" ? "native" : "standard" }))
+                          }
+                          disabled={busy}
+                          title="Develop this RAW from the same brightness as every other one. Off shows the exposure the sensor recorded."
+                        />
+                      </span>
+                    ),
+                  }
+                : undefined,
+            )}
           </div>
         )}
 
@@ -4791,7 +5089,56 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         {accordionHeader("color", "Color")}
         {openGroup === "color" && (
           <div className="editor-accordion-body">
-            {scalarSliders(sectionFields("Color"))}
+            {/* White balance: the same relative Temperature slider for every
+                photo, raw or JPEG, then the red/blue shift cross as a fine
+                correction on top. */}
+            {scalarSliders(sectionFields("Color").filter((f) => f.key === "temperature"))}
+            {/* The eyedropper: click something that should be white. */}
+            <div className="editor-wb-pick">
+              <button
+                className={`btn btn-sm${wbPickMode ? " primary" : ""}`}
+                onClick={() => {
+                  setWbPickMode((on) => !on);
+                  setWbPickError(null);
+                }}
+                title="Set the white balance from an area that should be white"
+              >
+                {wbPickMode ? "Click a white area…" : "Pick white"}
+              </button>
+              {/* Back to the white balance as shot: temperature, tint and the
+                  shift cross together. */}
+              <button
+                className="btn btn-sm ghost"
+                disabled={
+                  adj.temperature === 0 && adj.tint === 0 && adj.wb_shift_r === 0 && adj.wb_shift_b === 0
+                }
+                onClick={() => {
+                  setWbPickMode(false);
+                  setWbPickError(null);
+                  setAdj((a) => ({ ...a, temperature: 0, tint: 0, wb_shift_r: 0, wb_shift_b: 0 }));
+                }}
+                title="Reset the white balance to as shot"
+              >
+                Reset
+              </button>
+              {wbPickError && <span className="editor-wb-pick-error">{wbPickError}</span>}
+            </div>
+            <WbShiftPad
+              red={adj.wb_shift_r}
+              blue={adj.wb_shift_b}
+              onChange={(v) => setAdj((a) => ({ ...a, wb_shift_r: v.red, wb_shift_b: v.blue }))}
+            />
+            {/* Tint is what the cross does (both axes together); the slider only
+                shows for a photo that carries a tint. */}
+            {scalarSliders(
+              sectionFields("Color").filter(
+                (f) =>
+                  f.key !== "temperature" &&
+                  f.key !== "wb_shift_r" &&
+                  f.key !== "wb_shift_b" &&
+                  (f.key !== "tint" || tintShown)
+              )
+            )}
 
             {/* HSL colour mixer: per-band Hue / Saturation / Luminance (adj.hsl). */}
             <div className="editor-section-title">
@@ -5206,79 +5553,88 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         {accordionHeader("presets", "Presets")}
         {openGroup === "presets" && (
           <div className="editor-accordion-body">
-        {namingPreset ? (
-          <div className="editor-preset-row">
-            <input
-              className="editor-preset-select"
-              type="text"
-              autoFocus
-              placeholder="Preset name"
-              value={presetName}
-              onChange={(e) => setPresetName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") confirmSavePreset();
-                else if (e.key === "Escape") {
-                  setNamingPreset(false);
-                  setPresetName("");
+            {/* Every preset is on show, one click applies it, and the one the
+                photo is on carries the accent ring and a tick - the film
+                simulations' way of saying "this one". */}
+            {presetLooks.length === 0 ? (
+              <p className="editor-preset-empty">No presets yet. Set up a look, then save it below.</p>
+            ) : (
+              <div className="editor-preset-list" role="listbox" aria-label="Presets">
+                {presetLooks.map(({ name }) => {
+                  const active = name === activePreset;
+                  return (
+                    <div key={name} className={`editor-preset-item${active ? " active" : ""}`}>
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={active}
+                        className="editor-preset-apply"
+                        onClick={() => applyPreset(presets[name])}
+                        disabled={busy}
+                        title={active ? `“${name}” is the current look` : `Apply “${name}”`}
+                      >
+                        {/* The tick's place is always kept, so a name never
+                            moves when its preset becomes the active one. */}
+                        <span className="editor-preset-tick" style={active ? undefined : { visibility: "hidden" }}>
+                          <IconCheck size={13} />
+                        </span>
+                        <span className="editor-preset-name">{name}</span>
+                      </button>
+                      {/* Take the changes made since into this preset. Off on
+                          the active one: it already is the current look. */}
+                      <button
+                        type="button"
+                        className="editor-preset-action"
+                        onClick={() => void confirmSavePreset(name)}
+                        disabled={busy || active}
+                        title={active ? `“${name}” already is the current look` : `Update “${name}” with the current look`}
+                        aria-label={`Update preset ${name} with the current look`}
+                      >
+                        <IconSave size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="editor-preset-action editor-preset-delete"
+                        onClick={() => handleDeletePreset(name)}
+                        disabled={busy}
+                        title={`Delete “${name}”`}
+                        aria-label={`Delete preset ${name}`}
+                      >
+                        <IconTrash size={13} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* Saving is always here, not behind a button that swaps the row:
+                type a name, Enter. An existing name asks before it replaces. */}
+            <div className="editor-preset-row">
+              <input
+                className="editor-preset-select"
+                type="text"
+                placeholder="Save current look as…"
+                aria-label="Name for a new preset"
+                value={presetName}
+                onChange={(e) => setPresetName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void confirmSavePreset();
+                  else if (e.key === "Escape") setPresetName("");
+                }}
+              />
+              <button
+                className="btn btn-sm primary"
+                onClick={() => void confirmSavePreset()}
+                disabled={!presetName.trim() || busy}
+                title={
+                  presets[presetName.trim()]
+                    ? "Replace the preset of this name with the current look"
+                    : "Save the current look as a preset"
                 }
-              }}
-            />
-            <button className="btn btn-sm primary" onClick={confirmSavePreset} disabled={!presetName.trim()}>
-              Save
-            </button>
-            <button
-              className="btn btn-sm ghost"
-              onClick={() => {
-                setNamingPreset(false);
-                setPresetName("");
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <div className="editor-preset-row">
-            <Dropdown
-              className="editor-preset-select"
-              value={selectedPreset}
-              ariaLabel="Apply preset"
-              onChange={(name) => {
-                setSelectedPreset(name);
-                const p = presets[name];
-                if (p) applyPreset(p);
-              }}
-              options={[
-                {
-                  value: "",
-                  label: Object.keys(presets).length ? "Apply a preset…" : "No presets yet",
-                },
-                ...Object.keys(presets)
-                  .sort()
-                  .map((name) => ({ value: name, label: name })),
-              ]}
-            />
-            <button
-              className="btn btn-sm"
-              onClick={() => {
-                setPresetName(selectedPreset || "");
-                setNamingPreset(true);
-              }}
-              title="Save the current look as a preset"
-              aria-label="Save the current look as a preset"
-            >
-              <IconSave size={14} />
-            </button>
-            <button
-              className="btn btn-sm quiet-danger"
-              onClick={handleDeletePreset}
-              disabled={!selectedPreset}
-              title="Delete the selected preset"
-              aria-label="Delete the selected preset"
-            >
-              <IconTrash size={14} />
-            </button>
-          </div>
-        )}
+              >
+                {presets[presetName.trim()] ? "Replace" : "Save"}
+              </button>
+            </div>
           </div>
         )}
 

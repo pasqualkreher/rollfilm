@@ -40,8 +40,16 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     "whites": (0, -200, 200, False),
     "blacks": (0, -200, 200, False),
     # White balance / presence
-    "temperature": (0, -250, 250, False),
-    "tint": (0, -250, 250, False),
+    # Temperature reaches +-300 so the editor's Kelvin slider (a relabelling of
+    # this same value, see white_balance.py) can run down to tungsten light.
+    # Both fractional: a 10 K step of the Kelvin slider is a fraction of one
+    # unit here, and whole units made the slider land beside the value asked for.
+    "temperature": (0, -300, 300, True),
+    "tint": (0, -250, 250, True),
+    # The camera-style shift cross under the Kelvin slider: whole steps of red
+    # and blue on top of the white balance, independent of it.
+    "wb_shift_r": (0, -9, 9, False),
+    "wb_shift_b": (0, -9, 9, False),
     # Extended past +-100 like the tone sliders; the chroma scale in
     # thumbnails._display_color_block is clamped at zero, so past -100 both
     # settle at grayscale instead of inverting colours.
@@ -106,13 +114,38 @@ LENS_KEYS: tuple[str, ...] = ("lens_profile", "lens_distortion", "lens_vignettin
 # stay in sync with film_sims.SIM_NAMES (asserted there at import) and with the
 # frontend FILM_SIMS list. `lut_intensity` above is the look's strength blend.
 ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
+    # Which generation of the pixel maths renders this edit (Lightroom calls it
+    # the process version). "2" moved the colour tools into a perceptual space,
+    # made Highlights/Shadows keep local contrast, sharpening halo-free and
+    # mask exposure scene-referred - all of which change how a given slider
+    # value looks. An edit made before that carries no key and reads as "1", so
+    # it renders exactly as it did when it was saved; the editor starts new
+    # edits on "2". With every slider neutral the two are the same picture, so
+    # the key never makes a photo count as edited (see is_neutral).
+    "process": ("1", ("1", "2")),
+    # Which exposure a RAW is developed from (see thumbnails._browsing_gain).
+    # "standard" lifts every raw to the same brightness with the auto-exposure
+    # gain the grid already uses (raw.compute_base_gain), so a photo opens the
+    # same whichever camera took it and Exposure works relative to that;
+    # "native" is the un-lifted sensor exposure, chosen per photo in the editor.
+    # An edit made before the key existed reads as "legacy" and renders as it
+    # always did: lifted only while nothing is developed, native once it is.
+    # The editor starts new edits on "standard". Only "native" counts as an
+    # edit (see is_neutral) - it has to be stored to survive.
+    "raw_base": ("legacy", ("legacy", "standard", "native")),
     "tone_mapper": ("basic", ("basic", "agx")),
     "curve_mode": ("point", ("point", "parametric")),
     "film_sim": ("none", ("none", "provia", "velvia", "astia", "classic_chrome",
-                          "classic_neg", "nostalgic_neg", "eterna",
+                          "reala_ace", "pro_neg_hi", "pro_neg_std",
+                          "classic_neg", "nostalgic_neg",
+                          "eterna", "eterna_bleach_bypass",
                           "acros", "acros_ye", "acros_r", "acros_g",
-                          "monochrome")),
+                          "monochrome", "monochrome_ye", "monochrome_r", "monochrome_g",
+                          "sepia")),
 }
+
+# The process version a photo's first edit starts on (see ENUM_SPEC["process"]).
+CURRENT_PROCESS = "2"
 
 # Identity point curve: pass-through on the 0..255 grid.
 _IDENTITY_CURVE = [[0, 0], [255, 255]]
@@ -350,7 +383,11 @@ def is_neutral(adj: dict[str, Any], ignore: tuple[str, ...] = ()) -> bool:
         if m.get("visible", True) and m.get("sub_masks") and m.get("adjustments"):
             return False
     for k in n:
-        if k == "masks" or k in ignore:
+        if k == "masks" or k == "process" or k in ignore:
+            continue
+        if k == "raw_base":
+            if n[k] == "native":
+                return False
             continue
         if n[k] != _DEFAULTS_NORM[k]:
             return False

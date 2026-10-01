@@ -460,7 +460,7 @@ export const api = {
     // Powers the export dialog's progress bar for both formats.
     exportStart(
       image_ids: string[],
-      opts: { quality: number; max_size?: number | null; format: "jpeg" | "original" }
+      opts: { quality: number; max_size?: number | null; format: "jpeg" | "tiff" | "original" }
     ): Promise<{ job_id: string; total: number }> {
       return request(`/images/export/start`, {
         method: "POST",
@@ -666,6 +666,26 @@ export const api = {
     // Develop suggestion learned from the user's own saved edits (CLIP k-NN
     // over edited photos). Pure suggestion - nothing is stored server-side.
     // Whether the photo's RAW carries lens correction data the editor can apply.
+    // The colour temperature a RAW was shot at; null for JPEGs and raws that
+    // carry no hint (the editor then shows the relative Temperature slider).
+    // `gains` is the camera's own Kelvin calibration where the file carries
+    // one: [[kelvin, red gain, blue gain], ...] relative to the as-shot balance.
+    whiteBalance(id: string): Promise<{ kelvin: number | null; gains: [number, number, number][] | null }> {
+      return request(`/images/${id}/white-balance`);
+    },
+    // The Straighten angle that levels the photo as it is currently turned
+    // and mirrored; null when it has no clear horizon.
+    autoStraighten(
+      id: string,
+      geometry: { rotation: number; flipH: boolean; flipV: boolean }
+    ): Promise<{ angle: number | null }> {
+      const q = new URLSearchParams({
+        rotation: String(geometry.rotation),
+        flip_h: String(geometry.flipH),
+        flip_v: String(geometry.flipV),
+      });
+      return request(`/images/${id}/auto-straighten?${q}`);
+    },
     lensProfile(id: string): Promise<{
       available: boolean;
       lens_model: string | null;

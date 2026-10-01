@@ -48,7 +48,9 @@ _CUBE_N = 33
 #   curve:  tone-curve control points on the 0..255 grid (PCHIP, per channel)
 #   split:  (shadow_hue, shadow_amt, highlight_hue, highlight_amt) toning
 #   bw:     (r, g, b) channel-mix weights - makes the look monochrome
+#   tone:   (hue, amount) one tint over the whole tonal range (sepia)
 _SHARED_ACROS_CURVE = [(0, 0), (52, 40), (128, 127), (208, 214), (255, 255)]
+_SHARED_MONO_CURVE = [(0, 2), (64, 60), (128, 128), (200, 202), (255, 253)]
 _RECIPES: dict[str, dict] = {
     # Standard: gentle S-curve, slightly rich but honest colour.
     "provia": {
@@ -84,6 +86,30 @@ _RECIPES: dict[str, dict] = {
                  (30, 40, -4.0, 0.88, 1.0),
                  (210, 70, -8.0, 0.92, 0.94)],
     },
+    # True-to-life: Provia's honesty with a touch less saturation and a
+    # slightly firmer tone - the newest stock, made to look like the scene.
+    "reala_ace": {
+        "curve": [(0, 0), (58, 50), (128, 129), (202, 208), (255, 255)],
+        "sat": 1.04,
+        "deepen": 0.08,
+        "hues": [(120, 70, -2.0, 0.96, 1.0)],
+    },
+    # Portrait, studio light: restrained colour with gentle skin, a clear
+    # but not hard tone.
+    "pro_neg_hi": {
+        "curve": [(0, 0), (58, 50), (128, 128), (200, 206), (255, 254)],
+        "sat": 0.94,
+        "deepen": 0.06,
+        "hues": [(25, 45, 1.0, 0.94, 1.02)],
+    },
+    # Portrait, soft light: the same palette on the flattest colour tone of
+    # the set - open shadows, long highlights.
+    "pro_neg_std": {
+        "curve": [(0, 3), (64, 62), (128, 128), (196, 198), (255, 252)],
+        "sat": 0.90,
+        "deepen": 0.04,
+        "hues": [(25, 45, 1.0, 0.94, 1.02)],
+    },
     # Film-negative print look: greens swung toward cyan, warm reds, cyan
     # shadows against warm highlights, punchy midtone contrast.
     "classic_neg": {
@@ -111,6 +137,13 @@ _RECIPES: dict[str, dict] = {
         "deepen": 0.10,
         "split": (210, 0.03, 45, 0.02),
     },
+    # Silver left in the print: very low colour on a hard, dense tone.
+    "eterna_bleach_bypass": {
+        "curve": [(0, 0), (50, 34), (128, 124), (206, 220), (255, 255)],
+        "sat": 0.55,
+        "deepen": 0.22,
+        "split": (210, 0.02, 45, 0.02),
+    },
     # B&W: orthopanchromatic-style mix with deep blacks and a fine shoulder;
     # the Ye/R/G variants mimic contrast filters (R darkens skies, G lifts foliage
 # and darkens skin).
@@ -118,10 +151,13 @@ _RECIPES: dict[str, dict] = {
     "acros_ye": {"bw": (0.35, 0.55, 0.10), "curve": _SHARED_ACROS_CURVE},
     "acros_r": {"bw": (0.55, 0.38, 0.07), "curve": _SHARED_ACROS_CURVE},
     "acros_g": {"bw": (0.13, 0.72, 0.15), "curve": _SHARED_ACROS_CURVE},
-    "monochrome": {
-        "bw": (0.30, 0.59, 0.11),
-        "curve": [(0, 2), (64, 60), (128, 128), (200, 202), (255, 253)],
-    },
+    # Plain B&W: a luminance mix on a gentle curve; Ye/R/G as for Acros.
+    "monochrome": {"bw": (0.30, 0.59, 0.11), "curve": _SHARED_MONO_CURVE},
+    "monochrome_ye": {"bw": (0.38, 0.54, 0.08), "curve": _SHARED_MONO_CURVE},
+    "monochrome_r": {"bw": (0.58, 0.36, 0.06), "curve": _SHARED_MONO_CURVE},
+    "monochrome_g": {"bw": (0.16, 0.72, 0.12), "curve": _SHARED_MONO_CURVE},
+    # The monochrome picture toned warm brown throughout.
+    "sepia": {"bw": (0.30, 0.59, 0.11), "curve": _SHARED_MONO_CURVE, "tone": (34, 0.16)},
 }
 
 # The enum values develop.py registers: neutral first, then the looks in
@@ -215,6 +251,15 @@ def _bake(recipe: dict, grid: np.ndarray) -> np.ndarray:
             ones = np.ones_like(luma)
             tint = _hsl_to_rgb(ones * tint_hue, ones, ones * 0.5)
             arr = arr + (tint - 0.5) * (amt * weight)[..., None]
+
+    tone = recipe.get("tone")
+    if tone:
+        tone_hue, amt = tone
+        ones = np.ones(arr.shape[:-1], dtype=np.float32)
+        tint = _hsl_to_rgb(ones * tone_hue, ones, ones * 0.5)
+        # Strongest in the midtones, fading to clean black and paper white.
+        luma = np.clip(arr @ _LUMA, 0.0, 1.0)
+        arr = arr + (tint - 0.5) * (amt * 4.0 * luma * (1.0 - luma))[..., None]
 
     return np.clip(arr, 0.0, 1.0)
 

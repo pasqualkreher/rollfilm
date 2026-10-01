@@ -55,8 +55,11 @@ _CURVE_XS = (0, 32, 64, 96, 128, 160, 192, 224, 255)
 # user unchecks are stripped from the suggestion, so those sliders keep
 # whatever value the editor currently holds.
 GROUP_FIELDS: dict[str, tuple[str, ...]] = {
-    "tone": ("exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks", "tone_mapper"),
-    "white_balance": ("temperature", "tint"),
+    "tone": ("exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks", "tone_mapper",
+             # The exposure a neighbor dialled in only means something on the raw
+             # base it was dialled in on, so the two travel together.
+             "raw_base"),
+    "white_balance": ("temperature", "tint", "wb_shift_r", "wb_shift_b"),
     "color": ("vibrance", "saturation", "hue", "chrome_effect", "chrome_blue",
               "film_sim", "hsl", "hsl_range", "color_grading", "color_calibration"),
     "details": ("sharpness", "sharpness_threshold", "clarity", "dehaze", "structure",
@@ -74,8 +77,10 @@ GROUP_FIELDS: dict[str, tuple[str, ...]] = {
 # instead. The exceptions are fields that don't transfer between photos: masks
 # (spatial regions), frame_width (a presentation border) and the lens correction
 # (a property of the lens a photo was taken with, not of a style); all are
-# deliberately left out of every group so they're never suggested.
-_UNGROUPED = {"masks", "frame_width", *develop.LENS_KEYS}
+# deliberately left out of every group so they're never suggested. Nor is the
+# process version: it says how the photo in hand renders its sliders, not what
+# they should be set to.
+_UNGROUPED = {"masks", "frame_width", "process", *develop.LENS_KEYS}
 assert set(GROUP_FIELDS) == set(AUTO_DEVELOP_GROUP_NAMES)
 _grouped = [f for fields in GROUP_FIELDS.values() for f in fields]
 assert sorted(_grouped) == sorted(set(develop.defaults()) - _UNGROUPED), (
@@ -196,6 +201,10 @@ def blend_adjustments(examples: list[tuple[dict[str, Any], float]]) -> dict[str,
         out[key] = _circular_mean_deg(vals, w) if key == "hue" else _wmean(vals, w)
     for key in develop.ENUM_SPEC:
         out[key] = _vote([a[key] for a in adjs], w)
+    # A "legacy" example is an edit, so it rendered native - and voting it in
+    # as "legacy" would hand the photo a base that turns native only once the
+    # suggestion makes it edited. Say what it was.
+    out["raw_base"] = _vote(["standard" if a["raw_base"] == "standard" else "native" for a in adjs], w)
     out["hsl"] = {
         band: [_wmean([a["hsl"][band][i] for a in adjs], w) for i in range(3)]
         for band in develop.COLOR_BANDS

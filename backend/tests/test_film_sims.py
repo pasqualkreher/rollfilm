@@ -61,6 +61,8 @@ def test_grey_stays_near_grey_on_colour_looks():
     broken white balance rather than a film stock."""
     grey = np.full((4, 4, 3), 0.5, np.float32)
     for sim in _LOOKS:
+        if sim == "sepia":
+            continue  # toned on purpose - a brown grey is the whole look
         out = film_sims.apply_film_sim(grey, sim, 100)
         assert abs(float(out.mean()) - 0.5) < 0.08, sim
         assert float(np.abs(out - out.mean(axis=-1, keepdims=True)).max()) < 0.05, sim

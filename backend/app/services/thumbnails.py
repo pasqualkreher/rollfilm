@@ -19,7 +19,7 @@ import numpy as np
 from PIL import Image as PILImage, ImageOps
 
 from app.config import settings
-from app.services import develop, develop_color, develop_effects, film_sims, lens_profile, masks
+from app.services import develop, develop_color, develop_effects, develop_v2, film_sims, lens_profile, masks
 from app.services import machine
 from app.services import raw as raw_service
 
@@ -1275,12 +1275,20 @@ def _smoothstep(x: np.ndarray) -> np.ndarray:
 
 
 def _tone_curve_y(
-    y0: np.ndarray, hi: float, sh: float, wh: float, bl: float, c: float, br: float
+    y0: np.ndarray, hi: float, sh: float, wh: float, bl: float, c: float, br: float,
+    l_local: np.ndarray | None = None,
 ) -> np.ndarray:
     """The tone sliders as a pure elementwise mapping of linear luminance -
     the curve itself, reusable on real pixels and on the reference grid the
-    monotone guard below evaluates."""
+    monotone guard below evaluates.
+
+    `l_local` (process version 2, see develop_v2) is the log luminance of each
+    pixel's SURROUNDINGS: Highlights and Shadows then decide their shift from
+    it instead of from the pixel, so a region moves as one and the detail in
+    it keeps its contrast. Where it equals the pixel's own - any flat area -
+    the result is the plain curve."""
     l = np.log2(y0 / _MIDDLE_GREY)  # stops from middle grey
+    l_hs = l if l_local is None else l_local
 
     # Region-weighted shifts in stops. Shadows/blacks look below middle grey
     # (-l), highlights/whites above (+l); scene-referred values > 1.0 sit at
@@ -1295,18 +1303,18 @@ def _tone_curve_y(
 
     y1 = y0
     shift = None
-    for amount, stops, (r0, r1), sign in (
-        (sh_base, _SH_STOPS, _SH_RANGE, -1.0),
-        (max(sh_extra, 0.0), _SH_EXTRA_STOPS, _SH_EXTRA_POS_RANGE, -1.0),
-        (min(sh_extra, 0.0), _SH_EXTRA_STOPS, _SH_EXTRA_NEG_RANGE, -1.0),
-        (hi, _HI_STOPS, _HI_RANGE, 1.0),
-        (max(bl, 0.0), _BL_STOPS, _BL_RANGE, -1.0),
-        (max(wh, 0.0), _WH_STOPS, _WH_RANGE, 1.0),
-        (min(wh, 0.0), _WH_NEG_STOPS, _WH_NEG_RANGE, 1.0),
+    for amount, stops, (r0, r1), sign, src in (
+        (sh_base, _SH_STOPS, _SH_RANGE, -1.0, l_hs),
+        (max(sh_extra, 0.0), _SH_EXTRA_STOPS, _SH_EXTRA_POS_RANGE, -1.0, l_hs),
+        (min(sh_extra, 0.0), _SH_EXTRA_STOPS, _SH_EXTRA_NEG_RANGE, -1.0, l_hs),
+        (hi, _HI_STOPS, _HI_RANGE, 1.0, l_hs),
+        (max(bl, 0.0), _BL_STOPS, _BL_RANGE, -1.0, l),
+        (max(wh, 0.0), _WH_STOPS, _WH_RANGE, 1.0, l),
+        (min(wh, 0.0), _WH_NEG_STOPS, _WH_NEG_RANGE, 1.0, l),
     ):
         if not amount:
             continue
-        w = _smoothstep((sign * l - r0) / (r1 - r0))
+        w = _smoothstep((sign * src - r0) / (r1 - r0))
         term = (amount * stops) * w
         shift = term if shift is None else shift + term
     if shift is not None:
@@ -1339,7 +1347,9 @@ def _tone_curve_y(
 _TONE_GUARD_L = np.linspace(-20.0, 10.0, 4096, dtype=np.float32)
 
 
-def _tone_ratio(y: np.ndarray, adj: dict) -> np.ndarray | None:
+def _tone_ratio(
+    y: np.ndarray, adj: dict, l_local: np.ndarray | None = None
+) -> np.ndarray | None:
     """Per-pixel multiplier on linear luminance implementing the tone sliders
     (highlights/shadows/whites/blacks/contrast/brightness), or None when all are
     neutral. Pure math on luminance so tests can drive it with 1-D ramps; the
@@ -1355,7 +1365,7 @@ def _tone_ratio(y: np.ndarray, adj: dict) -> np.ndarray | None:
         return None
 
     y0 = np.maximum(y, 1e-6).astype(np.float32)
-    y1 = _tone_curve_y(y0, hi, sh, wh, bl, c, br)
+    y1 = _tone_curve_y(y0, hi, sh, wh, bl, c, br, l_local)
 
     # Monotone guard for the extended slider travel: the region constants are
     # hand-tuned so every combination within +-100 stays monotone, but the
@@ -1372,36 +1382,84 @@ def _tone_ratio(y: np.ndarray, adj: dict) -> np.ndarray | None:
         if np.any(np.diff(gl1) < 0.0):
             gl1 = np.maximum.accumulate(gl1)
             l0 = np.log2(y0 / _MIDDLE_GREY)
-            y1 = _MIDDLE_GREY * np.exp2(np.interp(l0, _TONE_GUARD_L, gl1))
+            if l_local is None:
+                y1 = _MIDDLE_GREY * np.exp2(np.interp(l0, _TONE_GUARD_L, gl1))
+            else:
+                # The guarded curve places the surroundings; the pixel keeps
+                # its distance from them, scaled the way Contrast scales any
+                # tonal distance. Equal to the line above wherever the pixel
+                # IS its surroundings.
+                slope = 1.0 + (1.2 if c > 0 else 0.85) * c
+                y1 = _MIDDLE_GREY * np.exp2(
+                    np.interp(l_local, _TONE_GUARD_L, gl1) + slope * (l0 - l_local)
+                )
 
     return (y1 / y0).astype(np.float32)
 
 
-def _linear_tone_block(lin: np.ndarray, adj: dict, base_gain: float = 1.0) -> np.ndarray:
+# One step of the white-balance shift cross (wb_shift_r / wb_shift_b, +-9
+# steps each), as the camera does it: measured from RAFs shot with a WB shift
+# on a fixed preset, a step multiplies the red multiplier by e^0.031 and the
+# blue one by e^0.036 - the same on an X-E5 and an X-T30 II (their Daylight
+# presets land on the same point of the calibration once the shift is taken
+# out with these two numbers).
+_WB_SHIFT_RED = 0.031
+_WB_SHIFT_BLUE = 0.036
+
+
+def _tone_gains(adj: dict, base_gain: float) -> tuple[float, np.ndarray | None]:
+    """What the tone block multiplies the linear base by before any curve: the
+    total gain (auto base gain x 2^exposure, a true stop multiply) and the
+    white-balance channel gains (None when the white balance is as shot)."""
+    ev = float(adj.get("exposure", 0.0) or 0.0)
+    t = adj.get("temperature", 0) / 100.0
+    n = adj.get("tint", 0) / 100.0
+    shift_r = math.exp(adj.get("wb_shift_r", 0) * _WB_SHIFT_RED) - 1.0
+    shift_b = math.exp(adj.get("wb_shift_b", 0) * _WB_SHIFT_BLUE) - 1.0
+    g = float(base_gain) * (2.0 ** ev)
+    if not (t or n or shift_r or shift_b):
+        return g, None
+    # Channel gains: warm = more red / less blue; +tint = magenta (less
+    # green); the shift cross then scales red and blue on their own.
+    # Renormalised by luma so a neutral grey keeps its brightness
+    # (white balance shouldn't also change exposure).
+    gain = np.array(
+        [(1.0 + 0.3 * t) * (1.0 + shift_r), 1.0 - 0.3 * n, (1.0 - 0.3 * t) * (1.0 + shift_b)],
+        dtype=np.float32,
+    )
+    return g, gain / float(_LUMA @ gain)
+
+
+def _linear_tone_block(
+    lin: np.ndarray, adj: dict, base_gain: float = 1.0,
+    guide: "develop_v2.LocalToneGuide | None" = None, row0: int = 0,
+    white_floor: float = 1.0,
+) -> np.ndarray:
     """The scene-referred tonal pass: linear-light float RGB in (values may
     exceed 1.0 - that headroom IS the highlight-recovery data), display sRGB
     float 0..1 out. Nothing is clipped until the final encode.
 
     Order: total gain (auto base gain x 2^exposure, a true stop multiply) ->
     white balance -> tone sliders as one chroma-preserving luminance ratio ->
-    tone map (Reinhard-extended shoulder or AgX) -> sRGB encode."""
-    ev = float(adj.get("exposure", 0.0) or 0.0)
-    t = adj.get("temperature", 0) / 100.0
-    n = adj.get("tint", 0) / 100.0
+    tone map (Reinhard-extended shoulder or AgX) -> sRGB encode.
 
-    g = float(base_gain) * (2.0 ** ev)
+    `guide` (process version 2 with Highlights/Shadows in use) is the frame's
+    surroundings map; `row0` says which rows of the frame `lin` is, for the
+    banded caller. `white_floor` scales the shoulder's white point: a mask's
+    local pass runs under the picture's own shoulder (see _adjust_array)."""
+    g, gain = _tone_gains(adj, base_gain)
     arr = lin.astype(np.float32, copy=True)
     if g != 1.0:
         arr *= np.float32(g)
-    if t or n:
-        # Channel gains: warm = more red / less blue; +tint = magenta (less
-        # green). Renormalised by luma so a neutral grey keeps its brightness
-        # (white balance shouldn't also change exposure).
-        gain = np.array([1.0 + 0.3 * t, 1.0 - 0.3 * n, 1.0 - 0.3 * t], dtype=np.float32)
-        gain = gain / float(_LUMA @ gain)
+    if gain is not None:
         arr *= gain
 
-    ratio = _tone_ratio(arr @ _LUMA, adj)
+    y = arr @ _LUMA
+    l_local = None
+    if guide is not None:
+        l_local = guide.base_rows(np.log2(np.maximum(y, 1e-6) / _MIDDLE_GREY), row0)
+    ratio = _tone_ratio(y, adj, l_local)
+    del y, l_local
     if ratio is not None:
         arr *= ratio[..., None]
 
@@ -1424,7 +1482,7 @@ def _linear_tone_block(lin: np.ndarray, adj: dict, base_gain: float = 1.0) -> np
         # Whites<0 RAISES the white point (up to _WH_NEG_WP_STOPS stops): the
         # very top end darkens and de-clips decisively, while mids barely move -
         # the Lightroom "whites set the curve endpoint" behaviour.
-        white = max(g, 1.0)
+        white = max(g, 1.0) * max(float(white_floor), 1.0)
         if wh < 0:
             white *= 2.0 ** (_WH_NEG_WP_STOPS * -wh)
         y = np.maximum(arr @ _LUMA, 0.0)
@@ -1483,19 +1541,35 @@ def _tone_pool() -> ThreadPoolExecutor:
         return _tone_band_pool
 
 
+def _local_tone_guide(
+    lin: np.ndarray, adj: dict, base_gain: float, ref_long_edge: float | None
+) -> "develop_v2.LocalToneGuide | None":
+    """The surroundings map Highlights/Shadows read under process version 2,
+    or None when the plain per-pixel curve applies. It is the one thing in the
+    tone block that looks beyond a pixel - computed here, once for the frame,
+    so the bands below stay independent of each other."""
+    if not develop_v2.local_tone_active(adj):
+        return None
+    g, gain = _tone_gains(adj, base_gain)
+    weights = _LUMA * np.float32(g) if gain is None else _LUMA * gain * np.float32(g)
+    return develop_v2.LocalToneGuide(weights, lin, ref_long_edge)
+
+
 def _linear_tone_block_banded(
-    lin: np.ndarray, adj: dict, base_gain: float = 1.0
+    lin: np.ndarray, adj: dict, base_gain: float = 1.0,
+    ref_long_edge: float | None = None, white_floor: float = 1.0,
 ) -> np.ndarray:
     h, w = lin.shape[:2]
+    guide = _local_tone_guide(lin, adj, base_gain, ref_long_edge)
     bands = _TONE_BAND_WORKERS
     if bands <= 1 or h * w < _TONE_BAND_MIN_PX or h < bands:
-        return _linear_tone_block(lin, adj, base_gain)
+        return _linear_tone_block(lin, adj, base_gain, guide, 0, white_floor)
     out = np.empty((h, w, 3), dtype=np.float32)
     edges = np.linspace(0, h, bands + 1).astype(int)
 
     def run(i: int) -> None:
         y0, y1 = int(edges[i]), int(edges[i + 1])
-        out[y0:y1] = _linear_tone_block(lin[y0:y1], adj, base_gain)
+        out[y0:y1] = _linear_tone_block(lin[y0:y1], adj, base_gain, guide, y0, white_floor)
 
     # list() drains the map so a worker's exception surfaces here instead of
     # being swallowed by the lazy iterator.
@@ -1519,6 +1593,13 @@ def _display_color_block(arr: np.ndarray, adj: dict) -> np.ndarray:
     # calibration shape tone/primaries after the basic tonal controls.
     arr = develop_color.apply_curves(arr, adj)
     arr = develop_color.apply_color_calibration(arr, adj.get("color_calibration") or {})
+
+    if develop_v2.is_v2(adj):
+        # Process version 2: the mixer, hue, grading, saturation and vibrance
+        # in one perceptual pass (see develop_v2); chrome, an RGB-domain
+        # effect, moves ahead of it.
+        arr = _apply_chrome(arr, adj.get("chrome_effect", 0), adj.get("chrome_blue", 0))
+        return np.clip(develop_v2.apply_perceptual_color(arr, adj), 0.0, 1.0)
 
     mix = adj.get("hsl")
     hue_deg = adj.get("hue", 0)
@@ -1548,14 +1629,27 @@ def _display_color_block(arr: np.ndarray, adj: dict) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0)
 
 
-def _adjust_array(arr: np.ndarray, adj: dict) -> np.ndarray:
+def _adjust_array(
+    arr: np.ndarray, adj: dict, ref_long_edge: float | None = None, white: float = 1.0
+) -> np.ndarray:
     """Apply the tonal/colour adjustments to a display-referred HxWx3 float
     array in 0..1: decode to linear, run the scene-referred tone block (gain 1 -
     an 8-bit source has no headroom to recover), then the display colour block.
     Kept as the display-space entry point for mask-local adjustments
     (_apply_local_adjustments), which operate on the already-toned image."""
     lin = _srgb_to_linear(arr).astype(np.float32)
-    return _display_color_block(_linear_tone_block_banded(lin, adj, base_gain=1.0), adj)
+    if white > 1.0:
+        # Process version 2: take the picture's highlight shoulder back off,
+        # so the local tone sliders work on the scene values under it and the
+        # same shoulder (white_floor) goes back on afterwards. Darkening a
+        # bright sky then separates its tones again instead of turning the
+        # compressed highlights grey. With nothing set locally the two cancel.
+        y = np.maximum(lin @ _LUMA, 0.0)
+        lin *= develop_v2.inverse_shoulder_ratio(y, white)[..., None]
+    toned = _linear_tone_block_banded(
+        lin, adj, base_gain=1.0, ref_long_edge=ref_long_edge, white_floor=white
+    )
+    return _display_color_block(toned, adj)
 
 
 def _grain_field(h: int, w: int, particle_px: float, coarse: float, shape: float) -> np.ndarray:
@@ -1830,13 +1924,17 @@ def _grain_pil(image: PILImage.Image, adj: dict) -> PILImage.Image:
 
 
 def _apply_local_adjustments(
-    arr: np.ndarray, madj: dict, ref_long_edge: float | None = None
+    arr: np.ndarray, madj: dict, ref_long_edge: float | None = None,
+    process: str = "1", tone_white: float = 1.0,
 ) -> np.ndarray:
     """Render a mask's local adjustments on a copy of the (already globally-toned)
     array: the spatial detail passes it can use (clarity/structure/sharpness/
     dehaze) plus the tonal/colour pass. Whole-image effects (grain, vignette,
     glow, mist) are global-only and never applied per mask."""
     full = develop.normalize(madj)
+    # A mask renders with the process version of the edit it belongs to.
+    full["process"] = process
+    v2 = develop_v2.is_v2(full)
     long_edge = ref_long_edge or max(arr.shape[:2])
     cl = full.get("clarity", 0)
     if cl:
@@ -1846,19 +1944,19 @@ def _apply_local_adjustments(
         arr = develop_effects.apply_structure(arr, st)
     sp = full.get("sharpness", 0)
     if sp:
-        arr = _unsharp(
+        arr = (develop_v2.sharpen if v2 and sp > 0 else _unsharp)(
             arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
             threshold=full.get("sharpness_threshold", 0),
         )
     dh = full.get("dehaze", 0)
     if dh:
         arr = _dehaze(arr, dh, long_edge)
-    return _adjust_array(arr, full)
+    return _adjust_array(arr, full, long_edge, tone_white if v2 else 1.0)
 
 
 def apply_masks(
     arr: np.ndarray, adj: dict, peek: str | None = None, view=None,
-    ref_long_edge: float | None = None,
+    ref_long_edge: float | None = None, tone_white: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Blend each mask's local adjustments into the image, weighted by the mask's
     generated field * opacity (inverted if the mask is inverted). Masks with no
@@ -1892,7 +1990,9 @@ def apply_masks(
             peek_field = m
         if not renders or float(m.max()) <= 0.0:
             continue
-        adjusted = _apply_local_adjustments(arr.copy(), madj, ref_long_edge)
+        adjusted = _apply_local_adjustments(
+            arr.copy(), madj, ref_long_edge, adj.get("process", "1"), tone_white
+        )
         m3 = m[..., None]
         arr = arr * (1.0 - m3) + adjusted * m3
     return np.clip(arr, 0.0, 1.0), peek_field
@@ -2145,6 +2245,21 @@ def apply_adjustments(
     )
 
 
+def _shoulder_white(adj: dict, base_gain: float) -> float:
+    """The white point of the highlight shoulder _linear_tone_block put on this
+    render - what a mask's local pass takes back off (see _adjust_array). 1.0
+    where there is nothing to take off: AgX has no closed inverse, and an edit
+    on the original process keeps its masks on top of the finished tones."""
+    if not develop_v2.is_v2(adj) or adj.get("tone_mapper") == "agx":
+        return 1.0
+    g, _ = _tone_gains(adj, base_gain)
+    white = max(g, 1.0)
+    wh = adj.get("whites", 0) / 100.0
+    if wh < 0:
+        white *= 2.0 ** (_WH_NEG_WP_STOPS * -wh)
+    return white
+
+
 def _denoise_wanted(adj: dict, fast: bool) -> bool:
     """Whether _denoise_stage will touch the pixels - what decides if a render
     needs to sample the noise probe of the whole frame first."""
@@ -2200,10 +2315,14 @@ def apply_adjustments_linear(
     lin: np.ndarray, base_gain: float, adj: dict, include_grain: bool = True, fast: bool = False,
     tone_cache_key: str | None = None, peek: str | None = None, view=None,
     is_stale: Callable[[], bool] | None = None, noise_probe: np.ndarray | None = None,
-    timing: dict | None = None,
-) -> PILImage.Image:
+    timing: dict | None = None, depth16: bool = False,
+) -> "PILImage.Image | np.ndarray":
     """The develop pipeline on a scene-referred linear float base (the RAW
     demosaic, values may exceed 1.0 after the gain).
+
+    `depth16` hands the result back as an HxWx3 uint16 array instead of an
+    8-bit image - the 16-bit TIFF export, the one caller that keeps the tonal
+    resolution the float pipeline has.
 
     Order: linear tone block (gain/WB/tone sliders/tonemap - always runs, since
     even neutral edits need the base gain + shoulder applied) -> denoise ->
@@ -2282,8 +2401,10 @@ def apply_adjustments_linear(
         # Nothing but the neutral rendering (gain + shoulder) to do. Checked
         # before the cache so a neutral edit can never take a cached stage and
         # fall through the rest of the pipeline instead of returning here.
-        arr = _linear_tone_block_banded(lin, adj, base_gain)
+        arr = _linear_tone_block_banded(lin, adj, base_gain, long_edge)
         _mark(timing, "tone", t0)
+        if depth16:
+            return (arr * 65535.0 + 0.5).astype(np.uint16)
         return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
 
     # Tone + denoise depend on their own sliders and nothing else, so when
@@ -2317,7 +2438,7 @@ def apply_adjustments_linear(
         key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
         arr = _tone_stage_get(key)
         if arr is None:
-            arr = _linear_tone_block_banded(lin, adj, base_gain)
+            arr = _linear_tone_block_banded(lin, adj, base_gain, long_edge)
             arr = _denoise_stage(arr, adj, fast, short_edge, noise_probe, base_gain)
             _tone_stage_put(key, arr)
         elif timing is not None:
@@ -2356,7 +2477,9 @@ def apply_adjustments_linear(
             # +sharpen / -soften share the unsharp formula (negative amount blends
             # toward the blur). Radius is capped so sharpening stays a fine, tight
             # edge enhancement; Threshold gates it away from noise/smooth areas.
-            arr = _unsharp(
+            # Process version 2 sharpens luminance only and holds the result
+            # near the tones around each pixel (develop_v2.sharpen).
+            arr = (develop_v2.sharpen if develop_v2.is_v2(adj) and sp > 0 else _unsharp)(
                 arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
                 threshold=adj.get("sharpness_threshold", 0),
             )
@@ -2378,7 +2501,10 @@ def apply_adjustments_linear(
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
     _abort_if_stale()
-    arr, peek_field = apply_masks(arr, adj, peek=peek, view=view, ref_long_edge=long_edge)
+    arr, peek_field = apply_masks(
+        arr, adj, peek=peek, view=view, ref_long_edge=long_edge,
+        tone_white=_shoulder_white(adj, base_gain),
+    )
     t0 = _mark(timing, "masks", t0)
     # Highlight-bloom / diffusion effects run on the *toned* image (like a filter
     # in front of the lens), after the tonal pass. Mist and halation are
@@ -2409,6 +2535,9 @@ def apply_adjustments_linear(
     # something the vignette darkened and the grain crawled over.
     if peek_field is not None:
         arr = paint_mask_peek(arr, peek_field, view=view)
+    if depth16:
+        _mark(timing, "fx", t0)
+        return (arr * 65535.0 + 0.5).astype(np.uint16)
     out = (arr * 255.0 + 0.5).astype(np.uint8)
     _mark(timing, "fx", t0)
     return PILImage.fromarray(out, "RGB")
@@ -2436,6 +2565,16 @@ def add_frame(image: PILImage.Image, adj: dict | None) -> PILImage.Image:
     return framed
 
 
+def _add_frame_array(arr: np.ndarray, adj: dict | None) -> np.ndarray:
+    """add_frame for the 16-bit render's uint16 array."""
+    pct = adj.get("frame_width", 0) if adj else 0
+    h, w = arr.shape[:2]
+    border = int(round(min(w, h) * pct / 100.0)) if pct and pct > 0 else 0
+    if border <= 0:
+        return arr
+    return np.pad(arr, ((border, border), (border, border), (0, 0)), constant_values=65535)
+
+
 def _browsing_gain(base_gain: float, adjustments: dict | None) -> float:
     """Auto-exposure gain for the BROWSING/output renders (grid thumbnail,
     lightbox preview + its 100% full.jpg, exported copy).
@@ -2448,7 +2587,16 @@ def _browsing_gain(base_gain: float, adjustments: dict | None) -> float:
     deliberate consequence the user accepted - a crop-only edit on a dark raw
     stops auto-exposing it. JPEG/PNG bases are already gain 1.0, so unaffected.
     The lens correction settings don't count: switching the profile off isn't
-    developing the photo, and must not drop it 2-3 stops in the grid."""
+    developing the photo, and must not drop it 2-3 stops in the grid.
+
+    That is the rule for an edit from before `raw_base` existed ("legacy"). An
+    edit that names its base keeps it whatever else is set: "standard" is always
+    lifted (the editor rendered it lifted too), "native" never is."""
+    mode = adjustments.get("raw_base") if adjustments else None
+    if mode == "standard":
+        return base_gain
+    if mode == "native":
+        return 1.0
     if adjustments is None or develop.is_neutral(adjustments, ignore=develop.LENS_KEYS):
         return base_gain
     return 1.0
@@ -2591,7 +2739,7 @@ def generate_untouched_derivatives(
             if max(w, h) > PREVIEW_RENDER_MAX_PX:
                 scale = PREVIEW_RENDER_MAX_PX / max(w, h)
                 im.draft("RGB", (max(1, round(w * scale)), max(1, round(h * scale))))
-            source = ImageOps.exif_transpose(im).convert("RGB")
+            source = raw_service.to_srgb(ImageOps.exif_transpose(im)).convert("RGB")
         decoded = max(source.size)
         thumb_scale = THUMBNAIL_SCALE * (original / decoded if decoded and original else 1.0)
         preview = source.copy()
@@ -2880,6 +3028,21 @@ def _cached_editor_base(image_id: str, path_str: str, mtime_ns: int, max_px: int
         with _base_cache_lock:
             _BASE_INFLIGHT.pop(key, None)
         done.set()
+
+
+def _cached_base_gain(image_id: str, path_str: str, mtime_ns: int) -> float | None:
+    """The auto-exposure gain of the biggest base cached for this file, if any.
+    The native (full-size) decode measures its own gain, and a full demosaic's
+    median is not the half-size one's - up to 5% apart on a dark frame, which is
+    a visible brightness step when a "standard" edit is zoomed to 100%. The
+    native render takes the fit view's gain instead, so both are one picture."""
+    with _base_cache_lock:
+        key = max(
+            (k for k in _BASE_CACHE if k[:3] == (image_id, path_str, mtime_ns)),
+            key=lambda k: k[3],
+            default=None,
+        )
+        return _BASE_CACHE[key][1] if key is not None else None
 
 
 def _compute_editor_base(
@@ -3572,6 +3735,9 @@ def _render_editor_bytes(
     mtime_ns = path.stat().st_mtime_ns
     if native:
         lin16, gain = _cached_native_base(image.id, str(path), mtime_ns)
+        fit_gain = _cached_base_gain(image.id, str(path), mtime_ns)
+        if fit_gain is not None:
+            gain = fit_gain
         if region is None and region_px:
             budget = _base_budget_px(region_px, crop)
             if budget:
@@ -3771,19 +3937,23 @@ def _render_editor_bytes(
          list(lin16.shape[:2]) if early_cut is not None else None],
         sort_keys=True, separators=(",", ":"), default=str,
     )
-    # The editor renders the raw NATIVE (base_gain=1.0), never the browsing
-    # auto-exposure: opening a photo shows its true sensor exposure so you develop
-    # from the real data with full DR headroom. The Exposure slider (in adjustments)
-    # is the only lift. For JPEG/PNG sources the base gain is already 1.0, so this
-    # is a no-op there - only raws differ from the auto-exposed grid/lightbox.
+    # An edit on the "standard" raw base is developed from the auto-exposed
+    # picture the grid shows: every raw opens at the same brightness and
+    # Exposure works relative to that. The gain is a scalar beside the linear
+    # data and the shoulder's white point moves with it, so no headroom is lost.
+    # Any other edit ("native", or one from before the key existed) renders the
+    # raw NATIVE (base_gain=1.0): the true sensor exposure, with the Exposure
+    # slider as the only lift. For JPEG/PNG sources the base gain is already
+    # 1.0, so none of this applies there.
     #
-    # `browse=True` is the one exception: the "Original" half of the editor's
+    # `browse=True` is the other lifted render: the "Original" half of the editor's
     # split view, which is the photo as the library shows it. A DR-mode raw
     # demosaics 2-3 stops dark, so comparing an edit against the native render
     # would only ever say "the edit is brighter" - the honest before/after is
     # against the auto-exposed picture the user actually saw before opening it.
     img = apply_adjustments_linear(
-        arr, gain if browse else 1.0, adjustments, fast=fast, tone_cache_key=tone_key,
+        arr, gain if browse or adjustments.get("raw_base") == "standard" else 1.0,
+        adjustments, fast=fast, tone_cache_key=tone_key,
         peek=peek, view=view, is_stale=is_stale, noise_probe=noise_probe, timing=timing,
     )
     t0 = time.perf_counter()
@@ -3867,7 +4037,8 @@ def render_edited_image(
     persp_v: int = 0,
     max_px: int | None = None,
     half_decode: bool = False,
-) -> PILImage.Image:
+    depth16: bool = False,
+) -> "PILImage.Image | np.ndarray":
     """TRUE full-resolution RGB render with the given lens/geometry and tonal
     edits baked in - the only path that demosaics a RAW at full sensor size
     (half_size=False). Used for the flattened edited *copy* and the 100%-zoom
@@ -3923,15 +4094,20 @@ def render_edited_image(
         # Same browsing rule as the derivatives: an unedited raw's 100%-zoom
         # full.jpg is auto-exposed to match its lightbox preview; an edited one
         # renders native + the user's adjustments, matching the editor.
-        source = apply_adjustments_linear(lin, _browsing_gain(gain, adjustments), adjustments)
+        source = apply_adjustments_linear(
+            lin, _browsing_gain(gain, adjustments), adjustments, depth16=depth16
+        )
         del lin
+        if depth16:
+            return _add_frame_array(source, adjustments)
         source = add_frame(source, adjustments)
         return source.convert("RGB")
 
 
 def render_full_from_stored_edits(
-    image: "Image", max_size: int | None = None, half_decode: bool = False
-) -> PILImage.Image:
+    image: "Image", max_size: int | None = None, half_decode: bool = False,
+    depth16: bool = False,
+) -> "PILImage.Image | np.ndarray":
     """Full-resolution render of a photo with its *saved* edits baked in,
     optionally downscaled so the long edge fits max_size. Backs the cached
     100%-zoom full.jpg and the user-facing export."""
@@ -3951,7 +4127,17 @@ def render_full_from_stored_edits(
         persp_v=int(getattr(image, "edit_persp_v", 0) or 0),
         max_px=max_size,
         half_decode=half_decode,
+        depth16=depth16,
     )
+    if depth16:
+        h, w = rendered.shape[:2]
+        if max_size and max(h, w) > max_size:
+            scale = max_size / max(h, w)
+            rendered = cv2.resize(
+                rendered, (max(1, round(w * scale)), max(1, round(h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        return rendered
     if max_size and max(rendered.size) > max_size:
         rendered.thumbnail((max_size, max_size), PILImage.LANCZOS)
     return rendered
@@ -4110,11 +4296,11 @@ def _encode_jpeg_file(path: Path, quality: int, max_size: int | None) -> bytes:
             im.draft("RGB", (max(1, round(w * scale)), max(1, round(h * scale))))
     # full.jpg carries no orientation tag (a no-op); an untouched original
     # does, and the render pipeline honours it - so must the fast path.
-    im = ImageOps.exif_transpose(im).convert("RGB")
+    im = raw_service.to_srgb(ImageOps.exif_transpose(im)).convert("RGB")
     if max_size and max(im.size) > max_size:
         im.thumbnail((max_size, max_size), PILImage.LANCZOS)
     buf = io.BytesIO()
-    im.save(buf, "JPEG", quality=quality)
+    im.save(buf, "JPEG", quality=quality, icc_profile=raw_service.srgb_icc_bytes())
     return buf.getvalue()
 
 
@@ -4171,7 +4357,7 @@ def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None)
             return _encode_jpeg_file(full_path, quality, max_size)
         rendered = render_full_from_stored_edits(image, max_size=max_size)
         buf = io.BytesIO()
-        rendered.save(buf, "JPEG", quality=quality)
+        rendered.save(buf, "JPEG", quality=quality, icc_profile=raw_service.srgb_icc_bytes())
         data = buf.getvalue()
         # Only a full-resolution render is a valid 100%-zoom cache; a sized
         # export was decoded economically (possibly the half-size demosaic).
@@ -4181,6 +4367,18 @@ def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None)
             except Exception:
                 logger.exception("Could not fill the full.jpg cache for %s", image.id)
         return data
+
+
+def export_tiff_bytes(image: "Image", max_size: int | None = None) -> bytes:
+    """A 16-bit sRGB TIFF of a photo with its saved edits baked in - for work
+    that continues elsewhere (print, retouching), where an 8-bit JPEG's 256
+    levels band as soon as a sky is pushed again. Always the true render: the
+    cached full.jpg is 8-bit, so there is no fast path to take."""
+    rendered = render_full_from_stored_edits(image, max_size=max_size, depth16=True)
+    ok, buf = cv2.imencode(".tiff", np.ascontiguousarray(rendered[..., ::-1]))
+    if not ok:
+        raise RuntimeError("TIFF encoding failed")
+    return buf.tobytes()
 
 
 def render_untouched_full(image: "Image") -> PILImage.Image:
