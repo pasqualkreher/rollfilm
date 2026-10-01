@@ -2881,6 +2881,14 @@ _cached_editor_base.cache_clear = _base_cache_clear
 # one (see _cached_editor_base) and costs only its pipeline.
 _warm_lock = threading.Lock()
 _warming: set[str] = set()
+# The lightbox's rest warm-ups (`supersedable`): one decode at a time, and only
+# for the photo asked for LAST. Each used to get its own thread with nothing
+# bounding their sum - zapping through raws at a photo a second started a
+# decode per photo, each on every core and reading a whole raw off the library
+# disk, and once they overlapped they slowed each other until the previews the
+# user was paging through sat behind them for many seconds.
+_browse_warm_lock = threading.Lock()
+_browse_warm_latest = ""
 
 
 # How long the warm-up holds back before it starts decoding. The frame that was
@@ -2910,7 +2918,13 @@ def _wait_for_same_image_decodes(image_id: str, path_str: str, mtime_ns: int) ->
             ev.wait(timeout=60)
 
 
-def warm_editor_base(image_id: str, path_str: str, mtime_ns: int, then_native: bool = False) -> None:
+def warm_editor_base(
+    image_id: str,
+    path_str: str,
+    mtime_ns: int,
+    then_native: bool = False,
+    supersedable: bool = False,
+) -> None:
     """Decode the biggest preview base for this image in the background.
 
     Cheap to call on every preview request: it returns at once if the base is
@@ -2922,9 +2936,20 @@ def warm_editor_base(image_id: str, path_str: str, mtime_ns: int, then_native: b
     who opens a raw, works the sliders for a few seconds and then zooms to
     100% lands on a decoded base instead of a 7s wait behind a 2.5s poll.
     The lightbox's rest warm-up (editor-warm) does NOT: a full decode for
-    every photo merely looked at would be that wait paid for nothing."""
+    every photo merely looked at would be that wait paid for nothing.
+
+    `supersedable`: a speculative warm-up from browsing. These run one at a
+    time, and one that is still waiting when a newer one arrives is dropped -
+    the user has moved on (see _browse_warm_lock). The editor's own warm-ups
+    are for the photo being edited and always run."""
+    global _browse_warm_latest
     key = f"{image_id}:{mtime_ns}"
     top = ULTRA_EDITOR_PREVIEW_PX
+    if supersedable:
+        # Claimed even when this call turns out to be a no-op below: the user
+        # is on THIS photo now, so a warm-up queued for an earlier one is stale.
+        with _warm_lock:
+            _browse_warm_latest = key
     with _base_cache_lock:
         have_top = (image_id, path_str, mtime_ns, top) in _BASE_CACHE
     if have_top:
@@ -2939,6 +2964,14 @@ def warm_editor_base(image_id: str, path_str: str, mtime_ns: int, then_native: b
     def run() -> None:
         try:
             time.sleep(_WARM_DELAY_S)
+            if supersedable:
+                with _browse_warm_lock:
+                    with _warm_lock:
+                        if _browse_warm_latest != key:
+                            return
+                    _wait_for_same_image_decodes(image_id, path_str, mtime_ns)
+                    _cached_editor_base(image_id, path_str, mtime_ns, top)
+                return
             _wait_for_same_image_decodes(image_id, path_str, mtime_ns)
             _cached_editor_base(image_id, path_str, mtime_ns, top)
             if then_native and not native_base_ready(image_id, mtime_ns):

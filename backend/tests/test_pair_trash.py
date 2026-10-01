@@ -144,3 +144,31 @@ def test_rating_still_mirrors_while_both_halves_are_in_the_library(pair):
     _apply_to_pair(pair, 1, raw, 4, None)
     pair.commit()
     assert pair.get(Image, "jpg").rating == 4
+
+
+def _tag_names(db: Session, image_id: str) -> set[str]:
+    return set(schemas.ImageOut.model_validate(db.get(Image, image_id)).tags)
+
+
+def test_tagging_a_merged_pair_tags_both_halves(pair):
+    from app.api.routes.images import add_tag, bulk_add_tags, remove_tag
+
+    add_tag("jpg", schemas.AddTagRequest(name="beach", apply_to_pair=True), db=pair, current_user=_User())
+    assert _tag_names(pair, "jpg") == {"beach"} and _tag_names(pair, "raw") == {"beach"}
+    bulk_add_tags(
+        schemas.BulkTagRequest(image_ids=["raw"], tag_names=["sun"], apply_to_pair=True),
+        db=pair, current_user=_User(),
+    )
+    assert _tag_names(pair, "jpg") == {"beach", "sun"}
+    remove_tag("raw", "beach", apply_to_pair=True, db=pair, current_user=_User())
+    assert _tag_names(pair, "jpg") == {"sun"} and _tag_names(pair, "raw") == {"sun"}
+
+
+def test_tagging_one_half_alone_leaves_the_other_untouched(pair):
+    from app.api.routes.images import add_tag, remove_tag
+
+    add_tag("jpg", schemas.AddTagRequest(name="beach"), db=pair, current_user=_User())
+    assert _tag_names(pair, "jpg") == {"beach"} and _tag_names(pair, "raw") == set()
+    add_tag("raw", schemas.AddTagRequest(name="beach"), db=pair, current_user=_User())
+    remove_tag("raw", "beach", apply_to_pair=False, db=pair, current_user=_User())
+    assert _tag_names(pair, "jpg") == {"beach"} and _tag_names(pair, "raw") == set()

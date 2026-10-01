@@ -94,6 +94,19 @@ def _try_regenerate_derivatives(image: Image) -> None:
         logger.exception("Failed to regenerate thumbnails for image %s after edit", image.id)
 
 
+def _pair_partner(db: Session, owner_id: int, image: Image) -> Image | None:
+    """The RAW+JPEG partner a change on `image` may be mirrored onto, or None:
+    no partner, not the caller's, or on the other side of the Trash."""
+    if not image.paired_image_id:
+        return None
+    partner = db.get(Image, image.paired_image_id)
+    if partner is None or partner.owner_id != owner_id:
+        return None
+    if (partner.deleted_at is None) != (image.deleted_at is None):
+        return None
+    return partner
+
+
 def _apply_to_pair(
     db: Session,
     owner_id: int,
@@ -106,12 +119,8 @@ def _apply_to_pair(
     no partner (or it isn't owned by the caller), and no-op across the Trash:
     while one half is deleted the pair is suspended everywhere else too, so
     rating the survivor must not reach into a photo the user threw away."""
-    if not image.paired_image_id:
-        return
-    partner = db.get(Image, image.paired_image_id)
-    if partner is None or partner.owner_id != owner_id:
-        return
-    if (partner.deleted_at is None) != (image.deleted_at is None):
+    partner = _pair_partner(db, owner_id, image)
+    if partner is None:
         return
     if rating is not None:
         partner.rating = rating
@@ -1255,8 +1264,11 @@ def bulk_add_tags(
             raise HTTPException(status_code=400, detail=auto_tag_error(name))
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     for image in images:
+        partner = _pair_partner(db, current_user.id, image) if payload.apply_to_pair else None
         for name in payload.tag_names:
             _add_tag_to_image(db, current_user.id, image, name)
+            if partner is not None:
+                _add_tag_to_image(db, current_user.id, partner, name)
     db.commit()
     for image in images:
         db.refresh(image)
@@ -1611,6 +1623,10 @@ def add_tag(
     if is_auto_tag(payload.name):
         raise HTTPException(status_code=400, detail=auto_tag_error(payload.name))
     _add_tag_to_image(db, current_user.id, image, payload.name)
+    if payload.apply_to_pair:
+        partner = _pair_partner(db, current_user.id, image)
+        if partner is not None:
+            _add_tag_to_image(db, current_user.id, partner, payload.name)
     db.commit()
     db.refresh(image)
     return image
@@ -1622,6 +1638,7 @@ def remove_tag(
     tag_name: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    apply_to_pair: bool = False,
 ):
     image = get_owned_image(db, current_user.id, image_id)
     if is_auto_tag(tag_name):
@@ -1629,6 +1646,10 @@ def remove_tag(
     tag = db.query(Tag).filter(Tag.owner_id == current_user.id, Tag.name == tag_name).first()
     if tag:
         db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
+        # A merged RAW+JPEG pair is one shot: the tag comes off both halves.
+        partner = _pair_partner(db, current_user.id, image) if apply_to_pair else None
+        if partner is not None:
+            db.query(ImageTag).filter(ImageTag.image_id == partner.id, ImageTag.tag_id == tag.id).delete()
         # A tag no photo carries any more disappears with its last photo.
         prune_unused_tags(db, current_user.id)
         db.commit()
@@ -2040,7 +2061,9 @@ def editor_warm(
         mtime_ns = path.stat().st_mtime_ns
     except OSError:
         return {"status": "missing"}
-    thumbnails.warm_editor_base(image.id, str(path), mtime_ns)
+    # Superseded by the next photo's warm-up while it waits its turn: paging
+    # on must not leave a decode behind for every photo passed through.
+    thumbnails.warm_editor_base(image.id, str(path), mtime_ns, supersedable=True)
     return {"status": "warming"}
 
 

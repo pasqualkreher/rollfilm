@@ -30,6 +30,9 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
     setError(null);
     onAdd(name);
     setValue("");
+    // The tag is on the photo: hand the keyboard back to the photo view, so
+    // 0-5, the arrows and E work again without a click on the picture first.
+    (document.activeElement as HTMLElement | null)?.blur();
   }
 
   function submit(e: React.FormEvent) {
@@ -69,6 +72,7 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
           onSubmit={add}
           suggestions={(allTags ?? []).filter((t) => !isAutoTag(t))}
           exclude={tags}
+          keepFocus={false}
         />
         <button className="btn" type="submit" disabled={!value.trim()} title="Add tag" aria-label="Add tag">
           <IconPlus size={14} />

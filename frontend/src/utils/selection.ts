@@ -54,8 +54,7 @@ export function useSelectionKeys(opts: {
       } else if (
         (e.key === "e" || e.key === "E") &&
         !e.metaKey && !e.ctrlKey && !e.altKey &&
-        edit?.selected.size === 1 &&
-        target?.tagName !== "BUTTON"
+        edit?.selected.size === 1
       ) {
         const [id] = edit.selected;
         e.preventDefault();

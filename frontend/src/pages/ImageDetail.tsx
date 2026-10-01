@@ -46,6 +46,7 @@ import { errorText } from "../utils/apiError";
 import type { ColorLabel, ImageOut } from "../api/types";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
+import { isTextEntry } from "../utils/keyboardFocus";
 
 export function ImageDetail() {
   const { id, mode } = useParams<{ id: string; mode?: string }>();
@@ -343,9 +344,12 @@ export function ImageDetail() {
 
       // While a text field has focus the keyboard belongs to it: arrows move
       // the caret, Esc backs out of the field. Without this, naming a photo or
-      // writing its description paged to the next photo mid-word.
-      const tagName = (e.target as HTMLElement | null)?.tagName;
-      const typing = tagName === "INPUT" || tagName === "TEXTAREA";
+      // writing its description paged to the next photo mid-word. Only real
+      // text entry counts: a checkbox or a button that merely kept the focus
+      // from the last click must not swallow the photo's shortcuts.
+      const target = e.target as HTMLElement | null;
+      const tagName = target?.tagName;
+      const typing = isTextEntry(target);
       if (typing) {
         if (e.key === "Escape") {
           if (renaming) setRenaming(false);
@@ -367,10 +371,14 @@ export function ImageDetail() {
         return;
       }
 
+      // Cmd/Ctrl/Alt chords are the system's and the menu's (Cmd+1, Cmd+S...).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
       // Number keys set the star rating (0 clears it) - same shortcut as the
-      // import lightbox. Skipped while a control has focus, so a keystroke
-      // meant for it never rates the photo (text fields already returned above).
-      const inControl = tagName === "BUTTON" || tagName === "SELECT";
+      // import lightbox. They work whatever was clicked last: a button keeps
+      // the focus after a click (a star, a tag's x, Export), and has no use
+      // for a digit or a letter itself. Only a native select does (type-ahead).
+      const inControl = tagName === "SELECT";
       if (!inControl && image && !imageStale && e.key >= "0" && e.key <= "5") {
         setRating(Number(e.key));
         return;
@@ -523,10 +531,15 @@ export function ImageDetail() {
     if (restedId !== activeId || adjustOpen) return;
     const t = setTimeout(() => {
       void api.images.editorWarm(restedId).catch(() => {});
-    }, 400);
+    }, 700);
     return () => clearTimeout(t);
+    // activeId is a dependency on purpose: leaving the photo must cancel the
+    // timer at once. Keyed on restedId alone it only went when the NEXT photo
+    // had rested, so stepping on within the delay still decoded the photo
+    // just left - one raw decode per photo zapped through, stacking up on
+    // the backend until the previews themselves stalled.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restedId, adjustOpen]);
+  }, [restedId, activeId, adjustOpen]);
 
   // And the raw's 100%-zoom render, a good while later: a raw the user has
   // looked at for a few seconds is one they may zoom into, and that zoom
@@ -546,7 +559,7 @@ export function ImageDetail() {
     }, 3000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restedId, adjustOpen, image?.file_type, hiRes]);
+  }, [restedId, activeId, adjustOpen, image?.file_type, hiRes]);
 
   // Similar-photos strip: a CLIP search per photo is the most expensive
   // per-view request the lightbox makes - only run it for the rested photo,
@@ -587,8 +600,8 @@ export function ImageDetail() {
 
   const pixelsPending = imageStale || loadedId !== image.id;
 
-  // With "Merge RAW+JPG" on, rating/coloring the shown file also writes the
-  // partner - and we refresh its cached copy so the other tab reflects it.
+  // With "Merge RAW+JPG" on, rating/coloring/tagging the shown file also
+  // writes the partner - and we refresh its cached copy so the other tab reflects it.
   function invalidateActiveAndPair() {
     queryClient.invalidateQueries({ queryKey: ["image", activeId] });
     if (mergePairs && image!.paired_image_id) {
@@ -667,14 +680,15 @@ export function ImageDetail() {
   }
 
   async function addTag(name: string) {
-    await api.images.addTag(image!.id, name);
-    queryClient.invalidateQueries({ queryKey: ["image", activeId] });
+    await api.images.addTag(image!.id, name, mergePairs);
+    invalidateActiveAndPair();
     queryClient.invalidateQueries({ queryKey: ["tags"] });
   }
 
   async function removeTag(name: string) {
-    await api.images.removeTag(image!.id, name);
-    queryClient.invalidateQueries({ queryKey: ["image", activeId] });
+    await api.images.removeTag(image!.id, name, mergePairs);
+    invalidateActiveAndPair();
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
   }
 
   // With merged pairs the photo stands for the whole RAW+JPEG shot, so album

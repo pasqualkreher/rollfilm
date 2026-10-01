@@ -116,11 +116,15 @@ class TagUsage(BaseModel):
 
 class AddTagRequest(BaseModel):
     name: str
+    # See ImageUpdate.apply_to_pair - the tag also goes onto the RAW+JPEG partner.
+    apply_to_pair: bool = False
 
 
 class BulkTagRequest(BaseModel):
     image_ids: list[str]
     tag_names: list[str]
+    # See ImageUpdate.apply_to_pair - fans each tag out to RAW+JPEG partners.
+    apply_to_pair: bool = False
 
 
 class BulkResetRequest(BaseModel):

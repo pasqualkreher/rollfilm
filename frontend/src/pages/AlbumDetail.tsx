@@ -252,7 +252,7 @@ export function AlbumDetail() {
     if (selected.size === 0 || !name.trim()) return;
     const tag = name.trim();
     await withWait(`Tagging ${selected.size} photo${selected.size === 1 ? "" : "s"}…`, () =>
-      api.images.bulkAddTags(Array.from(selected), [tag])
+      api.images.bulkAddTags(Array.from(selected), [tag], mergePairs)
     );
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });

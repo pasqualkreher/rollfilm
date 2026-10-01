@@ -17,6 +17,9 @@ interface Props {
   ariaLabel?: string;
   title?: string;
   invalid?: boolean;
+  // After a suggestion is picked: keep the caret in the box for the next tag
+  // (default), or let the focus go so the page's shortcuts work again.
+  keepFocus?: boolean;
 }
 
 // A text field with a suggestion menu, replacing the native <datalist> that
@@ -40,6 +43,7 @@ export function TagSuggestInput({
   ariaLabel,
   title,
   invalid,
+  keepFocus = true,
 }: Props) {
   const [open, setOpen] = useState(false);
   // -1: nothing highlighted, Enter submits the typed text.
@@ -62,8 +66,10 @@ export function TagSuggestInput({
   function pick(name: string) {
     onSubmit(name);
     close();
-    // The box stays the place to type the next tag.
-    inputRef.current?.focus();
+    // The box stays the place to type the next tag - unless the caller wants
+    // the keyboard back.
+    if (keepFocus) inputRef.current?.focus();
+    else inputRef.current?.blur();
   }
 
   function onKey(e: React.KeyboardEvent<HTMLInputElement>) {
