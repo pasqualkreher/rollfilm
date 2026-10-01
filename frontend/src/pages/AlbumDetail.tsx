@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSessionState } from "../utils/useSessionState";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -31,12 +32,14 @@ import { MOTION } from "../utils/usePresence";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
-  const [viewMode, setViewMode] = useState<ViewMode>("combined");
-  const [ratingMin, setRatingMin] = useState<number>(0);
-  const [colorLabel, setColorLabel] = useState<ColorLabel>("none");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [dateFrom, setDateFrom] = useState<string | null>(null);
-  const [dateTo, setDateTo] = useState<string | null>(null);
+  // The filters outlive the page for the session (per album): opening a photo
+  // unmounts this grid, and coming back used to find every filter reset.
+  const [viewMode, setViewMode] = useSessionState<ViewMode>(`album:${id}:viewMode`, "combined");
+  const [ratingMin, setRatingMin] = useSessionState<number>(`album:${id}:ratingMin`, 0);
+  const [colorLabel, setColorLabel] = useSessionState<ColorLabel>(`album:${id}:colorLabel`, "none");
+  const [selectedTags, setSelectedTags] = useSessionState<string[]>(`album:${id}:selectedTags`, []);
+  const [dateFrom, setDateFrom] = useSessionState<string | null>(`album:${id}:dateFrom`, null);
+  const [dateTo, setDateTo] = useSessionState<string | null>(`album:${id}:dateTo`, null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();

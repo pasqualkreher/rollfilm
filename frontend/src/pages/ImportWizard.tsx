@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forgetLibraryFilters } from "../utils/libraryFilterMemory";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -458,6 +459,8 @@ export function ImportWizard() {
       // discard resets the review either way (see onSettled); the library is
       // where the photos just went, so land there like a finished import.
       await discard.mutateAsync(closing.keepFolder).catch(() => {});
+      // Unfiltered: a filter left on from before would hide the new photos.
+      forgetLibraryFilters();
       navigate("/");
     },
     // A failed commit used to be completely invisible (no state change, no

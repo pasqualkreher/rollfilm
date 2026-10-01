@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
+import { rememberLibraryFilters, rememberedLibraryFilters } from "../utils/libraryFilterMemory";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { withoutMembershipNames } from "../utils/autoTags";
@@ -41,8 +42,25 @@ import { MOTION } from "../utils/usePresence";
 // the fields both carry.
 type GridImage = LibraryIndexImage | ImageOut;
 
+// Opened without a filter set (the sidebar's link, a fresh visit) while one is
+// remembered from earlier in the session: go to that instead, before the page
+// below mounts - so the unfiltered grid never flashes up or gets fetched.
 export function Library() {
+  const [searchParams] = useSearchParams();
+  const remembered = rememberedLibraryFilters();
+  if (searchParams.toString() === "" && remembered) {
+    return <Navigate to={`/?${remembered}`} replace />;
+  }
+  return <LibraryPage />;
+}
+
+function LibraryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  // Keep the session's memory of the filter set in step with the URL (see
+  // utils/libraryFilterMemory.ts) - clearing the filters clears it too.
+  useEffect(() => {
+    rememberLibraryFilters(searchParams);
+  }, [searchParams]);
 
   // The filter set lives in the URL, not in component state. Opening a photo
   // navigates to /image/:id, which unmounts this page - anything held in

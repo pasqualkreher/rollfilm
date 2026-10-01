@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSessionState } from "../utils/useSessionState";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -15,12 +16,14 @@ export function SmartAlbumDetail() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const [viewMode, setViewMode] = useState<ViewMode>("combined");
-  const [ratingMin, setRatingMin] = useState(0);
-  const [colorLabel, setColorLabel] = useState<ColorLabel>("none");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [dateFrom, setDateFrom] = useState<string | null>(null);
-  const [dateTo, setDateTo] = useState<string | null>(null);
+  // The filters outlive the page for the session (per album): opening a photo
+  // unmounts this grid, and coming back used to find every filter reset.
+  const [viewMode, setViewMode] = useSessionState<ViewMode>(`smart-album:${id}:viewMode`, "combined");
+  const [ratingMin, setRatingMin] = useSessionState<number>(`smart-album:${id}:ratingMin`, 0);
+  const [colorLabel, setColorLabel] = useSessionState<ColorLabel>(`smart-album:${id}:colorLabel`, "none");
+  const [selectedTags, setSelectedTags] = useSessionState<string[]>(`smart-album:${id}:selectedTags`, []);
+  const [dateFrom, setDateFrom] = useSessionState<string | null>(`smart-album:${id}:dateFrom`, null);
+  const [dateTo, setDateTo] = useSessionState<string | null>(`smart-album:${id}:dateTo`, null);
 
   // Escape walks back to the albums, the same as it leaves a manual album,
   // the lightbox and the editor - one key out of any view. A dialog on top
