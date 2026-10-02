@@ -6,6 +6,7 @@ import { useWait } from "../state/wait";
 import { formatEta } from "../utils/duration";
 import { useTransientMessage } from "../utils/transientMessage";
 import { IconFolder } from "./Icons";
+import { Spinner } from "./Spinner";
 
 function size(bytes: number): string {
   if (bytes < 1e9) return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
@@ -101,7 +102,7 @@ export function ImportLibrary() {
       {running && (
         <div className="merge-summary">
           <p className="import-panel-desc">
-            <span className="btn-spinner" aria-hidden="true" />{" "}
+            <Spinner inline />
             {progress!.total > 0
               ? `${progress!.done} of ${progress!.total} photos`
               : "Reading the other library…"}

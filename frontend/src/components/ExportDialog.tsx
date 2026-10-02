@@ -4,6 +4,7 @@ import { useTransientMessage } from "../utils/transientMessage";
 import { Dropdown } from "./Dropdown";
 import { IconExport } from "./Icons";
 import { rangeFillStyle } from "../utils/rangeFill";
+import { Spinner } from "./Spinner";
 
 // Long-edge presets for the size dropdown; null = keep the original size.
 // Shared with the editor's Save-copy dialog, which offers the same choices.
@@ -230,7 +231,7 @@ export function ExportDialog({
             <button className="btn primary" onClick={doExport} disabled={busy}>
               {busy ? (
                 <>
-                  <span className="btn-spinner" aria-hidden="true" />
+                  <Spinner tone="inherit" inline />
                   Exporting…
                 </>
               ) : (

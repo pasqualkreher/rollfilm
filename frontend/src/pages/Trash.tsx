@@ -11,6 +11,7 @@ import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { useMergePairs } from "../state/viewPrefs";
 import { useTransientMessage } from "../utils/transientMessage";
 import { useWait } from "../state/wait";
+import { LoadingState } from "../components/Spinner";
 
 // The in-app Trash: managed (imported) photos land here when deleted and can
 // be restored; only deleting them from here removes the original files from
@@ -209,7 +210,7 @@ export function Trash() {
           <p style={{ color: "var(--text-muted)", marginBottom: 16 }}>{selected.size} selected</p>
         )}
         {isLoading ? (
-          <div className="empty-state">Loading...</div>
+          <LoadingState />
         ) : images.length === 0 ? (
           <div className="empty-state">
             The Trash is empty. Deleted photos appear here and can be restored.

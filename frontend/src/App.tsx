@@ -16,6 +16,7 @@ import { MOTION } from "./utils/usePresence";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NavHistoryTracker, runLeaveGuards, useNavHistory } from "./state/navHistory";
 import { isMac } from "./utils/selection";
+import { Spinner, LoadingState } from "./components/Spinner";
 
 // Every screen except the Library is code-split. The app used to ship as one
 // bundle, so each launch parsed and compiled the photo editor (by far the
@@ -312,7 +313,7 @@ function NavHistoryButtons({ locked }: { locked: boolean }) {
 // switch tabs) and a spinner + label shows what's happening. On narrow windows
 // the tab row collapses into a burger menu instead of wrapping onto extra rows.
 function TopBar() {
-  const { busyLabel } = useTasks();
+  const { busyLabel, renders } = useTasks();
   const locked = busyLabel !== null;
   const location = useLocation();
   const { isUploading, sessionId } = useImportSession();
@@ -408,8 +409,20 @@ function TopBar() {
       </div>
       {locked && (
         <span className="nav-task" role="status" aria-live="polite">
-          <span className="spinner" aria-hidden="true" />
+          <Spinner />
           {busyLabel}
+        </span>
+      )}
+      {/* The pictures of a bulk edit, rendering in the background: counted
+          down here until the last one is through. Blocks nothing. */}
+      {renders && !locked && (
+        <span
+          className="nav-task"
+          role="status"
+          title="The edited photos are being rendered in the background. You can keep working."
+        >
+          <Spinner />
+          Rendering <span className="nav-task-count">{renders.done}</span> of {renders.total}
         </span>
       )}
       <ImmichSyncIndicator />
@@ -494,7 +507,7 @@ function ImmichSyncIndicator() {
       aria-live="polite"
       title="Photos are uploading to Immich in the background. You will be asked before quitting interrupts this."
     >
-      <span className="spinner" aria-hidden="true" />
+      <Spinner />
       Immich sync: {pending} left
     </span>
   );
@@ -520,7 +533,7 @@ export default function App() {
                 than as the app blanking out. In practice it is rarely seen: the
                 chunks come off local disk, and the two routes the Library leads
                 to are prefetched while the app idles. */}
-            <Suspense fallback={<div className="empty-state">Loading...</div>}>
+            <Suspense fallback={<LoadingState />}>
             <Routes>
             <Route path="/" element={<Library />} />
             <Route path="/import" element={<ImportWizard />} />

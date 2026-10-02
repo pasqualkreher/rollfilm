@@ -1,8 +1,10 @@
 import { memo, useEffect, useRef, useState } from "react";
 
 // The white-balance shift grid a camera shows: one puck on a red/blue cross,
-// in whole steps of -9..+9 on each axis. Right is more red (left: cyan), up is
-// more blue (down: yellow). It sits under the Kelvin slider and is independent
+// -9..+9 on each axis. One unit is one step of the camera's grid, but the puck
+// is free between the crossings (tenths) - a whole step is 3-4 % on a channel,
+// too much for a fine correction. Right is more red (left: cyan), up is more
+// blue (down: yellow). It sits under the Kelvin slider and is independent
 // of it - the colour temperature is set first, this is the fine correction on
 // top (adjustments wb_shift_r / wb_shift_b, applied as channel gains in the
 // render's white-balance step).
@@ -15,8 +17,15 @@ interface Props {
 
 // Steps each way on both axes, as on the camera.
 const REACH = 9;
-const clamp = (v: number) => Math.max(-REACH, Math.min(REACH, Math.round(v)));
+const limit = (v: number) => Math.max(-REACH, Math.min(REACH, v));
+// Held in tenths of a step.
+const clamp = (v: number) => Math.round(limit(v) * 10) / 10;
 const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`);
+// The arrow keys: half a step, with Shift a tenth.
+const KEY_STEP = 0.5;
+const KEY_STEP_FINE = 0.1;
+// A drag with Shift held moves the puck at a quarter of the pointer's pace.
+const FINE_DRAG = 0.25;
 
 // One axis as a number: typed, or stepped with the field's arrows (and the
 // arrow keys while it has the focus).
@@ -31,7 +40,8 @@ function AxisField({
   value: number;
   onCommit: (value: number) => void;
 }) {
-  const shown = String(value);
+  // Always one decimal, so the field's text keeps its width as the value moves.
+  const shown = value.toFixed(1);
   // What is being typed, while it is being typed: "-" or "" on the way to a
   // number must not be snapped back by the value coming round again.
   const [draft, setDraft] = useState<string | null>(null);
@@ -42,7 +52,7 @@ function AxisField({
         type="number"
         min={-REACH}
         max={REACH}
-        step={1}
+        step={0.1}
         aria-label={name}
         value={draft ?? shown}
         onFocus={(e) => {
@@ -53,7 +63,7 @@ function AxisField({
         onChange={(e) => {
           const text = e.target.value;
           setDraft(text);
-          const typed = Number(text);
+          const typed = Number(text.replace(",", "."));
           if (text.trim() !== "" && Number.isFinite(typed)) onCommit(clamp(typed));
         }}
         onKeyDown={(e) => {
@@ -93,12 +103,29 @@ function WbShiftPadImpl({ red, blue, onChange }: Props) {
 
   const edited = red !== 0 || blue !== 0;
 
-  // The puck snaps to the grid's crossings: whole steps, like the camera's.
+  // The drag's own position, unrounded, and where the pointer last was: each
+  // move adds the pointer's travel to it, so the pace can change mid-drag
+  // (Shift) without the puck jumping.
+  const dragRef = useRef({ red: 0, blue: 0, x: 0, y: 0 });
+
+  // Where on the cross a point of the screen is. Not snapped to the grid's
+  // crossings - the puck follows the pointer.
   function fromPointer(clientX: number, clientY: number) {
     const rect = padRef.current!.getBoundingClientRect();
     const x = (clientX - rect.left) / rect.width;
     const y = (clientY - rect.top) / rect.height;
-    return { red: clamp((2 * x - 1) * REACH), blue: clamp((1 - 2 * y) * REACH) };
+    return { red: limit((2 * x - 1) * REACH), blue: limit((1 - 2 * y) * REACH) };
+  }
+
+  function dragTo(clientX: number, clientY: number, fine: boolean) {
+    const rect = padRef.current!.getBoundingClientRect();
+    const drag = dragRef.current;
+    const pace = fine ? FINE_DRAG : 1;
+    drag.red = limit(drag.red + ((clientX - drag.x) / rect.width) * 2 * REACH * pace);
+    drag.blue = limit(drag.blue - ((clientY - drag.y) / rect.height) * 2 * REACH * pace);
+    drag.x = clientX;
+    drag.y = clientY;
+    return { red: clamp(drag.red), blue: clamp(drag.blue) };
   }
 
   function queueChange(v: { red: number; blue: number }) {
@@ -140,18 +167,22 @@ function WbShiftPadImpl({ red, blue, onChange }: Props) {
           className={`wb-pad${dragging ? " dragging" : ""}`}
           tabIndex={0}
           role="group"
-          aria-label={`White balance shift, red ${signed(red)}, blue ${signed(blue)}. Arrow keys move it, double-click resets.`}
-          title="Drag: right is more red, up is more blue. Double-click resets."
+          aria-label={`White balance shift, red ${signed(clamp(red))}, blue ${signed(clamp(blue))}. Arrow keys move it, double-click resets.`}
+          title="Drag: right is more red, up is more blue. Hold Shift to move it slowly. Double-click resets."
           onPointerDown={(e) => {
             e.preventDefault();
             e.currentTarget.focus();
             draggingRef.current = true;
             setDragging(true);
             padRef.current!.setPointerCapture(e.pointerId);
-            onChangeRef.current(fromPointer(e.clientX, e.clientY));
+            // The puck jumps to the pointer - except with Shift held, where
+            // the drag starts from where the puck is and only nudges it.
+            const start = e.shiftKey ? { red, blue } : fromPointer(e.clientX, e.clientY);
+            dragRef.current = { ...start, x: e.clientX, y: e.clientY };
+            if (!e.shiftKey) onChangeRef.current({ red: clamp(start.red), blue: clamp(start.blue) });
           }}
           onPointerMove={(e) => {
-            if (draggingRef.current) queueChange(fromPointer(e.clientX, e.clientY));
+            if (draggingRef.current) queueChange(dragTo(e.clientX, e.clientY, e.shiftKey));
           }}
           onPointerUp={(e) => endDrag(e.pointerId)}
           onPointerCancel={(e) => endDrag(e.pointerId)}
@@ -169,7 +200,8 @@ function WbShiftPadImpl({ red, blue, onChange }: Props) {
             // must not also fire.
             e.preventDefault();
             e.stopPropagation();
-            onChangeRef.current({ red: clamp(red + delta[0]), blue: clamp(blue + delta[1]) });
+            const step = e.shiftKey ? KEY_STEP_FINE : KEY_STEP;
+            onChangeRef.current({ red: clamp(red + delta[0] * step), blue: clamp(blue + delta[1] * step) });
           }}
         >
           <span

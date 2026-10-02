@@ -515,6 +515,14 @@ export const api = {
         body: JSON.stringify({ image_ids, ...opts }),
       });
     },
+    // How many of these photos still wait for the re-render a bulk edit
+    // queued for them (the backend renders those in the background).
+    renderStatus(image_ids: string[]): Promise<{ pending: number }> {
+      return request(`/images/render-status`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids }),
+      });
+    },
     // Apply one develop object (an editor preset) to every selected photo in
     // place. Geometry is untouched; a neutral object clears the develop sliders.
     bulkDevelop(image_ids: string[], adjustments: Record<string, unknown>): Promise<ImageOut[]> {

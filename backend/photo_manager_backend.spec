@@ -10,6 +10,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 datas = [
     ("alembic.ini", "."),
     ("app/db/migrations", "app/db/migrations"),
+    # The film simulation cubes measured from camera JPEGs (film_sims.py).
+    ("app/services/film_luts", "app/services/film_luts"),
 ]
 binaries = []
 # Things imported dynamically (not visible to static analysis).

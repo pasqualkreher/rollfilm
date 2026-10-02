@@ -1577,7 +1577,7 @@ def _linear_tone_block_banded(
     return out
 
 
-def _display_color_block(arr: np.ndarray, adj: dict) -> np.ndarray:
+def _display_color_block(arr: np.ndarray, adj: dict, raw_source: bool = False) -> np.ndarray:
     """The display-referred colour pass on sRGB float 0..1: film simulation,
     curves, colour calibration, HSL mixer + global hue, Fuji chrome, 3-way
     colour grading, saturation/vibrance. (Curves are defined on the 0..255
@@ -1588,7 +1588,10 @@ def _display_color_block(arr: np.ndarray, adj: dict) -> np.ndarray:
 
     # The film-simulation look goes first so it acts as the base "stock" the
     # user's curves/mixer/grading refine - the order a camera bakes it in.
-    arr = film_sims.apply_film_sim(arr, adj.get("film_sim"), adj.get("lut_intensity", 100))
+    arr = film_sims.apply_film_sim(
+        arr, adj.get("film_sim"), adj.get("lut_intensity", 100),
+        measured=raw_source and develop_v2.measured_film_sims(adj),
+    )
     # Tone curves (point or parametric per curve_mode) and camera-style colour
     # calibration shape tone/primaries after the basic tonal controls.
     arr = develop_color.apply_curves(arr, adj)
@@ -2315,7 +2318,7 @@ def apply_adjustments_linear(
     lin: np.ndarray, base_gain: float, adj: dict, include_grain: bool = True, fast: bool = False,
     tone_cache_key: str | None = None, peek: str | None = None, view=None,
     is_stale: Callable[[], bool] | None = None, noise_probe: np.ndarray | None = None,
-    timing: dict | None = None, depth16: bool = False,
+    timing: dict | None = None, depth16: bool = False, raw_source: bool = False,
 ) -> "PILImage.Image | np.ndarray":
     """The develop pipeline on a scene-referred linear float base (the RAW
     demosaic, values may exceed 1.0 after the gain).
@@ -2323,6 +2326,11 @@ def apply_adjustments_linear(
     `depth16` hands the result back as an HxWx3 uint16 array instead of an
     8-bit image - the 16-bit TIFF export, the one caller that keeps the tonal
     resolution the float pipeline has.
+
+    `raw_source` says the base is a RAW demosaic. Only then do the film
+    simulations measured from camera JPEGs apply (process version 3): they
+    were fitted on this pipeline's render of a RAW, tone included, and would
+    put the camera's tone curve onto a JPEG a second time.
 
     Order: linear tone block (gain/WB/tone sliders/tonemap - always runs, since
     even neutral edits need the base gain + shoulder applied) -> denoise ->
@@ -2496,7 +2504,7 @@ def apply_adjustments_linear(
         _detail_stage_put(detail_key, arr)
         t0 = _mark(timing, "detail", t0)
     _abort_if_stale()
-    arr = _display_color_block(arr, adj)
+    arr = _display_color_block(arr, adj, raw_source)
     t0 = _mark(timing, "color", t0)
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
@@ -2669,7 +2677,7 @@ def generate_derivatives(
         # full res it would just be averaged away by the resize.
         source = apply_adjustments_linear(
             lin, _browsing_gain(gain, adjustments), adjustments if adjustments else develop.normalize({}),
-            include_grain=False,
+            include_grain=False, raw_source=raw_service.is_raw(source_path),
         )
         del lin
 
@@ -3955,6 +3963,7 @@ def _render_editor_bytes(
         arr, gain if browse or adjustments.get("raw_base") == "standard" else 1.0,
         adjustments, fast=fast, tone_cache_key=tone_key,
         peek=peek, view=view, is_stale=is_stale, noise_probe=noise_probe, timing=timing,
+        raw_source=raw_service.is_raw(path),
     )
     t0 = time.perf_counter()
     if trim is not None:
@@ -4095,7 +4104,8 @@ def render_edited_image(
         # full.jpg is auto-exposed to match its lightbox preview; an edited one
         # renders native + the user's adjustments, matching the editor.
         source = apply_adjustments_linear(
-            lin, _browsing_gain(gain, adjustments), adjustments, depth16=depth16
+            lin, _browsing_gain(gain, adjustments), adjustments, depth16=depth16,
+            raw_source=raw_service.is_raw(path),
         )
         del lin
         if depth16:

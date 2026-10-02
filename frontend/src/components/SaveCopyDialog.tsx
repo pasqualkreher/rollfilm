@@ -4,6 +4,7 @@ import { Dropdown } from "./Dropdown";
 import { SIZE_OPTIONS } from "./ExportDialog";
 import { IconDisk, IconDuplicate } from "./Icons";
 import { rangeFillStyle } from "../utils/rangeFill";
+import { Spinner } from "./Spinner";
 
 // The quality a copy is baked at when nobody picks one: the maximum JPEG
 // quality, which is also this dialog's starting point. A copy is a photo you
@@ -163,7 +164,7 @@ export function SaveCopyDialog({
             <button className="btn primary" onClick={doSave} disabled={busy}>
               {busy ? (
                 <>
-                  <span className="btn-spinner" aria-hidden="true" />
+                  <Spinner tone="inherit" inline />
                   Saving…
                 </>
               ) : physical ? (

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { Presence } from "../components/Presence";
+import { Spinner } from "../components/Spinner";
 
 // A full-screen "please wait" popup for actions the user must sit out - saving
 // edits, bulk resets, deletes and the like. withWait() blocks every click and
@@ -91,7 +92,7 @@ function WaitOverlay({ entry, closing = false }: { entry: WaitEntry; closing?: b
       aria-label={label}
     >
       <div className="wait-overlay-box" role="status" aria-live="polite">
-        <span className="wait-overlay-spinner" aria-hidden="true" />
+        <Spinner size="lg" />
         <span>
           {label}
           {progress && (

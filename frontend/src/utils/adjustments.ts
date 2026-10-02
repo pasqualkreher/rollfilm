@@ -43,9 +43,10 @@ export const SCALAR_SPEC = {
   // of one unit.
   temperature: { def: 0, min: -300, max: 300, fractional: true },
   tint: { def: 0, min: -250, max: 250, fractional: true },
-  // The camera-style shift cross (components/WbShiftPad.tsx): whole steps.
-  wb_shift_r: { def: 0, min: -9, max: 9, step: 1 },
-  wb_shift_b: { def: 0, min: -9, max: 9, step: 1 },
+  // The camera-style shift cross (components/WbShiftPad.tsx): one unit is one
+  // step of the camera's grid, set in tenths.
+  wb_shift_r: { def: 0, min: -9, max: 9, step: 0.1 },
+  wb_shift_b: { def: 0, min: -9, max: 9, step: 0.1 },
   // Extended past the classic +-100: the backend clamps the chroma scale at
   // zero, so past -100 both settle at grayscale instead of inverting colours.
   vibrance: { def: 0, min: -200, max: 200, uiScale: 2 },
@@ -225,8 +226,9 @@ export type FilmSim =
 // develop.ENUM_SPEC["process"] and services/develop_v2.py). New edits start on
 // the current one; an edit saved before it existed keeps "1" and so keeps
 // looking exactly as it did.
-export type ProcessVersion = "1" | "2";
-export const CURRENT_PROCESS: ProcessVersion = "2";
+// "3" is "2" with the film simulations measured from camera JPEGs.
+export type ProcessVersion = "1" | "2" | "3";
+export const CURRENT_PROCESS: ProcessVersion = "3";
 
 // Which exposure a RAW is developed from (see develop.ENUM_SPEC["raw_base"]).
 // "standard" opens every raw at the same brightness - the auto-exposed picture
@@ -349,8 +351,17 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
     base.luma_noise_reduction = Math.max(base.luma_noise_reduction, dn);
     base.color_noise_reduction = Math.max(base.color_noise_reduction, Math.min(100, Math.round(dn * 1.3)));
   }
+  // Without a key: "1" if it uses what "2" renders differently, "2" if it
+  // carries a film simulation (which only "3" renders differently), else it
+  // is the same picture on every version and continues on the current one.
   base.process =
-    raw.process === "1" || raw.process === "2" ? raw.process : usesLegacyLook(raw) ? "1" : CURRENT_PROCESS;
+    raw.process === "1" || raw.process === "2" || raw.process === "3"
+      ? raw.process
+      : usesLegacyLook(raw)
+        ? "1"
+        : raw.film_sim && raw.film_sim !== "none"
+          ? "2"
+          : CURRENT_PROCESS;
   // A stored edit without the key was developed on the native base and stays
   // there: moving it to "standard" would brighten it by the auto-exposure gain.
   base.raw_base = raw.raw_base === "standard" || raw.raw_base === "native" ? raw.raw_base : "legacy";

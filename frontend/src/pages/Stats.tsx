@@ -11,6 +11,7 @@ import {
   IconPin,
   IconStar,
 } from "../components/Icons";
+import { LoadingState } from "../components/Spinner";
 
 // Statistics dashboard (top-bar chart icon): what's in the library and what
 // it was shot with. Every chart is a single accent-colored series with its
@@ -188,9 +189,7 @@ export function Stats() {
     return (
       <div className="page stats-page">
         <h2 className="section-title">Statistics</h2>
-        <div className="empty-state">
-          <span className="spinner" aria-hidden="true" /> Crunching your library…
-        </div>
+        <LoadingState label="Crunching your library…" />
       </div>
     );
   }

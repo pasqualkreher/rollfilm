@@ -973,7 +973,11 @@ const CHAPTERS: Chapter[] = [
             <h4>5 · Color</h4>
             <p>
               Temperature, tint, vibrance, saturation, hue, and the Fuji Color Chrome / Chrome Blue
-              extras. Below them three more tools:
+              extras. For a RAW, Temperature reads in Kelvin as on the camera and starts at the value
+              the photo was shot with (arrow keys move it by 100 K, with <kbd>Shift</kbd> by 10 K).
+              The red/blue cross under it is the camera's white balance shift, set freely between
+              its steps — hold <kbd>Shift</kbd> while dragging to move it slowly. Below them three
+              more tools:
             </p>
             <ul>
               <li>
@@ -1016,7 +1020,9 @@ const CHAPTERS: Chapter[] = [
             <p>
               Save the current look under a name and reapply it to other photos (crop and rotation
               are not part of a preset — they belong to one picture). A saved preset can also be
-              applied to a whole selection at once from the Library's bulk bar.
+              applied to a whole selection at once from the Library's bulk bar. <strong>Export…</strong>{" "}
+              writes all your presets into one file, to keep or to take to another computer;{" "}
+              <strong>Import…</strong> adds the presets from such a file to the ones here.
             </p>
           </>
         ),

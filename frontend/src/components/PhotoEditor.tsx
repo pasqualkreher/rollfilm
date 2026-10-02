@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useId, useRef, useSta
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, editVersion, type ServedBlob } from "../api/client";
+import { api, editVersion, saveDownload, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
 import { IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSaveCopy, IconSideBySide, IconSplit, IconTarget, IconTrash, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
@@ -60,13 +60,22 @@ import {
   pointCurveInput,
   pointsToParametric,
 } from "../utils/curveConvert";
-import { loadPresets, savePreset, deletePreset, type EditPreset } from "../utils/presets";
+import {
+  loadPresets,
+  savePreset,
+  deletePreset,
+  presetAdjustments,
+  presetFromAdjustments,
+  presetsFromFile,
+  presetsToFile,
+  type EditPreset,
+} from "../utils/presets";
 import { useEditHistory } from "../utils/editHistory";
 import { useTransientMessage } from "../utils/transientMessage";
 import { CurveEditor, MAX_CURVE_POINTS } from "./CurveEditor";
 import { ColorWheel } from "./ColorWheel";
 import { WbShiftPad } from "./WbShiftPad";
-import { whiteBalanceFromNeutral } from "../utils/kelvin";
+import { kelvinFromTemperature, whiteBalanceFromKelvin, whiteBalanceFromNeutral } from "../utils/kelvin";
 import { MaskOverlay } from "./MaskOverlay";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
@@ -76,6 +85,7 @@ import { useWait } from "../state/wait";
 import { useLeaveGuard } from "../state/navHistory";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
+import { Spinner } from "./Spinner";
 
 interface Props {
   image: ImageOut;
@@ -338,6 +348,10 @@ function focusAdjacentSlider(from: HTMLInputElement | null, dir: 1 | -1): HTMLIn
   next.scrollIntoView({ block: "nearest" });
   return next;
 }
+
+// The Kelvin slider's range: the camera's own.
+const KELVIN_MIN = 2500;
+const KELVIN_MAX = 10000;
 
 function Slider({
   label,
@@ -643,7 +657,7 @@ function HistogramWait({ store, hidden }: { store: HistStore; hidden: boolean })
   if (bins !== null || hidden) return null;
   return (
     <span className="editor-histogram-wait" aria-label="Loading histogram">
-      <span className="spinner" aria-hidden />
+      <Spinner tone="inherit" />
     </span>
   );
 }
@@ -2411,9 +2425,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   }, []);
 
   function applyPreset(p: EditPreset) {
-    // Normalise so presets saved under an older/looser shape still land on a
-    // complete, in-range Adjustments object. Geometry is untouched by presets.
-    setAdj(normalizeAdjustments(p.adjustments));
+    // Normalised (see presetAdjustments), so presets saved under an older/looser
+    // shape still land on a complete, in-range Adjustments object. Geometry is
+    // untouched by presets.
+    setAdj(presetAdjustments(p));
   }
 
   // Each preset as the develop object applying it gives, serialised once per
@@ -2422,7 +2437,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     () =>
       Object.keys(presets)
         .sort((a, b) => a.localeCompare(b))
-        .map((name) => ({ name, look: JSON.stringify(normalizeAdjustments(presets[name].adjustments)) })),
+        .map((name) => ({ name, look: JSON.stringify(presetAdjustments(presets[name])) })),
     [presets],
   );
   // The preset the photo is on right now: the one whose look IS the current
@@ -2451,7 +2466,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       }))
     )
       return;
-    savePreset(name, { adjustments: adj });
+    savePreset(name, presetFromAdjustments(adj));
     setPresets(loadPresets());
     if (target === undefined) setPresetName("");
   }
@@ -2468,6 +2483,46 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     )
       return;
     deletePreset(name);
+    setPresets(loadPresets());
+  }
+
+  // All presets into one file - to keep, or to take to another computer.
+  async function exportPresets() {
+    try {
+      await saveDownload("Rollfilm presets.json", { "application/json": [".json"] }, async () =>
+        new Blob([presetsToFile(loadPresets())], { type: "application/json" })
+      );
+    } catch (e) {
+      await dialogs.alert({ title: "Could not export the presets", message: (e as Error).message });
+    }
+  }
+
+  // Presets from a file, added to the ones here. A name that already exists
+  // is only replaced after asking; saying no still brings in the rest.
+  const presetFileRef = useRef<HTMLInputElement | null>(null);
+  async function importPresets(file: File) {
+    const incoming = presetsFromFile(await file.text());
+    if (!incoming || Object.keys(incoming).length === 0) {
+      await dialogs.alert({
+        title: "No presets in this file",
+        message: "Choose a file that was written with Export in this panel.",
+      });
+      return;
+    }
+    const existing = loadPresets();
+    const clashes = Object.keys(incoming).filter((name) => existing[name]);
+    const replace =
+      clashes.length === 0 ||
+      (await dialogs.confirm({
+        title: `Replace ${clashes.length} preset(s) of the same name?`,
+        message: `Already here: ${clashes.join(", ")}. Replace them with the ones from the file, or keep yours and import only the others.`,
+        confirmLabel: "Replace",
+        cancelLabel: "Keep mine",
+      }));
+    for (const [name, preset] of Object.entries(incoming)) {
+      if (existing[name] && !replace) continue;
+      savePreset(name, preset);
+    }
     setPresets(loadPresets());
   }
 
@@ -3894,13 +3949,55 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     () => editedGroups(adj, { rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion }),
     [adj, rotation, crop, flipH, flipV, straighten, perspH, perspV, distortion]
   );
-  // The Tint slider shows once the photo carries a tint (the eyedropper sets
-  // one) and then stays for the session: resetting it to 0 must not make it
-  // vanish from under the pointer.
-  const [tintShown, setTintShown] = useState(() => adj.tint !== 0);
+  // The colour temperature the RAW was shot at (and, where the file carries
+  // one, the camera's own Kelvin calibration): with it the Temperature slider
+  // reads in Kelvin, as on the camera. JPEGs and raws that give no hint keep
+  // the relative slider.
+  const whiteBalance = useQuery({
+    queryKey: ["white-balance", image.id],
+    queryFn: () => api.images.whiteBalance(image.id),
+    enabled: image.file_type === "raw",
+    staleTime: Infinity,
+  });
+  const asShotKelvin = whiteBalance.data?.kelvin ?? null;
+  const kelvinGains = whiteBalance.data?.gains ?? null;
+  // Where the Kelvin slider stands, and the tint that setting brings with it
+  // on the camera's calibration (none on the black-body estimate) - what the
+  // photo's tint holds beyond that is the user's own.
+  const kelvinNow = asShotKelvin === null ? null : kelvinFromTemperature(adj.temperature, asShotKelvin, kelvinGains);
+  const kelvinTint =
+    asShotKelvin === null || kelvinNow === null || adj.temperature === 0
+      ? 0
+      : whiteBalanceFromKelvin(kelvinNow, asShotKelvin, kelvinGains).tint;
+  function setKelvin(kelvin: number) {
+    if (asShotKelvin === null) return;
+    const k = Math.max(kelvinRange.min, Math.min(kelvinRange.max, kelvin));
+    // Back on the as-shot value means no correction at all, not the nearest
+    // row of the table.
+    const next =
+      Math.abs(k - asShotKelvin) < 0.5
+        ? { temperature: 0, tint: 0 }
+        : whiteBalanceFromKelvin(k, asShotKelvin, kelvinGains);
+    setAdj((a) => ({
+      ...a,
+      temperature: next.temperature,
+      tint: Math.max(-250, Math.min(250, Math.round((next.tint + (a.tint - kelvinTint)) * 100) / 100)),
+    }));
+  }
+  // The camera's own range, widened to hold a photo shot outside it.
+  const kelvinRange = {
+    min: Math.min(KELVIN_MIN, asShotKelvin ?? KELVIN_MIN),
+    max: Math.max(KELVIN_MAX, asShotKelvin ?? KELVIN_MAX),
+  };
+  // The Tint slider shows once the photo carries a tint of its own (the
+  // eyedropper sets one) and then stays for the session: resetting it to 0
+  // must not make it vanish from under the pointer. The tint a Kelvin setting
+  // brings along does not count - moving that slider must not pop this one in.
+  const ownTint = Math.abs(adj.tint - kelvinTint) >= 1;
+  const [tintShown, setTintShown] = useState(() => ownTint);
   useEffect(() => {
-    if (adj.tint !== 0) setTintShown(true);
-  }, [adj.tint]);
+    if (ownTint) setTintShown(true);
+  }, [ownTint]);
   // Whether this photo's RAW carries lens correction data - the Lens profile
   // switch under Transform is only offered when it does.
   const lensProfile = useQuery({
@@ -4148,7 +4245,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             />
           ) : (
             <div className="editor-hint editor-hint-loading">
-              <span className="spinner" aria-hidden />
+              <Spinner tone="inherit" />
               Loading…
             </div>
           ))}
@@ -4160,7 +4257,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             short delay so a warm-cache render never flashes it. */}
         {framePending && !error && (loading ? placeholderShown : true) && (
           <div className="stage-rendering" role="status">
-            <span className="spinner" aria-hidden />
+            <Spinner size="sm" tone="inherit" />
             Rendering…
           </div>
         )}
@@ -4169,7 +4266,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             the first frame is in - never two of them in the corner. */}
         {!framePending && nativePending && !error && (
           <div className="stage-rendering" role="status">
-            <span className="spinner" aria-hidden />
+            <Spinner size="sm" tone="inherit" />
             Rendering full resolution…
           </div>
         )}
@@ -4895,7 +4992,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 <button
                   key={f.value}
                   className={`film-sim-tile${adj.film_sim === f.value ? " active" : ""}`}
-                  onClick={() => setAdj((a) => ({ ...a, film_sim: f.value }))}
+                  onClick={() =>
+                    // Choosing a look takes it in its current form: an edit on
+                    // process 2 moves to 3, which differs in nothing but the
+                    // (now measured) simulations.
+                    setAdj((a) => ({ ...a, film_sim: f.value, process: a.process === "2" ? "3" : a.process }))
+                  }
                   title={f.label}
                 >
                   <span className="film-sim-swatch" style={{ background: f.swatch }} />
@@ -5089,10 +5191,35 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         {accordionHeader("color", "Color")}
         {openGroup === "color" && (
           <div className="editor-accordion-body">
-            {/* White balance: the same relative Temperature slider for every
-                photo, raw or JPEG, then the red/blue shift cross as a fine
-                correction on top. */}
-            {scalarSliders(sectionFields("Color").filter((f) => f.key === "temperature"))}
+            {/* White balance: Temperature in Kelvin where the RAW says what it
+                was shot at (the relative slider otherwise - JPEGs), then the
+                red/blue shift cross as a fine correction on top. */}
+            {asShotKelvin !== null && kelvinNow !== null ? (
+              <div className="editor-sliders">
+                {/* Runs in mired (negated, so warmer is to the right): equal
+                    travel is an equal change in colour along the whole range. */}
+                <Slider
+                  label="Temperature"
+                  value={-1e6 / kelvinNow}
+                  min={-1e6 / kelvinRange.min}
+                  max={-1e6 / kelvinRange.max}
+                  step={0.1}
+                  resetValue={-1e6 / asShotKelvin}
+                  format={(v) => `${Math.round(-1e5 / v) * 10} K`}
+                  parse={(text) => {
+                    const typed = Number.parseFloat(text.replace(/[^0-9.]/g, ""));
+                    return Number.isFinite(typed) && typed > 0 ? -1e6 / typed : null;
+                  }}
+                  onArrow={(direction, fine) => {
+                    const step = fine ? 10 : 100;
+                    setKelvin((Math.round(kelvinNow / step) + direction) * step);
+                  }}
+                  onChange={(v) => setKelvin(-1e6 / v)}
+                />
+              </div>
+            ) : (
+              scalarSliders(sectionFields("Color").filter((f) => f.key === "temperature"))
+            )}
             {/* The eyedropper: click something that should be white. */}
             <div className="editor-wb-pick">
               <button
@@ -5634,6 +5761,37 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               >
                 {presets[presetName.trim()] ? "Replace" : "Save"}
               </button>
+            </div>
+            {/* The presets as a file: out to keep or carry over, in from one. */}
+            <div className="editor-preset-row">
+              <button
+                className="btn btn-sm ghost"
+                onClick={() => presetFileRef.current?.click()}
+                disabled={busy}
+                title="Add the presets from a file to the ones here"
+              >
+                Import…
+              </button>
+              <button
+                className="btn btn-sm ghost"
+                onClick={() => void exportPresets()}
+                disabled={presetLooks.length === 0}
+                title="Save all presets into one file, to keep or to use on another computer"
+              >
+                Export…
+              </button>
+              <input
+                ref={presetFileRef}
+                type="file"
+                accept=".json,application/json"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  // Cleared, so choosing the same file again fires again.
+                  e.target.value = "";
+                  if (file) void importPresets(file);
+                }}
+              />
             </div>
           </div>
         )}

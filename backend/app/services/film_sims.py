@@ -20,18 +20,41 @@ The recipes are hand-tuned approximations of the in-camera looks, not
 measured camera profiles: colour placement and tonality follow each stock's
 documented character (Velvia's deepened saturated primaries, Classic
 Chrome's muted reds and hard shadows, Eterna's flat low-chroma tone, ...).
+
+Process version 3 replaces a recipe with a measured cube where there is one
+(film_luts/<sim>.npy): fitted to the JPEGs the camera itself wrote into its
+RAFs, against this app's own neutral render of the same frames, with the
+recipe settings the photos were shot with (tone, colour, colour chrome) taken
+back out - see tools/film_sim_fit. The looks the library was never shot with
+(Provia, Velvia, Astia, Pro Neg. Std, Eterna Bleach Bypass) come from the 3D
+LUTs Fujifilm publishes for F-Log2 footage, reached from this app's render
+through a small bridge that was fitted, and checked, on the looks that were
+shot (tools/film_sim_fit/official.py). What Fujifilm's pack lacks - Pro Neg.
+Hi, Monochrome, Sepia and the yellow / red / green filter variants - comes
+the same way from Stuart Sowerby's "Fuji XTrans III" HaldCLUTs, which carry
+no licence to redistribute: see the note in tools/film_sim_fit/official.py
+before shipping those nine. Same cube format, same place in the
+pipeline; a look without a measured cube keeps its recipe, and edits made on
+an earlier process version keep the recipes throughout.
 """
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
 from app.services.develop import ENUM_SPEC
 from app.services.develop_color import _pchip_lut
 
+logger = logging.getLogger(__name__)
+
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+# The measured cubes (process version 3), one .npy per look that has one.
+_MEASURED_DIR = Path(__file__).parent / "film_luts"
 
 # Cube edge resolution. 33 is the conventional .cube size: fine enough that
 # trilinear interpolation of smooth recipes is visually transparent, small
@@ -264,9 +287,34 @@ def _bake(recipe: dict, grid: np.ndarray) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0)
 
 
+def _measured_cube(sim: str) -> np.ndarray | None:
+    """The look's cube as fitted to the camera's JPEGs, or None if it has none
+    (or the file is unusable - the recipe then stands in)."""
+    path = _MEASURED_DIR / f"{sim}.npy"
+    if sim not in _RECIPES or not path.is_file():
+        return None
+    try:
+        cube = np.load(path).astype(np.float32)
+    except (OSError, ValueError):
+        logger.exception("Unreadable measured film simulation %s", path)
+        return None
+    if cube.ndim != 4 or cube.shape[3] != 3 or len(set(cube.shape[:3])) != 1:
+        logger.error("Measured film simulation %s has shape %s", path, cube.shape)
+        return None
+    return np.clip(cube, 0.0, 1.0)
+
+
+def has_measured(sim: str) -> bool:
+    return _sim_cube(sim, True) is not _sim_cube(sim, False)
+
+
 @lru_cache(maxsize=None)
-def _sim_cube(sim: str) -> np.ndarray | None:
-    """The look's baked NxNxNx3 float32 cube, indexed [r][g][b], or None."""
+def _sim_cube(sim: str, measured: bool = False) -> np.ndarray | None:
+    """The look's NxNxNx3 float32 cube, indexed [r][g][b], or None: the
+    measured one where asked for and there is one, else the baked recipe."""
+    if measured:
+        cube = _measured_cube(sim)
+        return cube if cube is not None else _sim_cube(sim, False)
     recipe = _RECIPES.get(sim)
     if recipe is None:
         return None
@@ -300,12 +348,16 @@ def _sample_cube(arr: np.ndarray, cube: np.ndarray) -> np.ndarray:
     return (c0 * (1 - fr) + c1 * fr).astype(np.float32).reshape(arr.shape)
 
 
-def apply_film_sim(arr: np.ndarray, sim: str | None, intensity: float = 100) -> np.ndarray:
+def apply_film_sim(
+    arr: np.ndarray, sim: str | None, intensity: float = 100, measured: bool = False
+) -> np.ndarray:
     """Apply a built-in look to a display-referred sRGB float array (0..1),
-    blended by ``intensity`` percent. Neutral look / zero intensity: no-op."""
+    blended by ``intensity`` percent. Neutral look / zero intensity: no-op.
+    ``measured`` (process version 3) takes the cube fitted to the camera where
+    the look has one."""
     if not sim or sim == "none" or intensity <= 0:
         return arr
-    cube = _sim_cube(sim)
+    cube = _sim_cube(sim, measured)
     if cube is None:
         return arr
     base = np.clip(arr, 0.0, 1.0).astype(np.float32)

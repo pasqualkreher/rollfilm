@@ -46,10 +46,11 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     # unit here, and whole units made the slider land beside the value asked for.
     "temperature": (0, -300, 300, True),
     "tint": (0, -250, 250, True),
-    # The camera-style shift cross under the Kelvin slider: whole steps of red
-    # and blue on top of the white balance, independent of it.
-    "wb_shift_r": (0, -9, 9, False),
-    "wb_shift_b": (0, -9, 9, False),
+    # The camera-style shift cross under the Kelvin slider: red and blue on
+    # top of the white balance, independent of it. One unit is one step of the
+    # camera's grid; fractional, so the cross can sit between two of them.
+    "wb_shift_r": (0, -9, 9, True),
+    "wb_shift_b": (0, -9, 9, True),
     # Extended past +-100 like the tone sliders; the chroma scale in
     # thumbnails._display_color_block is clamped at zero, so past -100 both
     # settle at grayscale instead of inverting colours.
@@ -122,7 +123,10 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     # it renders exactly as it did when it was saved; the editor starts new
     # edits on "2". With every slider neutral the two are the same picture, so
     # the key never makes a photo count as edited (see is_neutral).
-    "process": ("1", ("1", "2")),
+    # "3" is "2" with the film simulations measured from camera JPEGs (see
+    # film_sims) in place of the hand-made recipes - a different picture for
+    # the same look, so an edit made on "1" or "2" keeps the recipes.
+    "process": ("1", ("1", "2", "3")),
     # Which exposure a RAW is developed from (see thumbnails._browsing_gain).
     # "standard" lifts every raw to the same brightness with the auto-exposure
     # gain the grid already uses (raw.compute_base_gain), so a photo opens the
@@ -145,7 +149,7 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # The process version a photo's first edit starts on (see ENUM_SPEC["process"]).
-CURRENT_PROCESS = "2"
+CURRENT_PROCESS = "3"
 
 # Identity point curve: pass-through on the 0..255 grid.
 _IDENTITY_CURVE = [[0, 0], [255, 255]]

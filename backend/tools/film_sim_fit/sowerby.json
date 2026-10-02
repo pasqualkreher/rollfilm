@@ -1,0 +1,58 @@
+{
+ "source": "sowerby",
+ "shot": [
+  "acros",
+  "classic_chrome"
+ ],
+ "held_out_photos": {
+  "acros": {
+   "mean": 0.77,
+   "p95": 2.26
+  },
+  "classic_chrome": {
+   "mean": 1.36,
+   "p95": 3.99
+  }
+ },
+ "left_out_simulation": {
+  "acros": {
+   "mean": 1.61,
+   "p95": 5.48
+  },
+  "classic_chrome": {
+   "mean": 1.88,
+   "p95": 4.78
+  }
+ },
+ "bridge": {
+  "white": 1.46,
+  "scale": 0.763,
+  "mix": [
+   [
+    1.0042,
+    0.0005,
+    -0.0095
+   ],
+   [
+    -0.0139,
+    0.9995,
+    0.0077
+   ],
+   [
+    0.0078,
+    0.0056,
+    0.9933
+   ]
+  ]
+ },
+ "few_photos": {
+  "pro_neg_hi": {
+   "mean": 3.2,
+   "p95": 8.97
+  },
+  "velvia": {
+   "mean": 1.27,
+   "p95": 2.93
+  }
+ }
+}

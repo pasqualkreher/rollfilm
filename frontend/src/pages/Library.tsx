@@ -25,7 +25,7 @@ import { EditPicker } from "../components/EditPicker";
 import { IconCloudUp, IconTrash } from "../components/Icons";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
-import { loadPresets } from "../utils/presets";
+import { loadPresets, presetAdjustments } from "../utils/presets";
 import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
 import { useWait } from "../state/wait";
@@ -37,6 +37,7 @@ import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
+import { LoadingState } from "../components/Spinner";
 
 // Browse mode works on slim index entries (the whole library in one query),
 // search mode on full rows - the shared selection/bulk handlers only touch
@@ -151,7 +152,7 @@ function LibraryPage() {
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Settings maintenance tasks.
-  const { setBusyLabel } = useTasks();
+  const { setBusyLabel, trackRenders } = useTasks();
   useEffect(() => {
     setBusyLabel(immichBusy ? "Uploading to Immich…" : null);
   }, [immichBusy, setBusyLabel]);
@@ -423,9 +424,10 @@ function LibraryPage() {
   async function resetSelected(opts: BulkResetOptions) {
     if (selected.size === 0) return;
     try {
-      await withBatches("Resetting photos…", Array.from(selected), (ids) =>
+      const { done } = await withBatches("Resetting photos…", Array.from(selected), (ids) =>
         api.images.bulkReset(ids, opts)
       );
+      trackRenders(done);
     } finally {
       await refreshAfterReset();
     }
@@ -461,7 +463,7 @@ function LibraryPage() {
     setDevelopBusy(true);
     setDevelopMsg(null);
     try {
-      const { results, cancelled } = await withBatches(
+      const { done, results, cancelled } = await withBatches(
         "Auto-developing photos…",
         Array.from(selected),
         (ids) => api.images.bulkAutoDevelop(ids)
@@ -473,6 +475,7 @@ function LibraryPage() {
           ? `Auto-developed ${applied} photo(s). Skipped ${skipped} with no similar edits to learn from.`
           : `Auto-developed ${applied} photo(s).`) + (cancelled ? CANCELLED_NOTE : "")
       );
+      trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
     } catch (e) {
@@ -500,11 +503,14 @@ function LibraryPage() {
       return;
     setDevelopBusy(true);
     setDevelopMsg(null);
+    const look = presetAdjustments(preset) as unknown as Record<string, unknown>;
     try {
       const { done, cancelled } = await withBatches("Applying preset…", Array.from(selected), (ids) =>
-        api.images.bulkDevelop(ids, preset.adjustments as Record<string, unknown>)
+        api.images.bulkDevelop(ids, look)
       );
       setDevelopMsg(`Applied preset “${name}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
+      // The pictures render in the background: the title bar counts them down.
+      trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
     } catch (e) {
@@ -698,7 +704,7 @@ function LibraryPage() {
         )}
       </Presence>
       {isLoading ? (
-        <div className="empty-state">Loading...</div>
+        <LoadingState />
       ) : q ? (
         <ThumbnailGrid
           images={orderedImages as ImageOut[]}

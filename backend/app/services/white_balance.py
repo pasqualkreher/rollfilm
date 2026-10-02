@@ -36,6 +36,8 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 
+from app.services import camera_matrix
+
 logger = logging.getLogger(__name__)
 
 # EXIF LightSource codes -> Kelvin, for the calibration pairs.
@@ -209,6 +211,13 @@ def _libraw_matrices(path: Path):
         wb = np.array(raw.camera_whitebalance[:3], dtype=float)
         xyz_cam = np.array(raw.rgb_xyz_matrix[:3], dtype=float)
         cam_rgb = np.array(raw.color_matrix, dtype=float)[:, :3]
+    if not xyz_cam.any() and not cam_rgb.any():
+        # A model that borrows a sibling's matrix in the decode (see
+        # camera_matrix) has to borrow it here as well: the gains are applied
+        # after that matrix.
+        borrowed = camera_matrix.borrowed_xyz_to_camera(path)
+        if borrowed is not None:
+            xyz_cam = borrowed
     has_xyz = bool(xyz_cam.any())
     to_srgb = None
     if cam_rgb.any():

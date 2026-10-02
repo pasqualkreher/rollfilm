@@ -12,6 +12,7 @@ import type { ImageOut } from "../api/types";
 import { PrintView } from "../components/CanvasEditor";
 import { EMPTY_SHEET_DOC } from "../components/CanvasSheet";
 import { errorText } from "../utils/apiError";
+import { LoadingState } from "../components/Spinner";
 
 export function CanvasView() {
   const { id } = useParams<{ id: string }>();
@@ -68,7 +69,7 @@ export function CanvasView() {
       </div>
     );
   }
-  if (!canvas) return <div className="empty-state">Loading...</div>;
+  if (!canvas) return <LoadingState />;
 
   return (
     <PrintView

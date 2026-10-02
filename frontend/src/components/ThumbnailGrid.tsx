@@ -27,6 +27,7 @@ import {
 } from "../utils/preload";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 import { isSelectClick } from "../utils/selection";
+import { onThumbNudge } from "../utils/thumbNudge";
 
 interface Props {
   images: ImageOut[];
@@ -187,6 +188,9 @@ function onRevive(fn: () => void): () => void {
   };
 }
 
+// Renders landing (utils/thumbNudge.ts) wake the tiles that gave up, too.
+onThumbNudge(emitRevive);
+
 // Grid thumbnail that starts loading shortly after it comes within the
 // preload margin of the viewport (see utils/preload.ts) - well before it's
 // visible. Replaces native loading="lazy", whose preload distance is
@@ -277,6 +281,21 @@ export function Thumb({
       unsubscribe();
     };
   }, [exhausted, src, show]);
+
+  // Mid-backoff when the pictures it may be waiting for have landed (see
+  // utils/thumbNudge.ts): ask now. The attempt is not counted - it is the
+  // answer to news, not another step down the ladder.
+  useEffect(() => {
+    if (!retrying) return;
+    const retryNow = () => {
+      if (retryTimer.current === null) return;
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+      retryCount.current = Math.max(0, retryCount.current - 1);
+      show(src, false);
+    };
+    return onThumbNudge(retryNow);
+  }, [retrying, src, show]);
 
   // A tile that finished loading can still end up broken later: under memory
   // pressure the browser discards decoded pixels and silently re-fetches, and

@@ -12,7 +12,7 @@ import rawpy
 from PIL import Image as PILImage
 from PIL import ImageOps
 
-from app.services import machine
+from app.services import camera_matrix, machine
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +240,7 @@ PNG_EXTENSIONS = {".png"}
 _PREVIEW_DECODE_PX = 1600
 
 
-def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool) -> np.ndarray:
+def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool, path: Path | None = None) -> np.ndarray:
     """Demosaic a RAW to a linear-light float32 RGB array (0..~1, sRGB primaries).
 
     `no_auto_bright=True` is the important bit: LibRaw's default auto-brightness
@@ -276,7 +276,11 @@ def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool) -> np.ndarray:
     filter layout that is `xtrans_interpolate(1)`; the real PPG only runs on
     Bayer). Bayer sensors keep LibRaw's default (AHD), where the trade-off is
     a different one and nothing was measured. half_size=True skips the
-    demosaic altogether, so the option is only passed for full decodes."""
+    demosaic altogether, so the option is only passed for full decodes.
+
+    `path` lets a camera LibRaw has no colour matrix for borrow the one of a
+    model with the same sensor (see camera_matrix): without it such a file
+    comes out in the sensor's own channels, flat and off in every colour."""
     kwargs: dict = {}
     if not half_size and _is_xtrans(raw):
         kwargs["demosaic_algorithm"] = rawpy.DemosaicAlgorithm.PPG
@@ -289,7 +293,19 @@ def _demosaic_linear(raw: "rawpy.RawPy", half_size: bool) -> np.ndarray:
         output_bps=16,
         **kwargs,
     )
-    return np.asarray(rgb16, dtype=np.float32) / 65535.0
+    lin = np.asarray(rgb16, dtype=np.float32) / 65535.0
+    matrix = camera_matrix.missing_matrix(path, _has_colour_matrix(raw))
+    if matrix is not None:
+        camera_matrix.apply(lin, matrix)
+    return lin
+
+
+def _has_colour_matrix(raw: "rawpy.RawPy") -> bool:
+    """Whether LibRaw converted the camera's channels to sRGB itself."""
+    try:
+        return bool(np.any(raw.rgb_xyz_matrix)) or bool(np.any(raw.color_matrix))
+    except Exception:
+        return True
 
 
 def _is_xtrans(raw: "rawpy.RawPy") -> bool:
@@ -379,7 +395,7 @@ def load_linear_base(
 
     try:
         with rawpy.imread(str(path)) as raw:
-            lin = _demosaic_linear(raw, half_size=half_size)
+            lin = _demosaic_linear(raw, half_size=half_size, path=path)
             return lin, compute_base_gain(lin)
     except Exception:
         # A file whose sensor data is damaged (e.g. truncated/corrupt CFA
@@ -506,7 +522,7 @@ def extract_preview_with_size(
                 thumb_bytes = thumb.data
             else:
                 # No embedded JPEG (rare): demosaic while the file is open.
-                lin = _demosaic_linear(raw, half_size=True)
+                lin = _demosaic_linear(raw, half_size=True, path=path)
                 preview = PILImage.fromarray(
                     default_tone_to_srgb(lin, compute_base_gain(lin))
                 )

@@ -70,6 +70,7 @@ from app.workers.queue import (
     enqueue_immich_upload,
     enqueue_post_import,
     enqueue_rerender,
+    rerenders_pending,
     schedule_embedding_backfill,
     store_immich_asset_id,
 )
@@ -1361,6 +1362,16 @@ def bulk_reset_metadata(
     return images
 
 
+@router.post("/render-status", response_model=schemas.RenderStatus)
+def render_status(
+    payload: schemas.RenderStatusRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """How far the background re-renders of a bulk edit are (see
+    _rerender_later): the app counts them down in its title bar."""
+    return schemas.RenderStatus(pending=rerenders_pending(payload.image_ids))
+
+
 @router.post("/bulk-develop", response_model=list[schemas.ImageOut])
 def bulk_develop(
     payload: schemas.BulkDevelopRequest,
@@ -1371,7 +1382,13 @@ def bulk_develop(
     in place and re-render them (in the background). Geometry is left untouched
     - a preset is a look, not a composition - and a neutral object simply clears
     the develop sliders."""
-    blob = develop.dumps(develop.normalize(payload.adjustments))
+    look = dict(payload.adjustments)
+    # A look that says nothing about the raw base (a preset saved before the
+    # Normalize switch existed) goes on the standard base, like a new edit -
+    # the "legacy" default would drop every photo to its dark native exposure.
+    if look.get("raw_base") not in ("standard", "native"):
+        look["raw_base"] = "standard"
+    blob = develop.dumps(develop.normalize(look))
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     changed: list[Image] = []
     for image in images:

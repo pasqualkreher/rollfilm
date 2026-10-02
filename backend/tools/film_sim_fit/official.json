@@ -1,0 +1,74 @@
+{
+ "shot": [
+  "acros",
+  "classic_chrome",
+  "classic_neg",
+  "eterna",
+  "reala_ace"
+ ],
+ "held_out_photos": {
+  "acros": {
+   "mean": 0.85,
+   "p95": 2.08
+  },
+  "classic_chrome": {
+   "mean": 1.34,
+   "p95": 3.78
+  },
+  "classic_neg": {
+   "mean": 1.43,
+   "p95": 3.95
+  },
+  "eterna": {
+   "mean": 1.1,
+   "p95": 2.71
+  },
+  "reala_ace": {
+   "mean": 1.1,
+   "p95": 3.34
+  }
+ },
+ "left_out_simulation": {
+  "acros": {
+   "mean": 1.06,
+   "p95": 2.42
+  },
+  "classic_chrome": {
+   "mean": 1.64,
+   "p95": 4.56
+  },
+  "classic_neg": {
+   "mean": 3.2,
+   "p95": 12.59
+  },
+  "eterna": {
+   "mean": 1.87,
+   "p95": 6.32
+  },
+  "reala_ace": {
+   "mean": 1.22,
+   "p95": 3.88
+  }
+ },
+ "bridge": {
+  "white": 7.145,
+  "scale": 0.955,
+  "mix": [
+   [
+    1.0045,
+    -0.0082,
+    -0.0055
+   ],
+   [
+    -0.0208,
+    0.999,
+    0.0111
+   ],
+   [
+    0.0118,
+    -0.0013,
+    0.9955
+   ]
+  ]
+ }
+}

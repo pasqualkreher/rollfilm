@@ -139,6 +139,17 @@ class BulkResetRequest(BaseModel):
     albums: bool = False  # remove from every album
 
 
+class RenderStatusRequest(BaseModel):
+    image_ids: list[str]
+
+
+class RenderStatus(BaseModel):
+    """How many of the asked-about photos still wait for the re-render a bulk
+    edit queued for them."""
+
+    pending: int
+
+
 class BulkDevelopRequest(BaseModel):
     """Apply one develop object (e.g. an editor preset) to every listed photo,
     in place. Geometry (crop/rotation/...) is left untouched - a preset is a

@@ -17,7 +17,7 @@ from app.api.routes.images import bulk_develop, bulk_reset_metadata
 from app.config import settings
 from app.db.base import Base
 from app.db.models import FileType, Image, Tag, User
-from app.services import thumbnails
+from app.services import develop, thumbnails
 
 
 @pytest.fixture()
@@ -118,6 +118,16 @@ def test_preset_rerenders_only_photos_whose_look_moved(db, rerenders):
     assert rerenders == []
 
 
+def test_preset_without_a_raw_base_goes_on_the_standard_one(db, rerenders):
+    # A preset saved before the Normalize switch existed carries no raw_base.
+    bulk_develop(schemas.BulkDevelopRequest(image_ids=["plain"], adjustments={"exposure": 0.5}), db, _user(db))
+    assert develop.loads(db.get(Image, "plain").edit_adjustments)["raw_base"] == "standard"
+    # One that asks for the native exposure keeps it.
+    look = {"exposure": 0.5, "raw_base": "native"}
+    bulk_develop(schemas.BulkDevelopRequest(image_ids=["plain"], adjustments=look), db, _user(db))
+    assert develop.loads(db.get(Image, "plain").edit_adjustments)["raw_base"] == "native"
+
+
 def test_rerender_drops_the_stale_files_first(db, rerenders):
     out_dir = settings.thumbnail_cache_root / "edited"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -130,3 +140,26 @@ def test_rerender_drops_the_stale_files_first(db, rerenders):
     # edit revision - the desktop shell reads them straight off disk.
     assert not thumbnails.has_derivatives("edited")
     assert not any(out_dir.iterdir())
+
+
+def test_render_status_counts_photos_until_their_render_is_through(monkeypatch):
+    from app.workers import queue
+
+    jobs: list[tuple] = []
+
+    class _Held:
+        def submit(self, fn, *args):
+            jobs.append((fn, args))
+
+    monkeypatch.setattr(queue, "_executor", _Held())
+    monkeypatch.setattr(queue, "ensure_derivatives", lambda image: None)
+    monkeypatch.setattr(queue, "schedule_embedding_backfill", lambda: None)
+    queue.enqueue_rerender("a")
+    queue.enqueue_rerender("b")
+    assert queue.rerenders_pending(["a", "b", "other"]) == 2
+    fn, args = jobs.pop(0)
+    fn(*args)
+    assert queue.rerenders_pending(["a", "b", "other"]) == 1
+    fn, args = jobs.pop(0)
+    fn(*args)
+    assert queue.rerenders_pending(["a", "b"]) == 0

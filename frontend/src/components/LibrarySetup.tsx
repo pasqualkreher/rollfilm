@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { IconFolder } from "./Icons";
+import { Spinner } from "./Spinner";
 
 // First-run library picker, shown before the backend is running (the desktop
 // shell opens the window with no library configured). This replaces the old
@@ -60,7 +61,7 @@ export function LibrarySetup() {
 
         {busy ? (
           <div className="setup-busy">
-            <span className="spinner" aria-hidden="true" />
+            <Spinner />
             <span>Setting up your library… The first start can take a few minutes.</span>
           </div>
         ) : (

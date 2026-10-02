@@ -4,6 +4,7 @@ import "leaflet/dist/leaflet.css";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
+import { Spinner } from "./Spinner";
 
 // Leaflet's default marker locates its icon images at runtime relative to its
 // stylesheet, which breaks under Vite's bundling - the pin renders as a
@@ -106,7 +107,7 @@ export function MiniMap({
       <div ref={containerRef} className="mini-map-canvas" />
       {!ready && (
         <div className="mini-map-loading" aria-hidden>
-          <span className="spinner" />
+          <Spinner />
         </div>
       )}
     </div>

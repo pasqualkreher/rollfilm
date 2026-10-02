@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { IconArrowUp, IconFolder, IconX } from "./Icons";
+import { LoadingState } from "./Spinner";
 
 interface Props {
   onSelect: (path: string) => void;
@@ -37,7 +38,7 @@ export function DirectoryPicker({ onSelect, onClose, closing = false }: Props) {
 
         <div className="dir-picker-list">
           {isLoading ? (
-            <div className="empty-state">Loading…</div>
+            <LoadingState />
           ) : !data?.exists ? (
             <div className="empty-state">That folder could not be found.</div>
           ) : (

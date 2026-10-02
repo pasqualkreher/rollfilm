@@ -102,3 +102,69 @@ def test_lut_intensity_scales_the_look_in_pipeline():
     adj["lut_intensity"] = 0
     out = thumbnails._display_color_block(arr.copy(), adj)
     assert np.abs(out - np.clip(arr, 0.0, 1.0)).max() < 2e-3
+
+
+# --- measured cubes (process version 3) ---------------------------------------
+
+@pytest.fixture()
+def measured_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(film_sims, "_MEASURED_DIR", tmp_path)
+    film_sims._sim_cube.cache_clear()
+    yield tmp_path
+    film_sims._sim_cube.cache_clear()
+
+
+def test_a_measured_cube_replaces_the_recipe_only_when_asked_for(measured_dir):
+    cube = np.full((33, 33, 33, 3), 0.25, dtype=np.float16)
+    np.save(measured_dir / "classic_neg.npy", cube)
+    arr = np.random.default_rng(0).random((8, 8, 3)).astype(np.float32)
+    recipe = film_sims.apply_film_sim(arr, "classic_neg")
+    measured = film_sims.apply_film_sim(arr, "classic_neg", measured=True)
+    np.testing.assert_allclose(measured, 0.25, atol=1e-3)
+    assert np.abs(recipe - 0.25).max() > 0.1
+    assert film_sims.has_measured("classic_neg")
+
+
+def test_a_look_without_a_measured_cube_keeps_its_recipe(measured_dir):
+    arr = np.random.default_rng(1).random((8, 8, 3)).astype(np.float32)
+    np.testing.assert_array_equal(
+        film_sims.apply_film_sim(arr, "velvia", measured=True), film_sims.apply_film_sim(arr, "velvia")
+    )
+    assert not film_sims.has_measured("velvia")
+
+
+def test_an_unusable_measured_cube_falls_back_to_the_recipe(measured_dir):
+    np.save(measured_dir / "eterna.npy", np.zeros((4, 5, 6), dtype=np.float16))
+    arr = np.random.default_rng(2).random((8, 8, 3)).astype(np.float32)
+    np.testing.assert_array_equal(
+        film_sims.apply_film_sim(arr, "eterna", measured=True), film_sims.apply_film_sim(arr, "eterna")
+    )
+
+
+def test_only_process_3_on_a_raw_source_renders_the_measured_cube(measured_dir):
+    from app.services import develop, thumbnails
+
+    np.save(measured_dir / "classic_neg.npy", np.full((33, 33, 33, 3), 0.25, dtype=np.float16))
+    lin = np.random.default_rng(3).random((16, 16, 3)).astype(np.float32) * 0.5
+
+    def render(process: str, raw_source: bool) -> np.ndarray:
+        adj = develop.normalize({"film_sim": "classic_neg", "process": process})
+        return np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, raw_source=raw_source))
+
+    assert np.abs(render("3", True).astype(int) - 64).max() <= 1
+    np.testing.assert_array_equal(render("2", True), render("2", False))
+    np.testing.assert_array_equal(render("3", False), render("2", False))
+
+
+def test_the_shipped_measured_cubes_are_sound():
+    film_sims._sim_cube.cache_clear()
+    for path in sorted(film_sims._MEASURED_DIR.glob("*.npy")):
+        sim = path.stem
+        assert sim in film_sims.SIM_NAMES
+        cube = film_sims._sim_cube(sim, True)
+        assert cube.shape == (33, 33, 33, 3)
+        assert cube.min() >= 0.0 and cube.max() <= 1.0
+        # Black stays dark, white stays bright, and the grey axis never turns back.
+        grey = cube[np.arange(33), np.arange(33), np.arange(33)] @ np.array([0.2126, 0.7152, 0.0722])
+        assert grey[0] < 0.08 and grey[-1] > 0.92
+        assert np.all(np.diff(grey) > -1e-3), sim

@@ -12,6 +12,7 @@ import { useAppDialogs } from "../components/AppDialogs";
 import { EMPTY_SHEET_DOC, shelfSheets, ShelfSheetItems } from "../components/CanvasSheet";
 import { IconCanvas, IconPencil, IconPlus, IconRename, IconTrash } from "../components/Icons";
 import { errorText } from "../utils/apiError";
+import { LoadingState } from "../components/Spinner";
 
 // The card's preview: the working layout's first sheet - the paper itself
 // with the photos on it.
@@ -141,7 +142,7 @@ export function Canvases() {
       </div>
 
       {isLoading ? (
-        <div className="empty-state">Loading...</div>
+        <LoadingState />
       ) : !canvases || canvases.length === 0 ? (
         <div className="empty-state">
           No canvases yet. Create one above, then select photos in the library and choose

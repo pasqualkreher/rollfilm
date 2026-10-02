@@ -47,6 +47,7 @@ import {
 } from "../components/Icons";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
+import { Spinner } from "../components/Spinner";
 
 // What a single-file edit in the review grid can change.
 type StagedPatch = {
@@ -1287,7 +1288,7 @@ export function ImportWizard() {
             commit button below stays disabled until this finishes. */}
         {stagingInBackground && (
           <p className="import-staging-banner" role="status" aria-live="polite">
-            <span className="spinner" aria-hidden="true" /> Still {inPlace ? "reading" : "copying"} photos in the background…{" "}
+            <Spinner /> Still {inPlace ? "reading" : "copying"} photos in the background…{" "}
             {liveStagedCount != null && totalFileCount != null
               ? `${liveStagedCount.toLocaleString()} / ${totalFileCount.toLocaleString()}${
                   copyEta != null ? ` · ~${formatEta(copyEta)} left` : ""
@@ -1330,7 +1331,7 @@ export function ImportWizard() {
             still catching up: placeholders fill in as it runs. */}
         {analyzingInBackground && (
           <p className="import-staging-banner" role="status" aria-live="polite">
-            <span className="spinner" aria-hidden="true" /> Analyzing photos in the background…{" "}
+            <Spinner /> Analyzing photos in the background…{" "}
             {analysisTotal > 0
               ? `${analysisProcessed.toLocaleString()} / ${analysisTotal.toLocaleString()}`
               : ""}{" "}
@@ -1434,7 +1435,7 @@ export function ImportWizard() {
         >
           {commit.isPending ? (
             <>
-              <span className="btn-spinner" aria-hidden="true" />
+              <Spinner tone="inherit" inline />
               {`Adding to library...${progressSuffix}`}
             </>
           ) : stagingInBackground ? (
@@ -1472,7 +1473,7 @@ export function ImportWizard() {
         >
           {discard.isPending ? (
             <>
-              <span className="btn-spinner" aria-hidden="true" />
+              <Spinner tone="inherit" inline />
               Closing…
             </>
           ) : (

@@ -27,6 +27,7 @@ import {
 } from "../utils/rebuildEstimate";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
+import { Spinner } from "../components/Spinner";
 
 // localStorage key for the self-calibrating rebuild rate. ".v2" = the
 // parallelised rebuild; the old sequential key's rate would overestimate ~3x.
@@ -1036,7 +1037,7 @@ export function Settings() {
           >
             {saveImmich.isPending ? (
               <>
-                <span className="btn-spinner" aria-hidden="true" />
+                <Spinner tone="inherit" inline />
                 Saving...
               </>
             ) : (
@@ -1051,7 +1052,7 @@ export function Settings() {
           >
             {testImmich.isPending ? (
               <>
-                <span className="btn-spinner" aria-hidden="true" />
+                <Spinner tone="inherit" inline />
                 Testing...
               </>
             ) : (
@@ -1426,7 +1427,7 @@ export function Settings() {
             <button className="btn" onClick={() => sync.mutate()} disabled={sync.isPending}>
               {sync.isPending ? (
                 <>
-                  <span className="btn-spinner" aria-hidden="true" />
+                  <Spinner tone="inherit" inline />
                   Syncing...
                 </>
               ) : (
@@ -1460,7 +1461,7 @@ export function Settings() {
             >
               {rebuildThumbnails.isPending ? (
                 <>
-                  <span className="btn-spinner" aria-hidden="true" />
+                  <Spinner tone="inherit" inline />
                   Rebuilding...
                 </>
               ) : (
@@ -1487,7 +1488,7 @@ export function Settings() {
           <button className="btn" onClick={() => repairDates.mutate()} disabled={repairDates.isPending}>
             {repairDates.isPending ? (
               <>
-                <span className="btn-spinner" aria-hidden="true" />
+                <Spinner tone="inherit" inline />
                 Repairing dates...
               </>
             ) : (
@@ -1567,7 +1568,7 @@ export function Settings() {
               >
                 {saveBorg.isPending ? (
                   <>
-                    <span className="btn-spinner" aria-hidden="true" />
+                    <Spinner tone="inherit" inline />
                     Saving...
                   </>
                 ) : (
@@ -1582,7 +1583,7 @@ export function Settings() {
               >
                 {testBorg.isPending ? (
                   <>
-                    <span className="btn-spinner" aria-hidden="true" />
+                    <Spinner tone="inherit" inline />
                     Testing...
                   </>
                 ) : (
@@ -1601,7 +1602,7 @@ export function Settings() {
               >
                 {borg?.running || backupBorgNow.isPending ? (
                   <>
-                    <span className="btn-spinner" aria-hidden="true" />
+                    <Spinner tone="inherit" inline />
                     Backing up...
                   </>
                 ) : (
@@ -1677,7 +1678,7 @@ export function Settings() {
             >
               {restore.isPending ? (
                 <>
-                  <span className="btn-spinner" aria-hidden="true" />
+                  <Spinner tone="inherit" inline />
                   Restoring...
                 </>
               ) : (

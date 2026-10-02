@@ -47,6 +47,7 @@ import type { ColorLabel, ImageOut } from "../api/types";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { isTextEntry } from "../utils/keyboardFocus";
+import { Spinner, LoadingState } from "../components/Spinner";
 
 export function ImageDetail() {
   const { id, mode } = useParams<{ id: string; mode?: string }>();
@@ -602,7 +603,7 @@ export function ImageDetail() {
     });
   }, [similar, image?.paired_image_id]);
 
-  if (!image) return <div className="page empty-state">Loading...</div>;
+  if (!image) return <LoadingState className="page" />;
 
   const pixelsPending = imageStale || loadedId !== image.id;
 
@@ -933,13 +934,13 @@ export function ImageDetail() {
             )}
             {pixelsPending && !previewFailed && (
               <div className="lightbox-loading-stage" aria-live="polite">
-                <span className="spinner" aria-hidden="true" />
+                <Spinner tone="inherit" />
                 Loading…
               </div>
             )}
             {hiRes && isRaw && full.state !== "ready" && full.state !== "failed" && !pixelsPending && (
               <div className="stage-rendering" role="status">
-                <span className="spinner" aria-hidden="true" />
+                <Spinner size="sm" tone="inherit" />
                 Rendering full resolution…
               </div>
             )}

@@ -393,6 +393,12 @@ button {
   white-space: nowrap;
 }
 
+/* A running count inside it: figures of one width, so the label does not
+   twitch as the number goes up. */
+.nav-task-count {
+  font-variant-numeric: tabular-nums;
+}
+
 /* Utility pages (Settings, Help) as quiet icon buttons on the far right -
    they're chrome, not photo modules, so they don't earn tabs. */
 .top-icon-links {
@@ -446,8 +452,13 @@ button {
   color: var(--text-muted);
 }
 
+/* The one busy indicator (components/Spinner.tsx): every wait in the app is
+   this ring, at one speed. Sizes and tones are modifiers, never per-place
+   overrides. */
 .spinner {
   display: inline-block;
+  flex: none;
+  box-sizing: border-box;
   width: 14px;
   height: 14px;
   border: 2px solid var(--border);
@@ -456,18 +467,48 @@ button {
   animation: pm-spin 0.7s linear infinite;
 }
 
-/* Spinner sized to sit inline with button text, tinted to the button's own
-   text colour so it reads on the accent-filled primary button. */
-.btn-spinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
+.spinner--sm {
+  width: 12px;
+  height: 12px;
+}
+
+.spinner--lg {
+  width: 22px;
+  height: 22px;
+  border-width: 3px;
+}
+
+/* In the colour of the text around it: on the accent-filled primary button,
+   on the dark stage and its badges. */
+.spinner--inherit {
+  border-color: color-mix(in srgb, currentColor 28%, transparent);
+  border-top-color: currentColor;
+}
+
+/* Set into a button label or a line of text. */
+.spinner--inline {
   margin-right: 8px;
   vertical-align: -2px;
-  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
-  border-top-color: currentColor;
-  border-radius: 50%;
-  animation: pm-spin 0.7s linear infinite;
+}
+
+/* Anything that covers content to say "still loading" waits a moment before
+   it shows, so a load that lands at once never flashes it. */
+.loading-state,
+.lightbox-loading-stage {
+  animation: stage-wait-in 0.15s ease 0.25s both;
+}
+
+.mini-map-loading .spinner {
+  animation:
+    pm-spin 0.7s linear infinite,
+    stage-wait-in 0.15s ease 0.25s both;
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 @keyframes pm-spin {
@@ -1831,16 +1872,6 @@ textarea:focus-visible {
 
 .wait-overlay-cancel:disabled {
   cursor: wait;
-}
-
-.wait-overlay-spinner {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: pm-spin 0.7s linear infinite;
 }
 
 /* App-skinned confirm/alert dialogs (components/AppDialogs.tsx) - replace the
@@ -3469,9 +3500,9 @@ textarea:focus-visible {
   animation: stage-wait-in 0.15s ease 0.25s both;
 }
 
-.editor-histogram-wait .spinner {
-  border-color: rgba(255, 255, 255, 0.18);
-  border-top-color: #9a9aa0;
+/* The spinner takes the plot's own grey (tone "inherit"). */
+.editor-histogram-wait {
+  color: #9a9aa0;
 }
 
 /* Live RGB histogram at the top of the edit panel (always a dark plot, like
@@ -3862,13 +3893,6 @@ input.editor-preset-select {
   pointer-events: none;
   user-select: none;
   animation: stage-wait-in 0.15s ease 0.25s both;
-}
-
-.stage-rendering .spinner {
-  width: 12px;
-  height: 12px;
-  border-color: rgba(255, 255, 255, 0.25);
-  border-top-color: #fff;
 }
 
 @keyframes stage-wait-in {

@@ -13,6 +13,7 @@ import { useFullResUpgrade } from "../utils/useFullResUpgrade";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
 import { setImportInfoPanelOpen, useImportInfoPanelOpen, useStageBg } from "../state/viewPrefs";
+import { Spinner } from "./Spinner";
 
 interface Props {
   sessionId: string;
@@ -334,13 +335,13 @@ export function ImportLightbox({
             )}
             {!loadFailed && !photoLoaded && (
               <div className="stage-rendering" role="status">
-                <span className="spinner" aria-hidden="true" />
+                <Spinner size="sm" tone="inherit" />
                 {file.file_type === "raw" && !file.processed ? "Analysing…" : "Developing preview…"}
               </div>
             )}
             {!loadFailed && photoLoaded && hiRes && isRaw && full.state === "loading" && (
               <div className="stage-rendering" role="status">
-                <span className="spinner" aria-hidden="true" />
+                <Spinner size="sm" tone="inherit" />
                 Rendering full resolution…
               </div>
             )}
