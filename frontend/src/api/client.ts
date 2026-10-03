@@ -788,9 +788,10 @@ export const api = {
     fullUrl(id: string, version?: string): string {
       return derivativeUrl(id, "full", version);
     },
-    // A raw's intermediate zoom tier (3900px, from the already-warm editor
-    // base): on screen within a second while the full render is still
-    // on its way.
+    // The tier above the preview (3900px, from the already-warm editor base;
+    // an unedited JPEG is answered with the file itself): what a fit view
+    // bigger than the preview sharpens to, and what a zoomed raw shows within
+    // a second while the full render is still on its way.
     halfUrl(id: string, version?: string): string {
       return derivativeUrl(id, "half", version);
     },

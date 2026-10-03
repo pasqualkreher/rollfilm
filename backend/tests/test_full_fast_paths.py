@@ -156,6 +156,23 @@ def test_the_half_tier_is_the_photo_at_the_editor_bases_size(photo):
     assert np.mean(np.abs(fast - half)) < 2.0  # same rendering, JPEG apart
 
 
+def test_the_half_tier_of_an_unedited_jpeg_is_the_file_itself(photo, monkeypatch):
+    """The lightbox sharpens a fit view from the half tier without a zoom, for
+    every photo rested on. For an unedited JPEG that must cost nothing: the
+    file is served as it is, no render and no half.jpg per photo looked at.
+    An edit (or a raw) still gets the rendered tier."""
+    from app.api.routes import images as images_routes
+
+    path = Path(photo.file_path)
+    monkeypatch.setattr(images_routes, "resolve_image_path", lambda img: path)
+    assert images_routes.half_tier_file(photo) == path
+    assert not (thumbnails.derivative_dir(photo.id) / "half.jpg").exists()
+
+    photo.edit_rotation = 90
+    out = images_routes.half_tier_file(photo)
+    assert out.name == "half.jpg" and out.exists()
+
+
 def test_a_saved_edit_clears_the_half_tier_with_the_full_one(photo, monkeypatch):
     d = thumbnails.derivative_dir(photo.id)
     d.mkdir(parents=True, exist_ok=True)

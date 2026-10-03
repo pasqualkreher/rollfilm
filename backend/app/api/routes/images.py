@@ -2707,14 +2707,27 @@ def get_full(image_id: str, db: Session = Depends(get_db), current_user: User = 
     )
 
 
+def half_tier_file(image: Image) -> Path:
+    """The file the half tier serves. An unedited JPEG/PNG is its own best
+    picture (see get_full): the file itself, no render and nothing written.
+    Everything else gets half.jpg - the 3900px render from the editor base."""
+    if image.file_type != FileType.raw and thumbnails.is_untouched(image):
+        original = resolve_image_path(image)
+        if original.exists():
+            return original
+    return thumbnails.generate_half(image)
+
+
 @router.get("/{image_id}/half")
 def get_half(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """The lightbox's intermediate zoom tier for raws (see thumbnails.
-    render_half_full): the photo at 3900px from the already-warm editor base,
-    served within a second while the true 100% render is still on its way."""
+    """The lightbox's tier above the preview (see thumbnails.render_half_full):
+    the photo at 3900px from the already-warm editor base. It is what a fit
+    view bigger than the preview sharpens to once the user rests on a photo,
+    and what a zoomed raw shows within a second while the true 100% render is
+    still on its way."""
     image = get_owned_image(db, current_user.id, image_id)
     try:
-        path = thumbnails.generate_half(image)
+        path = half_tier_file(image)
     except Exception:
         logger.exception("Half render failed for image %s", image.id)
         raise HTTPException(status_code=404, detail="Half-resolution image not available")

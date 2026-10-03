@@ -49,6 +49,14 @@ import { MOTION } from "../utils/usePresence";
 import { isTextEntry } from "../utils/keyboardFocus";
 import { Spinner, LoadingState } from "../components/Spinner";
 
+// The fit view counts as soft when it is shown more than this much bigger
+// than the preview's own pixels (a few percent of upscale is invisible, and
+// not worth a fetch), and how long after the user has rested on a photo the
+// sharper tier is asked for - a second after arriving, with the 250ms it
+// takes to count as rested.
+const FIT_SHARP_SLACK = 1.04;
+const FIT_SHARPEN_DELAY_MS = 750;
+
 export function ImageDetail() {
   const { id, mode } = useParams<{ id: string; mode?: string }>();
   const location = useLocation();
@@ -181,6 +189,12 @@ export function ImageDetail() {
   // their full size is the file itself.
   const [halfShown, setHalfShown] = useState(false);
   const [halfFailed, setHalfFailed] = useState(false);
+  // The long edge of the preview as it was loaded, per photo - what "is this
+  // fit view soft" is judged against (see the fit-view upgrade below). Read
+  // off the bitmap rather than assumed: older previews are smaller.
+  const [previewPx, setPreviewPx] = useState<{ id: string; px: number } | null>(null);
+  // The photo whose fit view has been found soft and is being sharpened.
+  const [sharperFor, setSharperFor] = useState<string | null>(null);
   // The preview itself failed to load (damaged/unreadable file). Shows a clean
   // error state instead of the browser's broken-image icon; navigation, rating
   // and the info panel keep working. Retry remounts the <img> (keyed by the
@@ -568,6 +582,35 @@ export function ImageDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restedId, activeId, adjustOpen, image?.file_type, hiRes]);
 
+  // The fit view sharpens on its own. The preview is 2600px at most, and a
+  // big window on a hi-dpi screen shows the photo at up to half as many
+  // pixels again - soft until the user zoomed, which is not something anyone
+  // should have to do to see a photo properly. So once the user has rested on
+  // a photo whose preview is being stretched (and which has the pixels to do
+  // better), the tier above it is fetched off-screen and swapped in: the
+  // 3900px half tier for a raw or an edited photo, the file itself for an
+  // unedited JPEG (the server picks, see get_half). A second after arriving,
+  // so paging through a set fetches nothing; leaving the photo cancels it.
+  // Zooming keeps its own chain (hiRes) and takes over from here.
+  const fitDevicePx = zoom.fit ? Math.max(zoom.fit.w, zoom.fit.h) * (window.devicePixelRatio || 1) : 0;
+  const sourcePx = zoomSource ? Math.max(zoomSource.w, zoomSource.h) : 0;
+  const loadedPreviewPx = image && previewPx?.id === image.id ? previewPx.px : 0;
+  const softAtFit =
+    loadedPreviewPx > 0 &&
+    fitDevicePx > loadedPreviewPx * FIT_SHARP_SLACK &&
+    sourcePx > loadedPreviewPx * FIT_SHARP_SLACK;
+  useEffect(() => {
+    if (restedId !== activeId || adjustOpen || slideshowOpen || hiRes || !softAtFit) return;
+    const t = setTimeout(() => setSharperFor(restedId), FIT_SHARPEN_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [restedId, activeId, adjustOpen, slideshowOpen, hiRes, softAtFit]);
+  const sharper = useFullResUpgrade(
+    image && !hiRes && sharperFor === image.id && activeId === image.id
+      ? api.images.halfUrl(image.id, editVersion(image))
+      : null
+  );
+  const sharperSrc = sharper.state === "ready" ? sharper.src : null;
+
   // Similar-photos strip: a CLIP search per photo is the most expensive
   // per-view request the lightbox makes - only run it for the rested photo,
   // never for photos zapped past.
@@ -893,12 +936,18 @@ export function ImageDetail() {
               {...({ fetchpriority: "high" } as Record<string, string>)}
               className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}${zoom.zoomAnim ? " zoom-anim" : ""}`}
               style={{ ...zoom.imageStyle, opacity: photoLoaded ? (pixelsPending ? 0.35 : 1) : 0 }}
-              onLoad={() => {
+              onLoad={(e) => {
+                const el = e.currentTarget;
                 zoom.refit();
                 setPhotoLoaded(true);
                 setLoadedId(image.id);
                 shownOnceRef.current = true;
                 if (hiRes && isRaw && !fullReady) setHalfShown(true);
+                // Only the preview's own size: the sharper tier loading must
+                // not make the view look "not soft" and undo itself.
+                if (!hiRes && !sharperSrc && el.naturalWidth) {
+                  setPreviewPx({ id: image.id, px: Math.max(el.naturalWidth, el.naturalHeight) });
+                }
               }}
               draggable={false}
               src={
@@ -910,7 +959,7 @@ export function ImageDetail() {
                         ? api.images.previewUrl(image.id, editVersion(image))
                         : api.images.halfUrl(image.id, editVersion(image))
                     : api.images.fullUrl(image.id, editVersion(image))
-                  : api.images.previewUrl(image.id, editVersion(image))
+                  : sharperSrc ?? api.images.previewUrl(image.id, editVersion(image))
               }
               alt={image.original_filename}
               onError={() => {
@@ -942,6 +991,11 @@ export function ImageDetail() {
               <div className="stage-rendering" role="status">
                 <Spinner size="sm" tone="inherit" />
                 Rendering full resolution…
+              </div>
+            )}
+            {!hiRes && sharper.state === "loading" && !pixelsPending && (
+              <div className="stage-rendering is-quiet" role="status" aria-label="Loading a sharper image">
+                <Spinner size="sm" tone="inherit" />
               </div>
             )}
             {hiRes && isRaw && full.state === "failed" && !pixelsPending && (
