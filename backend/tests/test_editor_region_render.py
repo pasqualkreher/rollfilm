@@ -98,9 +98,32 @@ def test_effects_a_tile_cannot_carry_keep_the_whole_frame():
     """What a tile cannot see, it may not render: the edge-defined effects and
     the diffusion ones, which are lit by parts of the photo outside the tile."""
     assert thumbnails.region_is_supported({"exposure": 1.0, "clarity": 40})
-    assert not thumbnails.region_is_supported({"grain_amount": 30})
+    # Grain is sized for the whole photo wherever it is rendered (see below).
+    assert thumbnails.region_is_supported({"grain_amount": 30})
     assert not thumbnails.region_is_supported({"frame_width": 4})
     for spreading in ("mist", "glow_amount", "halation_amount", "flare_amount"):
         assert not thumbnails.region_is_supported({spreading: 25}), spreading
     # Negative clarity brings the diffusion pass with it.
     assert not thumbnails.region_is_supported({"clarity": -40})
+
+
+def test_a_tile_gets_the_grain_of_the_whole_photo(monkeypatch):
+    """Grain particles are sized from the photo's long edge. A tile is a small
+    array of a big photo: told the photo's edge, it asks for the same particle
+    size the whole frame does - not the fine grain its own size would give."""
+    asked = []
+
+    def field(h, w, particle_px, coarse, shape):
+        asked.append(particle_px)
+        return np.zeros((h, w), dtype=np.float32)
+
+    monkeypatch.setattr(thumbnails, "_cached_grain_field", field)
+    # Wide enough that the particle size is off its 1px floor.
+    whole = np.full((300, 4500, 3), 0.5, dtype=np.float32)
+    tile = whole[100:200, 150:300]
+    thumbnails._apply_grain(whole, 30, 25, 50)
+    thumbnails._apply_grain(tile, 30, 25, 50, ref_long_edge=4500)
+    thumbnails._apply_grain(tile, 30, 25, 50)
+    assert asked[0] > 1.0
+    assert asked[1] == asked[0]
+    assert asked[2] < asked[0]

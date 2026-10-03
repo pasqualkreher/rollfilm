@@ -1874,7 +1874,7 @@ def _cached_grain_field(
 
 def _apply_grain(
     arr: np.ndarray, amount: int, size: int = 0, roughness: int = 50,
-    out: np.ndarray | None = None,
+    out: np.ndarray | None = None, ref_long_edge: float | None = None,
 ) -> np.ndarray:
     """Fujifilm-style analog film grain.
 
@@ -1898,11 +1898,16 @@ def _apply_grain(
     Stochastic - the preview shows a different pattern than the saved render.
 
     `out` may be `arr` itself: a caller that owns the frame gets the grain
-    written into it instead of a second frame beside it."""
+    written into it instead of a second frame beside it.
+
+    `ref_long_edge` is the long edge of the whole photo when `arr` is a tile
+    of it (the editor's zoomed render): the particles are sized for the photo,
+    so the tile shows grain as coarse as the frame it stands in for. The
+    pattern is the tile's own - a different draw, like every render's."""
     h, w = arr.shape[:2]
     size_f = min(100, max(0, size)) / 100.0
     rough = min(100, max(0, roughness)) / 100.0
-    long_edge = max(h, w)
+    long_edge = ref_long_edge or max(h, w)
 
     # Particle size relative to resolution. The smallest Grain Size lands on a
     # crisp ~1px fine-ISO texture (the 1.0px floor); the top end is chunky
@@ -2750,7 +2755,7 @@ def apply_adjustments_linear(
     if include_grain and adj.get("grain_amount", 0) > 0:
         arr = _apply_grain(
             arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50),
-            out=arr if owned else None,
+            out=arr if owned else None, ref_long_edge=long_edge,
         )
     # Last of all, so the marking is the flat pink it was meant to be rather than
     # something the vignette darkened and the grain crawled over.
@@ -3861,11 +3866,15 @@ def region_is_supported(adj: dict) -> bool:
     answer is to render the frame whole. None of them is what anyone zooms to
     100% to judge.
 
-    Defined by the frame's edges: film grain sizes its particles from the
-    image's long edge and draws a fresh noise field per render (a tile would
-    carry both the wrong particle size and a different texture from the frame it
-    replaces), and the frame border is drawn around the photo, which a tile from
-    the middle of it does not have.
+    Defined by the frame's edges: the frame border is drawn around the photo,
+    which a tile from the middle of it does not have.
+
+    Film grain used to be on this list and is not any more. It sizes its
+    particles from the photo's long edge, which a tile is told (_apply_grain's
+    ref_long_edge); what a tile cannot reproduce is the exact pattern, and no
+    two renders share that anyway. Keeping it here meant that one Grain slider
+    turned every zoomed frame of a 40MP raw into a whole-frame render - seconds
+    each, where a tile takes a few hundred milliseconds.
 
     Defined by light from outside the tile: the diffusion effects - mist, glow,
     halation, lens flare - spread bright areas across a large fraction of the
@@ -3874,8 +3883,6 @@ def region_is_supported(adj: dict) -> bool:
     it as padding, which is the whole cost this exists to avoid. (The detail
     passes are a different matter: their radii are a few dozen pixels, which is
     what REGION_PAD_PX covers.)"""
-    if adj.get("grain_amount", 0):
-        return False
     if adj.get("frame_width", 0):
         return False
     for spreads in ("mist", "glow_amount", "halation_amount", "flare_amount"):
