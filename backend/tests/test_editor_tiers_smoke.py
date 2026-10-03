@@ -197,8 +197,7 @@ def test_a_budget_bigger_than_the_tile_changes_nothing(photo):
 def test_a_region_tile_reuses_its_tone_stage(photo, monkeypatch):
     """Dragging a post-tone slider while zoomed re-renders the same tile with
     only stages below the tone block changed - the tone block must come from
-    the stage cache, not be recomputed per frame. (The native WHOLE frame stays
-    uncached on purpose; the tile is viewport-sized, which is the difference.)"""
+    the stage cache, not be recomputed per frame."""
     _warm_native(photo)
     thumbnails.invalidate_tone_stage()
     region = (0.3, 0.25, 0.3, 0.3)
@@ -219,6 +218,31 @@ def test_a_region_tile_reuses_its_tone_stage(photo, monkeypatch):
             region=region,
         )
     assert calls == 1, "the tile's tone stage was recomputed instead of reused"
+
+
+def test_a_native_whole_frame_settle_reuses_its_tone_stage(photo, monkeypatch):
+    """The fit-view settle of a 4K display is a native WHOLE frame at the
+    on-screen size. It had no stage key at all, so a colour slider at rest
+    repaid the tone block and the denoise on ten megapixels every time."""
+    _warm_native(photo)
+    thumbnails.invalidate_tone_stage()
+
+    calls = 0
+    real = thumbnails._linear_tone_block_banded
+
+    def counting(*a, **k):
+        nonlocal calls
+        calls += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(thumbnails, "_linear_tone_block_banded", counting)
+    for saturation in (20, -20):
+        thumbnails.render_editor_preview_bytes(
+            photo, 0, None,
+            develop.normalize({"exposure": 0.4, "saturation": saturation}),
+            native=True, settle_px=200,
+        )
+    assert calls == 1, "the settle's tone stage was recomputed instead of reused"
 
 
 def test_a_region_tile_is_prepared_once(photo, monkeypatch):

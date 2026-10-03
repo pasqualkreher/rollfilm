@@ -174,6 +174,21 @@ def test_the_rebuild_worker_waits_for_the_same_pause(monkeypatch):
 # --- Decodes of the same file never run beside each other ---------------------
 
 
+def test_the_speculative_native_decode_waits_for_a_pause(monkeypatch):
+    """Opening a raw used to start its full-resolution decode at once - four
+    threads and a gigabyte of temporaries beside the first sliders moved. The
+    speculative decode now takes the first pause in the editor instead."""
+    active = threading.Event()
+    active.set()
+    started = threading.Event()
+    monkeypatch.setattr(thumbnails, "editor_recently_active", lambda within_s: active.is_set())
+    monkeypatch.setattr(thumbnails, "warm_native_base", lambda *a: started.set())
+    thumbnails._warm_native_when_quiet("quiet-photo", "/nowhere.raf", 1)
+    assert not started.wait(0.6), "decoded while the editor was rendering"
+    active.clear()
+    assert started.wait(2.0), "never decoded once the editor went quiet"
+
+
 def test_the_warm_up_waits_for_an_inflight_decode():
     key = ("img", "/p/shot.jpg", 1, thumbnails.EDITOR_PREVIEW_PX)
     ev = threading.Event()

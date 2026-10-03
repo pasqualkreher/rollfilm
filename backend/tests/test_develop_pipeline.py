@@ -666,11 +666,49 @@ def test_tone_stage_cache_stays_shallow():
     lin = _rng(5).random((40, 60, 3)).astype(np.float32)
     adj = develop.defaults() | {"luma_noise_reduction": 40}
     thumbnails.invalidate_tone_stage()
-    for name in ("a", "b", "c", "d"):
+    for name in ("a", "b", "c", "d", "e"):
         thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key=name)
     assert len(thumbnails._tone_stage) == thumbnails._TONE_STAGE_MAX_ENTRIES
     oldest = thumbnails._tone_stage_key("a", 1.0, adj, False)
     assert oldest not in thumbnails._tone_stage
+
+
+def test_a_settle_sized_stage_is_kept_at_half_precision(monkeypatch):
+    """The 8GB machines' budget is below a settle frame's float32 copy, so the
+    denoise was repaid on every settle whichever slider had moved. A big stage
+    is stored as float16: it fits (the budget counts the stored bytes), the
+    next render that differs only below it reuses it, and what comes out is
+    the uncached render to within a rounding step."""
+    lin = _rng(7).random((60, 90, 3)).astype(np.float32)
+    monkeypatch.setattr(thumbnails, "_STAGE_HALF_FLOAT_BYTES", 1)
+    monkeypatch.setattr(thumbnails, "_TONE_STAGE_MAX_BYTES", int(lin.nbytes * 0.6))
+    thumbnails.invalidate_tone_stage()
+    adj = develop.defaults() | {"luma_noise_reduction": 40, "saturation": 20}
+    thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="settle")
+    (stored,) = thumbnails._tone_stage.values()
+    assert stored.dtype == np.float16
+    later = adj | {"saturation": -30}
+    timing: dict = {}
+    hit = thumbnails.apply_adjustments_linear(lin, 1.0, later, tone_cache_key="settle", timing=timing)
+    assert timing.get("tone_hit")
+    fresh = thumbnails.apply_adjustments_linear(lin, 1.0, later)
+    diff = np.abs(np.asarray(hit, np.int16) - np.asarray(fresh, np.int16))
+    assert int(diff.max()) <= 1
+
+
+def test_interactive_stages_stay_exact():
+    """Below the half-precision threshold (every drag and pointer-up frame) a
+    cache hit is the uncached render, bit for bit."""
+    lin = _rng(7).random((60, 90, 3)).astype(np.float32)
+    thumbnails.invalidate_tone_stage()
+    adj = develop.defaults() | {"luma_noise_reduction": 40, "saturation": 20}
+    thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="drag")
+    (stored,) = thumbnails._tone_stage.values()
+    assert stored.dtype == np.float32
+    later = adj | {"saturation": -30}
+    hit = thumbnails.apply_adjustments_linear(lin, 1.0, later, tone_cache_key="drag")
+    fresh = thumbnails.apply_adjustments_linear(lin, 1.0, later)
+    assert np.array_equal(np.asarray(hit), np.asarray(fresh))
 
 
 # --- The editor preview's detail stage cache ---------------------------------
@@ -1023,6 +1061,54 @@ def test_denoise_stage_tones_the_probe_like_the_tile():
     inner = (slice(24, -24), slice(24, -24))
     d = float(np.abs(out[inner] - whole[box][inner]).mean())
     assert d * 255 < 0.6, f"tile differs from the frame by {d*255:.2f}/255"
+
+
+def test_denoise_in_strips_is_the_whole_frame_and_can_be_stopped():
+    """An editor preview denoises a big plane in row strips so a superseded
+    render can stop between them. The strips carry exactly the halo a pixel's
+    result depends on, so the bytes are the whole-frame call's - and a render
+    that has gone stale does not finish the plane."""
+    rows = thumbnails._NLM_STRIP_ROWS * 2 + 150      # three uneven strips
+    scene = _smooth_scene(rows, 200)
+    plane = (np.clip(_noisy(scene, 6 / 255.0)[..., 0], 0, 1) * 65535.0).astype(np.uint16)
+    whole = thumbnails._nlm16(plane, 0.02)
+    assert np.array_equal(whole, thumbnails._nlm16(plane, 0.02, is_stale=lambda: False))
+
+    frame = _noisy(scene, 6 / 255.0)
+    assert np.array_equal(
+        thumbnails._denoise_arr(frame, 60, 40),
+        thumbnails._denoise_arr(frame, 60, 40, is_stale=lambda: False),
+    )
+    checks = 0
+
+    def stale_after_the_first_strip() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 2
+
+    with pytest.raises(thumbnails.PreviewSuperseded):
+        thumbnails._denoise_arr(frame, 60, 40, is_stale=stale_after_the_first_strip)
+
+
+def test_colour_only_denoise_of_a_small_frame_measures_itself_once(monkeypatch):
+    """A frame smaller than the probe grid is its own probe. With no luma pass
+    ahead of it the colour pass used to smooth the same planes twice - once as
+    "the probe", once as "the frame". Same bytes, half the smoothing."""
+    frame = _noisy(_smooth_scene(240, 320), 8 / 255.0)
+    calls = 0
+    real = thumbnails._chroma_smooth
+
+    def counting(*a, **k):
+        nonlocal calls
+        calls += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(thumbnails, "_chroma_smooth", counting)
+    once = thumbnails._denoise_arr(frame, 0, 50)
+    assert calls == 2, "one smoothing per chroma plane"
+    twice = thumbnails._denoise_arr(frame, 0, 50, probe=frame)
+    assert calls == 6
+    assert np.array_equal(once, twice)
 
 
 def test_noise_probe_is_the_same_grid_for_tile_and_frame():

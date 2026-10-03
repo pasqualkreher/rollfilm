@@ -792,12 +792,47 @@ def _noise_profile(y: np.ndarray) -> tuple[float, np.ndarray]:
     return sg, np.clip(bands, 0.5 * sg, 2.5 * sg).astype(np.float32)
 
 
-def _nlm16(plane16: np.ndarray, h: float) -> np.ndarray:
-    """Non-local means on a 16-bit plane; `h` in 0..1 units."""
-    return cv2.fastNlMeansDenoising(
-        plane16, h=[float(h * 65535.0)], templateWindowSize=7, searchWindowSize=21,
-        normType=cv2.NORM_L1,
-    )
+_NLM_TEMPLATE = 7
+_NLM_SEARCH = 21
+# The rows either side that a pixel's result can depend on: half the search
+# window plus half the patch compared at its edge. A strip cut with this much
+# halo denoises to exactly the whole frame's bytes (pinned by a test; one row
+# less and it does not).
+_NLM_HALO = _NLM_SEARCH // 2 + _NLM_TEMPLATE // 2
+_NLM_STRIP_ROWS = 512
+
+
+def _check_stale(is_stale: Callable[[], bool] | None) -> None:
+    if is_stale is not None and is_stale():
+        raise PreviewSuperseded()
+
+
+def _nlm16(
+    plane16: np.ndarray, h: float, is_stale: Callable[[], bool] | None = None
+) -> np.ndarray:
+    """Non-local means on a 16-bit plane; `h` in 0..1 units.
+
+    With `is_stale` (an editor preview) a big plane is denoised in row strips
+    with a check between them: one call on a 10MP plane is the longest stretch
+    of the whole render that cannot be interrupted, and a superseded settle
+    sitting in it held the render lock and the cores while the frames the user
+    was actually waiting for queued behind it. Same bytes either way."""
+    def run(part: np.ndarray) -> np.ndarray:
+        return cv2.fastNlMeansDenoising(
+            part, h=[float(h * 65535.0)], templateWindowSize=_NLM_TEMPLATE,
+            searchWindowSize=_NLM_SEARCH, normType=cv2.NORM_L1,
+        )
+
+    rows = plane16.shape[0]
+    if is_stale is None or rows <= _NLM_STRIP_ROWS + 2 * _NLM_HALO:
+        return run(plane16)
+    out = np.empty_like(plane16)
+    for y0 in range(0, rows, _NLM_STRIP_ROWS):
+        _check_stale(is_stale)
+        y1 = min(rows, y0 + _NLM_STRIP_ROWS)
+        a, b = max(0, y0 - _NLM_HALO), min(rows, y1 + _NLM_HALO)
+        out[y0:y1] = run(np.ascontiguousarray(plane16[a:b]))[y0 - a:y1 - a]
+    return out
 
 
 def _half(a: np.ndarray) -> np.ndarray:
@@ -810,7 +845,8 @@ def _up(a: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
 
 
 def _luma_nr(
-    y: np.ndarray, probe_y: np.ndarray, amount: float, detail: float, ref_short_edge: float
+    y: np.ndarray, probe_y: np.ndarray, amount: float, detail: float, ref_short_edge: float,
+    is_stale: Callable[[], bool] | None = None,
 ) -> np.ndarray:
     """The luminance pass (see the section comment). `y`/`probe_y` are luma
     planes 0..1, `amount`/`detail` 0..1."""
@@ -854,7 +890,8 @@ def _luma_nr(
     dn: np.ndarray | None = None
     for lvl in reversed(range(_NR_LEVELS)):
         kk = k if lvl == 0 else k * 0.85
-        out = _nlm16(pyr[lvl], kk * sigmas[lvl]).astype(np.float32) / 65535.0
+        _check_stale(is_stale)
+        out = _nlm16(pyr[lvl], kk * sigmas[lvl], is_stale).astype(np.float32) / 65535.0
         if lvl > 0:
             # Wiener guard: a coarse correction far above the noise at that
             # scale is structure, and is shrunk toward zero.
@@ -870,6 +907,7 @@ def _luma_nr(
     del pyr
     y_dn = inv[np.clip(dn * 65535.0 + 0.5, 0.0, 65535.0).astype(np.uint16)]
     del dn
+    _check_stale(is_stale)
     # Detail: give the residual back where the denoised picture has structure.
     # The threshold is in units of the local noise, so it means the same thing
     # in the lifted shadows as in the highlights.
@@ -918,7 +956,10 @@ def _chroma_smooth(plane: np.ndarray, guide: np.ndarray, fc: float, h: float) ->
     return cv2.ximgproc.guidedFilter(guide, _up(small, plane.shape), 8, 2e-3)
 
 
-def _chroma_nr(arr: np.ndarray, probe: np.ndarray, fc: float) -> np.ndarray:
+def _chroma_nr(
+    arr: np.ndarray, probe: np.ndarray | None, fc: float,
+    is_stale: Callable[[], bool] | None = None,
+) -> np.ndarray:
     """The colour pass: Cr/Cb smoothed against the (already denoised) luma,
     with the correction Wiener-limited to what is plausibly noise. Blotching
     is a large-scale pattern whose blobs dwarf NLM's window at full size, so
@@ -931,22 +972,32 @@ def _chroma_nr(arr: np.ndarray, probe: np.ndarray, fc: float) -> np.ndarray:
     corrections far above it are shrunk toward zero. Noise passes through
     nearly untouched; a real colour boundary is an order of magnitude above
     it and is left alone. On a clean image the level collapses and the pass
-    becomes a no-op."""
+    becomes a no-op.
+
+    `probe=None` says the frame is its own probe, pixel for pixel (a frame
+    smaller than the probe grid whose luma this render has not touched): the
+    correction measured on the probe is then the frame's own, and is computed
+    once instead of twice."""
     ycc = cv2.cvtColor(arr, cv2.COLOR_RGB2YCrCb)
-    pycc = cv2.cvtColor(probe, cv2.COLOR_RGB2YCrCb)
+    pycc = ycc if probe is None else cv2.cvtColor(probe, cv2.COLOR_RGB2YCrCb)
     w = min(1.0, fc * 1.5)
     for c in (1, 2):
+        _check_stale(is_stale)
         # Strength follows the noise at the scale NLM works on.
         s_q = _noise_sigma(cv2.resize(
             pycc[..., c], (max(1, pycc.shape[1] // 4), max(1, pycc.shape[0] // 4)),
             interpolation=cv2.INTER_AREA,
         ))
         h = (0.6 + 1.2 * fc) * max(s_q, 1.0 / 255.0)
-        pdelta = _chroma_smooth(pycc[..., c], pycc[..., 0], fc, h) - pycc[..., c]
-        level = float(np.median(np.abs(pdelta)))
-        limit = max(_CHROMA_NOISE_K * level, 1e-5)
         ch = ycc[..., c]
-        delta = _chroma_smooth(ch, ycc[..., 0], fc, h) - ch
+        if probe is None:
+            delta = _chroma_smooth(ch, ycc[..., 0], fc, h) - ch
+            level = float(np.median(np.abs(delta)))
+        else:
+            pdelta = _chroma_smooth(pycc[..., c], pycc[..., 0], fc, h) - pycc[..., c]
+            level = float(np.median(np.abs(pdelta)))
+            delta = _chroma_smooth(ch, ycc[..., 0], fc, h) - ch
+        limit = max(_CHROMA_NOISE_K * level, 1e-5)
         delta *= (limit * limit) / (delta * delta + limit * limit)
         ch += delta * w
     return np.clip(cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB), 0.0, 1.0)
@@ -955,6 +1006,7 @@ def _chroma_nr(arr: np.ndarray, probe: np.ndarray, fc: float) -> np.ndarray:
 def _denoise_arr(
     arr: np.ndarray, luma_amt: int, color_amt: int, detail_amt: int = 50,
     ref_short_edge: float | None = None, probe: np.ndarray | None = None,
+    is_stale: Callable[[], bool] | None = None,
 ) -> np.ndarray:
     """NR on a display-referred float RGB array (0..1). `probe` is the toned
     noise probe of the whole frame (see _noise_probe); without one the array
@@ -964,7 +1016,8 @@ def _denoise_arr(
     if fl <= 0 and fc <= 0:
         return arr
     arr = np.clip(arr, 0.0, 1.0)
-    if probe is None:
+    own_probe = probe is None
+    if own_probe:
         probe = _noise_probe(arr)
     probe = np.clip(probe, 0.0, 1.0)
     if fl > 0:
@@ -972,12 +1025,17 @@ def _denoise_arr(
         y_dn = _luma_nr(
             y, (probe @ _LUMA).astype(np.float32), fl,
             min(100, max(0, detail_amt)) / 100.0, ref_short_edge or min(arr.shape[:2]),
+            is_stale,
         )
         # Added as a luma offset, so chroma is exactly what it was.
         arr = np.clip(arr + (y_dn - y)[..., None], 0.0, 1.0)
         del y, y_dn
+    _check_stale(is_stale)
     if fc > 0:
-        arr = _chroma_nr(arr, probe, fc)
+        # With no luma pass before it, a frame that is its own probe (smaller
+        # than the probe grid) reaches the colour pass identical to it.
+        same = own_probe and fl <= 0 and probe.shape == arr.shape
+        arr = _chroma_nr(arr, None if same else probe, fc, is_stale)
     return arr
 
 
@@ -2266,16 +2324,26 @@ _POST_DENOISE_KEYS = frozenset({
 _tone_stage: "OrderedDict[str, np.ndarray]" = OrderedDict()
 _tone_stage_lock = threading.Lock()
 
-# Don't store frames bigger than the ultra tier (122MB). The native 100%-zoom
-# render is ~480MB per copy, where holding one to save a second of denoise is a
-# bad trade against the rest of the process; it recomputes like it always did.
+# Don't store frames bigger than the ultra tier. The native 100%-zoom render
+# is ~480MB per copy, where holding one to save a second of denoise is a bad
+# trade against the rest of the process; it recomputes like it always did.
+# Bytes as STORED: a settle-sized stage is kept at half precision (see
+# _STAGE_HALF_FLOAT_BYTES), which is what lets the 8GB machines keep the ultra
+# frame at all - their halved budget is below its 122MB float32 copy, so every
+# settle there repaid the denoise whatever slider had moved.
 _TONE_STAGE_MAX_BYTES = machine.scaled_budget(160 * 1024 * 1024)
-# Depth and total budget of the stage cache: three slots cover the tier ladder
-# of the image being edited (or edited+original in compare view) and the budget
-# keeps the worst case near two settled-tier frames on the 8GB machines this
-# has to share with the browser.
-_TONE_STAGE_MAX_ENTRIES = 3
-_TONE_STAGE_TOTAL_MAX_BYTES = machine.scaled_budget(192 * 1024 * 1024)
+# Depth and total budget of the stage cache: four slots cover the tier ladder
+# of the image being edited - drag, pointer-up, working-resolution settle and
+# the full-resolution one behind it - and the budget holds those four (about
+# 10 + 20 + 20 + 61MB on a 4K display) on the 8GB machines this has to share
+# with the browser.
+_TONE_STAGE_MAX_ENTRIES = 4
+_TONE_STAGE_TOTAL_MAX_BYTES = machine.scaled_budget(192 * 1024 * 1024, 2 / 3)
+# A stage bigger than this is stored as float16 and widened again on the way
+# out: half the bytes for a rounding step of at most 1/16 of an 8-bit level,
+# on the settle frames only. The interactive frames (a 1600px stage is 20MB)
+# stay float32, so a drag's cache hits are the exact array they always were.
+_STAGE_HALF_FLOAT_BYTES = 32 * 1024 * 1024
 
 
 def _tone_stage_key(base_key: str, base_gain: float, adj: dict, fast: bool) -> str:
@@ -2300,16 +2368,19 @@ def _stage_get(cache: "OrderedDict[str, np.ndarray]", key: str | None) -> np.nda
         if hit is None:
             return None
         cache.move_to_end(key)
-    return hit.copy()
+    return hit.astype(np.float32) if hit.dtype == np.float16 else hit.copy()
 
 
 def _stage_put(
     cache: "OrderedDict[str, np.ndarray]", key: str | None, arr: np.ndarray,
-    max_bytes: int, max_entries: int, total_max_bytes: int,
+    max_bytes: int, max_entries: int, total_max_bytes: int, half_float: bool = False,
 ) -> None:
-    if key is None or arr.nbytes > max_bytes:
+    if key is None:
         return
-    stored = arr.copy()
+    half = half_float and arr.dtype == np.float32 and arr.nbytes > _STAGE_HALF_FLOAT_BYTES
+    if (arr.nbytes // 2 if half else arr.nbytes) > max_bytes:
+        return
+    stored = arr.astype(np.float16) if half else arr.copy()
     # Read-only so a future pass that starts writing in place fails loudly here
     # instead of quietly poisoning every later frame that reuses this stage.
     stored.flags.writeable = False
@@ -2331,6 +2402,7 @@ def _tone_stage_put(key: str | None, arr: np.ndarray) -> None:
     _stage_put(
         _tone_stage, key, arr,
         _TONE_STAGE_MAX_BYTES, _TONE_STAGE_MAX_ENTRIES, _TONE_STAGE_TOTAL_MAX_BYTES,
+        half_float=True,
     )
 
 
@@ -2356,12 +2428,15 @@ _POST_DETAIL_KEYS = frozenset(_POST_DENOISE_KEYS - {
 
 _detail_stage: "OrderedDict[str, np.ndarray]" = OrderedDict()
 
-# Sized for the interactive frames this exists for (scrub/accurate frames and
-# budget-capped zoomed tiles are ~5-25MB); the settle tier's 2600px stage still
-# fits, the ultra/native ones do not and recompute like they always did.
-_DETAIL_STAGE_MAX_BYTES = machine.scaled_budget(64 * 1024 * 1024)
-_DETAIL_STAGE_MAX_ENTRIES = 3
-_DETAIL_STAGE_TOTAL_MAX_BYTES = machine.scaled_budget(128 * 1024 * 1024)
+# Sized like the tone stage's ladder (scrub/accurate frames and budget-capped
+# zoomed tiles are ~5-25MB, the settle frames are stored at half precision and
+# the ultra one is 61MB that way). Not scaled down on a low-RAM machine: at
+# half this, no settle frame fitted there at all, and a colour slider at rest
+# re-ran clarity and sharpening on 10MP every time - seconds of work on the
+# machines least able to afford them, to save 64MB.
+_DETAIL_STAGE_MAX_BYTES = 64 * 1024 * 1024
+_DETAIL_STAGE_MAX_ENTRIES = 4
+_DETAIL_STAGE_TOTAL_MAX_BYTES = 128 * 1024 * 1024
 
 
 def _detail_stage_key(base_key: str, base_gain: float, adj: dict, fast: bool) -> str:
@@ -2392,6 +2467,7 @@ def _detail_stage_put(key: str | None, arr: np.ndarray) -> None:
     _stage_put(
         _detail_stage, key, arr,
         _DETAIL_STAGE_MAX_BYTES, _DETAIL_STAGE_MAX_ENTRIES, _DETAIL_STAGE_TOTAL_MAX_BYTES,
+        half_float=True,
     )
 
 
@@ -2473,6 +2549,7 @@ def _denoise_wanted(adj: dict, fast: bool) -> bool:
 def _denoise_stage(
     arr: np.ndarray, adj: dict, fast: bool, ref_short_edge: float | None = None,
     noise_probe: np.ndarray | None = None, base_gain: float = 1.0,
+    is_stale: Callable[[], bool] | None = None,
 ) -> np.ndarray:
     """Denoise (spatial), split into Luminance + Colour like RapidRAW - the two
     halves of high-ISO noise are removed by different amounts of smoothing
@@ -2499,7 +2576,7 @@ def _denoise_stage(
     if noise_probe is not None:
         probe = _linear_tone_block_banded(noise_probe, adj, base_gain)
     return _denoise_arr(
-        arr, ln, cn, adj.get("luma_noise_detail", 50), ref_short_edge, probe,
+        arr, ln, cn, adj.get("luma_noise_detail", 50), ref_short_edge, probe, is_stale,
     )
 
 
@@ -2515,12 +2592,16 @@ def _mark(timing: dict | None, key: str, since: float) -> float:
 
 def stage_breakdown(timing: dict) -> str:
     """The slow-log tail of a render: `base=12 geom=30 tone=210* detail=40 ...`
-    from the dict _mark fills in. A `*` marks a stage answered from its cache."""
+    from the dict _mark fills in. A `*` marks a stage answered from its cache;
+    `nr` is the denoise pass, timed apart from the tone block it follows."""
     parts = []
-    for key in ("wait", "base", "geom", "tone", "detail", "color", "masks", "fx", "encode"):
+    for key in ("wait", "base", "geom", "tone", "nr", "detail", "color", "masks", "fx", "encode"):
         if key in timing:
             hit = "*" if timing.get(f"{key}_hit") else ""
             parts.append(f"{key}={timing[key]:.0f}{hit}")
+    if timing.get("busy"):
+        # What else had the cores and the memory while this frame rendered.
+        parts.append(f"busy={timing['busy']}")
     return " ".join(parts)
 
 
@@ -2670,7 +2751,13 @@ def apply_adjustments_linear(
         arr = _tone_stage_get(key)
         if arr is None:
             arr = _linear_tone_block_banded(lin, adj, base_gain, long_edge)
-            arr = _denoise_stage(arr, adj, fast, short_edge, noise_probe, base_gain)
+            if _denoise_wanted(adj, fast):
+                t0 = _mark(timing, "tone", t0)
+                _abort_if_stale()
+                arr = _denoise_stage(
+                    arr, adj, fast, short_edge, noise_probe, base_gain, is_stale
+                )
+                t0 = _mark(timing, "nr", t0)
             owned = not np.may_share_memory(arr, lin)
             _tone_stage_put(key, arr)
         elif timing is not None:
@@ -3403,7 +3490,7 @@ def warm_editor_base(
         have_top = (image_id, path_str, mtime_ns, top) in _BASE_CACHE
     if have_top:
         if then_native and not native_base_ready(image_id, mtime_ns):
-            warm_native_base(image_id, path_str, mtime_ns)
+            _warm_native_when_quiet(image_id, path_str, mtime_ns)
         return
     with _warm_lock:
         if key in _warming:
@@ -3424,7 +3511,7 @@ def warm_editor_base(
             _wait_for_same_image_decodes(image_id, path_str, mtime_ns)
             _cached_editor_base(image_id, path_str, mtime_ns, top)
             if then_native and not native_base_ready(image_id, mtime_ns):
-                warm_native_base(image_id, path_str, mtime_ns)
+                _warm_native_when_quiet(image_id, path_str, mtime_ns)
         except Exception:
             # A failed warm-up costs nothing: the ladder decodes as it always
             # did. Not worth a stack trace in the log for a photo that is
@@ -3482,6 +3569,46 @@ def _cached_native_base(
 
 _native_warm_lock = threading.Lock()
 _native_warming: set[str] = set()
+
+# The speculative full-resolution decode (warm_editor_base's `then_native`)
+# holds back until the editor has been quiet this long. It used to start the
+# moment a raw was opened: four decode threads and about a gigabyte of
+# temporaries, for 7-20s, beside the first sliders the user moved - the frames
+# of exactly those seconds were several times slower than the same frames a
+# little later. Nothing is waiting on this decode (a render that needs the
+# base asks warm_native_base directly and gets it at once), so it can take
+# the first pause instead.
+_NATIVE_WARM_QUIET_S = 1.5
+_native_wait_lock = threading.Lock()
+_native_wait_key: str | None = None
+
+
+def _warm_native_when_quiet(image_id: str, path_str: str, mtime_ns: int) -> None:
+    """warm_native_base, once the editor has stopped rendering for a moment.
+    One waiter at a time, for the photo asked about last: a waiter for a photo
+    the user has left gives up instead of decoding it."""
+    global _native_wait_key
+    key = f"{image_id}:{mtime_ns}"
+    with _native_wait_lock:
+        if _native_wait_key == key:
+            return
+        _native_wait_key = key
+
+    def run() -> None:
+        global _native_wait_key
+        try:
+            while editor_recently_active(_NATIVE_WARM_QUIET_S):
+                time.sleep(0.25)
+                with _native_wait_lock:
+                    if _native_wait_key != key:
+                        return
+            warm_native_base(image_id, path_str, mtime_ns)
+        finally:
+            with _native_wait_lock:
+                if _native_wait_key == key:
+                    _native_wait_key = None
+
+    threading.Thread(target=run, name="native-base-wait", daemon=True).start()
 
 
 def editor_mtime_ns(image: "Image") -> int:
@@ -3975,6 +4102,10 @@ def _render_editor_bytes(
     t0 = time.perf_counter()
     if timing is not None and "t_entry" in meta:
         timing["wait"] = (t0 - meta["t_entry"]) * 1000.0
+    # Whether a full-resolution decode had the cores while this frame rendered
+    # (sampled at both ends) - the slow log says so, since a frame rendered
+    # beside one is slow for a reason none of its own stages show.
+    busy_decode = _native_decode_lock.locked()
     mtime_ns = path.stat().st_mtime_ns
     if native:
         lin16, gain = _cached_native_base(image.id, str(path), mtime_ns)
@@ -4165,19 +4296,20 @@ def _render_editor_bytes(
     # Names the exact array the tone/denoise stage would be computed from, so the
     # cache can only ever be reused for it: the base (image + mtime + tier) plus
     # every geometry op applied above, plus which exposure the render is judged
-    # at. The native WHOLE-FRAME tier is left out on purpose - one copy of that
-    # stage is ~480MB, too much of the process to hold for a second of denoise.
-    # A native region TILE is a different trade: it is viewport-sized, the box
-    # stays put for the whole of a drag, and without the cache every zoomed drag
-    # of a post-tone slider (HSL, curves, masks, clarity...) re-ran the tone
-    # block on the tile per frame. The cut box and the tile's rendered size are
-    # part of the identity; _tone_stage_put's byte cap still refuses oversized
-    # tiles, so an uncapped (no region_px) cut can never pin half a GB.
-    tone_key = None if (native and early_cut is None) else json.dumps(
+    # at. A native render names the size of the array it started from as well:
+    # the whole frame is rendered from the native base downscaled to the
+    # on-screen budget (_native_budget_base), a tile from the cut at its
+    # rendered size - without the cache every zoomed drag of a post-tone slider
+    # (HSL, curves, masks, clarity...) re-ran the tone block on the tile per
+    # frame, and every fit-view settle on a 4K display repaid the denoise.
+    # The whole frame at true sensor size is still never kept: one copy of
+    # that stage is ~480MB and _tone_stage_put's byte cap refuses it, as it
+    # refuses an uncapped (no region_px) cut.
+    tone_key = json.dumps(
         [image.id, mtime_ns, base_px, rotation, crop, distortion, flip_h, flip_v,
          straighten, persp_h, persp_v, browse, region, native, early_cut,
          lens_profile.strengths(adjustments) if lens_on else None,
-         list(lin16.shape[:2]) if early_cut is not None else None],
+         list(lin16.shape[:2]) if (early_cut is not None or native) else None],
         sort_keys=True, separators=(",", ":"), default=str,
     )
     # An edit on the "standard" raw base is developed from the auto-exposed
@@ -4210,6 +4342,8 @@ def _render_editor_bytes(
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=quality)
     _mark(timing, "encode", t0)
+    if timing is not None and (busy_decode or _native_decode_lock.locked()):
+        timing["busy"] = "decode"
     return buf.getvalue()
 
 
