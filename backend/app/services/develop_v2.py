@@ -285,9 +285,12 @@ def perceptual_color_active(adj: dict) -> bool:
 _BAND_PIXELS = 2_000_000
 
 
-def apply_perceptual_color(arr: np.ndarray, adj: dict) -> np.ndarray:
+def apply_perceptual_color(arr: np.ndarray, adj: dict, pool=None) -> np.ndarray:
     """The mixer, global hue, colour grading, saturation and vibrance on a
-    display sRGB float array (0..1), in one trip through Oklab."""
+    display sRGB float array (0..1), in one trip through Oklab.
+
+    `pool` (a ThreadPoolExecutor) runs the bands of a big frame side by side.
+    They are the same bands either way, so the pixels are too."""
     if not perceptual_color_active(adj):
         return arr
     h, w = arr.shape[:2]
@@ -295,8 +298,17 @@ def apply_perceptual_color(arr: np.ndarray, adj: dict) -> np.ndarray:
         return _perceptual_color(arr, adj)
     out = np.empty_like(arr, dtype=np.float32)
     rows = max(1, _BAND_PIXELS // w)
-    for y0 in range(0, h, rows):
+
+    def run(y0: int) -> None:
         out[y0 : y0 + rows] = _perceptual_color(arr[y0 : y0 + rows], adj)
+
+    starts = range(0, h, rows)
+    if pool is None:
+        for y0 in starts:
+            run(y0)
+    else:
+        # list() drains the map so a worker's exception surfaces here.
+        list(pool.map(run, starts))
     return out
 
 

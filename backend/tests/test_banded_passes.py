@@ -116,3 +116,27 @@ def test_the_pipeline_never_writes_into_the_base_it_was_given(monkeypatch):
     second = np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="banded"))
     assert np.array_equal(first, second)
     assert np.array_equal(lin, before)
+
+
+def test_the_colour_bands_side_by_side_are_the_colour_bands_in_turn():
+    """The perceptual colour pass already went through a big frame in bands;
+    they now run on the pool. Same bands, same pixels."""
+    arr = np.clip(_frame(h=2100, w=2000), 0.0, 1.0)
+    adj = develop.defaults() | {"process": "2", "saturation": 25, "vibrance": 20}
+    assert arr.shape[0] * arr.shape[1] > 2 * develop_v2._BAND_PIXELS
+    in_turn = develop_v2.apply_perceptual_color(arr, adj)
+    side_by_side = develop_v2.apply_perceptual_color(arr, adj, pool=thumbnails._tone_pool())
+    assert np.array_equal(in_turn, side_by_side)
+
+
+def test_a_band_never_waits_on_its_own_pool():
+    """Work queued on the pool from one of its own workers would wait for a
+    free worker that is the one waiting. Inside a band, bands run in place."""
+    seen = []
+
+    def outer(y0: int, y1: int) -> None:
+        thumbnails._band_map(lambda a, b: seen.append((y0, a, b)), 2000, 1000)
+
+    thumbnails._band_map(outer, 2000, 1000)
+    bands = thumbnails._row_bands(2000)
+    assert sorted(seen) == sorted((y0, 0, 2000) for y0, _ in bands)

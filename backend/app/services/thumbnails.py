@@ -1599,15 +1599,26 @@ def _row_bands(h: int, rows: int = _BAND_ROWS) -> list[tuple[int, int]]:
     return [(y0, min(h, y0 + rows)) for y0 in range(0, h, rows)]
 
 
+def _band_pool() -> "ThreadPoolExecutor | None":
+    """The pool to spread bands over, or None where they have to run on the
+    calling thread: a single-worker machine, and a band that is itself running
+    on the pool - its workers waiting on work queued behind them would never
+    wake."""
+    if _TONE_BAND_WORKERS <= 1 or threading.current_thread().name.startswith("tone-band"):
+        return None
+    return _tone_pool()
+
+
 def _band_map(fn: Callable[[int, int], None], h: int, w: int) -> None:
     """Call fn(y0, y1) for every row band of an h x w frame. A frame under
     _TONE_BAND_MIN_PX is one band on the calling thread: a scrub frame keeps
     its latency, and is exactly the whole-frame code it always was."""
-    if _TONE_BAND_WORKERS <= 1 or h * w < _TONE_BAND_MIN_PX:
+    pool = _band_pool() if h * w >= _TONE_BAND_MIN_PX else None
+    if pool is None:
         fn(0, h)
         return
     # list() drains the map so a worker's exception surfaces here.
-    list(_tone_pool().map(lambda band: fn(*band), _row_bands(h)))
+    list(pool.map(lambda band: fn(*band), _row_bands(h)))
 
 
 def _banded_local(
@@ -1618,7 +1629,7 @@ def _banded_local(
     that many above and below, and only its own rows are kept. Image edges are
     band edges too, so the pass's border handling lands where it always did."""
     h, w = arr.shape[:2]
-    if _TONE_BAND_WORKERS <= 1 or h * w < _TONE_BAND_MIN_PX or arr.dtype != np.float32:
+    if h * w < _TONE_BAND_MIN_PX or arr.dtype != np.float32 or _band_pool() is None:
         return fn(arr)
     out = np.empty_like(arr)
 
@@ -1670,19 +1681,18 @@ def _linear_tone_block_banded(
 ) -> np.ndarray:
     h, w = lin.shape[:2]
     guide = _local_tone_guide(lin, adj, base_gain, ref_long_edge)
-    bands = _TONE_BAND_WORKERS
-    if bands <= 1 or h * w < _TONE_BAND_MIN_PX or h < bands:
+    if h * w < _TONE_BAND_MIN_PX or _band_pool() is None:
         return _linear_tone_block(lin, adj, base_gain, guide, 0, white_floor)
     out = np.empty((h, w, 3), dtype=np.float32)
-    edges = np.linspace(0, h, bands + 1).astype(int)
 
-    def run(i: int) -> None:
-        y0, y1 = int(edges[i]), int(edges[i + 1])
+    # Bands of _BAND_ROWS, not one band per worker: a quarter of a 40MP frame
+    # is 10MP, and four workers each holding the block's temporaries at that
+    # size were ~1GB between them. Measured on that frame, on an 8GB machine
+    # in swap: 5.9-6.9s with four bands, 2.1-4.5s with these.
+    def run(y0: int, y1: int) -> None:
         out[y0:y1] = _linear_tone_block(lin[y0:y1], adj, base_gain, guide, y0, white_floor)
 
-    # list() drains the map so a worker's exception surfaces here instead of
-    # being swallowed by the lazy iterator.
-    list(_tone_pool().map(run, range(bands)))
+    _band_map(run, h, w)
     return out
 
 
@@ -1714,7 +1724,11 @@ def _display_color_block(arr: np.ndarray, adj: dict, raw_source: bool = False) -
         # in one perceptual pass (see develop_v2); chrome, an RGB-domain
         # effect, moves ahead of it.
         arr = _apply_chrome(arr, adj.get("chrome_effect", 0), adj.get("chrome_blue", 0))
-        return np.clip(develop_v2.apply_perceptual_color(arr, adj), 0.0, 1.0)
+        out = develop_v2.apply_perceptual_color(arr, adj, pool=_band_pool())
+        if np.may_share_memory(out, arr):
+            return np.clip(out, 0.0, 1.0)
+        # The pass built this frame, so the clip can stay in it.
+        return np.clip(out, 0.0, 1.0, out=out)
 
     mix = adj.get("hsl")
     hue_deg = adj.get("hue", 0)
