@@ -245,4 +245,11 @@ def test_a_big_frame_in_bands_is_the_same_picture(monkeypatch):
     adj = _v({"saturation": 50, "vibrance": 30, "hue": 12}, "2")
     whole = develop_v2.apply_perceptual_color(arr.copy(), adj)
     monkeypatch.setattr(develop_v2, "_BAND_PIXELS", 500)
-    assert np.array_equal(develop_v2.apply_perceptual_color(arr.copy(), adj), whole)
+    banded = develop_v2.apply_perceptual_color(arr.copy(), adj)
+    # The same picture, not the same bits: cv2's vector code and the scalar
+    # code it finishes an array with round differently (x86 fuses multiply and
+    # add in the one, not in the other), so where a pixel falls in its array -
+    # which is what banding changes - moves its Oklab values by a unit in the
+    # last place. Through the 16-bit encode table that is at most the next
+    # entry or two: 4e-4 at the table's steepest, a tenth of an 8-bit level.
+    np.testing.assert_allclose(banded, whole, rtol=0, atol=1e-3)

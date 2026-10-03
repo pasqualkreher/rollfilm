@@ -365,7 +365,11 @@ def test_a_frame_taller_than_one_band_is_the_same_still(monkeypatch):
     scene = np.random.default_rng(2).random((30, 20, 3)).astype(np.float32) * 1.5
     whole = film_sims.apply_official(scene, "velvia", 1.0)
     monkeypatch.setattr(film_sims, "_SAMPLE_BAND_ROWS", 7)
-    np.testing.assert_array_equal(film_sims.apply_official(scene, "velvia", 1.0), whole)
+    # To the last place but one: cv2.transform rounds a pixel differently in
+    # its vector code than in the scalar code it finishes an array with, and a
+    # band ends elsewhere than the frame does (seen on the x86 CI runner: one
+    # value in 1800 off by 6e-8).
+    np.testing.assert_allclose(film_sims.apply_official(scene, "velvia", 1.0), whole, rtol=0, atol=1e-5)
 
 
 def test_process_4_renders_the_still_and_process_3_the_cube_as_it_stands():
