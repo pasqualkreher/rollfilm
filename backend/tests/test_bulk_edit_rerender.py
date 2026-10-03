@@ -184,7 +184,10 @@ def held_queue(monkeypatch):
     monkeypatch.setattr(queue, "ensure_derivatives", lambda image: rendered.append(image.id))
     monkeypatch.setattr(queue, "schedule_embedding_backfill", lambda: None)
     yield queue, jobs, rendered
-    for table in (queue._pending_rerenders, queue._rerender_undo, queue._running_rerenders, queue._cancelled_rerenders):
+    for table in (
+        queue._pending_rerenders, queue._rerender_undo, queue._running_rerenders, queue._cancelled_rerenders,
+        queue._waiting_rerenders, queue._waiting_jobs,
+    ):
         table.clear()
 
 
@@ -261,3 +264,23 @@ def test_cancel_renders_puts_the_edit_back_on_photos_not_rendered_yet(db, held_q
     # Nothing left to cancel.
     again = images_routes.cancel_renders(schemas.RenderStatusRequest(image_ids=["edited", "cropped"]), db, _user(db))
     assert again.cancelled == 0
+
+
+def test_the_renders_of_a_bulk_edit_go_ahead_of_thumbnails_queued_earlier(held_queue, monkeypatch, tmp_path):
+    """The startup sync (or an import) had queued a few hundred thumbnails; a
+    bulk edit made after that sat behind them and its count stayed at 0."""
+    queue, jobs, rendered = held_queue
+    monkeypatch.setattr(queue, "_process", lambda image_id, source_path: rendered.append(image_id))
+    for image_id in ("old-1", "old-2", "old-3"):
+        queue._submit(queue._waiting_jobs, queue._process, image_id, tmp_path)
+    queue.enqueue_rerender("a", undo="before-a")
+    queue.enqueue_rerender("b", undo="before-b")
+    assert len(jobs) == 5
+    for fn, args in jobs[:2]:
+        fn(*args)
+    assert rendered == ["a", "b"]
+    assert queue.rerenders_pending(["a", "b"]) == 0
+    # The older jobs follow, in the order they came.
+    for fn, args in jobs[2:]:
+        fn(*args)
+    assert rendered == ["a", "b", "old-1", "old-2", "old-3"]

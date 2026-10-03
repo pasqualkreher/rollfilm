@@ -58,6 +58,34 @@ _executor = ThreadPoolExecutor(
     max_workers=_POST_IMPORT_WORKERS, thread_name_prefix="post-import"
 )
 
+# The jobs wait here, not in the pool's own queue, which only knows first come,
+# first served: the pool is handed one _run_next per job and each takes the
+# re-renders of a bulk edit first. Someone is watching those count down in the
+# title bar, and behind a few hundred thumbnails the startup sync or an import
+# queued earlier the count sat at 0 for minutes while the machine was busy.
+# Among themselves both kinds keep their order.
+_waiting_rerenders: deque[tuple] = deque()
+_waiting_jobs: deque[tuple] = deque()
+_waiting_lock = Lock()
+
+
+def _submit(waiting: deque, fn: Callable, *args) -> None:
+    job = (fn, args)
+    with _waiting_lock:
+        waiting.append(job)
+    try:
+        _executor.submit(_run_next)
+    except Exception:
+        with _waiting_lock:
+            waiting.remove(job)
+        raise
+
+
+def _run_next() -> None:
+    with _waiting_lock:
+        fn, args = (_waiting_rerenders or _waiting_jobs).popleft()
+    fn(*args)
+
 # Post-import derivative jobs queued or running. The embedding backfill below
 # waits for this to drain, so CLIP work never overlaps the import's own
 # rendering phase.
@@ -140,7 +168,7 @@ def enqueue_post_import(image_id: str, source_path: Path) -> None:
     with _pending_derivatives_lock:
         _pending_derivatives += 1
     try:
-        _executor.submit(_process, image_id, source_path)
+        _submit(_waiting_jobs, _process, image_id, source_path)
     except Exception:
         with _pending_derivatives_lock:
             _pending_derivatives -= 1
@@ -154,7 +182,8 @@ def enqueue_rerender(image_id: str, undo: Any = None) -> None:
     raw, minutes for a big selection, on one core while the others idled. Here
     they run RENDER_SLOTS-wide in the background; the caller drops the stale
     files first (thumbnails.drop_derivatives) so the grid shimmers those tiles
-    and picks the new pictures up through its retry, as after an import.
+    and picks the new pictures up through its retry, as after an import. They
+    go ahead of whatever else waits for the pool (see _run_next).
 
     `undo` is what the photo looked like before the edit; with it the render
     can be cancelled while it waits (cancel_rerenders)."""
@@ -165,7 +194,7 @@ def enqueue_rerender(image_id: str, undo: Any = None) -> None:
         if undo is not None:
             _rerender_undo.setdefault(image_id, undo)
     try:
-        _executor.submit(_rerender, image_id)
+        _submit(_waiting_rerenders, _rerender, image_id)
     except Exception:
         with _pending_derivatives_lock:
             _pending_derivatives -= 1
