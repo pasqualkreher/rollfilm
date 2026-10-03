@@ -4438,6 +4438,18 @@ def defer_derivatives(image_id: str) -> None:
             _deferred_thread.start()
 
 
+# What gives a deferred render its edit revision once it is on disk. The
+# rule for that lives with the routes that save edits (routes/images.py,
+# _publish_revision), which register it here; without one the worker only
+# renders.
+_deferred_publish: Callable[..., None] | None = None
+
+
+def on_deferred_render(publish: Callable[..., None]) -> None:
+    global _deferred_publish
+    _deferred_publish = publish
+
+
 def take_deferred(image_id: str) -> bool:
     """Claim a deferred regeneration (the caller is about to do it now)."""
     with _deferred_lock:
@@ -4468,6 +4480,10 @@ def _deferred_run() -> None:
                 image = db.get(ImageRow, image_id)
                 if image is not None and image.deleted_at is None:
                     regenerate_for_image(image)
+                    # The pixels are on disk: now, and only now, the photo
+                    # gets the revision its views will ask for them under.
+                    if _deferred_publish is not None:
+                        _deferred_publish(db, image)
                     warm_full_cache(image_id)
             finally:
                 db.close()

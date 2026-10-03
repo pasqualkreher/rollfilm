@@ -263,9 +263,10 @@ class Image(Base):
     # pre-v2 edit can still be recovered and are no longer read by the render
     # pipeline. Null when the develop state is fully neutral.
     edit_adjustments: Mapped[str | None] = mapped_column(String, nullable=True)
-    # Per-image cache-buster, bumped on every edit save (edits/rotate/crop). The
-    # thumbnail URL's ?v= is String(edit_rev); the server is the sole source of
-    # truth for it, replacing the old recomputed per-field version string.
+    # Per-image cache-buster: the thumbnail URL's ?v= is String(edit_rev). It
+    # moves when an edit's derivatives are on disk, not when its values are
+    # saved, and never repeats (routes/images.py, _next_edit_rev). The server
+    # is the sole source of truth for it.
     edit_rev: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # For photos created via "save copy": the develop JSON that was baked into
     # this flattened JPEG. Never read by the render pipeline (the pixels already

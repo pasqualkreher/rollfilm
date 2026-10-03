@@ -79,19 +79,74 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
 
 
-def _try_regenerate_derivatives(image: Image) -> None:
+def _try_regenerate_derivatives(image: Image) -> bool:
     """Rotation/crop metadata is already committed by the time this runs -
     if the source file is missing, corrupt, or LibRaw chokes on it, that's a
     thumbnail-rebuild problem to retry later (see the Settings "Rebuild all
-    thumbnails" action), not a reason to fail the edit the user just made."""
+    thumbnails" action), not a reason to fail the edit the user just made.
+    Says whether the new derivatives are on disk."""
     try:
         thumbnails.regenerate_for_image(image)
         # Pre-render the 100%-zoom/export full.jpg in the background so the
         # common "edit, then export" flow doesn't pay the full RAW render at
         # export time.
         thumbnails.warm_full_cache(image.id)
+        return True
     except Exception:
         logger.exception("Failed to regenerate thumbnails for image %s after edit", image.id)
+        return False
+
+
+# The edit revision is the `?v=` of a photo's thumbnail and preview URLs, and
+# those URLs are served immutable - by the HTTP route and by the desktop
+# shell, which reads the files straight off the disk without looking at `v`.
+# Whatever preview.jpg holds the first time a client asks for `?v=N` is what
+# N shows from then on. So the revision may only move once the pixels it
+# stands for are on disk:
+#
+#   - an edit is saved: the values are committed, the derivatives rendered,
+#     and only then does the revision change (_render_and_publish). It used
+#     to change first, and a refetch during the render - seconds to minutes
+#     for a raw - pinned the pre-edit picture under the new revision until
+#     the next edit;
+#   - an autosave from the open editor writes values only and leaves the
+#     revision alone. Its render comes with the editor's final save, or from
+#     the deferred worker, and the revision with it;
+#   - a render that fails publishes nothing and is queued again;
+#   - a number is never handed out twice (_next_edit_rev).
+#
+# The bulk paths move the revision at once and get there the other way round:
+# they delete the old files first (_rerender_later), so there is nothing
+# stale to serve.
+def _next_edit_rev(image: Image) -> int:
+    """A revision this photo has not had before. Counting up is not enough:
+    a reset drops the revision to 0, and the next edit would count 1, 2, 3
+    again - numbers whose URLs the client still holds the earlier renders
+    for. The clock keeps the count above everything given out before."""
+    return max((image.edit_rev or 0) + 1, int(time.time()))
+
+
+def _publish_revision(db: Session, image: Image) -> None:
+    """The photo's derivatives have just been rendered from its current
+    edits: give them their revision (0, i.e. no `?v=`, for a photo with no
+    edit left)."""
+    image.edit_rev = _next_edit_rev(image) if _has_any_edit(image) else 0
+    db.commit()
+    db.refresh(image)
+
+
+def _render_and_publish(db: Session, image: Image) -> None:
+    """Render the derivatives of an edit whose values are committed, then
+    move the revision. A failed render leaves the revision - the old pixels
+    are still what is on disk - and hands the photo to the deferred worker
+    for another try."""
+    if _try_regenerate_derivatives(image):
+        _publish_revision(db, image)
+    else:
+        thumbnails.defer_derivatives(image.id)
+
+
+thumbnails.on_deferred_render(_publish_revision)
 
 
 def _pair_partner(db: Session, owner_id: int, image: Image) -> Image | None:
@@ -187,7 +242,7 @@ def _sync_edit_state(db: Session, owner_id: int, image: Image, prune: bool = Tru
     the un-edited baseline when nothing is left). prune=False leaves an emptied
     "edit" tag for the caller's own prune_unused_tags (see _remove_tag_from_image)."""
     if _has_any_edit(image):
-        image.edit_rev = (image.edit_rev or 0) + 1
+        image.edit_rev = _next_edit_rev(image)
         _add_tag_to_image(db, owner_id, image, "edit")
     else:
         image.edit_rev = 0
@@ -379,8 +434,8 @@ def list_images(
     )
 
 
-# The per-image thumbnail cache-buster is the server-owned `edit_rev` counter,
-# bumped on every edit save (edits/rotate/crop). The library index sends
+# The per-image thumbnail cache-buster is the server-owned `edit_rev`, moved
+# when an edit's derivatives are rendered (_next_edit_rev). The library index sends
 # String(edit_rev) and the frontend's editVersion() just echoes it - no per-field
 # version string is recomputed on either side any more.
 
@@ -1715,10 +1770,9 @@ def rotate_image(
     image.edit_rotation = (image.edit_rotation + payload.degrees) % 360
     # A crop drawn against the old orientation doesn't map onto the new one.
     image.edit_crop_x = image.edit_crop_y = image.edit_crop_width = image.edit_crop_height = None
-    image.edit_rev = (image.edit_rev or 0) + 1
     db.commit()
     db.refresh(image)
-    _try_regenerate_derivatives(image)
+    _render_and_publish(db, image)
     return image
 
 
@@ -1738,10 +1792,9 @@ def crop_image(
             raise HTTPException(status_code=400, detail="Crop box must be within the image bounds")
         image.edit_crop_x, image.edit_crop_y = c.x, c.y
         image.edit_crop_width, image.edit_crop_height = c.width, c.height
-    image.edit_rev = (image.edit_rev or 0) + 1
     db.commit()
     db.refresh(image)
-    _try_regenerate_derivatives(image)
+    _render_and_publish(db, image)
     return image
 
 
@@ -1812,16 +1865,15 @@ def save_edits(
 
     `?defer_derivatives=1` (the editor's autosave while it is open): the values
     are written now and the thumbnail/preview renders wait for the editor's
-    final save - see thumbnails.defer_derivatives for why."""
+    final save - see thumbnails.defer_derivatives for why. The edit revision
+    waits with them (see _next_edit_rev): it moves when the new pixels are on
+    disk, never before."""
     _validate_edits(payload)
     image = get_owned_image(db, current_user.id, image_id)
     _apply_edits(image, payload)
     # Tag edited photos "edit" so they're easy to find; drop the tag if the edit
-    # was reset back to the original look. Bump the per-image cache-buster so the
-    # thumbnail/preview URLs refresh; a reset back to neutral drops it to 0 (no ?v=).
-    has_edit = _has_any_edit(image)
-    image.edit_rev = (image.edit_rev or 0) + 1 if has_edit else 0
-    if has_edit:
+    # was reset back to the original look.
+    if _has_any_edit(image):
         _add_tag_to_image(db, current_user.id, image, "edit")
     else:
         _remove_tag_from_image(db, current_user.id, image, "edit")
@@ -1831,7 +1883,7 @@ def save_edits(
         thumbnails.defer_derivatives(image.id)
     else:
         thumbnails.take_deferred(image.id)
-        _try_regenerate_derivatives(image)
+        _render_and_publish(db, image)
     return image
 
 

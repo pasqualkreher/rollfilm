@@ -2537,6 +2537,11 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // came to rest) - let it land instead of racing a second write for the
         // same photo onto the server.
         await autosaveInflightRef.current;
+        // And none may start under this one: a timer armed by the last
+        // slider move would fire while the save below is still rendering,
+        // write the same values again with the render deferred, and have the
+        // server render this photo a second time for nothing.
+        window.clearTimeout(autosaveTimerRef.current);
         await api.images.saveEdits(image.id, edits);
         // What this write put on the server - the autosave below compares
         // against it, so a save-then-close never writes twice.
