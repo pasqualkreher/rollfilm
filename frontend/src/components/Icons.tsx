@@ -812,3 +812,55 @@ export function IconCloudUp(props: IconProps) {
     </svg>
   );
 }
+
+// The white-balance presets under the editor's Temperature slider.
+
+// A sun - daylight.
+export function IconSun(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="8" cy="8" r="2.75" />
+      <path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.58 3.58l1.06 1.06M11.36 11.36l1.06 1.06M3.58 12.42l1.06-1.06M11.36 4.64l1.06-1.06" />
+    </svg>
+  );
+}
+
+// A cloud - overcast light.
+export function IconCloud(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M4.25 12.25a2.5 2.5 0 0 1-.4-4.97 3.75 3.75 0 0 1 7.2-1.28A2.75 2.75 0 0 1 11.75 12.25z" />
+    </svg>
+  );
+}
+
+// A house and the shadow it casts - open shade.
+export function IconShade(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M1.75 7 6.25 2.75 10.75 7" />
+      <path d="M2.75 6.25v6.5h7v-6.5" />
+      <path d="M9.75 9l4.5 3.75h-4.5" />
+    </svg>
+  );
+}
+
+// A light bulb - tungsten, indoor light.
+export function IconBulb(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5.9 10.25a4 4 0 1 1 4.2 0c-.4.3-.6.7-.6 1.25h-3c0-.55-.2-.95-.6-1.25z" />
+      <path d="M6.75 13.75h2.5" />
+    </svg>
+  );
+}
+
+// A glowing tube - fluorescent light.
+export function IconTube(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.25" y="6.75" width="11.5" height="2.5" rx="1.25" />
+      <path d="M4.5 4.5 3.75 3.25M8 4.25v-1.5M11.5 4.5l.75-1.25M4.5 11.5l-.75 1.25M8 11.75v1.5M11.5 11.5l.75 1.25" />
+    </svg>
+  );
+}

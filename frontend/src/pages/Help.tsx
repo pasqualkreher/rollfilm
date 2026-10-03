@@ -975,7 +975,9 @@ const CHAPTERS: Chapter[] = [
               Temperature, tint, vibrance, saturation, hue, and the Fuji Color Chrome / Chrome Blue
               extras. For a RAW, Temperature reads in Kelvin as on the camera and starts at the value
               the photo was shot with (arrow keys move it by 100 K, with <kbd>Shift</kbd> by 10 K).
-              The red/blue cross under it is the camera's white balance shift, set freely between
+              The symbols under the sliders are presets for the light you shot in — Daylight,
+              Cloudy, Shade, Tungsten, Fluorescent — and set the Kelvin value for it in one click.
+              The red/blue cross under them is the camera's white balance shift, set freely between
               its steps — hold <kbd>Shift</kbd> while dragging to move it slowly. Below them three
               more tools:
             </p>

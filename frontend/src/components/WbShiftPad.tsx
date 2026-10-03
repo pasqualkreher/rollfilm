@@ -21,9 +21,9 @@ const limit = (v: number) => Math.max(-REACH, Math.min(REACH, v));
 // Held in tenths of a step.
 const clamp = (v: number) => Math.round(limit(v) * 10) / 10;
 const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`);
-// The arrow keys: half a step, with Shift a tenth.
-const KEY_STEP = 0.5;
-const KEY_STEP_FINE = 0.1;
+// The arrow keys: one step, with Shift half a step.
+const KEY_STEP = 1;
+const KEY_STEP_FINE = 0.5;
 // A drag with Shift held moves the puck at a quarter of the pointer's pace.
 const FINE_DRAG = 0.25;
 

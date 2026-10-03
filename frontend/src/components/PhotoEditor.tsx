@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, saveDownload, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSaveCopy, IconSideBySide, IconSplit, IconTarget, IconTrash, IconUndo, IconX } from "./Icons";
+import { IconBulb, IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSplit, IconSun, IconTarget, IconTrash, IconTube, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import { FocusButton, useFocusChrome } from "./FocusToggle";
@@ -352,6 +352,16 @@ function focusAdjacentSlider(from: HTMLInputElement | null, dir: 1 | -1): HTMLIn
 // The Kelvin slider's range: the camera's own.
 const KELVIN_MIN = 2500;
 const KELVIN_MAX = 10000;
+
+// The white-balance presets under the Kelvin slider: the light the photo was
+// taken in, and the colour temperature that stands for it.
+const WB_PRESETS = [
+  { label: "Daylight", kelvin: 5500, Icon: IconSun },
+  { label: "Cloudy", kelvin: 6500, Icon: IconCloud },
+  { label: "Shade", kelvin: 7500, Icon: IconShade },
+  { label: "Tungsten", kelvin: 2850, Icon: IconBulb },
+  { label: "Fluorescent", kelvin: 3800, Icon: IconTube },
+];
 
 function Slider({
   label,
@@ -5203,6 +5213,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 was shot at (the relative slider otherwise - JPEGs), then the
                 red/blue shift cross as a fine correction on top. */}
             {asShotKelvin !== null && kelvinNow !== null ? (
+              <>
               <div className="editor-sliders">
                 {/* Runs in mired (negated, so warmer is to the right): equal
                     travel is an equal change in colour along the whole range. */}
@@ -5235,6 +5246,27 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   onChange={setOwnTint}
                 />
               </div>
+              {/* The presets: one click sets the Kelvin of that light, the
+                  way dragging the slider there would. */}
+              <div className="editor-tool-row">
+                {WB_PRESETS.map(({ label, kelvin, Icon }) => {
+                  // Lit when the slider reads this preset's value.
+                  const active = Math.round(kelvinNow / 10) * 10 === kelvin;
+                  return (
+                    <button
+                      key={label}
+                      className={`btn btn-sm${active ? " primary" : ""}`}
+                      onClick={() => setKelvin(kelvin)}
+                      title={`${label} · ${kelvin} K`}
+                      aria-label={`${label}, ${kelvin} K`}
+                      aria-pressed={active}
+                    >
+                      <Icon size={14} />
+                    </button>
+                  );
+                })}
+              </div>
+              </>
             ) : (
               scalarSliders(sectionFields("Color").filter((f) => f.key === "temperature" || f.key === "tint"))
             )}
