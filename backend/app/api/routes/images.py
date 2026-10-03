@@ -1883,15 +1883,9 @@ def _render_breakdown(meta: dict) -> str:
     """The slow-log tail: `px=1600 base=12 geom=30 tone=210* detail=40 ...`
     from the timing dict the render fills in (thumbnails._mark). A `*` marks
     a stage answered from its cache."""
-    t = meta.get("t") or {}
-    parts = []
-    if meta.get("px"):
-        parts.append(f"px={meta['px']}")
-    for key in ("wait", "base", "geom", "tone", "detail", "color", "masks", "fx", "encode"):
-        if key in t:
-            hit = "*" if t.get(f"{key}_hit") else ""
-            parts.append(f"{key}={t[key]:.0f}{hit}")
-    return " ".join(parts)
+    stages = thumbnails.stage_breakdown(meta.get("t") or {})
+    px = f"px={meta['px']}" if meta.get("px") else ""
+    return " ".join(part for part in (px, stages) if part)
 
 
 _editor_preview_seq = itertools.count(1)

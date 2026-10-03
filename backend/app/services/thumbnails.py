@@ -1583,6 +1583,73 @@ def _tone_pool() -> ThreadPoolExecutor:
         return _tone_band_pool
 
 
+# Row bands for the passes below the tone block. Clarity, sharpening and grain
+# are a few seconds of arithmetic on a 40MP frame, but written as whole-frame
+# numpy each of them held several full-size temporaries at once - a ~460MB RGB
+# copy here, half a dozen ~155MB planes there. On an 8GB machine that is what
+# the time went into: the same three passes measured 21-66s whole and 5-6s in
+# bands, with the full render they sit in logged at 44-156s. A band's
+# temporaries are a few MB, reused from one band to the next, and the bands
+# run on the tone block's pool. The arithmetic per pixel is the same in the
+# same order, so the output is bit-identical to the whole-frame form.
+_BAND_ROWS = 256
+
+
+def _row_bands(h: int, rows: int = _BAND_ROWS) -> list[tuple[int, int]]:
+    return [(y0, min(h, y0 + rows)) for y0 in range(0, h, rows)]
+
+
+def _band_map(fn: Callable[[int, int], None], h: int, w: int) -> None:
+    """Call fn(y0, y1) for every row band of an h x w frame. A frame under
+    _TONE_BAND_MIN_PX is one band on the calling thread: a scrub frame keeps
+    its latency, and is exactly the whole-frame code it always was."""
+    if _TONE_BAND_WORKERS <= 1 or h * w < _TONE_BAND_MIN_PX:
+        fn(0, h)
+        return
+    # list() drains the map so a worker's exception surfaces here.
+    list(_tone_pool().map(lambda band: fn(*band), _row_bands(h)))
+
+
+def _banded_local(
+    fn: Callable[[np.ndarray], np.ndarray], arr: np.ndarray, halo: int
+) -> np.ndarray:
+    """fn(arr), computed band by band. For a pass that reads no further than
+    `halo` rows from the pixel it writes: each band is handed its rows plus
+    that many above and below, and only its own rows are kept. Image edges are
+    band edges too, so the pass's border handling lands where it always did."""
+    h, w = arr.shape[:2]
+    if _TONE_BAND_WORKERS <= 1 or h * w < _TONE_BAND_MIN_PX or arr.dtype != np.float32:
+        return fn(arr)
+    out = np.empty_like(arr)
+
+    def run(y0: int, y1: int) -> None:
+        e0, e1 = max(0, y0 - halo), min(h, y1 + halo)
+        out[y0:y1] = fn(arr[e0:e1])[y0 - e0 : y1 - e0]
+
+    _band_map(run, h, w)
+    return out
+
+
+def _sharpen_halo(radius: float) -> int:
+    """Rows a sharpening pass of this Gaussian sigma reads beyond its own:
+    cv2 cuts a float kernel at 4 sigma, and develop_v2.sharpen looks one more
+    row out for the tones around each pixel."""
+    return int(np.ceil(4.0 * radius)) + 2
+
+
+def _to_output_depth(arr: np.ndarray, depth16: bool) -> np.ndarray:
+    """The finished 0..1 float frame as uint8 (or uint16), rounded half up."""
+    h, w = arr.shape[:2]
+    scale = 65535.0 if depth16 else 255.0
+    out = np.empty(arr.shape, dtype=np.uint16 if depth16 else np.uint8)
+
+    def run(y0: int, y1: int) -> None:
+        out[y0:y1] = (arr[y0:y1] * scale + 0.5).astype(out.dtype)
+
+    _band_map(run, h, w)
+    return out
+
+
 def _local_tone_guide(
     lin: np.ndarray, adj: dict, base_gain: float, ref_long_edge: float | None
 ) -> "develop_v2.LocalToneGuide | None":
@@ -1805,7 +1872,10 @@ def _cached_grain_field(
     return f
 
 
-def _apply_grain(arr: np.ndarray, amount: int, size: int = 0, roughness: int = 50) -> np.ndarray:
+def _apply_grain(
+    arr: np.ndarray, amount: int, size: int = 0, roughness: int = 50,
+    out: np.ndarray | None = None,
+) -> np.ndarray:
     """Fujifilm-style analog film grain.
 
     Monochromatic (the same offset on R/G/B), like silver grain - Fuji's Grain
@@ -1825,7 +1895,10 @@ def _apply_grain(arr: np.ndarray, amount: int, size: int = 0, roughness: int = 5
     paper-white. A flat weighting (what this used before) lifts the blacks with
     an even veil, which is the single clearest giveaway of digital fake grain.
 
-    Stochastic - the preview shows a different pattern than the saved render."""
+    Stochastic - the preview shows a different pattern than the saved render.
+
+    `out` may be `arr` itself: a caller that owns the frame gets the grain
+    written into it instead of a second frame beside it."""
     h, w = arr.shape[:2]
     size_f = min(100, max(0, size)) / 100.0
     rough = min(100, max(0, roughness)) / 100.0
@@ -1844,18 +1917,27 @@ def _apply_grain(arr: np.ndarray, amount: int, size: int = 0, roughness: int = 5
     # low = fine, even, almost Gaussian texture; high = sparse, hard-edged
     # specks with clean gaps, plus a little more amplitude to match.
     field = _cached_grain_field(h, w, p, coarse, 1.0 + 0.55 * rough)
+    strength = (amount / 100.0) * 0.040 * (0.72 + 0.56 * rough)
+    if out is None:
+        out = np.empty_like(arr)
 
-    luma = np.clip(arr @ _LUMA, 0.0, 1.0)
-    # sqrt(luma) - 0.45*luma^3, peaking around luma 0.68 and normalised to 1
-    # there: clean deep blacks, full strength through the mids and highlights,
-    # a gentle roll-off into pure white (where the positive half of the noise
-    # clips anyway, so grain there reads as fine darkening speckle).
-    tone_w = np.sqrt(luma)
-    tone_w -= 0.45 * luma * luma * luma
-    tone_w *= 1.0 / 0.683
-    noise = field * tone_w
-    noise *= (amount / 100.0) * 0.040 * (0.72 + 0.56 * rough)
-    return np.clip(arr + noise[..., None], 0.0, 1.0)
+    def run(y0: int, y1: int) -> None:
+        rows = arr[y0:y1]
+        luma = np.clip(rows @ _LUMA, 0.0, 1.0)
+        # sqrt(luma) - 0.45*luma^3, peaking around luma 0.68 and normalised to
+        # 1 there: clean deep blacks, full strength through the mids and
+        # highlights, a gentle roll-off into pure white (where the positive
+        # half of the noise clips anyway, so grain there reads as fine
+        # darkening speckle).
+        tone_w = np.sqrt(luma)
+        tone_w -= 0.45 * luma * luma * luma
+        tone_w *= 1.0 / 0.683
+        noise = field[y0:y1] * tone_w
+        noise *= strength
+        out[y0:y1] = np.clip(rows + noise[..., None], 0.0, 1.0)
+
+    _band_map(run, h, w)
+    return out
 
 
 def _unsharp(arr: np.ndarray, radius: float, amount: float, threshold: float = 0.0) -> np.ndarray:
@@ -1872,7 +1954,27 @@ def _unsharp(arr: np.ndarray, radius: float, amount: float, threshold: float = 0
     return np.clip(arr + amount * hp, 0.0, 1.0)
 
 
-def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
+def _sharpen(
+    arr: np.ndarray, v2: bool, radius: float, amount: float, threshold: float = 0.0
+) -> np.ndarray:
+    """The Sharpness slider: +sharpen / -soften. Process version 2 sharpens
+    luminance only (develop_v2.sharpen); softening and version 1 are the plain
+    unsharp mask. Either reads only a few rows around each pixel, so a big
+    frame is sharpened band by band (_banded_local)."""
+    fn = develop_v2.sharpen if v2 and amount > 0 else _unsharp
+    return _banded_local(
+        lambda rows: fn(rows, radius, amount, threshold=threshold), arr, _sharpen_halo(radius)
+    )
+
+
+def _guided_filter(plane: np.ndarray, radius: int, eps: float) -> np.ndarray:
+    """cv2's self-guided filter of a single-channel plane."""
+    return cv2.ximgproc.guidedFilter(plane, plane, radius, eps)
+
+
+def _clarity(
+    arr: np.ndarray, radius: float, amount: float, out: np.ndarray | None = None
+) -> np.ndarray:
     """Fujifilm-style clarity (their -5..+5 maps roughly onto Lightroom's
     -50..+50 clarity, i.e. our -100..+100 slider covers the same span).
 
@@ -1916,18 +2018,27 @@ def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
 
     A single-channel guide
     is also about half the cost of a three-channel one (47ms against 84ms on a
-    2600px frame), so the fix is faster than what it replaces."""
-    y = np.clip(arr, 0.0, 1.0).astype(np.float32) @ _LUMA
-    y = np.maximum(y, 1e-6)
+    2600px frame), so the fix is faster than what it replaces.
+
+    Only the luminance planes the two filters need are whole-frame; everything
+    per pixel - luminance in, the mask, the ratio, the scaling of RGB - runs in
+    row bands (see _band_map). `out` may be `arr` itself, for a caller that
+    owns the frame."""
+    h, w = arr.shape[:2]
+    y = np.empty((h, w), dtype=np.float32)
+
+    def luminance(y0: int, y1: int) -> None:
+        y[y0:y1] = np.clip(arr[y0:y1], 0.0, 1.0).astype(np.float32) @ _LUMA
+
+    _band_map(luminance, h, w)
+    np.maximum(y, 1e-6, out=y)
     if amount > 0:
         # Positive clarity: midtone local contrast (definition / "bite").
         smooth = cv2.GaussianBlur(y, (0, 0), max(0.8, radius / 40.0))
-        base = cv2.ximgproc.guidedFilter(smooth, smooth, int(max(4, radius)), 0.01)
-        band = smooth - base
-        mask = np.power(1.0 - np.abs(2.0 * y - 1.0), 1.5)  # peaks at midtones
-        delta = amount * band * mask
-        delta -= 0.15 * amount * np.abs(band) * mask
-        y_out = y + delta
+        band = _guided_filter(smooth, int(max(4, radius)), 0.01)
+        np.subtract(smooth, band, out=band)  # smooth - base
+        del smooth
+        fine, blend = None, 0.0
     else:
         # Negative clarity: a pure fine-detail *softener* (the Fuji look), NOT a
         # contrast control. Blend toward an edge-preserving guided-filter smooth
@@ -1936,12 +2047,12 @@ def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
         # local contrast are left untouched - it reads as softening, not as
         # reduced contrast. The diffusion glow that completes the look is layered
         # on via _mist.
-        fine = cv2.ximgproc.guidedFilter(y, y, int(max(2.0, radius / 6.0)), 7e-3)
+        fine = _guided_filter(y, int(max(2.0, radius / 6.0)), 7e-3)
         blend = min(0.9, abs(amount) * 0.8)
-        y_out = y * (1.0 - blend) + fine * blend
+        band = None
     # Shared ratio: every channel is scaled by the same factor, so the colour of
     # a pixel is untouched and only its brightness carries the effect.
-    ratio = np.maximum(y_out, 0.0) / y
+    #
     # Cap the ratio where brightening would push a channel past 1: clipping it
     # afterwards would compress the brightest channel hardest and rotate the hue
     # of exactly the most saturated colours (measured 3 degrees on a fully
@@ -1955,10 +2066,28 @@ def _clarity(arr: np.ndarray, radius: float, amount: float) -> np.ndarray:
     # reduction over a length-3 trailing axis is ~8x slower than the pairwise
     # form (95ms against 13ms on a 3900px frame), which is the difference
     # between this guard costing half the pass and costing a twentieth of it.
-    peak = np.maximum(np.maximum(arr[..., 0], arr[..., 1]), arr[..., 2])
-    np.maximum(peak, 1e-6, out=peak)
-    np.minimum(ratio, np.reciprocal(peak), out=ratio)
-    return np.clip(arr * ratio[..., None], 0.0, 1.0)
+    if out is None:
+        out = np.empty_like(arr)
+
+    def run(y0: int, y1: int) -> None:
+        rows = arr[y0:y1]
+        y_in = y[y0:y1]
+        if band is not None:
+            b = band[y0:y1]
+            mask = np.power(1.0 - np.abs(2.0 * y_in - 1.0), 1.5)  # peaks at midtones
+            delta = amount * b * mask
+            delta -= 0.15 * amount * np.abs(b) * mask
+            y_out = y_in + delta
+        else:
+            y_out = y_in * (1.0 - blend) + fine[y0:y1] * blend
+        ratio = np.maximum(y_out, 0.0) / y_in
+        peak = np.maximum(np.maximum(rows[..., 0], rows[..., 1]), rows[..., 2])
+        np.maximum(peak, 1e-6, out=peak)
+        np.minimum(ratio, np.reciprocal(peak), out=ratio)
+        out[y0:y1] = np.clip(rows * ratio[..., None], 0.0, 1.0)
+
+    _band_map(run, h, w)
+    return out
 
 
 def _grain_pil(image: PILImage.Image, adj: dict) -> PILImage.Image:
@@ -1992,9 +2121,9 @@ def _apply_local_adjustments(
         arr = develop_effects.apply_structure(arr, st)
     sp = full.get("sharpness", 0)
     if sp:
-        arr = (develop_v2.sharpen if v2 and sp > 0 else _unsharp)(
-            arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
-            threshold=full.get("sharpness_threshold", 0),
+        arr = _sharpen(
+            arr, v2, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
+            full.get("sharpness_threshold", 0),
         )
     dh = full.get("dehaze", 0)
     if dh:
@@ -2361,6 +2490,17 @@ def _mark(timing: dict | None, key: str, since: float) -> float:
     return now
 
 
+def stage_breakdown(timing: dict) -> str:
+    """The slow-log tail of a render: `base=12 geom=30 tone=210* detail=40 ...`
+    from the dict _mark fills in. A `*` marks a stage answered from its cache."""
+    parts = []
+    for key in ("wait", "base", "geom", "tone", "detail", "color", "masks", "fx", "encode"):
+        if key in timing:
+            hit = "*" if timing.get(f"{key}_hit") else ""
+            parts.append(f"{key}={timing[key]:.0f}{hit}")
+    return " ".join(parts)
+
+
 def apply_adjustments_linear(
     lin: np.ndarray, base_gain: float, adj: dict, include_grain: bool = True, fast: bool = False,
     tone_cache_key: str | None = None, peek: str | None = None, view=None,
@@ -2467,8 +2607,8 @@ def apply_adjustments_linear(
         arr = _linear_tone_block_banded(lin, adj, base_gain, long_edge)
         _mark(timing, "tone", t0)
         if depth16:
-            return (arr * 65535.0 + 0.5).astype(np.uint16)
-        return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
+            return _to_output_depth(arr, True)
+        return PILImage.fromarray(_to_output_depth(arr, False), "RGB")
 
     # Tone + denoise depend on their own sliders and nothing else, so when
     # `tone_cache_key` names the base being rendered (the editor preview passes
@@ -2497,15 +2637,25 @@ def apply_adjustments_linear(
     arr = _detail_stage_get(detail_key)
     if arr is not None and timing is not None:
         timing["detail_hit"] = True
+    # Whether the frame in hand is this render's own, so the passes below may
+    # write into it instead of beside it. A stage handed out by a cache is a
+    # copy, and so is what goes into one; the tone block builds a new frame.
+    # The one thing it must never be is the caller's base.
+    owned = True
     if arr is None:
         key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
         arr = _tone_stage_get(key)
         if arr is None:
             arr = _linear_tone_block_banded(lin, adj, base_gain, long_edge)
             arr = _denoise_stage(arr, adj, fast, short_edge, noise_probe, base_gain)
+            owned = not np.may_share_memory(arr, lin)
             _tone_stage_put(key, arr)
         elif timing is not None:
             timing["tone_hit"] = True
+        # Nothing below reads the linear base. A caller that handed it over
+        # (render_edited_image) gets its ~460MB back here, not after the
+        # detail, colour and finishing passes have run on top of it.
+        lin = None
         t0 = _mark(timing, "tone", t0)
         _abort_if_stale()
         # Detail (spatial): clarity = large-radius local contrast, structure =
@@ -2515,7 +2665,11 @@ def apply_adjustments_linear(
         # `fast` note in the docstring).
         cl = adj.get("clarity", 0)
         if cl:
-            arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
+            arr = _clarity(
+                arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3,
+                out=arr if owned else None,
+            )
+            owned = True
             if cl < 0:
                 # Fuji's negative clarity doesn't just flatten - it diffuses like a
                 # Pro-Mist filter (soft halation around brights). Layer a gentle
@@ -2542,10 +2696,11 @@ def apply_adjustments_linear(
             # edge enhancement; Threshold gates it away from noise/smooth areas.
             # Process version 2 sharpens luminance only and holds the result
             # near the tones around each pixel (develop_v2.sharpen).
-            arr = (develop_v2.sharpen if develop_v2.is_v2(adj) and sp > 0 else _unsharp)(
-                arr, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
-                threshold=adj.get("sharpness_threshold", 0),
+            arr = _sharpen(
+                arr, develop_v2.is_v2(adj), min(2.0, max(0.6, long_edge / 2000.0)),
+                sp / 100.0 * 1.2, adj.get("sharpness_threshold", 0),
             )
+            owned = True
         ca_rc = adj.get("chromatic_aberration_red_cyan", 0)
         ca_by = adj.get("chromatic_aberration_blue_yellow", 0)
         if ca_rc or ca_by:
@@ -2593,17 +2748,17 @@ def apply_adjustments_linear(
         )
     _abort_if_stale()
     if include_grain and adj.get("grain_amount", 0) > 0:
-        arr = _apply_grain(arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50))
+        arr = _apply_grain(
+            arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50),
+            out=arr if owned else None,
+        )
     # Last of all, so the marking is the flat pink it was meant to be rather than
     # something the vignette darkened and the grain crawled over.
     if peek_field is not None:
         arr = paint_mask_peek(arr, peek_field, view=view)
-    if depth16:
-        _mark(timing, "fx", t0)
-        return (arr * 65535.0 + 0.5).astype(np.uint16)
-    out = (arr * 255.0 + 0.5).astype(np.uint8)
+    out = _to_output_depth(arr, depth16)
     _mark(timing, "fx", t0)
-    return PILImage.fromarray(out, "RGB")
+    return out if depth16 else PILImage.fromarray(out, "RGB")
 
 
 def add_frame(image: PILImage.Image, adj: dict | None) -> PILImage.Image:
@@ -4102,6 +4257,8 @@ def render_edited_image(
     max_px: int | None = None,
     half_decode: bool = False,
     depth16: bool = False,
+    timing: dict | None = None,
+    is_stale: Callable[[], bool] | None = None,
 ) -> "PILImage.Image | np.ndarray":
     """TRUE full-resolution RGB render with the given lens/geometry and tonal
     edits baked in - the only path that demosaics a RAW at full sensor size
@@ -4116,7 +4273,11 @@ def render_edited_image(
     perspective trims, so the output never comes out softer than an
     unbounded render downscaled to the same cap. A RAW drops to the 4x
     cheaper half-size demosaic only when that still covers the target;
-    JPEG/PNG decode at the smallest sufficient DCT scale."""
+    JPEG/PNG decode at the smallest sufficient DCT scale.
+
+    `timing` and `is_stale` are apply_adjustments_linear's: the per-stage
+    milliseconds for the slow-render log (plus `base` and `geom` from here),
+    and the probe that lets a background render give way between stages."""
     from app.services.filesystem import resolve_image_path
 
     path = resolve_image_path(image)
@@ -4135,6 +4296,7 @@ def render_edited_image(
     # _full_render_lock (callers serialise it on their own lock), so it no
     # longer queues behind a running full render or warm-up.
     with contextlib.nullcontext() if half_decode and max_px else _full_render_lock:
+        t0 = time.perf_counter()
         if decode_px is None:
             # Unbounded render: reuse (and fill) the editor's native-base cache
             # - the full-resolution linear decode kept for 100% zoom. "Save
@@ -4151,18 +4313,26 @@ def render_edited_image(
                 dims = raw_service.raw_dimensions(path)
                 half_size = half_decode or bool(dims and max(dims) // 2 >= decode_px)
             lin, gain = raw_service.load_linear_base(path, half_size=half_size, max_px=decode_px)
+        t0 = _mark(timing, "base", t0)
         lin = lens_profile.correct(lin, path, adjustments)
         if distortion:
             lin = apply_distortion_array(lin, distortion)
         lin = apply_edits_array(lin, rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v)
+        _mark(timing, "geom", t0)
         # Same browsing rule as the derivatives: an unedited raw's 100%-zoom
         # full.jpg is auto-exposed to match its lightbox preview; an edited one
         # renders native + the user's adjustments, matching the editor.
-        source = apply_adjustments_linear(
-            lin, _browsing_gain(gain, adjustments), adjustments, depth16=depth16,
-            raw_source=raw_service.is_raw(path),
-        )
+        #
+        # The frame is handed over, not lent: popped off a list so this
+        # function holds no name for it, and the pipeline lets it go once the
+        # tone block has read it. A 40MP float32 frame is ~460MB that would
+        # otherwise sit unused under every pass that follows.
+        handover = [lin]
         del lin
+        source = apply_adjustments_linear(
+            handover.pop(), _browsing_gain(gain, adjustments), adjustments, depth16=depth16,
+            raw_source=raw_service.is_raw(path), timing=timing, is_stale=is_stale,
+        )
         if depth16:
             return _add_frame_array(source, adjustments)
         source = add_frame(source, adjustments)
@@ -4171,7 +4341,8 @@ def render_edited_image(
 
 def render_full_from_stored_edits(
     image: "Image", max_size: int | None = None, half_decode: bool = False,
-    depth16: bool = False,
+    depth16: bool = False, timing: dict | None = None,
+    is_stale: Callable[[], bool] | None = None,
 ) -> "PILImage.Image | np.ndarray":
     """Full-resolution render of a photo with its *saved* edits baked in,
     optionally downscaled so the long edge fits max_size. Backs the cached
@@ -4193,6 +4364,8 @@ def render_full_from_stored_edits(
         max_px=max_size,
         half_decode=half_decode,
         depth16=depth16,
+        timing=timing,
+        is_stale=is_stale,
     )
     if depth16:
         h, w = rendered.shape[:2]
@@ -4331,11 +4504,13 @@ def _full_warm_run() -> None:
                 image = db.get(ImageRow, image_id)
                 if image is not None and image.deleted_at is None:
                     # The idle check races the user's next slider move; the
-                    # stale probe catches that gap so the render bails before
-                    # burning the lock, and the id goes back in the queue.
+                    # stale probe catches that gap - before the render takes
+                    # the lock and between its stages once it runs - and the
+                    # id goes back in the queue.
                     generate_full(
                         image,
                         is_stale=lambda: editor_recently_active(_FULL_WARM_EDITOR_IDLE_S),
+                        yield_mid_render=True,
                     )
             finally:
                 db.close()
@@ -4484,13 +4659,15 @@ def render_untouched_full(image: "Image") -> PILImage.Image:
 _half_render_lock = threading.Lock()
 
 
-def render_half_full(image: "Image") -> PILImage.Image:
+def render_half_full(image: "Image", timing: dict | None = None) -> PILImage.Image:
     from app.services.filesystem import resolve_image_path
 
     if not _is_untouched(image):
         # Edits: the bounded full render (half-size decode + the pipeline at
         # this size), a few seconds at most.
-        return render_full_from_stored_edits(image, max_size=ULTRA_EDITOR_PREVIEW_PX, half_decode=True)
+        return render_full_from_stored_edits(
+            image, max_size=ULTRA_EDITOR_PREVIEW_PX, half_decode=True, timing=timing
+        )
     path = resolve_image_path(image)
     adjustments = adjustments_from_image(image)
     lin16, gain = _cached_editor_base(
@@ -4511,11 +4688,17 @@ def generate_half(image: "Image") -> Path:
         if out.exists():
             return out
         t0 = time.perf_counter()
-        rendered = render_half_full(image)
+        timing: dict = {}
+        rendered = render_half_full(image, timing=timing)
+        t1 = time.perf_counter()
         _save_atomic(rendered, out, quality=90)
+        _mark(timing, "encode", t1)
         ms = (time.perf_counter() - t0) * 1000.0
         if ms >= _SLOW_FULL_MS:
-            logger.info("half render took %.0f ms (%s) px=%d", ms, image.id, max(rendered.size))
+            logger.info(
+                "half render took %.0f ms (%s) px=%d %s",
+                ms, image.id, max(rendered.size), stage_breakdown(timing),
+            )
     return out
 
 
@@ -4557,7 +4740,9 @@ def native_decode_busy() -> bool:
 _SLOW_FULL_MS = 300.0
 
 
-def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) -> Path:
+def generate_full(
+    image: "Image", is_stale: Callable[[], bool] | None = None, yield_mid_render: bool = False,
+) -> Path:
     """Render + cache the full-resolution edited JPEG (for true 100% zoom in the
     lightbox), returning its path. Cheap to serve once cached; cleared whenever
     the edit changes (see generate_derivatives). Holding the render lock across
@@ -4570,8 +4755,14 @@ def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) ->
     bails (PreviewSuperseded) instead of burning ~14s of the serialized render
     lock per abandoned photo - that queue was what made the whole app crawl
     after a stretch of zoom-and-page browsing. An already-cached file is served
-    regardless of staleness; background callers (warmer, export) pass nothing
-    and always render."""
+    regardless of staleness; export passes nothing and always renders.
+
+    `yield_mid_render` lets the probe stop a render that is already under way,
+    between its stages. The full.jpg warmer asks for it: its probe is "the
+    editor is active again", and a render that keeps going then competes with
+    the session it was holding back for. The lightbox's requests don't: their
+    probe is "a newer zoom exists", which is as often the same photo asked for
+    again, and a render that far along is the fastest way to answer it."""
     out = derivative_dir(image.id) / "full.jpg"
 
     def _bail_if_stale() -> None:
@@ -4612,16 +4803,23 @@ def generate_full(image: "Image", is_stale: Callable[[], bool] | None = None) ->
             if out.exists():
                 return out
             _bail_if_stale()
-            rendered = render_untouched_full(image) if untouched else render_full_from_stored_edits(image)
+            timing: dict = {}
+            rendered = (
+                render_untouched_full(image) if untouched
+                else render_full_from_stored_edits(
+                    image, timing=timing, is_stale=is_stale if yield_mid_render else None
+                )
+            )
             t1 = time.perf_counter()
             _save_atomic(rendered, out, quality=90)
             t2 = time.perf_counter()
             total_ms = (t2 - t0) * 1000.0
             if total_ms >= _SLOW_FULL_MS:
                 logger.info(
-                    "full render took %.0f ms (%s) %s render=%.0f encode=%.0f px=%d",
+                    "full render took %.0f ms (%s) %s render=%.0f encode=%.0f px=%d %s",
                     total_ms, image.id, "untouched" if untouched else "edited",
                     (t1 - t0) * 1000.0, (t2 - t1) * 1000.0, max(rendered.size),
+                    stage_breakdown(timing),
                 )
             del rendered
             _drop_native_base_if_idle()

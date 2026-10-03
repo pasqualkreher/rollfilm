@@ -51,7 +51,7 @@ def test_the_untouched_render_matches_the_pipeline(photo):
 def test_generate_full_takes_the_short_path_for_an_untouched_photo(photo, monkeypatch):
     taken = []
     monkeypatch.setattr(thumbnails, "render_untouched_full", lambda img: taken.append("fast") or PILImage.new("RGB", (4, 4)))
-    monkeypatch.setattr(thumbnails, "render_full_from_stored_edits", lambda img: taken.append("slow") or PILImage.new("RGB", (4, 4)))
+    monkeypatch.setattr(thumbnails, "render_full_from_stored_edits", lambda img, **_: taken.append("slow") or PILImage.new("RGB", (4, 4)))
     out = thumbnails.generate_full(photo)
     assert out.exists() and taken == ["fast"]
 

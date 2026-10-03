@@ -73,7 +73,7 @@ def test_the_full_warmer_holds_back_while_the_editor_renders(photo, monkeypatch)
     monkeypatch.setattr(thumbnails, "_FULL_WARM_POLL_S", 0.01)
     rendered = threading.Event()
     monkeypatch.setattr(
-        thumbnails, "generate_full", lambda image, is_stale=None: rendered.set()
+        thumbnails, "generate_full", lambda image, **_: rendered.set()
     )
 
     class _Db:
