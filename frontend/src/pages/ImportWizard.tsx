@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { forgetLibraryFilters } from "../utils/libraryFilterMemory";
-import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type {
   ColorLabel,
-  ImportAfterCommit,
   ImportChoice,
   ImportSessionSummary,
   StagedFileOut,
@@ -16,9 +13,8 @@ import { ImportLightbox } from "../components/ImportLightbox";
 import { ImportReviewGrid, dayLabel, isDuplicate } from "../components/ImportReviewGrid";
 import { ExternalSources } from "../components/ExternalSources";
 import { ImportLibrary } from "../components/ImportLibrary";
-import { ImportSessions, askToCloseSession } from "../components/ImportSessions";
+import { ImportSessions, closeSessionTitle, confirmCloseSession } from "../components/ImportSessions";
 import { ImportModeDialog } from "../components/ImportModeDialog";
-import { ImportAfterCommitDialog } from "../components/ImportAfterCommitDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { ImportAlbumPicker } from "../components/ImportAlbumPicker";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
@@ -119,6 +115,7 @@ export function ImportWizard() {
     startFilesImport,
     sessionMode,
     sessionFolder,
+    sessionBackup,
     cancelUpload,
     canStopStaging,
     stagingStopped,
@@ -227,7 +224,6 @@ export function ImportWizard() {
   // node per day section, and the fixed bottom action bar whose height the
   // rail must stay clear of.
   const actionBarRef = useRef<HTMLDivElement | null>(null);
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
 
@@ -340,47 +336,19 @@ export function ImportWizard() {
     },
   });
 
-  // The remembered answers to the two questions the Import page asks: copy
-  // or leave in place when photos are picked (askImportMode below), and keep
-  // or close the session after photos were added (askAfterCommit).
+  // The remembered answer to the question the Import page asks when photos
+  // are picked: copy (with or without a backup) or leave in place - see
+  // askImportMode below.
   const { data: importSettings } = useQuery({
     queryKey: ["import-settings"],
     queryFn: () => api.settings.getImport(),
   });
-  // The keep-or-close question after an import, as a promise the review
-  // renders. Backing out counts as keeping the session: nothing is lost.
-  const [afterCommitAsk, setAfterCommitAsk] = useState<{
-    added: number;
-    albumName: string | null;
-    resolve: (choice: Exclude<ImportAfterCommit, "ask">) => void;
-  } | null>(null);
-
-  function askAfterCommit(
-    added: number,
-    albumName: string | null
-  ): Promise<Exclude<ImportAfterCommit, "ask">> {
-    const remembered = importSettings?.after_commit;
-    if (remembered === "keep" || remembered === "close") return Promise.resolve(remembered);
-    return new Promise((resolve) => setAfterCommitAsk({ added, albumName, resolve }));
-  }
-
   // The album "Add to library" also puts the photos in (the picker next to
   // the button). Kept across commits of the session: a card of one trip goes
   // in a hundred at a time, into the same album each time.
   const [targetAlbumId, setTargetAlbumId] = useState<string | null>(null);
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
   const targetAlbum = albums?.find((a) => a.id === targetAlbumId) ?? null;
-
-  function chooseAfterCommit(choice: Exclude<ImportAfterCommit, "ask">, remember: boolean) {
-    afterCommitAsk?.resolve(choice);
-    setAfterCommitAsk(null);
-    if (remember) {
-      api.settings
-        .updateImport({ after_commit: choice })
-        .then((saved) => queryClient.setQueryData(["import-settings"], saved))
-        .catch(() => {});
-    }
-  }
 
   const commit = useMutation({
     // Blocking wait overlay, like saving or resetting edits and like Discard:
@@ -394,7 +362,7 @@ export function ImportWizard() {
           uploadToImmich && immichConfigured,
           syncAllToImmich && immichConfigured && immichMode === "selective",
           // The server leaves the session open even when nothing is left in
-          // it: whether it lives on is the user's call, asked below.
+          // it: it lives until the user closes it.
           true
         )
       ),
@@ -437,32 +405,11 @@ export function ImportWizard() {
       const inAlbum = albumName ? ` and to “${albumName}”` : "";
       // A session outlives an import until the user ends it: what wasn't
       // added - and what of its card isn't copied yet - stays for another
-      // day, and another card can join it. Whether it stays open now or
-      // closes is asked each time (or remembered in Settings); closing goes
-      // the same way as the Close session button, folder question included.
-      const choice = await askAfterCommit(added.length, albumName);
-      const closing =
-        choice === "close"
-          ? await askToCloseSession(
-              dialogs,
-              sourceLabel,
-              importedCount + added.length,
-              sessionFolder,
-              false
-            )
-          : null;
-      if (!closing) {
-        setCommitNote(
-          `${added.length.toLocaleString()} photo(s) added to your library${inAlbum}. This session stays open.`
-        );
-        return;
-      }
-      // discard resets the review either way (see onSettled); the library is
-      // where the photos just went, so land there like a finished import.
-      await discard.mutateAsync(closing.keepFolder).catch(() => {});
-      // Unfiltered: a filter left on from before would hide the new photos.
-      forgetLibraryFilters();
-      navigate("/");
+      // day, and another card can join it. Nothing is asked here; Close
+      // session ends it, the way the session was set up at its start.
+      setCommitNote(
+        `${added.length.toLocaleString()} photo(s) added to your library${inAlbum}. This session stays open until you close it.`
+      );
     },
     // A failed commit used to be completely invisible (no state change, no
     // message) - the button just looked dead. Staged files survive a failed
@@ -471,7 +418,7 @@ export function ImportWizard() {
       const message = err instanceof Error ? err.message : String(err);
       void dialogs.alert({
         title: "Import failed",
-        message: `${message}\n\nYour photos are still in the review area. Nothing was lost. Please try again.`,
+        message: `${message}\n\nYour photos are still in this session. Nothing was lost. Please try again.`,
       });
     },
   });
@@ -559,8 +506,9 @@ export function ImportWizard() {
   // or resetting them, so it's clear the app is working and nothing else can be
   // clicked into the half-deleted session meanwhile.
   const discard = useMutation({
-    mutationFn: (keepFolder: boolean) =>
-      withWait("Closing this session…", () => api.import.discard(sessionId!, keepFolder)),
+    // No folder flag: the server does what the session was started with (a
+    // backup folder stays, any other import folder goes).
+    mutationFn: () => withWait("Closing this session…", () => api.import.discard(sessionId!)),
     // Always reset locally, even if the delete itself failed (e.g. the
     // session was already committed/discarded) - the point of Discard is to
     // get back to a clean import screen, and a stale server-side session is
@@ -946,10 +894,11 @@ export function ImportWizard() {
     [startUpload]
   );
 
-  // Copy into the library, or leave the photos where they are? Asked once per
-  // fresh import (appends follow the session's mode), unless Settings remember
-  // an answer. The dialog is a promise the choose screen renders; it resolves
-  // null when the user cancels, and nothing is read then.
+  // Copy into an import folder (kept as a backup or not), or leave the photos
+  // where they are? Asked once per fresh import (appends follow the session),
+  // unless Settings remember an answer. The dialog is a promise the choose
+  // screen renders; it resolves null when the user cancels, and nothing is
+  // read then.
   const [modeAsk, setModeAsk] = useState<{
     defaultName: string;
     resolve: (choice: ImportChoice | null) => void;
@@ -964,7 +913,12 @@ export function ImportWizard() {
     // A remembered copy collects in the library's Import folder; choosing
     // another place per session (and naming it) is what the dialog is for.
     if (remembered === "copy" || remembered === "reference") {
-      return Promise.resolve({ mode: remembered, stagingFolder: null, name: defaultName });
+      return Promise.resolve({
+        mode: remembered,
+        stagingFolder: null,
+        keepBackup: remembered === "copy" && importSettings?.backup_default === "keep",
+        name: defaultName,
+      });
     }
     return new Promise((resolve) => setModeAsk({ defaultName, resolve }));
   }
@@ -974,7 +928,13 @@ export function ImportWizard() {
     setModeAsk(null);
     if (remember) {
       api.settings
-        .updateImport({ mode_default: choice.mode })
+        .updateImport(
+          // The backup answer belongs to a copy; leaving photos in place
+          // says nothing about it.
+          choice.mode === "copy"
+            ? { mode_default: "copy", backup_default: choice.keepBackup ? "keep" : "delete" }
+            : { mode_default: choice.mode }
+        )
         .then((saved) => queryClient.setQueryData(["import-settings"], saved))
         .catch(() => {});
     }
@@ -1101,6 +1061,7 @@ export function ImportWizard() {
             <ImportModeDialog
               libraryRoot={libraryRoot}
               defaultName={modeAsk.defaultName}
+              defaultBackup={importSettings?.backup_default === "keep"}
               onChoose={chooseImportMode}
               onClose={() => {
                 modeAsk.resolve(null);
@@ -1126,6 +1087,9 @@ export function ImportWizard() {
                 aria-haspopup="menu"
                 aria-expanded={importMenuOpen}
               >
+                {/* Working: the count can sit at 0 for a while on a slow
+                    card, so the spinner is what says it hasn't hung. */}
+                {isUploading && <Spinner tone="inherit" inline />}
                 {!isUploading
                   ? <><IconImport size={13} /> Import photos <IconChevronDown size={12} /></>
                   : folderImportActive
@@ -1223,7 +1187,7 @@ export function ImportWizard() {
               </Presence>
             </div>
             {isUploading && (
-              <p className="import-panel-desc" style={{ color: "var(--text-muted)" }}>
+              <p className="import-panel-desc" style={{ color: "var(--text-muted)", marginTop: 12 }}>
                 {folderImportActive
                   ? totalFileCount
                     ? `Photos are being ${inPlace ? "read" : "copied"} and analyzed in the background. Nothing is added to your library until you have reviewed them.`
@@ -1233,7 +1197,7 @@ export function ImportWizard() {
             )}
             {pickError && <p className="status-note status-note--error">{pickError}</p>}
             {uploadError && (
-              <p className="import-panel-desc" style={{ color: "var(--danger)" }}>Upload failed: {uploadError}</p>
+              <p className="import-panel-desc" style={{ color: "var(--danger)", marginTop: 12 }}>Upload failed: {uploadError}</p>
             )}
           </div>
 
@@ -1254,15 +1218,17 @@ export function ImportWizard() {
           From <strong>{sourceLabel}</strong>.{" "}
           {sessionFolder && (
             <>
-              Collected in <strong>{sessionFolder}</strong>.{" "}
+              Import folder: <strong>{sessionFolder}</strong> -{" "}
+              {sessionBackup ? "kept as a backup" : "deleted"} when you close the session.{" "}
             </>
           )}
           {importedCount > 0
             ? `${importedCount.toLocaleString()} photo(s) from this session are already in your library.`
             : "Nothing is in your library yet."}{" "}
-          {inPlace && "The photos stay where they are; the ones you keep are added from there. "}
-          Rate, compare and select, then click "Add to library". You can add a few at a time and
-          continue later.
+          {inPlace &&
+            "The photos stay where they are; the ones you add are listed in your library from there. "}
+          Rate, compare and select, then click "Add to library". You can add a few at a time; the
+          session stays open until you close it.
         </p>
         {/* A session can collect from more than one card or folder - add the
             next one without leaving the review. Desktop only: it needs native
@@ -1430,7 +1396,11 @@ export function ImportWizard() {
                 ? "Available when all photos have been analyzed"
                 : inPlace
                   ? "Add the selected photos to your library from where they are"
-                  : "Copy the selected photos into your library"
+                  : sessionBackup
+                    ? "Copy the selected photos into your library; they also stay in the import folder"
+                    : sessionFolder
+                      ? "Move the selected photos from the import folder into your library"
+                      : "Add the selected photos to your library"
           }
         >
           {commit.isPending ? (
@@ -1455,21 +1425,27 @@ export function ImportWizard() {
             queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
           }}
           disabled={commit.isPending || discard.isPending}
-          title="Close this session. Your selection and ratings are kept, and you can continue it from the Import page."
+          title="Leave the review and keep the session open. Nothing is deleted; your selection and ratings are kept, and you can continue from the Import page."
         >
           <IconBookmark size={14} /> Continue later
         </button>
         <button
           className="btn"
           onClick={async () => {
-            // Throwing away a whole reviewed batch (ratings, selection work)
-            // deserves a confirmation - and the dialog doubles as the place to
-            // reassure that the original files are untouched.
-            const answer = await askToCloseSession(dialogs, sourceLabel, importedCount, sessionFolder);
-            if (answer) discard.mutate(answer.keepFolder);
+            // What closing does was decided when the session started; it
+            // only stops to confirm when copies of photos that were never
+            // added would be deleted.
+            const ok = await confirmCloseSession(dialogs, {
+              label: sourceLabel,
+              mode: sessionMode,
+              folder: sessionFolder,
+              keepBackup: sessionBackup,
+              leftover: files ? files.filter((f) => !f.imported && !isDuplicate(f)).length : null,
+            });
+            if (ok) discard.mutate();
           }}
           disabled={discard.isPending}
-          title="Close this session. Photos already added stay in your library; a collection folder can be kept or deleted."
+          title={closeSessionTitle(sessionMode, sessionFolder, sessionBackup)}
         >
           {discard.isPending ? (
             <>
@@ -1518,18 +1494,6 @@ export function ImportWizard() {
         />
       )}
       </div>
-
-      <Presence open={afterCommitAsk !== null} ms={MOTION.modal}>
-        {afterCommitAsk && (
-          <ImportAfterCommitDialog
-            added={afterCommitAsk.added}
-            albumName={afterCommitAsk.albumName}
-            collectionFolder={sessionFolder}
-            onChoose={chooseAfterCommit}
-            onClose={() => chooseAfterCommit("keep", false)}
-          />
-        )}
-      </Presence>
 
       <Presence open={lightboxIndex !== null} ms={MOTION.overlay}>
         {lightboxIndex !== null && (

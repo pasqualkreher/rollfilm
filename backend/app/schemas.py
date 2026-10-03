@@ -581,6 +581,8 @@ class ImportSessionOut(BaseModel):
     mode: ImportMode = ImportMode.copy
     # Copy sessions: the collection folder the cards are copied into.
     staging_dir: str | None = None
+    # That folder is kept as a backup: commits copy out of it, closing leaves it.
+    keep_backup: bool = False
     created_at: datetime
     updated_at: datetime | None = None
 
@@ -612,6 +614,7 @@ class ImportSessionSummaryOut(BaseModel):
     source_path: str
     mode: ImportMode = ImportMode.copy
     staging_dir: str | None = None
+    keep_backup: bool = False
     created_at: datetime
     updated_at: datetime | None
     # Staged rows, and of those: committed by an earlier partial import,
@@ -766,6 +769,10 @@ class StagePathsRequest(BaseModel):
     # must exist); null = "Import" inside the library folder. First batch
     # only, like `mode`.
     staging_folder: str | None = None
+    # Copy mode: keep the collection folder as a backup of everything read -
+    # commits copy the chosen photos into the library instead of moving them,
+    # and the folder stays when the session closes. First batch only.
+    keep_backup: bool = False
 
 
 class ImportSessionUpdate(BaseModel):
@@ -782,11 +789,10 @@ class CommitImportRequest(BaseModel):
     # action-bar checkbox); individual photos can instead be flagged one by
     # one during review (StagedFileUpdate.immich_sync).
     sync_all_to_immich: bool = False
-    # Leave the session open even when nothing is left in it to import. The
-    # review asks the user afterwards whether the session stays or closes;
-    # closing then goes through DELETE /sessions/{id}, which knows the
-    # keep-the-folder question. Off = the session closes by itself once it is
-    # exhausted (its collection folder goes with it, unasked).
+    # Leave the session open even when nothing is left in it to import: the
+    # user closes it from the review or the Import page, through
+    # DELETE /sessions/{id}. Off = the session closes by itself once it is
+    # exhausted (its collection folder goes with it, unless it is a backup).
     keep_session_open: bool = False
 
 
@@ -851,6 +857,9 @@ class ImportSettingsOut(BaseModel):
     after_commit: Literal["ask", "keep", "close"]
     # Whether photos arriving in a review start out selected for import.
     select_default: Literal["select", "deselect"]
+    # Whether a copy session keeps its collection folder as a backup: the
+    # start dialog's pre-selection, and the answer when the dialog is skipped.
+    backup_default: Literal["keep", "delete"]
 
 
 class ImportSettingsUpdate(BaseModel):
@@ -858,6 +867,7 @@ class ImportSettingsUpdate(BaseModel):
     mode_default: Literal["ask", "copy", "reference"] | None = None
     after_commit: Literal["ask", "keep", "close"] | None = None
     select_default: Literal["select", "deselect"] | None = None
+    backup_default: Literal["keep", "delete"] | None = None
 
 
 class TrashSettingsOut(BaseModel):
@@ -886,35 +896,6 @@ class AutoDevelopSettingsUpdate(BaseModel):
     # None leaves the stored group selection untouched (the on/off toggle
     # doesn't need to know it); a list replaces it.
     enabled_groups: list[str] | None = None
-
-
-class BorgSettingsOut(BaseModel):
-    enabled: bool
-    repo: str | None
-    # The stored passphrase itself is never returned - only whether one is set.
-    passphrase_set: bool
-    # Whether the `borg` binary is installed on this machine; when false the UI
-    # shows install instructions and backups are disabled.
-    available: bool
-    # Live status of the background/manual backup runner.
-    running: bool
-    last_ok: bool | None
-    last_message: str
-    last_archive: str | None
-    last_finished_at: str | None
-
-
-class BorgSettingsUpdate(BaseModel):
-    enabled: bool
-    repo: str
-    # Omit / send null to keep the existing passphrase when only changing other
-    # fields; an empty string clears it (unencrypted repo).
-    passphrase: str | None = None
-
-
-class BorgTestResult(BaseModel):
-    ok: bool
-    message: str
 
 
 class ImmichTestResult(BaseModel):

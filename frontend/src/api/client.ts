@@ -2,8 +2,6 @@ import type {
   AlbumOut,
   AutoAdjustResult,
   AutoDevelopSettings,
-  BorgSettings,
-  BorgTestResult,
   BulkAutoDevelopResult,
   BulkResetOptions,
   CanvasGalleryOut,
@@ -1069,9 +1067,11 @@ export const api = {
       // the first batch only (it creates the session); appends follow the
       // session's mode.
       mode: ImportMode = "copy",
-      // Copy mode: where the session's collection folder is created; null =
+      // Copy mode: where the session's import folder is created; null =
       // "Import" inside the library folder. First batch only, like `mode`.
-      stagingFolder: string | null = null
+      stagingFolder: string | null = null,
+      // Copy mode: keep that folder as a backup. First batch only.
+      keepBackup = false
     ): Promise<ImportSessionOut> {
       return request(`/import/sessions/stage-paths`, {
         method: "POST",
@@ -1084,6 +1084,7 @@ export const api = {
           source_file_count: source?.fileCount ?? null,
           mode,
           staging_folder: stagingFolder,
+          keep_backup: keepBackup,
         }),
         signal,
       });
@@ -1128,8 +1129,7 @@ export const api = {
       });
     },
     // keepSessionOpen leaves the session open even when nothing is left in
-    // it - the review asks the user afterwards; closing then goes through
-    // discard(), which knows the keep-the-folder question.
+    // it: the user closes it, through discard().
     commit(
       id: string,
       uploadToImmich = false,
@@ -1145,11 +1145,12 @@ export const api = {
         }),
       });
     },
-    // keepFolder leaves a copy session's collection folder on disk.
-    discard(id: string, keepFolder = false): Promise<void> {
-      return request(`/import/sessions/${id}${keepFolder ? "?keep_folder=true" : ""}`, {
-        method: "DELETE",
-      });
+    // Closing does what the session was started with: a backup folder
+    // stays, any other import folder goes. keepFolder overrides that (a
+    // cancelled import removes even a backup folder it only half filled).
+    discard(id: string, keepFolder?: boolean): Promise<void> {
+      const query = keepFolder === undefined ? "" : `?keep_folder=${keepFolder}`;
+      return request(`/import/sessions/${id}${query}`, { method: "DELETE" });
     },
   },
   search: {
@@ -1323,25 +1324,6 @@ export const api = {
     },
     immichUploads(): Promise<ImmichUploadResult[]> {
       return request(`/settings/immich/uploads`);
-    },
-    // Automatic incremental Borg backups. getBorg doubles as the status poll
-    // (running / last-run outcome), so the Settings panel refreshes off it.
-    getBorg(): Promise<BorgSettings> {
-      return request(`/settings/borg`);
-    },
-    updateBorg(patch: {
-      enabled: boolean;
-      repo: string;
-      // Omit / send null to keep the stored passphrase; "" clears it.
-      passphrase?: string | null;
-    }): Promise<BorgSettings> {
-      return request(`/settings/borg`, { method: "PUT", body: JSON.stringify(patch) });
-    },
-    backupBorgNow(): Promise<BorgSettings> {
-      return request(`/settings/borg/backup`, { method: "POST" });
-    },
-    testBorg(): Promise<BorgTestResult> {
-      return request(`/settings/borg/test`, { method: "POST" });
     },
   },
   sources: {

@@ -40,15 +40,6 @@ DEFAULT_IMMICH_SYNC_MODE = IMMICH_MODE_MANUAL
 TRASH_RETENTION_DAYS = "trash_retention_days"
 DEFAULT_TRASH_RETENTION_DAYS = 14
 
-# Automatic incremental backups to a Borg repository (services/borg_backup.py).
-# BORG_ENABLED is "1"/"0"; BORG_REPO is the repository "address" (a local path,
-# a mounted NAS path, or a remote user@host:/path over SSH); BORG_PASSPHRASE is
-# the repokey passphrase, stored so unattended backups can run (plaintext in the
-# local app DB - an empty passphrase means an unencrypted repo).
-BORG_ENABLED = "borg_enabled"
-BORG_REPO = "borg_repo"
-BORG_PASSPHRASE = "borg_passphrase"
-
 # "1" to load RAWs with no brightness processing - the native (no auto-bright)
 # demosaic exactly as the sensor recorded it, instead of self-normalizing each
 # RAW to a consistent brightness. For users who want to do all tone work from
@@ -72,6 +63,12 @@ IMPORT_AFTER_COMMIT_CHOICES = ("ask", "keep", "close")
 # while more photos are still loading is never overwritten.
 IMPORT_SELECT_DEFAULT = "import_select_default"
 IMPORT_SELECT_DEFAULT_CHOICES = ("select", "deselect")
+# Whether a copy session keeps its collection folder as a backup ("keep") or
+# deletes it when the session closes ("delete", the default). Like the mode
+# default, only the client reads it: it pre-selects the start dialog and is
+# the answer when the dialog is skipped.
+IMPORT_BACKUP_DEFAULT = "import_backup_default"
+IMPORT_BACKUP_DEFAULT_CHOICES = ("keep", "delete")
 
 # "1" when the Auto develop button is shown in the editor. Off by default: the
 # suggestion only becomes useful once the user has saved a few edits, so it's
@@ -189,6 +186,11 @@ def get_import_after_commit(db: Session) -> str:
 def get_import_select_default(db: Session) -> str:
     value = get_setting(db, IMPORT_SELECT_DEFAULT)
     return value if value in IMPORT_SELECT_DEFAULT_CHOICES else "select"
+
+
+def get_import_backup_default(db: Session) -> str:
+    value = get_setting(db, IMPORT_BACKUP_DEFAULT)
+    return value if value in IMPORT_BACKUP_DEFAULT_CHOICES else "delete"
 
 
 def get_auto_develop_enabled(db: Session) -> bool:

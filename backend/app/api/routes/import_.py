@@ -49,7 +49,6 @@ from app.services.import_pipeline import (
     staged_preview_path,
     staged_thumb_dir,
 )
-from app.services.borg_backup import run_backup_soon
 from app.services.raw import classify_file_type, extract_full_preview
 from app.services.thumbnails import derivative_path
 from app.services.volumes import resolve_source_root, volume_of
@@ -442,6 +441,7 @@ def stage_local_paths(
                 mode=mode,
                 session_id=session_id,
                 staging_dir=str(staging_dir) if staging_dir else None,
+                keep_backup=bool(payload.keep_backup and staging_dir is not None),
             )
         source = (
             _source_row(db, session, source_root, payload.source_file_count)
@@ -517,6 +517,7 @@ def list_open_sessions(db: Session = Depends(get_db), current_user: User = Depen
                 source_path=s.source_path,
                 mode=s.mode,
                 staging_dir=s.staging_dir,
+                keep_backup=s.keep_backup,
                 created_at=s.created_at,
                 updated_at=s.updated_at,
                 file_count=total,
@@ -1033,6 +1034,27 @@ def commit_session(
             status_code=409,
             detail=f"{unprocessed} photo(s) are still being analyzed - wait a moment and try again.",
         )
+    if session.keep_backup and session.staging_dir:
+        # A backup session copies the chosen photos into the library (they
+        # stay in its folder too), so unlike a move this needs room for them.
+        needed = 0
+        for f in session.staged_files:
+            if f.selected and not f.imported:
+                try:
+                    needed += staged_file_path(f).stat().st_size
+                except OSError:
+                    pass
+        free = _free_disk_bytes(settings.library_root)
+        if needed + _DISK_SPACE_RESERVE_BYTES > free:
+            raise HTTPException(
+                status_code=507,
+                detail=(
+                    f"Not enough disk space to add these photos: the backup keeps them in "
+                    f"the import folder as well, so they need about {needed / 1e9:.0f} GB "
+                    f"more, but only {max(free - _DISK_SPACE_RESERVE_BYTES, 0) / 1e9:.0f} GB "
+                    f"are usable."
+                ),
+            )
     result = commit_import_session(
         db,
         session,
@@ -1041,9 +1063,6 @@ def commit_session(
         sync_all_to_immich=payload.sync_all_to_immich,
         keep_open=payload.keep_session_open,
     )
-    # New photos landed in the library - schedule an incremental Borg backup
-    # (debounced; a no-op unless the user configured one in Settings).
-    run_backup_soon()
     return result
 
 
@@ -1063,11 +1082,14 @@ def import_session_progress(
 @router.delete("/sessions/{session_id}", status_code=204)
 def discard_session(
     session_id: str,
-    keep_folder: bool = False,
+    keep_folder: bool | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     session = get_owned_import_session(db, current_user.id, session_id)
     if session.status != ImportSessionStatus.staging:
         raise HTTPException(status_code=400, detail=f"Session already {session.status.value}")
+    if keep_folder is None:
+        # Not said: the session knows - a backup folder stays, any other goes.
+        keep_folder = bool(session.keep_backup)
     discard_import_session(db, session, keep_folder=keep_folder)

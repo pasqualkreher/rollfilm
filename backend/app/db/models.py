@@ -384,6 +384,11 @@ class ImportSession(Base):
     # existed (they collected under settings.import_staging_root/<id>) and
     # for sessions that leave photos in place.
     staging_dir: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Copy sessions with a collection folder: the folder doubles as a backup
+    # of everything the session read. The photos chosen at commit are then
+    # *copied* into the library instead of moved, and the folder stays when
+    # the session closes. Fixed when the session is created, like `mode`.
+    keep_backup: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     # A session lives until the user ends it - import a hundred of a card's
     # five thousand photos today, the next hundred tomorrow, and collect from

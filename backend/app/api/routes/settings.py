@@ -11,9 +11,6 @@ from app.services.settings_store import (
     AUTO_DEVELOP_ENABLED,
     AUTO_DEVELOP_GROUP_NAMES,
     AUTO_DEVELOP_GROUPS,
-    BORG_ENABLED,
-    BORG_PASSPHRASE,
-    BORG_REPO,
     IMMICH_API_KEY,
     IMMICH_BASE_URL,
     IMMICH_ENABLED,
@@ -23,6 +20,7 @@ from app.services.settings_store import (
     IMMICH_SYNC_MODE,
     IMMICH_SYNC_PAUSED,
     IMPORT_AFTER_COMMIT,
+    IMPORT_BACKUP_DEFAULT,
     IMPORT_MODE_DEFAULT,
     IMPORT_SELECT_DEFAULT,
     RAW_NATIVE_DECODE,
@@ -37,6 +35,7 @@ from app.services.settings_store import (
     get_immich_sync_mode,
     get_immich_sync_paused,
     get_import_after_commit,
+    get_import_backup_default,
     get_import_mode_default,
     get_import_select_default,
     get_raw_native_decode,
@@ -47,7 +46,6 @@ from app.services.settings_store import (
 )
 from app.services import raw as raw_service
 from app.services import thumbnails as thumbnails_service
-from app.services import borg_backup
 from app.services.immich_sync import run_immich_sync_soon
 from app.services.trash import run_purge_soon
 from app.workers.queue import immich_pending_uploads, immich_upload_history
@@ -175,6 +173,7 @@ def _import_settings_out(db: Session) -> schemas.ImportSettingsOut:
         mode_default=get_import_mode_default(db),
         after_commit=get_import_after_commit(db),
         select_default=get_import_select_default(db),
+        backup_default=get_import_backup_default(db),
     )
 
 
@@ -202,6 +201,8 @@ def update_import_settings(
         set_setting(db, IMPORT_AFTER_COMMIT, payload.after_commit)
     if payload.select_default is not None:
         set_setting(db, IMPORT_SELECT_DEFAULT, payload.select_default)
+    if payload.backup_default is not None:
+        set_setting(db, IMPORT_BACKUP_DEFAULT, payload.backup_default)
     db.commit()
     return _import_settings_out(db)
 
@@ -354,69 +355,3 @@ def test_immich_settings(
         )
     ok, message = immich_service.check_connection(base_url, api_key)
     return schemas.ImmichTestResult(ok=ok, message=message)
-
-
-def _borg_out(db: Session) -> schemas.BorgSettingsOut:
-    config = borg_backup.get_borg_config(db)
-    status = borg_backup.get_status()
-    return schemas.BorgSettingsOut(
-        enabled=config.enabled,
-        repo=config.repo or None,
-        passphrase_set=bool(config.passphrase),
-        available=borg_backup.borg_available(),
-        running=status.running,
-        last_ok=status.last_ok,
-        last_message=status.last_message,
-        last_archive=status.last_archive,
-        last_finished_at=status.last_finished_at,
-    )
-
-
-@router.get("/borg", response_model=schemas.BorgSettingsOut)
-def get_borg_settings(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
-):
-    """Borg backup config plus live status (is borg installed, is a run in
-    progress, how did the last one go). Polled by the Settings panel."""
-    return _borg_out(db)
-
-
-@router.put("/borg", response_model=schemas.BorgSettingsOut)
-def update_borg_settings(
-    payload: schemas.BorgSettingsUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Save the repository address, passphrase and on/off toggle. Enabling (or
-    changing the target) nudges the background loop so an initial backup starts
-    soon instead of at the next daily tick."""
-    set_setting(db, BORG_ENABLED, "1" if payload.enabled else "0")
-    set_setting(db, BORG_REPO, payload.repo.strip())
-    # A null/omitted passphrase leaves the stored one untouched (edit the repo
-    # without re-typing it); an empty string clears it (unencrypted repo).
-    if payload.passphrase is not None:
-        set_setting(db, BORG_PASSPHRASE, payload.passphrase)
-    db.commit()
-    if payload.enabled:
-        borg_backup.run_backup_soon()
-    return _borg_out(db)
-
-
-@router.post("/borg/backup", response_model=schemas.BorgSettingsOut)
-def run_borg_backup_now(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
-):
-    """Start a backup right now, off the request path (borg can run for minutes).
-    The returned status has running=true; poll GET /settings/borg for the outcome."""
-    borg_backup.trigger_backup_now()
-    return _borg_out(db)
-
-
-@router.post("/borg/test", response_model=schemas.BorgTestResult)
-def test_borg_repo(
-    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
-):
-    """Check the configured repository is reachable, initializing it if it's new,
-    so the user gets an immediate yes/no."""
-    ok, message = borg_backup.test_repo(db)
-    return schemas.BorgTestResult(ok=ok, message=message)

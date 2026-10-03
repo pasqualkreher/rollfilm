@@ -57,3 +57,20 @@ def test_an_unknown_stored_select_default_reads_as_select(db):
     set_setting(db, IMPORT_SELECT_DEFAULT, "bogus")
     db.commit()
     assert get_import_settings(db, _User()).select_default == "select"
+
+
+def test_the_backup_default_is_off_until_remembered(db):
+    assert get_import_settings(db, _User()).backup_default == "delete"
+    out = update_import_settings(ImportSettingsUpdate(backup_default="keep"), db, _User())
+    assert (out.mode_default, out.backup_default) == ("ask", "keep")
+    assert get_import_settings(db, _User()).backup_default == "keep"
+
+
+def test_mode_and_backup_are_remembered_together(db):
+    out = update_import_settings(
+        ImportSettingsUpdate(mode_default="copy", backup_default="keep"), db, _User()
+    )
+    assert (out.mode_default, out.backup_default, out.after_commit) == ("copy", "keep", "ask")
+    # Back to asking keeps the backup answer as the dialog's pre-selection.
+    out = update_import_settings(ImportSettingsUpdate(mode_default="ask"), db, _User())
+    assert (out.mode_default, out.backup_default) == ("ask", "keep")

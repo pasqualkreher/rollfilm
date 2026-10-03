@@ -60,7 +60,6 @@ def db() -> Session:
 def rerenders(monkeypatch) -> list[str]:
     queued: list[str] = []
     monkeypatch.setattr(images_routes, "enqueue_rerender", queued.append)
-    monkeypatch.setattr(images_routes, "run_backup_soon", lambda: None)
     # The inline path must not run at all any more.
     monkeypatch.setattr(
         images_routes, "_try_regenerate_derivatives", lambda image: pytest.fail("rendered inline")

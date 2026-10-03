@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { ImportSessionSummary } from "../api/types";
+import type { ImportMode, ImportSessionSummary } from "../api/types";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "./AppDialogs";
 import { useWait } from "../state/wait";
@@ -17,45 +17,52 @@ function plural(n: number, one: string, many: string): string {
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
 }
 
+// What "Close session" does, said on the button: what was added stays in the
+// library, and the session's files go the way it was set up at its start.
+export function closeSessionTitle(
+  mode: ImportMode | null,
+  folder: string | null,
+  keepBackup: boolean
+): string {
+  const added = "Close this session. Photos you added stay in your library";
+  if (mode === "reference") return `${added}; no file is touched.`;
+  if (!folder) return `${added}; the copies you didn't add are deleted.`;
+  return keepBackup
+    ? `${added}, and the import folder stays as your backup.`
+    : `${added}; the import folder and the photos you didn't add are deleted.`;
+}
+
 // Closing a session ends it for good: what was added stays in the library, the
-// review goes. A copy session's collection folder is the user's call - kept
-// with the copies that weren't added, or deleted with them. Null when the user
-// backs out. `confirmClose` false skips the "close?" confirmation itself (the
-// user just chose to close, right after an import) and asks only about the
-// folder, if there is one.
-export async function askToCloseSession(
+// review goes. What happens to its files was decided when it started, so
+// nothing is asked - except to confirm when closing deletes copies of photos
+// that were never added (`leftover` of them; null = not known yet, so ask).
+// False when the user backs out.
+export async function confirmCloseSession(
   dialogs: ReturnType<typeof useAppDialogs>,
-  label: string,
-  importedCount: number,
-  collectionFolder: string | null,
-  confirmClose = true
-): Promise<{ keepFolder: boolean } | null> {
-  const title = `Close the session “${label}”?`;
-  const added =
-    importedCount > 0
-      ? `The ${plural(importedCount, "photo", "photos")} you added stay in your library. `
-      : "Nothing was added to your library. ";
-  if (!collectionFolder) {
-    if (!confirmClose) return { keepFolder: false };
-    const ok = await dialogs.confirm({
-      title,
-      message: added + "Your original files are not touched.",
-      confirmLabel: "Close session",
-      danger: true,
-    });
-    return ok ? { keepFolder: false } : null;
+  session: {
+    label: string;
+    mode: ImportMode | null;
+    folder: string | null;
+    keepBackup: boolean;
+    leftover: number | null;
   }
-  const choice = await dialogs.choose({
-    title,
-    message:
-      added +
-      `Keep the folder ${collectionFolder} with the rest of the copies, or delete it? ` +
-      "Your original files are not touched.",
-    altLabel: "Keep folder",
-    confirmLabel: "Delete folder",
+): Promise<boolean> {
+  const { label, mode, folder, keepBackup, leftover } = session;
+  if (mode === "reference" || (folder && keepBackup) || leftover === 0) return true;
+  const notAdded =
+    leftover == null
+      ? "Photos in this session may not have been added to your library. "
+      : `${plural(leftover, "photo", "photos")} in this session ${leftover === 1 ? "was" : "were"} not added to your library. `;
+  return dialogs.confirm({
+    title: `Close the session “${label}”?`,
+    message: folder
+      ? notAdded +
+        `Closing deletes the import folder ${folder} and these copies with it. ` +
+        "The files on your card or source folder are not touched."
+      : notAdded + "Closing deletes their copies. Your original files are not touched.",
+    confirmLabel: folder ? "Close and delete folder" : "Close session",
     danger: true,
   });
-  return choice === null ? null : { keepFolder: choice === "alt" };
 }
 
 // Import sessions live until the user ends them - a card culled a hundred
@@ -77,10 +84,17 @@ export function ImportSessions() {
   if (!sessions || sessions.length === 0) return null;
 
   async function close(s: ImportSessionSummary) {
-    const answer = await askToCloseSession(dialogs, s.source_path, s.imported_count, s.staging_dir);
-    if (!answer) return;
+    const ok = await confirmCloseSession(dialogs, {
+      label: s.source_path,
+      mode: s.mode,
+      folder: s.staging_dir,
+      keepBackup: s.keep_backup,
+      leftover: s.file_count - s.imported_count - s.duplicate_count,
+    });
+    if (!ok) return;
     try {
-      await withWait("Closing this session…", () => api.import.discard(s.id, answer.keepFolder));
+      // No folder flag: the server keeps a backup folder and deletes any other.
+      await withWait("Closing this session…", () => api.import.discard(s.id));
     } finally {
       queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
     }
@@ -196,7 +210,7 @@ export function ImportSessions() {
                 </button>
                 <button
                   className="btn btn-sm quiet-danger"
-                  title="Close this session. Photos already added stay in your library; a collection folder can be kept or deleted."
+                  title={closeSessionTitle(s.mode, s.staging_dir, s.keep_backup)}
                   onClick={() => close(s)}
                   disabled={isUploading}
                 >

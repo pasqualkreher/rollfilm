@@ -435,6 +435,20 @@ class _Analyzed:
     exif_json: str
 
 
+def _copy_into_library(src: str, dest: str) -> None:
+    """A backup session's commit: the chosen photo is copied, the session's
+    folder keeps its own. Written under a temporary name first, so a copy that
+    dies half-way never leaves a truncated file under a library name."""
+    dest_path = Path(dest)
+    part = dest_path.with_name(f".{dest_path.name}.{uuid.uuid4().hex}.part")
+    try:
+        shutil.copy2(src, part)
+        os.replace(part, dest_path)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+
+
 @dataclass
 class _CommitEntry:
     """A staged file that will be imported, with its resolved library
@@ -1130,18 +1144,21 @@ def create_import_session(
     mode: ImportMode = ImportMode.copy,
     session_id: str | None = None,
     staging_dir: str | None = None,
+    keep_backup: bool = False,
 ) -> ImportSession:
     """An empty session to stage into. A folder import creates it up front so
     the source row its files are read from exists before the first batch (see
     routes/import_.py); the multipart upload path stages straight away. `mode`
     is fixed here for the session's life: copy into the library, or reference
     the originals in place - and for a copy, `staging_dir` is the session's
-    collection folder (created by the route, named after `session_id`)."""
+    collection folder (created by the route, named after `session_id`), which
+    `keep_backup` turns into a backup that commits copy out of."""
     session = ImportSession(
         owner_id=owner_id,
         source_path=source_label or "Import",
         mode=mode,
         staging_dir=staging_dir,
+        keep_backup=keep_backup,
         updated_at=datetime.now(timezone.utc),
     )
     if session_id:
@@ -1356,6 +1373,9 @@ def commit_import_session(
     reference = session.mode == ImportMode.reference
     reference_roots: dict[str, SourceRoot] = {}
     library_resolved = settings.library_root.resolve()
+    # The collection folder is a backup: the chosen photos are copied into
+    # the library and stay in the folder as well.
+    backup = bool(session.keep_backup and session.staging_dir)
 
     def _referenced_duplicate(f: ImportStagedFile) -> Image | None:
         """The existing image this staged file is a byte-identical copy of, if
@@ -1564,6 +1584,22 @@ def commit_import_session(
             relative_dest = str(moved_copy.relative_to(settings.library_root))
             dest_path = moved_copy
             already_moved = True
+        elif (
+            backup
+            and (
+                settings.library_root
+                / f"{taken_at.year:04d}"
+                / taken_at.strftime("%Y-%m-%d")
+                / staged.original_filename
+            ).exists()
+            and (copied := _find_moved_library_copy(staged, taken_at)) is not None
+        ):
+            # A backup session's failed attempt leaves the staged file where
+            # it is, so the retry can't tell by its absence: adopt the copy
+            # that attempt already placed instead of making a second one.
+            relative_dest = str(copied.relative_to(settings.library_root))
+            dest_path = copied
+            already_moved = True
         else:
             relative_dest = library_relative_path(
                 taken_at, staged.original_filename, settings.library_root, is_taken=_dest_taken
@@ -1593,12 +1629,14 @@ def commit_import_session(
     # (a rename on the same filesystem, or a copy across one), the slowest part
     # of the commit. DB row creation stays serial below (the SQLAlchemy Session
     # isn't thread-safe). Moves must all finish before any row is created, since
-    # a row records the post-move library path and size.
+    # a row records the post-move library path and size. A backup session
+    # copies instead, so its folder keeps every photo.
     to_move = [e for e in plan if not e.already_moved]
     if to_move:
+        place = _copy_into_library if backup else shutil.move
         move_workers = min(_STAGE_WORKERS, len(to_move))
         with ThreadPoolExecutor(max_workers=move_workers) as pool:
-            list(pool.map(lambda e: shutil.move(str(e.staged_full_path), str(e.dest_path)), to_move))
+            list(pool.map(lambda e: place(str(e.staged_full_path), str(e.dest_path)), to_move))
 
     # Release the write lock periodically: one mega-transaction over the whole
     # loop held it for minutes on a big import, starving every other writer
@@ -1708,9 +1746,8 @@ def commit_import_session(
     # photos a day stays open with the rest - including whatever of it hasn't
     # been copied yet. Only once every file is in the library (or can't be
     # imported) and the source has nothing more does it close like before -
-    # unless the caller keeps it open: the review then asks the user whether
-    # the session stays, and closing goes through discard_import_session,
-    # which knows the keep-the-folder question.
+    # unless the caller keeps it open: the user then closes it, through
+    # discard_import_session.
     session_done = not keep_open and session_is_exhausted(session)
     session.updated_at = datetime.now(timezone.utc)
     if session_done:
@@ -1768,7 +1805,7 @@ def commit_import_session(
             )
 
     if session_done:
-        _remove_session_folders(session)
+        _remove_session_folders(session, keep_collection=backup)
         _drop_session_state(session.id)
     return new_images
 

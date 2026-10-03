@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
-import type { BorgTestResult, ImmichSyncMode, ImmichTestResult, ImportSettings } from "../api/types";
+import type { ImmichSyncMode, ImmichTestResult, ImportSettings } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
 import { IconCheck, IconX } from "../components/Icons";
 import { useAppDialogs } from "../components/AppDialogs";
@@ -516,56 +516,6 @@ export function Settings() {
     },
   });
 
-  // Borg backup: an automatic, incremental backup to a repository "address".
-  const [borgRepo, setBorgRepo] = useState("");
-  const [borgPass, setBorgPass] = useState("");
-  const [borgSaved, setBorgSaved] = useTransientFlag();
-  const [borgTest, setBorgTest] = useTransientValue<BorgTestResult>(8000);
-
-  // Poll while the page is open so a running backup and its outcome (this same
-  // endpoint carries the live status) show up without a manual refresh.
-  const { data: borg } = useQuery({
-    queryKey: ["borg-settings"],
-    queryFn: () => api.settings.getBorg(),
-    refetchInterval: 5_000,
-  });
-
-  // Seed the repo field once from the server without clobbering an edit in
-  // progress; the passphrase is never sent back down, so its field stays blank.
-  useEffect(() => {
-    if (borg) setBorgRepo(borg.repo ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [borg?.repo]);
-
-  const saveBorg = useMutation({
-    mutationFn: (enabled: boolean) =>
-      api.settings.updateBorg({
-        enabled,
-        repo: borgRepo.trim(),
-        // Blank = keep the existing passphrase rather than wiping it.
-        passphrase: borgPass ? borgPass : undefined,
-      }),
-    onSuccess: (data) => {
-      setBorgSaved(true);
-      setBorgPass("");
-      setBorgTest(null);
-      queryClient.setQueryData(["borg-settings"], data);
-    },
-  });
-
-  const testBorg = useMutation({
-    mutationFn: () => api.settings.testBorg(),
-    onSuccess: (result) => {
-      setBorgTest(result);
-      queryClient.invalidateQueries({ queryKey: ["borg-settings"] });
-    },
-  });
-
-  const backupBorgNow = useMutation({
-    mutationFn: () => api.settings.backupBorgNow(),
-    onSuccess: (data) => queryClient.setQueryData(["borg-settings"], data),
-  });
-
   // Auto develop: opt-in for the editor's Auto button, which suggests develop
   // settings learned from the user's own saved edits.
   const { data: autoDevelop } = useQuery({
@@ -867,24 +817,24 @@ export function Settings() {
           <div className="settings-subgroup">
             <h4 className="settings-subhead">When importing</h4>
             <Desc>
-              Photos you pick for import are either collected in a folder of the session's own
-              (inside this folder's "Import" folder, or wherever you choose) and sorted into the
-              library when you add them, or added from where they are without copying (their
+              Photos you pick for import are either copied into an import folder of the session's
+              own (inside this folder's "Import" folder, or wherever you choose) and sorted into
+              the library when you add them, or added from where they are without copying (their
               folder is then listed under External photo sources). A remembered answer skips the
-              question; sessions then collect in the library's Import folder.
+              start dialog; sessions then use the library's Import folder.
             </Desc>
             {(
               [
                 ["ask", "Ask every time", "A dialog asks before anything is read."],
                 [
                   "copy",
-                  "Always collect and copy into the library",
-                  "Each session collects its cards in the library's Import folder; the photos you keep are sorted into the library by date.",
+                  "Always copy to an import folder",
+                  "Each session copies its cards into the library's Import folder; the photos you add are sorted into the library by date.",
                 ],
                 [
                   "reference",
                   "Always leave photos where they are",
-                  "Nothing is copied; the photos you keep are added from their current folder.",
+                  "Nothing is copied; the photos you add are listed in the library from their current folder.",
                 ],
               ] as const
             ).map(([value, title, desc]) => (
@@ -902,40 +852,22 @@ export function Settings() {
             ))}
           </div>
           <div className="settings-subgroup">
-            <h4 className="settings-subhead">After adding photos to the library</h4>
+            <h4 className="settings-subhead">Import folder</h4>
             <Desc>
-              An import session lives until you close it: the photos you didn't add stay in it,
-              and you can add more of the card, or another card, later. After each "Add to
-              library" the review asks whether the session stays open, unless an answer is
-              remembered here.
+              An import session lives until you close it. Closing deletes its import folder, with
+              the photos you didn't add - unless the folder is kept as a backup.
             </Desc>
-            {(
-              [
-                ["ask", "Ask every time", "A dialog asks after the photos are in."],
-                [
-                  "keep",
-                  "Always keep the session open",
-                  "The session stays listed on the Import page until you close it yourself.",
-                ],
-                [
-                  "close",
-                  "Always close the session",
-                  "The session ends after each import. A collection folder still asks whether to keep it.",
-                ],
-              ] as const
-            ).map(([value, title, desc]) => (
-              <OptionRow
-                key={value}
-                type="radio"
-                name="import-after-commit"
-                checked={(importSettings?.after_commit ?? "ask") === value}
-                disabled={!importSettings}
-                busy={updateImportSettings.isPending}
-                onChange={() => updateImportSettings.mutate({ after_commit: value })}
-                title={title}
-                desc={desc}
-              />
-            ))}
+            <OptionRow
+              type="checkbox"
+              checked={importSettings?.backup_default === "keep"}
+              disabled={!importSettings}
+              busy={updateImportSettings.isPending}
+              onChange={(keep) =>
+                updateImportSettings.mutate({ backup_default: keep ? "keep" : "delete" })
+              }
+              title="Keep the import folder as a backup"
+              desc="Every photo stays in the import folder, and the ones you add are copied into the library, so they take up space twice. Pre-selected in the start dialog, and applied directly when the dialog is skipped."
+            />
           </div>
           <div className="settings-subgroup">
             <h4 className="settings-subhead">New photos in an import</h4>
@@ -1508,148 +1440,6 @@ export function Settings() {
           <a className="btn primary" href={api.maintenance.backupUrl()} style={{ display: "inline-block" }}>
             Download backup
           </a>
-        </div>
-
-        <div className="settings-block">
-          <div className="settings-subgroup">
-            <h4 className="settings-subhead">Automatic backup (Borg)</h4>
-            <Desc>
-              Keep a continuously updated backup in a{" "}
-              <a href="https://www.borgbackup.org" target="_blank" rel="noreferrer">
-                Borg
-              </a>{" "}
-              repository. Borg stores only what changed since the last run. The backup runs
-              automatically after imports and edits, and at least once a day. The repository can be
-              a local folder, a NAS path or a remote <code>user@host:/path</code> over SSH. Photos
-              from external sources are not included.
-            </Desc>
-
-            {borg && !borg.available && (
-              <Note error>
-                Borg is not installed on this machine. Install it and reload the app. On macOS:{" "}
-                <code>brew install borgbackup</code>.
-              </Note>
-            )}
-
-            <Field
-              label="Repository address"
-              placeholder="/Volumes/Backup/rollfilm  or  user@host:/backups/rollfilm"
-              value={borgRepo}
-              onChange={(v) => {
-                setBorgRepo(v);
-                setBorgSaved(false);
-              }}
-            />
-            <Field
-              type="password"
-              autoComplete="new-password"
-              label={
-                <>
-                  Passphrase{" "}
-                  {borg?.passphrase_set ? (
-                    <em>(a passphrase is saved, leave blank to keep it)</em>
-                  ) : (
-                    <em>(optional, encrypts the repository)</em>
-                  )}
-                </>
-              }
-              placeholder={borg?.passphrase_set ? "••••••••  (unchanged)" : "Choose a passphrase"}
-              value={borgPass}
-              onChange={(v) => {
-                setBorgPass(v);
-                setBorgSaved(false);
-              }}
-            />
-            <div className="import-toolbar">
-              <button
-                className="btn primary"
-                onClick={() => saveBorg.mutate(borg?.enabled ?? false)}
-                disabled={!borgRepo.trim() || saveBorg.isPending}
-              >
-                {saveBorg.isPending ? (
-                  <>
-                    <Spinner tone="inherit" inline />
-                    Saving...
-                  </>
-                ) : (
-                  "Save backup settings"
-                )}
-              </button>
-              <button
-                className="btn"
-                onClick={() => testBorg.mutate()}
-                disabled={!borg?.available || !borgRepo.trim() || testBorg.isPending}
-                title={!borg?.available ? "Install Borg first" : undefined}
-              >
-                {testBorg.isPending ? (
-                  <>
-                    <Spinner tone="inherit" inline />
-                    Testing...
-                  </>
-                ) : (
-                  "Test repository"
-                )}
-              </button>
-              <button
-                className="btn"
-                onClick={() => backupBorgNow.mutate()}
-                disabled={
-                  !borg?.available || !borg?.repo || borg?.running || backupBorgNow.isPending
-                }
-                title={
-                  !borg?.repo ? "Save a repository address first" : undefined
-                }
-              >
-                {borg?.running || backupBorgNow.isPending ? (
-                  <>
-                    <Spinner tone="inherit" inline />
-                    Backing up...
-                  </>
-                ) : (
-                  "Back up now"
-                )}
-              </button>
-            </div>
-            {borgSaved && <Note>Backup settings saved.</Note>}
-            {saveBorg.isError && <Note error>{(saveBorg.error as Error).message}</Note>}
-            {borgTest && (
-              <Note error={!borgTest.ok}>
-                {borgTest.ok ? <IconCheck size={12} /> : <IconX size={12} />}{" "}
-                {borgTest.message}
-              </Note>
-            )}
-
-            {borg?.repo && (
-              <OptionRow
-                type="checkbox"
-                checked={borg.enabled}
-                disabled={!borg.available || saveBorg.isPending}
-                busy={saveBorg.isPending}
-                onChange={(checked) => saveBorg.mutate(checked)}
-                title="Back up automatically"
-                desc="Runs after imports and edits, and at least once a day, while the app is open."
-              />
-            )}
-
-            {borg && (borg.running || borg.last_ok !== null) && (
-              <Note error={borg.last_ok === false && !borg.running}>
-                {borg.running ? (
-                  "Backup in progress…"
-                ) : borg.last_ok ? (
-                  <>
-                    <IconCheck size={12} /> Last backup{" "}
-                    {borg.last_finished_at
-                      ? new Date(borg.last_finished_at).toLocaleString()
-                      : "complete"}
-                  </>
-                ) : (
-                  <>
-                    <IconX size={12} /> {borg.last_message}
-                  </>
-                )}
-              </Note>
-            )}
-          </div>
         </div>
 
         <div className="settings-block">

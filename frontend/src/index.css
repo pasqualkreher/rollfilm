@@ -4835,6 +4835,92 @@ input.editor-preset-select {
   color: var(--text-muted);
 }
 
+/* "New import session": every control is always there (a mode that doesn't
+   use one switches it off instead of removing it), so the dialog keeps its
+   size whatever is chosen. */
+.import-start-modal {
+  width: min(540px, 100%);
+}
+
+.import-start-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.import-start-folder.is-off {
+  opacity: 0.5;
+}
+
+.import-start-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.import-start-folder-label {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.import-start-folder-path {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.import-start-folder-path > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-start-folder-path > span:last-child:not(:first-child) {
+  flex-shrink: 0;
+  max-width: 60%;
+}
+
+.import-start-backup {
+  align-items: flex-start;
+}
+
+.import-start-hint {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* The three outcomes share one grid cell: the box is as tall as the longest
+   of them at any width, and only the one that applies is visible. */
+.import-start-steps {
+  display: grid;
+}
+
+.import-start-steps > ol {
+  grid-area: 1 / 1;
+  visibility: hidden;
+  margin: 0;
+  padding-left: 1.4em;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.import-start-steps > ol.is-active {
+  visibility: visible;
+}
+
+.import-start-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .tag-input-error {
   color: var(--danger, #d33);
   font-size: 12px;

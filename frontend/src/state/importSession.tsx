@@ -65,8 +65,10 @@ interface ImportSessionState {
   // them where they are - null while there is none. The review words itself
   // by this ("copying" vs "reading").
   sessionMode: ImportMode | null;
-  // Copy sessions: the collection folder the cards are copied into.
+  // Copy sessions: the import folder the cards are copied into.
   sessionFolder: string | null;
+  // That folder is kept as a backup when the session closes.
+  sessionBackup: boolean;
   cancelUpload: () => void;
   reset: () => void;
   // The open session was started on a folder, so whatever of that folder it
@@ -123,6 +125,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const [sourceLabel, setSourceLabel] = useState("");
   const [sessionMode, setSessionMode] = useState<ImportMode | null>(null);
   const [sessionFolder, setSessionFolder] = useState<string | null>(null);
+  const [sessionBackup, setSessionBackup] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -161,6 +164,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setSessionResumable(false);
     setSessionMode("copy");
     setSessionFolder(null);
+    setSessionBackup(false);
     setStagingStopped(false);
     setCanStopStaging(false);
     setImportMode("upload");
@@ -190,7 +194,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         // the backend (best effort) and clear the screen instead of erroring.
         if (controller.signal.aborted || err.name === "AbortError") {
           const staged = uploadSessionRef.current;
-          if (staged) api.import.discard(staged).catch(() => {});
+          if (staged) api.import.discard(staged, false).catch(() => {});
           reset();
         } else {
           setUploadError(err.message);
@@ -252,10 +256,12 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     const resuming = opts.sessionId != null;
     const mode: ImportMode = opts.choice?.mode ?? "copy";
     const stagingFolder = opts.choice?.stagingFolder ?? null;
+    const keepBackup = mode === "copy" && (opts.choice?.keepBackup ?? false);
     if (!resuming) {
       setSessionMode(mode);
       // The real folder (named after the session) comes with the first reply.
       setSessionFolder(stagingFolder);
+      setSessionBackup(keepBackup);
     }
     uploadSessionRef.current = opts.sessionId ?? null;
     stopRef.current = false;
@@ -320,7 +326,8 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
           controller.signal,
           root ? { root, fileCount: countedRoots.has(root) ? undefined : counts[root] } : undefined,
           mode,
-          stagingFolder
+          stagingFolder,
+          keepBackup
         );
         if (root) countedRoots.add(root);
         runSessionId = session.id;
@@ -349,6 +356,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
           setSourceLabel(session.source_path);
           setSessionMode(session.mode);
           setSessionFolder(session.staging_dir ?? null);
+          setSessionBackup(session.keep_backup ?? false);
           setSessionId(session.id);
         }
         // "Stop copying, keep these": checked here rather than at the top of
@@ -363,9 +371,10 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
       .catch((err: Error) => {
         if (controller.signal.aborted || err.name === "AbortError") {
           // Cancel throws away a session this run created - never one it was
-          // only continuing, which can hold days of culling.
+          // only continuing, which can hold days of culling. Its half-filled
+          // folder goes too, backup or not.
           const staged = uploadSessionRef.current;
-          if (staged && !resuming) api.import.discard(staged).catch(() => {});
+          if (staged && !resuming) api.import.discard(staged, false).catch(() => {});
           reset();
         } else if (uploadSessionRef.current) {
           // The review was already open (at least one batch staged): keep those
@@ -460,6 +469,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setSourceLabel(s.source_path);
     setSessionMode(s.mode);
     setSessionFolder(s.staging_dir ?? null);
+    setSessionBackup(s.keep_backup);
     setSessionResumable(s.sources.length > 0);
     setUploadError(null);
     setStagingError(null);
@@ -551,6 +561,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setSourceLabel("");
     setSessionMode(null);
     setSessionFolder(null);
+    setSessionBackup(false);
     setSessionResumable(false);
     setStagingError(null);
     setSourceNotice(null);
@@ -568,6 +579,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setSourceLabel("");
     setSessionMode(null);
     setSessionFolder(null);
+    setSessionBackup(false);
     setSessionResumable(false);
     setSourceNotice(null);
     setUploadError(null);
@@ -604,6 +616,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
         startFilesImport,
         sessionMode,
         sessionFolder,
+        sessionBackup,
         cancelUpload,
         reset,
         sessionResumable,

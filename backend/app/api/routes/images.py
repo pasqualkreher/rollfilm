@@ -63,7 +63,6 @@ from app.services.filesystem import (
 from app.services.hashing import perceptual_hash
 from app.services import lens_profile
 from app.services.immich_sync import immich_album_names as _immich_album_names
-from app.services.borg_backup import run_backup_soon
 from app.services.immich_sync import run_immich_sync_soon, with_immich_partners
 from app.services.settings_store import get_auto_develop_groups, get_immich_config
 from app.workers.queue import (
@@ -193,9 +192,6 @@ def _sync_edit_state(db: Session, owner_id: int, image: Image, prune: bool = Tru
     else:
         image.edit_rev = 0
         _remove_tag_from_image(db, owner_id, image, "edit", prune=prune)
-    # The library changed - schedule an incremental Borg backup (debounced; a
-    # no-op unless the user has configured one). Covers all bulk develop paths.
-    run_backup_soon()
 
 
 def _edit_state(image: Image) -> tuple:
@@ -1836,7 +1832,6 @@ def save_edits(
     else:
         thumbnails.take_deferred(image.id)
         _try_regenerate_derivatives(image)
-    run_backup_soon()
     return image
 
 
@@ -2371,7 +2366,6 @@ def save_copy(
     # The search embedding isn't needed to display the photo - the backfill
     # worker picks the copy up (its preview.jpg was just rendered above).
     schedule_embedding_backfill()
-    run_backup_soon()
     return new_image
 
 

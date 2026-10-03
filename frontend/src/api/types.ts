@@ -92,26 +92,33 @@ export interface RawDecodeSettings {
 export type ImportMode = "copy" | "reference";
 
 // The answer to the import question: the mode, and for a copy where the
-// session's collection folder is created (null = "Import" in the library).
+// session's import folder is created (null = "Import" in the library) and
+// whether that folder is kept as a backup.
 export interface ImportChoice {
   mode: ImportMode;
   stagingFolder: string | null;
+  // Copy only: the import folder keeps every photo (the ones added to the
+  // library are copied, not moved) and stays when the session closes.
+  keepBackup: boolean;
   // The session's name; the source folder's name unless the user typed one.
   name: string;
 }
 
 export type ImportAfterCommit = "ask" | "keep" | "close";
 export type ImportSelectDefault = "select" | "deselect";
+export type ImportBackupDefault = "keep" | "delete";
 
 export interface ImportSettings {
   // "ask" = the Import page asks each time; otherwise the remembered answer.
   mode_default: "ask" | ImportMode;
-  // After photos were added to the library: ask whether the session stays
-  // open, or always keep / always close it.
+  // No longer read by the UI: a session stays open until the user closes it.
   after_commit: ImportAfterCommit;
   // Whether photos arriving in a review start out selected for import. The
   // backend applies it as each photo is staged.
   select_default: ImportSelectDefault;
+  // Whether a copy session keeps its import folder as a backup: pre-selected
+  // in the start dialog, and the answer when the dialog is skipped.
+  backup_default: ImportBackupDefault;
 }
 
 export interface AutoDevelopSettings {
@@ -442,8 +449,10 @@ export interface ImportSessionSummary {
   id: string;
   source_path: string;
   mode: ImportMode;
-  // Copy sessions: the collection folder its cards are copied into.
+  // Copy sessions: the import folder its cards are copied into.
   staging_dir: string | null;
+  // That folder is a backup: it keeps every photo and stays on close.
+  keep_backup: boolean;
   created_at: string;
   updated_at: string | null;
   file_count: number;
@@ -475,6 +484,7 @@ export interface ImportSessionOut {
   source_path: string;
   mode: ImportMode;
   staging_dir: string | null;
+  keep_backup?: boolean;
   source_root?: string | null;
   volume_name?: string | null;
   updated_at?: string | null;
@@ -570,25 +580,6 @@ export interface ImmichActivity {
   synced: number;
   total: number;
   paused: boolean;
-}
-
-export interface BorgSettings {
-  enabled: boolean;
-  repo: string | null;
-  passphrase_set: boolean;
-  // Whether the `borg` binary is installed on this machine.
-  available: boolean;
-  // Live status of the background/manual backup runner.
-  running: boolean;
-  last_ok: boolean | null;
-  last_message: string;
-  last_archive: string | null;
-  last_finished_at: string | null;
-}
-
-export interface BorgTestResult {
-  ok: boolean;
-  message: string;
 }
 
 export interface ImmichUploadResult {

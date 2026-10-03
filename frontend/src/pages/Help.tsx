@@ -1873,8 +1873,8 @@ const CHAPTERS: Chapter[] = [
         where: <>Settings → Maintenance</>,
         lead: (
           <>
-            Backup comes in two kinds — a zip you download, or a repository that keeps itself up to
-            date — plus two repair buttons for when something is wrong.
+            A backup is one zip you download and can restore from, plus two repair buttons for
+            when something is wrong.
           </>
         ),
         body: (
@@ -1885,18 +1885,6 @@ const CHAPTERS: Chapter[] = [
                 <strong>Download backup</strong> — one zip with every imported photo file plus all
                 ratings, color labels, albums and edits. Photos from external sources and tags are
                 not included.
-              </li>
-              <li>
-                <strong>Automatic backup (Borg)</strong> — a continuously updated backup in a{" "}
-                <a href="https://www.borgbackup.org" target="_blank" rel="noreferrer">
-                  Borg
-                </a>{" "}
-                repository, which stores only what changed since the last run. The repository can
-                be a local folder, a NAS path or <code>user@host:/path</code> over SSH, with an
-                optional passphrase. <em>Test repository</em> checks it, <em>Back up now</em> runs
-                one, and with <em>Back up automatically</em> on it runs after imports and edits and
-                at least once a day while the app is open; the section reports the last run. Borg
-                has to be installed on the computer — the section says so if it isn't.
               </li>
               <li>
                 <strong>Restore from backup</strong> — replaces <em>everything</em> in the current
