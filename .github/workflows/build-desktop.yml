@@ -20,9 +20,11 @@ on:
   push:
     tags: ["v*"]
 
-# Needed so the build can create the release and upload the installers to it.
+# Needed so the build can create the release and upload the installers to it,
+# and so a tag build can read how CI went for its commit.
 permissions:
   contents: write
+  actions: read
 
 jobs:
   # Cheap ubuntu job that turns the platform choice into the build matrix -
@@ -40,6 +42,35 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # A release is only built from a commit the tests passed on. The tag is
+      # pushed together with main, so CI for that commit is running right now:
+      # wait for it, and stop here - before a release exists - unless it comes
+      # out green. (v0.1.85 was built and published while its CI run was red.)
+      # A run started by hand is not held up: that is the way to rebuild one
+      # platform, or to build anyway.
+      - name: Wait for CI on this commit
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 120); do
+            RESULT="$(gh run list --repo "${{ github.repository }}" --workflow CI \
+              --commit "${{ github.sha }}" --limit 1 \
+              --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)"
+            case "$RESULT" in
+              "completed success")
+                echo "CI passed for ${{ github.sha }}."
+                exit 0;;
+              completed*)
+                echo "::error::CI did not pass for ${{ github.sha }} ($RESULT). Nothing is built. Once CI is green for this commit (re-run it), re-run this workflow; if it took a fix, tag the fixed commit as a new version."
+                exit 1;;
+            esac
+            echo "CI for ${{ github.sha }}: ${RESULT:-no run yet} - waiting ($i/120)"
+            sleep 15
+          done
+          echo "::error::No CI result for ${{ github.sha }} after 30 minutes. Is the tag on a commit that was pushed to main?"
+          exit 1
 
       - id: m
         run: |
