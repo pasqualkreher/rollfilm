@@ -1,7 +1,20 @@
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from app.db.models import Album, Canvas, Image, ImportSession
+from app.db.models import Album, Canvas, Image, ImageTag, ImportSession
+
+# Everything ImageOut reads off rows other than the image's own: the pair
+# partner (visible_paired_image_id), its tags and its albums. A list of photos
+# loads them with these - one query per relationship for the whole page.
+# Left to lazy loading it is several small queries PER PHOTO, and each of
+# those has to win the interpreter back from whatever else the backend is
+# busy with: while a library merge or a batch of RAW renders ran, a grid page
+# of 200 photos took 3-7 seconds instead of a few hundredths.
+IMAGE_OUT_LOADS = (
+    selectinload(Image.paired_image),
+    selectinload(Image.albums),
+    selectinload(Image.tag_links).selectinload(ImageTag.tag),
+)
 
 
 def get_owned_image(db: Session, owner_id: int, image_id: str) -> Image:

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import schemas
+from app.api.deps import IMAGE_OUT_LOADS
 from app.auth import get_current_user
 from app.db.models import FileType, Image, ImageTag, Tag, User
 from app.db.session import get_db
@@ -216,4 +217,4 @@ def smart_album_images(
     query = query.order_by(
         Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc()
     )
-    return query.offset(offset).limit(limit).all()
+    return query.options(*IMAGE_OUT_LOADS).offset(offset).limit(limit).all()

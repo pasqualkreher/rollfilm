@@ -15,7 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import schemas
-from app.api.deps import get_owned_canvas
+from app.api.deps import IMAGE_OUT_LOADS, get_owned_canvas
 from app.auth import get_current_user
 from app.db.models import (
     Canvas,
@@ -295,6 +295,7 @@ def canvas_images(
     )
     images = (
         db.query(Image)
+        .options(*IMAGE_OUT_LOADS)
         .filter(
             Image.owner_id == current_user.id,
             Image.deleted_at.is_(None),

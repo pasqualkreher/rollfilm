@@ -20,10 +20,10 @@ from PIL import Image as PILImage
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from sqlalchemy import String, case, func, or_, select, type_coerce
-from sqlalchemy.orm import Session, aliased, selectinload
+from sqlalchemy.orm import Session, aliased
 
 from app import schemas
-from app.api.deps import get_owned_image
+from app.api.deps import IMAGE_OUT_LOADS, get_owned_image
 from app.auth import get_current_user
 from app.config import settings
 from app.db.models import (
@@ -373,11 +373,10 @@ def list_images(
     query = query.order_by(
         Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc()
     )
-    # The response's paired_image_id is Image.visible_paired_image_id, which
-    # reads the partner's deleted_at - one extra query for the page instead of
-    # one lazy load per row.
+    # The response reads each photo's pair partner, tags and albums - one
+    # extra query each for the page instead of lazy loads per row.
     return (
-        query.options(selectinload(Image.paired_image))
+        query.options(*IMAGE_OUT_LOADS)
         .offset(offset)
         .limit(limit)
         .all()
@@ -677,7 +676,7 @@ def list_trash(db: Session = Depends(get_db), current_user: User = Depends(get_c
     # entries (there is no file of ours to delete or bring back).
     return (
         db.query(Image)
-        .options(selectinload(Image.paired_image))
+        .options(*IMAGE_OUT_LOADS)
         .filter(
             Image.owner_id == current_user.id,
             Image.deleted_at.isnot(None),
