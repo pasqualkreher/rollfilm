@@ -341,7 +341,7 @@ function NavHistoryButtons({ locked }: { locked: boolean }) {
 // switch tabs) and a spinner + label shows what's happening. On narrow windows
 // the tab row collapses into a burger menu instead of wrapping onto extra rows.
 function TopBar() {
-  const { busyLabel, renders } = useTasks();
+  const { busyLabel, renders, cancelRenders, cancellingRenders } = useTasks();
   const locked = busyLabel !== null;
   const location = useLocation();
   const { isUploading, sessionId } = useImportSession();
@@ -442,15 +442,27 @@ function TopBar() {
         </span>
       )}
       {/* The pictures of a bulk edit, rendering in the background: counted
-          down here until the last one is through. Blocks nothing. */}
+          down here until the last one is through. Blocks nothing. Cancel stops
+          it where it is - the photos not rendered yet lose the edit again. */}
       {renders && !locked && (
-        <span
-          className="nav-task"
-          role="status"
-          title="The edited photos are being rendered in the background. You can keep working."
-        >
-          <Spinner />
-          Rendering <span className="nav-task-count">{renders.done}</span> of {renders.total}
+        <span className="nav-task">
+          <span
+            className="nav-task-label"
+            role="status"
+            title="The edited photos are being rendered in the background. You can keep working."
+          >
+            <Spinner />
+            Rendering <span className="nav-task-count">{renders.done}</span> of {renders.total}
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm ghost"
+            onClick={cancelRenders}
+            disabled={cancellingRenders}
+            title="Stop here: the photos already rendered keep the edit, the rest go back to how they were."
+          >
+            Cancel
+          </button>
         </span>
       )}
       <ImmichSyncIndicator />

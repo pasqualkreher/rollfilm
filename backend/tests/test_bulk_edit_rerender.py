@@ -16,7 +16,7 @@ from app.api.routes import images as images_routes
 from app.api.routes.images import bulk_develop, bulk_reset_metadata
 from app.config import settings
 from app.db.base import Base
-from app.db.models import FileType, Image, Tag, User
+from app.db.models import FileType, Image, ImageTag, Tag, User
 from app.services import develop, thumbnails
 
 
@@ -59,7 +59,7 @@ def db() -> Session:
 @pytest.fixture()
 def rerenders(monkeypatch) -> list[str]:
     queued: list[str] = []
-    monkeypatch.setattr(images_routes, "enqueue_rerender", queued.append)
+    monkeypatch.setattr(images_routes, "enqueue_rerender", lambda image_id, undo=None: queued.append(image_id))
     # The inline path must not run at all any more.
     monkeypatch.setattr(
         images_routes, "_try_regenerate_derivatives", lambda image: pytest.fail("rendered inline")
@@ -162,3 +162,102 @@ def test_render_status_counts_photos_until_their_render_is_through(monkeypatch):
     fn, args = jobs.pop(0)
     fn(*args)
     assert queue.rerenders_pending(["a", "b"]) == 0
+
+
+# --- cancelling the renders of a bulk edit --------------------------------------
+
+@pytest.fixture()
+def held_queue(monkeypatch):
+    """The worker queue with its pool replaced by a list: jobs run when the
+    test says so."""
+    from app.workers import queue
+
+    jobs: list[tuple] = []
+
+    class _Held:
+        def submit(self, fn, *args):
+            jobs.append((fn, args))
+
+    rendered: list[str] = []
+    monkeypatch.setattr(queue, "_executor", _Held())
+    monkeypatch.setattr(queue, "SessionLocal", lambda: _Rows())
+    monkeypatch.setattr(queue, "ensure_derivatives", lambda image: rendered.append(image.id))
+    monkeypatch.setattr(queue, "schedule_embedding_backfill", lambda: None)
+    yield queue, jobs, rendered
+    for table in (queue._pending_rerenders, queue._rerender_undo, queue._running_rerenders, queue._cancelled_rerenders):
+        table.clear()
+
+
+class _Rows:
+    """Stands in for a database session in the worker: every photo exists."""
+
+    def get(self, model, image_id):
+        return type("Row", (), {"id": image_id, "deleted_at": None})()
+
+    def close(self):
+        pass
+
+
+def test_cancelling_takes_waiting_photos_out_and_hands_their_earlier_look_back(held_queue):
+    queue, jobs, rendered = held_queue
+    for image_id in ("a", "b", "c"):
+        queue.enqueue_rerender(image_id, undo=f"before-{image_id}")
+    fn, args = jobs.pop(0)
+    fn(*args)  # "a" is through
+    assert queue.cancel_rerenders(["a", "b", "c", "other"]) == {"b": "before-b", "c": "before-c"}
+    assert queue.rerenders_pending(["a", "b", "c"]) == 0
+    # The jobs still sitting in the pool do nothing when their turn comes.
+    for fn, args in jobs:
+        fn(*args)
+    assert rendered == ["a"]
+    assert queue.derivatives_pending() == 0
+    # A later edit of a cancelled photo renders as usual.
+    jobs.clear()
+    queue.enqueue_rerender("b", undo="before-b-again")
+    fn, args = jobs.pop(0)
+    fn(*args)
+    assert rendered == ["a", "b"]
+
+
+def test_a_photo_being_rendered_or_queued_without_its_earlier_look_is_not_cancelled(held_queue):
+    queue, jobs, rendered = held_queue
+    queue.enqueue_rerender("running", undo="before")
+    queue.enqueue_rerender("unknown")
+    queue._running_rerenders["running"] = 1  # a worker has it in hand
+    assert queue.cancel_rerenders(["running", "unknown"]) == {}
+    assert queue.rerenders_pending(["running", "unknown"]) == 2
+
+
+def test_cancel_renders_puts_the_edit_back_on_photos_not_rendered_yet(db, held_queue, monkeypatch, tmp_path):
+    queue, jobs, rendered = held_queue
+    monkeypatch.setattr(settings, "thumbnail_cache_root", tmp_path)
+    earlier = db.get(Image, "edited").edit_adjustments
+    look = {"exposure": 0.5, "contrast": 20}
+    bulk_develop(
+        schemas.BulkDevelopRequest(image_ids=["edited", "cropped", "plain"], adjustments=look), db, _user(db)
+    )
+    assert len(jobs) == 3
+    fn, args = jobs.pop(0)
+    fn(*args)  # "edited" is rendered with the preset
+    preset = db.get(Image, "edited").edit_adjustments
+    assert preset != earlier
+
+    result = images_routes.cancel_renders(
+        schemas.RenderStatusRequest(image_ids=["edited", "cropped", "plain"]), db, _user(db)
+    )
+    assert result.cancelled == 2
+    # The rendered photo keeps the preset; the other two are as they were:
+    # "cropped" with its crop and no develop work, "plain" untouched.
+    assert db.get(Image, "edited").edit_adjustments == preset
+    cropped, plain = db.get(Image, "cropped"), db.get(Image, "plain")
+    assert cropped.edit_adjustments is None and cropped.edit_crop_width == 0.5 and cropped.edit_rev > 0
+    assert plain.edit_adjustments is None and plain.edit_rev == 0
+    edit_tag = db.query(Tag).filter(Tag.name == "edit").one()
+    tagged = {row.image_id for row in db.query(ImageTag).filter(ImageTag.tag_id == edit_tag.id)}
+    assert tagged == {"edited", "cropped"}
+    for fn, args in jobs:
+        fn(*args)
+    assert rendered == ["edited"]
+    # Nothing left to cancel.
+    again = images_routes.cancel_renders(schemas.RenderStatusRequest(image_ids=["edited", "cropped"]), db, _user(db))
+    assert again.cancelled == 0

@@ -68,6 +68,7 @@ from app.services.settings_store import get_auto_develop_groups, get_immich_conf
 from app.workers.queue import (
     enqueue_immich_upload,
     enqueue_post_import,
+    cancel_rerenders,
     enqueue_rerender,
     rerenders_pending,
     schedule_embedding_backfill,
@@ -249,36 +250,42 @@ def _sync_edit_state(db: Session, owner_id: int, image: Image, prune: bool = Tru
         _remove_tag_from_image(db, owner_id, image, "edit", prune=prune)
 
 
+_EDIT_STATE_FIELDS = (
+    "edit_adjustments",
+    "edit_rotation",
+    "edit_crop_x",
+    "edit_crop_y",
+    "edit_crop_width",
+    "edit_crop_height",
+    "edit_flip_h",
+    "edit_flip_v",
+    "edit_straighten",
+    "edit_persp_h",
+    "edit_persp_v",
+    "edit_distortion",
+)
+
+
 def _edit_state(image: Image) -> tuple:
     """Everything the rendered pixels depend on that a bulk edit can change -
     compared before and after, so only photos whose look actually moved get
     re-rendered (resetting 200 photos of which 5 were edited renders 5)."""
-    return (
-        image.edit_adjustments,
-        image.edit_rotation,
-        image.edit_crop_x,
-        image.edit_crop_y,
-        image.edit_crop_width,
-        image.edit_crop_height,
-        image.edit_flip_h,
-        image.edit_flip_v,
-        image.edit_straighten,
-        image.edit_persp_h,
-        image.edit_persp_v,
-        image.edit_distortion,
-    )
+    return tuple(getattr(image, field) for field in _EDIT_STATE_FIELDS)
 
 
-def _rerender_later(images: list[Image]) -> None:
+def _rerender_later(images: list[Image], before: dict[str, tuple]) -> None:
     """Re-render the derivatives of bulk-edited photos in the background instead
     of inside the request (see workers.queue.enqueue_rerender). The stale files
     go first, synchronously - they are cheap to delete and must not be served
     under the new edit revision. No full.jpg warm-up here, unlike a single
     edit: a whole selection's worth of full-resolution renders would keep the
-    machine busy long after the user has moved on."""
+    machine busy long after the user has moved on.
+
+    `before` is each photo's _edit_state from before the edit: cancelling the
+    renders puts it back on the photos still waiting (see cancel_renders)."""
     for image in images:
         thumbnails.drop_derivatives(image.id)
-        enqueue_rerender(image.id)
+        enqueue_rerender(image.id, before.get(image.id))
 
 
 def _filtered_images_query(
@@ -1408,7 +1415,7 @@ def bulk_reset_metadata(
     db.commit()
     for image in images:
         db.refresh(image)
-    _rerender_later(changed)
+    _rerender_later(changed, before)
     return images
 
 
@@ -1420,6 +1427,35 @@ def render_status(
     """How far the background re-renders of a bulk edit are (see
     _rerender_later): the app counts them down in its title bar."""
     return schemas.RenderStatus(pending=rerenders_pending(payload.image_ids))
+
+
+@router.post("/cancel-renders", response_model=schemas.RenderCancelResult)
+def cancel_renders(
+    payload: schemas.RenderStatusRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stop the background re-renders of a bulk edit. A bulk edit is only as
+    far as its pictures are: the photos still waiting for their render get the
+    look they had before it back and are taken out of the queue; the ones
+    already rendered, or being rendered right now, keep the edit."""
+    owned = [
+        image_id
+        for image_id in payload.image_ids
+        if (image := db.get(Image, image_id)) is not None and image.owner_id == current_user.id
+    ]
+    undone = cancel_rerenders(owned)
+    for image_id, state in undone.items():
+        image = db.get(Image, image_id)
+        for field, value in zip(_EDIT_STATE_FIELDS, state):
+            setattr(image, field, value)
+        _sync_edit_state(db, current_user.id, image, prune=False)
+        # A tile on screen may have rendered the edit on demand in the meantime.
+        thumbnails.drop_derivatives(image_id)
+    if undone:
+        prune_unused_tags(db, current_user.id)
+        db.commit()
+    return schemas.RenderCancelResult(cancelled=len(undone))
 
 
 @router.post("/bulk-develop", response_model=list[schemas.ImageOut])
@@ -1440,6 +1476,7 @@ def bulk_develop(
         look["raw_base"] = "standard"
     blob = develop.dumps(develop.normalize(look))
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    before = {image.id: _edit_state(image) for image in images}
     changed: list[Image] = []
     for image in images:
         if image.edit_adjustments != blob:
@@ -1450,7 +1487,7 @@ def bulk_develop(
     db.commit()
     for image in images:
         db.refresh(image)
-    _rerender_later(changed)
+    _rerender_later(changed, before)
     return images
 
 
@@ -1471,6 +1508,7 @@ def bulk_auto_develop(
             detail="Auto develop is set to affect no settings - enable at least one group in Settings",
         )
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    before = {image.id: _edit_state(image) for image in images}
     changed: list[Image] = []
     # The subset whose develop object actually moved - the only ones to re-render.
     rendered: list[Image] = []
@@ -1505,7 +1543,7 @@ def bulk_auto_develop(
     db.commit()
     for image in images:
         db.refresh(image)
-    _rerender_later(rendered)
+    _rerender_later(rendered, before)
     return schemas.BulkAutoDevelopResult(
         images=images, applied=len(changed), skipped=len(images) - len(changed)
     )

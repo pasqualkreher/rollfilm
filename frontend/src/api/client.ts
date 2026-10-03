@@ -521,6 +521,14 @@ export const api = {
         body: JSON.stringify({ image_ids }),
       });
     },
+    // Stop those re-renders: the photos still waiting get the look they had
+    // before the bulk edit back, the ones already rendered keep the edit.
+    cancelRenders(image_ids: string[]): Promise<{ cancelled: number }> {
+      return request(`/images/cancel-renders`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids }),
+      });
+    },
     // Apply one develop object (an editor preset) to every selected photo in
     // place. Geometry is untouched; a neutral object clears the develop sliders.
     bulkDevelop(image_ids: string[], adjustments: Record<string, unknown>): Promise<ImageOut[]> {

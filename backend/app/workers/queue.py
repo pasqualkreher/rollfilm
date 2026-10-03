@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Callable
+from typing import Any, Callable
 
 from PIL import Image as PILImage
 from sqlalchemy import text
@@ -74,12 +74,37 @@ def derivatives_pending() -> int:
 # a second edit can queue a photo again before its first render is through).
 # The app asks for these to show how far the pictures of a bulk edit are.
 _pending_rerenders: dict[str, int] = {}
+# What each of them looked like before the bulk edit that queued it (whatever
+# the caller hands enqueue_rerender; the first one if it was queued twice):
+# cancelling gives a photo still waiting that look back.
+_rerender_undo: dict[str, Any] = {}
+# The ones a worker has in hand right now - too late to cancel - and the jobs
+# still in the pool's queue that were cancelled and have to do nothing.
+_running_rerenders: dict[str, int] = {}
+_cancelled_rerenders: dict[str, int] = {}
 
 
 def rerenders_pending(image_ids: list[str]) -> int:
     """How many of these photos still wait for their re-render."""
     with _pending_derivatives_lock:
         return sum(1 for image_id in image_ids if image_id in _pending_rerenders)
+
+
+def cancel_rerenders(image_ids: list[str]) -> dict[str, Any]:
+    """Take these photos' re-renders back out of the queue: photo -> what it
+    looked like before its bulk edit, for the caller to put back. Only photos
+    no worker has started on and whose earlier look is known; one being
+    rendered right now is finished and keeps its edit."""
+    undone: dict[str, Any] = {}
+    with _pending_derivatives_lock:
+        for image_id in image_ids:
+            waiting = _pending_rerenders.get(image_id, 0)
+            if not waiting or image_id in _running_rerenders or image_id not in _rerender_undo:
+                continue
+            del _pending_rerenders[image_id]
+            _cancelled_rerenders[image_id] = _cancelled_rerenders.get(image_id, 0) + waiting
+            undone[image_id] = _rerender_undo.pop(image_id)
+    return undone
 
 
 def _rerender_settled(image_id: str) -> None:
@@ -89,6 +114,7 @@ def _rerender_settled(image_id: str) -> None:
             _pending_rerenders[image_id] = left
         else:
             _pending_rerenders.pop(image_id, None)
+            _rerender_undo.pop(image_id, None)
 
 # Immich uploads get their own (network-bound) pool: they can take seconds to
 # minutes each (slow server, retries with sleeps, 120s timeout), and on the
@@ -121,18 +147,23 @@ def enqueue_post_import(image_id: str, source_path: Path) -> None:
         raise
 
 
-def enqueue_rerender(image_id: str) -> None:
+def enqueue_rerender(image_id: str, undo: Any = None) -> None:
     """Re-render one photo's derivatives after a bulk edit (reset, preset, auto
     develop) on the post-import pool. Those used to render inline, one photo
     after another, while the request - and the wait popup - held on: ~1s per
     raw, minutes for a big selection, on one core while the others idled. Here
     they run RENDER_SLOTS-wide in the background; the caller drops the stale
     files first (thumbnails.drop_derivatives) so the grid shimmers those tiles
-    and picks the new pictures up through its retry, as after an import."""
+    and picks the new pictures up through its retry, as after an import.
+
+    `undo` is what the photo looked like before the edit; with it the render
+    can be cancelled while it waits (cancel_rerenders)."""
     global _pending_derivatives
     with _pending_derivatives_lock:
         _pending_derivatives += 1
         _pending_rerenders[image_id] = _pending_rerenders.get(image_id, 0) + 1
+        if undo is not None:
+            _rerender_undo.setdefault(image_id, undo)
     try:
         _executor.submit(_rerender, image_id)
     except Exception:
@@ -143,6 +174,17 @@ def enqueue_rerender(image_id: str) -> None:
 
 
 def _rerender(image_id: str) -> None:
+    with _pending_derivatives_lock:
+        cancelled = _cancelled_rerenders.get(image_id, 0)
+        if cancelled > 1:
+            _cancelled_rerenders[image_id] = cancelled - 1
+        elif cancelled:
+            del _cancelled_rerenders[image_id]
+        else:
+            _running_rerenders[image_id] = _running_rerenders.get(image_id, 0) + 1
+    if cancelled:
+        _derivative_job_done()
+        return
     try:
         # Read the row now, not at enqueue time: whatever the photo holds when
         # its turn comes is what the picture has to show.
@@ -158,6 +200,12 @@ def _rerender(image_id: str) -> None:
     except Exception:
         logger.exception("Re-render after bulk edit failed for image %s", image_id)
     finally:
+        with _pending_derivatives_lock:
+            running = _running_rerenders.get(image_id, 0) - 1
+            if running > 0:
+                _running_rerenders[image_id] = running
+            else:
+                _running_rerenders.pop(image_id, None)
         _rerender_settled(image_id)
         _derivative_job_done()
 

@@ -399,6 +399,14 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* The label of a task that also carries a button (Cancel): spinner and text
+   keep their spacing as one group beside it. */
+.nav-task-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* Utility pages (Settings, Help) as quiet icon buttons on the far right -
    they're chrome, not photo modules, so they don't earn tabs. */
 .top-icon-links {
