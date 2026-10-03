@@ -79,10 +79,11 @@ export function useNavHistory() {
 }
 
 // ---- Leave guards ----------------------------------------------------------
-// Work that must finish before Back/Forward moves the app: the photo editor
-// registers its save here, so leaving it through the top bar (or the
-// shortcuts) writes the edits with the wait popup up, the same as its own
-// View button - instead of leaving them to the silent unmount autosave.
+// Work that must finish before the top bar moves the app - Back/Forward and
+// the tabs alike: the photo editor registers its save here, so leaving it
+// through the top bar (or the shortcuts) writes the edits with the wait popup
+// up, the same as its own View button - instead of leaving them to the silent
+// unmount autosave.
 
 type LeaveGuard = () => Promise<void>;
 const guards = new Set<LeaveGuard>();
@@ -95,6 +96,10 @@ export function useLeaveGuard(guard: LeaveGuard | null) {
       guards.delete(guard);
     };
   }, [guard]);
+}
+
+export function hasLeaveGuards(): boolean {
+  return guards.size > 0;
 }
 
 export async function runLeaveGuards(): Promise<void> {

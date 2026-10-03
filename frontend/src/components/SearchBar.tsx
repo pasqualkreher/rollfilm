@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { IconSearch, IconX } from "./Icons";
+import { runLeaveGuards } from "../state/navHistory";
 
 // Which routes have a grid that search filters in place. On any other page a
 // search falls back to the Library. Album detail keeps its own path so the
@@ -34,7 +35,9 @@ export function SearchBar() {
     if (query) carried.set("q", query);
     else carried.delete("q");
     const qs = carried.toString();
-    navigate(qs ? `${base}?${qs}` : base);
+    // A search from the photo editor leaves it for the Library: its save
+    // lands first, like any other way out through the top bar.
+    void runLeaveGuards().then(() => navigate(qs ? `${base}?${qs}` : base));
   }
 
   return (

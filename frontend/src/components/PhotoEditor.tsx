@@ -3993,15 +3993,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     min: Math.min(KELVIN_MIN, asShotKelvin ?? KELVIN_MIN),
     max: Math.max(KELVIN_MAX, asShotKelvin ?? KELVIN_MAX),
   };
-  // The Tint slider shows once the photo carries a tint of its own (the
-  // eyedropper sets one) and then stays for the session: resetting it to 0
-  // must not make it vanish from under the pointer. The tint a Kelvin setting
-  // brings along does not count - moving that slider must not pop this one in.
-  const ownTint = Math.abs(adj.tint - kelvinTint) >= 1;
-  const [tintShown, setTintShown] = useState(() => ownTint);
-  useEffect(() => {
-    if (ownTint) setTintShown(true);
-  }, [ownTint]);
+  // The Tint slider shows the photo's own tint: what it holds beyond the tint
+  // its Kelvin setting brings along, so dragging Temperature leaves this
+  // slider where it stands.
+  const ownTint = Math.round((adj.tint - kelvinTint) * 100) / 100;
+  function setOwnTint(v: number) {
+    const { min, max } = SCALAR_SPEC.tint;
+    setAdj((a) => ({ ...a, tint: Math.max(min, Math.min(max, Math.round((v + kelvinTint) * 100) / 100)) }));
+  }
   // Whether this photo's RAW carries lens correction data - the Lens profile
   // switch under Transform is only offered when it does.
   const lensProfile = useQuery({
@@ -5220,9 +5219,19 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   }}
                   onChange={(v) => setKelvin(-1e6 / v)}
                 />
+                <Slider
+                  label="Tint"
+                  value={ownTint}
+                  min={SCALAR_SPEC.tint.min}
+                  max={SCALAR_SPEC.tint.max}
+                  step={(SCALAR_SPEC.tint as ScalarDef).step}
+                  resetValue={0}
+                  uiScale={(SCALAR_SPEC.tint as ScalarDef).uiScale}
+                  onChange={setOwnTint}
+                />
               </div>
             ) : (
-              scalarSliders(sectionFields("Color").filter((f) => f.key === "temperature"))
+              scalarSliders(sectionFields("Color").filter((f) => f.key === "temperature" || f.key === "tint"))
             )}
             {/* The eyedropper: click something that should be white. */}
             <div className="editor-wb-pick">
@@ -5259,15 +5268,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               blue={adj.wb_shift_b}
               onChange={(v) => setAdj((a) => ({ ...a, wb_shift_r: v.red, wb_shift_b: v.blue }))}
             />
-            {/* Tint is what the cross does (both axes together); the slider only
-                shows for a photo that carries a tint. */}
             {scalarSliders(
               sectionFields("Color").filter(
                 (f) =>
                   f.key !== "temperature" &&
+                  f.key !== "tint" &&
                   f.key !== "wb_shift_r" &&
-                  f.key !== "wb_shift_b" &&
-                  (f.key !== "tint" || tintShown)
+                  f.key !== "wb_shift_b"
               )
             )}
 

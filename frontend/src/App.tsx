@@ -1,5 +1,12 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import {
+  NavLink as RouterNavLink,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  type NavLinkProps,
+} from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
@@ -14,7 +21,7 @@ import { WaitProvider } from "./state/wait";
 import { Presence } from "./components/Presence";
 import { MOTION } from "./utils/usePresence";
 import { TooltipLayer } from "./components/TooltipLayer";
-import { NavHistoryTracker, runLeaveGuards, useNavHistory } from "./state/navHistory";
+import { NavHistoryTracker, hasLeaveGuards, runLeaveGuards, useNavHistory } from "./state/navHistory";
 import { isMac } from "./utils/selection";
 import { Spinner, LoadingState } from "./components/Spinner";
 
@@ -131,6 +138,27 @@ function EmptyLibraryRedirect() {
     }
   }, [data, location.pathname, sessionId, isUploading, navigate]);
   return null;
+}
+
+// Every link in the top bar. Leaving through one is leaving like Back does:
+// whatever the current view still owes (the editor's save) runs to completion
+// first, with the wait popup up - see state/navHistory.ts. With nothing owed
+// it is a plain NavLink.
+function NavLink({ onClick, ...props }: NavLinkProps) {
+  const navigate = useNavigate();
+  return (
+    <RouterNavLink
+      {...props}
+      onClick={(e) => {
+        onClick?.(e);
+        if (e.defaultPrevented || !hasLeaveGuards()) return;
+        // Left to the browser: opening the link somewhere else leaves nothing.
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        void runLeaveGuards().then(() => navigate(props.to));
+      }}
+    />
+  );
 }
 
 function ImportNavLink({ onNavigate }: { onNavigate?: () => void }) {

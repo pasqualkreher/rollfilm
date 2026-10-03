@@ -74,6 +74,9 @@ export function ResetMenu({ count, onReset }: Props) {
     const opts: BulkResetOptions = {};
     for (const { key } of ASPECTS) opts[key] = checked.has(key);
     setBusy(true);
+    // The menu has said what it had to: it closes with the confirmation, so
+    // the wait popup comes up over the grid and not over an open menu.
+    setOpen(false);
     try {
       // The app-wide wait popup blocks everything while the server resets and
       // (for develop/geometry) re-renders the selected photos.
@@ -81,7 +84,6 @@ export function ResetMenu({ count, onReset }: Props) {
         `Resetting ${count} photo${count === 1 ? "" : "s"}…`,
         () => Promise.resolve(onReset(opts))
       );
-      setOpen(false);
     } finally {
       setBusy(false);
     }
