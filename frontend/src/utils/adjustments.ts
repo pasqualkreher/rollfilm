@@ -226,9 +226,10 @@ export type FilmSim =
 // develop.ENUM_SPEC["process"] and services/develop_v2.py). New edits start on
 // the current one; an edit saved before it existed keeps "1" and so keeps
 // looking exactly as it did.
-// "3" is "2" with the film simulations measured from camera JPEGs.
-export type ProcessVersion = "1" | "2" | "3";
-export const CURRENT_PROCESS: ProcessVersion = "3";
+// "3" is "2" with the film simulations from cubes (Fujifilm's own where it
+// publishes one); "4" renders those as the camera renders a still.
+export type ProcessVersion = "1" | "2" | "3" | "4";
+export const CURRENT_PROCESS: ProcessVersion = "4";
 
 // Which exposure a RAW is developed from (see develop.ENUM_SPEC["raw_base"]).
 // "standard" opens every raw at the same brightness - the auto-exposed picture
@@ -352,10 +353,10 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
     base.color_noise_reduction = Math.max(base.color_noise_reduction, Math.min(100, Math.round(dn * 1.3)));
   }
   // Without a key: "1" if it uses what "2" renders differently, "2" if it
-  // carries a film simulation (which only "3" renders differently), else it
+  // carries a film simulation (which "3" and "4" render differently), else it
   // is the same picture on every version and continues on the current one.
   base.process =
-    raw.process === "1" || raw.process === "2" || raw.process === "3"
+    raw.process === "1" || raw.process === "2" || raw.process === "3" || raw.process === "4"
       ? raw.process
       : usesLegacyLook(raw)
         ? "1"

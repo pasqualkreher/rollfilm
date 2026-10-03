@@ -946,6 +946,13 @@ const CHAPTERS: Chapter[] = [
               strength slider. The look becomes the base your other adjustments build on, so it is
               worth choosing before you start pushing sliders.
             </p>
+            <p>
+              On a RAW a look renders the way the camera renders its JPEG: a little under a stop
+              brighter than the plain picture, with the highlights running to white. Ten looks
+              come from Fujifilm's own LUTs; the others are built on those, Nostalgic Neg. and Pro
+              Neg. Hi with data from abpy/FujifilmCameraProfiles (CC BY-NC-SA 4.0), the
+              monochrome ones with Stuart Sowerby's Fuji XTrans III profiles.
+            </p>
             <h4>3 · Tone — the light</h4>
             <p>
               Exposure, brightness, contrast, highlights, shadows, whites and blacks — over a

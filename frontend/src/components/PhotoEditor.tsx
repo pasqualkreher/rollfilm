@@ -48,6 +48,7 @@ import {
   type SubMask,
   type SubMaskParams,
   type SubMaskType,
+  CURRENT_PROCESS,
   LENS_KEYS,
   scalarIsEdited,
 } from "../utils/adjustments";
@@ -5012,9 +5013,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   className={`film-sim-tile${adj.film_sim === f.value ? " active" : ""}`}
                   onClick={() =>
                     // Choosing a look takes it in its current form: an edit on
-                    // process 2 moves to 3, which differs in nothing but the
-                    // (now measured) simulations.
-                    setAdj((a) => ({ ...a, film_sim: f.value, process: a.process === "2" ? "3" : a.process }))
+                    // process 2 or 3 moves to the current one, which differs
+                    // in nothing but how the simulations render.
+                    setAdj((a) => ({
+                      ...a,
+                      film_sim: f.value,
+                      process: a.process === "2" || a.process === "3" ? CURRENT_PROCESS : a.process,
+                    }))
                   }
                   title={f.label}
                 >

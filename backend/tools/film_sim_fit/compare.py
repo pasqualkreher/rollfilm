@@ -1,12 +1,14 @@
 """Step 3: look at it. For each RAF, one strip of four pictures:
 
-    no simulation | the hand-made recipe | process 3 | the camera's JPEG
+    no simulation | process 3 | process 4 | the camera's JPEG
 
-all rendered by the app's own pipeline at the brightness of the camera's JPEG.
-Process 3 is Fujifilm's own cube where it publishes one ("official"), else the
-measured one. The camera's JPEG carries the recipe the photo was shot with
-(tone, colour, colour chrome) on top of the simulation; the cube is the
-simulation alone, so the two agree in character, not to the last digit.
+all rendered by the app's own pipeline at the exposure the app opens the photo
+with (its auto exposure), so the strip shows what the editor shows. Process 3
+is Fujifilm's video cube as it stands, process 4 the same look rendered as a
+still (film_sims: anchor and stills shoulder). The camera's JPEG carries the
+recipe the photo was shot with (tone, colour, colour chrome) on top of the
+simulation; the cube is the simulation alone, so the two agree in brightness
+and character, not to the last digit.
 
     python -m tools.film_sim_fit.compare <out.jpg> <file.RAF> [<file.RAF> ...]
 """
@@ -23,11 +25,10 @@ import numpy as np
 import rawpy
 from PIL import Image, ImageOps
 
-from app.services import develop, film_sims, raw as raw_service, thumbnails
+from app.services import develop, raw as raw_service, thumbnails
 from tools.film_sim_fit.extract import FILM_MODE, MONO
 
 WIDTH = 520
-_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 
 
 def _sim_of(path: Path) -> str:
@@ -46,7 +47,7 @@ def _render(lin: np.ndarray, gain: float, sim: str, process: str) -> np.ndarray:
 
 
 def strip(path: Path):
-    lin, _ = raw_service.load_linear_base(path, half_size=True)
+    lin, gain = raw_service.load_linear_base(path, half_size=True)
     h = round(lin.shape[0] * WIDTH / lin.shape[1])
     lin = cv2.resize(lin, (WIDTH, h), interpolation=cv2.INTER_AREA)
     with rawpy.imread(str(path)) as raw:
@@ -54,18 +55,9 @@ def strip(path: Path):
     im = Image.open(io.BytesIO(jpeg))
     im.draft("RGB", (WIDTH * 2, WIDTH * 2))
     cam = np.asarray(ImageOps.exif_transpose(im).convert("RGB").resize((WIDTH, h), Image.LANCZOS))
-    # The gain at which the neutral render has the JPEG's median brightness.
-    target = float(np.median(raw_service._srgb_to_linear(cam / 255.0) @ _LUMA))
-    lo, hi = 0.05, 64.0
-    for _ in range(24):
-        mid = (lo * hi) ** 0.5
-        med = float(np.median(raw_service._srgb_to_linear(_render(lin, mid, "none", "3") / 255.0) @ _LUMA))
-        lo, hi = (mid, hi) if med < target else (lo, mid)
-    gain = (lo * hi) ** 0.5
     sim = _sim_of(path)
-    tiles = [_render(lin, gain, "none", "3"), _render(lin, gain, sim, "2"), _render(lin, gain, sim, "3"), cam]
-    third = "official" if film_sims.official_cube(sim) is not None else "measured"
-    for tile, label in zip(tiles, ("no simulation", f"recipe: {sim}", f"{third}: {sim}", "camera JPEG")):
+    tiles = [_render(lin, gain, "none", "4"), _render(lin, gain, sim, "3"), _render(lin, gain, sim, "4"), cam]
+    for tile, label in zip(tiles, ("no simulation", f"process 3: {sim}", f"process 4: {sim}", "camera JPEG")):
         tile = tile.copy()
         cv2.putText(tile, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(tile, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)

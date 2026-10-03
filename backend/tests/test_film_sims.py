@@ -111,11 +111,14 @@ def measured_dir(tmp_path, monkeypatch):
     """An empty cube folder: no measured cubes, none of Fujifilm's either."""
     monkeypatch.setattr(film_sims, "_MEASURED_DIR", tmp_path)
     monkeypatch.setattr(film_sims, "_OFFICIAL_DIR", tmp_path / "official")
+    monkeypatch.setattr(film_sims, "_DERIVED_DIR", tmp_path / "derived")
     film_sims._sim_cube.cache_clear()
     film_sims.official_cube.cache_clear()
+    film_sims.derived_cube.cache_clear()
     yield tmp_path
     film_sims._sim_cube.cache_clear()
     film_sims.official_cube.cache_clear()
+    film_sims.derived_cube.cache_clear()
 
 
 def test_a_measured_cube_replaces_the_recipe_only_when_asked_for(measured_dir):
@@ -286,3 +289,116 @@ def test_the_shipped_measured_cubes_are_sound():
         grey = cube[np.arange(33), np.arange(33), np.arange(33)] @ np.array([0.2126, 0.7152, 0.0722])
         assert grey[0] < 0.08 and grey[-1] > 0.92
         assert np.all(np.diff(grey) > -1e-3), sim
+
+
+# --- the looks as stills (process version 4) -----------------------------------
+
+_LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+_GREY_LOOKS = [s for s in _LOOKS if s.startswith(("acros", "monochrome"))]
+
+
+def _grey(values) -> np.ndarray:
+    return np.repeat(np.asarray(values, dtype=np.float32)[None, :, None], 3, axis=2)
+
+
+@pytest.mark.parametrize("sim", _LOOKS)
+def test_every_look_renders_from_a_scene_cube_as_a_still(sim):
+    adj = develop.normalize({"film_sim": sim, "process": "4"})
+    assert film_sims.official_sim(adj, True) == sim
+    assert film_sims.official_sim(adj, False) is None
+    cube = film_sims.official_cube(sim)
+    if cube is None:
+        cube = film_sims.derived_cube(sim)
+    assert cube is not None and cube.shape == (65, 65, 65, 3)
+    # The frame as the sensor recorded it, 1.0 = clipping: black is black, what
+    # the camera meters as middle grey shows as middle grey, clipping is white
+    # (Sepia's and Nostalgic Neg.'s paper is tinted), and it never turns back.
+    ramp = np.concatenate([[0.0], np.geomspace(0.001, 1.0, 80), [0.097]]).astype(np.float32)
+    out = film_sims.apply_official(_grey(ramp), sim, 1.0)[0]
+    luma = out @ _LUMA
+    assert luma[0] < 0.03
+    assert abs(luma[-1] - 0.46) < 0.03, sim
+    assert luma[-2] > 0.96, sim
+    assert np.all(np.diff(luma[:-1]) > -2e-3), sim
+    if sim in _GREY_LOOKS:
+        colours = np.random.default_rng(1).random((1, 200, 3)).astype(np.float32)
+        grey = film_sims.apply_official(colours, sim, 1.0)[0]
+        assert np.abs(grey[:, 0] - grey[:, 1]).max() < 1e-3 and np.abs(grey[:, 1] - grey[:, 2]).max() < 1e-3
+
+
+def test_a_filter_look_keeps_the_grey_ramp_of_its_base_and_moves_the_colours():
+    ramp = _grey(np.geomspace(0.002, 1.0, 40))
+    for base, sims in (("acros", ("acros_ye", "acros_r", "acros_g")),):
+        plain = film_sims.apply_official(ramp, base, 1.0)
+        for sim in sims:
+            assert np.abs(film_sims.apply_official(ramp, sim, 1.0) - plain).max() < 0.01, sim
+    red, blue = np.array([[[0.30, 0.05, 0.04], [0.04, 0.07, 0.30]]], dtype=np.float32)[0]
+
+    def shows(sim: str, colour: np.ndarray) -> float:
+        return float(film_sims.apply_official(colour[None, None, :], sim, 1.0)[0, 0, 0])
+
+    # A red filter lets red through and holds blue back; yellow sits between.
+    assert shows("acros_r", red) > shows("acros_ye", red) > shows("acros", red) > shows("acros_g", red)
+    assert shows("acros_r", blue) < shows("acros_ye", blue) < shows("acros", blue)
+    assert shows("monochrome_r", red) > shows("monochrome", red) > shows("monochrome_g", red)
+
+
+@pytest.mark.parametrize("white", [1.0, 1.7, 3.3, 8.0, 20.0])
+def test_the_still_is_the_cube_given_more_light_below_the_knee_and_white_at_clipping(white):
+    # Up to an eighth of clipping at the camera's own exposure: the anchor and
+    # nothing else, however far the frame was lifted.
+    below = _grey(np.geomspace(0.001, 0.11, 30))
+    np.testing.assert_allclose(
+        film_sims.apply_official(below, "provia", white),
+        film_sims.apply_official(below * film_sims._STILLS_ANCHOR, "provia"),
+        atol=2e-3,
+    )
+    # Sensor clipping - the gain the frame was lifted by - is white.
+    clip = film_sims.apply_official(_grey([white]), "provia", white)[0, 0]
+    assert clip.min() > 0.985
+    # And the way there never turns back.
+    ramp = film_sims.apply_official(_grey(np.geomspace(0.001, white * 1.5, 400)), "provia", white)[0] @ _LUMA
+    assert np.all(np.diff(ramp) > -2e-3)
+
+
+def test_a_frame_taller_than_one_band_is_the_same_still(monkeypatch):
+    scene = np.random.default_rng(2).random((30, 20, 3)).astype(np.float32) * 1.5
+    whole = film_sims.apply_official(scene, "velvia", 1.0)
+    monkeypatch.setattr(film_sims, "_SAMPLE_BAND_ROWS", 7)
+    np.testing.assert_array_equal(film_sims.apply_official(scene, "velvia", 1.0), whole)
+
+
+def test_process_4_renders_the_still_and_process_3_the_cube_as_it_stands():
+    lin = np.random.default_rng(8).random((16, 16, 3)).astype(np.float32) * 0.4
+
+    def render(process: str, gain: float, **over) -> np.ndarray:
+        adj = develop.normalize({"film_sim": "classic_neg", "process": process, **over})
+        return np.asarray(thumbnails.apply_adjustments_linear(lin, gain, adj, raw_source=True)).astype(int)
+
+    def expect(scene: np.ndarray, white: float | None) -> np.ndarray:
+        return np.round(film_sims.apply_official(scene, "classic_neg", white) * 255.0).astype(int)
+
+    assert np.abs(render("3", 2.0) - expect(lin * 2.0, None)).max() <= 1
+    assert np.abs(render("4", 2.0) - expect(lin * 2.0, 2.0)).max() <= 1
+    # Exposure is part of the gain: a stop up moves the white point with it.
+    assert np.abs(render("4", 2.0, exposure=1.0) - expect(lin * 4.0, 4.0)).max() <= 1
+    # A frame darkened below the camera's exposure keeps the camera's white point.
+    assert np.abs(render("4", 1.0, exposure=-1.0) - expect(lin * 0.5, 1.0)).max() <= 1
+    assert render("4", 2.0).mean() > render("3", 2.0).mean() + 10
+
+
+def test_a_look_without_its_derived_cube_falls_back_to_the_display_cube(tmp_path, monkeypatch):
+    monkeypatch.setattr(film_sims, "_DERIVED_DIR", tmp_path)
+    film_sims.derived_cube.cache_clear()
+    try:
+        adj = develop.normalize({"film_sim": "nostalgic_neg", "process": "4"})
+        assert film_sims.official_sim(adj, True) is None
+        assert film_sims.official_sim({**adj, "film_sim": "provia"}, True) == "provia"
+        lin = np.random.default_rng(9).random((8, 8, 3)).astype(np.float32) * 0.5
+        on_3 = develop.normalize({"film_sim": "nostalgic_neg", "process": "3"})
+        np.testing.assert_array_equal(
+            np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, raw_source=True)),
+            np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, on_3, raw_source=True)),
+        )
+    finally:
+        film_sims.derived_cube.cache_clear()

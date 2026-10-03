@@ -42,11 +42,25 @@ note in tools/film_sim_fit/official.py before shipping those nine), and
 Nostalgic Neg., which nobody publishes, from the camera JPEGs after all
 (tools/film_sim_fit/fit.py). A look without any cube keeps its recipe, and
 edits made on an earlier process version keep the recipes throughout.
+
+Process version 4 renders them as the camera renders a still. Fujifilm's cubes
+are made for video: fed the same light they come out ~0.9 stops darker than
+the camera's JPEG of the same look, and they hold a long shoulder where the
+still has reached white by sensor clipping. Below middle grey the two tone
+curves are one curve, so both differences can be taken out in front of the
+cube, on the scene values, and the cube stays untouched: a fixed gain (the
+anchor) and a lift of the highlights that puts sensor clipping on white (the
+stills shoulder) - see _stills_factors, measured in tools/film_sim_fit/
+reference.py. The looks Fujifilm publishes no cube for get one of the same
+kind there (film_luts/derived/<sim>.npy, tools/film_sim_fit/derive.py: the
+published look they are closest to, plus what sets them apart from it), so all
+of them share one tone path.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -68,6 +82,26 @@ OFFICIAL_SIMS = frozenset({
     "provia", "velvia", "astia", "classic_chrome", "reala_ace", "pro_neg_std",
     "classic_neg", "eterna", "eterna_bleach_bypass", "acros",
 })
+# Cubes of the same kind for the looks Fujifilm publishes none for, built on
+# Fujifilm's by tools/film_sim_fit/derive.py (process version 4).
+_DERIVED_DIR = _MEASURED_DIR / "derived"
+
+# Process version 4, the look as a still (tools/film_sim_fit/reference.py).
+# The anchor: how much more light Fujifilm's video cubes want than the scene
+# value for their grey ramp to lie on the camera JPEG's - the same for every
+# look to within 0.03 stops.
+_STILLS_ANCHOR = 1.89
+# The stills shoulder: at a scene luminance of 0.10, 0.12 .. 1.00 of sensor
+# clipping, how many stops more than the anchor the cube has to be given to
+# show what the still shows there. Nothing up to an eighth of clipping (a third
+# of a stop over middle grey), three stops at clipping - which is where the
+# cube reaches white.
+_STILLS_SHOULDER_X = np.linspace(0.10, 1.0, 46)
+_STILLS_SHOULDER = np.array([
+    0.0, 0.0, 0.01, 0.03, 0.06, 0.09, 0.12, 0.15, 0.17, 0.2, 0.24, 0.31, 0.4, 0.51, 0.61, 0.72,
+    0.86, 1.0, 1.16, 1.34, 1.5, 1.64, 1.78, 1.91, 2.02, 2.12, 2.2, 2.28, 2.34, 2.42, 2.46, 2.52,
+    2.56, 2.57, 2.64, 2.67, 2.68, 2.75, 2.77, 2.77, 2.77, 2.88, 2.88, 2.88, 2.88, 3.04,
+])
 
 # Linear BT.709 -> F-Gamut (BT.2020 primaries, D65).
 _FGAMUT_FROM_709 = np.array([[0.627404, 0.329283, 0.043313],
@@ -350,14 +384,7 @@ def _sim_cube(sim: str, measured: bool = False) -> np.ndarray | None:
     return _bake(recipe, grid).reshape(_CUBE_N, _CUBE_N, _CUBE_N, 3).astype(np.float32)
 
 
-@lru_cache(maxsize=None)
-def official_cube(sim: str) -> np.ndarray | None:
-    """Fujifilm's cube for the look (F-Log2 code values in, display out),
-    indexed [r][g][b], or None where Fujifilm publishes none or the file is
-    missing or unusable."""
-    path = _OFFICIAL_DIR / f"{sim}.npy"
-    if sim not in OFFICIAL_SIMS or not path.is_file():
-        return None
+def _load_scene_cube(path: Path) -> np.ndarray | None:
     try:
         cube = np.load(path).astype(np.float32)
     except (OSError, ValueError):
@@ -369,36 +396,128 @@ def official_cube(sim: str) -> np.ndarray | None:
     return np.clip(cube, 0.0, 1.0)
 
 
-def official_sim(adj: dict, raw_source: bool) -> str | None:
-    """The look this edit renders from Fujifilm's own cube, or None: process
-    version 3, a RAW underneath, a look Fujifilm publishes, intensity above
-    zero. The tone block then applies it (apply_official) and the display
-    colour block leaves the simulation alone."""
-    sim = adj.get("film_sim")
-    if not raw_source or adj.get("process") != "3" or not sim or sim == "none":
+@lru_cache(maxsize=None)
+def official_cube(sim: str) -> np.ndarray | None:
+    """Fujifilm's cube for the look (F-Log2 code values in, display out),
+    indexed [r][g][b], or None where Fujifilm publishes none or the file is
+    missing or unusable."""
+    path = _OFFICIAL_DIR / f"{sim}.npy"
+    if sim not in OFFICIAL_SIMS or not path.is_file():
         return None
-    if adj.get("lut_intensity", 100) <= 0 or official_cube(sim) is None:
+    return _load_scene_cube(path)
+
+
+@lru_cache(maxsize=None)
+def derived_cube(sim: str) -> np.ndarray | None:
+    """The cube built on Fujifilm's for a look Fujifilm publishes none for
+    (same form as official_cube), or None if there is none."""
+    path = _DERIVED_DIR / f"{sim}.npy"
+    if sim not in _RECIPES or sim in OFFICIAL_SIMS or not path.is_file():
+        return None
+    return _load_scene_cube(path)
+
+
+def renders_as_still(adj: dict) -> bool:
+    """Process version 4: a look rendered from a scene cube gets the anchor
+    and the stills shoulder, and the derived cubes count."""
+    return adj.get("process") == "4"
+
+
+def _scene_cube(sim: str, still: bool) -> np.ndarray | None:
+    cube = official_cube(sim)
+    return derived_cube(sim) if cube is None and still else cube
+
+
+def official_sim(adj: dict, raw_source: bool) -> str | None:
+    """The look this edit renders from a scene cube, or None: process version
+    3 or 4, a RAW underneath, a look Fujifilm publishes (on 4 also one built
+    on those), intensity above zero. The tone block then applies it
+    (apply_official) and the display colour block leaves the simulation
+    alone."""
+    sim = adj.get("film_sim")
+    if not raw_source or adj.get("process") not in ("3", "4") or not sim or sim == "none":
+        return None
+    if adj.get("lut_intensity", 100) <= 0 or _scene_cube(sim, renders_as_still(adj)) is None:
         return None
     return sim
 
 
-def apply_official(scene: np.ndarray, sim: str) -> np.ndarray:
+# The stills factors are tabulated over scene luminance at this many points
+# between the knee and sensor clipping.
+_STILLS_TABLE_N = 1024
+
+
+def _stills_factors(white: float) -> tuple[np.ndarray, np.ndarray]:
+    """What a scene luminance is multiplied by in front of the cube for the
+    look to come out as a still, as a table (luminances, evenly spaced from
+    the knee to `white`; factors): the anchor everywhere, and from the knee up
+    the stills shoulder on top, so that `white` - the scene value the sensor
+    clips at, i.e. the gain the frame was lifted by - lands where the cube
+    reaches white. Below the first luminance the first factor holds, above the
+    last one the last.
+
+    The shoulder is measured for a frame at the camera's own exposure (white =
+    1). A frame lifted further (a DR200 / DR400 file, Exposure pushed) has its
+    clipping point higher up the cube's own shoulder and needs less: the same
+    shape stretched over the longer way from knee to clipping, scaled by how
+    much of the three stops is still missing - none of it from 3 stops up."""
+    white = max(float(white), 1.0)
+    knee = float(_STILLS_SHOULDER_X[np.flatnonzero(_STILLS_SHOULDER > 0)[0] - 1])
+    top = float(_STILLS_SHOULDER[-1])
+    missing = max(0.0, 1.0 - math.log2(white) / top)
+    y = np.linspace(knee, white, _STILLS_TABLE_N)
+    # Where this luminance sits between knee and clipping, in stops, mapped
+    # onto the same fraction of the way in the measured frame.
+    at = knee * (1.0 / knee) ** (np.log2(y / knee) / math.log2(white / knee))
+    stops = missing * np.interp(at, _STILLS_SHOULDER_X, _STILLS_SHOULDER)
+    return y, _STILLS_ANCHOR * 2.0 ** stops
+
+
+def apply_official(scene: np.ndarray, sim: str, stills_white: float | None = None) -> np.ndarray:
     """Scene-linear BT.709 RGB (HxWx3 float32, 0.18 = middle grey, highlights
     above 1.0 welcome - F-Log2 holds them to about 58) through Fujifilm's cube
     for `sim`: display sRGB float32 0..1 out. The cube's BT.709 code values are
     shown as they are, as every editor shows graded footage on a computer
-    screen."""
-    cube = official_cube(sim)
+    screen.
+
+    `stills_white` (process version 4) renders the look as a still: the scene
+    value the sensor clips at. Each pixel is scaled by its luminance's factor
+    (_stills_factors), colour ratios kept, before the cube sees it."""
+    still = stills_white is not None
+    cube = _scene_cube(sim, still)
+    if still:
+        import cv2
+
+        lums, factors = _stills_factors(stills_white)
+        first, per_step = np.float32(lums[0]), np.float32(1.0 / (lums[1] - lums[0]))
+        factors = factors.astype(np.float32).reshape(1, -1)
     out = np.empty(scene.shape, dtype=np.float32)
     for y0 in range(0, scene.shape[0], _SAMPLE_BAND_ROWS):
-        x = np.maximum(scene[y0:y0 + _SAMPLE_BAND_ROWS] @ _FGAMUT_FROM_709.T, 0.0)
-        code = np.where(
-            x >= _FLOG2_CUT,
-            _FLOG2_C * np.log10(_FLOG2_A * x + _FLOG2_B) + _FLOG2_D,
-            _FLOG2_E * x + _FLOG2_F,
-        ).astype(np.float32)
-        out[y0:y0 + _SAMPLE_BAND_ROWS] = _sample_band(code, cube)
+        band = scene[y0:y0 + _SAMPLE_BAND_ROWS]
+        if still:
+            # The factor table read like the cube is: as a picture one row
+            # high, through cv2.remap (np.interp takes 70 ms a frame for this).
+            band = np.ascontiguousarray(band, dtype=np.float32)
+            at = cv2.transform(band, _LUMA.reshape(1, 3))
+            at -= first
+            at *= per_step
+            x = cv2.transform(band, _FGAMUT_FROM_709)
+            x *= cv2.remap(
+                factors, at, np.zeros_like(at), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+            )[..., None]
+        else:
+            x = band @ _FGAMUT_FROM_709.T
+        out[y0:y0 + _SAMPLE_BAND_ROWS] = _sample_band(_flog2(np.maximum(x, 0.0, out=x)), cube)
     return np.clip(out, 0.0, 1.0, out=out)
+
+
+def _flog2(x: np.ndarray) -> np.ndarray:
+    """F-Log2 code values (0..1) of scene reflectance."""
+    return np.where(
+        x >= _FLOG2_CUT,
+        _FLOG2_C * np.log10(_FLOG2_A * x + _FLOG2_B) + _FLOG2_D,
+        _FLOG2_E * x + _FLOG2_F,
+    ).astype(np.float32)
 
 
 # cube id -> (cube, atlas). The cubes themselves live for the process in the

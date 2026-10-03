@@ -123,10 +123,14 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     # it renders exactly as it did when it was saved; the editor starts new
     # edits on "2". With every slider neutral the two are the same picture, so
     # the key never makes a photo count as edited (see is_neutral).
-    # "3" is "2" with the film simulations measured from camera JPEGs (see
-    # film_sims) in place of the hand-made recipes - a different picture for
-    # the same look, so an edit made on "1" or "2" keeps the recipes.
-    "process": ("1", ("1", "2", "3")),
+    # "3" is "2" with the film simulations from cubes (see film_sims:
+    # Fujifilm's own where it publishes one) in place of the hand-made recipes
+    # - a different picture for the same look, so an edit made on "1" or "2"
+    # keeps the recipes.
+    # "4" is "3" with those looks rendered as the camera renders a still -
+    # brighter by a fixed anchor, highlights running to white at sensor
+    # clipping - and with every look on a cube of that kind.
+    "process": ("1", ("1", "2", "3", "4")),
     # Which exposure a RAW is developed from (see thumbnails._browsing_gain).
     # "standard" lifts every raw to the same brightness with the auto-exposure
     # gain the grid already uses (raw.compute_base_gain), so a photo opens the
@@ -149,7 +153,7 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # The process version a photo's first edit starts on (see ENUM_SPEC["process"]).
-CURRENT_PROCESS = "3"
+CURRENT_PROCESS = "4"
 
 # Identity point curve: pass-through on the 0..255 grid.
 _IDENTITY_CURVE = [[0, 0], [255, 255]]

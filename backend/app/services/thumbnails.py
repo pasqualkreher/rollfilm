@@ -1473,8 +1473,12 @@ def _linear_tone_block(
         # shoulder nor AgX runs (film_sims.apply_official). Whites<0 has no
         # white point to raise in a cube: as for AgX, display white is scaled
         # down instead.
+        # Process version 4 renders it as the camera renders a still: the white
+        # point is where the sensor clips, the applied gain - the one the
+        # shoulder below takes for the picture without a look.
         sim, weight = official
-        look = film_sims.apply_official(arr, sim)
+        stills_white = max(g, 1.0) if film_sims.renders_as_still(adj) else None
+        look = film_sims.apply_official(arr, sim, stills_white)
         if wh < 0:
             look = _linear_to_srgb(
                 _srgb_to_linear(look) * np.float32(1.0 - _WH_NEG_AGX * -wh)
