@@ -22,6 +22,7 @@ import logging
 import shutil
 import threading
 import time
+import uuid
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -36,6 +37,7 @@ from app.db.models import Album, AlbumImage, Image, ImageTag, Tag
 from app.services.filesystem import library_relative_path
 from app.services.maintenance import image_row_from_dict, image_to_dict
 from app.services.membership_tags import sync_membership_tags
+from app.services.pairing import pair_library
 from app.services.thumbnails import derivative_dir
 
 logger = logging.getLogger(__name__)
@@ -401,9 +403,14 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
         carried = _read_source(source)
     logger.info("library merge: %d photos to go through, indexing this library", len(carried))
 
-    existing_by_hash: dict[str, Image] = {}
-    for image in db.query(Image).filter(Image.owner_id == owner_id):
-        existing_by_hash.setdefault(image.file_hash, image)
+    # Hash -> id, not the rows themselves: holding every photo of this library
+    # in the session made each commit below walk all of them, and the merge
+    # commits once per copied photo.
+    existing_by_hash: dict[str, str] = {}
+    for file_hash, image_id in db.query(Image.file_hash, Image.id).filter(
+        Image.owner_id == owner_id
+    ):
+        existing_by_hash.setdefault(file_hash, image_id)
 
     # Destination paths are claimed as we go: several photos of the same day
     # can carry the same camera filename, and the ones earlier in this run
@@ -412,6 +419,7 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
     tag_cache: dict[str, Tag] = {}
     album_cache: dict[str, Album] = {}
     id_map: dict[str, str] = {}  # source image id -> id in this library
+    touched_stems: set[str] = set()  # basenames of everything that came across
 
     added = updated = skipped = 0
     copied_bytes = 0
@@ -437,7 +445,8 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
                 canceled = True
                 break
             data = item.data
-            existing = existing_by_hash.get(data["file_hash"])
+            existing_id = existing_by_hash.get(data["file_hash"])
+            existing = db.get(Image, existing_id) if existing_id else None
             if existing is not None:
                 # The file is already here - take over only the decisions made
                 # on the trip.
@@ -468,17 +477,42 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
                 )
                 claimed.add(relative)
                 target.file_path = relative
-                db.add(target)
-                db.flush()  # assigns the id the derivative folder is named for
+                # The id the derivative folder is named for - given here rather
+                # than by a flush, so the files can be copied before the row
+                # touches the database.
+                target.id = str(uuid.uuid4())
                 dest = settings.library_root / relative
                 dest.parent.mkdir(parents=True, exist_ok=True)
+                # Nothing may be left uncommitted across the copy: a big RAW
+                # off a slow drive takes seconds, and an open transaction holds
+                # the database's write lock for all of them - every other
+                # writer (a rating, the Immich sync, the startup re-pair) then
+                # gives up with "database is locked". It also means a merge
+                # that dies here loses one photo's work, not a whole chunk's.
+                db.commit()
                 shutil.copy2(src_file, dest)
                 _copy_derivatives(library_root, item.source_id, target.id)
-                existing_by_hash.setdefault(data["file_hash"], target)
+                db.add(target)
+                db.flush()
+                existing_by_hash.setdefault(data["file_hash"], target.id)
                 copied_bytes += item.file_size
                 added += 1
 
             id_map[item.source_id] = target.id
+            touched_stems.add(Path(data["original_filename"]).stem.lower())
+
+            # RAW+JPEG partners are linked the moment the second half is here,
+            # not in one pass at the very end: until then every pair showed as
+            # two photos - for as long as the merge ran, and for good when it
+            # was interrupted.
+            partner_id = id_map.get(item.source_pair_id) if item.source_pair_id else None
+            if partner_id and partner_id != target.id:
+                partner = db.get(Image, partner_id)
+                if partner is not None:
+                    if target.paired_image_id is None:
+                        target.paired_image_id = partner.id
+                    if partner.paired_image_id is None:
+                        partner.paired_image_id = target.id
 
             for name in data.get("tags", []):
                 tag = _get_or_create_tag(db, owner_id, name, tag_cache)
@@ -507,7 +541,8 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
             if (added + updated + skipped) % 50 == 0:
                 db.commit()
 
-        # RAW+JPEG partners, once every id is known.
+        # RAW+JPEG partners once more, now that every id is known: catches a
+        # link the other library only recorded on one of the two halves.
         for item in carried:
             if not item.source_pair_id:
                 continue
@@ -517,6 +552,11 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
                 image = db.get(Image, here)
                 if image is not None and image.paired_image_id is None:
                     image.paired_image_id = partner
+        # And the pairs the other library never had: halves it held unlinked,
+        # or a RAW from the trip whose JPEG was already here. Flushed first -
+        # the pass queries for unpaired rows and must see the links just made.
+        db.flush()
+        pair_library(db, owner_id, stems=touched_stems)
 
         # Merged photos joined albums - give them their membership tags.
         sync_membership_tags(db, owner_id)

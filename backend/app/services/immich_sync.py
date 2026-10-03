@@ -320,6 +320,11 @@ def _upload_missing(db: Session, config: ImmichConfig) -> None:
                 logger.info("Immich sync uploaded %s (%s)%s", path.name, status, album_note)
         except Exception:
             logger.exception("Immich sync upload failed for %s", path.name)
+            # A commit that failed ("database is locked" while another writer
+            # held the database) leaves the session unusable until it is
+            # rolled back - reading image.id below then raised in turn and
+            # took the whole sync pass down with it.
+            db.rollback()
             _note_failure(image.id)
 
 

@@ -221,6 +221,83 @@ def test_raw_jpeg_pairs_stay_linked(home, travel):
     assert images["DSCF0003.RAF"].paired_image_id == images["DSCF0003.JPG"].id
 
 
+def test_a_pair_is_linked_as_soon_as_both_halves_are_here(home, travel, monkeypatch):
+    """Not in one pass at the end: a merge that is still running - or one that
+    dies half-way - must already show the pairs it brought across as one photo."""
+    from app.services import library_merge
+
+    taken = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    root, source = travel
+    jpg = _add_photo(source, root, "DSCF0003.JPG", b"gamma-jpg", taken=taken)
+    raw = _add_photo(
+        source, root, "DSCF0003.RAF", b"gamma-raw", taken=taken, file_type=FileType.raw
+    )
+    jpg.paired_image_id = raw.id
+    raw.paired_image_id = jpg.id
+    _add_photo(source, root, "DSCF0004.JPG", b"delta", taken=taken)
+    source.commit()
+
+    real_copy = library_merge.shutil.copy2
+
+    def drive_goes_away(src, dst, **kwargs):
+        if Path(src).name == "DSCF0004.JPG":
+            raise OSError("drive unplugged")
+        return real_copy(src, dst, **kwargs)
+
+    monkeypatch.setattr(library_merge.shutil, "copy2", drive_goes_away)
+    with pytest.raises(OSError):
+        merge_library(home, 1, root)
+    home.rollback()
+
+    images = {i.original_filename: i for i in home.query(Image)}
+    assert sorted(images) == ["DSCF0003.JPG", "DSCF0003.RAF"]
+    assert images["DSCF0003.JPG"].paired_image_id == images["DSCF0003.RAF"].id
+    assert images["DSCF0003.RAF"].paired_image_id == images["DSCF0003.JPG"].id
+
+
+def test_halves_the_other_library_never_linked_are_paired_here(home, travel):
+    """A RAW from the trip whose JPEG was already at home, and two halves the
+    travel library held unlinked: both end up as pairs."""
+    taken = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    root, source = travel
+    _add_photo(home, settings.library_root, "DSCF0005.JPG", b"home-jpg", taken=taken)
+    _add_photo(source, root, "DSCF0005.RAF", b"trip-raw", taken=taken, file_type=FileType.raw)
+    _add_photo(source, root, "DSCF0006.JPG", b"loose-jpg", taken=taken)
+    _add_photo(source, root, "DSCF0006.RAF", b"loose-raw", taken=taken, file_type=FileType.raw)
+
+    merge_library(home, 1, root)
+
+    images = {i.original_filename: i for i in home.query(Image)}
+    for stem in ("DSCF0005", "DSCF0006"):
+        assert images[f"{stem}.JPG"].paired_image_id == images[f"{stem}.RAF"].id
+        assert images[f"{stem}.RAF"].paired_image_id == images[f"{stem}.JPG"].id
+
+
+def test_the_database_is_free_while_a_file_copies(home, travel, monkeypatch):
+    """A copy off a slow drive takes seconds. A transaction left open across
+    it holds the write lock all that time, and every other writer - a rating,
+    the Immich sync - fails with "database is locked"."""
+    from app.services import library_merge
+
+    taken = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    root, source = travel
+    for i in range(3):
+        _add_photo(source, root, f"DSCF{i}.JPG", f"photo-{i}".encode(), taken=taken)
+
+    real_copy = library_merge.shutil.copy2
+    open_during_copy: list[bool] = []
+
+    def watched_copy(src, dst, **kwargs):
+        open_during_copy.append(home.in_transaction())
+        return real_copy(src, dst, **kwargs)
+
+    monkeypatch.setattr(library_merge.shutil, "copy2", watched_copy)
+    merge_library(home, 1, root)
+
+    assert open_during_copy == [False, False, False]
+    assert home.query(Image).count() == 3
+
+
 def test_trashed_and_external_photos_stay_behind(home, travel):
     """Photos thrown away on the trip were a decision; photos only indexed in
     place from an external drive aren't the travel library's to hand over."""
