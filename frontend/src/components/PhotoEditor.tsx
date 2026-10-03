@@ -965,9 +965,11 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     const shown = shownPx() - 2;
     const current = painted.token === currentToken;
     const rank = TIER_RANK[painted.tier] ?? 0;
-    // Nothing sharper exists: the frame IS the photo's pixels, or the native
-    // render of this very state.
-    const maxedOut = paintedPx >= nativeLongEdge() * 0.99 || (current && painted.tier === "native");
+    // Nothing sharper exists: the frame IS the photo's pixels. A native frame
+    // alone does not say that - at fit view it is rendered at the on-screen
+    // size (the settle sends its budget), and zooming into it is zooming into
+    // a 4000px picture of a 7700px photo.
+    const maxedOut = paintedPx >= nativeLongEdge() * 0.99;
     // Big enough AND a settled render (a pixel of slack: rounding in
     // fitCanvasToStage must not trigger a render). A scrub or accurate frame
     // that happens to cover the screen - zoomed out, a small stage - is still
@@ -982,10 +984,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     // The tier already answered for this state and still came back smaller
     // than the screen (the ceiling above is an estimate): the one above it,
     // and past native there is nothing to ask for.
+    // A native frame smaller than the screen was the whole frame at the size
+    // of a smaller view: native again, now as a tile of what is visible.
     if (current && shown > paintedPx + 1 && rank >= TIER_RANK[tier]) {
       if (painted.tier === "full") tier = "ultra";
       else if (painted.tier === "ultra") tier = "native";
-      else return null;
+      else if (painted.tier !== "native") return null;
     }
     // Native at any zoom, not only zoomed IN as before: shown whole it is
     // rendered from the native base at the on-screen size (the settle sends
