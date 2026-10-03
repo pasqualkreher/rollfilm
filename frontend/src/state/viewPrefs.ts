@@ -73,6 +73,21 @@ export const STAGE_BACKGROUNDS = [
 ] as const;
 export type StageBg = (typeof STAGE_BACKGROUNDS)[number]["key"];
 const DEFAULT_STAGE_BG: StageBg = "light";
+// The resolution the editor renders at while the sliders are being worked,
+// as a fraction of the picture's on-screen size (long edge, so 50% is a
+// quarter of the pixels). The settled frame costs time in proportion to its
+// pixels - on a 4K display that is a 10MP render after every slider - so the
+// editor first settles on this working size and fetches the full on-screen
+// resolution once nothing has been touched for a moment. Half is the default:
+// still sharper than the frame drawn at pointer-up, at a fraction of the wait.
+const EDITOR_WORK_RES_KEY = "pm.editorWorkRes";
+export const EDITOR_WORK_RES = [
+  { key: "full", label: "100%", factor: 1 },
+  { key: "balanced", label: "70%", factor: 0.7 },
+  { key: "fast", label: "50%", factor: 0.5 },
+] as const;
+export type EditorWorkRes = (typeof EDITOR_WORK_RES)[number]["key"];
+const DEFAULT_EDITOR_WORK_RES: EditorWorkRes = "fast";
 const DEFAULT_THUMB: ThumbSizeKey = "m";
 // The canvas filmstrip's chip width in px, set by dragging the strip's top
 // edge up or down. null means "follow the shared thumbnail Size" - the
@@ -146,6 +161,15 @@ function readSlideshowSeconds(): SlideshowSeconds {
 function readStageBg(): StageBg {
   const v = localStorage.getItem(STAGE_BG_KEY);
   return STAGE_BACKGROUNDS.some((b) => b.key === v) ? (v as StageBg) : DEFAULT_STAGE_BG;
+}
+
+function readEditorWorkRes(): EditorWorkRes {
+  const v = localStorage.getItem(EDITOR_WORK_RES_KEY);
+  return EDITOR_WORK_RES.some((r) => r.key === v) ? (v as EditorWorkRes) : DEFAULT_EDITOR_WORK_RES;
+}
+
+export function editorWorkResFactor(key: EditorWorkRes): number {
+  return EDITOR_WORK_RES.find((r) => r.key === key)?.factor ?? 1;
 }
 
 export function thumbPx(key: ThumbSizeKey): number {
@@ -223,6 +247,11 @@ export function setStageBg(bg: StageBg) {
   emit();
 }
 
+export function setEditorWorkRes(res: EditorWorkRes) {
+  localStorage.setItem(EDITOR_WORK_RES_KEY, res);
+  emit();
+}
+
 export function setSlideshowSeconds(seconds: SlideshowSeconds) {
   localStorage.setItem(SLIDESHOW_KEY, String(seconds));
   emit();
@@ -258,6 +287,10 @@ export function useImportInfoPanelOpen(): boolean {
 
 export function useStageBg(): StageBg {
   return useSyncExternalStore(subscribe, readStageBg, () => DEFAULT_STAGE_BG);
+}
+
+export function useEditorWorkRes(): EditorWorkRes {
+  return useSyncExternalStore(subscribe, readEditorWorkRes, () => DEFAULT_EDITOR_WORK_RES);
 }
 
 export function useSlideshowSeconds(): SlideshowSeconds {

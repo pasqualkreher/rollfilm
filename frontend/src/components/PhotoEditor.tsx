@@ -80,7 +80,7 @@ import { kelvinFromTemperature, whiteBalanceFromKelvin, whiteBalanceFromNeutral 
 import { MaskOverlay } from "./MaskOverlay";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
-import { useStageBg, useAskSaveCopyOptions } from "../state/viewPrefs";
+import { useStageBg, useAskSaveCopyOptions, useEditorWorkRes, editorWorkResFactor } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
 import { useWait } from "../state/wait";
 import { useLeaveGuard } from "../state/navHistory";
@@ -186,6 +186,21 @@ const SCRUB_STEP_UP_MS = 70;
 // tile stretched over a 4K viewport. Each drag also starts one rung above
 // where the last one ended (see the pointer-up handler).
 const SCRUB_STEP_UP_FRAMES = 5;
+// How long a working-resolution frame stands before the full on-screen
+// resolution is rendered behind it (see scheduleSettle). A breath, not a
+// pause: at two seconds the sharp frame of a fit view never arrived for
+// anyone who touched the picture in between, and a full-resolution render the
+// next slider throws away is cheap now that the server drops it mid-pass.
+const FULL_RES_IDLE_MS = 400;
+// The smallest frame the server's settle tiers render (it clamps the budget
+// it is sent). A working resolution below this is not a smaller render.
+const SETTLE_MIN_PX = 1600;
+// A painted frame this close to the on-screen size counts as sharp. A 40MP
+// raw's ultra frame is 3876px and a 4K display in a scaled mode shows the fit
+// view at ~3900-4000: a 3% upscale nobody can see, which used to send every
+// settle to the native tier - a full-resolution decode and a second 10MP
+// render - for it.
+const SHARP_SLACK = 1.04;
 
 // How long the edit has to stand still before the editor writes it. A drag
 // fires changes the whole way through, so the write waits for the slider to
@@ -780,6 +795,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // which says nothing about the seconds of decode behind it; this drives the
   // "Rendering full resolution…" badge, the lightbox's twin (ImageDetail).
   const [nativePending, setNativePending] = useState(false);
+  // True while the full-resolution reload of a working-resolution frame is
+  // being rendered (see scheduleSettle's "full" phase). Same quiet badge.
+  const [fullResPending, setFullResPending] = useState(false);
+  // The working resolution (Settings -> Photo editor) as a factor of the
+  // on-screen size: what the settle renders first, before the full-resolution
+  // reload that follows once the editor has been left alone for a moment.
+  const workFactorRef = useRef(1);
+  workFactorRef.current = editorWorkResFactor(useEditorWorkRes());
   const applyHistBins = useCallback((bins: Uint32Array[]) => histStore.set(bins), [histStore]);
   // When the histogram last updated - scrub frames throttle it (see drawBlob).
   const histAtRef = useRef(0);
@@ -877,7 +900,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         ? Math.min(paintedPxRef.current, origPaintedPxRef.current)
         : paintedPxRef.current;
     // A pixel of slack: rounding in fitCanvasToStage shouldn't trigger a render.
-    return shown > painted + 1;
+    return shown > painted * SHARP_SLACK + 1;
   }
   // The part of the frame the user can actually see, as fractions of it - what
   // the native render is asked for while zoomed in.
@@ -969,11 +992,18 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   function targetTier(
     paintedPx = paintedPxRef.current,
     painted = paintedTierRef.current,
-    currentToken = dirtyToken.current
+    currentToken = dirtyToken.current,
+    // The working-resolution factor (1 = the full on-screen size). It scales
+    // what a fit view asks for, so half resolution on a 4K display settles on
+    // a preview tier instead of the native one. Zoomed far enough in that
+    // only part of the frame is visible, the tier is judged at the true size:
+    // the native tile of that part - rendered at the scaled budget, see the
+    // settle - is far fewer pixels than a whole frame of the tier below.
+    factor = 1
   ): "full" | "ultra" | "native" | null {
     const cv = canvasRef.current;
     if (!cv || !paintedPx) return null;
-    const shown = shownPx() - 2;
+    const shown = (shownPx() - 2) * (factor < 1 && !visibleRegion() ? factor : 1);
     const current = painted.token === currentToken;
     const rank = TIER_RANK[painted.tier] ?? 0;
     // Nothing sharper exists: the frame IS the photo's pixels. A native frame
@@ -988,16 +1018,20 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     // resolution-dependent passes (denoise, sharpen, grain) only preview as
     // they save on the larger base. That is the render the smallest zoom
     // levels never got.
-    if (shown <= paintedPx + 1 && (rank >= TIER_RANK.full || maxedOut)) return null;
+    if (shown <= paintedPx * SHARP_SLACK + 1 && (rank >= TIER_RANK.full || maxedOut)) return null;
     if (maxedOut) return null;
     let tier: "full" | "ultra" | "native" =
-      shown <= tierCeiling(FULL_TIER_PX) + 1 ? "full" : shown <= tierCeiling(ULTRA_TIER_PX) + 1 ? "ultra" : "native";
+      shown <= tierCeiling(FULL_TIER_PX) * SHARP_SLACK + 1
+        ? "full"
+        : shown <= tierCeiling(ULTRA_TIER_PX) * SHARP_SLACK + 1
+          ? "ultra"
+          : "native";
     // The tier already answered for this state and still came back smaller
     // than the screen (the ceiling above is an estimate): the one above it,
     // and past native there is nothing to ask for.
     // A native frame smaller than the screen was the whole frame at the size
     // of a smaller view: native again, now as a tile of what is visible.
-    if (current && shown > paintedPx + 1 && rank >= TIER_RANK[tier]) {
+    if (current && shown > paintedPx * SHARP_SLACK + 1 && rank >= TIER_RANK[tier]) {
       if (painted.tier === "full") tier = "ultra";
       else if (painted.tier === "ultra") tier = "native";
       else if (painted.tier !== "native") return null;
@@ -1917,11 +1951,21 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // Once edits come to rest, refine on the larger full-quality base so the
   // resolution-dependent passes (denoise/sharpen radii, grain) preview as they
   // will be saved. Cancelled the instant a new drag starts.
-  const scheduleSettle = useCallback(() => {
+  //
+  // Two phases when a working resolution below 100% is set. "work" renders at
+  // that fraction of the on-screen size - a 4K fit view is a 10MP frame at
+  // full size, and waiting for it after every slider is what made editing
+  // with denoise or sharpening feel stuck. "full" is the same settle at the
+  // true on-screen size, armed once the working frame is up and fired
+  // FULL_RES_IDLE_MS later; any new edit, zoom or pan starts over at "work"
+  // (the timer is shared, and the pump aborts the request).
+  // At 100% the first phase already is the full one and nothing follows it.
+  const scheduleSettle = useCallback((phase: "work" | "full" = "work", delay?: number) => {
     clearTimeout(settleTimer.current);
     if (goneRef.current) return;
     settleTimer.current = setTimeout(async () => {
       if (goneRef.current) return;
+      const factor = phase === "full" ? 1 : workFactorRef.current;
       // A pointer is down, so a drag may still be in flight - but the settle
       // must not be *dropped* here, or the photo stays on a preview tier until
       // the next edit happens to come along (press the mouse again inside the
@@ -1945,7 +1989,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // the two lower rungs were thrown away by the one above seconds later.
         // The size that is needed is known up front from the canvas's own
         // on-screen size, so it is asked for directly and painted once.
-        let tier = targetTier();
+        let tier = targetTier(undefined, undefined, undefined, factor);
         // A frame patched with region tiles still shows the OLD edit outside
         // them. targetTier judges resolution only, so it happily says "sharp
         // enough" about stale pixels - when the ground is flagged stale, force
@@ -1954,12 +1998,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // render that finally shows the edit everywhere; still zoomed native
         // it re-tiles the visible part and the flag simply stays up.
         const staleGround = !tier && groundStaleRef.current;
-        if (staleGround) tier = targetTier(1);
-        // Anything short of native is quick and paints unannounced; a native
-        // settle can be seconds of decode, so it says so. Cleared below once
-        // the sharp frame is on the canvas (or by a later settle that finds
-        // nothing owed: zoomed back out, or already sharp).
-        setNativePending(tier === "native");
+        if (staleGround) tier = targetTier(1, undefined, undefined, factor);
         // Native is the only tier the user can be zoomed far enough into for
         // most of the frame to be off screen, and the only one where that
         // matters: it renders at true resolution, where the whole frame of a
@@ -1980,9 +2019,43 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // Which of the two halves still needs work: the settle is worth
         // running for the original alone, e.g. when a compare mode is entered
         // over an edit that is already sharp.
-        const otier = wantOrigRef.current
-          ? targetTier(origPaintedPxRef.current, origPaintedTierRef.current, origToken.current)
+        let otier = wantOrigRef.current
+          ? targetTier(origPaintedPxRef.current, origPaintedTierRef.current, origToken.current, factor)
           : null;
+        // The render budget: the on-screen size of what is being rendered
+        // (the whole picture, or the visible tile), at this phase's factor.
+        const budget = (px: number) => (factor < 1 ? Math.ceil(px * factor) : px);
+        // A working frame is only worth rendering when it is a bigger picture
+        // than the one already up. In a window where half the on-screen size
+        // is no more than the pointer-up frame (or than the server's smallest
+        // settle), it was that same frame rendered a second time - a second
+        // of denoise that did nothing but hold back the sharp one. Skipped,
+        // and the full resolution follows at once (see the end of this pass).
+        // Whole frames only: a zoomed tile isn't measured by the frame's size.
+        const alreadyCovers = (paintedPx: number, painted: { tier: string; token: number }, token: number) =>
+          factor < 1 &&
+          painted.token === token &&
+          (TIER_RANK[painted.tier] ?? 0) >= TIER_RANK.accurate &&
+          Math.max(SETTLE_MIN_PX, budget(shownPx())) <= paintedPx * SHARP_SLACK + 1;
+        if (
+          tier && !region && !staleGround &&
+          alreadyCovers(paintedPxRef.current, paintedTierRef.current, dirtyToken.current)
+        ) {
+          tier = null;
+        }
+        if (
+          otier && !(otier === "native" && visibleRegion()) &&
+          alreadyCovers(origPaintedPxRef.current, origPaintedTierRef.current, origToken.current)
+        ) {
+          otier = null;
+        }
+        const rendering = tier !== null || otier !== null;
+        // Anything short of native is quick and paints unannounced; a native
+        // settle can be seconds of decode, so it says so. Cleared below once
+        // the sharp frame is on the canvas (or by a later settle that finds
+        // nothing owed: zoomed back out, or already sharp).
+        setNativePending(tier === "native");
+        setFullResPending(phase === "full" && rendering);
         let rearm = false;
         if (tier) {
           const dtoken = dirtyToken.current;
@@ -2013,7 +2086,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           // came to rest. The native tile carries its own (region.px).
           const blob = await api.images.editorPreview(
             image.id, previewEditsLatest.current!, fctrl.signal, tier, false, peekRef.current,
-            region, false, region ? region.px : shownPx(), nativeOnly
+            region, false, budget(region ? region.px : shownPx()), nativeOnly
           );
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
           if (blob.servedTier === "pending") {
@@ -2044,7 +2117,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           const onativeOnly = otier === "native" && origPendingRef.current === otoken;
           const oblob = await api.images.editorPreview(
             image.id, baselineLatest.current, fctrl.signal, otier, baselineBrowseRef.current, null,
-            oregion, false, oregion ? oregion.px : shownPx(), onativeOnly
+            oregion, false, budget(oregion ? oregion.px : shownPx()), onativeOnly
           );
           if ((scrubbing.current && !compareRef.current) || otoken !== origToken.current) return;
           if (oblob.servedTier === "pending") {
@@ -2058,16 +2131,30 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           }
         }
         if (rearm) {
-          clearTimeout(settleTimer.current);
-          settleTimer.current = window.setTimeout(() => scheduleSettleRef.current(), 2500);
+          scheduleSettleRef.current(phase, 2500);
+        } else if (
+          factor < 1 &&
+          (targetTier() !== null ||
+            (wantOrigRef.current &&
+              targetTier(origPaintedPxRef.current, origPaintedTierRef.current, origToken.current) !== null))
+        ) {
+          // The working frame is up and the screen can show more than it
+          // holds: the full resolution follows - after a breath when a
+          // working frame was just painted, at once when there was none to
+          // paint.
+          scheduleSettleRef.current("full", rendering ? FULL_RES_IDLE_MS : 0);
         }
       } catch {
         // Non-fatal: the accurate preview is already on screen.
+      } finally {
+        // Only while this settle is still the current one: a newer settle has
+        // already set the flag for itself by the time an aborted one unwinds.
+        if (fullAbortRef.current === fctrl) setFullResPending(false);
       }
-    }, 350);
+    }, delay ?? 350);
   }, [image.id, drawBlob, drawOriginal, drawRegionIntoOriginal]);
   // Re-entry point for the re-arm above (scheduleSettle can't name itself).
-  const scheduleSettleRef = useRef<() => void>(() => {});
+  const scheduleSettleRef = useRef<(phase?: "work" | "full", delay?: number) => void>(() => {});
   scheduleSettleRef.current = scheduleSettle;
 
   // The live-preview pump. It renders the *latest* edit state, one request at a
@@ -2156,7 +2243,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         const scrubPx = region
           ? Math.max(SCRUB_REGION_MIN_PX[level], Math.round(region.px * SCRUB_REGION_FRAC[level]))
           : (scaleRef.current > 1.001 ? SCRUB_ZOOM_WHOLE_PX : SCRUB_FIT_PX)[level];
-        const restPx = region ? region.px : null;
+        // The pointer-up tile renders at the working resolution, like the
+        // settle that follows it (and shares its tone stage); the full
+        // on-screen size is the settle's second phase.
+        const restPx = region ? Math.ceil(region.px * workFactorRef.current) : null;
         try {
           // Progressive feedback: when the accurate tier has been slow, show a
           // scrub frame of this edit state right away, then let the accurate
@@ -2265,6 +2355,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     histStore.set(null);
     setFramePending(true);
     setNativePending(false);
+    setFullResPending(false);
   }, [image.id]);
 
   // Geometry moved, so the compare view's original no longer matches the frame
@@ -4282,11 +4373,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         )}
         {/* The frame is up but soft: the native render of this view is on its
             way (a zoomed-in raw, or a 4K fit view). Same badge, and only once
-            the first frame is in - never two of them in the corner. */}
-        {!framePending && nativePending && !error && (
-          <div className="stage-rendering" role="status">
+            the first frame is in - never two of them in the corner. Quiet: it
+            comes up after every pause at a working resolution, and a labelled
+            pill appearing over the photo each time would be the thing the eye
+            goes to - a faint spinner says the same without asking for it. */}
+        {!framePending && (nativePending || fullResPending) && !error && (
+          <div className="stage-rendering is-quiet" role="status" aria-label="Rendering full resolution">
             <Spinner size="sm" tone="inherit" />
-            Rendering full resolution…
           </div>
         )}
         {/* Side by side: the original gets a pane of its own, left of the edited

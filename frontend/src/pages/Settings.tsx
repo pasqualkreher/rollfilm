@@ -14,6 +14,9 @@ import {
   setAskDeletePartner,
   useAskSaveCopyOptions,
   setAskSaveCopyOptions,
+  EDITOR_WORK_RES,
+  useEditorWorkRes,
+  setEditorWorkRes,
 } from "../state/viewPrefs";
 import { SettingsTour, SETTINGS_TOUR_KEY } from "../components/SettingsTour";
 import { useTransientFlag, useTransientMessage, useTransientValue } from "../utils/transientMessage";
@@ -362,6 +365,7 @@ export function Settings() {
   // Whether the editor's "Save copy" asks for quality and size first. Also a
   // client-side view preference, not a server setting.
   const askSaveCopyOptions = useAskSaveCopyOptions();
+  const editorWorkRes = useEditorWorkRes();
 
   // The open tab. sectionProps stays the single indirection every section call
   // site goes through, so grouping them cost no change at the call sites.
@@ -1156,6 +1160,27 @@ export function Settings() {
           title="Ask for quality and size before saving a copy"
           desc="Shows JPEG quality and size controls when saving a physical copy, so you can make a smaller file."
         />
+        <div className="settings-corners">
+          <span className="settings-option-body">
+            <strong>Working resolution</strong>
+            <span className="settings-option-desc">
+              How sharp the preview is rendered while you adjust. Lower is faster; the full
+              resolution loads on its own once you pause. Saved photos are not affected.
+            </span>
+          </span>
+          <span className="segmented">
+            {EDITOR_WORK_RES.map((r) => (
+              <button
+                key={r.key}
+                className={editorWorkRes === r.key ? "active" : ""}
+                aria-pressed={editorWorkRes === r.key}
+                onClick={() => setEditorWorkRes(r.key)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </span>
+        </div>
       </Section>
 
       <Section {...sectionProps("Auto develop")}>

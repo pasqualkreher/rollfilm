@@ -3903,6 +3903,26 @@ input.editor-preset-select {
   animation: stage-wait-in 0.15s ease 0.25s both;
 }
 
+/* The full-resolution reload behind a picture that is already up: the spinner
+   alone, no pill and no words, and later - most reloads land before it shows. */
+.stage-rendering.is-quiet {
+  padding: 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.85);
+  mix-blend-mode: difference;
+  opacity: 0.5;
+  animation: stage-wait-in-quiet 0.3s ease 0.8s both;
+}
+
+@keyframes stage-wait-in-quiet {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.5;
+  }
+}
+
 @keyframes stage-wait-in {
   from {
     opacity: 0;

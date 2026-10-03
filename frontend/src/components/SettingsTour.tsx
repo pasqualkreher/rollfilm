@@ -23,7 +23,7 @@ const TOUR_TEXT: Record<string, string> = {
   "RAW files":
     "How unedited RAW photos look while browsing: brightened automatically (default) or unprocessed and dark, as in the editor.",
   "Photo editor":
-    "Save copy in the editor creates a new edited JPEG at full quality in one click. Turn this on to be asked for quality and size each time.",
+    "Save copy in the editor creates a new edited JPEG at full quality in one click. Turn this on to be asked for quality and size each time. Working resolution sets how sharp the preview renders while you adjust.",
   "Auto develop":
     "Adds an Auto button to the editor that suggests settings based on your own saved edits. The more you edit, the better it gets.",
   "Smart albums":
