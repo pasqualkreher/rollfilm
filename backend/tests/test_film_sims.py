@@ -108,10 +108,14 @@ def test_lut_intensity_scales_the_look_in_pipeline():
 
 @pytest.fixture()
 def measured_dir(tmp_path, monkeypatch):
+    """An empty cube folder: no measured cubes, none of Fujifilm's either."""
     monkeypatch.setattr(film_sims, "_MEASURED_DIR", tmp_path)
+    monkeypatch.setattr(film_sims, "_OFFICIAL_DIR", tmp_path / "official")
     film_sims._sim_cube.cache_clear()
+    film_sims.official_cube.cache_clear()
     yield tmp_path
     film_sims._sim_cube.cache_clear()
+    film_sims.official_cube.cache_clear()
 
 
 def test_a_measured_cube_replaces_the_recipe_only_when_asked_for(measured_dir):
@@ -154,6 +158,120 @@ def test_only_process_3_on_a_raw_source_renders_the_measured_cube(measured_dir):
     assert np.abs(render("3", True).astype(int) - 64).max() <= 1
     np.testing.assert_array_equal(render("2", True), render("2", False))
     np.testing.assert_array_equal(render("3", False), render("2", False))
+
+
+# --- the cube lookup -----------------------------------------------------------
+
+def _sample_cube_reference(arr: np.ndarray, cube: np.ndarray) -> np.ndarray:
+    """Trilinear interpolation spelled out: the eight corners, gathered."""
+    n = cube.shape[0]
+    flat = cube.reshape(-1, 3)
+    x = np.clip(arr, 0.0, 1.0).reshape(-1, 3) * (n - 1)
+    i0 = np.minimum(x.astype(np.int32), n - 2)
+    f = (x - i0).astype(np.float32)
+    fr, fg, fb = f[:, 0:1], f[:, 1:2], f[:, 2:3]
+    base = (i0[:, 0] * n + i0[:, 1]) * n + i0[:, 2]
+    c00 = flat.take(base, axis=0) * (1 - fb) + flat.take(base + 1, axis=0) * fb
+    c01 = flat.take(base + n, axis=0) * (1 - fb) + flat.take(base + n + 1, axis=0) * fb
+    c10 = flat.take(base + n * n, axis=0) * (1 - fb) + flat.take(base + n * n + 1, axis=0) * fb
+    c11 = flat.take(base + n * n + n, axis=0) * (1 - fb) + flat.take(base + n * n + n + 1, axis=0) * fb
+    c0 = c00 * (1 - fg) + c01 * fg
+    c1 = c10 * (1 - fg) + c11 * fg
+    return (c0 * (1 - fr) + c1 * fr).astype(np.float32).reshape(arr.shape)
+
+
+@pytest.mark.parametrize("n", [17, 33, 65])
+def test_the_cube_lookup_is_trilinear_interpolation(n, monkeypatch):
+    rng = np.random.default_rng(n)
+    cube = rng.random((n, n, n, 3)).astype(np.float32)  # no smoothness to hide behind
+    arr = rng.random((40, 50, 3)).astype(np.float32)
+    arr[0, 0], arr[0, 1], arr[0, 2] = 0.0, 1.0, (1.0, 0.0, 1.0)  # the cube's corners
+    np.testing.assert_allclose(film_sims._sample_cube(arr, cube), _sample_cube_reference(arr, cube), atol=2e-4)
+    # A frame taller than one band is the same picture, band by band.
+    monkeypatch.setattr(film_sims, "_SAMPLE_BAND_ROWS", 7)
+    np.testing.assert_array_equal(film_sims._sample_cube(arr, cube), film_sims._sample_band(arr, cube))
+    # And a plain list of colours goes through too.
+    colours = arr.reshape(-1, 3)
+    np.testing.assert_allclose(
+        film_sims._sample_cube(colours, cube), _sample_cube_reference(colours, cube), atol=2e-4
+    )
+
+
+# --- Fujifilm's own cubes (process version 3) ----------------------------------
+
+_OFFICIAL = sorted(film_sims.OFFICIAL_SIMS)
+
+
+@pytest.mark.parametrize("sim", _OFFICIAL)
+def test_the_shipped_official_cubes_are_sound(sim):
+    film_sims.official_cube.cache_clear()
+    cube = film_sims.official_cube(sim)
+    assert cube is not None and cube.shape == (65, 65, 65, 3)
+    # A grey ramp in scene reflectance: black is black, middle grey lands where
+    # a display shows 18% (sRGB 0.46), six stops over it is white, and it never
+    # turns back.
+    ramp = np.geomspace(0.002, 16.0, 64, dtype=np.float32)
+    scene = np.repeat(np.concatenate([[0.0], ramp, [0.18]]).astype(np.float32)[None, :, None], 3, axis=2)
+    out = film_sims.apply_official(scene, sim)[0]
+    assert out.dtype == np.float32 and out.min() >= 0.0 and out.max() <= 1.0
+    luma = out @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+    assert luma[0] < 0.02
+    assert abs(luma[-1] - 0.46) < 0.03, sim
+    assert luma[-2] > 0.97
+    assert np.all(np.diff(luma[:-1]) > -1e-3), sim
+    if sim == "acros":
+        assert np.abs(out[:, 0] - out[:, 1]).max() < 1e-4 and np.abs(out[:, 1] - out[:, 2]).max() < 1e-4
+
+
+def test_only_process_3_on_a_raw_source_renders_fujifilms_cube():
+    def adj(**over):
+        return develop.normalize({"film_sim": "classic_neg", "process": "3", **over})
+
+    assert film_sims.official_sim(adj(), True) == "classic_neg"
+    assert film_sims.official_sim(adj(), False) is None
+    assert film_sims.official_sim(adj(process="2"), True) is None
+    assert film_sims.official_sim(adj(lut_intensity=0), True) is None
+    assert film_sims.official_sim(adj(film_sim="none"), True) is None
+    # Fujifilm publishes no Nostalgic Neg.: that look stays a display cube.
+    assert film_sims.official_sim(adj(film_sim="nostalgic_neg"), True) is None
+
+
+def test_fujifilms_cube_is_the_tone_map_and_is_not_applied_twice():
+    lin = np.random.default_rng(5).random((16, 16, 3)).astype(np.float32) * 0.6
+    adj = develop.normalize({"film_sim": "classic_neg", "process": "3"})
+    out = np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, raw_source=True))
+    expected = film_sims.apply_official(lin, "classic_neg")
+    assert np.abs(out.astype(int) - np.round(expected * 255.0).astype(int)).max() <= 1
+    # AgX has nothing to map: the look carries its own tone curve.
+    agx = develop.normalize({"film_sim": "classic_neg", "process": "3", "tone_mapper": "agx"})
+    np.testing.assert_array_equal(
+        np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, agx, raw_source=True)), out
+    )
+
+
+def test_intensity_blends_fujifilms_cube_with_the_plain_render():
+    lin = np.random.default_rng(6).random((16, 16, 3)).astype(np.float32) * 0.6
+
+    def render(**over) -> np.ndarray:
+        adj = develop.normalize({"process": "3", **over})
+        return np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, raw_source=True)).astype(float)
+
+    plain, full = render(), render(film_sim="velvia")
+    half = render(film_sim="velvia", lut_intensity=50)
+    assert np.abs(full - plain).max() > 8
+    assert np.abs(half - (plain + full) / 2).max() <= 1.5
+
+
+def test_whites_and_blacks_still_move_a_picture_rendered_from_fujifilms_cube():
+    lin = np.random.default_rng(7).random((16, 16, 3)).astype(np.float32) * 0.6
+
+    def mean(**over) -> float:
+        adj = develop.normalize({"film_sim": "provia", "process": "3", **over})
+        return float(np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, raw_source=True)).mean())
+
+    base = mean()
+    assert mean(whites=60) > base + 1 and mean(whites=-60) < base - 1
+    assert mean(blacks=60) > base + 1 and mean(blacks=-60) < base - 1
 
 
 def test_the_shipped_measured_cubes_are_sound():

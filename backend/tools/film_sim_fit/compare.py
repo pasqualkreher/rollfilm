@@ -1,11 +1,12 @@
 """Step 3: look at it. For each RAF, one strip of four pictures:
 
-    no simulation | the hand-made recipe | the measured cube | the camera's JPEG
+    no simulation | the hand-made recipe | process 3 | the camera's JPEG
 
 all rendered by the app's own pipeline at the brightness of the camera's JPEG.
-The camera's JPEG carries the recipe the photo was shot with (tone, colour,
-colour chrome) on top of the simulation; the cube is the simulation alone, so
-the two agree in character, not to the last digit.
+Process 3 is Fujifilm's own cube where it publishes one ("official"), else the
+measured one. The camera's JPEG carries the recipe the photo was shot with
+(tone, colour, colour chrome) on top of the simulation; the cube is the
+simulation alone, so the two agree in character, not to the last digit.
 
     python -m tools.film_sim_fit.compare <out.jpg> <file.RAF> [<file.RAF> ...]
 """
@@ -22,7 +23,7 @@ import numpy as np
 import rawpy
 from PIL import Image, ImageOps
 
-from app.services import develop, raw as raw_service, thumbnails
+from app.services import develop, film_sims, raw as raw_service, thumbnails
 from tools.film_sim_fit.extract import FILM_MODE, MONO
 
 WIDTH = 520
@@ -63,7 +64,8 @@ def strip(path: Path):
     gain = (lo * hi) ** 0.5
     sim = _sim_of(path)
     tiles = [_render(lin, gain, "none", "3"), _render(lin, gain, sim, "2"), _render(lin, gain, sim, "3"), cam]
-    for tile, label in zip(tiles, ("no simulation", f"recipe: {sim}", f"measured: {sim}", "camera JPEG")):
+    third = "official" if film_sims.official_cube(sim) is not None else "measured"
+    for tile, label in zip(tiles, ("no simulation", f"recipe: {sim}", f"{third}: {sim}", "camera JPEG")):
         tile = tile.copy()
         cv2.putText(tile, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(tile, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)

@@ -10,7 +10,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 datas = [
     ("alembic.ini", "."),
     ("app/db/migrations", "app/db/migrations"),
-    # The film simulation cubes measured from camera JPEGs (film_sims.py).
+    # The film simulation cubes (film_sims.py): Fujifilm's own in official/,
+    # the measured ones beside it. The folder is copied with its subfolders.
     ("app/services/film_luts", "app/services/film_luts"),
 ]
 binaries = []

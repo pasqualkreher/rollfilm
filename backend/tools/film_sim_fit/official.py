@@ -1,4 +1,11 @@
-"""Step 2b: the simulations nobody shot, from Fujifilm's own cubes.
+"""Step 2b: the simulations nobody shot, from published cubes.
+
+What the app ships from this file today is the `--source sowerby` half: the
+nine looks Fujifilm publishes no cube for. Fujifilm's own ten are no longer
+bent into the app's display space through the bridge below - the app applies
+them where they are defined, on scene values (import_official.py,
+film_sims.apply_official), with nothing fitted to a camera JPEG. The Fujifilm
+half stays as the record of how the bridge was found and checked.
 
 Fujifilm publishes 3D LUTs that turn F-Log2 footage into ten of its film
 simulations (fujifilm-x.com/global/support/download/lut, the GFX ETERNA 55

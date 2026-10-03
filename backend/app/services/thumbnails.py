@@ -1465,6 +1465,67 @@ def _linear_tone_block(
 
     wh = adj.get("whites", 0) / 100.0
     bl = adj.get("blacks", 0) / 100.0
+    official = adj.get(_OFFICIAL_KEY)
+    if official is not None:
+        # Process version 3 on a RAW, a look Fujifilm publishes: its cube takes
+        # the scene values as they stand here and returns the display picture -
+        # Fujifilm's own tone curve and highlight roll-off, so neither the
+        # shoulder nor AgX runs (film_sims.apply_official). Whites<0 has no
+        # white point to raise in a cube: as for AgX, display white is scaled
+        # down instead.
+        sim, weight = official
+        look = film_sims.apply_official(arr, sim)
+        if wh < 0:
+            look = _linear_to_srgb(
+                _srgb_to_linear(look) * np.float32(1.0 - _WH_NEG_AGX * -wh)
+            ).astype(np.float32)
+        if weight < 1.0:
+            # Intensity blends against the picture without the look: this
+            # block's own tone map, in display space like every other look.
+            own = _linear_to_srgb(
+                np.clip(_tone_map(arr, adj, g, wh, white_floor), 0.0, 1.0)
+            ).astype(np.float32)
+            look = own + (look - own) * np.float32(weight)
+        if wh <= 0 and not bl:
+            return look
+        arr = _srgb_to_linear(look).astype(np.float32)
+    else:
+        arr = _tone_map(arr, adj, g, wh, white_floor)
+
+    # Display-referred endpoint moves (per channel, standard endpoint
+    # behaviour - the encode clip below catches out-of-range tails):
+    # whites>0 pulls the display white point down (brightens into a hard clip);
+    # blacks<0 sets a display-linear black point (everything below crushes to
+    # true black, the rest rescales - a real toe, where the old additive
+    # darkening could never reach 0); blacks>0 lifts the black point (washes
+    # the toe while white stays pinned). These act on the display range, so
+    # every photo responds - the scene-referred regions above only bite where
+    # the histogram actually has content.
+    if wh > 0:
+        arr /= np.float32(1.0 - _WH_POS_POINT * wh)
+    if bl < 0:
+        bp = np.float32(_BL_NEG_POINT * -bl)
+        arr = (arr - bp) / (1.0 - bp)
+    elif bl > 0:
+        lift = np.float32(_BL_POS_LIFT * bl)
+        arr = arr * (1.0 - lift) + lift
+
+    return _linear_to_srgb(np.clip(arr, 0.0, 1.0)).astype(np.float32)
+
+
+# What apply_adjustments_linear leaves in the adjustments for the tone block
+# when the film simulation renders from Fujifilm's own cube: (look, intensity
+# 0..1). A private key rather than a parameter because it has to travel with
+# the adjustments everywhere they go - into the stage cache keys (it decides
+# what the tone stage holds), the noise probe, the masks' shoulder.
+_OFFICIAL_KEY = "_official_sim"
+
+
+def _tone_map(
+    arr: np.ndarray, adj: dict, g: float, wh: float, white_floor: float
+) -> np.ndarray:
+    """This app's own tone map: scene-linear in, display-linear out (may work
+    in place)."""
     if adj.get("tone_mapper") == "agx":
         # AgX handles scene-referred input natively (log2 encode spans +4 EV)
         # and returns display-linear 0..1. AgX has no white-point parameter, so
@@ -1487,26 +1548,7 @@ def _linear_tone_block(
             white *= 2.0 ** (_WH_NEG_WP_STOPS * -wh)
         y = np.maximum(arr @ _LUMA, 0.0)
         arr *= raw_service.reinhard_ratio(y, white)[..., None]
-
-    # Display-referred endpoint moves (per channel, standard endpoint
-    # behaviour - the encode clip below catches out-of-range tails):
-    # whites>0 pulls the display white point down (brightens into a hard clip);
-    # blacks<0 sets a display-linear black point (everything below crushes to
-    # true black, the rest rescales - a real toe, where the old additive
-    # darkening could never reach 0); blacks>0 lifts the black point (washes
-    # the toe while white stays pinned). These act on the display range, so
-    # every photo responds - the scene-referred regions above only bite where
-    # the histogram actually has content.
-    if wh > 0:
-        arr /= np.float32(1.0 - _WH_POS_POINT * wh)
-    if bl < 0:
-        bp = np.float32(_BL_NEG_POINT * -bl)
-        arr = (arr - bp) / (1.0 - bp)
-    elif bl > 0:
-        lift = np.float32(_BL_POS_LIFT * bl)
-        arr = arr * (1.0 - lift) + lift
-
-    return _linear_to_srgb(np.clip(arr, 0.0, 1.0)).astype(np.float32)
+    return arr
 
 
 # --- Banded execution of the tone block --------------------------------------
@@ -1588,10 +1630,13 @@ def _display_color_block(arr: np.ndarray, adj: dict, raw_source: bool = False) -
 
     # The film-simulation look goes first so it acts as the base "stock" the
     # user's curves/mixer/grading refine - the order a camera bakes it in.
-    arr = film_sims.apply_film_sim(
-        arr, adj.get("film_sim"), adj.get("lut_intensity", 100),
-        measured=raw_source and develop_v2.measured_film_sims(adj),
-    )
+    # (A look rendered from Fujifilm's own cube is in the picture already: the
+    # tone block applied it.)
+    if adj.get(_OFFICIAL_KEY) is None:
+        arr = film_sims.apply_film_sim(
+            arr, adj.get("film_sim"), adj.get("lut_intensity", 100),
+            measured=raw_source and develop_v2.measured_film_sims(adj),
+        )
     # Tone curves (point or parametric per curve_mode) and camera-style colour
     # calibration shape tone/primaries after the basic tonal controls.
     arr = develop_color.apply_curves(arr, adj)
@@ -2251,9 +2296,11 @@ def apply_adjustments(
 def _shoulder_white(adj: dict, base_gain: float) -> float:
     """The white point of the highlight shoulder _linear_tone_block put on this
     render - what a mask's local pass takes back off (see _adjust_array). 1.0
-    where there is nothing to take off: AgX has no closed inverse, and an edit
-    on the original process keeps its masks on top of the finished tones."""
-    if not develop_v2.is_v2(adj) or adj.get("tone_mapper") == "agx":
+    where there is nothing to take off: AgX has no closed inverse, nor has a
+    film simulation rendered from Fujifilm's cube, and an edit on the original
+    process keeps its masks on top of the finished tones."""
+    if (not develop_v2.is_v2(adj) or adj.get("tone_mapper") == "agx"
+            or adj.get(_OFFICIAL_KEY) is not None):
         return 1.0
     g, _ = _tone_gains(adj, base_gain)
     white = max(g, 1.0)
@@ -2327,10 +2374,11 @@ def apply_adjustments_linear(
     8-bit image - the 16-bit TIFF export, the one caller that keeps the tonal
     resolution the float pipeline has.
 
-    `raw_source` says the base is a RAW demosaic. Only then do the film
-    simulations measured from camera JPEGs apply (process version 3): they
-    were fitted on this pipeline's render of a RAW, tone included, and would
-    put the camera's tone curve onto a JPEG a second time.
+    `raw_source` says the base is a RAW demosaic. Only then does process
+    version 3 render the film simulations from cubes (film_sims): Fujifilm's
+    own take scene values, which a JPEG no longer has, and the measured ones
+    were made on this pipeline's render of a RAW, tone included - either
+    would put a camera's tone curve onto a JPEG a second time.
 
     Order: linear tone block (gain/WB/tone sliders/tonemap - always runs, since
     even neutral edits need the base gain + shoulder applied) -> denoise ->
@@ -2405,6 +2453,13 @@ def apply_adjustments_linear(
     ref_h, ref_w = (view.full_h, view.full_w) if view is not None else lin.shape[:2]
     long_edge = max(ref_h, ref_w)
     short_edge = min(ref_h, ref_w)
+    official = film_sims.official_sim(adj, raw_source)
+    if official is not None:
+        # The tone block renders this look (see _OFFICIAL_KEY).
+        adj = {
+            **adj,
+            _OFFICIAL_KEY: (official, min(100.0, float(adj.get("lut_intensity", 100))) / 100.0),
+        }
     if develop.is_neutral(adj) and peek is None:
         # Nothing but the neutral rendering (gain + shoulder) to do. Checked
         # before the cache so a neutral edit can never take a cached stage and

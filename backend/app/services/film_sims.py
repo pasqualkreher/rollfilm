@@ -21,21 +21,27 @@ measured camera profiles: colour placement and tonality follow each stock's
 documented character (Velvia's deepened saturated primaries, Classic
 Chrome's muted reds and hard shadows, Eterna's flat low-chroma tone, ...).
 
-Process version 3 replaces a recipe with a measured cube where there is one
-(film_luts/<sim>.npy): fitted to the JPEGs the camera itself wrote into its
-RAFs, against this app's own neutral render of the same frames, with the
-recipe settings the photos were shot with (tone, colour, colour chrome) taken
-back out - see tools/film_sim_fit. The looks the library was never shot with
-(Provia, Velvia, Astia, Pro Neg. Std, Eterna Bleach Bypass) come from the 3D
-LUTs Fujifilm publishes for F-Log2 footage, reached from this app's render
-through a small bridge that was fitted, and checked, on the looks that were
-shot (tools/film_sim_fit/official.py). What Fujifilm's pack lacks - Pro Neg.
-Hi, Monochrome, Sepia and the yellow / red / green filter variants - comes
-the same way from Stuart Sowerby's "Fuji XTrans III" HaldCLUTs, which carry
-no licence to redistribute: see the note in tools/film_sim_fit/official.py
-before shipping those nine. Same cube format, same place in the
-pipeline; a look without a measured cube keeps its recipe, and edits made on
-an earlier process version keep the recipes throughout.
+Process version 3 on a RAW renders the looks Fujifilm itself publishes from
+Fujifilm's own cubes (film_luts/official/<sim>.npy): the 3D LUTs for F-Log2
+footage, ten looks - Provia, Velvia, Astia, Classic Chrome, Reala Ace, Pro
+Neg. Std, Classic Neg., Eterna, Eterna Bleach Bypass, Acros. They are
+scene-referred: the tone block hands apply_official the linear picture, which
+is encoded as F-Log2 / F-Gamut and looked up, and the cube's output IS the
+display picture - Fujifilm's tone curve and highlight roll-off for that look,
+in place of this app's shoulder (see thumbnails._linear_tone_block). Nothing
+in that path is fitted to anything; 18% grey in is 18% grey out. The cubes
+were first fitted to the JPEGs the camera wrote into its RAFs, but those
+carry the recipe they were shot with (tone, colour, colour chrome), which
+does not come back out cleanly - Classic Neg. showed it.
+
+What Fujifilm's pack lacks keeps a display-referred cube in this module's own
+format (film_luts/<sim>.npy), applied where the recipes are: Pro Neg. Hi,
+Monochrome, Sepia and the yellow / red / green filter variants from Stuart
+Sowerby's "Fuji XTrans III" HaldCLUTs (no licence to redistribute: see the
+note in tools/film_sim_fit/official.py before shipping those nine), and
+Nostalgic Neg., which nobody publishes, from the camera JPEGs after all
+(tools/film_sim_fit/fit.py). A look without any cube keeps its recipe, and
+edits made on an earlier process version keep the recipes throughout.
 """
 
 from __future__ import annotations
@@ -55,6 +61,26 @@ _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 
 # The measured cubes (process version 3), one .npy per look that has one.
 _MEASURED_DIR = Path(__file__).parent / "film_luts"
+# Fujifilm's own cubes (F-Log2 / F-Gamut in, BT.709 out), copied by
+# tools/film_sim_fit/import_official.py.
+_OFFICIAL_DIR = _MEASURED_DIR / "official"
+OFFICIAL_SIMS = frozenset({
+    "provia", "velvia", "astia", "classic_chrome", "reala_ace", "pro_neg_std",
+    "classic_neg", "eterna", "eterna_bleach_bypass", "acros",
+})
+
+# Linear BT.709 -> F-Gamut (BT.2020 primaries, D65).
+_FGAMUT_FROM_709 = np.array([[0.627404, 0.329283, 0.043313],
+                             [0.069097, 0.919540, 0.011362],
+                             [0.016391, 0.088013, 0.895595]], dtype=np.float32)
+# F-Log2 OETF (Fujifilm's data sheet): scene reflectance -> code value 0..1.
+_FLOG2_A, _FLOG2_B, _FLOG2_C, _FLOG2_D = 5.555556, 0.064829, 0.245281, 0.384316
+_FLOG2_E, _FLOG2_F, _FLOG2_CUT = 8.799461, 0.092864, 0.000889
+
+# A frame is looked up in bands of this many rows: the lookup's coordinate
+# maps are frame-sized float32 temporaries, and on a 40MP render they are what
+# pushed an 8GB machine into swap.
+_SAMPLE_BAND_ROWS = 1024
 
 # Cube edge resolution. 33 is the conventional .cube size: fine enough that
 # trilinear interpolation of smooth recipes is visually transparent, small
@@ -324,28 +350,112 @@ def _sim_cube(sim: str, measured: bool = False) -> np.ndarray | None:
     return _bake(recipe, grid).reshape(_CUBE_N, _CUBE_N, _CUBE_N, 3).astype(np.float32)
 
 
+@lru_cache(maxsize=None)
+def official_cube(sim: str) -> np.ndarray | None:
+    """Fujifilm's cube for the look (F-Log2 code values in, display out),
+    indexed [r][g][b], or None where Fujifilm publishes none or the file is
+    missing or unusable."""
+    path = _OFFICIAL_DIR / f"{sim}.npy"
+    if sim not in OFFICIAL_SIMS or not path.is_file():
+        return None
+    try:
+        cube = np.load(path).astype(np.float32)
+    except (OSError, ValueError):
+        logger.exception("Unreadable official film simulation %s", path)
+        return None
+    if cube.ndim != 4 or cube.shape[3] != 3 or len(set(cube.shape[:3])) != 1:
+        logger.error("Official film simulation %s has shape %s", path, cube.shape)
+        return None
+    return np.clip(cube, 0.0, 1.0)
+
+
+def official_sim(adj: dict, raw_source: bool) -> str | None:
+    """The look this edit renders from Fujifilm's own cube, or None: process
+    version 3, a RAW underneath, a look Fujifilm publishes, intensity above
+    zero. The tone block then applies it (apply_official) and the display
+    colour block leaves the simulation alone."""
+    sim = adj.get("film_sim")
+    if not raw_source or adj.get("process") != "3" or not sim or sim == "none":
+        return None
+    if adj.get("lut_intensity", 100) <= 0 or official_cube(sim) is None:
+        return None
+    return sim
+
+
+def apply_official(scene: np.ndarray, sim: str) -> np.ndarray:
+    """Scene-linear BT.709 RGB (HxWx3 float32, 0.18 = middle grey, highlights
+    above 1.0 welcome - F-Log2 holds them to about 58) through Fujifilm's cube
+    for `sim`: display sRGB float32 0..1 out. The cube's BT.709 code values are
+    shown as they are, as every editor shows graded footage on a computer
+    screen."""
+    cube = official_cube(sim)
+    out = np.empty(scene.shape, dtype=np.float32)
+    for y0 in range(0, scene.shape[0], _SAMPLE_BAND_ROWS):
+        x = np.maximum(scene[y0:y0 + _SAMPLE_BAND_ROWS] @ _FGAMUT_FROM_709.T, 0.0)
+        code = np.where(
+            x >= _FLOG2_CUT,
+            _FLOG2_C * np.log10(_FLOG2_A * x + _FLOG2_B) + _FLOG2_D,
+            _FLOG2_E * x + _FLOG2_F,
+        ).astype(np.float32)
+        out[y0:y0 + _SAMPLE_BAND_ROWS] = _sample_band(code, cube)
+    return np.clip(out, 0.0, 1.0, out=out)
+
+
+# cube id -> (cube, atlas). The cubes themselves live for the process in the
+# lru_caches above, so the id is stable; keeping the cube in the entry pins it.
+_atlases: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _atlas(cube: np.ndarray) -> np.ndarray:
+    """The cube as one 2-D picture for cv2.remap: its n blue slices stacked
+    top to bottom, each n rows (green) by n columns (red)."""
+    entry = _atlases.get(id(cube))
+    if entry is None or entry[0] is not cube:
+        n = cube.shape[0]
+        entry = (cube, np.ascontiguousarray(cube.transpose(2, 1, 0, 3).reshape(n * n, n, 3)))
+        _atlases[id(cube)] = entry
+    return entry[1]
+
+
+def _sample_band(arr: np.ndarray, cube: np.ndarray) -> np.ndarray:
+    import cv2
+
+    n = cube.shape[0]
+    atlas = _atlas(cube)
+    x = np.clip(arr, 0.0, 1.0) * np.float32(n - 1)
+    red = np.ascontiguousarray(x[..., 0])
+    blue = x[..., 2]
+    b0 = np.minimum(np.floor(blue), n - 2)
+    fb = (blue - b0)[..., None]
+    # Bilinear in red and green inside the blue slice below and the one above
+    # (green never leaves its slice: it stops at row n - 1), then blend the two.
+    row = b0 * n + x[..., 1]
+    lo = cv2.remap(atlas, red, row, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    row += n
+    hi = cv2.remap(atlas, red, row, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    hi -= lo
+    hi *= fb
+    lo += hi
+    return lo
+
+
 def _sample_cube(arr: np.ndarray, cube: np.ndarray) -> np.ndarray:
     """Trilinear interpolation of an HxWx3 0..1 array through the cube.
 
-    Gathers the 8 lattice corners through a flattened (N^3, 3) view with 1-D
-    take() calls - one multi-axis fancy-index per corner on the 4-D cube costs
-    several times more, which matters at editor-preview resolution."""
-    n = cube.shape[0]
-    flat = cube.reshape(-1, 3)
-    x = np.clip(arr, 0.0, 1.0).reshape(-1, 3) * (n - 1)
-    i0 = np.minimum(x.astype(np.int32), n - 2)
-    f = (x - i0).astype(np.float32)
-    fr, fg, fb = f[:, 0:1], f[:, 1:2], f[:, 2:3]
-    base = (i0[:, 0] * n + i0[:, 1]) * n + i0[:, 2]  # index of the low corner
-    # Blend the corners axis by axis: b (stride 1), then g (stride n), then r
-    # (stride n*n).
-    c00 = flat.take(base, axis=0) * (1 - fb) + flat.take(base + 1, axis=0) * fb
-    c01 = flat.take(base + n, axis=0) * (1 - fb) + flat.take(base + n + 1, axis=0) * fb
-    c10 = flat.take(base + n * n, axis=0) * (1 - fb) + flat.take(base + n * n + 1, axis=0) * fb
-    c11 = flat.take(base + n * n + n, axis=0) * (1 - fb) + flat.take(base + n * n + n + 1, axis=0) * fb
-    c0 = c00 * (1 - fg) + c01 * fg
-    c1 = c10 * (1 - fg) + c11 * fg
-    return (c0 * (1 - fr) + c1 * fr).astype(np.float32).reshape(arr.shape)
+    The cube is laid out as a 2-D atlas and read with two cv2.remap calls
+    (SIMD, all cores) instead of eight numpy gathers: the same numbers at a
+    ninth of the time (1837x1225: 23 ms against 211 ms), which is the
+    difference between a film simulation costing the editor a frame and
+    costing it nothing. Big frames go through in row bands."""
+    if arr.ndim != 3:  # a list of colours: as a picture one colour wide
+        return _sample_cube(arr.reshape(-1, 1, 3), cube).reshape(arr.shape)
+    arr = arr.astype(np.float32, copy=False)
+    if arr.shape[0] <= _SAMPLE_BAND_ROWS:
+        return _sample_band(arr, cube)
+    out = np.empty(arr.shape, dtype=np.float32)
+    for y0 in range(0, arr.shape[0], _SAMPLE_BAND_ROWS):
+        out[y0:y0 + _SAMPLE_BAND_ROWS] = _sample_band(arr[y0:y0 + _SAMPLE_BAND_ROWS], cube)
+    return out
 
 
 def apply_film_sim(

@@ -44,8 +44,9 @@ def is_v2(adj: dict) -> bool:
 
 
 def measured_film_sims(adj: dict) -> bool:
-    """Process version 3: the film simulations are the cubes fitted to the
-    camera's own JPEGs (film_sims), where one exists."""
+    """Process version 3: the film simulations render from cubes instead of
+    the hand-made recipes - Fujifilm's own where it publishes one, a measured
+    one where there is one (film_sims)."""
     return adj.get("process") == "3"
 
 
