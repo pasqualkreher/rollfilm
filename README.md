@@ -18,8 +18,9 @@ non-destructively, print what you made.<br>
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Windows%20·%20Linux-lightgrey)](#download--installation)
 [![GitHub stars](https://img.shields.io/github/stars/pasqualkreher/Rollfilm?style=flat&color=f5c518)](https://github.com/pasqualkreher/Rollfilm/stargazers)
+[![Donate with PayPal](https://img.shields.io/badge/donate-PayPal-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=TE6RWWJ7JRPKN)
 
-**[⬇ Download](#download--installation)** · [Why Rollfilm](#why-rollfilm) · [Screenshots](#screenshots) · [Features](#features) · [Contributing](#contributing) · [rollfilm.org](https://rollfilm.org)
+**[⬇ Download](#download--installation)** · [Why Rollfilm](#why-rollfilm) · [Screenshots](#screenshots) · [Features](#features) · [Contributing](#contributing) · [Donate](#support-the-project) · [rollfilm.org](https://rollfilm.org)
 
 <a href="https://rollfilm.org"><img src="docs/screenshots/library.jpg" alt="Rollfilm library view" width="850"></a>
 
@@ -58,26 +59,33 @@ Your photos stay on your own machine. Rollfilm copies them into a managed librar
 
 ## Screenshots
 
-More on [rollfilm.org](https://rollfilm.org/#screenshots).
+More on [rollfilm.org](https://rollfilm.org/#gallery).
 
 | | |
 | :---: | :---: |
-| <img src="docs/screenshots/search.jpg" alt="Semantic search" width="420"><br>**Semantic search** — describe what you remember | <img src="docs/screenshots/map.jpg" alt="Map view" width="420"><br>**Map view** — every geotagged photo |
-| <img src="docs/screenshots/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import wizard** — stage, compare, pick | <img src="docs/screenshots/immich-sync.jpg" alt="Immich sync modes" width="420"><br>**Immich sync** — your library, mirrored |
-| <img src="docs/screenshots/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor** — non-destructive, masks, film sims | <img src="docs/screenshots/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare** — split by a draggable line, or side by side |
-| <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics** — the gear you actually use | <img src="docs/screenshots/themes.jpg" alt="Color skins" width="420"><br>**Skins** — a light one, a dark one, or follow the system |
-| <img src="docs/screenshots/canvas.jpg" alt="Canvas editor with photos laid out on a page" width="420"><br>**Canvas** — lay photos out on a page, print or export it | <img src="docs/screenshots/albums-wide.jpg" alt="Albums page" width="420"><br>**Albums** — countries, years and months, plus your own |
-| <img src="docs/screenshots/canvas-edit.jpg" alt="Canvas with the photo editor docked beside the page" width="420"><br>**Canvas edit** — edit a photo right on the page, the original stays untouched | <img src="docs/screenshots/import-sessions.jpg" alt="Open import sessions" width="420"><br>**Import sessions** — an import stays open until you end it, pull the card and come back later |
+| <img src="docs/screenshots/search.jpg" alt="Semantic search" width="420"><br>**Semantic search**: describe what you remember | <img src="docs/screenshots/map.jpg" alt="Map view" width="420"><br>**Map view**: every geotagged photo |
+| <img src="docs/screenshots/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import review**: stage, compare, pick, with the camera settings beside the photo | <img src="docs/screenshots/import-start.jpg" alt="New import session dialog" width="420"><br>**Import start**: copy the card or leave the photos where they are |
+| <img src="docs/screenshots/import-sessions.jpg" alt="Open import sessions" width="420"><br>**Import sessions**: an import stays open until you end it, pull the card and come back later | <img src="docs/screenshots/immich-sync.jpg" alt="Immich sync modes" width="420"><br>**Immich sync**: your library, mirrored |
+| <img src="docs/screenshots/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor**: non-destructive, with masks that find the sky by themselves | <img src="docs/screenshots/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare**: split by a draggable line, or side by side |
+| <img src="docs/screenshots/edit-film.jpg" alt="Film simulation list in the editor" width="420"><br>**Film simulations**: twenty looks over your own photo | <img src="docs/screenshots/edit-camera-jpg.jpg" alt="A RAW edit compared with the camera JPG" width="420"><br>**Camera JPG**: your RAW edit against the JPG the camera made |
+| <img src="docs/screenshots/edit-lens.jpg" alt="Lens correction in the editor" width="420"><br>**Lens correction**: distortion and vignetting from the lens data in the RAW | <img src="docs/screenshots/edit-nr.jpg" alt="Noise reduction at 200 percent" width="420"><br>**Noise reduction**: ISO 12800 at 200%, original left, cleaned right |
+| <img src="docs/screenshots/edit-wb.jpg" alt="White balance controls" width="420"><br>**White balance**: Kelvin, tint and the usual lights one click away | <img src="docs/screenshots/edit-presets.jpg" alt="Preset list in the editor" width="420"><br>**Presets**: save a look once, apply it with one click |
+| <img src="docs/screenshots/canvas.jpg" alt="Canvas editor with photos laid out on a page" width="420"><br>**Canvas**: lay photos out on a page, print or export it | <img src="docs/screenshots/canvas-edit.jpg" alt="Canvas with the photo editor docked beside the page" width="420"><br>**Canvas edit**: edit a photo right on the page, the original stays untouched |
+| <img src="docs/screenshots/albums-wide.jpg" alt="Albums page" width="420"><br>**Albums**: countries, years and months, plus your own | <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics**: the gear you actually use |
+
+Three quiet skins, each in light and dark, with a switch that can follow the system:
+
+<img src="docs/screenshots/themes.jpg" alt="Appearance dialog with the Stone, Pebble and Paper skins" width="850">
 
 ## Features
 
 | | Highlights |
 | :--- | :--- |
-| **Import** | Staged import wizard with a light table, sessions that stay open until you end them, RAW+JPEG pairing, byte-identical duplicate detection, EXIF and lens data, reverse geocoding |
-| **Organize** | Albums, smart albums, tags with bulk tagging, star ratings, color labels, selects/picks, per-photo descriptions, trash with retention, a right-click menu on every photo, chips that say which albums and canvases a photo is in |
+| **Import** | Staged import wizard with a light table, one start dialog (copy the card or leave the photos in place, with an optional backup folder), sessions that stay open until you end them, RAW+JPEG pairing, byte-identical duplicate detection, EXIF and lens data, reverse geocoding |
+| **Organize** | Albums, smart albums, tags with bulk tagging, star ratings, color labels, selects/picks, per-photo notes, trash with retention, a right-click menu on every photo, chips that say which albums and canvases a photo is in |
 | **Search** | Local semantic search, image-to-image similarity, gear filters that cross-filter each other, map, exact-scrolling timeline, statistics |
 | **Immich** | Three sync modes, background reconciliation every 60 s, album mirroring, durable deletion queue, optional RAW upload |
-| **Edit** *(experimental)* | Non-destructive, backend-rendered, masks with local AI subject selection, tone curves on the histogram, auto develop learned from your own edits, virtual copies |
+| **Edit** *(experimental)* | Non-destructive, backend-rendered, lens correction from the camera's own data, twenty film simulations, masks with local AI subject selection, tone curves on the histogram, Kelvin white balance, luminance and color noise reduction, presets, auto develop learned from your own edits, virtual copies |
 | **Canvas** | Pages or one free sheet, A4/A3/Letter/square or any size in mm, drag, crop-in-frame, rotate, snap, captions, the editor docked beside the page, print view and lossless PDF export |
 | **Safety** | Originals never modified, renames survive Finder, backup and restore as one zip, external folders mounted read-only |
 
@@ -88,7 +96,10 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 - **Sessions you can come back to** — *Continue later* keeps your ticks, stars, labels and the files already copied; *Open import sessions* on the Import page lists what is still open and *Continue* copies only what isn't copied yet, including photos shot onto the card since. Photos already added in an earlier round stay visible, marked as in the library and blocked from coming in twice
 - **The card, not its path** — a session remembers the card itself, so it is recognised even when the computer mounts it under another name, and a different card under the same name is not mistaken for it. An unplugged card shows as *Not connected* until it returns
 - **One session, several sources** — *Add folder…* / *Add photos…* in the review collect from more than one card or folder into the same session, each tracked and continued on its own
-- **RAW support** (via rawpy) with automatic RAW+JPEG pairing
+- **Copy the card, or leave the photos where they are.** One start dialog per import decides: copy everything into an import folder of the session's own, so the card can go back in the camera, or add the photos in place without copying. The import folder can be kept as a backup of everything that was read, and Settings can remember the answer so the dialog never comes up
+- **Straight into an album.** An album choice next to *Add to library* files the chosen photos as they come in
+- **Camera settings while you cull.** I, or the Info button, opens camera, lens and exposure beside the staged photo
+- **RAW support** (via rawpy) with automatic RAW+JPEG pairing; a pair shares its stars, colour label, tags and notes
 - **EXIF extraction** (ExifTool) — capture date, camera, **lens**, exposure data — and reverse geocoding of GPS coordinates to country/place
 - **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
 - **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
@@ -97,7 +108,7 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 - **Right-click any photo** — export, save a copy, or show the file in Finder / Explorer; on a selected photo the action applies to the whole selection
 - **Where a photo lives** — album and canvas chips beside each photo and on the grid's hover card, each a link into that album or canvas, with an × to take the photo out
 - **Rename photos from the app** — the file on disk is renamed with them, the RAW/JPEG partner follows to the same name, and the photo keeps its stars, tags, albums, edits and cached previews
-- **Free-text descriptions** per photo, stored in the database like every other edit
+- **Notes** per photo, stored in the database like every other edit
 - **Renames survive Finder** — a photo you rename or move outside the app is matched back by its content, not its name, so it keeps everything you gave it instead of being treated as deleted
 - **Trash** with configurable retention and automatic background purge — a deletion keeps the photo's stars, tags, albums and edits, and Restore brings it all back
 - **Backup & restore** — one zip with every photo plus all ratings, colors, albums, tags and edits, and a one-click "sync database to library" repair
@@ -115,7 +126,7 @@ More on [rollfilm.org](https://rollfilm.org/#screenshots).
 - **A timeline that stays out of the way at any size** — the whole library is laid out up front, so the scrollbar is exact from the first frame and the date scrubber on the right lands anywhere in it instantly; only the tiles near the viewport are ever mounted
 - **Details without leaving the grid** — hover a tile for an "i" that opens camera, lens, exposure, tags and albums beside it
 - **Statistics** — photos per year, plus which camera bodies, lenses and focal-length ranges you actually shoot, how your ratings fall, and what the library is made of
-- **Look & feel** — seven light/dark skin pairs (Stone, Slate, Ink, Orange, Sand, Sage, Blue), a light one and a dark one chosen separately with a Light / Dark / Auto switch that can follow the system; rounded or square corners; the interface typeface picked from what your system already has
+- **Look & feel.** Three light/dark skin pairs (Stone, Pebble, Paper), a light one and a dark one chosen separately with a Light / Dark / Auto switch that can follow the system; rounded or square corners; the interface typeface picked from what your system already has
 
 </details>
 
@@ -172,10 +183,15 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 - Edits are stored as values in the database; originals are never touched
 - **It saves itself** — no Save button: edits are written a moment after a slider comes to rest and again when you close. Small dots on sliders and sections show where the edits are
 - **Focus mode** — F hides the app's bars, P the panel, so the photo gets the whole window
-- Exposure/contrast/highlights/shadows, white balance, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
+- **Lens correction.** RAW files are corrected for distortion and vignetting from the data the camera stored (Fujifilm, Sony, OM System, Panasonic, DNG), with the Lensfun database for the rest. A switch and two strength sliders under Transform
+- **Twenty film simulations** with a strength slider, from Provia and Velvia to Classic Neg., Acros and Sepia, and a Basic or AgX tone mapper that keeps a look's colours
+- **Noise reduction** in three sliders: luminance, luminance detail and colour
+- Exposure/contrast/highlights/shadows, white balance in Kelvin with presets for daylight, cloudy, shade, tungsten and fluorescent, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
 - **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives
 - **Masks** — radial, linear, brush, luminance and color, plus **AI subject selection** (sky, water, greenery, people, buildings, ground) run locally with SegFormer. Point at a mask in the list and it marks what it covers
-- **Compare against the original** — split by a divider you drag across the photo, or the two side by side. On a RAW the original half is shown with the library's auto-exposure, so the comparison isn't just "the edit is brighter"
+- **Compare against the original, a snapshot or the camera's JPG.** Split by a divider you drag across the photo, or the two side by side. A RAW shot together with a JPG can be held against that JPG. On a RAW the original half is shown with the library's auto-exposure, so the comparison isn't just "the edit is brighter"
+- **Presets.** Save a look, apply it from a list with one click, to one photo or a whole selection, and export or import presets as a file
+- **Working resolution.** The editor preview renders at 100%, 70% or 50%, a setting for slower machines
 - **Physical and virtual copies** — *Save copy* bakes an edit into a new file in the library; a virtual copy is a second, independently editable version of the same file that costs no disk space
 - **Auto develop** — an optional "Auto" button that suggests develop settings *learned from your own edits*: a local CLIP k-nearest-neighbor recommender finds the photos you've already edited that look most like the one you're working on and blends their settings. No training step, no cloud — every edit you save immediately makes the next suggestion better. Works on a single photo or a whole selection at once
 
@@ -265,8 +281,8 @@ three-line function exists, which is how the reasoning survives between sessions
 
 What that means in practice:
 
-- **It's tested where it counts.** 450+ backend tests cover the paths that could
-  lose your photos or your edits — import, trash, pairing, library sync. Your
+- **It's tested where it counts.** 550+ backend tests cover the paths that could
+  lose your photos or your edits: import, trash, pairing, library sync. Your
   originals are never modified; edits live in the database beside them.
 - **It also means one person's blind spots.** Rollfilm is used daily on one
   library, one camera bag, one operating system more than the others. Bug
@@ -311,7 +327,7 @@ cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 python run_server.py   # runs Alembic migrations, then starts the API on localhost
-pytest                 # 450+ tests, in-memory database, a few seconds
+pytest                 # 550+ tests, in-memory database
 ```
 
 ### Configuration
@@ -357,7 +373,13 @@ Issues and pull requests are welcome — please read [CONTRIBUTING.md](CONTRIBUT
 
 ## Support the project
 
-Rollfilm is free and open source, built in my spare time. If it's useful to you, a ⭐ on GitHub or a mention to a friend already helps. Bug reports from a setup unlike mine help even more. More on [rollfilm.org](https://rollfilm.org/#about).
+Rollfilm is free and open source, built in my spare time. If it's useful to you, a ⭐ on GitHub or a mention to a friend already helps. Bug reports from a setup unlike mine help even more.
+
+If you would like to give something back, a small donation keeps it going:
+
+[![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-0070ba?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=TE6RWWJ7JRPKN)
+
+Rollfilm has no paid tier, so a donation changes nothing about what the app does for you. More on [rollfilm.org](https://rollfilm.org/#donate).
 
 ## License
 
