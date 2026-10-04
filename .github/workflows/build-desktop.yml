@@ -218,8 +218,11 @@ jobs:
           shopt -s nullglob
           # latest*.yml + blockmaps are what the in-app auto-updater
           # (electron-updater) reads to discover and delta-download a release;
-          # the .zsync is the same thing for AppImage update tools.
+          # the .zsync is the same thing for AppImage update tools. The mac
+          # .zip is not for people: it is what the app on a Mac updates from
+          # (a dmg barely delta-downloads, and can't be unpacked unmounted).
           files=(electron/dist-app/*.dmg electron/dist-app/*.exe electron/dist-app/*.AppImage
+                 electron/dist-app/*.zip
                  electron/dist-app/latest*.yml electron/dist-app/*.blockmap
                  electron/dist-app/*.zsync electron/dist-app/*.sha256)
           if [ ${#files[@]} -eq 0 ]; then

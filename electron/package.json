@@ -54,7 +54,10 @@
       "output": "dist-app"
     },
     "mac": {
-      "target": "dmg",
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.photography",
       "identity": null,
       "gatekeeperAssess": false,

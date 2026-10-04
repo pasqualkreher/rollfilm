@@ -244,7 +244,11 @@ Download `Rollfilm-<version>.AppImage`, make it executable (`chmod +x Rollfilm-*
 
 ### Updates
 
-On Windows and Linux the app updates itself: it checks the Releases page, downloads the new version in the background and applies it on the next quit. **On macOS it can't** — swapping an app bundle in place requires a signed build — so it only tells you a new version exists and opens the release page. Updating there means repeating the install: same two commands, drag over the old app.
+The app updates itself: it checks the Releases page, downloads the new version in the background and applies it on the next quit. Only what changed is downloaded — some tens of MB, not the whole installer again. (On a Mac the first update after an install is still the whole thing; the app keeps that download in `~/Library/Caches/rollfilm-desktop-updater` as the base for the next ones.)
+
+**On macOS this needs the app to sit somewhere it may replace itself** — in practice: dragged into Applications. The usual updater for Mac apps refuses an unsigned build, so Rollfilm unpacks the new version and trades the app bundle itself once it has quit. Run straight from the disk image, or where macOS doesn't allow the swap, it falls back to telling you a new version exists and opening the release page; updating then means repeating the install. The AppImage additionally carries update information, so AppImageUpdate and similar tools can update it too.
+
+What the updater did, and why an update didn't install, is in `updater.log` — in the app's `logs` folder, next to `backend.log` (on macOS `~/Library/Application Support/rollfilm-desktop/logs/`).
 
 ## Who builds this, and how
 
