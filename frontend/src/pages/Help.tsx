@@ -959,7 +959,9 @@ const CHAPTERS: Chapter[] = [
               choice of tone curve. <strong>Basic</strong> is the straightforward one;{" "}
               <strong>AgX</strong> is filmic: it rolls the highlights off more softly and lets
               bright, saturated areas fade toward white instead of shifting color, which is what
-              you want for skies and hard sunlight.
+              you want for skies and hard sunlight. With a film simulation on a RAW,{" "}
+              <strong>Basic</strong> is the simulation's own tone curve, and <strong>AgX</strong>{" "}
+              keeps its colors on AgX's curve.
             </p>
             <h4>4 · Curves</h4>
             <ul>

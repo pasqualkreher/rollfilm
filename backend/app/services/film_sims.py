@@ -55,6 +55,12 @@ reference.py. The looks Fujifilm publishes no cube for get one of the same
 kind there (film_luts/derived/<sim>.npy, tools/film_sim_fit/derive.py: the
 published look they are closest to, plus what sets them apart from it), so all
 of them share one tone path.
+
+Process version 5 lets the tone mapper choose that path's tone curve. Basic is
+the look's own, as on 4. AgX keeps the look's colour and takes its tones from
+AgX: like the stills shoulder it is a factor per scene luminance in front of
+the untouched cube, the one that makes the cube's grey ramp come out where
+AgX puts it (_agx_factors).
 """
 
 from __future__ import annotations
@@ -110,6 +116,12 @@ _FGAMUT_FROM_709 = np.array([[0.627404, 0.329283, 0.043313],
 # F-Log2 OETF (Fujifilm's data sheet): scene reflectance -> code value 0..1.
 _FLOG2_A, _FLOG2_B, _FLOG2_C, _FLOG2_D = 5.555556, 0.064829, 0.245281, 0.384316
 _FLOG2_E, _FLOG2_F, _FLOG2_CUT = 8.799461, 0.092864, 0.000889
+
+# Process version 5, AgX under a look: the factors are tabulated over scene
+# luminance in stops (log2), from below AgX's black to where F-Log2 runs out,
+# at this many points.
+_AGX_TABLE_EV = (-13.0, 6.0)
+_AGX_TABLE_N = 2048
 
 # A frame is looked up in bands of this many rows: the lookup's coordinate
 # maps are frame-sized float32 temporaries, and on a 40MP render they are what
@@ -418,9 +430,15 @@ def derived_cube(sim: str) -> np.ndarray | None:
 
 
 def renders_as_still(adj: dict) -> bool:
-    """Process version 4: a look rendered from a scene cube gets the anchor
-    and the stills shoulder, and the derived cubes count."""
-    return adj.get("process") == "4"
+    """Process version 4 and up: a look rendered from a scene cube gets the
+    anchor and the stills shoulder, and the derived cubes count."""
+    return adj.get("process") in ("4", "5")
+
+
+def agx_under_look(adj: dict) -> bool:
+    """Process version 5 with AgX chosen: a look rendered from a scene cube
+    takes its tone curve from AgX instead of bringing its own."""
+    return adj.get("process") == "5" and adj.get("tone_mapper") == "agx"
 
 
 def _scene_cube(sim: str, still: bool) -> np.ndarray | None:
@@ -430,12 +448,12 @@ def _scene_cube(sim: str, still: bool) -> np.ndarray | None:
 
 def official_sim(adj: dict, raw_source: bool) -> str | None:
     """The look this edit renders from a scene cube, or None: process version
-    3 or 4, a RAW underneath, a look Fujifilm publishes (on 4 also one built
+    3 and up, a RAW underneath, a look Fujifilm publishes (on 4 also one built
     on those), intensity above zero. The tone block then applies it
     (apply_official) and the display colour block leaves the simulation
     alone."""
     sim = adj.get("film_sim")
-    if not raw_source or adj.get("process") not in ("3", "4") or not sim or sim == "none":
+    if not raw_source or adj.get("process") not in ("3", "4", "5") or not sim or sim == "none":
         return None
     if adj.get("lut_intensity", 100) <= 0 or _scene_cube(sim, renders_as_still(adj)) is None:
         return None
@@ -473,7 +491,33 @@ def _stills_factors(white: float) -> tuple[np.ndarray, np.ndarray]:
     return y, _STILLS_ANCHOR * 2.0 ** stops
 
 
-def apply_official(scene: np.ndarray, sim: str, stills_white: float | None = None) -> np.ndarray:
+@lru_cache(maxsize=None)
+def _agx_factors(sim: str) -> np.ndarray:
+    """What a scene luminance is multiplied by in front of the cube for the
+    look's grey ramp to follow AgX, as a table over _AGX_TABLE_EV (evenly
+    spaced in stops): the cube's own grey ramp read backwards at the
+    brightness AgX gives that luminance. Where AgX asks for more than the cube
+    has (a look with lifted blacks, below them) the nearest end stands in."""
+    from app.services import develop_effects
+
+    cube = _scene_cube(sim, True)
+    ev = np.linspace(*_AGX_TABLE_EV, _AGX_TABLE_N)
+    grey = np.repeat((2.0 ** ev).astype(np.float32)[:, None, None], 3, axis=2)
+    wanted = develop_effects.agx_tonemap(grey)[:, 0] @ _LUMA
+    shown = _sample_band(_flog2(grey), cube)[:, 0].astype(np.float64)
+    # Display-linear luminance of what the cube shows (sRGB decode).
+    shown = np.where(shown <= 0.04045, shown / 12.92, ((shown + 0.055) / 1.055) ** 2.4) @ _LUMA
+    # The ramp read backwards needs it rising: flat stretches (the cube at
+    # black, at white) keep their first point.
+    shown = np.maximum.accumulate(shown)
+    rising = np.concatenate(([True], np.diff(shown) > 1e-7))
+    at = np.interp(wanted, shown[rising], ev[rising])
+    return (2.0 ** (at - ev)).astype(np.float32).reshape(1, -1)
+
+
+def apply_official(
+    scene: np.ndarray, sim: str, stills_white: float | None = None, agx: bool = False
+) -> np.ndarray:
     """Scene-linear BT.709 RGB (HxWx3 float32, 0.18 = middle grey, highlights
     above 1.0 welcome - F-Log2 holds them to about 58) through Fujifilm's cube
     for `sim`: display sRGB float32 0..1 out. The cube's BT.709 code values are
@@ -482,10 +526,23 @@ def apply_official(scene: np.ndarray, sim: str, stills_white: float | None = Non
 
     `stills_white` (process version 4) renders the look as a still: the scene
     value the sensor clips at. Each pixel is scaled by its luminance's factor
-    (_stills_factors), colour ratios kept, before the cube sees it."""
+    (_stills_factors), colour ratios kept, before the cube sees it.
+
+    `agx` (process version 5) takes AgX's factors in their place
+    (_agx_factors): the look's colour on AgX's tone curve."""
     still = stills_white is not None
-    cube = _scene_cube(sim, still)
-    if still:
+    cube = _scene_cube(sim, still or agx)
+    if agx:
+        import cv2
+
+        # The table runs over stops: its position is read off the natural log.
+        factors = _agx_factors(sim)
+        lowest = np.float32(2.0 ** _AGX_TABLE_EV[0])
+        first = np.float32(_AGX_TABLE_EV[0] * math.log(2.0))
+        per_step = np.float32(
+            (_AGX_TABLE_N - 1) / ((_AGX_TABLE_EV[1] - _AGX_TABLE_EV[0]) * math.log(2.0))
+        )
+    elif still:
         import cv2
 
         lums, factors = _stills_factors(stills_white)
@@ -494,11 +551,14 @@ def apply_official(scene: np.ndarray, sim: str, stills_white: float | None = Non
     out = np.empty(scene.shape, dtype=np.float32)
     for y0 in range(0, scene.shape[0], _SAMPLE_BAND_ROWS):
         band = scene[y0:y0 + _SAMPLE_BAND_ROWS]
-        if still:
+        if still or agx:
             # The factor table read like the cube is: as a picture one row
             # high, through cv2.remap (np.interp takes 70 ms a frame for this).
             band = np.ascontiguousarray(band, dtype=np.float32)
             at = cv2.transform(band, _LUMA.reshape(1, 3))
+            if agx:
+                np.maximum(at, lowest, out=at)
+                cv2.log(at, at)
             at -= first
             at *= per_step
             x = cv2.transform(band, _FGAMUT_FROM_709)

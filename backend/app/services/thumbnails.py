@@ -1604,9 +1604,14 @@ def _linear_tone_block(
         # Process version 4 renders it as the camera renders a still: the white
         # point is where the sensor clips, the applied gain - the one the
         # shoulder below takes for the picture without a look.
+        # Process version 5 hands the tone curve back to the tone mapper: Basic
+        # is the look's own, as above; with AgX the cube keeps the colour and
+        # AgX sets the tones (film_sims.agx_under_look).
         sim, weight = official
         stills_white = max(g, 1.0) if film_sims.renders_as_still(adj) else None
-        look = film_sims.apply_official(arr, sim, stills_white)
+        look = film_sims.apply_official(
+            arr, sim, stills_white, agx=film_sims.agx_under_look(adj)
+        )
         if wh < 0:
             look = _linear_to_srgb(
                 _srgb_to_linear(look) * np.float32(1.0 - _WH_NEG_AGX * -wh)

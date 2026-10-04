@@ -406,3 +406,70 @@ def test_a_look_without_its_derived_cube_falls_back_to_the_display_cube(tmp_path
         )
     finally:
         film_sims.derived_cube.cache_clear()
+
+
+# --- process version 5: the tone mapper under a look ---------------------------
+
+def test_process_5_with_basic_is_process_4_and_agx_is_only_heard_on_5():
+    lin = np.random.default_rng(11).random((16, 16, 3)).astype(np.float32) * 0.9
+
+    def render(**over) -> np.ndarray:
+        adj = develop.normalize({"film_sim": "classic_neg", **over})
+        return np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, raw_source=True))
+
+    on_4 = render(process="4")
+    np.testing.assert_array_equal(render(process="5"), on_4)
+    np.testing.assert_array_equal(render(process="4", tone_mapper="agx"), on_4)
+    assert np.abs(render(process="5", tone_mapper="agx").astype(int) - on_4.astype(int)).max() > 8
+
+
+@pytest.mark.parametrize("sim", _LOOKS)
+def test_agx_under_a_look_puts_the_grey_ramp_where_agx_puts_it(sim):
+    from app.services import develop_effects
+
+    # From five stops under middle grey to three over: inside what every cube
+    # can show (a look with lifted blacks cannot go as dark as AgX does).
+    ramp = _grey(0.18 * 2.0 ** np.linspace(-5.0, 3.0, 60))
+    wanted = develop_effects.agx_tonemap(ramp)[0] @ _LUMA
+    out = film_sims.apply_official(ramp, sim, 1.0, agx=True)[0].astype(np.float64)
+    shown = np.where(out <= 0.04045, out / 12.92, ((out + 0.055) / 1.055) ** 2.4) @ _LUMA
+    assert np.abs(shown - wanted).max() < 2e-3, sim
+    if sim in _GREY_LOOKS:
+        colours = np.random.default_rng(1).random((1, 200, 3)).astype(np.float32)
+        grey = film_sims.apply_official(colours, sim, 1.0, agx=True)[0]
+        assert np.abs(grey[:, 0] - grey[:, 1]).max() < 1e-3 and np.abs(grey[:, 1] - grey[:, 2]).max() < 1e-3
+
+
+def test_agx_under_a_look_keeps_the_looks_colour():
+    # A colour look still differs from plain AgX, and Velvia stays more
+    # saturated than Eterna.
+    lin = np.random.default_rng(12).random((1, 400, 3)).astype(np.float32) * 0.8
+
+    def chroma(sim: str) -> float:
+        out = film_sims.apply_official(lin, sim, 1.0, agx=True)[0]
+        return float((out.max(axis=1) - out.min(axis=1)).mean())
+
+    assert chroma("velvia") > chroma("eterna") + 0.03
+
+
+def test_a_frame_taller_than_one_band_is_the_same_picture_under_agx(monkeypatch):
+    lin = np.random.default_rng(13).random((40, 12, 3)).astype(np.float32) * 1.4
+    whole = film_sims.apply_official(lin, "provia", 1.0, agx=True)
+    monkeypatch.setattr(film_sims, "_SAMPLE_BAND_ROWS", 16)
+    # A tolerance, not equality: cv2.transform rounds by position on x86.
+    np.testing.assert_allclose(
+        film_sims.apply_official(lin, "provia", 1.0, agx=True), whole, atol=1e-4
+    )
+
+
+def test_intensity_blends_agx_under_a_look_with_plain_agx():
+    lin = np.random.default_rng(14).random((16, 16, 3)).astype(np.float32) * 0.6
+
+    def render(**over) -> np.ndarray:
+        adj = develop.normalize({"process": "5", "tone_mapper": "agx", **over})
+        return np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, raw_source=True)).astype(float)
+
+    plain, full = render(), render(film_sim="velvia")
+    half = render(film_sim="velvia", lut_intensity=50)
+    assert np.abs(full - plain).max() > 8
+    assert np.abs(half - (plain + full) / 2).max() <= 1.5

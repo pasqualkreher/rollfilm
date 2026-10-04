@@ -130,7 +130,9 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     # "4" is "3" with those looks rendered as the camera renders a still -
     # brighter by a fixed anchor, highlights running to white at sensor
     # clipping - and with every look on a cube of that kind.
-    "process": ("1", ("1", "2", "3", "4")),
+    # "5" is "4" with the tone mapper heard under such a look: AgX sets the
+    # tone curve and the look keeps the colour, where "3" and "4" ignore it.
+    "process": ("1", ("1", "2", "3", "4", "5")),
     # Which exposure a RAW is developed from (see thumbnails._browsing_gain).
     # "standard" lifts every raw to the same brightness with the auto-exposure
     # gain the grid already uses (raw.compute_base_gain), so a photo opens the
@@ -153,7 +155,7 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # The process version a photo's first edit starts on (see ENUM_SPEC["process"]).
-CURRENT_PROCESS = "4"
+CURRENT_PROCESS = "5"
 
 # Identity point curve: pass-through on the 0..255 grid.
 _IDENTITY_CURVE = [[0, 0], [255, 255]]

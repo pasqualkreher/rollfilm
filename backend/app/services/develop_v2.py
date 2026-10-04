@@ -40,14 +40,14 @@ COLOR_BANDS: tuple[str, ...] = ("red", "orange", "yellow", "green", "aqua", "blu
 
 def is_v2(adj: dict) -> bool:
     """Process version 2 and everything built on it."""
-    return adj.get("process") in ("2", "3", "4")
+    return adj.get("process") in ("2", "3", "4", "5")
 
 
 def measured_film_sims(adj: dict) -> bool:
     """Process version 3 and up: the film simulations render from cubes
     instead of the hand-made recipes - Fujifilm's own where it publishes one, a
     measured one where there is one (film_sims)."""
-    return adj.get("process") in ("3", "4")
+    return adj.get("process") in ("3", "4", "5")
 
 
 # ------------------------------------------------------------------ transfers

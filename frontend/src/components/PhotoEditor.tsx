@@ -5149,7 +5149,17 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               <Dropdown
                 className="editor-select-inline"
                 value={adj.tone_mapper}
-                onChange={(v) => setAdj((a) => ({ ...a, tone_mapper: v as Adjustments["tone_mapper"] }))}
+                onChange={(v) =>
+                  // Process 3 and 4 render a film simulation on its own tone
+                  // curve whatever is chosen here; the current one listens.
+                  // Like choosing a look, choosing a tone mapper takes it in
+                  // its current form.
+                  setAdj((a) => ({
+                    ...a,
+                    tone_mapper: v as Adjustments["tone_mapper"],
+                    process: a.process === "3" || a.process === "4" ? CURRENT_PROCESS : a.process,
+                  }))
+                }
                 title="Tone mapper"
                 ariaLabel="Tone mapper"
                 options={TONE_MAPPERS.map((t) => ({ value: t.value, label: t.label }))}
