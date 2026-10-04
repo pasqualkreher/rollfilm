@@ -72,13 +72,18 @@ jobs:
           echo "::error::No CI result for ${{ github.sha }} after 30 minutes. Is the tag on a commit that was pushed to main?"
           exit 1
 
+      # Linux builds on the OLDEST Ubuntu runner, not ubuntu-latest: PyInstaller
+      # bundles the build host's Python and system libraries, and those need
+      # at least the glibc they were linked against. Built on 24.04 the
+      # AppImage asked for glibc 2.38 and would not start on anything older;
+      # built on 22.04 it asks for 2.35.
       - id: m
         run: |
           case "${{ github.event.inputs.platform || 'all' }}" in
             macos)   echo 'matrix=["macos-latest"]' >> "$GITHUB_OUTPUT";;
             windows) echo 'matrix=["windows-latest"]' >> "$GITHUB_OUTPUT";;
-            linux)   echo 'matrix=["ubuntu-latest"]' >> "$GITHUB_OUTPUT";;
-            *)       echo 'matrix=["macos-latest","windows-latest","ubuntu-latest"]' >> "$GITHUB_OUTPUT";;
+            linux)   echo 'matrix=["ubuntu-22.04"]' >> "$GITHUB_OUTPUT";;
+            *)       echo 'matrix=["macos-latest","windows-latest","ubuntu-22.04"]' >> "$GITHUB_OUTPUT";;
           esac
 
       # Create (once, up front) the release the build jobs upload into. Release
