@@ -3182,6 +3182,14 @@ textarea:focus-visible {
   gap: 5px;
 }
 
+/* The third step has no icon that says "the camera's JPEG" - it is the three
+   letters, small enough to sit level with the icons beside them. */
+.editor-baseline .editor-baseline-jpg {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 /* The compact background steps: each button shows a swatch of the grey it
    sets - the swatch IS the label (names stay in the tooltips). */
 .stage-swatch {

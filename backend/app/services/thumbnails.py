@@ -3765,10 +3765,11 @@ def warm_native_base(image_id: str, path_str: str, mtime_ns: int) -> None:
 def clear_editor_base_caches() -> None:
     """Drop every cached editor base (preview-sized LRU + the native frame).
     Called when a setting that changes the decode itself flips."""
-    global _native_editor_base, _native_rung_base
+    global _native_editor_base, _native_rung_base, _pair_reference_frame
     _cached_editor_base.cache_clear()
     _native_editor_base = None
     _native_rung_base = None
+    _pair_reference_frame = None
     # The tone/denoise stage was computed from one of those bases, so it has to
     # go with them - its own key can't see a decode setting change.
     invalidate_tone_stage()
@@ -3796,6 +3797,7 @@ def editor_caches_empty() -> bool:
         grain = bool(_GRAIN_CACHE)
     return not (
         bases or stages or grain or _native_editor_base is not None or _native_rung_base is not None
+        or _pair_reference_frame is not None
     )
 
 
@@ -4438,6 +4440,180 @@ def _render_editor_bytes(
     return buf.getvalue()
 
 
+# The camera JPEG of a RAW+JPEG pair as the editor's compare reference: the
+# file as the camera made it, laid into the raw's frame and put through the
+# edit's geometry, so the two sides cover each other. Deliberately its own
+# 8-bit path rather than a render of the partner through the editor pipeline:
+# the full-resolution base is kept for ONE image (_cached_native_base), so a
+# zoomed compare would evict the raw's base with every reference frame and pay
+# the demosaic again for the next edit frame - and a picture that is shown
+# untouched has nothing to develop.
+#
+# The finished frame is kept for one (file, geometry): panning a zoomed
+# compare cuts its tiles from it instead of decoding per tile, and a smaller
+# whole frame is a downscale of it. (key, the scale of the raw's frame it was
+# built at, that frame's long edge, the picture.)
+_pair_reference_frame: tuple[tuple, float, int, PILImage.Image] | None = None
+_pair_reference_lock = threading.Lock()
+
+# A gap up to this fraction of the frame is the sensor border the camera JPEG
+# leaves out (a raw holds a few rows and columns more) and is filled by
+# repeating the edge, so the reference gets no dark hairline around it. Beyond
+# it the JPEG was cropped in camera (16:9, 1:1), and what it doesn't show
+# stays dark. The same tolerance decides that a JPEG is the raw's own pixels
+# (laid in unscaled) rather than a smaller size setting (scaled to fit).
+_PAIR_BORDER_FRAC = 0.02
+_PAIR_PAD_LEVEL = 24
+
+
+def _pair_reference_base(
+    path: Path, frame_size: tuple[int, int] | None, max_px: int | None
+) -> tuple[PILImage.Image, float, int]:
+    """The camera JPEG laid into the raw's frame (`frame_size`, oriented), the
+    frame's long edge held to `max_px`. Returns it with the scale of the raw's
+    frame it was built at and that frame's full long edge."""
+    im = PILImage.open(path)
+    jw, jh = im.size
+    if im.getexif().get(0x0112) in (5, 6, 7, 8):
+        jw, jh = jh, jw
+    fw, fh = frame_size if frame_size and min(frame_size) > 0 else (jw, jh)
+    fit = min(fw / jw, fh / jh)
+    if abs(fit - 1.0) <= _PAIR_BORDER_FRAC:
+        fit = 1.0
+    k = min(1.0, max_px / max(fw, fh)) if max_px else 1.0
+    tw, th = max(1, round(fw * k)), max(1, round(fh * k))
+    sw, sh = max(1, round(jw * fit * k)), max(1, round(jh * fit * k))
+    if fit * k < 1.0:
+        # draft() takes the size in the file's own orientation.
+        im.draft("RGB", (max(1, round(im.size[0] * fit * k)), max(1, round(im.size[1] * fit * k))))
+    im = raw_service.to_srgb(ImageOps.exif_transpose(im)).convert("RGB")
+    if im.size != (sw, sh):
+        im = im.resize((sw, sh), PILImage.LANCZOS, reducing_gap=2.0)
+    if (sw, sh) == (tw, th):
+        return im, k, max(fw, fh)
+    arr = np.asarray(im)
+    for axis, (have, want) in enumerate(((sh, th), (sw, tw))):
+        if have > want:
+            start = (have - want) // 2
+            arr = arr[start : start + want] if axis == 0 else arr[:, start : start + want]
+        elif have < want:
+            before = (want - have) // 2
+            pad = [(0, 0), (0, 0), (0, 0)]
+            pad[axis] = (before, want - have - before)
+            if want - have <= want * _PAIR_BORDER_FRAC:
+                arr = np.pad(arr, pad, mode="edge")
+            else:
+                arr = np.pad(arr, pad, mode="constant", constant_values=_PAIR_PAD_LEVEL)
+    return PILImage.fromarray(np.ascontiguousarray(arr), "RGB"), k, max(fw, fh)
+
+
+def _pair_reference(
+    path: Path,
+    mtime_ns: int,
+    frame_size: tuple[int, int] | None,
+    max_px: int | None,
+    geometry: tuple,
+) -> PILImage.Image:
+    """The reference frame with the edit's geometry applied, from the one kept
+    frame when it is this file and geometry at this size or a bigger one."""
+    global _pair_reference_frame
+    key = (str(path), mtime_ns, frame_size, geometry)
+    with _pair_reference_lock:
+        hit = _pair_reference_frame
+        if hit is not None and hit[0] == key:
+            _, have_k, long_edge, frame = hit
+            want_k = min(1.0, max_px / long_edge) if max_px else 1.0
+            if abs(want_k - have_k) <= have_k * 0.001:
+                return frame
+            if want_k < have_k:
+                ratio = want_k / have_k
+                return frame.resize(
+                    (max(1, round(frame.size[0] * ratio)), max(1, round(frame.size[1] * ratio))),
+                    PILImage.LANCZOS, reducing_gap=2.0,
+                )
+        _pair_reference_frame = None  # free the old frame before building the next
+        base, k, long_edge = _pair_reference_base(path, frame_size, max_px)
+        rotation, crop, distortion, flip_h, flip_v, straighten, persp_h, persp_v = geometry
+        frame = apply_edits(
+            apply_distortion(base, distortion),
+            rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v,
+        )
+        _pair_reference_frame = (key, k, long_edge, frame)
+        _note_cache_touch()
+        return frame
+
+
+def render_pair_reference_bytes(
+    partner: "Image",
+    frame_size: tuple[int, int] | None,
+    rotation: int,
+    crop: CropBox | None,
+    distortion: int = 0,
+    full_quality: bool = False,
+    ultra: bool = False,
+    native: bool = False,
+    flip_h: bool = False,
+    flip_v: bool = False,
+    straighten: float = 0.0,
+    persp_h: int = 0,
+    persp_v: int = 0,
+    region: tuple[float, float, float, float] | None = None,
+    region_px: int | None = None,
+    settle_px: int | None = None,
+    meta: dict | None = None,
+) -> bytes:
+    """The editor's compare reference for a raw with a camera JPEG beside it:
+    `partner`'s file, untouched, in the frame the raw's edit is shown in.
+    `frame_size` is the raw's oriented frame; the geometry arguments, the tiers,
+    `region` / `region_px` / `settle_px` and `meta` mean what they mean in
+    render_editor_preview_bytes, so the editor paints either answer the same
+    way. A region is cut from the full-resolution frame on every tier but the
+    whole-frame settles - a JPEG decodes in a fraction of a second, so there is
+    no base to wait for and no tier below to answer from."""
+    from app.services.filesystem import resolve_image_path
+
+    note_editor_activity()
+    path = resolve_image_path(partner)
+    if region is not None and (full_quality or ultra):
+        region = None
+    if region is not None:
+        max_px = None
+    elif native:
+        max_px = _base_budget_px(settle_px, crop)
+    elif full_quality or ultra:
+        max_px = _settle_base_px(
+            ULTRA_EDITOR_PREVIEW_PX if ultra else FULL_EDITOR_PREVIEW_PX,
+            _base_budget_px(settle_px, crop),
+        )
+    else:
+        max_px = EDITOR_PREVIEW_PX
+    img = _pair_reference(
+        path, path.stat().st_mtime_ns, frame_size, max_px,
+        (rotation, crop, distortion, flip_h, flip_v, straighten, persp_h, persp_v),
+    )
+    if region is not None:
+        full_w, full_h = img.size
+        rx, ry, rw, rh = region
+        x0 = max(0, min(full_w - 1, int(round(rx * full_w))))
+        y0 = max(0, min(full_h - 1, int(round(ry * full_h))))
+        x1 = max(x0 + 1, min(full_w, int(round((rx + rw) * full_w))))
+        y1 = max(y0 + 1, min(full_h, int(round((ry + rh) * full_h))))
+        img = img.crop((x0, y0, x1, y1))
+        if region_px and max(img.size) > region_px * 1.05:
+            scale = region_px / max(img.size)
+            img = img.resize(
+                (max(1, round(img.size[0] * scale)), max(1, round(img.size[1] * scale))),
+                PILImage.LANCZOS, reducing_gap=2.0,
+            )
+        if meta is not None:
+            meta["frame"] = (full_w, full_h)
+            meta["box"] = (x0, y0)
+            meta["box_size"] = (x1 - x0, y1 - y0)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=95 if (full_quality or ultra) else 90)
+    return buf.getvalue()
+
+
 def render_framed_base_image(
     image: "Image",
     rotation: int,
@@ -4973,11 +5149,12 @@ def _drop_native_base_if_idle() -> None:
     base is only worth keeping for an editor that is about to zoom - and a
     user zapping through the lightbox has no such editor. Let it go (the
     next editor zoom decodes again); on roomy machines it stays."""
-    global _native_editor_base, _native_rung_base
+    global _native_editor_base, _native_rung_base, _pair_reference_frame
     if not machine.LOW_RAM or editor_recently_active(30.0):
         return
     _native_editor_base = None
     _native_rung_base = None
+    _pair_reference_frame = None
 
 
 # Full renders in flight (generate_full, decode included). A counter rather

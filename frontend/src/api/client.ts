@@ -612,7 +612,11 @@ export const api = {
       // this set the server answers "not yet" (202, servedTier "pending")
       // instead of re-rendering the multi-second fallback frame - check
       // servedTier before touching the blob, a pending one is empty.
-      nativeOnly = false
+      nativeOnly = false,
+      // "pair": answer with the raw's camera JPEG instead of a render of the
+      // raw - the compare views' third baseline. Only the edits' geometry is
+      // used; the JPEG comes back untouched, in the frame the edit is shown in.
+      reference: "pair" | null = null
     ): Promise<ServedBlob> {
       const tier =
         mode === "native"
@@ -637,6 +641,7 @@ export const api = {
         !regionParam && regionPx && mode !== "fast" ? `px=${Math.round(regionPx)}` : "",
         mode === "native" && nativeOnly ? "native_only=1" : "",
         zoomed && mode === "scrub" ? "zoomed=1" : "",
+        reference ? `reference=${reference}` : "",
       ]
         .filter(Boolean)
         .join("&");

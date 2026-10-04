@@ -1983,6 +1983,63 @@ _editor_preview_latest: dict[str, int] = {}
 _editor_preview_state_lock = threading.Lock()
 
 
+def _editor_pair_reference(
+    db: Session,
+    owner_id: int,
+    image: Image,
+    payload: schemas.ImageEdits,
+    *,
+    full: bool,
+    scrub: bool,
+    ultra: bool,
+    native: bool,
+    region: tuple[float, float, float, float] | None,
+    region_px: int | None,
+    settle_px: int | None,
+) -> Response:
+    """editor-preview's `?reference=pair`: the raw's camera JPEG in the edit's
+    frame, with the same tier and tile headers a render of the raw carries."""
+    partner = _pair_partner(db, owner_id, image)
+    if image.file_type != FileType.raw or partner is None or partner.file_type != FileType.jpeg:
+        raise HTTPException(status_code=404, detail="This photo has no camera JPEG to compare with")
+    crop = None
+    if payload.crop is not None:
+        crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
+    render_meta: dict = {}
+    try:
+        data = thumbnails.render_pair_reference_bytes(
+            partner,
+            (image.width, image.height) if image.width and image.height else None,
+            payload.rotation % 360,
+            crop,
+            distortion=_clamp100(payload.distortion),
+            full_quality=full,
+            ultra=ultra,
+            native=native,
+            flip_h=bool(payload.flip_h),
+            flip_v=bool(payload.flip_v),
+            straighten=max(-45.0, min(45.0, float(payload.straighten))),
+            persp_h=_clamp100(payload.persp_h),
+            persp_v=_clamp100(payload.persp_v),
+            region=region,
+            region_px=region_px,
+            settle_px=settle_px,
+            meta=render_meta,
+        )
+    except Exception:
+        logger.exception("Failed to render the camera JPEG reference for %s", image.id)
+        raise HTTPException(status_code=500, detail="Could not render the preview")
+    served = "native" if native else "ultra" if ultra else "full" if full else "scrub" if scrub else "accurate"
+    headers = {"X-Rollfilm-Tier": served}
+    if render_meta.get("frame"):
+        fw, fh = render_meta["frame"]
+        bx, by = render_meta["box"]
+        bw, bh = render_meta["box_size"]
+        headers["X-Rollfilm-Frame"] = f"{fw}x{fh}"
+        headers["X-Rollfilm-Box"] = f"{bx},{by},{bw},{bh}"
+    return Response(content=data, media_type="image/jpeg", headers=headers)
+
+
 @router.post("/{image_id}/editor-preview")
 def editor_preview(
     image_id: str,
@@ -1998,6 +2055,7 @@ def editor_preview(
     zoomed: bool = False,
     px: int | None = None,
     native_only: bool = False,
+    reference: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -2028,10 +2086,17 @@ def editor_preview(
     `?peek=<mask id>` marks that mask's covered area in the frame with the
     editor's zebra, so a luminance / colour / edge mask - none of which has an
     outline that could be drawn over the photo - can be seen while it is being
-    set up."""
+    set up.
+
+    `?reference=pair` answers with the raw's camera JPEG instead of a render of
+    the raw: the compare views' third baseline, beside the original and the
+    snapshot. Only the payload's geometry is used - the JPEG is shown as the
+    camera made it, in the frame the edit is shown in."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
+    if reference not in (None, "", "pair"):
+        raise HTTPException(status_code=400, detail="Unknown compare reference")
     image = get_owned_image(db, current_user.id, image_id)
     view_region = _parse_region(region)
     # Clamped, not validated: a nonsense budget degrades to "no cap" or a
@@ -2056,6 +2121,16 @@ def editor_preview(
         if px and native
         else None
     )
+    if reference == "pair":
+        # Before everything below on purpose: the JPEG has no native base to
+        # wait for, and it takes no part in "newest render of this image" - it
+        # is cheap, it renders none of the raw, and claiming the slot would
+        # cancel an edit render in flight for a picture that isn't one.
+        return _editor_pair_reference(
+            db, current_user.id, image, payload,
+            full=full, scrub=scrub, ultra=ultra, native=native,
+            region=view_region, region_px=view_region_px, settle_px=settle_px,
+        )
     # `?native_only=1`: the caller already has this edit state painted from the
     # fallback tier and is only waiting for the full-resolution base. Answering
     # such a poll by re-rendering the multi-second fallback frame it already

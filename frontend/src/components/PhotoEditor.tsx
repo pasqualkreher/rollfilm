@@ -1490,8 +1490,19 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // What every compare shows against. By default the untouched original; Capture
   // pins the edit as it stands, so a later tweak can be judged against THAT
   // rather than against the bare photo - Reset goes back to the original.
-  const [snapshot, setSnapshot] = useState<ImageEdits | null>(null);
-  useEffect(() => setSnapshot(null), [image.id]);
+  const [takenSnapshot, setSnapshot] = useState<ImageEdits | null>(null);
+  // A raw shot together with a camera JPEG has a third thing to be judged
+  // against: that JPEG, the picture the camera made of the same exposure. It
+  // is a baseline like the other two - every compare shows against it - and
+  // choosing it keeps a taken snapshot for going back to.
+  const hasJpg = image.file_type === "raw" && !!image.paired_image_id;
+  const [jpgChosen, setVsJpg] = useState(false);
+  const vsJpg = jpgChosen && hasJpg;
+  const snapshot = vsJpg ? null : takenSnapshot;
+  useEffect(() => {
+    setSnapshot(null);
+    setVsJpg(false);
+  }, [image.id]);
   const split = compareMode === "split";
   const pair = compareMode === "pair";
   const [splitPos, setSplitPos] = useState(0.5);
@@ -1743,6 +1754,17 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // state is shown as the editor showed it when it was captured.
   const baselineBrowseRef = useRef(true);
   baselineBrowseRef.current = !snapshot;
+  // The camera JPEG is not a render of this photo at all: the request names it
+  // (see `reference` on editorPreview) and sends the baseline's geometry along.
+  // That goes for the compare views' own canvas and for the main one while
+  // hold-to-compare has it showing the baseline - previewEdits IS
+  // baselineEdits then, which is what tells the two kinds of request apart.
+  const baselineRefRef = useRef<"pair" | null>(null);
+  baselineRefRef.current = vsJpg ? "pair" : null;
+  const referenceFor = useCallback(
+    (sent: ImageEdits) => (sent === baselineLatest.current ? baselineRefRef.current : null),
+    []
+  );
 
   // Paint a rendered JPEG onto the canvas, sizing it to the bitmap and
   // (optionally) refreshing the histogram. `seq` guards against a late or
@@ -2069,7 +2091,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           if (staleGround && !region) {
             const quick = await api.images.editorPreview(
               image.id, previewEditsLatest.current!, fctrl.signal, "scrub", false, peekRef.current,
-              null, scaleRef.current > 1.001, SCRUB_ZOOM_WHOLE_PX[scrubLevelRef.current]
+              null, scaleRef.current > 1.001, SCRUB_ZOOM_WHOLE_PX[scrubLevelRef.current],
+              false, referenceFor(previewEditsLatest.current!)
             );
             if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
             await drawBlob(quick, seq, false, previewEditsLatest.current!.crop);
@@ -2086,7 +2109,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           // came to rest. The native tile carries its own (region.px).
           const blob = await api.images.editorPreview(
             image.id, previewEditsLatest.current!, fctrl.signal, tier, false, peekRef.current,
-            region, false, budget(region ? region.px : shownPx()), nativeOnly
+            region, false, budget(region ? region.px : shownPx()), nativeOnly,
+            referenceFor(previewEditsLatest.current!)
           );
           if ((scrubbing.current && !compareRef.current) || seq !== renderSeq.current) return;
           if (blob.servedTier === "pending") {
@@ -2117,7 +2141,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           const onativeOnly = otier === "native" && origPendingRef.current === otoken;
           const oblob = await api.images.editorPreview(
             image.id, baselineLatest.current, fctrl.signal, otier, baselineBrowseRef.current, null,
-            oregion, false, budget(oregion ? oregion.px : shownPx()), onativeOnly
+            oregion, false, budget(oregion ? oregion.px : shownPx()), onativeOnly,
+            baselineRefRef.current
           );
           if ((scrubbing.current && !compareRef.current) || otoken !== origToken.current) return;
           if (oblob.servedTier === "pending") {
@@ -2152,7 +2177,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         if (fullAbortRef.current === fctrl) setFullResPending(false);
       }
     }, delay ?? 350);
-  }, [image.id, drawBlob, drawOriginal, drawRegionIntoOriginal]);
+  }, [image.id, drawBlob, drawOriginal, drawRegionIntoOriginal, referenceFor]);
   // Re-entry point for the re-arm above (scheduleSettle can't name itself).
   const scheduleSettleRef = useRef<(phase?: "work" | "full", delay?: number) => void>(() => {});
   scheduleSettleRef.current = scheduleSettle;
@@ -2198,7 +2223,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               baselineLatest.current,
               octrl.signal,
               "fast",
-              baselineBrowseRef.current
+              baselineBrowseRef.current,
+              null,
+              null,
+              false,
+              null,
+              false,
+              baselineRefRef.current
             );
             await drawOriginal(blob);
           } catch {
@@ -2258,7 +2289,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           if (!scrub && slowAccurate.current && lastScrubEditsRef.current !== edits) {
             const quick = await api.images.editorPreview(
               image.id, edits, ctrl.signal, "scrub", false, peekRef.current,
-              region, scaleRef.current > 1.001, scrubPx
+              region, scaleRef.current > 1.001, scrubPx, false, referenceFor(edits)
             );
             if (region && quick.frame) await drawRegionIntoFrame(quick, seq, token);
             else await drawBlob(quick, seq, !peekRef.current, edits.crop);
@@ -2272,7 +2303,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             // Zoomed in, whole-frame scrub renders size up to the accurate
             // base (see ?zoomed=1) - the fallback while a tile isn't possible.
             image.id, edits, ctrl.signal, scrub ? "scrub" : "fast", false, peekRef.current,
-            region, scaleRef.current > 1.001, scrub ? scrubPx : restPx
+            region, scaleRef.current > 1.001, scrub ? scrubPx : restPx, false, referenceFor(edits)
           );
           if (!scrub) {
             slowAccurate.current = performance.now() - t0 > 300;
@@ -2328,7 +2359,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     // the settle re-arms itself while a pointer is down instead of rendering.
     // (A closed editor has no canvas left to settle - see goneRef.)
     scheduleSettle();
-  }, [image.id, drawBlob, drawRegionIntoFrame, drawOriginal, scheduleSettle]);
+  }, [image.id, drawBlob, drawRegionIntoFrame, drawOriginal, scheduleSettle, referenceFor]);
   pumpRef.current = () => void pump();
 
   // Kick the pump whenever the edit state changes (or the image switches).
@@ -2361,14 +2392,16 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // Geometry moved, so the compare view's original no longer matches the frame
   // it's shown against; entering a compare mode wants it rendered in the first
   // place. Either way the pump does the work (see its original branch).
+  // vsJpg: the original and the camera JPEG are asked for with the very same
+  // edits, so the switch between them is a change the edits can't show.
   useEffect(() => {
     origToken.current++;
-  }, [baselineEdits, image.id]);
+  }, [baselineEdits, image.id, vsJpg]);
 
   useEffect(() => {
     if (compareMode !== "off") void pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compareMode, baselineEdits, image.id]);
+  }, [compareMode, baselineEdits, image.id, vsJpg]);
 
   // Switching between split and side-by-side moves the original's canvas in the
   // DOM (overlay vs. its own pane), so the frame has to be put back on the new
@@ -4194,9 +4227,11 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // geometry is shared by both sides, so it can't differ - see baselineEdits).
   // The snapshot's side is serialised once per snapshot, not once per frame.
   const snapshotKey = useMemo(() => (snapshot ? JSON.stringify(snapshot.adjustments) : null), [snapshot]);
+  // The camera JPEG is another picture altogether - there is always something
+  // to compare, an untouched raw included.
   const nothingToCompare = useMemo(
-    () => (snapshotKey !== null ? JSON.stringify(adj) === snapshotKey : allNeutral),
-    [snapshotKey, adj, allNeutral]
+    () => !vsJpg && (snapshotKey !== null ? JSON.stringify(adj) === snapshotKey : allNeutral),
+    [vsJpg, snapshotKey, adj, allNeutral]
   );
 
   // Nothing left to compare - the toggles disable themselves there, so the mode
@@ -4204,7 +4239,9 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   useEffect(() => {
     if (nothingToCompare) setCompareMode("off");
   }, [nothingToCompare]);
-  const baselineLabel = snapshot ? "Snapshot" : "Original";
+  const baselineLabel = vsJpg ? "JPG" : snapshot ? "Snapshot" : "Original";
+  // In a sentence: "the original", "the snapshot", "the camera JPG".
+  const baselineName = vsJpg ? "camera JPG" : baselineLabel.toLowerCase();
 
   // The selected mask (if any) and its index-0 sub-mask - what the panel's mask
   // editor is bound to.
@@ -4710,13 +4747,20 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             <span className="editor-compare-group">
               {/* What the compares show against. "Snapshot" pins the edit as
                   it stands (clicking it again pins the newer state);
-                  "Original" (the picture icon) lets the snapshot go. */}
+                  "Original" (the picture icon) lets the snapshot go; "JPG" is
+                  the raw's camera JPEG, and leaves a taken snapshot to come
+                  back to. That step exists only for a raw that has one: a
+                  library without RAW+JPG pairs would carry a dead button in
+                  every editor otherwise. */}
               <span className="segmented editor-baseline" role="group" aria-label="Compare with">
                 <button
-                  className={snapshot ? "" : "active"}
-                  aria-pressed={!snapshot}
+                  className={snapshot || vsJpg ? "" : "active"}
+                  aria-pressed={!snapshot && !vsJpg}
                   aria-label="Compare with the original"
-                  onClick={() => setSnapshot(null)}
+                  onClick={() => {
+                    setSnapshot(null);
+                    setVsJpg(false);
+                  }}
                   title="Compare with the original photo"
                 >
                   <IconImage size={14} />
@@ -4725,15 +4769,33 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   className={snapshot ? "active" : ""}
                   aria-pressed={!!snapshot}
                   aria-label="Compare with a snapshot"
-                  onClick={() => setSnapshot(edits)}
+                  onClick={() => {
+                    // Coming back from the JPG, the snapshot taken earlier is
+                    // what's wanted - not a new one of whatever the edit is now.
+                    if (!(vsJpg && takenSnapshot)) setSnapshot(edits);
+                    setVsJpg(false);
+                  }}
                   title={
                     snapshot
                       ? "Comparing with the snapshot. Click again to take a new snapshot of the current edit."
-                      : "Take a snapshot of the current edit to compare later changes against it"
+                      : vsJpg && takenSnapshot
+                        ? "Compare with the snapshot taken earlier"
+                        : "Take a snapshot of the current edit to compare later changes against it"
                   }
                 >
                   <IconCamera size={14} />
                 </button>
+                {hasJpg && (
+                  <button
+                    className={`editor-baseline-jpg${vsJpg ? " active" : ""}`}
+                    aria-pressed={vsJpg}
+                    aria-label="Compare with the camera JPG"
+                    onClick={() => setVsJpg(true)}
+                    title="Compare with the JPG the camera saved beside this RAW"
+                  >
+                    JPG
+                  </button>
+                )}
               </span>
               <span className="editor-toolbar-sep" aria-hidden />
               <button
@@ -4746,11 +4808,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 disabled={nothingToCompare || compareMode !== "off"}
                 aria-label="Hold to compare"
                 title={
-                  compare
-                    ? `Showing ${baselineLabel.toLowerCase()}`
-                    : snapshot
-                      ? "Hold to compare with the snapshot"
-                      : "Hold to compare with the original"
+                  compare ? `Showing the ${baselineName}` : `Hold to compare with the ${baselineName}`
                 }
               >
                 <IconEye size={14} />
@@ -4764,7 +4822,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   aria-label="Compare split by a draggable line"
                   disabled={nothingToCompare}
                   onClick={() => setCompareMode((m) => (m === "split" ? "off" : "split"))}
-                  title={`Split view: ${baselineLabel.toLowerCase()} and edit in one picture, divided by a draggable line`}
+                  title={`Split view: ${baselineName} and edit in one picture, divided by a draggable line`}
                 >
                   <IconSplit size={14} />
                 </button>
@@ -4774,7 +4832,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   aria-label="Compare side by side"
                   disabled={nothingToCompare}
                   onClick={() => setCompareMode((m) => (m === "pair" ? "off" : "pair"))}
-                  title={`Side by side: ${baselineLabel.toLowerCase()} and edit as two pictures`}
+                  title={`Side by side: ${baselineName} and edit as two pictures`}
                 >
                   <IconSideBySide size={14} />
                 </button>

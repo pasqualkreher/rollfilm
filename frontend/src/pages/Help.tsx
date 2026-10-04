@@ -862,6 +862,15 @@ const CHAPTERS: Chapter[] = [
                 to comparing with the untouched photo.
               </li>
               <li>
+                <strong>Compare with the camera's JPG</strong>: a RAW that was shot together with
+                a JPG has a third choice beside those two, <strong>JPG</strong>. Hold, split and
+                side by side then show the picture the camera made of the same shot, in the crop
+                and rotation of your edit — the quickest way to see how far your development is
+                from the camera's own. A snapshot you took stays put while you look; the camera
+                icon brings it back. A JPG the camera cropped to another format (16:9, 1:1) is
+                shown with dark bars where it has no picture.
+              </li>
+              <li>
                 <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo. One slider drag or brush stroke is one
                 step, so undo walks back the way you worked.
               </li>
