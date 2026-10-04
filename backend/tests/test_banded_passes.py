@@ -1,5 +1,6 @@
-"""Clarity, sharpening, grain and the output conversion run in row bands on a
-big frame (thumbnails._band_map). The bands are an arrangement of the same
+"""Clarity, sharpening, grain, the curves, chrome, mist, the colour denoise's
+correction and the output conversion run in row bands on a big frame
+(thumbnails._band_map). The bands are an arrangement of the same
 arithmetic, so each test here renders one frame both ways - in bands, and as
 the single band a small frame gets - and expects the same bits."""
 
@@ -96,6 +97,83 @@ def test_the_output_conversion_in_bands_rounds_like_the_whole_frame(depth16):
     assert np.array_equal(
         thumbnails._to_output_depth(arr, depth16), (arr * scale + 0.5).astype(dtype)
     )
+
+
+_POINT_CURVE = {"luma": [[4, 0], [65, 43], [193, 191], [255, 255]], "red": [[0, 0], [255, 240]]}
+_PARAMETRIC_CURVE = {"luma": {"highlights": -30, "lights": 10, "darks": -10, "shadows": 20}}
+
+
+@pytest.mark.parametrize(
+    "curves",
+    [
+        {"curve_mode": "point", "point_curves": _POINT_CURVE},
+        {"curve_mode": "parametric", "parametric_curve": _PARAMETRIC_CURVE},
+        {},  # no curve: only the clip, and the frame is left alone
+    ],
+)
+def test_the_curves_in_bands_are_the_whole_frame_curves(whole, curves):
+    arr = _frame()
+    adj = develop.defaults() | curves
+    banded = thumbnails._apply_curves(arr.copy(), adj)
+    assert np.array_equal(banded, whole(lambda: thumbnails._apply_curves(arr.copy(), adj)))
+    if not curves:
+        untouched = arr.copy()
+        thumbnails._apply_curves(untouched, adj)
+        assert np.array_equal(untouched, arr)
+
+
+@pytest.mark.parametrize("chrome, blue", [(100, 0), (0, 80), (60, 40)])
+def test_chrome_in_bands_is_the_whole_frame_chrome(whole, chrome, blue):
+    arr = np.clip(_frame(), 0.0, 1.0)
+    banded = thumbnails._apply_chrome(arr, chrome, blue)
+    assert np.array_equal(banded, whole(lambda: thumbnails._apply_chrome(arr, chrome, blue)))
+    assert np.abs(banded - arr).max() > 0.01
+
+
+def test_chrome_without_the_hue_reads_the_same_saturation_and_lightness():
+    arr = np.clip(_frame(h=64, w=64), 0.0, 1.0)
+    arr[:8] = 0.5  # grey rows: the zero-chroma branch
+    _, sat, lum = thumbnails._rgb_to_hsl(arr)
+    short_sat, short_lum = thumbnails._hsl_sat_lum(arr)
+    assert np.array_equal(short_sat, sat) and np.array_equal(short_lum, lum)
+
+
+@pytest.mark.parametrize("light_sources", [True, False])
+def test_mist_in_bands_is_the_whole_frame_mist(whole, light_sources):
+    arr = np.clip(_frame(), 0.0, 1.0)
+    banded = thumbnails._mist(arr, 40, light_sources=light_sources, ref_long_edge=1100.0)
+    assert np.array_equal(
+        banded,
+        whole(lambda: thumbnails._mist(arr, 40, light_sources=light_sources, ref_long_edge=1100.0)),
+    )
+    assert np.abs(banded - arr).max() > 0.005
+
+
+def test_mist_with_nothing_bright_enough_leaves_the_frame_as_it_is():
+    arr = np.full((1100, 1000, 3), 0.3, dtype=np.float32)
+    assert thumbnails._mist(arr, 40, light_sources=True) is arr
+
+
+def test_the_colour_denoise_in_bands_is_the_whole_frame_colour_denoise(whole):
+    arr = np.clip(_frame(), 0.0, 1.0)
+    probe = thumbnails._noise_probe(arr)
+    banded = thumbnails._chroma_nr(arr, probe, 0.5)
+    assert np.array_equal(banded, whole(lambda: thumbnails._chroma_nr(arr, probe, 0.5)))
+    assert np.abs(banded - arr).max() > 0.002
+
+
+def test_the_colour_passes_never_write_into_the_cached_detail_stage(monkeypatch):
+    """The curve is written into the frame the colour block is handed. With a
+    detail stage cached, that frame must be the render's copy of it."""
+    lin = np.clip(_frame(), 0.0, 1.0)
+    adj = develop.defaults() | {
+        "clarity": -25, "sharpness": 25, "chrome_effect": 100,
+        "curve_mode": "point", "point_curves": _POINT_CURVE,
+    }
+    thumbnails.invalidate_tone_stage()
+    first = np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="colour"))
+    second = np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="colour"))
+    assert np.array_equal(first, second)
 
 
 def test_the_pipeline_never_writes_into_the_base_it_was_given(monkeypatch):

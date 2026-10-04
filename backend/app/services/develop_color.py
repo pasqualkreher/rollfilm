@@ -106,6 +106,16 @@ def _param_channel_neutral(p: dict) -> bool:
     return not any(p.get(k, 0) for k in ("highlights", "lights", "darks", "shadows", "white_level", "black_level"))
 
 
+def curves_active(adj: dict) -> bool:
+    """Whether apply_curves has a curve to apply (and so writes into the array
+    it is given) or only clips."""
+    if adj.get("curve_mode", "point") == "point":
+        pc = adj.get("point_curves") or {}
+        return any(not _is_identity_points(pc.get(ch)) for ch in ("luma", "red", "green", "blue"))
+    pc = adj.get("parametric_curve") or {}
+    return any(not _param_channel_neutral(pc.get(ch) or {}) for ch in ("luma", "red", "green", "blue"))
+
+
 def apply_curves(arr: np.ndarray, adj: dict) -> np.ndarray:
     """Apply the active tone curve (point or parametric per curve_mode). The
     luma/master channel maps all of R,G,B through one LUT (a tone curve); the

@@ -489,6 +489,18 @@ def _blend_shape(t: np.ndarray, a: float, b: float) -> np.ndarray:
     return ta / (ta + tb + 1e-9)
 
 
+def _hsl_sat_lum(arr: np.ndarray):
+    """_rgb_to_hsl's saturation and lightness, without the hue."""
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    d = mx - mn
+    lum = (mx + mn) / 2.0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sat = np.where(d == 0, 0.0, d / (1.0 - np.abs(2.0 * lum - 1.0) + 1e-9))
+    return np.clip(sat, 0.0, 1.0), lum
+
+
 def _rgb_to_hsl(arr: np.ndarray):
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
     mx = np.maximum(np.maximum(r, g), b)
@@ -941,9 +953,17 @@ def _luma_nr(
 _CHROMA_NOISE_K = 4.0
 
 
-def _chroma_smooth(plane: np.ndarray, guide: np.ndarray, fc: float, h: float) -> np.ndarray:
+def _chroma_guide(luma: np.ndarray):
+    """The guided filter _chroma_smooth upsamples against, set up once for a
+    luma plane: both chroma planes are filtered against the same guide, and
+    its statistics are half of what the filter computes."""
+    return cv2.ximgproc.createGuidedFilter(luma, 8, 2e-3)
+
+
+def _chroma_smooth(plane: np.ndarray, guide, fc: float, h: float) -> np.ndarray:
     """One chroma plane smoothed: NLM + Gaussian at quarter scale, then a
-    guided upsample against luma that snaps the colour back onto real edges.
+    guided upsample against luma (`guide`, see _chroma_guide) that snaps the
+    colour back onto real edges.
     Quarter scale because the downscale averages the fine confetti away and
     shrinks the blotches into NLM's patch/search window, so they are removed
     as a pattern instead of merely averaged down; the Gaussian finishes the
@@ -953,7 +973,7 @@ def _chroma_smooth(plane: np.ndarray, guide: np.ndarray, fc: float, h: float) ->
     small16 = np.clip(small * 65535.0 + 0.5, 0.0, 65535.0).astype(np.uint16)
     small = _nlm16(small16, h).astype(np.float32) / 65535.0
     small = cv2.GaussianBlur(small, (0, 0), 0.5 + fc * 5.0)
-    return cv2.ximgproc.guidedFilter(guide, _up(small, plane.shape), 8, 2e-3)
+    return guide.filter(_up(small, plane.shape))
 
 
 def _chroma_nr(
@@ -980,6 +1000,8 @@ def _chroma_nr(
     once instead of twice."""
     ycc = cv2.cvtColor(arr, cv2.COLOR_RGB2YCrCb)
     pycc = ycc if probe is None else cv2.cvtColor(probe, cv2.COLOR_RGB2YCrCb)
+    guide = _chroma_guide(ycc[..., 0])
+    pguide = guide if probe is None else _chroma_guide(pycc[..., 0])
     w = min(1.0, fc * 1.5)
     for c in (1, 2):
         _check_stale(is_stale)
@@ -991,16 +1013,27 @@ def _chroma_nr(
         h = (0.6 + 1.2 * fc) * max(s_q, 1.0 / 255.0)
         ch = ycc[..., c]
         if probe is None:
-            delta = _chroma_smooth(ch, ycc[..., 0], fc, h) - ch
+            delta = _chroma_smooth(ch, guide, fc, h) - ch
             level = float(np.median(np.abs(delta)))
-        else:
-            pdelta = _chroma_smooth(pycc[..., c], pycc[..., 0], fc, h) - pycc[..., c]
-            level = float(np.median(np.abs(pdelta)))
-            delta = _chroma_smooth(ch, ycc[..., 0], fc, h) - ch
+            limit = max(_CHROMA_NOISE_K * level, 1e-5)
+            delta *= (limit * limit) / (delta * delta + limit * limit)
+            ch += delta * w
+            continue
+        pdelta = _chroma_smooth(pycc[..., c], pguide, fc, h) - pycc[..., c]
+        level = float(np.median(np.abs(pdelta)))
         limit = max(_CHROMA_NOISE_K * level, 1e-5)
-        delta *= (limit * limit) / (delta * delta + limit * limit)
-        ch += delta * w
-    return np.clip(cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB), 0.0, 1.0)
+        smooth = _chroma_smooth(ch, guide, fc, h)
+
+        # The correction itself is per pixel: in row bands (see _band_map).
+        def correct(y0: int, y1: int) -> None:
+            rows = ch[y0:y1]
+            delta = smooth[y0:y1] - rows
+            delta *= (limit * limit) / (delta * delta + limit * limit)
+            rows += delta * w
+
+        _band_map(correct, *ch.shape[:2])
+    out = cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB)
+    return np.clip(out, 0.0, 1.0, out=out)
 
 
 def _denoise_arr(
@@ -1027,8 +1060,11 @@ def _denoise_arr(
             min(100, max(0, detail_amt)) / 100.0, ref_short_edge or min(arr.shape[:2]),
             is_stale,
         )
-        # Added as a luma offset, so chroma is exactly what it was.
-        arr = np.clip(arr + (y_dn - y)[..., None], 0.0, 1.0)
+        # Added as a luma offset, so chroma is exactly what it was. Into the
+        # frame itself: the clip above made it this pass's own.
+        y_dn -= y
+        arr += y_dn[..., None]
+        np.clip(arr, 0.0, 1.0, out=arr)
         del y, y_dn
     _check_stale(is_stale)
     if fc > 0:
@@ -1059,23 +1095,37 @@ def _apply_chrome(arr: np.ndarray, chrome: int, chrome_blue: int) -> np.ndarray:
     saturation rises as the tone deepens - like the real effect."""
     if not chrome and not chrome_blue:
         return arr
-    hue, sat, lum = _rgb_to_hsl(arr)
-    # Weight by *chroma* (max-min), not HSL saturation: HSL sat blows up to ~1
-    # for near-white/near-black pixels with tiny channel differences (the
-    # cylinder normalisation divides by the vanishing lightness span), which
-    # darkened random bright cloud pixels into blotchy artifacts. Chroma fades
-    # to zero at both tonal extremes by construction, so only genuinely
-    # colourful pixels deepen - like the in-camera effect.
-    chroma_w = np.minimum(1.0, sat * (1.0 - np.abs(2.0 * lum - 1.0)) * 1.4)
-    factor = np.ones_like(sat)
-    if chrome:
-        factor *= 1.0 - 0.32 * (chrome / 100.0) * np.power(chroma_w, 1.5)
-    if chrome_blue:
-        ang = np.abs(hue - 250.0)
-        ang = np.minimum(ang, 360.0 - ang)
-        window = np.where(ang < 90.0, 0.5 + 0.5 * np.cos(np.pi * ang / 90.0), 0.0)
-        factor *= 1.0 - 0.35 * (chrome_blue / 100.0) * chroma_w * window
-    return np.clip(arr * factor[..., None], 0.0, 1.0)
+    out = np.empty_like(arr)
+
+    # Per pixel throughout, so in row bands (see _band_map): whole, the HSL
+    # planes of a 40MP frame were a dozen 155MB temporaries on one core.
+    def run(y0: int, y1: int) -> None:
+        rows = arr[y0:y1]
+        # Only the blue window reads the hue, and the hue is most of what the
+        # HSL split costs.
+        if chrome_blue:
+            hue, sat, lum = _rgb_to_hsl(rows)
+        else:
+            sat, lum = _hsl_sat_lum(rows)
+        # Weight by *chroma* (max-min), not HSL saturation: HSL sat blows up to
+        # ~1 for near-white/near-black pixels with tiny channel differences
+        # (the cylinder normalisation divides by the vanishing lightness span),
+        # which darkened random bright cloud pixels into blotchy artifacts.
+        # Chroma fades to zero at both tonal extremes by construction, so only
+        # genuinely colourful pixels deepen - like the in-camera effect.
+        chroma_w = np.minimum(1.0, sat * (1.0 - np.abs(2.0 * lum - 1.0)) * 1.4)
+        factor = np.ones_like(sat)
+        if chrome:
+            factor *= 1.0 - 0.32 * (chrome / 100.0) * np.power(chroma_w, 1.5)
+        if chrome_blue:
+            ang = np.abs(hue - 250.0)
+            ang = np.minimum(ang, 360.0 - ang)
+            window = np.where(ang < 90.0, 0.5 + 0.5 * np.cos(np.pi * ang / 90.0), 0.0)
+            factor *= 1.0 - 0.35 * (chrome_blue / 100.0) * chroma_w * window
+        out[y0:y1] = np.clip(rows * factor[..., None], 0.0, 1.0)
+
+    _band_map(run, *arr.shape[:2])
+    return out
 
 
 # A wide Gaussian is expensive in a way that scales with its own radius: the
@@ -1198,29 +1248,44 @@ def _mist(
     f = min(100, max(0, amount)) / 100.0
     if f <= 0:
         return arr
-    luma = np.clip(arr @ _LUMA, 0.0, 1.0)
-    if light_sources:
-        # Smoothstep over display 0.62..1.0, squared: the same "light sources
-        # only" character the old linear ramp had, but with no corner at the
-        # foot of it. A hard knee draws a visible contour line through a smooth
-        # gradient - a sky, a softbox falloff - exactly where the effect is
-        # meant to be least noticeable.
-        t = np.clip((luma - 0.62) * (1.0 / 0.38), 0.0, 1.0)
-        mask = np.square(t * t * (3.0 - 2.0 * t))
-        # `k` is the fraction of a fully-gated pixel's light the filter diverts.
-        k = 0.42 * f
-    else:
+    # `k` is the fraction of a fully-gated pixel's light the filter diverts.
+    k = (0.42 if light_sources else 0.30) * f
+
+    def gate(rows: np.ndarray) -> np.ndarray:
+        luma = np.clip(rows @ _LUMA, 0.0, 1.0)
+        if light_sources:
+            # Smoothstep over display 0.62..1.0, squared: the same "light
+            # sources only" character the old linear ramp had, but with no
+            # corner at the foot of it. A hard knee draws a visible contour
+            # line through a smooth gradient - a sky, a softbox falloff -
+            # exactly where the effect is meant to be least noticeable.
+            t = np.clip((luma - 0.62) * (1.0 / 0.38), 0.0, 1.0)
+            return np.square(t * t * (3.0 - 2.0 * t))
         # Whole-highlight: everything above the deep shadows scatters a little,
         # the brights most. No isolation - this is the soft overall diffusion
         # that goes with Fuji's negative clarity, not a light-source bloom.
-        mask = np.power(np.clip((luma - 0.10) * (1.0 / 0.90), 0.0, 1.0), 1.6)
-        k = 0.30 * f
-    if float(mask.max()) <= 0.0:
-        return arr
-    lin = _srgb_to_linear(arr).astype(np.float32)
-    src = lin * mask[..., None]
+        return np.power(np.clip((luma - 0.10) * (1.0 / 0.90), 0.0, 1.0), 1.6)
 
-    h, w = lin.shape[:2]
+    # Everything per pixel runs in row bands (see _band_map): the gate, the
+    # decode and the gated light going in, the scatter and the encode coming
+    # out. Whole, a 40MP frame held half a dozen full-size temporaries and
+    # took its three power curves on one core. Only the gated light (which the
+    # field is averaged from, and which doubles as the output) and the field
+    # put back to full size are whole frames.
+    h, w = arr.shape[:2]
+    src = np.empty((h, w, 3), dtype=np.float32)
+    peaks: list[float] = []
+
+    def scatter_out(y0: int, y1: int) -> None:
+        rows = arr[y0:y1]
+        mask = gate(rows)
+        peaks.append(float(mask.max()))
+        src[y0:y1] = _srgb_to_linear(rows).astype(np.float32) * mask[..., None]
+
+    _band_map(scatter_out, h, w)
+    if max(peaks) <= 0.0:
+        return arr
+
     # Same photo-pixels per field-pixel as a whole-frame render: the field is
     # sized for the frame, and a tile takes its share of it.
     scale = min(1.0, _MIST_FIELD_PX / (ref_long_edge or max(h, w)))
@@ -1243,8 +1308,13 @@ def _mist(
     # Scatter: the gated light leaves the direct path (-k*src) and arrives
     # spread out (+halo). The PSF weights sum to 1, so away from the veil
     # surplus this moves light around rather than manufacturing it.
-    out = lin - src * k + halo
-    return _linear_to_srgb(np.clip(out, 0.0, 1.0)).astype(np.float32)
+    def scatter_in(y0: int, y1: int) -> None:
+        lin = _srgb_to_linear(arr[y0:y1]).astype(np.float32)
+        out = lin - src[y0:y1] * k + halo[y0:y1]
+        src[y0:y1] = _linear_to_srgb(np.clip(out, 0.0, 1.0)).astype(np.float32)
+
+    _band_map(scatter_in, h, w)
+    return src
 
 
 def _apply_vignette(arr: np.ndarray, amount: int) -> np.ndarray:
@@ -1758,6 +1828,22 @@ def _linear_tone_block_banded(
     return out
 
 
+def _apply_curves(arr: np.ndarray, adj: dict) -> np.ndarray:
+    """develop_color.apply_curves, in row bands on a big frame: the curve is a
+    table read per value, and whole it went through a float64 copy of every
+    channel on one core. A curve is written into the frame it is given, as
+    apply_curves always did; with none set there is only its clip to do."""
+    h, w = arr.shape[:2]
+    if h * w < _TONE_BAND_MIN_PX or not develop_color.curves_active(adj):
+        return develop_color.apply_curves(arr, adj)
+
+    def run(y0: int, y1: int) -> None:
+        arr[y0:y1] = develop_color.apply_curves(arr[y0:y1], adj)
+
+    _band_map(run, h, w)
+    return arr
+
+
 def _display_color_block(arr: np.ndarray, adj: dict, raw_source: bool = False) -> np.ndarray:
     """The display-referred colour pass on sRGB float 0..1: film simulation,
     curves, colour calibration, HSL mixer + global hue, Fuji chrome, 3-way
@@ -1778,7 +1864,7 @@ def _display_color_block(arr: np.ndarray, adj: dict, raw_source: bool = False) -
         )
     # Tone curves (point or parametric per curve_mode) and camera-style colour
     # calibration shape tone/primaries after the basic tonal controls.
-    arr = develop_color.apply_curves(arr, adj)
+    arr = _apply_curves(arr, adj)
     arr = develop_color.apply_color_calibration(arr, adj.get("color_calibration") or {})
 
     if develop_v2.is_v2(adj):
