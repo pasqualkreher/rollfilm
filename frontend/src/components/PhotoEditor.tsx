@@ -4399,13 +4399,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         {error && <div className="editor-hint">{error}</div>}
         {/* The first frame of this photo is still on its way, and the stage
             is showing something else meanwhile (the placeholder on open, the
-            previous photo on a switch). A corner badge, not a centred hint:
+            previous photo on a switch). A corner spinner, not a centred hint:
             the picture underneath is still worth looking at. Faded in after a
             short delay so a warm-cache render never flashes it. */}
         {framePending && !error && (loading ? placeholderShown : true) && (
-          <div className="stage-rendering" role="status">
+          <div className="stage-rendering is-bare" role="status" aria-label="Rendering">
             <Spinner size="sm" tone="inherit" />
-            Rendering…
           </div>
         )}
         {/* The frame is up but soft: the native render of this view is on its

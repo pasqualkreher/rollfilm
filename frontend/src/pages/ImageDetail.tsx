@@ -56,6 +56,11 @@ import { Spinner, LoadingState } from "../components/Spinner";
 // takes to count as rested.
 const FIT_SHARP_SLACK = 1.04;
 const FIT_SHARPEN_DELAY_MS = 750;
+// How long after the user has rested on a raw its full-resolution render is
+// fetched for the fit view. Not sooner: zapping through a set at a photo every
+// second or two must not start a render per photo - each one holds the render
+// for many seconds and the next photo's waits behind it.
+const FIT_FULL_DELAY_MS = 3000;
 
 export function ImageDetail() {
   const { id, mode } = useParams<{ id: string; mode?: string }>();
@@ -195,6 +200,9 @@ export function ImageDetail() {
   const [previewPx, setPreviewPx] = useState<{ id: string; px: number } | null>(null);
   // The photo whose fit view has been found soft and is being sharpened.
   const [sharperFor, setSharperFor] = useState<string | null>(null);
+  // The raw whose full-resolution render the fit view is to move on to (see
+  // the fit-view upgrade below).
+  const [fullAtFitFor, setFullAtFitFor] = useState<string | null>(null);
   // The preview itself failed to load (damaged/unreadable file). Shows a clean
   // error state instead of the browser's broken-image icon; navigation, rating
   // and the info panel keep working. Retry remounts the <img> (keyed by the
@@ -316,9 +324,13 @@ export function ImageDetail() {
   // up: the <img> shows the half tier meanwhile and switches when this has
   // landed. Busy/superseded answers are asked again; a real failure keeps the
   // half tier - never a broken image, never a blank stage - and says so.
+  // The fit view asks for the same render once the user has rested on the
+  // photo (fullAtFitFor): one fetch for both, so a zoom during or after it
+  // starts nothing new.
   const isRaw = image?.file_type === "raw";
+  const fullAtFit = !!image && fullAtFitFor === image.id && activeId === image.id && !adjustOpen;
   const full = useFullResUpgrade(
-    hiRes && isRaw && image && (halfShown || halfFailed)
+    isRaw && image && ((hiRes && (halfShown || halfFailed)) || fullAtFit)
       ? api.images.fullUrl(image.id, editVersion(image))
       : null
   );
@@ -562,25 +574,20 @@ export function ImageDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restedId, activeId, adjustOpen]);
 
-  // And the raw's 100%-zoom render, a good while later: a raw the user has
-  // looked at for a few seconds is one they may zoom into, and that zoom
-  // used to be a 7-9s render on the spot. Not sooner - zapping through a set
-  // at a photo every second or two must not start a render per photo, since
-  // each one holds the render for ~8s and the zoom that follows waits behind
-  // it (the server also refuses a warm while any render runs). JPEGs need
-  // nothing (their full size is the file itself); moving on cancels the
-  // timer, and a warm still queued on the server is superseded by the next
-  // photo's.
+  // And the raw's full-resolution render, a good while later: a raw shows its
+  // true pixels on its own, without the user having to zoom for them. The
+  // preview and the half tier come from a half-size decode; the full render is
+  // the picture a zoom used to be needed for. It is fetched off-screen through
+  // the same hook the zoom uses (see `full` above) and swapped in when it has
+  // landed. JPEGs need nothing here (their full size is the file itself, and
+  // the half tier below hands it over); moving on cancels the timer, and a
+  // render still queued on the server is superseded by the next photo's.
   useEffect(() => {
-    // Zooming cancels a warm still pending: the zoom's own /full request is
-    // on its way, and a warm fired after it would claim "newest" over it.
-    if (restedId !== activeId || adjustOpen || image?.file_type !== "raw" || hiRes) return;
-    const t = setTimeout(() => {
-      void api.images.fullWarm(restedId).catch(() => {});
-    }, 3000);
+    if (restedId !== activeId || adjustOpen || slideshowOpen || image?.file_type !== "raw") return;
+    const t = setTimeout(() => setFullAtFitFor(restedId), FIT_FULL_DELAY_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restedId, activeId, adjustOpen, image?.file_type, hiRes]);
+  }, [restedId, activeId, adjustOpen, slideshowOpen, image?.file_type]);
 
   // The fit view sharpens on its own. The preview is 2600px at most, and a
   // big window on a hi-dpi screen shows the photo at up to half as many
@@ -610,6 +617,8 @@ export function ImageDetail() {
       : null
   );
   const sharperSrc = sharper.state === "ready" ? sharper.src : null;
+  // The raw's full render, once it has landed for the fit view.
+  const fitFullSrc = isRaw && fullReady ? full.src : null;
 
   // Similar-photos strip: a CLIP search per photo is the most expensive
   // per-view request the lightbox makes - only run it for the rested photo,
@@ -945,7 +954,7 @@ export function ImageDetail() {
                 if (hiRes && isRaw && !fullReady) setHalfShown(true);
                 // Only the preview's own size: the sharper tier loading must
                 // not make the view look "not soft" and undo itself.
-                if (!hiRes && !sharperSrc && el.naturalWidth) {
+                if (!hiRes && !sharperSrc && !fitFullSrc && el.naturalWidth) {
                   setPreviewPx({ id: image.id, px: Math.max(el.naturalWidth, el.naturalHeight) });
                 }
               }}
@@ -959,7 +968,7 @@ export function ImageDetail() {
                         ? api.images.previewUrl(image.id, editVersion(image))
                         : api.images.halfUrl(image.id, editVersion(image))
                     : api.images.fullUrl(image.id, editVersion(image))
-                  : sharperSrc ?? api.images.previewUrl(image.id, editVersion(image))
+                  : fitFullSrc ?? sharperSrc ?? api.images.previewUrl(image.id, editVersion(image))
               }
               alt={image.original_filename}
               onError={() => {
@@ -987,14 +996,14 @@ export function ImageDetail() {
                 Loading…
               </div>
             )}
-            {hiRes && isRaw && full.state !== "ready" && full.state !== "failed" && !pixelsPending && (
-              <div className="stage-rendering" role="status">
-                <Spinner size="sm" tone="inherit" />
-                Rendering full resolution…
-              </div>
-            )}
-            {!hiRes && sharper.state === "loading" && !pixelsPending && (
-              <div className="stage-rendering is-quiet" role="status" aria-label="Loading a sharper image">
+            {/* The picture is up and a sharper one is on its way - the raw's
+                full render (zoomed or at fit) or the fit view's half tier. The
+                editor's own full-resolution wait: the spinner alone. */}
+            {!pixelsPending &&
+              ((hiRes && isRaw && full.state !== "ready" && full.state !== "failed") ||
+                full.state === "loading" ||
+                (!hiRes && sharper.state === "loading")) && (
+              <div className="stage-rendering is-quiet" role="status" aria-label="Rendering full resolution">
                 <Spinner size="sm" tone="inherit" />
               </div>
             )}

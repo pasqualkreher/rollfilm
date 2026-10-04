@@ -334,15 +334,17 @@ export function ImportLightbox({
               />
             )}
             {!loadFailed && !photoLoaded && (
-              <div className="stage-rendering" role="status">
+              <div
+                className="stage-rendering is-bare"
+                role="status"
+                aria-label={file.file_type === "raw" && !file.processed ? "Analysing" : "Developing preview"}
+              >
                 <Spinner size="sm" tone="inherit" />
-                {file.file_type === "raw" && !file.processed ? "Analysing…" : "Developing preview…"}
               </div>
             )}
             {!loadFailed && photoLoaded && hiRes && isRaw && full.state === "loading" && (
-              <div className="stage-rendering" role="status">
+              <div className="stage-rendering is-quiet" role="status" aria-label="Rendering full resolution">
                 <Spinner size="sm" tone="inherit" />
-                Rendering full resolution…
               </div>
             )}
             {!loadFailed && photoLoaded && hiRes && isRaw && full.state === "failed" && (

@@ -3887,11 +3887,11 @@ input.editor-preset-select {
    top-left corner, in the side gutter, clear of the picture and of the split
    view's tags. Held back 250ms then faded in, so a warm-cache render that
    lands right away never flashes it. */
-/* The wait badge in a stage's top-left corner - the editor's "Rendering…" /
-   "Rendering full resolution…" and the lightboxes' "Rendering full
-   resolution…" / "Developing preview…" are one and the same pill, in the same
-   place, so a wait reads the same wherever a photo is shown big. A corner
-   badge, not a centred hint: the picture underneath is still worth looking
+/* The badge in a stage's top-left corner - the editor's first frame, the
+   import review's preview and the full-resolution reload all wait in the same
+   place, so a wait reads the same wherever a photo is shown big (as a bare
+   spinner, see .is-bare / .is-quiet below; the pill itself carries messages).
+   In the corner, not centred: the picture underneath is still worth looking
    at. Faded in after a short delay so a warm-cache render never flashes it. */
 .stage-rendering {
   position: absolute;
@@ -3911,13 +3911,20 @@ input.editor-preset-select {
   animation: stage-wait-in 0.15s ease 0.25s both;
 }
 
-/* The full-resolution reload behind a picture that is already up: the spinner
-   alone, no pill and no words, and later - most reloads land before it shows. */
+/* A wait says itself with the spinner alone, no pill and no words; the pill
+   is for a message (a failed render). Drawn as a difference so it shows on a
+   light picture and on a dark one. */
+.stage-rendering.is-bare,
 .stage-rendering.is-quiet {
   padding: 0;
   background: none;
   color: rgba(255, 255, 255, 0.85);
   mix-blend-mode: difference;
+}
+
+/* The full-resolution reload behind a picture that is already up: fainter, and
+   later - most reloads land before it shows. */
+.stage-rendering.is-quiet {
   opacity: 0.5;
   animation: stage-wait-in-quiet 0.3s ease 0.8s both;
 }
