@@ -86,6 +86,14 @@ run(`Package installer (electron-builder ${targetFlag})`, "npx", ["electron-buil
   cwd: electronDir,
 });
 
+if (!isMac && !isWin) {
+  // electron-builder leaves the AppImage without update information; see the
+  // script for what that is and why it runs before anything hashes the file.
+  run("AppImage update information + .zsync", "node", ["scripts/appimage-update-info.js", "electron/dist-app"], {
+    cwd: root,
+  });
+}
+
 // --- Report ----------------------------------------------------------------
 const outDir = path.join(electronDir, "dist-app");
 const wanted = isMac ? ".dmg" : isWin ? ".exe" : ".AppImage";

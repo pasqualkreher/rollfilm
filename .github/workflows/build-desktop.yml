@@ -187,6 +187,12 @@ jobs:
           fi
           "$PY" -m pip install -e . pyinstaller
 
+      # zsyncmake writes the .zsync that AppImage update tools download first;
+      # scripts/appimage-update-info.js refuses to build a release without it.
+      - name: Install zsync (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsync
+
       - name: Build installer
         run: node build-desktop.js
 
@@ -211,10 +217,11 @@ jobs:
         run: |
           shopt -s nullglob
           # latest*.yml + blockmaps are what the in-app auto-updater
-          # (electron-updater) reads to discover and delta-download a release.
+          # (electron-updater) reads to discover and delta-download a release;
+          # the .zsync is the same thing for AppImage update tools.
           files=(electron/dist-app/*.dmg electron/dist-app/*.exe electron/dist-app/*.AppImage
                  electron/dist-app/latest*.yml electron/dist-app/*.blockmap
-                 electron/dist-app/*.sha256)
+                 electron/dist-app/*.zsync electron/dist-app/*.sha256)
           if [ ${#files[@]} -eq 0 ]; then
             echo "::error::No installer found in electron/dist-app/"
             exit 1
