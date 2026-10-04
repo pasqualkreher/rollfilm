@@ -1519,6 +1519,14 @@ export function Settings() {
             contact@rollfilm.org
           </a>
         </Desc>
+        {/* An https link leaves the app for the system browser (the desktop
+            shell routes every external URL to the OS). */}
+        <Desc>
+          Rollfilm is free. If it is useful to you, a small donation keeps it going:{" "}
+          <a href="https://www.paypal.com/donate/?hosted_button_id=TE6RWWJ7JRPKN" target="_blank" rel="noreferrer">
+            Donate via PayPal
+          </a>
+        </Desc>
       </Section>
 
       <SettingsTour
