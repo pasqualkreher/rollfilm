@@ -270,13 +270,23 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Culling.</strong> Rate and color-label staged photos right away — on the
                 cards, or in the preview (<kbd>←</kbd> / <kbd>→</kbd> to flip through,{" "}
-                <kbd>0</kbd>–<kbd>5</kbd> for stars, <kbd>Space</kbd> to include or exclude).
+                <kbd>0</kbd>–<kbd>5</kbd> for stars, <kbd>Space</kbd> to include or exclude,{" "}
+                <kbd>P</kbd> to show or hide the camera settings).
               </li>
               <li>
-                <strong>Selecting.</strong> Every card carries a tick box; click it, or{" "}
-                <kbd>⌘</kbd>/<kbd>Ctrl</kbd>-click the card, to include or exclude the photo.{" "}
-                <strong>Shift-click</strong> applies that same tick (or untick) to the whole range
-                since your last click; <kbd>⌘A</kbd> ticks everything shown. The tick box on a{" "}
+                <strong>Selecting.</strong> Every card carries an import checkbox beside its stars;
+                tick it to include the photo, untick it to leave it out. Photos that are left out
+                are dimmed. To decide for several at once, select them as in the library:{" "}
+                <kbd>⌘</kbd>/<kbd>Ctrl</kbd>-click a card, <strong>Shift-click</strong> for the
+                whole range since your last click, <kbd>⌘A</kbd> for everything shown (
+                <kbd>Esc</kbd> drops the selection). A card always decides for its own photo; the
+                bar at the bottom then sets stars, color and the import checkbox for all the
+                selected ones, and so do <kbd>0</kbd>–<kbd>5</kbd> and <kbd>Space</kbd>. While
+                photos are selected the toolbar shows{" "}
+                <strong>Select all</strong> and <strong>Clear selection</strong>.{" "}
+                <strong>Import all</strong> in the bottom bar ticks every photo shown,{" "}
+                <strong>Import none</strong> unticks the whole batch. New photos arrive unticked -
+                Settings can turn that around. The tick box on a{" "}
                 <strong>day heading</strong> takes or clears that day in one go; if the batch spans
                 several months or years, the heading offers those wider scopes too.
               </li>
@@ -309,7 +319,7 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>"Add to Immich"</strong> pushes the imported JPEGs to your Immich server,
                 if you set one up. RAW files go along only when "Also upload RAW files" is on
-                under Settings → Immich integration.
+                under Settings → Integrations.
               </li>
             </ul>
           </>
@@ -438,7 +448,7 @@ const CHAPTERS: Chapter[] = [
             </ul>
             <Tip title="Same version on both sides.">
               If the travel library is older, open it once with this version (
-              <em>Settings → Library folder</em>) so it can update itself, then merge it.
+              <em>Settings → Library → Library folder</em>) so it can update itself, then merge it.
             </Tip>
           </>
         ),
@@ -515,6 +525,17 @@ const CHAPTERS: Chapter[] = [
                 -click one, then tick more. <kbd>Shift</kbd>-click takes a range — it ticks the
                 run, or clears it if the photo you clicked was already ticked. <kbd>⌘A</kbd> takes
                 everything shown, <kbd>Esc</kbd> lets go.
+              </li>
+              <li>
+                <strong>Cull from the keyboard:</strong> with one photo ticked, the arrow keys move
+                the tick to the photo beside, above or below it. <kbd>0</kbd>–<kbd>5</kbd> set its
+                stars, <kbd>6</kbd>–<kbd>9</kbd> a color label, <kbd>Delete</kbd> deletes it and
+                moves on. With several ticked, the same keys act on all of them.
+              </li>
+              <li>
+                <strong>Sort</strong> the library by capture date (newest or oldest first), file
+                name or rating with the menu in the bar above the grid. A search is always ordered
+                by how well the photos match.
               </li>
               <li>
                 <strong>The bar at the bottom acts on all of them:</strong> set stars or a color
@@ -791,7 +812,8 @@ const CHAPTERS: Chapter[] = [
             <ul>
               <li>
                 <kbd>E</kbd> opens the editor, <kbd>P</kbd> hides the panel so the photo gets the
-                whole window, <kbd>0</kbd>–<kbd>5</kbd> rate.
+                whole window, <kbd>0</kbd>–<kbd>5</kbd> rate, <kbd>6</kbd>–<kbd>9</kbd> set a color
+                label (red, yellow, green, blue), <kbd>Delete</kbd> deletes.
               </li>
               <li>
                 <kbd>←</kbd> / <kbd>→</kbd> walk the same filtered set you came from; <kbd>↑</kbd> /{" "}
@@ -962,6 +984,47 @@ const CHAPTERS: Chapter[] = [
               Neg. Hi with data from abpy/FujifilmCameraProfiles (CC BY-NC-SA 4.0), the
               monochrome ones with Stuart Sowerby's Fuji XTrans III profiles.
             </p>
+            <p>
+              Below the Fujifilm looks the list goes on with film stocks, in sections:{" "}
+              <strong>negative film</strong> (Gold, UltraMax, Portra, Ektar, ColorPlus, Superia,
+              Agfa Vista and more), <strong>cinema film</strong> (Vision3, Eterna 500),{" "}
+              <strong>slide film</strong>{" "}
+              (Kodachrome, Ektachrome, Velvia, Astia, Sensia), <strong>black &amp; white
+              film</strong> (Tri-X, T-Max, HP5, FP4, Delta, Neopan, APX, Rollei),{" "}
+              <strong>instant film</strong> (Polaroid, Fuji FP, Instax) and{" "}
+              <strong>cross-processed</strong> film. Within a section the stocks stand by maker
+              — Kodak first, then Fujifilm, Agfa, Ilford and Rollei — and a maker's by family and
+              speed. The list scrolls inside the section and
+              opens at the look in use. To compare looks without aiming at each tile, step
+              through them: the arrows beside the look's name above the list, or the arrow keys
+              while the section is open, go to the look before or after and stop at either end
+              of the list.
+            </p>
+            <p>
+              A film look gives the picture the stock's colour — or, in black and white, the way
+              it turns colours into greys — and only a quarter of its own tone curve: the rest
+              is the standard curve of the Fujifilm looks, so switching to a film does not
+              blacken the shadows or change the exposure. A faded instant film keeps its grey
+              black and its cream white.
+            </p>
+            <p>
+              Twenty-one film looks (Gold 200, UltraMax 400, Ektar 100, Portra 160, 400 and 800
+              with its two pushes, Fujicolor C200, Superia X-tra 400, Pro 400H, cinema film,
+              Kodachrome 64, Ektachrome 100, Provia 100F, Velvia 100 and Double-X) are derived
+              from spektrafilm by Andrea Volpato
+              (github.com/andreavolpato/spektrafilm), a spectral simulation of film, development
+              and print. Seven more (Vericolor III, Aerocolor IV, Fuji Pro 160S, Natura 1600,
+              Eterna 500 and 500 Vivid, Instax Color) are derived from spectral_film_lut by Jan
+              Lohse (github.com/JanLohse/spectral_film_lut), a simulation from the stocks'
+              datasheets, licensed MIT. The others are derived from the RawTherapee Film
+              Simulation Collection by Pat David, Pavlov Dmitry and Michael Ezra, which
+              approximates each stock on the finished picture; it and spektrafilm are licensed
+              CC BY-SA 4.0. ColorPlus 200, Agfa Vista 100 and 400, Ektachrome 100 G and Fortia
+              SP 50 are derived from t3mujinpack by João Almeida
+              (github.com/t3mujin/t3mujinpack), licensed MIT. All were converted into lookup
+              tables for Rollfilm. The film names say which stock a look approximates; their
+              owners have nothing to do with Rollfilm.
+            </p>
             <h4>3 · Tone — the light</h4>
             <p>
               Exposure, brightness, contrast, highlights, shadows, whites and blacks — over a
@@ -1012,8 +1075,11 @@ const CHAPTERS: Chapter[] = [
                 the whole image, with blending and balance between them.
               </li>
               <li>
-                <strong>Calibration</strong> — hue and saturation of the red, green and blue
-                primaries, plus shadow tint. The deep end: it changes how every color is built.
+                <strong>Calibration</strong> — hue, saturation and luminance of the red, green and
+                blue primaries, plus shadow tint. The deep end: it changes how every color is built.
+                Each primary reaches well into its neighbours, so Green Primary Luminance darkens
+                all the foliage in a photo, the yellowish leaves too, and leaves it as saturated as
+                it was.
               </li>
             </ul>
             <h4>6 · Details</h4>
@@ -1434,7 +1500,7 @@ const CHAPTERS: Chapter[] = [
                 photo.
               </li>
               <li>
-                <strong>Undo:</strong> <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd> undo and redo every step.
+                <strong>Undo:</strong> <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo every step.
               </li>
               <li>
                 <strong>The filmstrip's top edge is a sash</strong> — drag it to make the chips
@@ -1635,7 +1701,9 @@ const CHAPTERS: Chapter[] = [
           <>
             <p>
               Add photos from the Library's bulk bar ("Add to…" → Selects), from inside an album, or
-              on a photo's own page. Nothing about the photos changes by being in there.
+              on a photo's own page. Nothing about the photos changes by being in there. The tray is
+              kept with the library: it is still there when you open the app again, and it goes
+              into the backup.
             </p>
             <ul>
               <li>
@@ -1683,15 +1751,54 @@ const CHAPTERS: Chapter[] = [
                 you send people.
               </li>
               <li>
+                <strong>TIFF — 16-bit, edits baked in.</strong> For printing or retouching that
+                continues elsewhere. Large files, with the sRGB profile embedded.
+              </li>
+              <li>
                 <strong>Original files — 1:1.</strong> Exactly what is in your library, RAW stays
                 RAW, every metadata tag kept. This is what you give another editor, or an archive.
               </li>
             </ul>
-            <h4>Good to know</h4>
+            <h4>The options</h4>
             <ul>
               <li>
-                <strong>Several photos at once</strong> come down as a zip.
+                <strong>Metadata.</strong> A rendered file carries what the camera recorded
+                (camera, lens, exposure, date, GPS) plus your stars, colour label and tags, so
+                another program can read them. <em>Without the location</em> leaves out where it
+                was taken; <em>None</em> leaves only the colour profile. The app's own tags
+                ("edit", "album: …") never go along.
               </li>
+              <li>
+                <strong>File name.</strong> Empty keeps each photo's name. Or type a pattern with
+                placeholders: <code>{"{name}"}</code>, <code>{"{date}"}</code>,{" "}
+                <code>{"{time}"}</code>, <code>{"{seq}"}</code>, <code>{"{camera}"}</code>,{" "}
+                <code>{"{rating}"}</code> — <code>{"{date}_{seq}"}</code> gives{" "}
+                <code>2026-07-17_001.jpg</code>. The line under the field shows what the first
+                photo will be called.
+              </li>
+              <li>
+                <strong>Save to.</strong> <em>Ask where to save</em> hands you one file, or a zip
+                of several. <em>A folder</em> writes the files straight into a folder you pick,
+                one beside the other; a file that is already there is never overwritten, the new
+                one gets <code>_1</code> at the end. The folder is remembered.
+              </li>
+              <li>
+                <strong>Sharpen for output.</strong> A touch of sharpening after resizing, for
+                the size the picture leaves at. Worth it on a smaller copy for the web; leave it
+                off at original size.
+              </li>
+              <li>
+                <strong>Watermark.</strong> A line of text in a corner, with a size and a
+                strength. It is drawn onto the exported file only.
+              </li>
+              <li>
+                <strong>Presets.</strong> <em>Save…</em> keeps everything in the dialog under a
+                name — "Web", "Print" — and the list at the top brings it back. The dialog also
+                opens the way you last exported.
+              </li>
+            </ul>
+            <h4>Good to know</h4>
+            <ul>
               <li>
                 <strong>Right-click</strong> a photo in the Library, an album or Selects for Export
                 — on a ticked photo it takes the whole selection. The same menu has{" "}
@@ -1809,7 +1916,7 @@ const CHAPTERS: Chapter[] = [
             </p>
             <Tip title="Did it arrive?">
               Every upload and removal is listed with a ✓ or the exact error under{" "}
-              <em>Settings → Immich → Recent uploads</em>. Network hiccups are retried
+              <em>Settings → Integrations → Recent uploads</em>. Network hiccups are retried
               automatically, and "duplicate" means Immich already has that photo — that is fine, not
               an error.
             </Tip>
@@ -1978,9 +2085,41 @@ const CHAPTERS: Chapter[] = [
                 { keys: <kbd>⌘A</kbd>, does: "Select every photo shown" },
                 {
                   keys: <kbd>Esc</kbd>,
-                  does: "Clear the selection (not in the import review, where the ticks are the point)",
+                  does: "Clear the selection",
                 },
                 { keys: <kbd>E</kbd>, does: "One photo selected: open it with the editor already open" },
+                {
+                  keys: (
+                    <>
+                      <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd>
+                    </>
+                  ),
+                  does: "One photo selected: move the selection to the photo beside, above or below it",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>0</kbd>–<kbd>5</kbd>
+                    </>
+                  ),
+                  does: "Set the star rating of the selected photos (0 clears it)",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>6</kbd>–<kbd>9</kbd>
+                    </>
+                  ),
+                  does: "Color label of the selected photos: red, yellow, green, blue. The same key again takes it off",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>Delete</kbd> / <kbd>⌫</kbd>
+                    </>
+                  ),
+                  does: "Delete the selected photos (asks first). After a single photo the selection moves on to the next",
+                },
               ]}
             />
             <h4>Import review</h4>
@@ -2000,9 +2139,12 @@ const CHAPTERS: Chapter[] = [
                       <kbd>0</kbd>–<kbd>5</kbd>
                     </>
                   ),
-                  does: "Set the star rating (0 clears it)",
+                  does: "Set the star rating (0 clears it): the photo in the preview, or every selected photo in the grid",
                 },
-                { keys: <kbd>Space</kbd>, does: "Include / exclude this file from the import" },
+                {
+                  keys: <kbd>Space</kbd>,
+                  does: "Include / exclude from the import: the photo in the preview, or every selected photo in the grid",
+                },
                 { keys: <kbd>Esc</kbd>, does: "Close the preview" },
               ]}
             />
@@ -2033,6 +2175,22 @@ const CHAPTERS: Chapter[] = [
                   ),
                   does: "Set the star rating (0 clears it)",
                 },
+                {
+                  keys: (
+                    <>
+                      <kbd>6</kbd>–<kbd>9</kbd>
+                    </>
+                  ),
+                  does: "Color label: red, yellow, green, blue. The same key again takes it off",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>Delete</kbd> / <kbd>⌫</kbd>
+                    </>
+                  ),
+                  does: "Delete this photo (asks first), then on to the next one",
+                },
                 { keys: <kbd>E</kbd>, does: "Open the editor on this photo (E in the editor brings you back)" },
                 { keys: <kbd>P</kbd>, does: "Show / hide the side panel, so the photo gets the whole window" },
                 {
@@ -2059,7 +2217,7 @@ const CHAPTERS: Chapter[] = [
                       <kbd>↑</kbd> / <kbd>↓</kbd>
                     </>
                   ),
-                  does: "Step through the sliders of the open section",
+                  does: "Step through the sliders of the open section. With Film Simulation open: the look before / after",
                 },
                 {
                   keys: (
@@ -2067,7 +2225,7 @@ const CHAPTERS: Chapter[] = [
                       <kbd>←</kbd> / <kbd>→</kbd>
                     </>
                   ),
-                  does: "Adjust the focused slider's value",
+                  does: "Adjust the focused slider's value. With Film Simulation open and no slider focused: the look before / after",
                 },
                 {
                   keys: (
@@ -2075,8 +2233,17 @@ const CHAPTERS: Chapter[] = [
                       <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd>
                     </>
                   ),
-                  does: "Undo / redo (one slider drag or brush stroke is one step)",
+                  does: "Undo / redo (one slider drag or brush stroke is one step). Ctrl+Y redoes as well",
                 },
+                {
+                  keys: (
+                    <>
+                      <kbd>0</kbd>–<kbd>9</kbd>
+                    </>
+                  ),
+                  does: "On a focused slider: type its value, Enter sets it",
+                },
+                { keys: <kbd>J</kbd>, does: "Show / hide the clipping warning" },
                 { keys: <kbd>P</kbd>, does: "Show / hide the edit panel, so the photo gets the whole window" },
                 {
                   keys: <kbd>F</kbd>,
@@ -2095,7 +2262,7 @@ const CHAPTERS: Chapter[] = [
                 {
                   keys: (
                     <>
-                      <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd>
+                      <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd>
                     </>
                   ),
                   does: "Undo / redo",
@@ -2216,7 +2383,7 @@ const CHAPTERS: Chapter[] = [
             </p>
             <h4>An Immich upload didn't arrive</h4>
             <p>
-              <em>Settings → Immich → Recent uploads</em> lists every background upload with a ✓ or
+              <em>Settings → Integrations → Recent uploads</em> lists every background upload with a ✓ or
               the exact error. If uploads keep failing, use "Test connection" in the same section
               and make sure the server is reachable from this machine.
             </p>

@@ -61,7 +61,10 @@ from app.services.filesystem import (
     resolve_image_path,
 )
 from app.services.hashing import perceptual_hash
+from app.services import exif as exif_service
+from app.services import export_finish
 from app.services import lens_profile
+from app.services import name_template
 from app.services.immich_sync import immich_album_names as _immich_album_names
 from app.services.immich_sync import run_immich_sync_soon, with_immich_partners
 from app.services.settings_store import get_auto_develop_groups, get_immich_config
@@ -1040,6 +1043,40 @@ def _prune_export_jobs() -> None:
         _drop_export_job(jid)
 
 
+def _export_library_metadata(db: Session, image: Image) -> exif_service.LibraryMetadata:
+    """Stars, colour label and the tags the user gave a photo - not the ones
+    the app keeps for itself ("edit", "album: ..."), which say where a photo
+    sits in this library and mean nothing outside it."""
+    names = [
+        name
+        for (name,) in db.query(Tag.name)
+        .join(ImageTag, ImageTag.tag_id == Tag.id)
+        .filter(ImageTag.image_id == image.id)
+        .order_by(Tag.name)
+        if not is_auto_tag(name)
+    ]
+    label = image.color_label
+    return exif_service.LibraryMetadata(
+        rating=image.rating or 0,
+        label=None if label in (None, ColorLabel.none) else label.value,
+        keywords=tuple(names),
+    )
+
+
+def _unique_export_name(name: str, used: set[str], folder: Path | None) -> str:
+    """`name`, or `name` with _1, _2... before the extension when it is taken:
+    by an earlier photo of this export (a RAW+JPEG pair shares a stem, and so
+    does a virtual copy with its original) or, in a folder, by a file that is
+    already there - an export never writes over anything."""
+    path = Path(name)
+    candidate, n = name, 0
+    while candidate.casefold() in used or (folder is not None and (folder / candidate).exists()):
+        n += 1
+        candidate = f"{path.stem}_{n}{path.suffix}"
+    used.add(candidate.casefold())
+    return candidate
+
+
 def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequest) -> None:
     job = _export_jobs[job_id]
 
@@ -1047,8 +1084,14 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
         return job["state"] == "cancelled"
 
     db = SessionLocal()
-    fd, tmp_path = tempfile.mkstemp(prefix="pm-export-")
-    os.close(fd)
+    folder = Path(payload.dest_dir) if payload.dest_dir else None
+    tmp_path: str | None = None
+    if folder is None:
+        fd, tmp_path = tempfile.mkstemp(prefix="pm-export-")
+        os.close(fd)
+    # The export thread's own exiftool: the shared helper is one process with
+    # one pipe, and an import may be reading through it right now.
+    helper = exif_service.new_helper()
     try:
         images = (
             db.query(Image)
@@ -1060,59 +1103,115 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
         images = [by_id[i] for i in payload.image_ids if i in by_id]
         quality = max(1, min(100, payload.quality))
 
+        original = payload.format == "original"
         tiff = payload.format == "tiff"
-        ext = ".tif" if tiff else ".jpg"
+        finish = export_finish.Finish(
+            sharpen=payload.sharpen,
+            watermark=payload.watermark_text,
+            corner=payload.watermark_corner,
+            size=payload.watermark_size,
+            opacity=payload.watermark_opacity,
+        )
 
-        def render_jpeg(image: Image) -> bytes:
+        def export_name(image: Image, seq: int) -> str:
+            return _export_filename(payload, image, seq, len(images))
+
+        def write_rendered(image: Image, target: Path) -> None:
+            """The photo with its edits baked in, at `target`, saying about
+            itself what the export was asked to keep."""
             if tiff:
-                return thumbnails.export_tiff_bytes(image, payload.max_size)
-            return thumbnails.export_jpeg_bytes(image, quality, payload.max_size)
+                data = thumbnails.export_tiff_bytes(image, payload.max_size, finish=finish)
+            else:
+                data = thumbnails.export_jpeg_bytes(image, quality, payload.max_size, finish=finish)
+            target.write_bytes(data)
+            keep = payload.metadata != "none"
+            try:
+                exif_service.write_export_metadata(
+                    target,
+                    resolve_image_path(image) if keep else None,
+                    strip_location=payload.metadata == "no_location",
+                    library=_export_library_metadata(db, image) if keep else None,
+                    # The JPEG encoder embeds the profile itself; the 16-bit
+                    # TIFF encoder can't.
+                    icc_profile=thumbnails.raw_service.srgb_icc_bytes() if tiff else None,
+                    tiff=tiff,
+                    helper=helper,
+                )
+            except Exception:
+                # The picture is what was asked for; one that comes out
+                # without its camera data still beats one that doesn't.
+                logger.exception("Export: could not write metadata into %s", target.name)
 
+        used_names: set[str] = set()
+        if folder is not None:
+            # Straight into the folder, one file beside the other.
+            first: Path | None = None
+            for seq, image in enumerate(images, start=1):
+                if cancelled():
+                    return
+                target = folder / _unique_export_name(export_name(image, seq), used_names, folder)
+                try:
+                    if original:
+                        shutil.copyfile(resolve_image_path(image), target)
+                    else:
+                        write_rendered(image, target)
+                except Exception:
+                    # One broken photo shouldn't sink the whole export.
+                    logger.exception("Export job render failed for %s - skipping", image.id)
+                    target.unlink(missing_ok=True)
+                    job["done"] += 1
+                    continue
+                first = first or target
+                job["written"] += 1
+                job["done"] += 1
+            if cancelled():
+                return
+            job.update(
+                dest_dir=str(folder),
+                reveal_path=str(first) if first else None,
+                state="ready",
+            )
+            return
+
+        assert tmp_path is not None
         if len(images) == 1:
             image = images[0]
-            if payload.format == "original":
+            filename = export_name(image, 1)
+            if original:
                 shutil.copyfile(resolve_image_path(image), tmp_path)
-                filename = image.original_filename
                 media = "image/jpeg" if image.file_type == FileType.jpeg else "application/octet-stream"
             else:
-                Path(tmp_path).write_bytes(render_jpeg(image))
-                filename = f"{Path(image.original_filename).stem}{ext}"
+                write_rendered(image, Path(tmp_path))
                 media = "image/tiff" if tiff else "image/jpeg"
             job["done"] = 1
+            job["written"] = 1
         else:
             # ZIP_STORED like the synchronous endpoints: JPEGs (and compressed
             # RAWs) don't shrink further, they'd only cost CPU.
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as archive:
-                used_names: dict[str, int] = {}
-                for image in images:
-                    if cancelled():
-                        return
-                    try:
-                        if payload.format == "original":
-                            data = None
-                            src = resolve_image_path(image)
-                            name = image.original_filename
-                        else:
-                            data = render_jpeg(image)
-                            name = f"{Path(image.original_filename).stem}{ext}"
-                    except Exception:
-                        # One broken photo shouldn't sink the whole export.
-                        logger.exception("Export job render failed for %s - skipping", image.id)
+            fd, scratch = tempfile.mkstemp(prefix="pm-export-file-")
+            os.close(fd)
+            try:
+                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as archive:
+                    for seq, image in enumerate(images, start=1):
+                        if cancelled():
+                            return
+                        try:
+                            if original:
+                                src = resolve_image_path(image)
+                            else:
+                                src = Path(scratch)
+                                write_rendered(image, src)
+                        except Exception:
+                            # One broken photo shouldn't sink the whole export.
+                            logger.exception("Export job render failed for %s - skipping", image.id)
+                            job["done"] += 1
+                            continue
+                        archive.write(src, arcname=_unique_export_name(export_name(image, seq), used_names, None))
+                        job["written"] += 1
                         job["done"] += 1
-                        continue
-                    # Suffix filename collisions (RAW+JPEG pairs share a stem).
-                    if name in used_names:
-                        used_names[name] += 1
-                        stem = Path(name)
-                        name = f"{stem.stem}_{used_names[name]}{stem.suffix}"
-                    else:
-                        used_names[name] = 0
-                    if data is None:
-                        archive.write(src, arcname=name)
-                    else:
-                        archive.writestr(name, data)
-                    job["done"] += 1
-            filename = "photos.zip" if payload.format == "original" else "export.zip"
+            finally:
+                Path(scratch).unlink(missing_ok=True)
+            filename = "photos.zip" if original else "export.zip"
             media = "application/zip"
         if cancelled():
             return
@@ -1122,8 +1221,43 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
         job.update(state="error", error=str(e) or "Export failed")
     finally:
         db.close()
-        if job["state"] != "ready":
+        try:
+            helper.terminate()
+        except Exception:
+            pass
+        if tmp_path is not None and job["state"] != "ready":
             Path(tmp_path).unlink(missing_ok=True)
+
+
+def _export_filename(payload: schemas.ExportStartRequest, image: Image, seq: int, total: int) -> str:
+    """What an export calls this photo: the template's name (or the photo's
+    own), with the extension of what is written - the original's for a
+    byte-for-byte copy."""
+    stem = name_template.render_stem(payload.name_template, image, seq, total)
+    if payload.format == "original":
+        return f"{stem}{Path(image.original_filename).suffix}"
+    return f"{stem}{'.tif' if payload.format == 'tiff' else '.jpg'}"
+
+
+@router.post("/export/name-preview", response_model=schemas.ExportNamePreview)
+def export_name_preview(
+    payload: schemas.ExportStartRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The file name the first photo of an export would get - what the dialog
+    shows under the name field while a template is typed, with the photo's
+    real date and camera rather than made-up ones."""
+    if not payload.image_ids:
+        raise HTTPException(status_code=400, detail="No images to export")
+    if payload.name_template:
+        problem = name_template.template_error(payload.name_template)
+        if problem:
+            return schemas.ExportNamePreview(error=problem)
+    image = get_owned_image(db, current_user.id, payload.image_ids[0])
+    return schemas.ExportNamePreview(
+        name=_export_filename(payload, image, 1, len(payload.image_ids))
+    )
 
 
 @router.post("/export/start", response_model=schemas.ExportStartResponse)
@@ -1134,6 +1268,16 @@ def export_start(
 ):
     if not payload.image_ids:
         raise HTTPException(status_code=400, detail="No images to export")
+    if payload.name_template:
+        problem = name_template.template_error(payload.name_template)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+    if payload.dest_dir:
+        folder = Path(payload.dest_dir)
+        if not folder.is_absolute() or not folder.is_dir():
+            raise HTTPException(status_code=400, detail="That folder doesn't exist any more. Choose another one.")
+        if not os.access(folder, os.W_OK):
+            raise HTTPException(status_code=400, detail="Nothing can be written into that folder. Choose another one.")
     _prune_export_jobs()
     # Validate ownership up front so the worker can assume clean input.
     for image_id in payload.image_ids:
@@ -1147,6 +1291,9 @@ def export_start(
         "filename": None,
         "media": None,
         "error": None,
+        "dest_dir": None,
+        "written": 0,
+        "reveal_path": None,
         "created": time.monotonic(),
     }
     with _export_jobs_lock:
@@ -1176,6 +1323,9 @@ def export_progress(job_id: str, current_user: User = Depends(get_current_user))
         state=job["state"],
         filename=job["filename"],
         error=job["error"],
+        dest_dir=job["dest_dir"],
+        written=job["written"],
+        reveal_path=job["reveal_path"],
     )
 
 
@@ -1184,6 +1334,10 @@ def export_result(job_id: str, current_user: User = Depends(get_current_user)):
     job = _get_export_job(job_id)
     if job["state"] != "ready":
         raise HTTPException(status_code=409, detail="Export not finished")
+    if not job["path"]:
+        # A folder export has nothing to download: its files are where they
+        # were asked to go.
+        raise HTTPException(status_code=409, detail="This export was written to a folder")
     # The temp file is deleted (and the job dropped) after the response has
     # streamed - the result is a one-shot download.
     return FileResponse(
@@ -1579,7 +1733,7 @@ def update_image(
 # separators (a rename is not a move), the reserved punctuation, and control
 # bytes. Checked on the *typed* name so the error names the real problem
 # instead of some silently mangled result.
-_ILLEGAL_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_ILLEGAL_NAME_CHARS = name_template.ILLEGAL_NAME_CHARS
 
 
 def _renamed_filename(typed: str, current_suffix: str) -> str:

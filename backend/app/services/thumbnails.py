@@ -21,6 +21,7 @@ from PIL import Image as PILImage, ImageOps
 from app.config import settings
 from app.services import develop, develop_color, develop_effects, develop_v2, film_sims, lens_profile, masks
 from app.services import machine
+from app.services import export_finish
 from app.services import raw as raw_service
 
 
@@ -1849,7 +1850,9 @@ def _apply_curves(arr: np.ndarray, adj: dict) -> np.ndarray:
     return arr
 
 
-def _display_color_block(arr: np.ndarray, adj: dict, raw_source: bool = False) -> np.ndarray:
+def _display_color_block(
+    arr: np.ndarray, adj: dict, raw_source: bool = False, ref_long_edge: float | None = None
+) -> np.ndarray:
     """The display-referred colour pass on sRGB float 0..1: film simulation,
     curves, colour calibration, HSL mixer + global hue, Fuji chrome, 3-way
     colour grading, saturation/vibrance. (Curves are defined on the 0..255
@@ -1870,7 +1873,10 @@ def _display_color_block(arr: np.ndarray, adj: dict, raw_source: bool = False) -
     # Tone curves (point or parametric per curve_mode) and camera-style colour
     # calibration shape tone/primaries after the basic tonal controls.
     arr = _apply_curves(arr, adj)
-    arr = develop_color.apply_color_calibration(arr, adj.get("color_calibration") or {})
+    arr = develop_color.apply_color_calibration(
+        arr, adj.get("color_calibration") or {},
+        whole_band=develop_v2.calibration_moves_whole_bands(adj), ref_long_edge=ref_long_edge,
+    )
 
     if develop_v2.is_v2(adj):
         # Process version 2: the mixer, hue, grading, saturation and vibrance
@@ -2915,7 +2921,7 @@ def apply_adjustments_linear(
         _detail_stage_put(detail_key, arr)
         t0 = _mark(timing, "detail", t0)
     _abort_if_stale()
-    arr = _display_color_block(arr, adj, raw_source)
+    arr = _display_color_block(arr, adj, raw_source, ref_long_edge=long_edge)
     t0 = _mark(timing, "color", t0)
     # Local (per-region) mask adjustments layer on the globally-toned image,
     # before the global finishing effects (bloom/vignette/grain).
@@ -4963,7 +4969,17 @@ def _full_warm_run() -> None:
             logger.exception("full.jpg warm-up failed for %s", image_id)
 
 
-def _encode_jpeg_file(path: Path, quality: int, max_size: int | None) -> bytes:
+def _finished(im: PILImage.Image, finish: "export_finish.Finish | None") -> PILImage.Image:
+    """`im` as an export hands it out: sharpened for its size and watermarked
+    when the export asked for either, itself otherwise."""
+    if finish is None or not finish.active:
+        return im
+    return PILImage.fromarray(export_finish.apply(np.asarray(im), finish))
+
+
+def _encode_jpeg_file(
+    path: Path, quality: int, max_size: int | None, finish: "export_finish.Finish | None" = None
+) -> bytes:
     """Decode an already-finished JPEG/PNG and re-encode it at the export
     quality/size - the cheap tail shared by every export fast path. draft()
     must run before any pixel access (it picks the DCT decode scale), and its
@@ -4982,7 +4998,7 @@ def _encode_jpeg_file(path: Path, quality: int, max_size: int | None) -> bytes:
     if max_size and max(im.size) > max_size:
         im.thumbnail((max_size, max_size), PILImage.LANCZOS)
     buf = io.BytesIO()
-    im.save(buf, "JPEG", quality=quality, icc_profile=raw_service.srgb_icc_bytes())
+    _finished(im, finish).save(buf, "JPEG", quality=quality, icc_profile=raw_service.srgb_icc_bytes())
     return buf.getvalue()
 
 
@@ -5008,7 +5024,12 @@ def _is_untouched(image: "Image") -> bool:
     )
 
 
-def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None) -> bytes:
+def export_jpeg_bytes(
+    image: "Image",
+    quality: int,
+    max_size: int | None = None,
+    finish: "export_finish.Finish | None" = None,
+) -> bytes:
     """Export-optimised JPEG bytes of a photo with its saved edits baked in.
 
     Prefers the cached 100%-zoom full.jpg - the exact full-resolution pixels
@@ -5019,16 +5040,19 @@ def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None)
     original pixels exactly, so re-encoding the original is the same output
     at a tenth of the cost. When no fast path applies the true render runs
     once and *fills* the cache, so every following export (and the lightbox's
-    100% zoom) of that photo is fast."""
+    100% zoom) of that photo is fast.
+
+    `finish` (output sharpening, a watermark) goes onto the exported pixels
+    only - the cache keeps the picture as the library shows it."""
     from app.services.filesystem import resolve_image_path
 
     full_path = derivative_dir(image.id) / "full.jpg"
     if full_path.exists():
-        return _encode_jpeg_file(full_path, quality, max_size)
+        return _encode_jpeg_file(full_path, quality, max_size, finish)
 
     source_path = resolve_image_path(image)
     if not raw_service.is_raw(source_path) and _is_untouched(image):
-        return _encode_jpeg_file(source_path, quality, max_size)
+        return _encode_jpeg_file(source_path, quality, max_size, finish)
 
     with _full_render_lock:
         # A concurrent native render (the post-save warmer, the lightbox /full
@@ -5036,10 +5060,12 @@ def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None)
         # thread waited on the lock. Without the recheck the "edit, export
         # right away" flow rendered the same 14s frame twice back to back.
         if full_path.exists():
-            return _encode_jpeg_file(full_path, quality, max_size)
+            return _encode_jpeg_file(full_path, quality, max_size, finish)
         rendered = render_full_from_stored_edits(image, max_size=max_size)
         buf = io.BytesIO()
-        rendered.save(buf, "JPEG", quality=quality, icc_profile=raw_service.srgb_icc_bytes())
+        _finished(rendered, finish).save(
+            buf, "JPEG", quality=quality, icc_profile=raw_service.srgb_icc_bytes()
+        )
         data = buf.getvalue()
         # Only a full-resolution render is a valid 100%-zoom cache; a sized
         # export was decoded economically (possibly the half-size demosaic).
@@ -5051,12 +5077,16 @@ def export_jpeg_bytes(image: "Image", quality: int, max_size: int | None = None)
         return data
 
 
-def export_tiff_bytes(image: "Image", max_size: int | None = None) -> bytes:
+def export_tiff_bytes(
+    image: "Image", max_size: int | None = None, finish: "export_finish.Finish | None" = None
+) -> bytes:
     """A 16-bit sRGB TIFF of a photo with its saved edits baked in - for work
     that continues elsewhere (print, retouching), where an 8-bit JPEG's 256
     levels band as soon as a sky is pushed again. Always the true render: the
     cached full.jpg is 8-bit, so there is no fast path to take."""
-    rendered = render_full_from_stored_edits(image, max_size=max_size, depth16=True)
+    rendered = export_finish.apply(
+        render_full_from_stored_edits(image, max_size=max_size, depth16=True), finish
+    )
     ok, buf = cv2.imencode(".tiff", np.ascontiguousarray(rendered[..., ::-1]))
     if not ok:
         raise RuntimeError("TIFF encoding failed")

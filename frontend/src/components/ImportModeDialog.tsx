@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ImportChoice, ImportMode } from "../api/types";
 import { IconDisk, IconFolder } from "./Icons";
+import { useEscapeToClose } from "../utils/modalKeys";
 
 type Outcome = "backup" | "copy" | "reference";
 
@@ -55,6 +56,7 @@ export function ImportModeDialog({
   closing?: boolean;
 }) {
   const [mode, setMode] = useState<ImportMode>("copy");
+  useEscapeToClose(!closing, onClose);
   // Where the session's import folder is created; null = <library>/Import.
   const [stagingFolder, setStagingFolder] = useState<string | null>(null);
   const [keepBackup, setKeepBackup] = useState(defaultBackup);
@@ -104,7 +106,7 @@ export function ImportModeDialog({
               </span>
               <span className="copy-kind-text">
                 <strong>Copy to an import folder</strong>
-                <span>All photos are copied first, so you can remove the card afterwards.</span>
+                <span>All photos are copied first, so you can disconnect the source afterwards.</span>
               </span>
             </button>
             <button
@@ -119,7 +121,7 @@ export function ImportModeDialog({
               </span>
               <span className="copy-kind-text">
                 <strong>Leave them where they are</strong>
-                <span>Nothing is copied. For an archive or a NAS, not for a memory card.</span>
+                <span>Nothing is copied. The photos are only there while their source is connected.</span>
               </span>
             </button>
           </div>

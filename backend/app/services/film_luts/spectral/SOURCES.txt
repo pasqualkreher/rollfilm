@@ -1,0 +1,31 @@
+Scene cubes for more analog film looks (F-Log2 / F-Gamut code values in,
+display sRGB out), baked by backend/tools/film_sim_fit/bake_spectral.py.
+
+Derived from spectral_film_lut by Jan Lohse
+https://github.com/JanLohse/spectral_film_lut (commit b8d69398fc71038579c20473378be22103695dd5)
+Licensed MIT - copyright and permission notice in SPECTRAL_FILM_LUT_LICENSE.txt,
+next to this file.
+Modified by Pasqual Kreher: the stocks are rendered into 3D LUTs for Rollfilm,
+each negative on the print named below, and levelled - the medium's black and
+white on the display's, 18% grey on middle grey.
+
+kodak_vericolor_iii.npy
+    Kodak Vericolor III printed on Kodak Portra Endura Paper
+kodak_aerocolor_iv.npy
+    Kodak Aerocolor IV 2460 printed on Kodak Portra Endura Paper
+fuji_pro_160s.npy
+    Fuji Pro 160S printed on Fuji Crystal Archive DPII
+fuji_natura_1600.npy
+    Fuji Natura 1600 printed on Fuji Crystal Archive DPII
+fuji_eterna_500.npy
+    Fuji Eterna 500 printed on Fuji Eterna-CP Type 3513DI
+fuji_eterna_500_vivid.npy
+    Fuji Eterna 500 Vivid printed on Fuji Eterna-CP Type 3513DI
+fuji_instax_color.npy
+    Fuji Instax color as its own positive
+
+The trademarked names are there to say which film stock a cube is made to
+approximate. Neither the author nor Rollfilm are affiliated with or endorsed
+by the companies that own them.
+
+Removing a file takes its look out of the scene path.

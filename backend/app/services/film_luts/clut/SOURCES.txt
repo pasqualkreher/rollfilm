@@ -1,0 +1,180 @@
+Display cubes for the film scan looks (sRGB in, sRGB out, 33 nodes),
+imported by backend/tools/film_sim_fit/import_clut.py.
+
+Derived from the RawTherapee Film Simulation Collection, version 2015-09-20,
+by Pat David, Pavlov Dmitry and Michael Ezra
+http://rawtherapee.com/shared/HaldCLUT.zip
+(as mirrored at https://github.com/NatronGitHub/clut, commit af7b50d4caf6244fb6895a647f5b6a84efe7931a)
+Licensed CC BY-SA 4.0 - https://creativecommons.org/licenses/by-sa/4.0/
+Modified by Pasqual Kreher: each HaldCLUT is thinned from 144 nodes an axis
+to 33 and stored as a numpy array; the black & white stocks that are grey to
+within their 8 bits are made exactly grey. These files are under the same
+licence.
+
+kodak_portra_160_nc.npy
+    negative_color/kodak_portra_160_nc.png
+kodak_portra_160_vc.npy
+    negative_color/kodak_portra_160_vc.png
+kodak_portra_400_nc.npy
+    negative_old/kodak_portra_400_nc.png
+kodak_portra_400_uc.npy
+    negative_old/kodak_portra_400_uc.png
+kodak_portra_400_vc.npy
+    negative_old/kodak_portra_400_vc.png
+fuji_160c.npy
+    negative_new/fuji_160c.png
+fuji_800z.npy
+    negative_new/fuji_800z.png
+fuji_superia_100.npy
+    negative_old/fuji_superia_100.png
+fuji_superia_200.npy
+    negative_color/fuji_superia_200.png
+fuji_superia_400.npy
+    negative_old/fuji_superia_400.png
+fuji_superia_800.npy
+    negative_old/fuji_superia_800.png
+fuji_superia_1600.npy
+    negative_old/fuji_superia_1600.png
+fuji_superia_hg_1600.npy
+    negative_color/fuji_superia_hg_1600.png
+fuji_superia_reala_100.npy
+    negative_color/fuji_superia_reala_100.png
+fuji_superia_xtra_800.npy
+    negative_color/fuji_superia_x-tra_800.png
+agfa_vista_200.npy
+    negative_color/agfa_vista_200.png
+agfa_ultra_color_100.npy
+    negative_color/agfa_ultra_color_100.png
+kodak_elite_color_200.npy
+    negative_color/kodak_elite_color_200.png
+kodak_elite_color_400.npy
+    negative_color/kodak_elite_color_400.png
+fuji_velvia_50.npy
+    colorslide/fuji_velvia_50.png
+fuji_astia_100f.npy
+    colorslide/fuji_astia_100f.png
+fuji_provia_400f.npy
+    colorslide/fuji_provia_400f.png
+fuji_provia_400x.npy
+    colorslide/fuji_provia_400x.png
+fuji_sensia_100.npy
+    colorslide/fuji_sensia_100.png
+kodak_kodachrome_25.npy
+    colorslide/kodak_kodachrome_25.png
+kodak_kodachrome_200.npy
+    colorslide/kodak_kodachrome_200.png
+kodak_ektachrome_100_gx.npy
+    colorslide/kodak_e-100_gx_ektachrome_100.png
+kodak_ektachrome_100_vs.npy
+    colorslide/kodak_ektachrome_100_vs.png
+kodak_elite_chrome_200.npy
+    colorslide/kodak_elite_chrome_200.png
+kodak_elite_chrome_400.npy
+    colorslide/kodak_elite_chrome_400.png
+kodak_elite_extracolor_100.npy
+    colorslide/kodak_elite_extracolor_100.png
+agfa_precisa_100.npy
+    colorslide/agfa_precisa_100.png
+kodak_tri_x_400.npy
+    bw/kodak_tri-x_400.png
+kodak_tmax_100.npy
+    bw/kodak_t-max_100.png
+kodak_tmax_400.npy
+    bw/kodak_t-max_400.png
+kodak_tmax_3200.npy
+    bw/kodak_t-max_3200.png
+kodak_bw_400cn.npy
+    bw/kodak_bw_400_cn.png
+kodak_hie.npy
+    bw/kodak_hie_(hs_infra).png
+ilford_hp5_plus_400.npy
+    bw/ilford_hp5_plus_400.png
+ilford_hps_800.npy
+    bw/ilford_hps_800.png
+ilford_fp4_plus_125.npy
+    bw/ilford_fp4_plus_125.png
+ilford_delta_100.npy
+    bw/ilford_delta_100.png
+ilford_delta_400.npy
+    bw/ilford_delta_400.png
+ilford_delta_3200.npy
+    bw/ilford_delta_3200.png
+ilford_pan_f_plus_50.npy
+    bw/ilford_pan_f_plus_50.png
+ilford_xp2.npy
+    bw/ilford_xp2.png
+fuji_neopan_acros_100.npy
+    bw/fuji_neopan_acros_100.png
+fuji_neopan_1600.npy
+    bw/fuji_neopan_1600.png
+agfa_apx_25.npy
+    bw/agfa_apx_25.png
+agfa_apx_100.npy
+    bw/agfa_apx_100.png
+rollei_retro_80s.npy
+    bw/rollei_retro_80s.png
+rollei_retro_100_tonal.npy
+    bw/rollei_retro_100_tonal.png
+rollei_ortho_25.npy
+    bw/rollei_ortho_25.png
+rollei_ir_400.npy
+    bw/rollei_ir_400.png
+polaroid_664.npy
+    bw/polaroid_664.png
+polaroid_665.npy
+    instant_pro/polaroid_665.png
+polaroid_667.npy
+    bw/polaroid_667.png
+polaroid_669.npy
+    instant_pro/polaroid_669.png
+polaroid_672.npy
+    bw/polaroid_672.png
+polaroid_690.npy
+    instant_pro/polaroid_690.png
+polaroid_px_70.npy
+    instant_consumer/polaroid_px-70.png
+polaroid_px_680.npy
+    instant_consumer/polaroid_px-680.png
+polaroid_time_zero.npy
+    instant_consumer/polaroid_time_zero_(expired).png
+polaroid_polachrome.npy
+    colorslide/polaroid_polachrome.png
+fuji_fp_100c.npy
+    instant_pro/fuji_fp-100c.png
+fuji_fp_100c_cool.npy
+    instant_pro/fuji_fp-100c_cool.png
+fuji_fp_100c_negative.npy
+    instant_pro/fuji_fp-100c_negative.png
+fuji_fp_3000b.npy
+    instant_pro/fuji_fp-3000b.png
+kodak_elite_100_xpro.npy
+    negative_color/kodak_elite_100_xpro.png
+fuji_superia_200_xpro.npy
+    colorslide/fuji_superia_200_xpro.png
+lomography_xpro_slide_200.npy
+    colorslide/lomography_x-pro_slide_200.png
+lomography_redscale_100.npy
+    negative_color/lomography_redscale_100.png
+
+Five more are derived from t3mujinpack by João Almeida
+https://github.com/t3mujin/t3mujinpack (commit 0b421f3e25209ed78253d1724a29cc6255c5e7fe)
+Licensed MIT - copyright and permission notice in T3MUJINPACK_LICENSE.txt,
+next to this file. Thinned and stored the same way.
+
+kodak_colorplus_200.npy
+    haldcluts/t3mujinpack - Color Negative - Kodak ColorPlus 200.png
+agfa_vista_100.npy
+    haldcluts/t3mujinpack - Color Negative - Agfa Vista 100.png
+agfa_vista_400.npy
+    haldcluts/t3mujinpack - Color Negative - Agfa Vista 400.png
+fuji_fortia_sp_50.npy
+    haldcluts/t3mujinpack - Color Slide - Fuji Fortia SP 50.png
+kodak_ektachrome_100_g.npy
+    haldcluts/t3mujinpack - Color Slide - Kodak Ektachrome 100 G.png
+
+The trademarked names in the file names are there to say which film stock a
+cube is made to approximate. Neither the authors nor Rollfilm are affiliated
+with or endorsed by the companies that own them.
+
+Removing a file leaves its look in the list without effect: the picture stays
+as it is.

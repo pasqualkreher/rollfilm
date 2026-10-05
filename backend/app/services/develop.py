@@ -132,7 +132,10 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     # clipping - and with every look on a cube of that kind.
     # "5" is "4" with the tone mapper heard under such a look: AgX sets the
     # tone curve and the look keeps the colour, where "3" and "4" ignore it.
-    "process": ("1", ("1", "2", "3", "4", "5")),
+    # "6" is "5" with a Calibration primary moving its whole band of colours
+    # by the same amount (develop_color.apply_color_calibration); before, a
+    # colour off the centre of its band - a leaf under Green - got part of it.
+    "process": ("1", ("1", "2", "3", "4", "5", "6")),
     # Which exposure a RAW is developed from (see thumbnails._browsing_gain).
     # "standard" lifts every raw to the same brightness with the auto-exposure
     # gain the grid already uses (raw.compute_base_gain), so a photo opens the
@@ -151,11 +154,58 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
                           "eterna", "eterna_bleach_bypass",
                           "acros", "acros_ye", "acros_r", "acros_g",
                           "monochrome", "monochrome_ye", "monochrome_r", "monochrome_g",
-                          "sepia")),
+                          "sepia",
+                          # The analog film looks (film_sims.ANALOG_SIMS).
+                          "kodak_portra_400",
+                          "kodak_portra_800_push1", "kodak_portra_800_push2",
+                          "kodak_ektar_100",
+                          "kodak_gold_200", "kodak_ultramax_400",
+                          "kodak_portra_160", "kodak_portra_800",
+                          "fujifilm_c200", "fujifilm_pro_400h", "fujifilm_xtra_400",
+                          "kodak_vision3_50d", "kodak_vision3_500t",
+                          "kodak_vision3_250d", "kodak_verita_200d", "kodak_vision3_200t",
+                          "kodak_kodachrome_64", "kodak_ektachrome_100",
+                          "fujifilm_provia_100f", "fujifilm_velvia_100",
+                          "kodak_doublex",
+                          "kodak_vericolor_iii", "kodak_aerocolor_iv",
+                          "fuji_pro_160s", "fuji_natura_1600",
+                          "fuji_eterna_500", "fuji_eterna_500_vivid", "fuji_instax_color",
+                          # The film scan looks (film_sims.CLUT_SIMS).
+                          "kodak_portra_160_nc", "kodak_portra_160_vc", "kodak_portra_400_nc",
+                          "kodak_portra_400_uc", "kodak_portra_400_vc", "kodak_colorplus_200",
+                          "fuji_160c", "fuji_800z",
+                          "fuji_superia_100", "fuji_superia_200", "fuji_superia_400",
+                          "fuji_superia_800", "fuji_superia_1600", "fuji_superia_hg_1600",
+                          "fuji_superia_reala_100",
+                          "fuji_superia_xtra_800",
+                          "agfa_vista_100", "agfa_vista_200", "agfa_vista_400",
+                          "agfa_ultra_color_100",
+                          "kodak_elite_color_200", "kodak_elite_color_400", "fuji_velvia_50",
+                          "fuji_fortia_sp_50", "fuji_astia_100f",
+                          "fuji_provia_400f", "fuji_provia_400x",
+                          "fuji_sensia_100", "kodak_kodachrome_25",
+                          "kodak_kodachrome_200", "kodak_ektachrome_100_g",
+                          "kodak_ektachrome_100_gx", "kodak_ektachrome_100_vs",
+                          "kodak_elite_chrome_200", "kodak_elite_chrome_400",
+                          "kodak_elite_extracolor_100", "agfa_precisa_100", "kodak_tri_x_400",
+                          "kodak_tmax_100", "kodak_tmax_400", "kodak_tmax_3200", "kodak_bw_400cn",
+                          "kodak_hie", "ilford_hp5_plus_400", "ilford_hps_800",
+                          "ilford_fp4_plus_125",
+                          "ilford_delta_100", "ilford_delta_400", "ilford_delta_3200",
+                          "ilford_pan_f_plus_50", "ilford_xp2",
+                          "fuji_neopan_acros_100", "fuji_neopan_1600", "agfa_apx_25",
+                          "agfa_apx_100", "rollei_retro_80s", "rollei_retro_100_tonal",
+                          "rollei_ortho_25", "rollei_ir_400", "polaroid_664", "polaroid_665",
+                          "polaroid_667", "polaroid_669", "polaroid_672", "polaroid_690",
+                          "polaroid_px_70", "polaroid_px_680", "polaroid_time_zero",
+                          "polaroid_polachrome", "fuji_fp_100c", "fuji_fp_100c_cool",
+                          "fuji_fp_100c_negative", "fuji_fp_3000b",
+                          "kodak_elite_100_xpro", "fuji_superia_200_xpro",
+                          "lomography_xpro_slide_200", "lomography_redscale_100")),
 }
 
 # The process version a photo's first edit starts on (see ENUM_SPEC["process"]).
-CURRENT_PROCESS = "5"
+CURRENT_PROCESS = "6"
 
 # Identity point curve: pass-through on the 0..255 grid.
 _IDENTITY_CURVE = [[0, 0], [255, 255]]
@@ -163,8 +213,15 @@ _CURVE_CHANNELS = ("luma", "red", "green", "blue")
 _PARAM_CURVE = {"highlights": 0, "lights": 0, "darks": 0, "shadows": 0,
                 "white_level": 0, "black_level": 0, "split1": 25, "split2": 50, "split3": 75}
 _GRADE_WHEEL = {"hue": 0, "saturation": 0, "luminance": 0}
-_CALIBRATION = {"shadows_tint": 0, "red_hue": 0, "red_saturation": 0,
-                "green_hue": 0, "green_saturation": 0, "blue_hue": 0, "blue_saturation": 0}
+_CALIBRATION = {"shadows_tint": 0, "red_hue": 0, "red_saturation": 0, "red_luminance": 0,
+                "green_hue": 0, "green_saturation": 0, "green_luminance": 0,
+                "blue_hue": 0, "blue_saturation": 0, "blue_luminance": 0}
+# The primaries' hue and saturation reach +-200 (60 degrees; grey at the
+# primary / twice as saturated); shadows tint and luminance are +-100.
+_CALIBRATION_WIDE = ("red_hue", "green_hue", "blue_hue",
+                     "red_saturation", "green_saturation", "blue_saturation")
+# The mixer's [hue, sat, lum] limits: saturation is the wide one here too.
+_HSL_LIMITS = (100, 200, 100)
 
 
 def _default_hsl() -> dict[str, list[int]]:
@@ -220,7 +277,10 @@ def _norm_hsl(raw: Any) -> dict[str, list[int]]:
         for band in COLOR_BANDS:
             vals = raw.get(band)
             if isinstance(vals, (list, tuple)):
-                out[band] = [int(_clampf(vals[i] if i < len(vals) else 0, -100, 100, 0, False)) for i in range(3)]
+                out[band] = [
+                    int(_clampf(vals[i] if i < len(vals) else 0, -lim, lim, 0, False))
+                    for i, lim in enumerate(_HSL_LIMITS)
+                ]
     return out
 
 
@@ -286,7 +346,8 @@ def _norm_calibration(raw: Any) -> dict[str, int]:
     out = dict(_CALIBRATION)
     if isinstance(raw, dict):
         for k in _CALIBRATION:
-            out[k] = int(_clampf(raw.get(k, 0), -100, 100, 0, False))
+            lim = 200 if k in _CALIBRATION_WIDE else 100
+            out[k] = int(_clampf(raw.get(k, 0), -lim, lim, 0, False))
     return out
 
 

@@ -20,7 +20,8 @@ contextBridge.exposeInMainWorld("photoManager", {
   // budgets (utils/preload.ts) - this is what tells them apart.
   totalMemoryGb: Math.round(os.totalmem() / 1024 ** 3),
   // Opens the native OS folder dialog; resolves to an absolute host path or null.
-  pickFolder: () => ipcRenderer.invoke("pm:pick-folder"),
+  // `opts` ({ title, defaultPath }) is optional.
+  pickFolder: (opts) => ipcRenderer.invoke("pm:pick-folder", opts),
   // Native multi-file dialog; resolves to [{ path, size }] or null when dismissed.
   pickFiles: () => ipcRenderer.invoke("pm:pick-files"),
   // Selects a file in Finder / Explorer / the file manager (its folder when

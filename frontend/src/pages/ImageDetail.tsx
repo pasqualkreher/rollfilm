@@ -42,6 +42,8 @@ import { rememberLastViewedImage } from "../utils/lastViewed";
 import { splitFilename } from "../utils/photoMeta";
 import { ExifTable } from "../components/ExifTable";
 import { useTransientMessage } from "../utils/transientMessage";
+import { isModalOpen } from "../utils/modalKeys";
+import { COLOR_KEYS } from "../utils/selection";
 import { errorText } from "../utils/apiError";
 import type { ColorLabel, ImageOut } from "../api/types";
 import { Presence } from "../components/Presence";
@@ -348,6 +350,14 @@ export function ImageDetail() {
   const [immichBusy, setImmichBusy] = useState(false);
   // Flash message - auto-dismisses after a moment.
   const [immichMsg, setImmichMsg] = useTransientMessage();
+  // The notes are about the photo they were written under. A failure stays
+  // until the next action, so paging on has to take it away - or the next
+  // photo would open with the last one's error beside it.
+  useEffect(() => {
+    setRenameNote(null);
+    setDescNote(null);
+    setImmichMsg(null);
+  }, [id, setRenameNote, setDescNote, setImmichMsg]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -360,14 +370,11 @@ export function ImageDetail() {
       // slideshow pages, pauses and closes with its own listener).
       if (adjustOpen || slideshowOpen) return;
 
-      // While the Save-copy dialog is up the keyboard belongs to it: Esc
-      // closes the dialog (never the lightbox behind it), everything else -
-      // paging, rating, shortcuts - stays parked until it's gone.
-      if (saveCopyOpen) {
-        // Escape is ignored while the dialog is busy - it disables its own Cancel.
-        if (e.key === "Escape") setSaveCopyOpen(false);
-        return;
-      }
+      // While a dialog is up (Save copy, Export, the delete question) the
+      // keyboard belongs to it: the dialog closes on Esc by itself, and
+      // everything else - paging, rating, shortcuts - stays parked until it's
+      // gone, instead of reaching the photo behind it.
+      if (isModalOpen()) return;
 
       // While a text field has focus the keyboard belongs to it: arrows move
       // the caret, Esc backs out of the field. Without this, naming a photo or
@@ -417,6 +424,21 @@ export function ImageDetail() {
         return;
       }
 
+      // 6-9 set a colour label (red, yellow, green, blue, as in the grid);
+      // the key of the label the photo already has takes it off again.
+      if (!inControl && image && !imageStale && e.key in COLOR_KEYS) {
+        const label = COLOR_KEYS[e.key as keyof typeof COLOR_KEYS];
+        void setColor(image.color_label === label ? "none" : label);
+        return;
+      }
+
+      // Delete / Backspace: the trash button's question, without the mouse.
+      if (!inControl && image && !imageStale && (e.key === "Delete" || e.key === "Backspace")) {
+        e.preventDefault();
+        void deletePhoto();
+        return;
+      }
+
       // E opens the editor on the photo you're looking at - the same thing the
       // Edit button does, without going for the mouse. (The handler returns
       // early while the editor is open, so it can't re-trigger itself; Esc and
@@ -445,7 +467,7 @@ export function ImageDetail() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [goToOffset, adjustOpen, adjustClosing, openAdjust, slideshowOpen, saveCopyOpen, image, imageStale, paired, activeId, zoomed, renaming, panelOpen]);
+  }, [goToOffset, adjustOpen, adjustClosing, openAdjust, slideshowOpen, image, imageStale, paired, activeId, zoomed, renaming, panelOpen]);
 
   // The photo the user has actually SETTLED on: follows activeId only after a
   // short pause without further navigation. Holding an arrow key changes
@@ -684,6 +706,7 @@ export function ImageDetail() {
     if (!image) return;
     setNameDraft(splitFilename(image.original_filename).stem);
     setRenameError(null);
+    setRenameNote(null);
     setRenaming(true);
   }
 
@@ -703,7 +726,7 @@ export function ImageDetail() {
     try {
       const result = await api.images.rename(image.id, stem);
       setRenaming(false);
-      if (result.pair_error) setRenameNote(result.pair_error);
+      if (result.pair_error) setRenameNote(result.pair_error, { keep: true });
       else if (result.paired_filename) setRenameNote(`The matching file was renamed to ${result.paired_filename}.`);
       queryClient.invalidateQueries({ queryKey: ["image", activeId] });
       if (image.paired_image_id) {
@@ -737,7 +760,7 @@ export function ImageDetail() {
       }
       setDescNote(next ? "Notes saved." : "Notes cleared.");
     } catch (e) {
-      setDescNote(errorText(e));
+      setDescNote(errorText(e), { keep: true });
     } finally {
       setDescBusy(false);
     }
@@ -832,7 +855,7 @@ export function ImageDetail() {
       const result = await api.images.pushToImmich(ids);
       setImmichMsg(result.message);
     } catch (e) {
-      setImmichMsg((e as Error).message);
+      setImmichMsg((e as Error).message, { keep: true });
     } finally {
       setImmichBusy(false);
     }
@@ -1196,7 +1219,7 @@ export function ImageDetail() {
                 disabled={immichBusy}
                 title="Upload this photo to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
               >
-                <IconCloudUp size={13} /> {immichBusy ? "Uploading..." : "Add to Immich"}
+                <IconCloudUp size={13} /> {immichBusy ? "Uploading…" : "Add to Immich"}
               </button>
             )}
           </div>

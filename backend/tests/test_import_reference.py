@@ -419,11 +419,13 @@ def test_a_copy_session_collects_in_its_own_folder_and_cleans_up(db, dirs, monke
 
     # Committing moves the chosen copy into the library by date; the session
     # closes once nothing is left, and its folder goes with it. (Analysis is
-    # stubbed out above, so mark the rows analyzed by hand.)
+    # stubbed out above, so mark the rows analyzed by hand. Photos arrive
+    # unticked by default: A is the one picked here.)
     a, b = rows
     for r in rows:
         r.processed = True
         r.exif_json = '{"taken_at": "2026-07-01T12:00:00+00:00"}'
+    a.selected = True
     b.selected = False
     db.commit()
     session_row = db.get(ImportSession, session.id)
@@ -492,6 +494,7 @@ def test_a_copy_session_kept_open_after_its_last_commit_keeps_its_folder(db, dir
     folder = Path(session.staging_dir)
     [row] = db.query(ImportStagedFile).all()
     row.processed = True
+    row.selected = True
     row.exif_json = '{"taken_at": "2026-07-01T12:00:00+00:00"}'
     db.commit()
 

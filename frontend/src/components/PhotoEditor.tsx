@@ -18,6 +18,11 @@ import {
   editsAreNeutral,
   editsFromImage,
   FILM_SIMS,
+  FILM_SIM_ORDER,
+  FILM_SIM_SECTIONS,
+  withFilmSim,
+  withCalibration,
+  processForCurrentLooks,
   MASK_ADJUST_FIELDS,
   MASK_LIMIT_TYPES,
   MASK_SUBJECTS,
@@ -48,7 +53,6 @@ import {
   type SubMask,
   type SubMaskParams,
   type SubMaskType,
-  CURRENT_PROCESS,
   LENS_KEYS,
   scalarIsEdited,
 } from "../utils/adjustments";
@@ -87,6 +91,7 @@ import { useLeaveGuard } from "../state/navHistory";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
 import { Spinner } from "./Spinner";
+import { shortcutLabel } from "../utils/selection";
 
 interface Props {
   image: ImageOut;
@@ -143,9 +148,11 @@ const GRID_OPTIONS: { value: GridOverlay; label: string }[] = [
   { value: "grid", label: "Square grid" },
   { value: "diagonal", label: "Diagonals" },
 ];
-const MIX_CHANNELS: [number, string][] = [
+// `wide`: stored as +-200 and shown as +-100, like the global Saturation
+// (ScalarDef.uiScale).
+const MIX_CHANNELS: [number, string, boolean?][] = [
   [0, "Hue"],
-  [1, "Saturation"],
+  [1, "Saturation", true],
   [2, "Luminance"],
 ];
 
@@ -258,15 +265,28 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 // CSS gap, which the fit maths has to subtract before halving the stage).
 const PAIR_GAP = 12;
 
-// Colour calibration: seven -100..100 sliders.
-const CALIB_FIELDS: { key: keyof ColorCalibration; label: string }[] = [
+// Colour calibration: shadow tint, then hue / saturation / luminance of each
+// primary. All -100..100 on screen; `wide` as in MIX_CHANNELS. Each primary is
+// a block of its own (a hairline above its first slider) and its three sliders
+// carry a patch of its colour, the mixer's swatch for that band.
+type CalibField = {
+  key: keyof ColorCalibration;
+  label: string;
+  wide?: boolean;
+  primary?: "red" | "green" | "blue";
+  groupStart?: boolean;
+};
+const CALIB_FIELDS: CalibField[] = [
   { key: "shadows_tint", label: "Shadows Tint" },
-  { key: "red_hue", label: "Red Primary Hue" },
-  { key: "red_saturation", label: "Red Primary Saturation" },
-  { key: "green_hue", label: "Green Primary Hue" },
-  { key: "green_saturation", label: "Green Primary Saturation" },
-  { key: "blue_hue", label: "Blue Primary Hue" },
-  { key: "blue_saturation", label: "Blue Primary Saturation" },
+  { key: "red_hue", label: "Red Primary Hue", primary: "red", wide: true, groupStart: true },
+  { key: "red_saturation", label: "Red Primary Saturation", primary: "red", wide: true },
+  { key: "red_luminance", label: "Red Primary Luminance", primary: "red" },
+  { key: "green_hue", label: "Green Primary Hue", primary: "green", wide: true, groupStart: true },
+  { key: "green_saturation", label: "Green Primary Saturation", primary: "green", wide: true },
+  { key: "green_luminance", label: "Green Primary Luminance", primary: "green" },
+  { key: "blue_hue", label: "Blue Primary Hue", primary: "blue", wide: true, groupStart: true },
+  { key: "blue_saturation", label: "Blue Primary Saturation", primary: "blue", wide: true },
+  { key: "blue_luminance", label: "Blue Primary Luminance", primary: "blue" },
 ];
 
 // Crop aspect-ratio presets. `ratio` is width/height; "orig" locks to the
@@ -393,6 +413,7 @@ function Slider({
   parse,
   headExtra,
   groupStart,
+  swatch,
 }: {
   label: string;
   value: number;
@@ -421,6 +442,9 @@ function Slider({
   headExtra?: ReactNode;
   // Opens a sub-group: drawn with a hairline above (FieldDef.groupStart).
   groupStart?: boolean;
+  // A small patch of the colour this slider works on, set before its name
+  // (Calibration: which primary).
+  swatch?: string;
 }) {
   // The label names the range input explicitly: with a control in the head, the
   // implicit "first control inside" would make a click on the name press that.
@@ -490,6 +514,7 @@ function Slider({
     <label className={`editor-slider${groupStart ? " editor-slider--group" : ""}`} htmlFor={inputId}>
       <span className="editor-slider-head">
         <span>
+          {swatch && <span className="editor-slider-swatch" style={{ background: swatch }} />}
           {label}
           {/* Always in the row, only hidden while the slider is on its
               default: appearing must not push the control beside the name. */}
@@ -1441,6 +1466,43 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openGroup]);
+  // The film simulation list scrolls inside its section: opening the section
+  // brings the look in use into the middle of it. Only the list is moved, not
+  // the panel around it (scrollIntoView would scroll both).
+  const filmSimGridRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const grid = filmSimGridRef.current;
+    const tile = grid?.querySelector<HTMLElement>(".film-sim-tile.active");
+    if (openGroup !== "filmsim" || !grid || !tile) return;
+    grid.scrollTop = tile.offsetTop - (grid.clientHeight - tile.offsetHeight) / 2;
+  }, [openGroup]);
+  // And when the look changes while it is open - stepped through, undone - the
+  // list moves just far enough to show it: below the section heading that
+  // sticks to the top, above the bottom edge. A click on a tile in view moves
+  // nothing.
+  useLayoutEffect(() => {
+    const grid = filmSimGridRef.current;
+    const tile = grid?.querySelector<HTMLElement>(".film-sim-tile.active");
+    if (!grid || !tile) return;
+    const heading = grid.querySelector<HTMLElement>(".film-sim-group")?.offsetHeight ?? 0;
+    const top = tile.offsetTop - heading;
+    const bottom = tile.offsetTop + tile.offsetHeight + 2;
+    if (top < grid.scrollTop) grid.scrollTop = top;
+    else if (bottom > grid.scrollTop + grid.clientHeight) grid.scrollTop = bottom - grid.clientHeight;
+  }, [adj.film_sim]);
+  // Stepping through the looks in the order the list shows them, stopping at
+  // either end: the previous / next buttons above the list, and the arrow keys
+  // while the section is open (see the key handler).
+  const stepFilmSim = useCallback((dir: 1 | -1) => {
+    setAdj((a) => {
+      const next = FILM_SIM_ORDER[FILM_SIM_ORDER.indexOf(a.film_sim) + dir];
+      return next === undefined ? a : withFilmSim(a, next);
+    });
+  }, []);
+  // Docked on the canvas the arrow keys move the frame, so there only the
+  // buttons step. A ref: the key handler does not re-subscribe for this.
+  const filmSimKeysRef = useRef<((dir: 1 | -1) => void) | null>(null);
+  filmSimKeysRef.current = openGroup === "filmsim" && !docked ? stepFilmSim : null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -2999,6 +3061,17 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
 
+      // With the film simulations open the arrows step through the looks:
+      // left / up to the one before, right / down to the next. The Strength
+      // slider, when it has the focus, keeps them for itself.
+      const stepLook = filmSimKeysRef.current;
+      if (stepLook && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        e.preventDefault();
+        stepLook(e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+
       // Up/down from outside any control jumps into the visible slider list
       // (a focused slider handles these itself and walks the list; text
       // fields/selects keep their native arrow behaviour).
@@ -3288,10 +3361,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     });
   }
   function setCalib(key: keyof ColorCalibration, v: number) {
-    setAdj((a) => {
-      const color_calibration: ColorCalibration = { ...a.color_calibration, [key]: v };
-      return { ...a, color_calibration };
-    });
+    setAdj((a) => withCalibration(a, key, v));
   }
 
   // ---- Mask writers. All immutable: map over adj.masks and rebuild only the
@@ -5151,32 +5221,63 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           </div>
         )}
 
-        {/* Film simulation: built-in Fuji-style looks rendered server-side as
+        {/* Film simulation: built-in looks (Fuji-style simulations, analog film
+            stocks) in one scrolling, sectioned list, rendered server-side as
             the base "stock" under curves/mixer/grading, plus a strength blend. */}
         {accordionHeader("filmsim", "Film Simulation")}
         {openGroup === "filmsim" && (
           <div className="editor-accordion-body">
-            <div className="film-sim-grid">
-              {FILM_SIMS.map((f) => (
-                <button
-                  key={f.value}
-                  className={`film-sim-tile${adj.film_sim === f.value ? " active" : ""}`}
-                  onClick={() =>
-                    // Choosing a look takes it in its current form: an edit on
-                    // process 2 or 3 moves to the current one, which differs
-                    // in nothing but how the simulations render.
-                    setAdj((a) => ({
-                      ...a,
-                      film_sim: f.value,
-                      process: a.process === "2" || a.process === "3" ? CURRENT_PROCESS : a.process,
-                    }))
-                  }
-                  title={f.label}
-                >
-                  <span className="film-sim-swatch" style={{ background: f.swatch }} />
-                  <span className="film-sim-label">{f.label}</span>
-                </button>
-              ))}
+            {/* The look in use between a previous and a next button: stepping
+                through the list without aiming at its tiles. Always there and
+                always the same height, the buttons greyed at the list's ends. */}
+            <div className="film-sim-stepper">
+              <button
+                className="icon-btn"
+                onClick={() => stepFilmSim(-1)}
+                disabled={FILM_SIM_ORDER.indexOf(adj.film_sim) <= 0}
+                title="Previous look (←)"
+                aria-label="Previous look"
+              >
+                <IconChevronLeft size={14} />
+              </button>
+              <span className="film-sim-current">
+                <span
+                  className="film-sim-swatch"
+                  style={{ background: FILM_SIMS.find((f) => f.value === adj.film_sim)?.swatch }}
+                />
+                <span className="film-sim-label">
+                  {FILM_SIMS.find((f) => f.value === adj.film_sim)?.label}
+                </span>
+              </span>
+              <button
+                className="icon-btn"
+                onClick={() => stepFilmSim(1)}
+                disabled={FILM_SIM_ORDER.indexOf(adj.film_sim) >= FILM_SIM_ORDER.length - 1}
+                title="Next look (→)"
+                aria-label="Next look"
+              >
+                <IconChevronRight size={14} />
+              </button>
+            </div>
+            <div className="film-sim-grid" ref={filmSimGridRef}>
+              {FILM_SIM_SECTIONS.flatMap(({ group, sims }) => [
+                group && (
+                  <div key={`group-${group.value}`} className="film-sim-group">
+                    {group.label}
+                  </div>
+                ),
+                ...sims.map((f) => (
+                  <button
+                    key={f.value}
+                    className={`film-sim-tile${adj.film_sim === f.value ? " active" : ""}`}
+                    onClick={() => setAdj((a) => withFilmSim(a, f.value))}
+                    title={f.label}
+                  >
+                    <span className="film-sim-swatch" style={{ background: f.swatch }} />
+                    <span className="film-sim-label">{f.label}</span>
+                  </button>
+                )),
+              ])}
             </div>
             {adj.film_sim !== "none" && (
               <div className="editor-sliders">
@@ -5214,7 +5315,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   setAdj((a) => ({
                     ...a,
                     tone_mapper: v as Adjustments["tone_mapper"],
-                    process: a.process === "3" || a.process === "4" ? CURRENT_PROCESS : a.process,
+                    process: a.process === "3" || a.process === "4" ? processForCurrentLooks(a) : a.process,
                   }))
                 }
                 title="Tone mapper"
@@ -5324,7 +5425,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 </button>
               </span>
               <button className="btn btn-sm ghost" onClick={resetCurve} title="Reset the active channel">
-                Reset curve
+                Reset
               </button>
             </div>
             {adj.curve_mode === "point" ? (
@@ -5499,8 +5600,16 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               ))}
             </div>
             <div className="editor-sliders">
-              {MIX_CHANNELS.map(([ch, lbl]) => (
-                <Slider key={ch} label={lbl} value={adj.hsl[band][ch]} onChange={(v) => setBandChannel(ch, v)} />
+              {MIX_CHANNELS.map(([ch, lbl, wide]) => (
+                <Slider
+                  key={ch}
+                  label={lbl}
+                  value={adj.hsl[band][ch]}
+                  min={wide ? -200 : -100}
+                  max={wide ? 200 : 100}
+                  uiScale={wide ? 2 : 1}
+                  onChange={(v) => setBandChannel(ch, v)}
+                />
               ))}
               {/* How far this band's three sliders reach into the neighbouring
                   hues before the next band takes over. Negative keeps the edit
@@ -5543,7 +5652,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               <Slider label="Balance" value={adj.color_grading.balance} onChange={(v) => setGradeScalar("balance", v)} />
             </div>
 
-            {/* Colour calibration: seven primary hue/saturation + shadow tint. */}
+            {/* Colour calibration: shadow tint + each primary's hue/saturation/luminance. */}
             <div className="editor-section-title">
               Calibration
               {edited.calibration && <span className="editor-edited-dot" title="This group contains edits" />}
@@ -5554,6 +5663,11 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   key={f.key}
                   label={f.label}
                   value={adj.color_calibration[f.key]}
+                  min={f.wide ? -200 : -100}
+                  max={f.wide ? 200 : 100}
+                  uiScale={f.wide ? 2 : 1}
+                  groupStart={f.groupStart}
+                  swatch={f.primary && BAND_SWATCH[f.primary]}
                   onChange={(v) => setCalib(f.key, v)}
                 />
               ))}
@@ -6022,7 +6136,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 className="icon-btn"
                 onClick={undo}
                 disabled={!history.canUndo}
-                title="Undo (⌘Z)"
+                title={`Undo (${shortcutLabel("Z")})`}
                 aria-label="Undo"
               >
                 <IconUndo size={15} />
@@ -6031,7 +6145,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 className="icon-btn"
                 onClick={redo}
                 disabled={!history.canRedo}
-                title="Redo (⇧⌘Z)"
+                title={`Redo (${shortcutLabel("Z", true)})`}
                 aria-label="Redo"
               >
                 <IconRedo size={15} />

@@ -73,6 +73,7 @@ import { ExportChip } from "./CanvasExportChip";
 import { FocusButton, FocusToggle, useFocusChrome } from "./FocusToggle";
 import { Presence } from "./Presence";
 import { rangeFillStyle } from "../utils/rangeFill";
+import { shortcutLabel } from "../utils/selection";
 
 // How long after the last edit the canvas writes itself.
 const AUTOSAVE_MS = 700;
@@ -4133,10 +4134,10 @@ function CanvasToolbar({
       {/* No spacer before the view tools: one continuous run of groups,
           rather than two clusters with a void between them. */}
       <div className="control-group">
-        <button className="btn btn-sm" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">
+        <button className="btn btn-sm" onClick={onUndo} disabled={!canUndo} title={`Undo (${shortcutLabel("Z")})`}>
           <IconUndo size={14} />
         </button>
-        <button className="btn btn-sm" onClick={onRedo} disabled={!canRedo} title="Redo (⌘⇧Z)">
+        <button className="btn btn-sm" onClick={onRedo} disabled={!canRedo} title={`Redo (${shortcutLabel("Z", true)})`}>
           <IconRedo size={14} />
         </button>
         <button className="btn btn-sm" onClick={() => onZoom(1 / 1.2)} aria-label="Zoom out" title="Zoom out (−)">
@@ -4707,10 +4708,10 @@ function CanvasActionBar({
       {!cropping && (
         <span className="canvas-action-group">
           <span className="canvas-action-divider" />
-          <button className="btn btn-sm" onClick={() => onRestack("front")} title="Bring to front (⌘⇧])">
+          <button className="btn btn-sm" onClick={() => onRestack("front")} title={`Bring to front (${shortcutLabel("]", true)})`}>
             <IconBringFront size={13} /> <span className="canvas-action-label">Bring to front</span>
           </button>
-          <button className="btn btn-sm" onClick={() => onRestack("back")} title="Send to back (⌘⇧[)">
+          <button className="btn btn-sm" onClick={() => onRestack("back")} title={`Send to back (${shortcutLabel("[", true)})`}>
             <IconSendBack size={13} /> <span className="canvas-action-label">Send to back</span>
           </button>
         </span>

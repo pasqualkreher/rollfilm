@@ -16,6 +16,7 @@ Shapes/keys match services/develop.py:
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
@@ -241,34 +242,198 @@ def _hsl_to_rgb(hue, sat, lum):
     return np.clip(np.stack([r + m, g + m, b + m], axis=-1), 0.0, 1.0)
 
 
-def apply_color_calibration(arr: np.ndarray, cal: dict) -> np.ndarray:
-    """Camera-calibration-style primary shifts: rotate/saturate the red, green and
-    blue primaries, plus a shadows tint. Approximated as hue/saturation shifts on
-    three wide hue bands centred on the primaries (0/120/240 deg)."""
+# How far a primary's Luminance moves its colour at +-100, in stops on the
+# display values at the centre of the band. Down reaches further than up: real
+# greens sit off the centre of the green band (a leaf is nearer yellow), and
+# brightening has only the room left under white.
+_CALIB_LUM_DOWN = 3.0
+_CALIB_LUM_UP = 1.0
+
+# Process version 6 (`whole_band`): a primary moves its whole family of colours
+# by the same amount. The bell above gives a colour off the centre of its band
+# only part of the move - a leaf, nearer yellow than green, a quarter to a half
+# of it - so turning Green far enough for the leaves sent the true greens to
+# cyan. Here each band is flat from the secondary below its primary to 30
+# degrees above it: Green is yellow to green (foliage), Blue is cyan to blue
+# (sky, water), Red is magenta to orange (skin). Outside that it falls off:
+# quickly below, where the next family begins (15 degrees - a tan wall at hue
+# 35 is not foliage, the yellowest leaf at 60 is), slower above, and the hue
+# turn ends where the bell ends, 90 degrees above the primary.
+_CALIB_BAND_BELOW = 60.0
+_CALIB_BAND_ABOVE = 30.0
+_CALIB_RAMP_BELOW = 15.0
+_CALIB_RAMP_ABOVE = 30.0
+# Hue at +-200, in degrees, for every colour on the flat part.
+_CALIB_HUE_WHOLE = 45.0
+# The hues ahead of a turning band are squeezed into the room that is left, and
+# keep their order while that room is wider than the turn. Turning up there is
+# always room enough inside the bell's reach (so Green never touches a sky);
+# turning down, past 13 degrees, the ramp has to grow into the colours below
+# (Green at -100 reaches skin) - nothing else would keep them apart.
+_CALIB_HUE_ROOM_ABOVE = 90.0 - _CALIB_BAND_ABOVE
+_CALIB_HUE_ROOM = 0.9
+# Luminance in stops at -100: every leaf gets all of it here, so it is set to
+# what the leaves got from the bell.
+_CALIB_LUM_DOWN_WHOLE = 2.0
+
+
+# What a primary does to a pixel is decided by the colours around it, not by
+# the pixel alone: over this fraction of the photo's long edge. A colour on the
+# edge of a band (a tan wall under Green) has noise that carries single pixels
+# in and out of it, and decided pixel by pixel the band paints that noise onto
+# the wall as green specks.
+_CALIB_SMOOTH = 1.0 / 800.0
+# How big a step in brightness (display values, squared) counts as an edge the
+# smoothing must not cross: above the noise of a plain surface, below the step
+# from a leaf to the wall behind it.
+_CALIB_SMOOTH_EDGE = 1e-3
+
+
+def _calib_colour_ramp(sat: np.ndarray) -> np.ndarray:
+    """Luminance scales the colour as a whole, so a darker green is as
+    saturated as it was. Greys have a hue only by accident: this ramp on the
+    saturation they came in with keeps them still, and is done early because
+    foliage, the colour Luminance is most used on, is barely saturated (about
+    0.16)."""
+    return np.clip((sat - 0.03) / 0.09, 0.0, 1.0)
+
+
+def _band_fields(arr: np.ndarray, primaries) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Process version 6: per pixel of `arr`, the hue turn in degrees, the
+    saturation scale and the luminance in stops (None with no Luminance set)."""
+    hue, sat, _ = _rgb_to_hsl(arr)
+    hue_shift = np.zeros_like(hue)
+    sat_scale = np.ones_like(hue)
+    stops = None
+    for centre, h_adj, s_adj, l_adj in primaries:
+        if not h_adj and not s_adj and not l_adj:
+            continue
+        side = (hue - centre + 180.0) % 360.0 - 180.0  # below / above the primary
+        # how far outside the flat part, in degrees (negative inside it)
+        out = np.where(side < 0, -side - _CALIB_BAND_BELOW, side - _CALIB_BAND_ABOVE)
+        t = np.clip(1.0 - out / np.where(side < 0, _CALIB_RAMP_BELOW, _CALIB_RAMP_ABOVE), 0.0, 1.0)
+        win = t * t * (3.0 - 2.0 * t)
+        if h_adj:
+            turn = h_adj / 200.0 * _CALIB_HUE_WHOLE
+            below, above = _CALIB_RAMP_BELOW, _CALIB_HUE_ROOM_ABOVE
+            if turn < 0:
+                below = max(below, -turn / _CALIB_HUE_ROOM)
+            else:
+                above = max(above, turn / _CALIB_HUE_ROOM)
+            hue_shift += np.clip(1.0 - out / np.where(side < 0, below, above), 0.0, 1.0) * turn
+        sat_scale *= np.maximum(1.0 + win * (s_adj / 100.0 * 0.5), 0.0)
+        if l_adj:
+            k = _CALIB_LUM_DOWN_WHOLE if l_adj < 0 else _CALIB_LUM_UP
+            amount = win * (l_adj / 100.0 * k)
+            stops = amount if stops is None else stops + amount
+    if stops is not None:
+        stops = stops * _calib_colour_ramp(sat)
+    return hue_shift, sat_scale, stops
+
+
+def _smoothed_band_fields(arr: np.ndarray, primaries, ref_long_edge: float | None):
+    """_band_fields with each pixel's answer taken from the colours around it
+    (_CALIB_SMOOTH). `ref_long_edge` is the long edge of the whole photo when
+    `arr` is a tile of it.
+
+    The smoothing follows the picture's brightness (a guided filter, the
+    brightness as its guide): across a flat wall the noise averages out, and at
+    the edge of a dark leaf against that wall the answer still changes with the
+    edge, where a plain blur would lay a dark rim around every leaf. It is
+    worked out on a small copy and its two coefficients laid back over the full
+    picture, so a 40MP frame pays for a few megapixels."""
+    h, w = arr.shape[:2]
+    sigma = (ref_long_edge or max(h, w)) * _CALIB_SMOOTH
+    if sigma < 0.7:
+        return _band_fields(arr, primaries)
+    step = max(1, int(sigma / 1.5))
+    small = arr
+    if step > 1:
+        small = cv2.resize(arr, (-(-w // step), -(-h // step)), interpolation=cv2.INTER_AREA)
+    radius = max(1, int(round(2.0 * sigma / step)))
+    ksize = (2 * radius + 1, 2 * radius + 1)
+
+    def box(x: np.ndarray) -> np.ndarray:
+        return cv2.boxFilter(x, -1, ksize, borderType=cv2.BORDER_REFLECT)
+
+    guide = small @ _LUMA
+    guide_mean = box(guide)
+    guide_var = box(guide * guide) - guide_mean * guide_mean
+    full_guide = arr @ _LUMA if step > 1 else guide
+    out = []
+    for field in _band_fields(small, primaries):
+        if field is None or float(np.ptp(field)) < 1e-6:
+            out.append(field if field is None or step == 1 else np.full((h, w), field.flat[0], np.float32))
+            continue
+        mean = box(field)
+        gain = (box(guide * field) - guide_mean * mean) / (guide_var + _CALIB_SMOOTH_EDGE)
+        offset = box(mean - gain * guide_mean)
+        gain = box(gain)
+        if step > 1:
+            gain = cv2.resize(gain, (w, h), interpolation=cv2.INTER_LINEAR)
+            offset = cv2.resize(offset, (w, h), interpolation=cv2.INTER_LINEAR)
+        # The straight line through a neighbourhood can run past what any pixel
+        # in it was given (a glint on a leaf is far brighter than the leaf).
+        out.append(np.clip(gain * full_guide + offset, float(field.min()), float(field.max())))
+    return tuple(out)
+
+
+def apply_color_calibration(
+    arr: np.ndarray, cal: dict, whole_band: bool = False, ref_long_edge: float | None = None
+) -> np.ndarray:
+    """Camera-calibration-style primary shifts: rotate/saturate/darken the red,
+    green and blue primaries, plus a shadows tint. Approximated as hue/saturation/
+    brightness shifts on three wide hue bands centred on the primaries
+    (0/120/240 deg). `whole_band` is process version 6: the bands are flat
+    instead of bell-shaped (see _CALIB_BAND_BELOW) and read from the colours around
+    a pixel (_CALIB_SMOOTH; `ref_long_edge` as in _smoothed_band_fields)."""
     sh_tint = cal.get("shadows_tint", 0)
     primaries = (
-        (0.0, cal.get("red_hue", 0), cal.get("red_saturation", 0)),
-        (120.0, cal.get("green_hue", 0), cal.get("green_saturation", 0)),
-        (240.0, cal.get("blue_hue", 0), cal.get("blue_saturation", 0)),
+        (0.0, cal.get("red_hue", 0), cal.get("red_saturation", 0), cal.get("red_luminance", 0)),
+        (120.0, cal.get("green_hue", 0), cal.get("green_saturation", 0), cal.get("green_luminance", 0)),
+        (240.0, cal.get("blue_hue", 0), cal.get("blue_saturation", 0), cal.get("blue_luminance", 0)),
     )
-    if not sh_tint and not any(h or s for _, h, s in primaries):
+    if not sh_tint and not any(h or s or l for _, h, s, l in primaries):
         return arr
 
     hue, sat, lum = _rgb_to_hsl(arr)
-    hue_shift = np.zeros_like(hue)
-    sat_scale = np.ones_like(hue)
-    for centre, h_adj, s_adj in primaries:
-        if not h_adj and not s_adj:
-            continue
-        ang = np.abs(hue - centre)
-        ang = np.minimum(ang, 360.0 - ang)
-        # Wide raised-cosine window (+/-90 deg) around the primary.
-        win = np.where(ang < 90.0, 0.5 + 0.5 * np.cos(np.pi * ang / 90.0), 0.0)
-        hue_shift += win * (h_adj / 100.0 * 30.0)  # up to +/-30 deg
-        sat_scale *= 1.0 + win * (s_adj / 100.0 * 0.5)
+    if whole_band:
+        hue_shift, sat_scale, stops = _smoothed_band_fields(arr, primaries, ref_long_edge)
+    else:
+        hue_shift = np.zeros_like(hue)
+        sat_scale = np.ones_like(hue)
+        stops = None
+        for centre, h_adj, s_adj, l_adj in primaries:
+            if not h_adj and not s_adj and not l_adj:
+                continue
+            ang = np.abs(hue - centre)
+            ang = np.minimum(ang, 360.0 - ang)
+            # Wide raised-cosine window (+/-90 deg) around the primary.
+            win = np.where(ang < 90.0, 0.5 + 0.5 * np.cos(np.pi * ang / 90.0), 0.0)
+            # +-30 degrees at +-100; the slider reaches +-200. 60 degrees is as far
+            # as this window carries: beyond it the hues on its flank would cross.
+            hue_shift += win * (h_adj / 100.0 * 30.0)
+            # +-100 is half / one and a half; the slider reaches +-200 (grey / twice).
+            sat_scale *= np.maximum(1.0 + win * (s_adj / 100.0 * 0.5), 0.0)
+            if l_adj:
+                k = _CALIB_LUM_DOWN if l_adj < 0 else _CALIB_LUM_UP
+                amount = win * (l_adj / 100.0 * k)
+                stops = amount if stops is None else stops + amount
+        if stops is not None:
+            stops = stops * _calib_colour_ramp(sat)
     hue = (hue + hue_shift) % 360.0
     sat = np.clip(sat * sat_scale, 0.0, 1.0)
     out = _hsl_to_rgb(hue, sat, lum)
+    if stops is not None:
+        gain = np.exp2(stops)
+        # Brightening has to fit under white: the largest channel goes up a
+        # curve that only approaches 1 and the other two follow in proportion,
+        # so a bright red (or skin, which the red band covers) keeps its colour
+        # instead of clipping to white.
+        peak = out.max(axis=-1)
+        lifted = (1.0 - np.power(np.clip(1.0 - peak, 0.0, 1.0), gain)) / np.maximum(peak, 1e-6)
+        gain = np.where((stops > 0) & (peak > 1e-6), np.minimum(lifted, gain), gain)
+        out = np.clip(out * gain[..., None], 0.0, 1.0)
     if sh_tint:
         # Shadows tint: green(-)/magenta(+) weighted toward the shadows.
         shadow_w = np.clip(1.0 - lum * 2.0, 0.0, 1.0)[..., None]

@@ -324,3 +324,114 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
         gps_lat=to_float(metadata.get("Composite:GPSLatitude")),
         gps_lon=to_float(metadata.get("Composite:GPSLongitude")),
     )
+
+
+# ---- Writing ----------------------------------------------------------------
+# The one place the app writes metadata - and only ever into a file it has
+# just made itself (an export). A photo of the user's is never written to.
+
+
+@dataclass
+class LibraryMetadata:
+    """What the library knows about a photo that the file itself doesn't say:
+    travels into an export next to the camera's own data."""
+
+    rating: int = 0
+    label: str | None = None
+    keywords: tuple[str, ...] = ()
+
+
+# Where a place name can sit besides the GPS block.
+_LOCATION_NAME_TAGS = (
+    "XMP:City",
+    "XMP:State",
+    "XMP:Country",
+    "XMP:CountryCode",
+    "XMP:Location",
+    "IPTC:City",
+    "IPTC:Province-State",
+    "IPTC:Country-PrimaryLocationName",
+    "IPTC:Country-PrimaryLocationCode",
+    "IPTC:Sub-location",
+)
+
+
+def write_export_metadata(
+    dst: Path,
+    source: Path | None,
+    *,
+    strip_location: bool = False,
+    library: LibraryMetadata | None = None,
+    icc_profile: bytes | None = None,
+    tiff: bool = False,
+    helper: exiftool.ExifToolHelper | None = None,
+) -> None:
+    """Give a freshly encoded export the metadata of the photo it was made
+    from: everything `source` carries (camera, lens, exposure, dates, GPS),
+    then what the library adds (stars, colour label, tags).
+
+    The pixels of an export are already upright, in sRGB and at their own
+    size, so the tags that describe the *source's* pixels are set to match
+    instead of being copied: orientation, colour space, dimensions, and the
+    camera's embedded thumbnail (which shows the unedited frame) is dropped.
+    Maker notes stay behind - megabytes of preview data in some RAW formats,
+    and nothing a viewer reads.
+
+    `source` None copies nothing; `icc_profile` embeds a colour profile in a
+    file whose encoder couldn't (the 16-bit TIFF)."""
+    args: list[str] = ["-overwrite_original"]
+    if source is not None:
+        args += [
+            "-TagsFromFile", str(source),
+            "-all:all",
+            "--MakerNotes",
+            "-EXIF:Orientation#=1",
+            "-EXIF:ColorSpace#=1",
+            "-IFD1:all=",
+            "-ThumbnailImage=",
+            "-PreviewImage=",
+            "-PrintIM:all=",
+        ]
+        if tiff:
+            # A TIFF states its size in the image directory itself; the JPEG
+            # way of saying it is not allowed there.
+            args += ["-EXIF:ExifImageWidth=", "-EXIF:ExifImageHeight=", "-EXIF:ComponentsConfiguration="]
+        else:
+            args += [
+                "-TagsFromFile", "@",
+                "-EXIF:ExifImageWidth<ImageWidth",
+                "-EXIF:ExifImageHeight<ImageHeight",
+            ]
+        if strip_location:
+            args += ["-GPS:all=", "-XMP:GPS*="]
+            args += [f"-{tag}=" for tag in _LOCATION_NAME_TAGS]
+    if library is not None:
+        if library.rating > 0:
+            args.append(f"-XMP:Rating={int(library.rating)}")
+        if library.label:
+            args.append(f"-XMP:Label={library.label.capitalize()}")
+        for word in library.keywords:
+            # Remove-then-add: a tag the file already carries isn't doubled.
+            args += [
+                f"-XMP-dc:Subject-={word}", f"-XMP-dc:Subject+={word}",
+                f"-IPTC:Keywords-={word}", f"-IPTC:Keywords+={word}",
+            ]
+        if library.keywords:
+            args.append("-IPTC:CodedCharacterSet=UTF8")
+
+    icc_file: Path | None = None
+    try:
+        if icc_profile:
+            import tempfile
+
+            fd, name = tempfile.mkstemp(prefix="pm-icc-", suffix=".icc")
+            with os.fdopen(fd, "wb") as f:
+                f.write(icc_profile)
+            icc_file = Path(name)
+            args.append(f"-ICC_Profile<={icc_file}")
+        if len(args) == 1:
+            return  # nothing to write
+        (helper or _get_helper()).execute(*args, str(dst))
+    finally:
+        if icc_file is not None:
+            icc_file.unlink(missing_ok=True)

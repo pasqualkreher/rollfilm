@@ -44,19 +44,19 @@ def test_each_answer_is_remembered_on_its_own(db):
     assert (out.mode_default, out.after_commit) == ("copy", "ask")
 
 
-def test_new_photos_start_selected_until_changed(db):
-    assert get_import_settings(db, _User()).select_default == "select"
-    out = update_import_settings(ImportSettingsUpdate(select_default="deselect"), db, _User())
-    assert (out.mode_default, out.after_commit, out.select_default) == ("ask", "ask", "deselect")
+def test_new_photos_start_unselected_until_changed(db):
     assert get_import_settings(db, _User()).select_default == "deselect"
+    out = update_import_settings(ImportSettingsUpdate(select_default="select"), db, _User())
+    assert (out.mode_default, out.after_commit, out.select_default) == ("ask", "ask", "select")
+    assert get_import_settings(db, _User()).select_default == "select"
 
 
-def test_an_unknown_stored_select_default_reads_as_select(db):
+def test_an_unknown_stored_select_default_reads_as_deselect(db):
     from app.services.settings_store import IMPORT_SELECT_DEFAULT, set_setting
 
     set_setting(db, IMPORT_SELECT_DEFAULT, "bogus")
     db.commit()
-    assert get_import_settings(db, _User()).select_default == "select"
+    assert get_import_settings(db, _User()).select_default == "deselect"
 
 
 def test_the_backup_default_is_off_until_remembered(db):

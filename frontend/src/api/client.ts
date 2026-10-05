@@ -9,7 +9,11 @@ import type {
   CanvasSummary,
   CropBox,
   DirListing,
+  ExportFormat,
   ExportJobProgress,
+  ExportMetadata,
+  ExportOptions,
+  ExportSettings,
   FolderScanOut,
   GeoImage,
   ImageOut,
@@ -96,10 +100,22 @@ const BASE_URL =
   "http://localhost:8000";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...init,
+    });
+  } catch (e) {
+    // A request someone aborted on purpose stays what it is.
+    if ((e as Error)?.name === "AbortError") throw e;
+    // No answer at all (the backend is restarting, or gone). Reported in the
+    // same shape as an HTTP failure, so whoever shows it knows which request
+    // it was instead of a bare "Failed to fetch".
+    throw new Error(
+      `${init?.method ?? "GET"} ${path} failed: the app's background service did not answer. Try again in a moment.`
+    );
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`${init?.method ?? "GET"} ${path} failed: ${res.status} ${body}`);
@@ -458,7 +474,22 @@ export const api = {
     // Powers the export dialog's progress bar for both formats.
     exportStart(
       image_ids: string[],
-      opts: { quality: number; max_size?: number | null; format: "jpeg" | "tiff" | "original" }
+      opts: {
+        quality: number;
+        max_size?: number | null;
+        format: ExportFormat;
+        metadata?: ExportMetadata;
+        // "{date}_{seq}"; empty keeps each photo's own name.
+        name_template?: string;
+        // An absolute folder: the files are written there instead of being
+        // handed back as a download.
+        dest_dir?: string | null;
+        sharpen?: ExportOptions["sharpen"];
+        watermark_text?: string;
+        watermark_corner?: ExportOptions["watermark_corner"];
+        watermark_size?: ExportOptions["watermark_size"];
+        watermark_opacity?: number;
+      }
     ): Promise<{ job_id: string; total: number }> {
       return request(`/images/export/start`, {
         method: "POST",
@@ -467,7 +498,26 @@ export const api = {
           quality: opts.quality,
           max_size: opts.max_size ?? null,
           format: opts.format,
+          metadata: opts.metadata ?? "all",
+          name_template: opts.name_template || null,
+          dest_dir: opts.dest_dir ?? null,
+          sharpen: opts.sharpen ?? "off",
+          watermark_text: opts.watermark_text ?? "",
+          watermark_corner: opts.watermark_corner ?? "br",
+          watermark_size: opts.watermark_size ?? "medium",
+          watermark_opacity: opts.watermark_opacity ?? 60,
         }),
+      });
+    },
+    // What the first photo of an export would be called, from the photo's
+    // real date and camera - or why the template can't be used.
+    exportNamePreview(
+      image_ids: string[],
+      opts: { format: ExportFormat; name_template: string }
+    ): Promise<{ name: string | null; error: string | null }> {
+      return request(`/images/export/name-preview`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids, format: opts.format, name_template: opts.name_template || null }),
       });
     },
     exportProgress(job_id: string): Promise<ExportJobProgress> {
@@ -1251,6 +1301,17 @@ export const api = {
       });
     },
   },
+  // The Selects tray, stored with the library (see state/selects.tsx). `set`
+  // replaces the whole list and answers with what was kept - ids of photos
+  // that are gone or in the Trash drop out.
+  selects: {
+    get(): Promise<{ ids: string[] }> {
+      return request(`/selects`);
+    },
+    set(ids: string[]): Promise<{ ids: string[] }> {
+      return request(`/selects`, { method: "PUT", body: JSON.stringify({ ids }) });
+    },
+  },
   tags: {
     list(): Promise<string[]> {
       return request(`/tags`);
@@ -1299,6 +1360,14 @@ export const api = {
     // Partial: only the fields sent change.
     updateImport(patch: Partial<ImportSettings>): Promise<ImportSettings> {
       return request(`/settings/import`, { method: "PUT", body: JSON.stringify(patch) });
+    },
+    // The export dialog's saved presets and the options it was last used with.
+    getExport(): Promise<ExportSettings> {
+      return request(`/settings/export`);
+    },
+    // Partial: only the fields sent change; `presets` replaces the list.
+    updateExport(patch: Partial<ExportSettings>): Promise<ExportSettings> {
+      return request(`/settings/export`, { method: "PUT", body: JSON.stringify(patch) });
     },
     updateRawDecode(native_decode: boolean): Promise<RawDecodeSettings> {
       return request(`/settings/raw`, { method: "PUT", body: JSON.stringify({ native_decode }) });

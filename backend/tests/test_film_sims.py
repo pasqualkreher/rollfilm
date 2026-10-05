@@ -63,6 +63,8 @@ def test_grey_stays_near_grey_on_colour_looks():
     for sim in _LOOKS:
         if sim == "sepia":
             continue  # toned on purpose - a brown grey is the whole look
+        if sim in film_sims.CLUT_SIMS:
+            continue  # a film scan brings its own brightness and cast (see below)
         out = film_sims.apply_film_sim(grey, sim, 100)
         assert abs(float(out.mean()) - 0.5) < 0.08, sim
         assert float(np.abs(out - out.mean(axis=-1, keepdims=True)).max()) < 0.05, sim
@@ -112,13 +114,19 @@ def measured_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(film_sims, "_MEASURED_DIR", tmp_path)
     monkeypatch.setattr(film_sims, "_OFFICIAL_DIR", tmp_path / "official")
     monkeypatch.setattr(film_sims, "_DERIVED_DIR", tmp_path / "derived")
-    film_sims._sim_cube.cache_clear()
-    film_sims.official_cube.cache_clear()
-    film_sims.derived_cube.cache_clear()
+    monkeypatch.setattr(film_sims, "_ANALOG_DIR", tmp_path / "analog")
+    monkeypatch.setattr(film_sims, "_SPECTRAL_DIR", tmp_path / "spectral")
+    monkeypatch.setattr(film_sims, "_CLUT_DIR", tmp_path / "clut")
+    caches = (
+        film_sims._sim_cube, film_sims.official_cube, film_sims.derived_cube,
+        film_sims.analog_cube, film_sims.clut_cube, film_sims._clut_scene_cube,
+        film_sims._film_display_cube, film_sims._film_factors,
+    )
+    for cache in caches:
+        cache.cache_clear()
     yield tmp_path
-    film_sims._sim_cube.cache_clear()
-    film_sims.official_cube.cache_clear()
-    film_sims.derived_cube.cache_clear()
+    for cache in caches:
+        cache.cache_clear()
 
 
 def test_a_measured_cube_replaces_the_recipe_only_when_asked_for(measured_dir):
@@ -301,7 +309,13 @@ def _grey(values) -> np.ndarray:
     return np.repeat(np.asarray(values, dtype=np.float32)[None, :, None], 3, axis=2)
 
 
-@pytest.mark.parametrize("sim", _LOOKS)
+# The film scan looks are display cubes laid over Provia: black, middle grey and
+# white are where each scan has them, not where a camera's still does. They
+# have their own tests at the end.
+_STILL_LOOKS = [s for s in _LOOKS if s not in film_sims.CLUT_SIMS]
+
+
+@pytest.mark.parametrize("sim", _STILL_LOOKS)
 def test_every_look_renders_from_a_scene_cube_as_a_still(sim):
     adj = develop.normalize({"film_sim": sim, "process": "4"})
     assert film_sims.official_sim(adj, True) == sim
@@ -309,6 +323,8 @@ def test_every_look_renders_from_a_scene_cube_as_a_still(sim):
     cube = film_sims.official_cube(sim)
     if cube is None:
         cube = film_sims.derived_cube(sim)
+    if cube is None:
+        cube = film_sims.analog_cube(sim)
     assert cube is not None and cube.shape == (65, 65, 65, 3)
     # The frame as the sensor recorded it, 1.0 = clipping: black is black, what
     # the camera meters as middle grey shows as middle grey, clipping is white
@@ -433,7 +449,14 @@ def test_agx_under_a_look_puts_the_grey_ramp_where_agx_puts_it(sim):
     wanted = develop_effects.agx_tonemap(ramp)[0] @ _LUMA
     out = film_sims.apply_official(ramp, sim, 1.0, agx=True)[0].astype(np.float64)
     shown = np.where(out <= 0.04045, out / 12.92, ((out + 0.055) / 1.055) ** 2.4) @ _LUMA
-    assert np.abs(shown - wanted).max() < 2e-3, sim
+    # A film scan with a faded black or a dimmed white has less than that:
+    # judged where AgX stays between what the look shows of nothing and of
+    # sixty times clipping.
+    ends = film_sims.apply_official(_grey([0.0, 60.0]), sim, 1.0)[0].astype(np.float64)
+    low, high = np.where(ends <= 0.04045, ends / 12.92, ((ends + 0.055) / 1.055) ** 2.4) @ _LUMA
+    within = (wanted > low + 2e-3) & (wanted < high - 2e-3) if sim in film_sims.CLUT_SIMS else slice(None)
+    assert np.count_nonzero(np.ones(60, bool)[within]) > 20, sim
+    assert np.abs(shown - wanted)[within].max() < 2e-3, sim
     if sim in _GREY_LOOKS:
         colours = np.random.default_rng(1).random((1, 200, 3)).astype(np.float32)
         grey = film_sims.apply_official(colours, sim, 1.0, agx=True)[0]
@@ -473,3 +496,227 @@ def test_intensity_blends_agx_under_a_look_with_plain_agx():
     half = render(film_sim="velvia", lut_intensity=50)
     assert np.abs(full - plain).max() > 8
     assert np.abs(half - (plain + full) / 2).max() <= 1.5
+
+
+# --- analog film looks (spektrafilm's and spectral_film_lut's stocks, process 4 and up) ---
+
+_ANALOG = list(film_sims.ANALOG_SIMS)
+
+
+@pytest.mark.parametrize("sim", _ANALOG)
+def test_the_shipped_analog_cubes_are_sound(sim):
+    film_sims.analog_cube.cache_clear()
+    cube = film_sims.analog_cube(sim)
+    assert cube is not None and cube.shape == (65, 65, 65, 3)
+    # A grey ramp in scene reflectance, a quarter stop a step: the medium's
+    # black is black, 18% grey is middle grey, six stops over it is the
+    # medium's white on display white, and it never turns back.
+    ramp = _grey(np.concatenate([[0.0], 0.18 * 2.0 ** np.linspace(-8.0, 6.0, 57)]))
+    luma = film_sims._sample_cube(film_sims._flog2(ramp), cube)[0] @ _LUMA
+    assert luma[0] < 0.03
+    assert abs(luma[33] - 0.46) < 0.03, sim
+    assert luma[-1] > 0.98, sim
+    assert np.all(np.diff(luma) > -2e-3), sim
+
+
+def test_an_analog_look_is_lifted_by_what_its_own_shoulder_is_short_of_white():
+    # A pushed negative on paper is at its white where the sensor clips; a cine
+    # negative on print film is most of a stop short of it.
+    assert film_sims._analog_top("kodak_portra_800_push2") == 0.0
+    assert 0.5 < film_sims._analog_top("kodak_vision3_500t") < 1.5
+    # Nothing missing is the anchor alone, whatever the frame was lifted by.
+    for white in (1.0, 4.0):
+        assert np.allclose(film_sims._stills_factors(white, 0.0)[1], film_sims._STILLS_ANCHOR)
+    # Fujifilm's cubes keep the shoulder measured for them.
+    np.testing.assert_array_equal(
+        film_sims._stills_factors(2.0)[1],
+        film_sims._stills_factors(2.0, float(film_sims._STILLS_SHOULDER[-1]))[1],
+    )
+
+
+@pytest.mark.parametrize("sim", _ANALOG)
+def test_an_analog_look_on_a_display_picture_keeps_black_grey_and_white(sim):
+    cube = film_sims._sim_cube(sim)
+    assert cube.shape == (33, 33, 33, 3)
+    grey = cube[np.arange(33), np.arange(33), np.arange(33)] @ _LUMA
+    assert grey[0] < 0.03 and grey[-1] > 0.96, sim
+    assert abs(grey[16] - 0.5) < 0.04, sim
+    assert np.all(np.diff(grey) > -1e-3), sim
+
+
+def test_the_black_and_white_analog_look_renders_grey():
+    assert not np.ptp(film_sims.analog_cube("kodak_doublex"), axis=-1).any()
+    colours = np.random.default_rng(2).random((1, 200, 3)).astype(np.float32)
+    for out in (
+        film_sims.apply_official(colours, "kodak_doublex", 1.0)[0],
+        film_sims.apply_film_sim(colours, "kodak_doublex")[0],
+    ):
+        assert np.abs(out[:, 0] - out[:, 1]).max() < 1e-3 and np.abs(out[:, 1] - out[:, 2]).max() < 1e-3
+
+
+def test_an_analog_look_exists_from_process_4_on_and_on_a_jpeg_too():
+    lin = np.random.default_rng(21).random((16, 16, 3)).astype(np.float32) * 0.6
+
+    def render(raw_source: bool = True, **over) -> np.ndarray:
+        adj = develop.normalize(over)
+        return np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, raw_source=raw_source)).astype(int)
+
+    for process in ("4", "5"):
+        adj = develop.normalize({"film_sim": "kodak_portra_400", "process": process})
+        assert film_sims.official_sim(adj, True) == "kodak_portra_400"
+        assert np.abs(render(film_sim="kodak_portra_400", process=process) - render(process=process)).max() > 8
+    assert film_sims.official_sim(develop.normalize({"film_sim": "kodak_portra_400", "process": "3"}), True) is None
+    assert np.abs(
+        render(False, film_sim="kodak_kodachrome_64", process="5") - render(False, process="5")
+    ).max() > 8
+
+
+def test_an_analog_look_without_its_cube_leaves_the_picture_alone(measured_dir):
+    arr = _srgb_image()
+    assert film_sims.apply_film_sim(arr, "kodak_portra_400") is arr
+    adj = develop.normalize({"film_sim": "kodak_portra_400", "process": "5"})
+    assert film_sims.official_sim(adj, True) is None
+
+
+# --- film scan looks (the RawTherapee collection's display cubes) --------------
+
+_CLUT = list(film_sims.CLUT_SIMS)
+# Expired or first-generation instant film: the scan's black is a grey and its
+# white a cream, which is the look.
+_FADED = {"polaroid_px_70", "polaroid_px_680", "polaroid_time_zero"}
+
+
+@pytest.mark.parametrize("sim", _CLUT)
+def test_the_shipped_film_scan_cubes_are_sound(sim):
+    film_sims.clut_cube.cache_clear()
+    cube = film_sims.clut_cube(sim)
+    assert cube is not None and cube.shape == (33, 33, 33, 3)
+    assert cube.min() >= 0.0 and cube.max() <= 1.0
+    grey = cube[np.arange(33), np.arange(33), np.arange(33)] @ _LUMA
+    if sim not in _FADED:
+        assert grey[0] < 0.1 and grey[-1] > 0.9, sim
+    # The grey axis rises; a step back is one of the 8 bits the scans came in.
+    assert grey[-1] > grey[16] > grey[0], sim
+    assert np.all(np.diff(grey) > -0.01), sim
+
+
+def test_the_black_and_white_film_scans_render_grey():
+    grey_cubes = [s for s in _CLUT if not np.ptp(film_sims.clut_cube(s), axis=-1).any()]
+    assert len(grey_cubes) >= 22 and "kodak_tri_x_400" in grey_cubes and "ilford_hp5_plus_400" in grey_cubes
+    colours = np.random.default_rng(1).random((1, 200, 3)).astype(np.float32)
+    for sim in grey_cubes:
+        for out in (film_sims.apply_official(colours, sim, 1.0)[0], film_sims.apply_film_sim(colours, sim)[0]):
+            assert np.abs(out[:, 0] - out[:, 1]).max() < 1e-3 and np.abs(out[:, 1] - out[:, 2]).max() < 1e-3, sim
+
+
+@pytest.mark.parametrize("sim", _CLUT)
+def test_a_film_scans_scene_cube_is_provia_with_the_scan_laid_over_it(sim):
+    for process in ("4", "5"):
+        adj = develop.normalize({"film_sim": sim, "process": process})
+        assert film_sims.official_sim(adj, True) == sim
+    assert film_sims.official_sim(develop.normalize({"film_sim": sim, "process": "3"}), True) is None
+    cube = film_sims._scene_cube(sim, True)
+    assert cube.shape == (65, 65, 65, 3)
+    # F-Log2 code values, as the cubes are looked up.
+    code = np.random.default_rng(5).random((40, 200, 3)).astype(np.float32)
+    laid_over = film_sims._sample_cube(
+        film_sims._sample_cube(code, film_sims.official_cube("provia")), film_sims.clut_cube(sim)
+    )
+    # The scene cube is the scan sampled at Provia's 65 nodes: between them it
+    # is smoother than the scan, which shows in the most saturated colours.
+    off = np.abs(film_sims._sample_cube(code, cube) - laid_over)
+    assert off.mean() < 0.005 and np.percentile(off, 99) < 0.06, sim
+
+
+@pytest.mark.parametrize("sim", _CLUT)
+def test_a_film_scan_on_a_display_picture_keeps_its_own_black_and_white(sim):
+    cube = film_sims._sim_cube(sim)
+    scan = film_sims.clut_cube(sim)
+    assert cube.shape == (33, 33, 33, 3)
+    grey = cube[np.arange(33), np.arange(33), np.arange(33)] @ _LUMA
+    # The ends are the scan's - a faded instant film stays faded - and what
+    # lies between runs from one to the other.
+    assert abs(grey[0] - scan[0, 0, 0] @ _LUMA) < 0.02 and abs(grey[-1] - scan[-1, -1, -1] @ _LUMA) < 0.03, sim
+    assert np.all(np.diff(grey) > -1e-3), sim
+
+
+def test_clicking_through_the_film_scans_keeps_only_a_few_cubes():
+    scene = np.full((2, 2, 3), 0.2, np.float32)
+    for sim in _CLUT[:12]:
+        film_sims.apply_official(scene, sim, 1.0)
+    assert film_sims._clut_scene_cube.cache_info().currsize <= film_sims._CLUT_SCENE_CACHE
+    assert len(film_sims._atlases) <= film_sims._ATLAS_CACHE
+
+
+def test_a_film_scan_without_its_cube_leaves_the_picture_alone(measured_dir):
+    arr = _srgb_image()
+    assert film_sims.apply_film_sim(arr, "kodak_tri_x_400") is arr
+    adj = develop.normalize({"film_sim": "kodak_tri_x_400", "process": "5"})
+    assert film_sims.official_sim(adj, True) is None
+
+
+# --- film looks keep to the simulations' tone (film_sims._film_factors) --------
+
+_FILM = _ANALOG + _CLUT
+
+
+def _still_ramp(sim: str) -> np.ndarray:
+    """Display luma of a grey ramp from five stops under metered middle grey
+    to sensor clipping."""
+    ramp = _grey(0.097 * 2.0 ** np.linspace(-5.0, 3.3, 60))
+    return film_sims.apply_official(ramp, sim, 1.0)[0] @ _LUMA
+
+
+@pytest.fixture()
+def film_tone(monkeypatch):
+    def set_tone(tone: float) -> None:
+        monkeypatch.setattr(film_sims, "_FILM_TONE", tone)
+        film_sims._film_factors.cache_clear()
+
+    yield set_tone
+    film_sims._film_factors.cache_clear()
+
+
+def test_a_film_look_is_most_of_the_way_on_provias_tone_curve(film_tone):
+    provia = _still_ramp("provia")
+    # The stocks on their own curves: a consumer negative, a high-key and a
+    # hard black & white scan are far off the standard picture.
+    film_tone(0.0)
+    own = {sim: float(np.abs(_still_ramp(sim) - provia).max()) for sim in _FILM}
+    assert own["fujifilm_xtra_400"] > 0.08 and own["agfa_apx_100"] > 0.2 and own["rollei_retro_80s"] > 0.12
+    # All the way there, a look whose black and white are the display's has
+    # Provia's grey ramp.
+    film_tone(1.0)
+    for sim in ("fujifilm_xtra_400", "kodak_portra_400", "kodak_vision3_500t", "rollei_ortho_25"):
+        assert np.abs(_still_ramp(sim) - provia).max() < 0.03, sim
+
+
+@pytest.mark.parametrize("sim", _FILM)
+def test_a_film_looks_tone_stays_near_the_standard_picture(sim):
+    off = np.abs(_still_ramp(sim) - _still_ramp("provia"))
+    # What is left is a quarter of the stock's own curve (the high-key scans
+    # are 0.2 and more off on their own), and the black and white a scan has
+    # of its own.
+    cube = film_sims._scene_cube(sim, True)
+    ends = max(float(cube[0, 0, 0] @ _LUMA), 1.0 - float(cube[-1, -1, -1] @ _LUMA))
+    assert off.max() < 0.08 + ends, sim
+    # Middle grey itself, unless the scan's ends are in the way - or its grey
+    # is as blue as cross-processed Superia's, where the luma of the code
+    # values is no longer the luminance the curve is matched in.
+    if sim not in _FADED | {"fuji_superia_200_xpro"}:
+        assert off[np.argmin(np.abs(np.linspace(-5.0, 3.3, 60)))] < 0.06, sim
+
+
+def test_a_film_look_keeps_its_colour_under_the_shared_tone_curve():
+    lin = (np.random.default_rng(31).random((1, 400, 3)) * 0.5).astype(np.float32)
+    provia = film_sims.apply_official(lin, "provia", 1.0)
+    for sim in ("kodak_portra_400", "kodak_kodachrome_64", "fuji_velvia_50"):
+        assert np.abs(film_sims.apply_official(lin, sim, 1.0) - provia).mean() > 0.01, sim
+
+
+def test_a_frame_taller_than_one_band_is_the_same_picture_under_a_film_look(monkeypatch):
+    lin = np.random.default_rng(32).random((40, 12, 3)).astype(np.float32) * 1.4
+    whole = film_sims.apply_official(lin, "kodak_portra_400", 1.0)
+    monkeypatch.setattr(film_sims, "_SAMPLE_BAND_ROWS", 16)
+    # A tolerance, not equality: cv2.transform rounds by position on x86.
+    np.testing.assert_allclose(film_sims.apply_official(lin, "kodak_portra_400", 1.0), whole, atol=1e-4)

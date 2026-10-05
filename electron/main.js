@@ -1240,9 +1240,17 @@ ipcMain.handle("pm:is-full-screen", () => Boolean(mainWindow?.isFullScreen()));
 
 // Native folder picker: the app's core new capability. Returns an absolute host
 // path the native backend can read directly (no Docker mounts involved).
-ipcMain.handle("pm:pick-folder", async () => {
+// `opts` lets a caller that isn't picking photos say so: the export dialog
+// asks for a destination ({ title, defaultPath }).
+ipcMain.handle("pm:pick-folder", async (_event, opts) => {
+  const title = opts && typeof opts.title === "string" && opts.title ? opts.title : "Choose a photo folder";
+  const defaultPath =
+    opts && typeof opts.defaultPath === "string" && path.isAbsolute(opts.defaultPath)
+      ? opts.defaultPath
+      : undefined;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: "Choose a photo folder",
+    title,
+    defaultPath,
     properties: ["openDirectory", "createDirectory"],
   });
   if (result.canceled || result.filePaths.length === 0) return null;

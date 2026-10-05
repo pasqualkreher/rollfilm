@@ -75,7 +75,7 @@ export function ImportLightbox({
   // Light / mid grey / black surround - the same shared preference (and the
   // same control) as the library photo view and the editor.
   const bgMode = useStageBg();
-  // The camera-settings panel right of the photo (I, or the Info button).
+  // The camera-settings panel right of the photo (P, or the Info button).
   // Closed until opened, then remembered like the library's side panel.
   const infoOpen = useImportInfoPanelOpen();
   // Scroll/pinch zoom, drag pan, fit sizing - the same hook the library photo
@@ -146,7 +146,13 @@ export function ImportLightbox({
         // are already in the library and can't be re-imported).
         e.preventDefault();
         if (!duplicate) onUpdate(file!.id, { selected: !file!.selected });
-      } else if (!inControl && (e.key === "i" || e.key === "I") && !e.metaKey && !e.ctrlKey) {
+      } else if (
+        !inControl &&
+        (e.key === "p" || e.key === "P" || e.key === "i" || e.key === "I") &&
+        !e.metaKey && !e.ctrlKey
+      ) {
+        // P, as in the library photo view; I stays wired up as well - it was
+        // the original key here, and fingers that learned it keep working.
         setImportInfoPanelOpen(!infoOpen);
       }
     }
@@ -217,8 +223,14 @@ export function ImportLightbox({
               <span className="lightbox-counter lightbox-counter--index">
                 {index + 1} / {files.length}
               </span>
-              <span className="lightbox-counter" title="Keyboard shortcuts">
-                0-5 rate · Space import · ←/→ navigate · I info
+              {/* One span per shortcut: the row shows as many whole ones as it
+                  has room for and drops the rest (see .lightbox-hints), so the
+                  hints give way before the bar has to break into two rows. */}
+              <span className="lightbox-counter lightbox-hints" title="Keyboard shortcuts">
+                <span>0-5 rate</span>
+                <span>Space import</span>
+                <span>←/→ navigate</span>
+                <span>P info</span>
               </span>
             </div>
             <div className="lightbox-controls-actions">
@@ -383,7 +395,7 @@ export function ImportLightbox({
               <button
                 className="btn btn-sm detail-panel-toggle"
                 onClick={() => setImportInfoPanelOpen(!infoOpen)}
-                title={infoOpen ? "Hide the camera settings (I)" : "Show the camera settings (I)"}
+                title={infoOpen ? "Hide the camera settings (P)" : "Show the camera settings (P)"}
                 aria-label={infoOpen ? "Hide the camera settings" : "Show the camera settings"}
                 aria-expanded={infoOpen}
                 aria-controls="import-info-panel"

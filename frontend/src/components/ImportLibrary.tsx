@@ -53,7 +53,7 @@ export function ImportLibrary() {
       setReading(true);
       setSummary(await api.maintenance.inspectLibraryMerge(path));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not read that library");
+      setError(e instanceof Error ? e.message : "Could not read that library", { keep: true });
     } finally {
       setReading(false);
     }
@@ -67,7 +67,7 @@ export function ImportLibrary() {
       // Pick the running state up straight away rather than on the next tick.
       queryClient.invalidateQueries({ queryKey: ["library-merge-progress"] });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "The import could not be started");
+      setError(e instanceof Error ? e.message : "The import could not be started", { keep: true });
     }
   }
 
@@ -92,7 +92,7 @@ export function ImportLibrary() {
 
   return (
     <div className="import-panel">
-      <h3 className="import-panel-title">Import a library</h3>
+      <h3 className="section-title">Import a library</h3>
       <p className="import-panel-desc">
         Merge another Rollfilm library into this one, for example from a second drive. Photos
         come across <strong>with</strong> their ratings, color labels, edits, tags and albums.

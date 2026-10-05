@@ -21,6 +21,7 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
+import { Dropdown } from "../components/Dropdown";
 import { EditPicker } from "../components/EditPicker";
 import { IconCloudUp, IconTrash } from "../components/Icons";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
@@ -38,6 +39,31 @@ import { useTransientMessage, useTransientValue } from "../utils/transientMessag
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { LoadingState } from "../components/Spinner";
+import { ActionBarMessages } from "../components/ActionBarMessages";
+import { errorText, failureReason } from "../utils/apiError";
+
+// How the browsed library is ordered. The server sends it newest first; the
+// other orders are made here from the same index, which carries the name and
+// the stars of every photo anyway.
+type SortKey = "newest" | "oldest" | "name" | "rating";
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "name", label: "File name" },
+  { value: "rating", label: "Rating" },
+];
+const NAME_ORDER = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+// The section headings of the orders that are not by date: the name's first
+// character, or the stars. Module-level, so their identity is stable - the
+// timeline's layout is memoised on it.
+function nameSection(image: LibraryIndexImage): string {
+  const first = image.original_filename.charAt(0).toUpperCase();
+  return /[A-Z0-9]/.test(first) ? first : "#";
+}
+function ratingSection(image: LibraryIndexImage): string {
+  return image.rating > 0 ? `${image.rating} ${image.rating === 1 ? "star" : "stars"}` : "No rating";
+}
 
 // Browse mode works on slim index entries (the whole library in one query),
 // search mode on full rows - the shared selection/bulk handlers only touch
@@ -85,6 +111,11 @@ function LibraryPage() {
       else if (value) next.set(key, value);
     }
     paramsRef.current = next;
+    // The memory has to follow in the same breath: the wrapper above reads it
+    // during the very render this triggers, before the effect above has run -
+    // emptying the URL (back to "RAW + JPEG", the last filter reset) would
+    // otherwise be answered with a redirect to the set just left.
+    rememberLibraryFilters(next);
     // Replace, not push: refining a filter is not a new place to go back to.
     // Pushing would make the back arrow step through every filter tweak
     // instead of leaving the lightbox and landing on the grid.
@@ -115,6 +146,10 @@ function LibraryPage() {
   const setDateFrom = (v: string | null) => setParams({ from: v });
   const dateTo = searchParams.get("to");
   const setDateTo = (v: string | null) => setParams({ to: v });
+  // In the URL like the filters, so it survives the trip into a photo and back.
+  const sortParam = searchParams.get("sort");
+  const sort: SortKey = SORT_OPTIONS.some((o) => o.value === sortParam) ? (sortParam as SortKey) : "newest";
+  const setSort = (v: SortKey) => setParams({ sort: v === "newest" ? null : v });
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [lastIndex, setLastIndex] = useState<number | null>(null);
@@ -149,6 +184,15 @@ function LibraryPage() {
   // the tag note appears. Carries its own error flag since a failed add must not
   // read like a success.
   const [albumMsg, setAlbumMsg] = useTransientValue<{ text: string; error: boolean }>();
+  // A failed bulk action. Not transient like the notes above: it stays until
+  // it is dismissed, the next action starts or the selection is dropped.
+  const [barError, setBarError] = useState<string | null>(null);
+  function dismissMessages() {
+    setImmichMsg(null);
+    setDevelopMsg(null);
+    setAlbumMsg(null);
+    setBarError(null);
+  }
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Settings maintenance tasks.
@@ -228,6 +272,34 @@ function LibraryPage() {
 
   const images: GridImage[] | undefined = q ? searchQuery.data : indexQuery.data?.images;
   const isLoading = q ? searchQuery.isLoading : indexQuery.isLoading;
+  // A load that failed is not an empty library, and must not be shown as one.
+  // (A failed REFETCH keeps the grid it already had - that is not this.)
+  const activeQuery = q ? searchQuery : indexQuery;
+  const loadFailed = activeQuery.isError && !images;
+  // Anything narrowing the view, so "nothing here" can say why and offer the
+  // way out.
+  const isFiltering =
+    viewMode !== "combined" ||
+    ratingMin > 0 ||
+    colorLabel !== "none" ||
+    Boolean(albumId || canvasId || camera || lens || focalMin || focalMax || dateFrom || dateTo) ||
+    selectedTags.length > 0;
+  function clearFilters() {
+    setParams({
+      view: null,
+      rating: null,
+      color: null,
+      album: null,
+      canvas: null,
+      tag: null,
+      camera: null,
+      lens: null,
+      focal_min: null,
+      focal_max: null,
+      from: null,
+      to: null,
+    });
+  }
 
   // In combined view, either merge each RAW+JPEG pair into one JPEG card, or
   // just keep the two partners adjacent. Other view modes show a flat list.
@@ -239,14 +311,24 @@ function LibraryPage() {
   // refetch - so buildJustifiedLayout re-ran over the WHOLE library each time,
   // which is a long frame on a big one. Now it only rebuilds when the photos or
   // the pairing mode actually change.
+  // The chosen order, made before the pairs are put together so a pair still
+  // ends up side by side. Search results keep their ranking. Array.sort is
+  // stable: within one rating the photos stay newest first.
+  const sortedImages: GridImage[] = useMemo(() => {
+    const list = images ?? [];
+    if (q || sort === "newest") return list;
+    if (sort === "oldest") return [...list].reverse();
+    if (sort === "name") return [...list].sort((a, b) => NAME_ORDER.compare(a.original_filename, b.original_filename));
+    return [...list].sort((a, b) => b.rating - a.rating);
+  }, [images, q, sort]);
   const orderedImages: GridImage[] = useMemo(
     () =>
       viewMode === "combined"
         ? mergePairs
-          ? collapsePairsBy(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
-          : groupPairsAdjacent(images ?? [], (img) => img.file_type, (img) => img.paired_image_id)
-        : images ?? [],
-    [images, viewMode, mergePairs]
+          ? collapsePairsBy(sortedImages, (img) => img.file_type, (img) => img.paired_image_id)
+          : groupPairsAdjacent(sortedImages, (img) => img.file_type, (img) => img.paired_image_id)
+        : sortedImages,
+    [sortedImages, viewMode, mergePairs]
   );
 
   // Expand a set of ids with each one's RAW/JPEG partner, but only in merged
@@ -293,6 +375,9 @@ function LibraryPage() {
   function clearSelection() {
     setSelected(new Set());
     setLastIndex(null);
+    // The bar goes with the selection - and must not come back later with
+    // an old failure still written on it.
+    dismissMessages();
   }
 
   // Cmd/Ctrl+A picks the whole (filtered) grid, Escape drops the selection,
@@ -302,19 +387,41 @@ function LibraryPage() {
     onClear: clearSelection,
     hasSelection: selected.size > 0,
     edit: { selected, order: orderedImages.map((img) => img.id) },
+    onRate: (rating) => void applyBulk({ rating }),
+    // The key of the colour the selection already has takes it off again.
+    onColor: (label) =>
+      void applyBulk({
+        color_label: selectionSharedMeta(images ?? [], selected).colorLabel === label ? "none" : label,
+      }),
+    onDelete: () => void deleteSelected(),
   });
 
-  async function applyBulk(patch: { rating?: number; color_label?: string }) {
+  async function applyBulk(patch: { rating?: number; color_label?: ColorLabel }) {
     if (selected.size === 0) return;
+    const ids = new Set(selected);
     // When pairs are merged the grid only shows the JPEG, so fan the change out
     // to each hidden RAW partner too.
     try {
-      await withBatches("Updating photos…", Array.from(selected), (ids) =>
-        api.images.bulkUpdate(ids, patch)
+      // One photo is one quick request and gets no wait popup: the popup
+      // holds every key while it is up, and culling from the keyboard - a
+      // star, then the arrow to the next photo - must not lose the arrow.
+      if (ids.size === 1) await api.images.bulkUpdate(Array.from(ids), patch);
+      else await withBatches("Updating photos…", Array.from(ids), (slice) => api.images.bulkUpdate(slice, patch));
+      // Onto the tiles at once, without waiting for the whole index to come
+      // back (megabytes on a big library). The refetch below then finds what
+      // it expected and changes nothing.
+      queryClient.setQueriesData<{ images: LibraryIndexImage[] }>({ queryKey: ["images", "index"] }, (old) =>
+        old ? { ...old, images: old.images.map((im) => (ids.has(im.id) ? { ...im, ...patch } : im)) } : old
       );
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
     }
+  }
+
+  // The arrow keys' target: this photo, and only it (see utils/gridKeys).
+  function selectOnly(id: string, index: number) {
+    setSelected(new Set([id]));
+    setLastIndex(index);
   }
 
   async function deleteSelected() {
@@ -334,6 +441,17 @@ function LibraryPage() {
       partnerItems: toItems(partnerIds),
     });
     if (!ids) return;
+    // Where a single deleted photo's selection goes: the next one in the grid,
+    // or the one before at the end. Its index is the deleted photo's own slot.
+    let nextAfterDelete: { id: string; index: number } | null = null;
+    if (baseIds.length === 1) {
+      const at = orderedImages.findIndex((im) => im.id === baseIds[0]);
+      const gone = new Set(ids);
+      const after = orderedImages.slice(at + 1).find((im) => !gone.has(im.id));
+      const before = orderedImages.slice(0, Math.max(at, 0)).reverse().find((im) => !gone.has(im.id));
+      if (at !== -1 && after) nextAfterDelete = { id: after.id, index: at };
+      else if (at > 0 && before) nextAfterDelete = { id: before.id, index: at - 1 };
+    }
     try {
       const { done, cancelled } = await withBatches(
         "Moving photos to trash…",
@@ -342,6 +460,9 @@ function LibraryPage() {
       );
       // Cancelled: what is still in the grid stays selected.
       if (cancelled) setSelected(new Set(baseIds.filter((x) => !done.includes(x))));
+      // One photo deleted (culling from the keyboard): the selection moves on
+      // to its neighbour instead of ending there.
+      else if (nextAfterDelete) selectOnly(nextAfterDelete.id, nextAfterDelete.index);
       else clearSelection();
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -389,7 +510,9 @@ function LibraryPage() {
     setAlbumMsg(
       ok
         ? { text: `Added ${takeAddedCount()} photo(s) to ${what}.${cancelNote}`, error: false }
-        : { text: `Could not add to ${what}.`, error: true }
+        : { text: `Could not add to ${what}.`, error: true },
+      // A failure stays until it is dismissed or the next action runs.
+      { keep: !ok }
     );
   }
 
@@ -417,7 +540,9 @@ function LibraryPage() {
     setAlbumMsg(
       ok
         ? { text: `Added ${takeAddedCount()} photo(s) to “${name}”.${cancelNote}`, error: false }
-        : { text: `Could not add to “${name}”.`, error: true }
+        : { text: `Could not add to “${name}”.`, error: true },
+      // A failure stays until it is dismissed or the next action runs.
+      { keep: !ok }
     );
   }
 
@@ -462,6 +587,7 @@ function LibraryPage() {
       return;
     setDevelopBusy(true);
     setDevelopMsg(null);
+    setBarError(null);
     try {
       const { done, results, cancelled } = await withBatches(
         "Auto-developing photos…",
@@ -479,7 +605,7 @@ function LibraryPage() {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
     } catch (e) {
-      setDevelopMsg((e as Error).message);
+      setBarError(errorText(e));
     } finally {
       setDevelopBusy(false);
     }
@@ -503,6 +629,7 @@ function LibraryPage() {
       return;
     setDevelopBusy(true);
     setDevelopMsg(null);
+    setBarError(null);
     const look = presetAdjustments(preset) as unknown as Record<string, unknown>;
     try {
       const { done, cancelled } = await withBatches("Applying preset…", Array.from(selected), (ids) =>
@@ -514,7 +641,7 @@ function LibraryPage() {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
     } catch (e) {
-      setDevelopMsg((e as Error).message);
+      setBarError(errorText(e));
     } finally {
       setDevelopBusy(false);
     }
@@ -524,11 +651,12 @@ function LibraryPage() {
     if (selected.size === 0) return;
     setImmichBusy(true);
     setImmichMsg(null);
+    setBarError(null);
     try {
       const result = await api.images.pushToImmich(Array.from(selected));
       setImmichMsg(result.message);
     } catch (e) {
-      setImmichMsg((e as Error).message);
+      setBarError(errorText(e));
     } finally {
       setImmichBusy(false);
     }
@@ -541,6 +669,7 @@ function LibraryPage() {
     if (selected.size === 0) return;
     setImmichBusy(true);
     setImmichMsg(null);
+    setBarError(null);
     try {
       const updated = await api.images.setImmichSync(Array.from(selected), enabled);
       setImmichMsg(
@@ -550,7 +679,7 @@ function LibraryPage() {
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
     } catch (e) {
-      setImmichMsg((e as Error).message);
+      setBarError(errorText(e));
     } finally {
       setImmichBusy(false);
     }
@@ -599,6 +728,19 @@ function LibraryPage() {
         dateTo={dateTo}
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
+        viewExtras={
+          // Search results are ranked by how well they match, so there the
+          // control says so and rests - in place, rather than disappearing.
+          <Dropdown
+            className="sort-dropdown"
+            value={q ? "relevance" : sort}
+            onChange={(v) => setSort(v as SortKey)}
+            disabled={Boolean(q)}
+            title={q ? "Search results are ordered by how well they match" : "The order the photos are shown in"}
+            ariaLabel="Sort order"
+            options={q ? [{ value: "relevance", label: "Best match" }] : SORT_OPTIONS}
+          />
+        }
       >
         {/* Both only once a photo is picked (Cmd/Ctrl-click) - the toolbar
             stays clean while nothing is selected; Cmd/Ctrl+A works anytime. */}
@@ -667,7 +809,7 @@ function LibraryPage() {
                     disabled={immichBusy}
                     title="Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
                   >
-                    <IconCloudUp size={13} /> {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+                    <IconCloudUp size={13} /> {immichBusy ? "Uploading to Immich…" : "Add to Immich"}
                   </button>
                 )}
               </div>
@@ -689,27 +831,43 @@ function LibraryPage() {
             >
               <IconTrash size={15} />
             </button>
-            {(immichMsg || developMsg || albumMsg) && (
-              <div className="action-bar-messages">
-                {immichMsg && <span>{immichMsg}</span>}
-                {developMsg && <span>{developMsg}</span>}
-                {albumMsg && (
-                  <span className={albumMsg.error ? "action-bar-message--error" : undefined}>
-                    {albumMsg.text}
-                  </span>
-                )}
-              </div>
-            )}
+            <ActionBarMessages
+              messages={[
+                immichMsg ? { text: immichMsg } : null,
+                developMsg ? { text: developMsg } : null,
+                albumMsg,
+                barError ? { text: barError, error: true } : null,
+              ]}
+              onDismiss={dismissMessages}
+            />
           </div>
         )}
       </Presence>
       {isLoading ? (
         <LoadingState />
+      ) : loadFailed ? (
+        <div className="empty-state" role="alert">
+          <div>The photos could not be loaded.</div>
+          <div className="empty-state-detail">{failureReason(activeQuery.error)}</div>
+          <button className="btn empty-state-action" onClick={() => void activeQuery.refetch()}>
+            Try again
+          </button>
+        </div>
+      ) : orderedImages.length === 0 && (q || isFiltering) ? (
+        <div className="empty-state">
+          <div>{q ? `No photos match “${q}” in this view.` : "No photos match these filters."}</div>
+          {isFiltering && (
+            <button className="btn empty-state-action" onClick={clearFilters}>
+              Clear filters
+            </button>
+          )}
+        </div>
       ) : q ? (
         <ThumbnailGrid
           images={orderedImages as ImageOut[]}
           selectedIds={selected}
           onToggleSelect={toggleSelect}
+          onSelectOnly={selectOnly}
           groupByDate={false}
         />
       ) : (
@@ -717,12 +875,15 @@ function LibraryPage() {
           images={orderedImages as LibraryIndexImage[]}
           selectedIds={selected}
           onToggleSelect={toggleSelect}
+          onSelectOnly={selectOnly}
           // Changing a FILTER jumps to the top of the (new) result set - the
           // old scroll position pointed into a different library and landed
           // somewhere arbitrary. view_mode is deliberately not part of the key:
           // switching combined/RAW/JPEG shows the same photos and keeps its
           // position via the timeline's re-anchoring.
+          sectionLabel={sort === "name" ? nameSection : sort === "rating" ? ratingSection : undefined}
           resetKey={JSON.stringify([
+            sort,
             ratingMin,
             colorLabel,
             albumId,

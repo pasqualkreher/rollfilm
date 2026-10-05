@@ -20,9 +20,16 @@ import { loadMarginFor } from "./preload";
 // margin, section spacing). They only need to be internally consistent: the
 // virtual grid positions everything itself, so these ARE the layout.
 export const GAP = 12;
-export const HEADER_H = 34;
-export const HEADER_MB = 12;
-export const SECTION_MB = 8;
+// The header pill is 28px tall, 31px once it carries the import review's
+// month/year buttons; HEADER_H is the box reserved for either.
+//
+// A header has to read as the start of ITS section: the space above it
+// (SECTION_MB) is several times the space between it and its own first row.
+// With the two the other way round it sat closer to the previous section's
+// last photo than to its own and looked like a caption for the wrong one.
+export const HEADER_H = 32;
+export const HEADER_MB = 6;
+export const SECTION_MB = 28;
 
 // How far a row may be stretched past the target height to justify it. A row is
 // filled until the NEXT tile would overflow, so a full row is at most one tile
@@ -64,6 +71,8 @@ export interface LayoutTile<T> {
 export interface LayoutRow<T> {
   top: number; // within the section
   height: number;
+  // What the row reserves below its tiles (see LayoutOptions.rowExtra).
+  extra: number;
   tiles: LayoutTile<T>[];
 }
 
@@ -101,8 +110,10 @@ interface LayoutOptions<T> {
   // than the image - the import review puts rating stars and colour swatches
   // under each thumbnail. Rows advance by it; `row.height` stays the IMAGE
   // height, so tiles keep their aspect ratio and the caller adds this back for
-  // the card's total height.
-  rowExtra?: number;
+  // the card's total height (`row.extra`). A function decides it per row from
+  // the widths of the row's tiles, for a footer that needs less height where
+  // every card is wide enough to put its controls on one line.
+  rowExtra?: number | ((tileWidths: number[]) => number);
 }
 
 // Justified-rows layout, the JS twin of the CSS flexbox grid (flex-grow: ar,
@@ -147,8 +158,10 @@ export function buildJustifiedLayout<T>(
         x += w + GAP;
         return tile;
       });
-      rows.push({ top: innerY, height, tiles });
-      innerY += height + rowExtra + GAP;
+      const extra =
+        typeof rowExtra === "function" ? rowExtra(tiles.map((t) => t.width)) : rowExtra;
+      rows.push({ top: innerY, height, extra, tiles });
+      innerY += height + extra + GAP;
       pending = [];
       sumAr = 0;
     };

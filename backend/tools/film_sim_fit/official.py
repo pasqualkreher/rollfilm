@@ -87,17 +87,17 @@ SOWERBY = {
 HALD_N = 36  # nodes kept of a HaldCLUT's 144 per axis (every 4th, plus the last)
 
 
-def read_hald(path: Path) -> torch.Tensor:
+def read_hald(path: Path, nodes: int = HALD_N) -> torch.Tensor:
     """A level-12 HaldCLUT image as (n^3, 3) indexed (r*n + g)*n + b, thinned
-    to HALD_N nodes per axis. In the image red runs fastest, then green."""
+    to `nodes` per axis. In the image red runs fastest, then green."""
     from PIL import Image
 
     arr = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
     n = round(arr.shape[0] ** (2 / 3))
     cube = arr.reshape(n, n, n, 3)  # [b][g][r]
-    keep = np.unique(np.round(np.linspace(0, n - 1, HALD_N)).astype(int))
+    keep = np.unique(np.round(np.linspace(0, n - 1, nodes)).astype(int))
     # Trilinear lookup assumes evenly spaced nodes: resample exactly onto them.
-    pos = np.linspace(0, n - 1, HALD_N)
+    pos = np.linspace(0, n - 1, nodes)
     lo = np.floor(pos).astype(int).clip(max=n - 2)
     f = (pos - lo).astype(np.float32)
     for axis in range(3):

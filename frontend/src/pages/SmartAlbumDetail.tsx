@@ -8,6 +8,7 @@ import type { ColorLabel, ImageOut, SmartAlbumOut, ViewMode } from "../api/types
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { collapsePairs } from "../state/viewPrefs";
+import { isModalOpen } from "../utils/modalKeys";
 
 // Read-only view of one smart album's photos. Smart albums are virtual (no
 // Album row, nothing to rename or edit), so unlike AlbumDetail this page is
@@ -31,6 +32,8 @@ export function SmartAlbumDetail() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
+      // (...unless a menu inside that dialog took the press for itself.)
+      if (isModalOpen()) return;
       const target = e.target as HTMLElement | null;
       // A text box keeps its own Escape (backing out of a search).
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;

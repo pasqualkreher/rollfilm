@@ -9,7 +9,7 @@ interface Props {
   busy?: boolean;
 }
 
-// ONE "Edit..." for the bulk action bars, the develop counterpart of "Add
+// ONE "Edit…" for the bulk action bars, the develop counterpart of "Add
 // to...": automatic edits and every saved editor preset in a single dropdown,
 // instead of an "Auto develop" button plus a preset dropdown that only showed
 // up once a preset existed (so applying one to a selection went unnoticed).
@@ -39,7 +39,7 @@ export function EditPicker({ onAutoEdit, onApplyPreset, busy = false }: Props) {
   return (
     <Dropdown
       value=""
-      placeholder={busy ? "Working…" : "Edit..."}
+      placeholder={busy ? "Working…" : "Edit…"}
       disabled={busy}
       title="Apply automatic edits or a saved editor preset to the selected photos"
       ariaLabel="Apply auto edit or preset"

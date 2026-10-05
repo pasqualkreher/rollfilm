@@ -3,11 +3,12 @@ import { IconStar } from "./Icons";
 interface Props {
   rating: number;
   onChange?: (rating: number) => void;
+  title?: string;
 }
 
-export function RatingStars({ rating, onChange }: Props) {
+export function RatingStars({ rating, onChange, title }: Props) {
   return (
-    <span className="rating-stars">
+    <span className="rating-stars" title={title}>
       {[1, 2, 3, 4, 5].map((n) => (
         <button
           key={n}

@@ -121,7 +121,7 @@ export function ExternalSources() {
           onClick={() => addSource.mutate()}
           disabled={!path.trim() || addSource.isPending}
         >
-          <IconPlus size={13} /> {addSource.isPending ? "Adding..." : "Add & scan"}
+          <IconPlus size={13} /> {addSource.isPending ? "Adding…" : "Add & scan"}
         </button>
       </div>
       {addSource.isError && (

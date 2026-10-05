@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { IconArrowUp, IconFolder, IconX } from "./Icons";
 import { LoadingState } from "./Spinner";
+import { useEscapeToClose } from "../utils/modalKeys";
 
 interface Props {
   onSelect: (path: string) => void;
@@ -16,6 +17,7 @@ interface Props {
 export function DirectoryPicker({ onSelect, onClose, closing = false }: Props) {
   // undefined => let the backend start at its browse root (/sources).
   const [path, setPath] = useState<string | undefined>(undefined);
+  useEscapeToClose(!closing, onClose);
 
   const { data, isLoading } = useQuery({
     queryKey: ["browse", path ?? "__root__"],

@@ -1,5 +1,6 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Navigate,
   NavLink as RouterNavLink,
   Route,
   Routes,
@@ -14,6 +15,8 @@ import { SearchBar } from "./components/SearchBar";
 import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconLandfill, IconMail, IconMenu } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { UnhandledErrors } from "./components/UnhandledErrors";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
 import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
@@ -553,6 +556,18 @@ function ImmichSyncIndicator() {
   );
 }
 
+// A crash while a page renders used to unmount the whole app - a white window
+// with no way out but a restart. Caught here, the bars stay, the page says
+// what happened, and going anywhere else clears it.
+function PageBoundary({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  return (
+    <ErrorBoundary what="This page" resetKey={pathname}>
+      {children}
+    </ErrorBoundary>
+  );
+}
+
 export default function App() {
   usePrefetchLikelyRoutes();
   return (
@@ -567,12 +582,14 @@ export default function App() {
             <EmptyLibraryRedirect />
             <TopBar />
             <TooltipLayer />
+            <UnhandledErrors />
 
             {/* Same wording and styling as a page waiting on its own data, so a
                 chunk that isn't in memory yet reads as the page loading rather
                 than as the app blanking out. In practice it is rarely seen: the
                 chunks come off local disk, and the two routes the Library leads
                 to are prefetched while the app idles. */}
+            <PageBoundary>
             <Suspense fallback={<LoadingState />}>
             <Routes>
             <Route path="/" element={<Library />} />
@@ -594,8 +611,12 @@ export default function App() {
             <Route path="/stats" element={<Stats />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/help" element={<Help />} />
+            {/* An address that leads nowhere lands in the library instead of
+                on an empty window. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
             </Suspense>
+            </PageBoundary>
 
             <OnboardingWizard />
           </div>

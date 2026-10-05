@@ -27,12 +27,16 @@ import {
 } from "../utils/preload";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 import { isSelectClick } from "../utils/selection";
+import { onlySelected, revealInScroller, useGridArrowKeys } from "../utils/gridKeys";
 import { onThumbNudge } from "../utils/thumbNudge";
 
 interface Props {
   images: ImageOut[];
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string, index: number, shiftKey: boolean) => void;
+  // Make this photo the whole selection - where the arrow keys move a single
+  // selected photo to (see utils/gridKeys). Without it the arrows do nothing.
+  onSelectOnly?: (id: string, index: number) => void;
   // A plain click normally opens the photo; selecting takes Cmd/Ctrl-click or
   // Shift-click (see utils/selection). Grids with nothing to open - the Trash
   // - set this so a plain click selects instead.
@@ -685,6 +689,7 @@ export function ThumbnailGrid({
   images,
   selectedIds,
   onToggleSelect,
+  onSelectOnly,
   clickSelects,
   groupByDate,
   onRemove,
@@ -733,6 +738,44 @@ export function ThumbnailGrid({
   // it first), so the scroll is guarded on its own and the reveal is not. The
   // timer backs up the frame callback, which doesn't fire while the window is
   // hidden - switching apps mid-transition must not leave an empty library.
+  // Arrow keys walk a single selected photo through the grid. This grid is
+  // laid out by CSS, so up / down are read off the cards themselves: the card
+  // of the neighbouring row that sits most squarely above or below.
+  useGridArrowKeys({
+    current: onSelectOnly ? onlySelected(selectedIds) : null,
+    neighbour: (id, move) => {
+      const at = images.findIndex((im) => im.id === id);
+      if (at === -1) return null;
+      if (move === "left") return images[at - 1]?.id ?? null;
+      if (move === "right") return images[at + 1]?.id ?? null;
+      const here = cardEls.current.get(id)?.getBoundingClientRect();
+      if (!here) return null;
+      const centre = here.left + here.width / 2;
+      const step = move === "up" ? -1 : 1;
+      let rowTop: number | null = null;
+      let best: { id: string; off: number } | null = null;
+      for (let i = at + step; i >= 0 && i < images.length; i += step) {
+        const rect = cardEls.current.get(images[i].id)?.getBoundingClientRect();
+        if (!rect || Math.abs(rect.top - here.top) < 2) continue; // still this row
+        if (rowTop === null) rowTop = rect.top;
+        else if (Math.abs(rect.top - rowTop) > 2) break; // past the neighbouring row
+        const off = Math.abs(rect.left + rect.width / 2 - centre);
+        if (!best || off < best.off) best = { id: images[i].id, off };
+      }
+      return best?.id ?? null;
+    },
+    onMove: (id) => {
+      const index = images.findIndex((im) => im.id === id);
+      if (index === -1 || !onSelectOnly) return;
+      onSelectOnly(id, index);
+      const el = cardEls.current.get(id);
+      const scroller = (el?.closest(".page-scroll") ?? el?.closest(".page")) as HTMLElement | null;
+      if (!el || !scroller) return;
+      const rect = el.getBoundingClientRect();
+      revealInScroller(scroller, rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop, rect.height);
+    },
+  });
+
   const pendingScrollId = useRef<string | null>(peekLastViewedImage());
   const fadesIn = useRef(pendingScrollId.current !== null);
   const [restoring, setRestoring] = useState(pendingScrollId.current !== null);

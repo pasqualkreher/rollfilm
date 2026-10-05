@@ -1,6 +1,7 @@
 """Thin read/write helpers over the app_settings key-value table plus the
 typed Immich config the import pipeline and settings routes both need."""
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -58,8 +59,8 @@ IMPORT_MODE_DEFAULTS = ("ask", "copy", "reference")
 IMPORT_AFTER_COMMIT = "import_after_commit"
 IMPORT_AFTER_COMMIT_CHOICES = ("ask", "keep", "close")
 # Whether photos arriving in an import review start out selected for import
-# ("select", the default) or not ("deselect" - for picking a few keepers out of
-# a big card). Read by the backend when it stages a file, so a choice made
+# ("select") or not ("deselect", the default - the review is where the keepers
+# are picked). Read by the backend when it stages a file, so a choice made
 # while more photos are still loading is never overwritten.
 IMPORT_SELECT_DEFAULT = "import_select_default"
 IMPORT_SELECT_DEFAULT_CHOICES = ("select", "deselect")
@@ -102,6 +103,11 @@ DEFAULT_SMART_ALBUM_SECTIONS = (
 # How far (km) a photo may sit from a place's center and still belong to it.
 SMART_ALBUM_PLACE_RADIUS_KM = "smart_album_place_radius_km"
 DEFAULT_SMART_ALBUM_PLACE_RADIUS_KM = 5.0
+
+# The export dialog's saved presets and the options it was last used with, as
+# one JSON object: {"presets": [{"name", "options"}], "last": options | null}.
+# The shape of `options` is schemas.ExportOptions; the routes validate it.
+EXPORT_SETTINGS = "export_settings"
 
 
 @dataclass(frozen=True)
@@ -158,6 +164,47 @@ def set_setting(db: Session, key: str, value: str) -> None:
         row.value = value
 
 
+# The Selects tray: the ids of the photos gathered there, in the order they
+# were added, as a JSON list. In the library's own database, so the tray
+# survives a restart and belongs to this library - a different library folder
+# has its own.
+SELECTS = "selects"
+
+
+def get_selects(db: Session) -> list[str]:
+    """The stored Selects ids, in order, each once. Anything unreadable counts
+    as an empty tray. Not checked against the photos - see routes/selects.py."""
+    raw = get_setting(db, SELECTS)
+    try:
+        data = json.loads(raw) if raw else []
+    except ValueError:
+        data = []
+    if not isinstance(data, list):
+        return []
+    return list(dict.fromkeys(x for x in data if isinstance(x, str)))
+
+
+def set_selects(db: Session, ids: list[str]) -> None:
+    set_setting(db, SELECTS, json.dumps(list(dict.fromkeys(ids))))
+
+
+def get_export_settings(db: Session) -> dict:
+    """The stored export presets and last-used options. Anything unreadable
+    counts as nothing stored - a preset list is never worth failing over."""
+    raw = get_setting(db, EXPORT_SETTINGS)
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    presets = data.get("presets")
+    return {
+        "presets": presets if isinstance(presets, list) else [],
+        "last": data.get("last") if isinstance(data.get("last"), dict) else None,
+    }
+
+
 def get_trash_retention_days(db: Session) -> int:
     """How many days a photo stays in the Trash before the startup purge
     permanently deletes it. 0 means "keep forever" (purge disabled)."""
@@ -185,7 +232,7 @@ def get_import_after_commit(db: Session) -> str:
 
 def get_import_select_default(db: Session) -> str:
     value = get_setting(db, IMPORT_SELECT_DEFAULT)
-    return value if value in IMPORT_SELECT_DEFAULT_CHOICES else "select"
+    return value if value in IMPORT_SELECT_DEFAULT_CHOICES else "deselect"
 
 
 def get_import_backup_default(db: Session) -> str:

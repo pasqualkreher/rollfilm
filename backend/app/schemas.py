@@ -166,6 +166,12 @@ class BulkDevelopRequest(BaseModel):
     adjustments: dict[str, Any] = Field(default_factory=dict)
 
 
+class Selects(BaseModel):
+    """The Selects tray: image ids in the order they were added."""
+
+    ids: list[str] = Field(default_factory=list)
+
+
 class BulkAutoDevelopRequest(BaseModel):
     image_ids: list[str]
 
@@ -290,11 +296,39 @@ class ExportStartRequest(ExportRequest):
     # TIFFs (for print or further retouching); "original" hands out the
     # library files byte-for-byte (RAW stays RAW, metadata untouched).
     format: Literal["jpeg", "tiff", "original"] = "jpeg"
+    # What a rendered file says about itself: "all" carries the camera's data
+    # (camera, lens, exposure, date, GPS) plus the library's stars, colour
+    # label and tags; "no_location" the same without where it was taken;
+    # "none" nothing but the colour profile. Original files are never touched.
+    metadata: Literal["all", "no_location", "none"] = "all"
+    # File names from a template ("{date}_{seq}", see services/name_template);
+    # empty keeps each photo's own name.
+    name_template: str | None = None
+    # An absolute folder to write the files into, one beside the other and
+    # never over a file already there. Unset: the result is a download (one
+    # file, or a zip of several).
+    dest_dir: str | None = None
+    # Finishing touches on the rendered pixels, for the output only: unsharp
+    # masking for the size the picture leaves at, and a line of text in a
+    # corner (empty = no watermark; size relative to the picture, opacity in
+    # percent).
+    sharpen: Literal["off", "low", "standard", "high"] = "off"
+    watermark_text: str = ""
+    watermark_corner: Literal["tl", "tr", "bl", "br"] = "br"
+    watermark_size: Literal["small", "medium", "large"] = "medium"
+    watermark_opacity: int = 60
 
 
 class ExportStartResponse(BaseModel):
     job_id: str
     total: int
+
+
+class ExportNamePreview(BaseModel):
+    # What the first photo of this export would be called - or, in place of
+    # it, why the template can't be used.
+    name: str | None = None
+    error: str | None = None
 
 
 class ExportJobProgress(BaseModel):
@@ -305,6 +339,46 @@ class ExportJobProgress(BaseModel):
     # suggestion before the result request is made).
     filename: str | None = None
     error: str | None = None
+    # A folder export: where the files went, how many were written (photos
+    # that could not be rendered are skipped), and one of them to point at.
+    dest_dir: str | None = None
+    written: int = 0
+    reveal_path: str | None = None
+
+
+class ExportOptions(BaseModel):
+    """The choices of the export dialog, as a preset stores them."""
+
+    format: Literal["jpeg", "tiff", "original"] = "jpeg"
+    quality: int = 90
+    max_size: int | None = None
+    metadata: Literal["all", "no_location", "none"] = "all"
+    name_template: str = ""
+    # "download" asks where to save each time; "folder" writes into dest_dir.
+    destination: Literal["download", "folder"] = "download"
+    dest_dir: str | None = None
+    sharpen: Literal["off", "low", "standard", "high"] = "off"
+    watermark_text: str = ""
+    watermark_corner: Literal["tl", "tr", "bl", "br"] = "br"
+    watermark_size: Literal["small", "medium", "large"] = "medium"
+    watermark_opacity: int = 60
+
+
+class ExportPreset(BaseModel):
+    name: str
+    options: ExportOptions
+
+
+class ExportSettingsOut(BaseModel):
+    presets: list[ExportPreset]
+    # What the dialog was last exported with - it opens the way it was left.
+    last: ExportOptions | None = None
+
+
+class ExportSettingsUpdate(BaseModel):
+    # Partial: only the fields sent are changed. `presets` replaces the list.
+    presets: list[ExportPreset] | None = None
+    last: ExportOptions | None = None
 
 
 class ImmichPushRequest(BaseModel):

@@ -79,7 +79,7 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult, chipsO
       {!chipsOnly && (
       <Dropdown
         value=""
-        placeholder="Add to album..."
+        placeholder="Add to album…"
         // Until the list arrives there is nothing to pick either, but "No
         // albums yet" would be a lie - the placeholder holds until we know.
         emptyLabel={noAlbums ? "No albums yet" : undefined}

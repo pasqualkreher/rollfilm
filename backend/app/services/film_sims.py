@@ -61,12 +61,56 @@ the look's own, as on 4. AgX keeps the look's colour and takes its tones from
 AgX: like the stills shoulder it is a factor per scene luminance in front of
 the untouched cube, the one that makes the cube's grey ramp come out where
 AgX puts it (_agx_factors).
+
+The analog film looks (ANALOG_SIMS) are film stocks, not camera simulations: a
+negative, developed and printed on its paper, or a slide, scanned - rendered
+by spektrafilm, Andrea Volpato's spectral simulation, into cubes of the same
+kind as Fujifilm's (film_luts/analog/<sim>.npy, tools/film_sim_fit/
+bake_analog.py and, for the black & white one, bake_analog_bw.py; CC BY-SA
+4.0, see SOURCES.txt there). Seven stocks spektrafilm has no profile for come
+from spectral_film_lut, Jan Lohse's simulation from the stocks' datasheets,
+as cubes of that kind in a folder of their own (SPECTRAL_SIMS, film_luts/
+spectral/<sim>.npy, tools/film_sim_fit/bake_spectral.py; MIT). They have no
+recipe and
+exist from process version 4 on, on the same tone path: the anchor, and a
+shoulder read off each cube's own grey ramp, since every stock runs into its
+white somewhere else (_analog_top). A JPEG, and an edit on process 1 or 2,
+gets the same look from a display cube made of the scene cube
+(_film_display_cube).
+
+The film scan looks (CLUT_SIMS) come the other way round: black & white,
+colour, instant and cross-processed stocks from the RawTherapee Film Simulation
+Collection (Pat David, Pavlov Dmitry, Michael Ezra; CC BY-SA 4.0) and five
+from t3mujinpack (João Almeida; MIT), which are display cubes - made to be
+laid over a finished picture (film_luts/clut/<sim>.npy, tools/film_sim_fit/
+import_clut.py). They need a scene cube like
+every other look, and get it the way the derived ones did: Fujifilm's Provia,
+then the film's cube on top of it (_clut_scene_cube) - so the anchor, the
+stills shoulder and AgX under a look hold for them as they stand.
+
+Neither kind of film look renders on the stock's own tone curve alone. A
+print's, a slide's or a scan's contrast and black come in much harder than
+any of the camera's simulations, so the grey ramp is taken three quarters of
+the way to Provia's (_film_factors): the film gives the colour, and of its
+curve what the simulations differ by among themselves.
+
+On that shared tone some stocks render alike. Measured on photographs as the
+mean CIELAB distance between two looks, where Fujifilm's two closest colour
+simulations, Provia and Astia, lie 2.0 apart: under 1.5 for spektrafilm's
+Portra 160 and 800, Gold 200 and UltraMax 400 (to Portra 400), Vision3 250D
+and Verita 200D (to Vision3 50D) and Vision3 200T (to 500T), and for the
+collection's Ilford HPS 800 (to HP5 Plus; Portra 160 VC lies 1.9 from 160
+NC). Those are in the list all the same - a stock like Gold 200 is looked for
+by its name. What is not there is a second look under a name: the
+collection's scans of the stocks that are analog looks.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 
@@ -91,6 +135,30 @@ OFFICIAL_SIMS = frozenset({
 # Cubes of the same kind for the looks Fujifilm publishes none for, built on
 # Fujifilm's by tools/film_sim_fit/derive.py (process version 4).
 _DERIVED_DIR = _MEASURED_DIR / "derived"
+# The analog film looks' cubes (tools/film_sim_fit/bake_analog.py, and
+# bake_analog_bw.py for the black & white one): negatives on paper, cine
+# negatives on print film, slides, black & white. The picker's order is the
+# frontend's (FILM_SIMS in utils/adjustments.ts), not this one.
+_ANALOG_DIR = _MEASURED_DIR / "analog"
+# The analog film looks whose cubes are spectral_film_lut's (tools/
+# film_sim_fit/bake_spectral.py), in their own folder under their own licence.
+_SPECTRAL_DIR = _MEASURED_DIR / "spectral"
+SPECTRAL_SIMS: tuple[str, ...] = (
+    "kodak_vericolor_iii", "kodak_aerocolor_iv", "fuji_pro_160s", "fuji_natura_1600",
+    "fuji_eterna_500", "fuji_eterna_500_vivid",
+    "fuji_instax_color",
+)
+ANALOG_SIMS: tuple[str, ...] = (
+    "kodak_portra_400", "kodak_portra_800_push1", "kodak_portra_800_push2", "kodak_ektar_100",
+    "kodak_gold_200", "kodak_ultramax_400", "kodak_portra_160", "kodak_portra_800",
+    "fujifilm_c200", "fujifilm_pro_400h", "fujifilm_xtra_400",
+    "kodak_vision3_50d", "kodak_vision3_500t",
+    "kodak_vision3_250d", "kodak_verita_200d", "kodak_vision3_200t",
+    "kodak_kodachrome_64", "kodak_ektachrome_100",
+    "fujifilm_provia_100f", "fujifilm_velvia_100",
+    "kodak_doublex",
+    *SPECTRAL_SIMS,
+)
 
 # Process version 4, the look as a still (tools/film_sim_fit/reference.py).
 # The anchor: how much more light Fujifilm's video cubes want than the scene
@@ -108,6 +176,54 @@ _STILLS_SHOULDER = np.array([
     0.86, 1.0, 1.16, 1.34, 1.5, 1.64, 1.78, 1.91, 2.02, 2.12, 2.2, 2.28, 2.34, 2.42, 2.46, 2.52,
     2.56, 2.57, 2.64, 2.67, 2.68, 2.75, 2.77, 2.77, 2.77, 2.88, 2.88, 2.88, 2.88, 3.04,
 ])
+# The film scan looks' display cubes (tools/film_sim_fit/import_clut.py), by
+# the picker's sections.
+_CLUT_DIR = _MEASURED_DIR / "clut"
+CLUT_SIMS: tuple[str, ...] = (
+    # Negative film
+    "kodak_portra_160_nc", "kodak_portra_160_vc",
+    "kodak_portra_400_nc", "kodak_portra_400_uc", "kodak_portra_400_vc",
+    "kodak_colorplus_200", "fuji_160c", "fuji_800z",
+    "fuji_superia_100", "fuji_superia_200", "fuji_superia_400", "fuji_superia_800",
+    "fuji_superia_1600", "fuji_superia_hg_1600", "fuji_superia_reala_100",
+    "fuji_superia_xtra_800", "agfa_vista_100", "agfa_vista_200", "agfa_vista_400",
+    "agfa_ultra_color_100", "kodak_elite_color_200",
+    "kodak_elite_color_400",
+    # Slide film
+    "fuji_velvia_50", "fuji_fortia_sp_50", "fuji_astia_100f", "fuji_provia_400f",
+    "fuji_provia_400x", "fuji_sensia_100", "kodak_kodachrome_25", "kodak_kodachrome_200",
+    "kodak_ektachrome_100_g", "kodak_ektachrome_100_gx", "kodak_ektachrome_100_vs",
+    "kodak_elite_chrome_200",
+    "kodak_elite_chrome_400", "kodak_elite_extracolor_100", "agfa_precisa_100",
+    # Black & white film
+    "kodak_tri_x_400", "kodak_tmax_100", "kodak_tmax_400", "kodak_tmax_3200", "kodak_bw_400cn",
+    "kodak_hie", "ilford_hp5_plus_400", "ilford_hps_800", "ilford_fp4_plus_125", "ilford_delta_100",
+    "ilford_delta_400", "ilford_delta_3200", "ilford_pan_f_plus_50", "ilford_xp2",
+    "fuji_neopan_acros_100", "fuji_neopan_1600", "agfa_apx_25", "agfa_apx_100",
+    "rollei_retro_80s", "rollei_retro_100_tonal", "rollei_ortho_25", "rollei_ir_400",
+    # Instant film
+    "polaroid_664", "polaroid_665", "polaroid_667", "polaroid_669", "polaroid_672",
+    "polaroid_690", "polaroid_px_70", "polaroid_px_680", "polaroid_time_zero",
+    "polaroid_polachrome", "fuji_fp_100c", "fuji_fp_100c_cool", "fuji_fp_100c_negative",
+    "fuji_fp_3000b",
+    # Cross-processed
+    "kodak_elite_100_xpro", "fuji_superia_200_xpro", "lomography_xpro_slide_200",
+    "lomography_redscale_100",
+)
+# Their scene cubes are put together when asked for (3 MB each, and as much
+# again for the lookup's atlas): only the last few are kept, or clicking
+# through the list would hold half a gigabyte on a machine with eight.
+_CLUT_SCENE_CACHE = 4
+# An analog film look counts as having reached its white where its grey ramp
+# shows this much of the brightest it gets: that is where sensor clipping is
+# put (_analog_top). Papers and slides creep up to their white over stops.
+_ANALOG_WHITE = 0.975
+# How far a film look's tone curve is moved from the stock's own to Provia's
+# (0 the stock's, 1 Provia's), in stops: see _film_factors. At three quarters
+# the film looks spread, in contrast and in how deep their shadows go, over
+# what the camera's simulations spread over - measured on photographs, where
+# the stocks' own curves all lay outside it.
+_FILM_TONE = 0.75
 
 # Linear BT.709 -> F-Gamut (BT.2020 primaries, D65).
 _FGAMUT_FROM_709 = np.array([[0.627404, 0.329283, 0.043313],
@@ -258,7 +374,9 @@ _RECIPES: dict[str, dict] = {
 # The enum values develop.py registers: neutral first, then the looks in
 # display order (the frontend list mirrors this order). A recipe the schema
 # doesn't know (or vice versa) could never be selected, so fail at import.
-SIM_NAMES: tuple[str, ...] = ("none", *_RECIPES.keys())
+SIM_NAMES: tuple[str, ...] = ("none", *_RECIPES.keys(), *ANALOG_SIMS, *CLUT_SIMS)
+# The looks that are film stocks, not camera simulations.
+_FILM_SIMS = frozenset(ANALOG_SIMS + CLUT_SIMS)
 assert SIM_NAMES == ENUM_SPEC["film_sim"][1], (
     "film_sims.SIM_NAMES out of sync with develop.ENUM_SPEC['film_sim']: "
     f"{set(SIM_NAMES) ^ set(ENUM_SPEC['film_sim'][1])}"
@@ -387,6 +505,8 @@ def _sim_cube(sim: str, measured: bool = False) -> np.ndarray | None:
     if measured:
         cube = _measured_cube(sim)
         return cube if cube is not None else _sim_cube(sim, False)
+    if sim in _FILM_SIMS:
+        return _film_display_cube(sim)
     recipe = _RECIPES.get(sim)
     if recipe is None:
         return None
@@ -429,21 +549,59 @@ def derived_cube(sim: str) -> np.ndarray | None:
     return _load_scene_cube(path)
 
 
+@lru_cache(maxsize=None)
+def analog_cube(sim: str) -> np.ndarray | None:
+    """The scene cube of an analog film look (same form as official_cube), or
+    None if `sim` is not one or its file is missing or unusable."""
+    path = (_SPECTRAL_DIR if sim in SPECTRAL_SIMS else _ANALOG_DIR) / f"{sim}.npy"
+    if sim not in ANALOG_SIMS or not path.is_file():
+        return None
+    return _load_scene_cube(path)
+
+
+@lru_cache(maxsize=None)
+def clut_cube(sim: str) -> np.ndarray | None:
+    """The display cube of a film scan look (the recipes' cube format, display
+    sRGB in and out), or None if `sim` is not one or its file is missing or
+    unusable."""
+    path = _CLUT_DIR / f"{sim}.npy"
+    if sim not in CLUT_SIMS or not path.is_file():
+        return None
+    return _load_scene_cube(path)
+
+
+@lru_cache(maxsize=_CLUT_SCENE_CACHE)
+def _clut_scene_cube(sim: str) -> np.ndarray | None:
+    """The scene cube of a film scan look (same form as official_cube), or
+    None without the two it is made of: what Fujifilm's Provia cube shows,
+    looked up in the film's display cube - the standard picture with the film
+    laid over it, which is how these cubes are meant to be used."""
+    clut, provia = clut_cube(sim), official_cube("provia")
+    if clut is None or provia is None:
+        return None
+    n = provia.shape[0]
+    return _sample_cube(provia.reshape(n * n, n, 3), clut).reshape(n, n, n, 3)
+
+
 def renders_as_still(adj: dict) -> bool:
     """Process version 4 and up: a look rendered from a scene cube gets the
     anchor and the stills shoulder, and the derived cubes count."""
-    return adj.get("process") in ("4", "5")
+    return adj.get("process") in ("4", "5", "6")
 
 
 def agx_under_look(adj: dict) -> bool:
-    """Process version 5 with AgX chosen: a look rendered from a scene cube
-    takes its tone curve from AgX instead of bringing its own."""
-    return adj.get("process") == "5" and adj.get("tone_mapper") == "agx"
+    """Process version 5 and up with AgX chosen: a look rendered from a scene
+    cube takes its tone curve from AgX instead of bringing its own."""
+    return adj.get("process") in ("5", "6") and adj.get("tone_mapper") == "agx"
 
 
 def _scene_cube(sim: str, still: bool) -> np.ndarray | None:
     cube = official_cube(sim)
-    return derived_cube(sim) if cube is None and still else cube
+    if cube is not None or not still:
+        return cube
+    if sim in ANALOG_SIMS:
+        return analog_cube(sim)
+    return _clut_scene_cube(sim) if sim in CLUT_SIMS else derived_cube(sim)
 
 
 def official_sim(adj: dict, raw_source: bool) -> str | None:
@@ -453,7 +611,7 @@ def official_sim(adj: dict, raw_source: bool) -> str | None:
     (apply_official) and the display colour block leaves the simulation
     alone."""
     sim = adj.get("film_sim")
-    if not raw_source or adj.get("process") not in ("3", "4", "5") or not sim or sim == "none":
+    if not raw_source or adj.get("process") not in ("3", "4", "5", "6") or not sim or sim == "none":
         return None
     if adj.get("lut_intensity", 100) <= 0 or _scene_cube(sim, renders_as_still(adj)) is None:
         return None
@@ -465,7 +623,7 @@ def official_sim(adj: dict, raw_source: bool) -> str | None:
 _STILLS_TABLE_N = 1024
 
 
-def _stills_factors(white: float) -> tuple[np.ndarray, np.ndarray]:
+def _stills_factors(white: float, top: float | None = None) -> tuple[np.ndarray, np.ndarray]:
     """What a scene luminance is multiplied by in front of the cube for the
     look to come out as a still, as a table (luminances, evenly spaced from
     the knee to `white`; factors): the anchor everywhere, and from the knee up
@@ -478,17 +636,73 @@ def _stills_factors(white: float) -> tuple[np.ndarray, np.ndarray]:
     1). A frame lifted further (a DR200 / DR400 file, Exposure pushed) has its
     clipping point higher up the cube's own shoulder and needs less: the same
     shape stretched over the longer way from knee to clipping, scaled by how
-    much of the three stops is still missing - none of it from 3 stops up."""
+    much of the three stops is still missing - none of it from 3 stops up.
+
+    `top` is for a cube that is not Fujifilm's (an analog film look): how many
+    stops its own grey ramp is short of white at clipping (_analog_top). The
+    shoulder keeps its shape and is scaled to end there."""
     white = max(float(white), 1.0)
     knee = float(_STILLS_SHOULDER_X[np.flatnonzero(_STILLS_SHOULDER > 0)[0] - 1])
-    top = float(_STILLS_SHOULDER[-1])
-    missing = max(0.0, 1.0 - math.log2(white) / top)
+    shoulder = _STILLS_SHOULDER
+    if top is None:
+        top = float(_STILLS_SHOULDER[-1])
+    else:
+        shoulder = _STILLS_SHOULDER * (top / float(_STILLS_SHOULDER[-1]))
+    missing = max(0.0, 1.0 - math.log2(white) / top) if top > 0 else 0.0
     y = np.linspace(knee, white, _STILLS_TABLE_N)
     # Where this luminance sits between knee and clipping, in stops, mapped
     # onto the same fraction of the way in the measured frame.
     at = knee * (1.0 / knee) ** (np.log2(y / knee) / math.log2(white / knee))
-    stops = missing * np.interp(at, _STILLS_SHOULDER_X, _STILLS_SHOULDER)
+    stops = missing * np.interp(at, _STILLS_SHOULDER_X, shoulder)
     return y, _STILLS_ANCHOR * 2.0 ** stops
+
+
+@lru_cache(maxsize=None)
+def _analog_top(sim: str) -> float:
+    """How many stops an analog film look is short of its white where the
+    sensor clips: its cube's grey ramp, from the anchored clipping point
+    upwards, read for where it first shows _ANALOG_WHITE of its brightest.
+    Nothing for a stock that is there already (most papers), a stop and more
+    for a cine print's long shoulder - which would leave a blown sky grey."""
+    cube = analog_cube(sim)
+    ev = np.linspace(0.0, 4.5, 451)
+    grey = np.repeat((_STILLS_ANCHOR * 2.0 ** ev).astype(np.float32)[:, None, None], 3, axis=2)
+    shown = _sample_band(_flog2(grey), cube)[:, 0] @ _LUMA
+    return float(ev[np.argmax(shown >= _ANALOG_WHITE * shown.max())])
+
+
+@lru_cache(maxsize=None)
+def _film_display_cube(sim: str) -> np.ndarray | None:
+    """A film look for a picture that is already a display picture (a JPEG; an
+    edit on process version 1 or 2), in the recipes' cube format, or None
+    without the scene cubes it is made of. The picture is read back to a
+    scene through Provia's grey ramp - the standard curve a camera, and this
+    app, gave it - colour ratios kept, and that scene is rendered as a still
+    through the film's cube. So white stays white and black black, and the
+    film's curve replaces the standard one instead of landing on top."""
+    if _scene_cube(sim, True) is None or official_cube("provia") is None:
+        return None
+    # Provia's grey ramp as a still, in display-linear light, over the scene
+    # luminances up to clipping.
+    scene = np.concatenate(([0.0], np.geomspace(2.0 ** -14, 1.0, 1024))).astype(np.float32)
+    shown = _display_linear(
+        apply_official(np.repeat(scene[:, None, None], 3, axis=2), "provia", 1.0)[:, 0]
+    ) @ _LUMA.astype(np.float64)
+    shown = np.maximum.accumulate(shown)
+    rising = np.concatenate(([True], np.diff(shown) > 1e-9))
+    axis = np.linspace(0.0, 1.0, _CUBE_N, dtype=np.float32)
+    r, g, b = np.meshgrid(axis, axis, axis, indexing="ij")
+    linear = _display_linear(np.stack([r, g, b], axis=-1).reshape(_CUBE_N * _CUBE_N, _CUBE_N, 3))
+    lum = linear @ _LUMA.astype(np.float64)
+    gain = np.interp(lum, shown[rising], scene[rising]) / np.maximum(lum, 1e-9)
+    out = apply_official((linear * gain[..., None]).astype(np.float32), sim, 1.0)
+    return out.reshape(_CUBE_N, _CUBE_N, _CUBE_N, 3)
+
+
+def _display_linear(code: np.ndarray) -> np.ndarray:
+    """Display-linear light of sRGB code values."""
+    code = code.astype(np.float64)
+    return np.where(code <= 0.04045, code / 12.92, ((code + 0.055) / 1.055) ** 2.4)
 
 
 @lru_cache(maxsize=None)
@@ -500,19 +714,62 @@ def _agx_factors(sim: str) -> np.ndarray:
     has (a look with lifted blacks, below them) the nearest end stands in."""
     from app.services import develop_effects
 
-    cube = _scene_cube(sim, True)
+    wanted = develop_effects.agx_tonemap(_table_greys())[:, 0] @ _LUMA
+    return _ramp_factors(_grey_ramp(_scene_cube(sim, True)), wanted).astype(np.float32).reshape(1, -1)
+
+
+def _table_greys() -> np.ndarray:
+    """The scene greys the tables over _AGX_TABLE_EV stand for, as a picture
+    one pixel wide."""
     ev = np.linspace(*_AGX_TABLE_EV, _AGX_TABLE_N)
-    grey = np.repeat((2.0 ** ev).astype(np.float32)[:, None, None], 3, axis=2)
-    wanted = develop_effects.agx_tonemap(grey)[:, 0] @ _LUMA
-    shown = _sample_band(_flog2(grey), cube)[:, 0].astype(np.float64)
-    # Display-linear luminance of what the cube shows (sRGB decode).
-    shown = np.where(shown <= 0.04045, shown / 12.92, ((shown + 0.055) / 1.055) ** 2.4) @ _LUMA
-    # The ramp read backwards needs it rising: flat stretches (the cube at
-    # black, at white) keep their first point.
-    shown = np.maximum.accumulate(shown)
+    return np.repeat((2.0 ** ev).astype(np.float32)[:, None, None], 3, axis=2)
+
+
+def _grey_ramp(cube: np.ndarray) -> np.ndarray:
+    """The display-linear luminance `cube` shows of each scene grey of the
+    table (_table_greys). Never falling: a flat stretch (the cube at black,
+    at white) or a step back stays at the level reached."""
+    shown = _display_linear(_sample_band(_flog2(_table_greys()), cube)[:, 0]) @ _LUMA
+    return np.maximum.accumulate(shown)
+
+
+def _ramp_factors(shown: np.ndarray, wanted: np.ndarray) -> np.ndarray:
+    """What each scene luminance of the table is multiplied by in front of a
+    cube with the grey ramp `shown` (_grey_ramp) for it to be shown at
+    `wanted`, a display-linear luminance per table entry: the ramp read
+    backwards. Where more is wanted than the cube has, the nearest end stands
+    in."""
+    ev = np.linspace(*_AGX_TABLE_EV, _AGX_TABLE_N)
+    # Read backwards the ramp has to rise: flat stretches keep their first point.
     rising = np.concatenate(([True], np.diff(shown) > 1e-7))
     at = np.interp(wanted, shown[rising], ev[rising])
-    return (2.0 ** (at - ev)).astype(np.float32).reshape(1, -1)
+    return 2.0 ** (at - ev)
+
+
+@lru_cache(maxsize=32)
+def _film_factors(sim: str, white: float) -> np.ndarray:
+    """What a scene luminance is multiplied by in front of a film look's cube
+    for a still, as a table over _AGX_TABLE_EV like AgX's.
+
+    A stock's own tone curve - the anchor and the shoulder up to clipping, its
+    own for an analog film look (_analog_top), Provia's for a film scan laid
+    over Provia - comes in harder than any of the camera's simulations: a
+    paper is at its black four stops under middle grey and at its white three
+    over, and a scan brings its own exposure along. So the curve is taken
+    _FILM_TONE of the way, in stops, to the one Provia has as a still of the
+    same frame: the factors that put the cube's grey ramp on Provia's
+    (_ramp_factors), Provia's fitted between the look's own black and white,
+    which a faded instant film keeps. The film keeps its colour; what is left
+    of its curve is as much as the simulations differ by among themselves."""
+    lum = 2.0 ** np.linspace(*_AGX_TABLE_EV, _AGX_TABLE_N)
+    own = np.interp(lum, *_stills_factors(white, _analog_top(sim) if sim in ANALOG_SIMS else None))
+    if official_cube("provia") is None:
+        return own.astype(np.float32).reshape(1, -1)
+    shown = _grey_ramp(_scene_cube(sim, True))
+    provia = _display_linear(apply_official(_table_greys(), "provia", white)[:, 0]) @ _LUMA
+    provia = (provia - provia[0]) / (provia[-1] - provia[0])
+    matched = _ramp_factors(shown, shown[0] + provia * (shown[-1] - shown[0]))
+    return (own ** (1.0 - _FILM_TONE) * matched ** _FILM_TONE).astype(np.float32).reshape(1, -1)
 
 
 def apply_official(
@@ -532,11 +789,13 @@ def apply_official(
     (_agx_factors): the look's colour on AgX's tone curve."""
     still = stills_white is not None
     cube = _scene_cube(sim, still or agx)
-    if agx:
+    # AgX's factors, and a film look's as a still, run over stops.
+    over_stops = agx or (still and sim in _FILM_SIMS)
+    if over_stops:
         import cv2
 
-        # The table runs over stops: its position is read off the natural log.
-        factors = _agx_factors(sim)
+        # The table's position is read off the natural log.
+        factors = _agx_factors(sim) if agx else _film_factors(sim, max(float(stills_white), 1.0))
         lowest = np.float32(2.0 ** _AGX_TABLE_EV[0])
         first = np.float32(_AGX_TABLE_EV[0] * math.log(2.0))
         per_step = np.float32(
@@ -556,7 +815,7 @@ def apply_official(
             # high, through cv2.remap (np.interp takes 70 ms a frame for this).
             band = np.ascontiguousarray(band, dtype=np.float32)
             at = cv2.transform(band, _LUMA.reshape(1, 3))
-            if agx:
+            if over_stops:
                 np.maximum(at, lowest, out=at)
                 cv2.log(at, at)
             at -= first
@@ -580,20 +839,30 @@ def _flog2(x: np.ndarray) -> np.ndarray:
     ).astype(np.float32)
 
 
-# cube id -> (cube, atlas). The cubes themselves live for the process in the
-# lru_caches above, so the id is stable; keeping the cube in the entry pins it.
-_atlases: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+# cube id -> (cube, atlas), the last few used. Keeping the cube in the entry
+# pins it, so the id stays its own while the entry lives; an atlas is a copy of
+# its cube, and one per look ever shown would double what the looks hold.
+_ATLAS_CACHE = 8
+_atlases: OrderedDict[int, tuple[np.ndarray, np.ndarray]] = OrderedDict()
+_atlases_lock = threading.Lock()
 
 
 def _atlas(cube: np.ndarray) -> np.ndarray:
     """The cube as one 2-D picture for cv2.remap: its n blue slices stacked
     top to bottom, each n rows (green) by n columns (red)."""
-    entry = _atlases.get(id(cube))
-    if entry is None or entry[0] is not cube:
-        n = cube.shape[0]
-        entry = (cube, np.ascontiguousarray(cube.transpose(2, 1, 0, 3).reshape(n * n, n, 3)))
-        _atlases[id(cube)] = entry
-    return entry[1]
+    with _atlases_lock:
+        entry = _atlases.get(id(cube))
+        if entry is not None and entry[0] is cube:
+            _atlases.move_to_end(id(cube))
+            return entry[1]
+    n = cube.shape[0]
+    atlas = np.ascontiguousarray(cube.transpose(2, 1, 0, 3).reshape(n * n, n, 3))
+    with _atlases_lock:
+        _atlases[id(cube)] = (cube, atlas)
+        _atlases.move_to_end(id(cube))
+        while len(_atlases) > _ATLAS_CACHE:
+            _atlases.popitem(last=False)
+    return atlas
 
 
 def _sample_band(arr: np.ndarray, cube: np.ndarray) -> np.ndarray:

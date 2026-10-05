@@ -24,7 +24,10 @@ import { useAppDialogs } from "../components/AppDialogs";
 import { useWait } from "../state/wait";
 import { useMergePairs } from "../state/viewPrefs";
 import { formatEta } from "../utils/duration";
-import { modKeyLabel, useSelectionKeys } from "../utils/selection";
+import { modKeyLabel, takesTyping, useSelectionKeys } from "../utils/selection";
+import { selectionSharedMeta } from "../utils/selectionMeta";
+import { RatingStars } from "../components/RatingStars";
+import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { useTransientMessage } from "../utils/transientMessage";
 import {
   clearReviewState,
@@ -91,6 +94,55 @@ function ImportSteps({ current }: { current: 1 | 2 }) {
         );
       })}
     </ol>
+  );
+}
+
+// "Show in Finder" is the desktop app's: the web build has no file manager
+// to open. Named after the OS's own, like its menus.
+const revealFile = window.photoManager?.revealFile;
+const REVEAL_LABEL =
+  window.photoManager?.platform === "darwin"
+    ? "Show in Finder"
+    : window.photoManager?.platform === "win32"
+      ? "Show in Explorer"
+      : "Show in file manager";
+
+// Where a copying session keeps its files, in the row under the review text
+// (beside the Add buttons): the path and what closing the session does to it. In the
+// desktop app the label and path are the way to open it - one click shows
+// the folder in the file manager, no button of its own beside them.
+function ImportFolder({ folder, backup }: { folder: string; backup: boolean }) {
+  // A long path gives way in the middle: the session's own folder name at
+  // the end is the part worth reading.
+  const cut = Math.max(folder.lastIndexOf("/"), folder.lastIndexOf("\\")) + 1;
+  const where = (
+    <>
+      <span className="import-folder-label">
+        <IconFolder size={12} /> Import folder
+      </span>
+      <span className="import-start-folder-path import-folder-path" title={revealFile ? undefined : folder}>
+        <span>{folder.slice(0, cut)}</span>
+        <span>{folder.slice(cut)}</span>
+      </span>
+    </>
+  );
+  return (
+    <>
+      {revealFile ? (
+        <button
+          className="import-folder-reveal"
+          onClick={() => void revealFile(folder)}
+          title={`${REVEAL_LABEL}: ${folder}`}
+        >
+          {where}
+        </button>
+      ) : (
+        where
+      )}
+      <span className="import-add-hint">
+        {backup ? "Kept as a backup" : "Deleted"} when you close the session.
+      </span>
+    </>
   );
 }
 
@@ -171,6 +223,12 @@ export function ImportWizard() {
   // preview then stays put at that position instead of closing.
   const lightboxFallback = useRef(0);
   const [lastIndex, setLastIndex] = useState<number | null>(null);
+  // Cards picked the way the library picks photos (Cmd/Ctrl-click,
+  // Shift-click, Cmd/Ctrl+A). Not the import choice: it only says which cards
+  // the selection row in the bottom bar - and the import checkbox of a picked
+  // card - acts on, so a handful of photos can be included, excluded, rated
+  // or labelled in one go.
+  const [marked, setMarked] = useState<Set<string>>(() => new Set());
   const [uploadToImmich, setUploadToImmich] = useState(initial.current?.uploadToImmich ?? false);
   // Selective sync: flag *everything* imported for Immich sync at commit.
   const [syncAllToImmich, setSyncAllToImmich] = useState(initial.current?.syncAllToImmich ?? false);
@@ -199,7 +257,17 @@ export function ImportWizard() {
     setSyncAllToImmich(st.syncAllToImmich);
     setLightboxFileId(st.lightboxFileId);
     savedScroll.current = st.scroll;
+    setMarked(new Set());
+    setLastIndex(null);
   }
+
+  // A selection belongs to the list it was made in: the set-narrowing filters
+  // (the same ones that reset the grid's scroll) drop it, so a bulk change
+  // never acts on cards picked under a different filter.
+  useEffect(() => {
+    setMarked(new Set());
+    setLastIndex(null);
+  }, [hideDuplicates, ratingMin, colorFilter]);
 
   // Keep the record current. Skipped until the session's own values are in
   // place, or the defaults of the previous render would overwrite them.
@@ -226,6 +294,21 @@ export function ImportWizard() {
   const actionBarRef = useRef<HTMLDivElement | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
+  // Cancel throws away everything this run has copied - one click on a button
+  // that sits right beside "Stop & keep" must not be all it takes. The copy
+  // carries on while the question is up.
+  async function confirmCancelUpload() {
+    const ok = await dialogs.confirm({
+      title: "Discard this import?",
+      message: canStopStaging
+        ? "Everything copied so far is discarded. To review the photos already copied instead, choose Stop & keep."
+        : "Everything copied so far is discarded.",
+      confirmLabel: "Discard",
+      cancelLabel: "Keep importing",
+      danger: true,
+    });
+    if (ok) cancelUpload();
+  }
 
   const { data: immich } = useQuery({
     queryKey: ["immich-settings"],
@@ -697,28 +780,72 @@ export function ImportWizard() {
     return out;
   }
 
-  // Library-style selection: Cmd/Ctrl-click a card (or tick its checkbox) to
-  // toggle whether it's imported, shift-click to apply that toggle to the
-  // whole range since the last click. (Exact duplicates can't be imported, so
-  // they're skipped.) A plain click opens the lightbox preview instead.
-  async function toggleStagedSelect(index: number, shiftKey: boolean) {
+  // The library's selection: Cmd/Ctrl-click a card (or its corner checkbox,
+  // once one is picked) to pick or drop it, shift-click to apply that to the
+  // whole range since the last click. It leaves the import choice alone -
+  // what happens to the picked cards is decided in the bottom bar and by its
+  // keys (applyToMarked), never on a card. Exact duplicates can't be
+  // imported, so there is nothing picking one could do.
+  function toggleMark(index: number, shiftKey: boolean) {
     const target = visibleFiles[index];
     if (!target || isDuplicate(target)) return;
-    if (shiftKey && lastIndex !== null) {
-      // The range takes whatever the clicked card itself is about to become:
-      // shift-clicking an unticked card selects the run, shift-clicking a
-      // ticked one clears it again. A shift-range used to be one-way - only
-      // ever selecting - so undoing one meant clicking every card a second
-      // time.
-      const selected = !target.selected;
-      const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
-      const range = withPartners(visibleFiles.slice(start, end + 1)).filter((f) => !isDuplicate(f));
-      await api.import.bulkUpdateStagedFiles(sessionId!, range.map((f) => f.id), { selected });
-      queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
-    } else {
-      updateStaged.mutate({ fileId: target.id, patch: { selected: !target.selected } });
-    }
+    setMarked((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastIndex !== null) {
+        const unmark = next.has(target.id);
+        const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
+        for (const f of visibleFiles.slice(start, end + 1)) {
+          if (unmark) next.delete(f.id);
+          else if (!isDuplicate(f)) next.add(f.id);
+        }
+      } else if (next.has(target.id)) {
+        next.delete(target.id);
+      } else {
+        next.add(target.id);
+      }
+      return next;
+    });
     setLastIndex(index);
+  }
+
+  // The import checkbox in a card's footer: that photo, in or out - picked or
+  // not. A card's footer is always about its own photo; the picked cards as a
+  // whole are decided in the bottom bar. (Exact duplicates can't be imported,
+  // so they're skipped.)
+  function toggleStagedSelect(index: number) {
+    const target = visibleFiles[index];
+    if (!target || isDuplicate(target)) return;
+    updateStaged.mutate({ fileId: target.id, patch: { selected: !target.selected } });
+  }
+
+  // The picked cards that are on screen right now. A card the view mode has
+  // since hidden no longer counts, so a bulk change never reaches a photo that
+  // isn't shown as picked.
+  const markedFiles = useMemo(() => visibleFiles.filter((f) => marked.has(f.id)), [visibleFiles, marked]);
+  // The selection row's stars and swatches mirror the picked cards, exactly
+  // as the library's bulk bar does.
+  const markedMeta = selectionSharedMeta(markedFiles, marked);
+
+  // One change for every picked card (and each one's hidden pair partner).
+  async function applyToMarked(patch: { selected?: boolean; rating?: number; color_label?: ColorLabel }) {
+    if (!sessionId || markedFiles.length === 0) return;
+    const ids = withPartners(markedFiles)
+      .filter((f) => !patch.selected || !isDuplicate(f))
+      .map((f) => f.id);
+    await api.import.bulkUpdateStagedFiles(sessionId, ids, patch);
+    queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
+  }
+
+  // Whether the picked cards are imported, for the bar's one checkbox: all of
+  // them, none, or a mix (drawn as the dash). Same rule as a day heading's
+  // box - a click takes them all, and clears them once they all are in.
+  const markedImport = useMemo<"none" | "some" | "all">(() => {
+    const ticked = markedFiles.filter((f) => f.selected).length;
+    return ticked === 0 ? "none" : ticked === markedFiles.length ? "all" : "some";
+  }, [markedFiles]);
+
+  function toggleMarkedImport() {
+    void applyToMarked({ selected: markedImport !== "all" });
   }
 
   // Selection state per day / month / year of the review grid, counted once per
@@ -762,7 +889,7 @@ export function ImportWizard() {
       bump(yearKey, f.selected);
     }
     // A batch shot on one day has exactly one month and one year, where those
-    // buttons would just be a second and third "Select all" - only offer a
+    // buttons would just repeat what "Select all" already reaches - only offer a
     // wider scope when the batch actually spans one.
     return { days, counts, hasMonths: months.size > 1, hasYears: years.size > 1 };
   }, [visibleFiles, effectiveTakenAt]);
@@ -824,23 +951,82 @@ export function ImportWizard() {
     onToggle: toggleSectionSelect,
   };
 
-  // Cmd/Ctrl+A ticks every photo shown; Escape is left alone here - the
-  // import selection is the whole point of the review, not something to drop
-  // with a stray key.
-  useSelectionKeys({ onSelectAll: () => selectAll(true) });
+  // Cmd/Ctrl+A picks every card shown and Escape drops the selection, as in
+  // the library. Neither touches what gets imported - that is the whole point
+  // of the review, not something to change with a stray key. Escape is left
+  // to the preview while one is open (there it closes the preview).
+  useSelectionKeys({
+    onSelectAll: markAll,
+    onClear: () => setMarked(new Set()),
+    hasSelection: marked.size > 0 && lightboxIndex === null,
+  });
 
-  async function selectAll(selected: boolean) {
-    // Selecting acts on the filtered view (select exactly what you see);
-    // clearing acts on the WHOLE batch. Filters hide files that are still
-    // selected - Trash-restores under the default "Hide duplicates", the
-    // other half of the type filter - and a clear scoped to the visible ones
-    // left those invisibly selected: the count stayed above zero and they
-    // would have been imported.
+  // With cards picked, the preview's two culling keys work on all of them:
+  // 0-5 sets their stars, Space takes them in or leaves them out - the same
+  // as the bar's stars and its import checkbox. The preview keeps both keys
+  // for its own photo while it is open, a dialog keeps them for its buttons,
+  // and a text box for typing. Read through a ref so the window listeners
+  // aren't torn down on every render (as in useSelectionKeys).
+  const markedKeys = useRef({ active: false, rate: (_rating: number) => {}, toggleImport: () => {} });
+  markedKeys.current = {
+    active: markedFiles.length > 0 && lightboxIndex === null,
+    rate: (rating) => void applyToMarked({ rating }),
+    toggleImport: toggleMarkedImport,
+  };
+  useEffect(() => {
+    function claims(e: KeyboardEvent): "rate" | "import" | null {
+      if (!markedKeys.current.active || document.querySelector(".modal-overlay")) return null;
+      const target = e.target as HTMLElement | null;
+      if (target && takesTyping(target)) return null;
+      if (e.metaKey || e.ctrlKey || e.altKey) return null;
+      if (e.key === " " || e.code === "Space") return "import";
+      return e.key >= "0" && e.key <= "5" && e.key.length === 1 ? "rate" : null;
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      const what = claims(e);
+      if (!what) return;
+      e.preventDefault();
+      if (e.repeat) return;
+      if (what === "rate") markedKeys.current.rate(Number(e.key));
+      else markedKeys.current.toggleImport();
+    }
+    // A checkbox or button that still has the focus from the last click (a
+    // card's selection box, say) is activated by Space on key-UP - without
+    // this the press would toggle the import and that control as well.
+    function onKeyUp(e: KeyboardEvent) {
+      if (claims(e) === "import") e.preventDefault();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  // Every card shown (the filtered view - select exactly what you see), minus
+  // the exact duplicates nothing can be done with.
+  function markAll() {
+    setMarked(new Set(visibleFiles.filter((f) => !isDuplicate(f)).map((f) => f.id)));
+  }
+
+  // The whole batch in or out, from the bar's two standing buttons - the one
+  // visible way to take a card as it is, without knowing about selections.
+  // Taking acts on the filtered view (exactly what you see); dropping acts on
+  // the WHOLE batch. Filters hide files that are still ticked - Trash-restores
+  // under the default "Hide duplicates", the other half of the type filter -
+  // and a drop scoped to the visible ones left those invisibly ticked: the
+  // count stayed above zero and they would have been imported.
+  async function importAll(selected: boolean) {
+    if (!sessionId) return;
     const scope = selected ? withPartners(visibleFiles) : files ?? [];
     const ids = scope.filter((f) => !selected || !isDuplicate(f)).map((f) => f.id);
-    await api.import.bulkUpdateStagedFiles(sessionId!, ids, { selected });
+    await api.import.bulkUpdateStagedFiles(sessionId, ids, { selected });
     queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] });
   }
+  // Nothing left for "Import all" to do: every card shown that can be imported
+  // already is.
+  const allShownTicked = visibleFiles.every((f) => f.selected || isDuplicate(f));
 
   async function handleCommitClick() {
     // Never commit a session whose background copying or analysis hasn't
@@ -885,7 +1071,7 @@ export function ImportWizard() {
       // reads it) before the caller clears target.value, which empties that list.
       const picked = pickImportableFiles(fileList);
       if (picked.length === 0) {
-        setPickError(emptyMessage);
+        setPickError(emptyMessage, { keep: true });
         return;
       }
       setPickError(null);
@@ -1094,11 +1280,11 @@ export function ImportWizard() {
                   ? <><IconImport size={13} /> Import photos <IconChevronDown size={12} /></>
                   : folderImportActive
                     ? totalFileCount
-                      ? `Importing... ${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}`
+                      ? `Importing… ${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}`
                       : "Scanning folder…"
                     : (uploadProgress ?? 0) >= 100
-                      ? `Processing files...${progressSuffix}`
-                      : `Importing... ${uploadProgress ?? 0}%${uploadEtaSuffix}`}
+                      ? `Processing files…${progressSuffix}`
+                      : `Importing… ${uploadProgress ?? 0}%${uploadEtaSuffix}`}
               </button>
               {/* Bail out of a long SD-card upload without waiting for it to
                   finish - aborts the in-flight request and clears the screen.
@@ -1106,9 +1292,9 @@ export function ImportWizard() {
                   since at that point the batch is already staging server-side. */}
               {isUploading && (uploadProgress ?? 0) < 100 && (
                 <button
-                  className="btn"
+                  className="btn danger"
                   style={{ marginLeft: 8 }}
-                  onClick={cancelUpload}
+                  onClick={() => void confirmCancelUpload()}
                   title="Stop and discard everything copied so far"
                 >
                   Cancel
@@ -1209,45 +1395,58 @@ export function ImportWizard() {
     );
   }
 
+  const addHint = isUploading
+    ? `Available once ${inPlace ? "reading" : "copying"} has finished.`
+    : "Collect from several cards or folders in this session.";
+
   return (
     <div className="page page-timeline">
       <div className="import-review-head">
         <ImportSteps current={2} />
-        <h2 className="section-title">Review &amp; choose what to keep</h2>
-        <p className="import-review-sub">
-          From <strong>{sourceLabel}</strong>.{" "}
-          {sessionFolder && (
-            <>
-              Import folder: <strong>{sessionFolder}</strong> -{" "}
-              {sessionBackup ? "kept as a backup" : "deleted"} when you close the session.{" "}
-            </>
-          )}
-          {importedCount > 0
-            ? `${importedCount.toLocaleString()} photo(s) from this session are already in your library.`
-            : "Nothing is in your library yet."}{" "}
-          {inPlace &&
-            "The photos stay where they are; the ones you add are listed in your library from there. "}
-          Rate, compare and select, then click "Add to library". You can add a few at a time; the
-          session stays open until you close it.
-        </p>
+        {/* Title and explanation run on in one line; the header stays three
+            lines tall on a wide window instead of five. */}
+        <div className="import-review-intro">
+          <h2 className="section-title">Review &amp; choose what to keep</h2>
+          <p className="import-review-sub">
+            From <strong>{sourceLabel}</strong>.{" "}
+            {importedCount > 0
+              ? `${importedCount.toLocaleString()} photo(s) from this session are already in your library.`
+              : "Nothing is in your library yet."}{" "}
+            {inPlace &&
+              "The photos stay where they are; the ones you add are listed in your library from there. "}
+            Rate, compare and select, then click "Add to library". You can add a few at a time; the
+            session stays open until you close it.
+          </p>
+        </div>
         {/* A session can collect from more than one card or folder - add the
             next one without leaving the review. Desktop only: it needs native
-            paths the backend reads itself. */}
-        {nativePick?.pickFolder && (
+            paths the backend reads itself. What the buttons are for is in
+            their tooltips; the session's folder shares the row. */}
+        {(nativePick?.pickFolder || sessionFolder) && (
           <div className="import-add-row">
-            <button className="btn btn-slim" onClick={addFolderToOpenSession} disabled={isUploading}>
-              <IconFolder size={12} /> Add folder…
-            </button>
-            {nativePick.pickFiles && (
-              <button className="btn btn-slim" onClick={addFilesToOpenSession} disabled={isUploading}>
-                <IconImage size={12} /> Add photos…
-              </button>
+            {nativePick?.pickFolder && (
+              <>
+                <button
+                  className="btn btn-slim"
+                  onClick={addFolderToOpenSession}
+                  disabled={isUploading}
+                  title={addHint}
+                >
+                  <IconFolder size={12} /> Add folder…
+                </button>
+                {nativePick.pickFiles && (
+                  <button
+                    className="btn btn-slim"
+                    onClick={addFilesToOpenSession}
+                    disabled={isUploading}
+                    title={addHint}
+                  >
+                    <IconImage size={12} /> Add photos…
+                  </button>
+                )}
+              </>
             )}
-            <span className="import-add-hint">
-              {isUploading
-                ? `Available once ${inPlace ? "reading" : "copying"} has finished.`
-                : "Collect from several cards or folders in this session."}
-            </span>
+            {sessionFolder && <ImportFolder folder={sessionFolder} backup={sessionBackup} />}
           </div>
         )}
         {/* Background copying still running: photos keep appearing, and the
@@ -1325,139 +1524,205 @@ export function ImportWizard() {
           </label>
         }
       >
-        {/* "Select all" is scoped to the filtered view (it acts on
-            visibleFiles), so with a filter active it selects exactly the
-            filtered photos - same as the library. No separate "only
-            filtered" button needed. */}
-        {/* "Select all" stays up with nothing selected - that is where a
-            review starts when new photos arrive unselected (Settings). */}
-        {(files?.length ?? 0) > 0 && (
-          <button
-            className="btn"
-            onClick={() => selectAll(true)}
-            title={`Import every photo shown (${modKeyLabel}+A)`}
-          >
-            Select all
-          </button>
-        )}
-        {selectedCount > 0 && (
-          <button className="btn" onClick={() => selectAll(false)} title="Import none of the photos">
-            Clear selection
-          </button>
+        {/* The library's two selection buttons, shown as there: only once a
+            card is picked (Cmd/Ctrl-click, Shift-click) - the toolbar stays
+            clean while nothing is selected; Cmd/Ctrl+A works anytime. They
+            pick cards, they import nothing: taking what is picked is the
+            import checkbox in the bottom bar's selection row. */}
+        {marked.size > 0 && (
+          <>
+            <button className="btn" onClick={markAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
+              Select all
+            </button>
+            <button className="btn" onClick={() => setMarked(new Set())} title="Clear the selection (Esc)">
+              Clear selection
+            </button>
+          </>
         )}
       </PhotoFilters>
       <div className="page-scroll">
       <div className="filter-bar action-bar--bottom" ref={actionBarRef}>
-        <span>
-          {selectedCount} of {files?.length ?? 0} selected for import
-          {importedCount > 0 && ` · ${importedCount.toLocaleString()} already added`}
-        </span>
-        {/* Only shown when Immich is configured in Settings - an inert greyed
-            checkbox is just clutter for everyone who doesn't use Immich. In
-            selective/full sync modes the per-import checkbox is replaced by a
-            status chip, since uploads are driven by the sync mode instead. */}
-        {immichConfigured && immichMode === "manual" && (
-          <ImmichSyncToggle
-            on={uploadToImmich}
-            onToggle={setUploadToImmich}
-            label="Add to Immich"
-            title="Upload the selected photos to Immich after import. RAW files only when “Also upload RAW files” is on in Settings."
-          />
+        {/* The library's bulk bar, as a row of its own on top of this one:
+            the bar is anchored to the window's bottom edge, so it grows
+            upward and the count and buttons below stay exactly where they
+            are. Everything a card's footer holds - stars, colour, import -
+            once more, here for all the picked photos: a card decides for
+            its own photo, this row for the selection. */}
+        {markedFiles.length > 0 && (
+          <div className="control-group action-bar-selection">
+            <span>{markedFiles.length} selected</span>
+            <RatingStars
+              rating={markedMeta.rating}
+              onChange={(rating) => applyToMarked({ rating })}
+              title="Rate the selected photos (0–5)"
+            />
+            <ColorLabelPicker
+              value={markedMeta.colorLabel}
+              onChange={(color_label) => applyToMarked({ color_label })}
+            />
+            <label className="filter-field filter-field-inline" title="Import or skip the selected photos (Space)">
+              <input
+                type="checkbox"
+                checked={markedImport === "all"}
+                // "Partly imported" has no JSX attribute - it's a DOM property only.
+                ref={(el) => {
+                  if (el) el.indeterminate = markedImport === "some";
+                }}
+                onChange={toggleMarkedImport}
+              />{" "}
+              Import
+            </label>
+          </div>
         )}
-        {immichConfigured && immichMode === "selective" && (
-          <ImmichSyncToggle
-            on={syncAllToImmich}
-            onToggle={setSyncAllToImmich}
-            title="Mark every imported photo for Immich sync. RAW files only when “Also upload RAW files” is on in Settings. You can also mark single photos in the preview."
-          />
-        )}
-        {immichConfigured && immichMode === "full" && (
-          <span
-            className="filter-field filter-field-inline"
-            style={{ color: "var(--text-muted)" }}
-            title="Change this under Settings → Immich integration → Sync mode"
+        <div className="control-group">
+          {/* Always there, switched off rather than hidden when there is
+              nothing for them to do - a review that starts with nothing ticked
+              (the default) starts at "Import all". They tick, they don't
+              select: the selection stays as it is. */}
+          <button
+            className="btn"
+            onClick={() => importAll(true)}
+            disabled={visibleFiles.length === 0 || allShownTicked}
+            title="Import every photo shown"
           >
-            🔄 Immich full sync is on. Every imported photo is uploaded automatically.
+            Import all
+          </button>
+          <button
+            className="btn"
+            onClick={() => importAll(false)}
+            disabled={selectedCount === 0}
+            title="Import none of the photos"
+          >
+            Import none
+          </button>
+          {/* What the two buttons before it add up to. A slot as wide as the
+              longest count this batch can show, in digits of equal width, so
+              nothing after it moves while the count climbs from 0 to
+              everything. */}
+          <span
+            style={{
+              minWidth: `${2 * String(files?.length ?? 0).length + 12}ch`,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {selectedCount} of {files?.length ?? 0} to import
           </span>
-        )}
-        <ImportAlbumPicker
-          albumId={targetAlbum ? targetAlbum.id : null}
-          onChange={setTargetAlbumId}
-          disabled={commit.isPending}
-        />
-        <button
-          className="btn primary"
-          onClick={handleCommitClick}
-          disabled={selectedCount === 0 || commit.isPending || stagingInBackground || analysisPending}
-          title={
-            stagingInBackground
-              ? `Available when all photos have been ${inPlace ? "read" : "copied"}`
-              : analysisPending
-                ? "Available when all photos have been analyzed"
-                : inPlace
-                  ? "Add the selected photos to your library from where they are"
-                  : sessionBackup
-                    ? "Copy the selected photos into your library; they also stay in the import folder"
-                    : sessionFolder
-                      ? "Move the selected photos from the import folder into your library"
-                      : "Add the selected photos to your library"
-          }
-        >
-          {commit.isPending ? (
-            <>
-              <Spinner tone="inherit" inline />
-              {`Adding to library...${progressSuffix}`}
-            </>
-          ) : stagingInBackground ? (
-            inPlace ? "Reading photos…" : "Copying photos…"
-          ) : analysisPending ? (
-            `Analyzing… ${analysisProcessed}/${analysisTotal}`
-          ) : (
-            `Add ${selectedCount} photo(s) to library`
+          {importedCount > 0 && <span>{importedCount.toLocaleString()} already added</span>}
+        </div>
+        {/* The bar reads left to right in the order the work goes: what to
+            import, where it goes and the button that does it - and, apart
+            at the far end, the two ways to leave the review without adding
+            anything. */}
+        <div className="control-group">
+          {/* Only shown when Immich is configured in Settings - an inert greyed
+              checkbox is just clutter for everyone who doesn't use Immich. In
+              selective/full sync modes the per-import checkbox is replaced by a
+              status chip, since uploads are driven by the sync mode instead. */}
+          {immichConfigured && immichMode === "manual" && (
+            <ImmichSyncToggle
+              on={uploadToImmich}
+              onToggle={setUploadToImmich}
+              label="Add to Immich"
+              title="Upload the selected photos to Immich after import. RAW files only when “Also upload RAW files” is on in Settings."
+            />
           )}
-        </button>
-        {/* Closes the review, keeps the session: it is listed on the Import
-            page to continue - selection, ratings and copies all as left. */}
-        <button
-          className="btn"
-          onClick={() => {
-            leaveSession();
-            queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
-          }}
-          disabled={commit.isPending || discard.isPending}
-          title="Leave the review and keep the session open. Nothing is deleted; your selection and ratings are kept, and you can continue from the Import page."
-        >
-          <IconBookmark size={14} /> Continue later
-        </button>
-        <button
-          className="btn"
-          onClick={async () => {
-            // What closing does was decided when the session started; it
-            // only stops to confirm when copies of photos that were never
-            // added would be deleted.
-            const ok = await confirmCloseSession(dialogs, {
-              label: sourceLabel,
-              mode: sessionMode,
-              folder: sessionFolder,
-              keepBackup: sessionBackup,
-              leftover: files ? files.filter((f) => !f.imported && !isDuplicate(f)).length : null,
-            });
-            if (ok) discard.mutate();
-          }}
-          disabled={discard.isPending}
-          title={closeSessionTitle(sessionMode, sessionFolder, sessionBackup)}
-        >
-          {discard.isPending ? (
-            <>
-              <Spinner tone="inherit" inline />
-              Closing…
-            </>
-          ) : (
-            <>
-              <IconLeave size={14} /> Close session
-            </>
+          {immichConfigured && immichMode === "selective" && (
+            <ImmichSyncToggle
+              on={syncAllToImmich}
+              onToggle={setSyncAllToImmich}
+              title="Mark every imported photo for Immich sync. RAW files only when “Also upload RAW files” is on in Settings. You can also mark single photos in the preview."
+            />
           )}
-        </button>
+          {immichConfigured && immichMode === "full" && (
+            <span
+              className="filter-field filter-field-inline"
+              style={{ color: "var(--text-muted)" }}
+              title="Change this under Settings → Immich integration → Sync mode"
+            >
+              🔄 Immich full sync is on. Every imported photo is uploaded automatically.
+            </span>
+          )}
+          <ImportAlbumPicker
+            albumId={targetAlbum ? targetAlbum.id : null}
+            onChange={setTargetAlbumId}
+            disabled={commit.isPending}
+          />
+          <button
+            className="btn primary"
+            onClick={handleCommitClick}
+            disabled={selectedCount === 0 || commit.isPending || stagingInBackground || analysisPending}
+            title={
+              stagingInBackground
+                ? `Available when all photos have been ${inPlace ? "read" : "copied"}`
+                : analysisPending
+                  ? "Available when all photos have been analyzed"
+                  : inPlace
+                    ? "Add the selected photos to your library from where they are"
+                    : sessionBackup
+                      ? "Copy the selected photos into your library; they also stay in the import folder"
+                      : sessionFolder
+                        ? "Move the selected photos from the import folder into your library"
+                        : "Add the selected photos to your library"
+            }
+          >
+            {commit.isPending ? (
+              <>
+                <Spinner tone="inherit" inline />
+                {`Adding to library…${progressSuffix}`}
+              </>
+            ) : stagingInBackground ? (
+              inPlace ? "Reading photos…" : "Copying photos…"
+            ) : analysisPending ? (
+              `Analyzing… ${analysisProcessed}/${analysisTotal}`
+            ) : (
+              `Add ${selectedCount} photo(s) to library`
+            )}
+          </button>
+        </div>
+        <div className="control-group" style={{ marginLeft: "auto" }}>
+          {/* Closes the review, keeps the session: it is listed on the Import
+              page to continue - selection, ratings and copies all as left. */}
+          <button
+            className="btn"
+            onClick={() => {
+              leaveSession();
+              queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
+            }}
+            disabled={commit.isPending || discard.isPending}
+            title="Leave the review and keep the session open. Nothing is deleted; your selection and ratings are kept, and you can continue from the Import page."
+          >
+            <IconBookmark size={14} /> Continue later
+          </button>
+          <button
+            className="btn"
+            onClick={async () => {
+              // What closing does was decided when the session started; it
+              // only stops to confirm when copies of photos that were never
+              // added would be deleted.
+              const ok = await confirmCloseSession(dialogs, {
+                label: sourceLabel,
+                mode: sessionMode,
+                folder: sessionFolder,
+                keepBackup: sessionBackup,
+                leftover: files ? files.filter((f) => !f.imported && !isDuplicate(f)).length : null,
+              });
+              if (ok) discard.mutate();
+            }}
+            disabled={discard.isPending}
+            title={closeSessionTitle(sessionMode, sessionFolder, sessionBackup)}
+          >
+            {discard.isPending ? (
+              <>
+                <Spinner tone="inherit" inline />
+                Closing…
+              </>
+            ) : (
+              <>
+                <IconLeave size={14} /> Close session
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -1473,6 +1738,8 @@ export function ImportWizard() {
           mergePairs={mergePairs}
           viewMode={viewMode}
           onToggleSelect={toggleStagedSelect}
+          markedIds={marked}
+          onToggleMark={toggleMark}
           sectionSelect={sectionSelect}
           onOpen={openLightboxAt}
           onPatch={(fileId, patch) => updateStaged.mutate({ fileId, patch })}

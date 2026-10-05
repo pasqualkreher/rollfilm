@@ -398,6 +398,49 @@ export interface ExportJobProgress {
   state: "running" | "ready" | "error" | "cancelled";
   filename: string | null;
   error: string | null;
+  // A folder export: where the files went, how many were written (a photo
+  // that could not be rendered is skipped), and one of them to point at.
+  dest_dir: string | null;
+  written: number;
+  reveal_path: string | null;
+}
+
+export type ExportFormat = "jpeg" | "tiff" | "original";
+export type ExportSharpen = "off" | "low" | "standard" | "high";
+// What a rendered file says about itself: everything (camera data plus the
+// library's stars, colour label and tags), the same without where it was
+// taken, or nothing but the colour profile.
+export type ExportMetadata = "all" | "no_location" | "none";
+
+// The choices of the export dialog, as a preset stores them (mirrors
+// ExportOptions in backend schemas.py).
+export interface ExportOptions {
+  format: ExportFormat;
+  quality: number;
+  max_size: number | null;
+  metadata: ExportMetadata;
+  name_template: string;
+  // "download" asks where to save each time; "folder" writes into dest_dir.
+  destination: "download" | "folder";
+  dest_dir: string | null;
+  // Finishing touches on the exported pixels only: sharpening for the size
+  // the picture leaves at, and a line of text in a corner ("" = none).
+  sharpen: ExportSharpen;
+  watermark_text: string;
+  watermark_corner: "tl" | "tr" | "bl" | "br";
+  watermark_size: "small" | "medium" | "large";
+  watermark_opacity: number;
+}
+
+export interface ExportPreset {
+  name: string;
+  options: ExportOptions;
+}
+
+export interface ExportSettings {
+  presets: ExportPreset[];
+  // What the dialog was last exported with; null before the first export.
+  last: ExportOptions | null;
 }
 
 export interface ImportProgress {

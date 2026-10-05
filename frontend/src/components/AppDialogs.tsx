@@ -2,7 +2,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -10,6 +9,7 @@ import {
 } from "react";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
+import { useEscapeToClose } from "../utils/modalKeys";
 
 // App-skinned replacements for window.confirm / window.alert. The native
 // dialogs render in the OS look, ignore the app's theme entirely and (in
@@ -176,20 +176,8 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   );
 
   // Escape dismisses like the native dialogs do (cancel for confirm, OK for
-  // alert). Captured, so an underlying lightbox/menu with its own Escape
-  // handler doesn't also close while a dialog is on top of it.
-  useEffect(() => {
-    if (!current) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        e.preventDefault();
-        close(current.kind === "alert");
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [current, close]);
+  // alert) - and only this dialog, not the one it may be lying on top of.
+  useEscapeToClose(current !== null, () => close(currentRef.current?.kind === "alert"));
 
   const api = useMemo(
     () => ({ confirm, choose, alert, prompt }),
@@ -232,7 +220,9 @@ export function DialogProvider({ children }: { children: ReactNode }) {
               </div>
               <div className="confirm-modal-actions">
                 {current.kind !== "alert" && (
-                  <button className="btn" onClick={() => close(false)}>
+                  // A destructive question opens with the focus on Cancel, so
+                  // a stray Enter backs out instead of deleting.
+                  <button className="btn" autoFocus={current.danger === true} onClick={() => close(false)}>
                     {current.cancelLabel ?? "Cancel"}
                   </button>
                 )}
@@ -243,7 +233,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
                 )}
                 <button
                   className={`btn ${current.danger ? "danger" : "primary"}`}
-                  autoFocus={current.kind !== "prompt"}
+                  autoFocus={current.kind !== "prompt" && !current.danger}
                   onClick={() => close(true)}
                 >
                   {current.confirmLabel ?? "OK"}

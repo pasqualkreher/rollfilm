@@ -347,7 +347,7 @@ def test_a_whole_batch_from_a_source_records_every_file_under_it(db, dirs, tmp_p
     assert {r.source_id for r in rows} == {source.id}
 
 
-@pytest.mark.parametrize("choice, selected", [(None, True), ("select", True), ("deselect", False)])
+@pytest.mark.parametrize("choice, selected", [(None, False), ("select", True), ("deselect", False)])
 def test_new_photos_start_selected_or_not_as_set(db, dirs, tmp_path, monkeypatch, choice, selected):
     """Settings -> Library decides whether arriving photos start selected; it is
     applied as each row is created, so picks made while a card is still

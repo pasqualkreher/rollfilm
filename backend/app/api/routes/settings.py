@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -11,6 +13,7 @@ from app.services.settings_store import (
     AUTO_DEVELOP_ENABLED,
     AUTO_DEVELOP_GROUP_NAMES,
     AUTO_DEVELOP_GROUPS,
+    EXPORT_SETTINGS,
     IMMICH_API_KEY,
     IMMICH_BASE_URL,
     IMMICH_ENABLED,
@@ -30,6 +33,7 @@ from app.services.settings_store import (
     TRASH_RETENTION_DAYS,
     get_auto_develop_enabled,
     get_auto_develop_groups,
+    get_export_settings,
     get_immich_enabled,
     get_immich_include_raw,
     get_immich_sync_mode,
@@ -205,6 +209,61 @@ def update_import_settings(
         set_setting(db, IMPORT_BACKUP_DEFAULT, payload.backup_default)
     db.commit()
     return _import_settings_out(db)
+
+
+def _export_settings_out(db: Session) -> schemas.ExportSettingsOut:
+    stored = get_export_settings(db)
+    presets = []
+    for entry in stored["presets"]:
+        try:
+            presets.append(schemas.ExportPreset.model_validate(entry))
+        except ValueError:
+            continue  # written by a newer or older build: skip, don't fail
+    try:
+        last = schemas.ExportOptions.model_validate(stored["last"]) if stored["last"] else None
+    except ValueError:
+        last = None
+    return schemas.ExportSettingsOut(presets=presets, last=last)
+
+
+@router.get("/export", response_model=schemas.ExportSettingsOut)
+def get_export_settings_route(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    return _export_settings_out(db)
+
+
+@router.put("/export", response_model=schemas.ExportSettingsOut)
+def update_export_settings(
+    payload: schemas.ExportSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The export dialog's saved presets and the options it was last used
+    with. Only the fields sent change; `presets` replaces the whole list (a
+    name appears once - the later entry wins)."""
+    current = _export_settings_out(db)
+    presets = current.presets
+    if payload.presets is not None:
+        by_name: dict[str, schemas.ExportPreset] = {}
+        for preset in payload.presets:
+            name = preset.name.strip()
+            if name:
+                by_name[name] = schemas.ExportPreset(name=name, options=preset.options)
+        presets = list(by_name.values())
+    last = payload.last if payload.last is not None else current.last
+    set_setting(
+        db,
+        EXPORT_SETTINGS,
+        json.dumps(
+            {
+                "presets": [p.model_dump() for p in presets],
+                "last": last.model_dump() if last else None,
+            }
+        ),
+    )
+    db.commit()
+    return _export_settings_out(db)
 
 
 @router.get("/raw", response_model=schemas.RawDecodeSettingsOut)

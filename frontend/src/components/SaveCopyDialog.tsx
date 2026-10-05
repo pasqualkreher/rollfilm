@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTransientMessage } from "../utils/transientMessage";
+import { useEscapeToClose } from "../utils/modalKeys";
 import { Dropdown } from "./Dropdown";
 import { SIZE_OPTIONS } from "./ExportDialog";
 import { IconDisk, IconDuplicate } from "./Icons";
@@ -49,6 +50,10 @@ export function SaveCopyDialog({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(0);
   const [error, setError] = useTransientMessage();
+  // Escape is the Cancel button - which is disabled while the copy renders.
+  useEscapeToClose(!closing, () => {
+    if (!busy) onClose();
+  });
 
   async function doSave() {
     setBusy(true);
@@ -58,7 +63,7 @@ export function SaveCopyDialog({
       await onSave(kind === "physical" ? { kind, quality, maxSize } : { kind }, setDone);
     } catch (e) {
       setBusy(false);
-      setError((e as Error).message || "Could not save the copy.");
+      setError((e as Error).message || "Could not save the copy.", { keep: true });
     }
   }
 

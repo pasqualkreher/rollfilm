@@ -4,6 +4,7 @@ import { deleteConfirmMessage, membershipWarning } from "../utils/deleteMessage"
 import { useAskDeletePartner } from "../state/viewPrefs";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
+import { useEscapeToClose } from "../utils/modalKeys";
 
 // Only the field deleteConfirmMessage needs, so the library's slim index
 // entries qualify alongside full ImageOut rows.
@@ -99,12 +100,21 @@ export function usePairDeleteConfirm() {
     pending?.resolve(ids);
     setPending(null);
   }
+  useEscapeToClose(pending !== null, () => finish(null));
 
+  // Both variants open with the focus on Cancel: Enter must never be the key
+  // that deletes, and the button that opened the dialog must not keep it.
   let dialog: React.ReactNode = null;
   if (pending?.kind === "confirm") {
     dialog = (
       <div className="modal-overlay" onClick={() => finish(null)}>
-        <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="modal pair-delete-modal"
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="Delete photos"
+          onClick={(e) => e.stopPropagation()}
+        >
           <div className="pair-delete-body">
             <p className="pair-delete-message">{pending.message}</p>
             {pending.warning && <p className="pair-delete-warning">{pending.warning}</p>}
@@ -112,7 +122,7 @@ export function usePairDeleteConfirm() {
               <button className="btn danger danger-filled" onClick={() => finish(pending.ids)}>
                 Delete
               </button>
-              <button className="btn ghost" onClick={() => finish(null)}>
+              <button className="btn ghost" autoFocus onClick={() => finish(null)}>
                 Cancel
               </button>
             </div>
@@ -124,7 +134,13 @@ export function usePairDeleteConfirm() {
     const { baseIds, partnerIds } = pending;
     dialog = (
       <div className="modal-overlay" onClick={() => finish(null)}>
-        <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="modal pair-delete-modal"
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="Delete photos"
+          onClick={(e) => e.stopPropagation()}
+        >
           <div className="pair-delete-body">
             <h3>{baseIds.length === 1 ? "Delete photo" : `Delete ${baseIds.length} photos`}</h3>
             <p className="settings-desc" style={{ margin: 0 }}>
@@ -145,7 +161,7 @@ export function usePairDeleteConfirm() {
               <button className="btn danger" onClick={() => finish(baseIds)}>
                 {baseIds.length === 1 ? "Delete only this file" : "Delete only the selected"}
               </button>
-              <button className="btn ghost" onClick={() => finish(null)}>
+              <button className="btn ghost" autoFocus onClick={() => finish(null)}>
                 Cancel
               </button>
             </div>

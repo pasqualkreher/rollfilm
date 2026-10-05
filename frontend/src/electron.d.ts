@@ -11,8 +11,11 @@ declare global {
       platform?: string;
       /** Physical RAM in GB (os.totalmem). Absent in older builds. */
       totalMemoryGb?: number;
-      /** Opens the native folder dialog; resolves to an absolute path or null. */
-      pickFolder: () => Promise<string | null>;
+      /**
+       * Opens the native folder dialog; resolves to an absolute path or null.
+       * `opts` names the dialog and where it opens (ignored by older builds).
+       */
+      pickFolder: (opts?: { title?: string; defaultPath?: string }) => Promise<string | null>;
       /** Native multi-file dialog; resolves to picked files (absolute path + size) or null. */
       pickFiles?: () => Promise<{ path: string; size: number }[] | null>;
       /**

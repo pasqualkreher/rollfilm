@@ -9,6 +9,10 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 interface Props {
   // What failed, in the user's terms: "the canvas", "the photo editor".
   what: string;
+  // When this changes while the crash message is up, the message is dropped
+  // and the children get another go - the route, for the boundary around the
+  // pages, so going somewhere else leaves the crash behind.
+  resetKey?: string;
   children: ReactNode;
 }
 
@@ -27,6 +31,10 @@ export class ErrorBoundary extends Component<Props, State> {
     // Keep the stack somewhere reachable: the message on screen is for the
     // user, the console entry is what a bug report is built from.
     console.error(`${this.props.what} crashed`, error, info.componentStack);
+  }
+
+  componentDidUpdate(prev: Props) {
+    if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null });
   }
 
   render() {

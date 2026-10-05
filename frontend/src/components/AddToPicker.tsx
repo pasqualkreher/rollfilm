@@ -199,7 +199,7 @@ export function AddToPicker({
     <div className="album-picker">
       <Dropdown
         value=""
-        placeholder="Add to..."
+        placeholder="Add to…"
         disabled={busy}
         ariaLabel={onAddToSelects ? "Add to selects, album or canvas" : "Add to album or canvas"}
         onChange={(v) => {

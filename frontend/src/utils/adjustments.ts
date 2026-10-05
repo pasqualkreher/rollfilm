@@ -164,10 +164,13 @@ export interface ColorCalibration {
   shadows_tint: number;
   red_hue: number;
   red_saturation: number;
+  red_luminance: number;
   green_hue: number;
   green_saturation: number;
+  green_luminance: number;
   blue_hue: number;
   blue_saturation: number;
+  blue_luminance: number;
 }
 export type SubMaskType = "radial" | "linear" | "brush" | "luminance" | "color" | "edge" | "semantic";
 export type SubMaskMode = "additive" | "subtractive" | "intersect";
@@ -220,7 +223,114 @@ export type FilmSim =
   | "monochrome_ye"
   | "monochrome_r"
   | "monochrome_g"
-  | "sepia";
+  | "sepia"
+  // The analog film looks (film_sims.ANALOG_SIMS).
+  | "kodak_portra_400"
+  | "kodak_portra_800_push1"
+  | "kodak_portra_800_push2"
+  | "kodak_ektar_100"
+  | "kodak_gold_200"
+  | "kodak_ultramax_400"
+  | "kodak_portra_160"
+  | "kodak_portra_800"
+  | "fujifilm_c200"
+  | "fujifilm_pro_400h"
+  | "fujifilm_xtra_400"
+  | "kodak_vision3_50d"
+  | "kodak_vision3_500t"
+  | "kodak_vision3_250d"
+  | "kodak_verita_200d"
+  | "kodak_vision3_200t"
+  | "kodak_kodachrome_64"
+  | "kodak_ektachrome_100"
+  | "fujifilm_provia_100f"
+  | "fujifilm_velvia_100"
+  | "kodak_doublex"
+  | "kodak_vericolor_iii"
+  | "kodak_aerocolor_iv"
+  | "fuji_pro_160s"
+  | "fuji_natura_1600"
+  | "fuji_eterna_500"
+  | "fuji_eterna_500_vivid"
+  | "fuji_instax_color"
+  // The film scan looks (film_sims.CLUT_SIMS).
+  | "kodak_portra_160_nc"
+  | "kodak_portra_160_vc"
+  | "kodak_portra_400_nc"
+  | "kodak_portra_400_uc"
+  | "kodak_portra_400_vc"
+  | "kodak_colorplus_200"
+  | "fuji_160c"
+  | "fuji_800z"
+  | "fuji_superia_100"
+  | "fuji_superia_200"
+  | "fuji_superia_400"
+  | "fuji_superia_800"
+  | "fuji_superia_1600"
+  | "fuji_superia_hg_1600"
+  | "fuji_superia_reala_100"
+  | "fuji_superia_xtra_800"
+  | "agfa_vista_100"
+  | "agfa_vista_200"
+  | "agfa_vista_400"
+  | "agfa_ultra_color_100"
+  | "kodak_elite_color_200"
+  | "kodak_elite_color_400"
+  | "fuji_velvia_50"
+  | "fuji_fortia_sp_50"
+  | "fuji_astia_100f"
+  | "fuji_provia_400f"
+  | "fuji_provia_400x"
+  | "fuji_sensia_100"
+  | "kodak_kodachrome_25"
+  | "kodak_kodachrome_200"
+  | "kodak_ektachrome_100_g"
+  | "kodak_ektachrome_100_gx"
+  | "kodak_ektachrome_100_vs"
+  | "kodak_elite_chrome_200"
+  | "kodak_elite_chrome_400"
+  | "kodak_elite_extracolor_100"
+  | "agfa_precisa_100"
+  | "kodak_tri_x_400"
+  | "kodak_tmax_100"
+  | "kodak_tmax_400"
+  | "kodak_tmax_3200"
+  | "kodak_bw_400cn"
+  | "kodak_hie"
+  | "ilford_hp5_plus_400"
+  | "ilford_hps_800"
+  | "ilford_fp4_plus_125"
+  | "ilford_delta_100"
+  | "ilford_delta_400"
+  | "ilford_delta_3200"
+  | "ilford_pan_f_plus_50"
+  | "ilford_xp2"
+  | "fuji_neopan_acros_100"
+  | "fuji_neopan_1600"
+  | "agfa_apx_25"
+  | "agfa_apx_100"
+  | "rollei_retro_80s"
+  | "rollei_retro_100_tonal"
+  | "rollei_ortho_25"
+  | "rollei_ir_400"
+  | "polaroid_664"
+  | "polaroid_665"
+  | "polaroid_667"
+  | "polaroid_669"
+  | "polaroid_672"
+  | "polaroid_690"
+  | "polaroid_px_70"
+  | "polaroid_px_680"
+  | "polaroid_time_zero"
+  | "polaroid_polachrome"
+  | "fuji_fp_100c"
+  | "fuji_fp_100c_cool"
+  | "fuji_fp_100c_negative"
+  | "fuji_fp_3000b"
+  | "kodak_elite_100_xpro"
+  | "fuji_superia_200_xpro"
+  | "lomography_xpro_slide_200"
+  | "lomography_redscale_100";
 
 // Which generation of the backend's pixel maths renders an edit (see
 // develop.ENUM_SPEC["process"] and services/develop_v2.py). New edits start on
@@ -229,9 +339,13 @@ export type FilmSim =
 // "3" is "2" with the film simulations from cubes (Fujifilm's own where it
 // publishes one); "4" renders those as the camera renders a still; "5" lets
 // the tone mapper set the tone curve under such a look (AgX), where "3" and
-// "4" ignore it.
-export type ProcessVersion = "1" | "2" | "3" | "4" | "5";
-export const CURRENT_PROCESS: ProcessVersion = "5";
+// "4" ignore it; "6" has a Calibration primary move its whole band of colours
+// by the same amount, where before a colour off the centre of the band (a
+// leaf under Green) got part of it.
+export type ProcessVersion = "1" | "2" | "3" | "4" | "5" | "6";
+export const CURRENT_PROCESS: ProcessVersion = "6";
+// The last process on which Calibration renders the old way.
+const LAST_BELL_CALIBRATION: ProcessVersion = "5";
 
 // Which exposure a RAW is developed from (see develop.ENUM_SPEC["raw_base"]).
 // "standard" opens every raw at the same brightness - the auto-exposed picture
@@ -287,7 +401,12 @@ function neutralColorGrading(): ColorGrading {
   return { shadows: neutralWheel(), midtones: neutralWheel(), highlights: neutralWheel(), global: neutralWheel(), blending: 50, balance: 0 };
 }
 function neutralCalibration(): ColorCalibration {
-  return { shadows_tint: 0, red_hue: 0, red_saturation: 0, green_hue: 0, green_saturation: 0, blue_hue: 0, blue_saturation: 0 };
+  return {
+    shadows_tint: 0,
+    red_hue: 0, red_saturation: 0, red_luminance: 0,
+    green_hue: 0, green_saturation: 0, green_luminance: 0,
+    blue_hue: 0, blue_saturation: 0, blue_luminance: 0,
+  };
 }
 
 export function defaultAdjustments(): Adjustments {
@@ -328,6 +447,8 @@ function usesLegacyLook(raw: Partial<Adjustments>): boolean {
   if (raw.hsl && COLOR_BANDS.some((b) => Array.isArray(raw.hsl![b]) && raw.hsl![b].some((v) => v !== 0))) return true;
   const g = raw.color_grading;
   if (g && [g.shadows, g.midtones, g.highlights, g.global].some((w) => w && (nonZero(w.saturation) || nonZero(w.luminance)))) return true;
+  // Calibration is the same picture on "1" to "5" and a different one on "6".
+  if (raw.color_calibration && Object.values(raw.color_calibration).some(nonZero)) return true;
   return Array.isArray(raw.masks) && raw.masks.length > 0;
 }
 
@@ -362,7 +483,8 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
     raw.process === "2" ||
     raw.process === "3" ||
     raw.process === "4" ||
-    raw.process === "5"
+    raw.process === "5" ||
+    raw.process === "6"
       ? raw.process
       : usesLegacyLook(raw)
         ? "1"
@@ -390,7 +512,10 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
   if (raw.point_curves) base.point_curves = raw.point_curves as PointCurves;
   if (raw.parametric_curve) base.parametric_curve = raw.parametric_curve as ParametricCurve;
   if (raw.color_grading) base.color_grading = raw.color_grading as ColorGrading;
-  if (raw.color_calibration) base.color_calibration = raw.color_calibration as ColorCalibration;
+  // Over the neutral values: an edit saved before a key existed (the primaries'
+  // luminance) must read 0 there, not undefined.
+  if (raw.color_calibration)
+    base.color_calibration = { ...neutralCalibration(), ...(raw.color_calibration as Partial<ColorCalibration>) };
   if (Array.isArray(raw.masks)) base.masks = raw.masks as MaskDef[];
   return base;
 }
@@ -511,31 +636,192 @@ export const TONE_MAPPERS: { value: "basic" | "agx"; label: string }[] = [
   { value: "agx", label: "AgX" },
 ];
 
-// Film simulation picker entries, in panel display order. `swatch` is a small
-// CSS gradient hinting at each look's palette on the picker tile.
-export const FILM_SIMS: { value: FilmSim; label: string; swatch: string }[] = [
-  { value: "none", label: "None", swatch: "linear-gradient(135deg, #888, #bbb)" },
-  { value: "provia", label: "Provia · Standard", swatch: "linear-gradient(135deg, #4a7bc8, #d8a05a)" },
-  { value: "velvia", label: "Velvia · Vivid", swatch: "linear-gradient(135deg, #c8332e, #2e7d32)" },
-  { value: "astia", label: "Astia · Soft", swatch: "linear-gradient(135deg, #6f9bd1, #e8b98a)" },
-  { value: "classic_chrome", label: "Classic Chrome", swatch: "linear-gradient(135deg, #6b7d8a, #b09a7a)" },
-  { value: "reala_ace", label: "Reala Ace", swatch: "linear-gradient(135deg, #5b86b8, #d9a86a)" },
-  { value: "pro_neg_hi", label: "Pro Neg. Hi", swatch: "linear-gradient(135deg, #6f8496, #d6b08c)" },
-  { value: "pro_neg_std", label: "Pro Neg. Std", swatch: "linear-gradient(135deg, #8492a0, #dcc0a4)" },
-  { value: "classic_neg", label: "Classic Neg.", swatch: "linear-gradient(135deg, #4e8f86, #d2954f)" },
-  { value: "nostalgic_neg", label: "Nostalgic Neg.", swatch: "linear-gradient(135deg, #8a6f52, #e0b878)" },
-  { value: "eterna", label: "Eterna · Cinema", swatch: "linear-gradient(135deg, #5a6a72, #a5a08e)" },
-  { value: "eterna_bleach_bypass", label: "Eterna Bleach Bypass", swatch: "linear-gradient(135deg, #3f474b, #b4b0a6)" },
-  { value: "acros", label: "Acros", swatch: "linear-gradient(135deg, #2b2b2b, #d6d6d6)" },
-  { value: "acros_ye", label: "Acros +Ye", swatch: "linear-gradient(135deg, #3a3628, #d9d3b8)" },
-  { value: "acros_r", label: "Acros +R", swatch: "linear-gradient(135deg, #402c2c, #dcc9c9)" },
-  { value: "acros_g", label: "Acros +G", swatch: "linear-gradient(135deg, #2c3a2e, #c9dccd)" },
-  { value: "monochrome", label: "Monochrome", swatch: "linear-gradient(135deg, #1f1f1f, #cfcfcf)" },
-  { value: "monochrome_ye", label: "Monochrome +Ye", swatch: "linear-gradient(135deg, #2e2b20, #d4cfb6)" },
-  { value: "monochrome_r", label: "Monochrome +R", swatch: "linear-gradient(135deg, #352626, #d6c6c6)" },
-  { value: "monochrome_g", label: "Monochrome +G", swatch: "linear-gradient(135deg, #253027, #c6d6ca)" },
-  { value: "sepia", label: "Sepia", swatch: "linear-gradient(135deg, #3b2a1a, #d9bd94)" },
+// The picker's sections, in display order: the camera's simulations, then the
+// film looks by kind of stock - negatives printed on paper, cine negatives on
+// print film, slides, black & white, instant film, cross-processed film.
+export type FilmSimGroup = "fujifilm" | "negative" | "cinema" | "slide" | "bw" | "instant" | "xpro";
+export const FILM_SIM_GROUPS: { value: FilmSimGroup; label: string }[] = [
+  { value: "fujifilm", label: "Fujifilm camera" },
+  { value: "negative", label: "Negative film" },
+  { value: "cinema", label: "Cinema film" },
+  { value: "slide", label: "Slide film" },
+  { value: "bw", label: "Black & white film" },
+  { value: "instant", label: "Instant film" },
+  { value: "xpro", label: "Cross-processed" },
 ];
+
+// Film simulation picker entries, in panel display order. `swatch` is the two
+// halves of the small disc on the picker tile, hinting at each look's palette.
+// For a film look they are what its cube makes of a sky blue and of a warm
+// tone (the two of Provia's swatch), with the shift from the unaltered colour
+// doubled in Oklab so that it reads at that size; a dark and a light grey as
+// the cube renders them for a black & white one. "None" belongs to no section
+// and leads the list; a section shows its looks in the order they stand here:
+// by maker (Kodak, Fujifilm, Agfa, Ilford, Rollei), a maker's by family and
+// speed - whichever of the backend's two lists a look comes from.
+export const FILM_SIMS: { value: FilmSim; label: string; swatch: string; group?: FilmSimGroup }[] = [
+  { value: "none", label: "None", swatch: "linear-gradient(135deg, #888 50%, #bbb 50%)" },
+  { value: "provia", label: "Provia · Standard", group: "fujifilm", swatch: "linear-gradient(135deg, #4a7bc8 50%, #d8a05a 50%)" },
+  { value: "velvia", label: "Velvia · Vivid", group: "fujifilm", swatch: "linear-gradient(135deg, #c8332e 50%, #2e7d32 50%)" },
+  { value: "astia", label: "Astia · Soft", group: "fujifilm", swatch: "linear-gradient(135deg, #6f9bd1 50%, #e8b98a 50%)" },
+  { value: "classic_chrome", label: "Classic Chrome", group: "fujifilm", swatch: "linear-gradient(135deg, #6b7d8a 50%, #b09a7a 50%)" },
+  { value: "reala_ace", label: "Reala Ace", group: "fujifilm", swatch: "linear-gradient(135deg, #5b86b8 50%, #d9a86a 50%)" },
+  { value: "pro_neg_hi", label: "Pro Neg. Hi", group: "fujifilm", swatch: "linear-gradient(135deg, #6f8496 50%, #d6b08c 50%)" },
+  { value: "pro_neg_std", label: "Pro Neg. Std", group: "fujifilm", swatch: "linear-gradient(135deg, #8492a0 50%, #dcc0a4 50%)" },
+  { value: "classic_neg", label: "Classic Neg.", group: "fujifilm", swatch: "linear-gradient(135deg, #4e8f86 50%, #d2954f 50%)" },
+  { value: "nostalgic_neg", label: "Nostalgic Neg.", group: "fujifilm", swatch: "linear-gradient(135deg, #8a6f52 50%, #e0b878 50%)" },
+  { value: "eterna", label: "Eterna · Cinema", group: "fujifilm", swatch: "linear-gradient(135deg, #5a6a72 50%, #a5a08e 50%)" },
+  { value: "eterna_bleach_bypass", label: "Eterna Bleach Bypass", group: "fujifilm", swatch: "linear-gradient(135deg, #3f474b 50%, #b4b0a6 50%)" },
+  { value: "acros", label: "Acros", group: "fujifilm", swatch: "linear-gradient(135deg, #2b2b2b 50%, #d6d6d6 50%)" },
+  { value: "acros_ye", label: "Acros +Ye", group: "fujifilm", swatch: "linear-gradient(135deg, #3a3628 50%, #d9d3b8 50%)" },
+  { value: "acros_r", label: "Acros +R", group: "fujifilm", swatch: "linear-gradient(135deg, #402c2c 50%, #dcc9c9 50%)" },
+  { value: "acros_g", label: "Acros +G", group: "fujifilm", swatch: "linear-gradient(135deg, #2c3a2e 50%, #c9dccd 50%)" },
+  { value: "monochrome", label: "Monochrome", group: "fujifilm", swatch: "linear-gradient(135deg, #1f1f1f 50%, #cfcfcf 50%)" },
+  { value: "monochrome_ye", label: "Monochrome +Ye", group: "fujifilm", swatch: "linear-gradient(135deg, #2e2b20 50%, #d4cfb6 50%)" },
+  { value: "monochrome_r", label: "Monochrome +R", group: "fujifilm", swatch: "linear-gradient(135deg, #352626 50%, #d6c6c6 50%)" },
+  { value: "monochrome_g", label: "Monochrome +G", group: "fujifilm", swatch: "linear-gradient(135deg, #253027 50%, #c6d6ca 50%)" },
+  { value: "sepia", label: "Sepia", group: "fujifilm", swatch: "linear-gradient(135deg, #3b2a1a 50%, #d9bd94 50%)" },
+  { value: "kodak_gold_200", label: "Gold 200", group: "negative", swatch: "linear-gradient(135deg, #349fc3 50%, #c87a0f 50%)" },
+  { value: "kodak_colorplus_200", label: "ColorPlus 200", group: "negative", swatch: "linear-gradient(135deg, #6abafd 50%, #e8a401 50%)" },
+  { value: "kodak_ultramax_400", label: "UltraMax 400", group: "negative", swatch: "linear-gradient(135deg, #1d8ebb 50%, #cd850e 50%)" },
+  { value: "kodak_ektar_100", label: "Ektar 100", group: "negative", swatch: "linear-gradient(135deg, #079db6 50%, #c4740d 50%)" },
+  { value: "kodak_portra_160", label: "Portra 160", group: "negative", swatch: "linear-gradient(135deg, #16a8c6 50%, #c7770f 50%)" },
+  { value: "kodak_portra_160_nc", label: "Portra 160 NC", group: "negative", swatch: "linear-gradient(135deg, #119dc4 50%, #d7823f 50%)" },
+  { value: "kodak_portra_160_vc", label: "Portra 160 VC", group: "negative", swatch: "linear-gradient(135deg, #10a2b9 50%, #e57b2b 50%)" },
+  { value: "kodak_portra_400", label: "Portra 400", group: "negative", swatch: "linear-gradient(135deg, #149dc2 50%, #cc7a0b 50%)" },
+  { value: "kodak_portra_400_nc", label: "Portra 400 NC", group: "negative", swatch: "linear-gradient(135deg, #76accb 50%, #bc9212 50%)" },
+  { value: "kodak_portra_400_uc", label: "Portra 400 UC", group: "negative", swatch: "linear-gradient(135deg, #0e8ebe 50%, #ca9513 50%)" },
+  { value: "kodak_portra_400_vc", label: "Portra 400 VC", group: "negative", swatch: "linear-gradient(135deg, #61a9ce 50%, #b9870f 50%)" },
+  { value: "kodak_portra_800", label: "Portra 800", group: "negative", swatch: "linear-gradient(135deg, #1992ba 50%, #cb8212 50%)" },
+  { value: "kodak_portra_800_push1", label: "Portra 800 · Push +1", group: "negative", swatch: "linear-gradient(135deg, #0391b6 50%, #c9770d 50%)" },
+  { value: "kodak_portra_800_push2", label: "Portra 800 · Push +2", group: "negative", swatch: "linear-gradient(135deg, #0590ad 50%, #d17303 50%)" },
+  { value: "kodak_vericolor_iii", label: "Vericolor III", group: "negative", swatch: "linear-gradient(135deg, #477edd 50%, #b98d01 50%)" },
+  { value: "kodak_aerocolor_iv", label: "Aerocolor IV", group: "negative", swatch: "linear-gradient(135deg, #22b2e2 50%, #c97c15 50%)" },
+  { value: "kodak_elite_color_200", label: "Elite Color 200", group: "negative", swatch: "linear-gradient(135deg, #45b0e3 50%, #c46d0d 50%)" },
+  { value: "kodak_elite_color_400", label: "Elite Color 400", group: "negative", swatch: "linear-gradient(135deg, #17c6c0 50%, #d25322 50%)" },
+  { value: "fujifilm_c200", label: "Fujicolor C200", group: "negative", swatch: "linear-gradient(135deg, #0c79a9 50%, #dc9405 50%)" },
+  { value: "fuji_superia_100", label: "Superia 100", group: "negative", swatch: "linear-gradient(135deg, #53a1fa 50%, #c19e2f 50%)" },
+  { value: "fuji_superia_200", label: "Superia 200", group: "negative", swatch: "linear-gradient(135deg, #74b9e9 50%, #d38002 50%)" },
+  { value: "fuji_superia_400", label: "Superia 400", group: "negative", swatch: "linear-gradient(135deg, #2393e3 50%, #d0a116 50%)" },
+  { value: "fujifilm_xtra_400", label: "Superia X-tra 400", group: "negative", swatch: "linear-gradient(135deg, #086fa6 50%, #e19b11 50%)" },
+  { value: "fuji_superia_800", label: "Superia 800", group: "negative", swatch: "linear-gradient(135deg, #417bce 50%, #d0a215 50%)" },
+  { value: "fuji_superia_xtra_800", label: "Superia X-tra 800", group: "negative", swatch: "linear-gradient(135deg, #4ba2b6 50%, #c77a60 50%)" },
+  { value: "fuji_superia_1600", label: "Superia 1600", group: "negative", swatch: "linear-gradient(135deg, #077ccd 50%, #cfa50b 50%)" },
+  { value: "fuji_superia_hg_1600", label: "Superia HG 1600", group: "negative", swatch: "linear-gradient(135deg, #0c989b 50%, #c88c72 50%)" },
+  { value: "fuji_natura_1600", label: "Natura 1600", group: "negative", swatch: "linear-gradient(135deg, #0581e6 50%, #c69903 50%)" },
+  { value: "fuji_superia_reala_100", label: "Superia Reala 100", group: "negative", swatch: "linear-gradient(135deg, #69a3c3 50%, #d9884e 50%)" },
+  { value: "fujifilm_pro_400h", label: "Fuji Pro 400H", group: "negative", swatch: "linear-gradient(135deg, #047fa8 50%, #cd9012 50%)" },
+  { value: "fuji_160c", label: "Fuji 160C", group: "negative", swatch: "linear-gradient(135deg, #8092d1 50%, #b08910 50%)" },
+  { value: "fuji_pro_160s", label: "Fuji Pro 160S", group: "negative", swatch: "linear-gradient(135deg, #1976c6 50%, #c89710 50%)" },
+  { value: "fuji_800z", label: "Fuji 800Z", group: "negative", swatch: "linear-gradient(135deg, #718bc6 50%, #b89008 50%)" },
+  { value: "agfa_vista_100", label: "Agfa Vista 100", group: "negative", swatch: "linear-gradient(135deg, #3aa7fd 50%, #db9005 50%)" },
+  { value: "agfa_vista_200", label: "Agfa Vista 200", group: "negative", swatch: "linear-gradient(135deg, #0285c9 50%, #ec9a03 50%)" },
+  { value: "agfa_vista_400", label: "Agfa Vista 400", group: "negative", swatch: "linear-gradient(135deg, #1faffa 50%, #d69c11 50%)" },
+  { value: "agfa_ultra_color_100", label: "Agfa Ultra Color 100", group: "negative", swatch: "linear-gradient(135deg, #0e98d3 50%, #f16f0a 50%)" },
+  { value: "kodak_vision3_50d", label: "Vision3 50D", group: "cinema", swatch: "linear-gradient(135deg, #247d9b 50%, #c3901d 50%)" },
+  { value: "kodak_vision3_250d", label: "Vision3 250D", group: "cinema", swatch: "linear-gradient(135deg, #198091 50%, #c18a14 50%)" },
+  { value: "kodak_verita_200d", label: "Verita 200D", group: "cinema", swatch: "linear-gradient(135deg, #27859a 50%, #bd891b 50%)" },
+  { value: "kodak_vision3_200t", label: "Vision3 200T", group: "cinema", swatch: "linear-gradient(135deg, #4681a2 50%, #b68a02 50%)" },
+  { value: "kodak_vision3_500t", label: "Vision3 500T", group: "cinema", swatch: "linear-gradient(135deg, #4889a1 50%, #b1820e 50%)" },
+  { value: "fuji_eterna_500", label: "Eterna 500", group: "cinema", swatch: "linear-gradient(135deg, #2e87d1 50%, #a98a2b 50%)" },
+  { value: "fuji_eterna_500_vivid", label: "Eterna 500 Vivid", group: "cinema", swatch: "linear-gradient(135deg, #3189d5 50%, #a98509 50%)" },
+  { value: "kodak_kodachrome_25", label: "Kodachrome 25", group: "slide", swatch: "linear-gradient(135deg, #0991a9 50%, #d0b446 50%)" },
+  { value: "kodak_kodachrome_64", label: "Kodachrome 64", group: "slide", swatch: "linear-gradient(135deg, #4d8d8f 50%, #c29652 50%)" },
+  { value: "kodak_kodachrome_200", label: "Kodachrome 200", group: "slide", swatch: "linear-gradient(135deg, #0e9297 50%, #c58f7c 50%)" },
+  { value: "kodak_ektachrome_100", label: "Ektachrome 100", group: "slide", swatch: "linear-gradient(135deg, #3b7a98 50%, #c4a44b 50%)" },
+  { value: "kodak_ektachrome_100_g", label: "Ektachrome 100 G", group: "slide", swatch: "linear-gradient(135deg, #66aff2 50%, #de9f27 50%)" },
+  { value: "kodak_ektachrome_100_gx", label: "Ektachrome 100 GX", group: "slide", swatch: "linear-gradient(135deg, #03b3d8 50%, #c06e56 50%)" },
+  { value: "kodak_ektachrome_100_vs", label: "Ektachrome 100 VS", group: "slide", swatch: "linear-gradient(135deg, #108fbb 50%, #f48850 50%)" },
+  { value: "kodak_elite_chrome_200", label: "Elite Chrome 200", group: "slide", swatch: "linear-gradient(135deg, #0e91ca 50%, #dd8237 50%)" },
+  { value: "kodak_elite_chrome_400", label: "Elite Chrome 400", group: "slide", swatch: "linear-gradient(135deg, #009ebf 50%, #ca8d0f 50%)" },
+  { value: "kodak_elite_extracolor_100", label: "Elite ExtraColor 100", group: "slide", swatch: "linear-gradient(135deg, #16b5d4 50%, #d3830a 50%)" },
+  { value: "fuji_velvia_50", label: "Velvia 50", group: "slide", swatch: "linear-gradient(135deg, #03a1ba 50%, #c17f36 50%)" },
+  { value: "fujifilm_velvia_100", label: "Velvia 100", group: "slide", swatch: "linear-gradient(135deg, #2c78be 50%, #ddab19 50%)" },
+  { value: "fujifilm_provia_100f", label: "Provia 100F", group: "slide", swatch: "linear-gradient(135deg, #3d728b 50%, #cdac5b 50%)" },
+  { value: "fuji_provia_400f", label: "Provia 400F", group: "slide", swatch: "linear-gradient(135deg, #46acc2 50%, #c18366 50%)" },
+  { value: "fuji_provia_400x", label: "Provia 400X", group: "slide", swatch: "linear-gradient(135deg, #33699d 50%, #fea028 50%)" },
+  { value: "fuji_astia_100f", label: "Astia 100F", group: "slide", swatch: "linear-gradient(135deg, #3d93a1 50%, #f58e64 50%)" },
+  { value: "fuji_sensia_100", label: "Sensia 100", group: "slide", swatch: "linear-gradient(135deg, #7376cc 50%, #e69e44 50%)" },
+  { value: "fuji_fortia_sp_50", label: "Fortia SP 50", group: "slide", swatch: "linear-gradient(135deg, #5fbcfd 50%, #fe9b29 50%)" },
+  { value: "agfa_precisa_100", label: "Agfa Precisa 100", group: "slide", swatch: "linear-gradient(135deg, #0e8fa9 50%, #dab007 50%)" },
+  { value: "kodak_tri_x_400", label: "Tri-X 400", group: "bw", swatch: "linear-gradient(135deg, #292929 50%, #d0d0d0 50%)" },
+  { value: "kodak_tmax_100", label: "T-Max 100", group: "bw", swatch: "linear-gradient(135deg, #282828 50%, #d2d2d2 50%)" },
+  { value: "kodak_tmax_400", label: "T-Max 400", group: "bw", swatch: "linear-gradient(135deg, #282828 50%, #d2d2d2 50%)" },
+  { value: "kodak_tmax_3200", label: "T-Max 3200", group: "bw", swatch: "linear-gradient(135deg, #262626 50%, #d2d2d2 50%)" },
+  { value: "kodak_doublex", label: "Double-X", group: "bw", swatch: "linear-gradient(135deg, #2c2c2c 50%, #d6d6d6 50%)" },
+  { value: "kodak_bw_400cn", label: "Kodak BW 400CN", group: "bw", swatch: "linear-gradient(135deg, #2a2a2a 50%, #d0d0d0 50%)" },
+  { value: "kodak_hie", label: "Kodak HIE Infrared", group: "bw", swatch: "linear-gradient(135deg, #2e2e2e 50%, #e4e4e4 50%)" },
+  { value: "ilford_pan_f_plus_50", label: "Pan F Plus 50", group: "bw", swatch: "linear-gradient(135deg, #292929 50%, #d4d4d4 50%)" },
+  { value: "ilford_fp4_plus_125", label: "FP4 Plus 125", group: "bw", swatch: "linear-gradient(135deg, #2e2e2e 50%, #d3d3d3 50%)" },
+  { value: "ilford_hp5_plus_400", label: "HP5 Plus 400", group: "bw", swatch: "linear-gradient(135deg, #262626 50%, #d8d8d8 50%)" },
+  { value: "ilford_hps_800", label: "HPS 800", group: "bw", swatch: "linear-gradient(135deg, #262626 50%, #d9d9d9 50%)" },
+  { value: "ilford_delta_100", label: "Delta 100", group: "bw", swatch: "linear-gradient(135deg, #2a2a2a 50%, #d5d5d5 50%)" },
+  { value: "ilford_delta_400", label: "Delta 400", group: "bw", swatch: "linear-gradient(135deg, #282828 50%, #cccccc 50%)" },
+  { value: "ilford_delta_3200", label: "Delta 3200", group: "bw", swatch: "linear-gradient(135deg, #292929 50%, #cccccc 50%)" },
+  { value: "ilford_xp2", label: "Ilford XP2", group: "bw", swatch: "linear-gradient(135deg, #292929 50%, #d4d4d4 50%)" },
+  { value: "fuji_neopan_acros_100", label: "Neopan Acros 100", group: "bw", swatch: "linear-gradient(135deg, #272727 50%, #c8c8c8 50%)" },
+  { value: "fuji_neopan_1600", label: "Neopan 1600", group: "bw", swatch: "linear-gradient(135deg, #262626 50%, #d7d7d7 50%)" },
+  { value: "agfa_apx_25", label: "Agfa APX 25", group: "bw", swatch: "linear-gradient(135deg, #292929 50%, #dadada 50%)" },
+  { value: "agfa_apx_100", label: "Agfa APX 100", group: "bw", swatch: "linear-gradient(135deg, #313131 50%, #e0e0e0 50%)" },
+  { value: "rollei_ortho_25", label: "Rollei Ortho 25", group: "bw", swatch: "linear-gradient(135deg, #2a2a2a 50%, #e3e3e3 50%)" },
+  { value: "rollei_retro_80s", label: "Rollei Retro 80S", group: "bw", swatch: "linear-gradient(135deg, #222222 50%, #dedede 50%)" },
+  { value: "rollei_retro_100_tonal", label: "Rollei Retro 100 Tonal", group: "bw", swatch: "linear-gradient(135deg, #2d2d2d 50%, #d3d3d3 50%)" },
+  { value: "rollei_ir_400", label: "Rollei IR 400", group: "bw", swatch: "linear-gradient(135deg, #242424 50%, #cfcfcf 50%)" },
+  { value: "polaroid_664", label: "Polaroid 664", group: "instant", swatch: "linear-gradient(135deg, #2e2e2e 50%, #d6d6d6 50%)" },
+  { value: "polaroid_665", label: "Polaroid 665", group: "instant", swatch: "linear-gradient(135deg, #2c2c2c 50%, #dcdcdc 50%)" },
+  { value: "polaroid_667", label: "Polaroid 667", group: "instant", swatch: "linear-gradient(135deg, #2c2c2c 50%, #d6d6d6 50%)" },
+  { value: "polaroid_669", label: "Polaroid 669", group: "instant", swatch: "linear-gradient(135deg, #5bb8b4 50%, #b47e75 50%)" },
+  { value: "polaroid_672", label: "Polaroid 672", group: "instant", swatch: "linear-gradient(135deg, #262626 50%, #d1d1d1 50%)" },
+  { value: "polaroid_690", label: "Polaroid 690", group: "instant", swatch: "linear-gradient(135deg, #06cdda 50%, #be8103 50%)" },
+  { value: "polaroid_px_70", label: "Polaroid PX-70", group: "instant", swatch: "linear-gradient(135deg, #dbd300 50%, #c0990d 50%)" },
+  { value: "polaroid_px_680", label: "Polaroid PX-680", group: "instant", swatch: "linear-gradient(135deg, #c7b84c 50%, #c1922b 50%)" },
+  { value: "polaroid_time_zero", label: "Time Zero · Expired", group: "instant", swatch: "linear-gradient(135deg, #fee4d2 50%, #d68b0b 50%)" },
+  { value: "polaroid_polachrome", label: "Polachrome", group: "instant", swatch: "linear-gradient(135deg, #d9bdad 50%, #a9996f 50%)" },
+  { value: "fuji_fp_100c", label: "Fuji FP-100C", group: "instant", swatch: "linear-gradient(135deg, #3469ba 50%, #bb8611 50%)" },
+  { value: "fuji_fp_100c_cool", label: "Fuji FP-100C · Cool", group: "instant", swatch: "linear-gradient(135deg, #1669c2 50%, #b58809 50%)" },
+  { value: "fuji_fp_100c_negative", label: "Fuji FP-100C · Negative", group: "instant", swatch: "linear-gradient(135deg, #0243b1 50%, #c19c35 50%)" },
+  { value: "fuji_fp_3000b", label: "Fuji FP-3000B", group: "instant", swatch: "linear-gradient(135deg, #2f2f2f 50%, #d8d8d8 50%)" },
+  { value: "fuji_instax_color", label: "Fuji Instax Color", group: "instant", swatch: "linear-gradient(135deg, #0e2db3 50%, #f79e05 50%)" },
+  { value: "kodak_elite_100_xpro", label: "Elite 100 · X-Pro", group: "xpro", swatch: "linear-gradient(135deg, #1cd2d0 50%, #ce9e17 50%)" },
+  { value: "fuji_superia_200_xpro", label: "Superia 200 · X-Pro", group: "xpro", swatch: "linear-gradient(135deg, #0daae2 50%, #0f86ae 50%)" },
+  { value: "lomography_xpro_slide_200", label: "Lomo X-Pro Slide 200", group: "xpro", swatch: "linear-gradient(135deg, #2688db 50%, #c7a939 50%)" },
+  { value: "lomography_redscale_100", label: "Lomo Redscale 100", group: "xpro", swatch: "linear-gradient(135deg, #90b692 50%, #a2673c 50%)" },
+];
+
+// The picker's list as it is shown: "None" on its own, then each section with
+// its looks. The order the looks are stepped through (arrow keys, the previous
+// / next buttons) is read off the same list, so the two cannot drift apart.
+export const FILM_SIM_SECTIONS: { group?: (typeof FILM_SIM_GROUPS)[number]; sims: typeof FILM_SIMS }[] = [
+  undefined,
+  ...FILM_SIM_GROUPS,
+].map((group) => ({ group, sims: FILM_SIMS.filter((f) => f.group === group?.value) }));
+export const FILM_SIM_ORDER: FilmSim[] = FILM_SIM_SECTIONS.flatMap((section) => section.sims.map((f) => f.value));
+
+// The process an older edit moves to when it takes a look or a tone mapper in
+// its current form: the current one, unless it has Calibration set - that
+// renders differently there, and the move must change nothing else.
+export function processForCurrentLooks(a: Adjustments): ProcessVersion {
+  return calibrationIsNeutral(a) ? CURRENT_PROCESS : LAST_BELL_CALIBRATION;
+}
+
+export function calibrationIsNeutral(a: Adjustments): boolean {
+  return Object.values(a.color_calibration).every((v) => v === 0);
+}
+
+// An edit with one Calibration slider set. The first one moved on an edit
+// whose Calibration was untouched takes Calibration in its current form (an
+// edit on "5" moves on; with Calibration neutral that changes nothing else).
+export function withCalibration(a: Adjustments, key: keyof ColorCalibration, v: number): Adjustments {
+  const process = a.process === LAST_BELL_CALIBRATION && calibrationIsNeutral(a) ? CURRENT_PROCESS : a.process;
+  return { ...a, process, color_calibration: { ...a.color_calibration, [key]: v } };
+}
+
+// An edit with the look `value` chosen. Choosing a look takes it in its current
+// form: an edit on process 2 or 3 moves to the current one, which differs in
+// nothing but how the simulations render.
+export function withFilmSim(a: Adjustments, value: FilmSim): Adjustments {
+  return { ...a, film_sim: value, process: a.process === "2" || a.process === "3" ? processForCurrentLooks(a) : a.process };
+}
 
 // ---- The full non-destructive edit: geometry + the develop object.
 export interface ImageEdits {

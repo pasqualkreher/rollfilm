@@ -31,6 +31,9 @@ import { useTransientMessage, useTransientValue } from "../utils/transientMessag
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { LoadingState } from "../components/Spinner";
+import { ActionBarMessages } from "../components/ActionBarMessages";
+import { errorText } from "../utils/apiError";
+import { isModalOpen } from "../utils/modalKeys";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
@@ -83,6 +86,15 @@ export function AlbumDetail() {
   // place the tag note appears. Carries its own error flag since a failed add
   // must not read like a success.
   const [albumMsg, setAlbumMsg] = useTransientValue<{ text: string; error: boolean }>();
+  // A failed bulk action. Not transient like the notes above: it stays until
+  // it is dismissed, the next action starts or the selection is dropped.
+  const [barError, setBarError] = useState<string | null>(null);
+  function dismissMessages() {
+    setImmichMsg(null);
+    setDevelopMsg(null);
+    setAlbumMsg(null);
+    setBarError(null);
+  }
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Settings maintenance tasks.
@@ -101,6 +113,8 @@ export function AlbumDetail() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape" || hasSelection) return;
+      // (...unless a menu inside that dialog took the press for itself.)
+      if (isModalOpen()) return;
       const target = e.target as HTMLElement | null;
       // A text box keeps its own Escape (backing out of a rename or search).
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
@@ -190,6 +204,9 @@ export function AlbumDetail() {
   function clearSelection() {
     setSelected(new Set());
     setLastIndex(null);
+    // The bar goes with the selection - and must not come back later with
+    // an old failure still written on it.
+    dismissMessages();
   }
 
   // Cmd/Ctrl+A picks the whole album, Escape drops the selection, E opens a
@@ -199,6 +216,13 @@ export function AlbumDetail() {
     onClear: clearSelection,
     hasSelection,
     edit: { selected, order: orderedImages.map((img) => img.id) },
+    onRate: (rating) => void applyBulk({ rating }),
+    // The key of the colour the selection already has takes it off again.
+    onColor: (label) =>
+      void applyBulk({
+        color_label: selectionSharedMeta(images ?? [], selected).colorLabel === label ? "none" : label,
+      }),
+    onDelete: () => void deleteSelected(),
   });
 
   async function applyBulk(patch: { rating?: number; color_label?: string }) {
@@ -206,12 +230,19 @@ export function AlbumDetail() {
     // With merged pairs only the JPEG is visible, so mirror the change to each
     // hidden RAW partner too.
     try {
-      await withBatches("Updating photos…", Array.from(selected), (ids) =>
-        api.images.bulkUpdate(ids, patch)
-      );
+      // One photo gets no wait popup: it holds every key while it is up, and
+      // a star followed by the arrow to the next photo must not lose the arrow.
+      if (selected.size === 1) await api.images.bulkUpdate(Array.from(selected), patch);
+      else await withBatches("Updating photos…", Array.from(selected), (ids) => api.images.bulkUpdate(ids, patch));
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
     }
+  }
+
+  // The arrow keys' target: this photo, and only it (see utils/gridKeys).
+  function selectOnly(id: string, index: number) {
+    setSelected(new Set([id]));
+    setLastIndex(index);
   }
 
   async function deleteSelected() {
@@ -231,6 +262,17 @@ export function AlbumDetail() {
       partnerItems: toItems(partnerIds),
     });
     if (!ids) return;
+    // Where a single deleted photo's selection goes: the next one in the grid,
+    // or the one before at the end. Its index is the deleted photo's own slot.
+    let nextAfterDelete: { id: string; index: number } | null = null;
+    if (baseIds.length === 1) {
+      const at = orderedImages.findIndex((im) => im.id === baseIds[0]);
+      const gone = new Set(ids);
+      const after = orderedImages.slice(at + 1).find((im) => !gone.has(im.id));
+      const before = orderedImages.slice(0, Math.max(at, 0)).reverse().find((im) => !gone.has(im.id));
+      if (at !== -1 && after) nextAfterDelete = { id: after.id, index: at };
+      else if (at > 0 && before) nextAfterDelete = { id: before.id, index: at - 1 };
+    }
     try {
       const { done, cancelled } = await withBatches(
         "Moving photos to trash…",
@@ -239,6 +281,9 @@ export function AlbumDetail() {
       );
       // Cancelled: what is still in the grid stays selected.
       if (cancelled) setSelected(new Set(baseIds.filter((x) => !done.includes(x))));
+      // One photo deleted (culling from the keyboard): the selection moves on
+      // to its neighbour instead of ending there.
+      else if (nextAfterDelete) selectOnly(nextAfterDelete.id, nextAfterDelete.index);
       else clearSelection();
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -309,7 +354,9 @@ export function AlbumDetail() {
     setAlbumMsg(
       ok
         ? { text: `Added ${takeAddedCount()} photo(s) to ${what}.${cancelNote}`, error: false }
-        : { text: `Could not add to ${what}.`, error: true }
+        : { text: `Could not add to ${what}.`, error: true },
+      // A failure stays until it is dismissed or the next action runs.
+      { keep: !ok }
     );
   }
 
@@ -338,7 +385,9 @@ export function AlbumDetail() {
     setAlbumMsg(
       ok
         ? { text: `Added ${takeAddedCount()} photo(s) to “${name}”.${cancelNote}`, error: false }
-        : { text: `Could not add to “${name}”.`, error: true }
+        : { text: `Could not add to “${name}”.`, error: true },
+      // A failure stays until it is dismissed or the next action runs.
+      { keep: !ok }
     );
   }
 
@@ -378,6 +427,7 @@ export function AlbumDetail() {
       return;
     setDevelopBusy(true);
     setDevelopMsg(null);
+    setBarError(null);
     try {
       const { done, results, cancelled } = await withBatches(
         "Auto-developing photos…",
@@ -395,7 +445,7 @@ export function AlbumDetail() {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["album", id] });
     } catch (e) {
-      setDevelopMsg((e as Error).message);
+      setBarError(errorText(e));
     } finally {
       setDevelopBusy(false);
     }
@@ -416,6 +466,7 @@ export function AlbumDetail() {
       return;
     setDevelopBusy(true);
     setDevelopMsg(null);
+    setBarError(null);
     const look = presetAdjustments(preset) as unknown as Record<string, unknown>;
     try {
       const { done, cancelled } = await withBatches("Applying preset…", Array.from(selected), (ids) =>
@@ -427,7 +478,7 @@ export function AlbumDetail() {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["album", id] });
     } catch (e) {
-      setDevelopMsg((e as Error).message);
+      setBarError(errorText(e));
     } finally {
       setDevelopBusy(false);
     }
@@ -443,11 +494,12 @@ export function AlbumDetail() {
     if (selected.size === 0) return;
     setImmichBusy(true);
     setImmichMsg(null);
+    setBarError(null);
     try {
       const result = await api.images.pushToImmich(Array.from(selected));
       setImmichMsg(result.message);
     } catch (e) {
-      setImmichMsg((e as Error).message);
+      setBarError(errorText(e));
     } finally {
       setImmichBusy(false);
     }
@@ -603,7 +655,7 @@ export function AlbumDetail() {
                   disabled={immichBusy}
                   title="Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
                 >
-                  <IconCloudUp size={13} /> {immichBusy ? "Uploading to Immich..." : "Add to Immich"}
+                  <IconCloudUp size={13} /> {immichBusy ? "Uploading to Immich…" : "Add to Immich"}
                 </button>
               </div>
             )}
@@ -627,17 +679,15 @@ export function AlbumDetail() {
             >
               <IconTrash size={15} />
             </button>
-            {(immichMsg || developMsg || albumMsg) && (
-              <div className="action-bar-messages">
-                {immichMsg && <span>{immichMsg}</span>}
-                {developMsg && <span>{developMsg}</span>}
-                {albumMsg && (
-                  <span className={albumMsg.error ? "action-bar-message--error" : undefined}>
-                    {albumMsg.text}
-                  </span>
-                )}
-              </div>
-            )}
+            <ActionBarMessages
+              messages={[
+                immichMsg ? { text: immichMsg } : null,
+                developMsg ? { text: developMsg } : null,
+                albumMsg,
+                barError ? { text: barError, error: true } : null,
+              ]}
+              onDismiss={dismissMessages}
+            />
           </div>
         )}
       </Presence>
@@ -648,6 +698,7 @@ export function AlbumDetail() {
           images={orderedImages}
           selectedIds={selected}
           onToggleSelect={toggleSelect}
+          onSelectOnly={selectOnly}
           groupByDate={!q}
           onRemove={removeFromAlbum}
           removeTitle="Remove from this album"

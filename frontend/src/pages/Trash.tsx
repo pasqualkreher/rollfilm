@@ -115,7 +115,7 @@ export function Trash() {
         removeFromCachedList(slice);
       });
     } catch (e) {
-      setActionError(`Restore failed: ${(e as Error).message}`);
+      setActionError(`Restore failed: ${(e as Error).message}`, { keep: true });
     } finally {
       // Refresh even after an error - the server may have applied the change
       // before the request failed, and the refetch brings the view back in
@@ -152,7 +152,7 @@ export function Trash() {
         removeFromCachedList(slice);
       });
     } catch (e) {
-      setActionError(`Delete failed: ${(e as Error).message}`);
+      setActionError(`Delete failed: ${(e as Error).message}`, { keep: true });
     } finally {
       refreshAfterChange();
     }

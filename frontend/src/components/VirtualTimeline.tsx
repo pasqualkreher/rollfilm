@@ -14,6 +14,7 @@ import {
 } from "./ThumbnailGrid";
 import { usePhotoInfoCard } from "./PhotoInfoCard";
 import { usePhotoContextMenu } from "./PhotoContextMenu";
+import { onlySelected, revealInScroller, useGridArrowKeys } from "../utils/gridKeys";
 import { useMergePairs } from "../state/viewPrefs";
 import { thumbPx, thumbTier, useThumbSize } from "../state/viewPrefs";
 import {
@@ -51,6 +52,12 @@ interface Props {
   images: LibraryIndexImage[];
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string, index: number, shiftKey: boolean) => void;
+  // Make this photo the whole selection - where the arrow keys move a single
+  // selected photo to (see utils/gridKeys). Without it the arrows do nothing.
+  onSelectOnly?: (id: string, index: number) => void;
+  // The heading a photo belongs under; a run of equal ones is a section. The
+  // month it was taken in unless the page sorts by something else.
+  sectionLabel?: (image: LibraryIndexImage) => string;
   // When this key changes (the Library's filters), the view jumps to the top
   // of the new result set instead of re-anchoring to the photo that happened
   // to be on screen - a filtered library is a different list, and the old
@@ -64,7 +71,14 @@ interface Props {
 // directly on real, correctly-sized tiles - while only the tiles near the
 // viewport are actually mounted, keeping the DOM and thumbnail traffic small
 // no matter how big the library is.
-export function VirtualTimeline({ images, selectedIds, onToggleSelect, resetKey }: Props) {
+export function VirtualTimeline({
+  images,
+  selectedIds,
+  onToggleSelect,
+  onSelectOnly,
+  sectionLabel,
+  resetKey,
+}: Props) {
   const navigate = useNavigate();
   const mergePairs = useMergePairs();
   const thumbSize = useThumbSize();
@@ -96,11 +110,11 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, resetKey 
         ? buildJustifiedLayout(images, {
             width,
             rowHeight: rowH,
-            labelOf: (image) => monthLabel(image.taken_at),
+            labelOf: sectionLabel ?? ((image) => monthLabel(image.taken_at)),
             aspectOf: (image) => tileAspectRatio(image.width, image.height),
           })
         : null,
-    [images, width, rowH]
+    [images, width, rowH, sectionLabel]
   );
 
 
@@ -113,6 +127,59 @@ export function VirtualTimeline({ images, selectedIds, onToggleSelect, resetKey 
     lastScrollRef,
     partnerIdOf: (image) => image.paired_image_id,
     resetKey,
+  });
+
+  // Arrow keys walk a single selected photo through the grid. The layout knows
+  // every tile's place, mounted or not, so this works across the whole
+  // library: the rows are flattened once per key press (cheap next to the
+  // layout itself) and the neighbour read off them.
+  function locate(id: string) {
+    if (!layout) return null;
+    const rows: { top: number; row: Row }[] = [];
+    let at: { r: number; t: number } | null = null;
+    for (const s of layout.sections) {
+      for (const row of s.rows) {
+        if (!at) {
+          const t = row.tiles.findIndex((tile) => tile.item.id === id);
+          if (t !== -1) at = { r: rows.length, t };
+        }
+        rows.push({ top: s.top + row.top, row });
+      }
+    }
+    return at ? { rows, ...at } : null;
+  }
+  useGridArrowKeys({
+    current: onSelectOnly ? onlySelected(selectedIds) : null,
+    neighbour: (id, move) => {
+      const here = locate(id);
+      if (!here) return null;
+      const { rows, r, t } = here;
+      const tiles = rows[r].row.tiles;
+      if (move === "left") return (t > 0 ? tiles[t - 1] : rows[r - 1]?.row.tiles.at(-1))?.item.id ?? null;
+      if (move === "right") return (t < tiles.length - 1 ? tiles[t + 1] : rows[r + 1]?.row.tiles[0])?.item.id ?? null;
+      // Up / down: the tile of the next row that sits most squarely above or
+      // below this one.
+      const other = rows[move === "up" ? r - 1 : r + 1]?.row.tiles;
+      if (!other) return null;
+      const centre = tiles[t].left + tiles[t].width / 2;
+      let best = other[0];
+      for (const tile of other) {
+        if (Math.abs(tile.left + tile.width / 2 - centre) < Math.abs(best.left + best.width / 2 - centre)) best = tile;
+      }
+      return best.item.id;
+    },
+    onMove: (id) => {
+      const there = locate(id);
+      const root = rootRef.current;
+      const scroller = scrollerRef.current;
+      if (!there || !onSelectOnly) return;
+      const { top, row } = there.rows[there.r];
+      onSelectOnly(id, row.tiles[there.t].index);
+      if (!root || !scroller) return;
+      const rootTop =
+        root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      revealInScroller(scroller, rootTop + top, row.height);
+    },
   });
 
   // Returning from the detail view: jump straight to the photo the user was

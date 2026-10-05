@@ -1,0 +1,57 @@
+Scene cubes for the analog film looks (F-Log2 / F-Gamut code values in,
+display sRGB out), baked by backend/tools/film_sim_fit/bake_analog.py.
+
+Derived from spektrafilm by Andrea Volpato
+https://github.com/andreavolpato/spektrafilm (commit 3bb2c2d2801ff68b92019cf1dbcbb133d60832bc)
+Licensed CC BY-SA 4.0 - full text and attribution requirements in
+SPEKTRAFILM_LICENSE.txt, next to this file.
+Modified by Pasqual Kreher: the profiles are rendered into 3D LUTs for
+Rollfilm, each negative on the print named below, each slide scanned.
+
+kodak_gold_200.npy
+    kodak_gold_200 printed on kodak_portra_endura
+kodak_ultramax_400.npy
+    kodak_ultramax_400 printed on kodak_portra_endura
+kodak_ektar_100.npy
+    kodak_ektar_100 printed on kodak_portra_endura
+kodak_portra_160.npy
+    kodak_portra_160 printed on kodak_portra_endura
+kodak_portra_400.npy
+    kodak_portra_400 printed on kodak_portra_endura
+kodak_portra_800.npy
+    kodak_portra_800 printed on kodak_portra_endura
+kodak_portra_800_push1.npy
+    kodak_portra_800_push1 printed on kodak_portra_endura
+kodak_portra_800_push2.npy
+    kodak_portra_800_push2 printed on kodak_portra_endura
+fujifilm_c200.npy
+    fujifilm_c200 printed on fujifilm_crystal_archive_typeii
+fujifilm_xtra_400.npy
+    fujifilm_xtra_400 printed on fujifilm_crystal_archive_typeii
+fujifilm_pro_400h.npy
+    fujifilm_pro_400h printed on fujifilm_crystal_archive_typeii
+kodak_vision3_50d.npy
+    kodak_vision3_50d printed on kodak_2383
+kodak_vision3_250d.npy
+    kodak_vision3_250d printed on kodak_2383
+kodak_verita_200d.npy
+    kodak_verita_200d printed on kodak_2383
+kodak_vision3_200t.npy
+    kodak_vision3_200t printed on kodak_2383
+kodak_vision3_500t.npy
+    kodak_vision3_500t printed on kodak_2383
+kodak_kodachrome_64.npy
+    kodak_kodachrome_64 scanned as a slide
+kodak_ektachrome_100.npy
+    kodak_ektachrome_100 scanned as a slide
+fujifilm_provia_100f.npy
+    fujifilm_provia_100f scanned as a slide
+fujifilm_velvia_100.npy
+    fujifilm_velvia_100 scanned as a slide
+
+From spektrafilm's dev branch (commit 6cd00c8d4f30b5b550f50f4bbd3753c9f2a48507), made exactly grey:
+
+kodak_doublex.npy
+    kodak_doublex printed on kodak_2302
+
+Removing a file takes its look out of the scene path.

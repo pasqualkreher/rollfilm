@@ -56,7 +56,9 @@ def _card(tmp_path: Path, files=("A.JPG", "B.JPG")) -> Path:
 
 
 def _start(db, card: Path, *, keep_backup=True, mode="copy", session_id=None):
-    """Stage the whole card and mark it analyzed (analysis is stubbed out)."""
+    """Stage the whole card, mark it analyzed (analysis is stubbed out) and
+    tick every photo for import - they arrive unticked by default, and each
+    test then drops the ones it wants left behind."""
     files = sorted(p for p in card.iterdir() if p.is_file())
     out = routes.stage_local_paths(
         schemas.StagePathsRequest(
@@ -79,6 +81,7 @@ def _start(db, card: Path, *, keep_backup=True, mode="copy", session_id=None):
     )
     for r in rows:
         r.processed = True
+        r.selected = True
         r.exif_json = '{"taken_at": "2026-07-01T12:00:00+00:00"}'
     db.commit()
     return db.get(ImportSession, out.id), rows

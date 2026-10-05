@@ -15,3 +15,11 @@ export function errorText(e: unknown): string {
   }
   return raw;
 }
+
+// The same, without the "GET /images/index?… failed: " the request layer puts
+// in front: for a message shown where the user can't do anything with the
+// address of the request, only with what went wrong.
+export function failureReason(e: unknown): string {
+  const text = errorText(e).replace(/^[A-Z]+ \S+ failed: /, "");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}

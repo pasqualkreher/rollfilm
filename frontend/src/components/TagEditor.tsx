@@ -62,7 +62,7 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
       )}
       <form onSubmit={submit} style={{ display: "flex", gap: 6 }}>
         <TagSuggestInput
-          placeholder="Add tag..."
+          placeholder="Add tag…"
           ariaLabel="Add tag"
           value={value}
           onChange={(v) => {

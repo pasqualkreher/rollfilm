@@ -177,8 +177,10 @@ export function Selects() {
   function reportAddTo({ kind, name, ok }: AddToResult) {
     const what = kind === "canvas" ? `canvas “${name}”` : `album “${name}”`;
     const acted = hasSelection ? selected.size : count;
-    if (ok) setAddMsg(`Added ${acted} photo${acted === 1 ? "" : "s"} to ${what}.`);
-    else setError(`Could not add to ${what}.`);
+    if (ok) {
+      setError(null);
+      setAddMsg(`Added ${acted} photo${acted === 1 ? "" : "s"} to ${what}.`);
+    } else setError(`Could not add to ${what}.`, { keep: true });
   }
 
   async function addToImmich(imageIds: string[]) {
@@ -190,7 +192,7 @@ export function Selects() {
       const result = await api.images.pushToImmich(imageIds);
       setImmichMsg(result.message);
     } catch (e) {
-      setError((e as Error).message);
+      setError((e as Error).message, { keep: true });
     } finally {
       setImmichBusy(false);
     }
@@ -237,7 +239,7 @@ export function Selects() {
                 >
                   <IconCloudUp size={13} />{" "}
                   {immichBusy
-                    ? "Uploading to Immich..."
+                    ? "Uploading to Immich…"
                     : hasSelection
                       ? `Add ${selected.size} to Immich`
                       : "Add to Immich"}
@@ -279,6 +281,11 @@ export function Selects() {
             images={images}
             selectedIds={selected}
             onToggleSelect={toggleSelect}
+            // The arrow keys walk a single ticked photo through the list.
+            onSelectOnly={(id, index) => {
+              setSelected(new Set([id]));
+              setLastIndex(index);
+            }}
             onRemove={remove}
             removeTitle="Remove from selects"
           />

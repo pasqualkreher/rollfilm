@@ -32,9 +32,9 @@ export function BulkTagInput({ onAdd }: Props) {
   }
 
   return (
-    <form onSubmit={submit} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+    <form onSubmit={submit} className="bulk-tag-form" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
       <TagSuggestInput
-        placeholder="Add tag to selection..."
+        placeholder="Add tag to selection…"
         ariaLabel="Add tag to selection"
         value={value}
         onChange={(v) => {
@@ -56,7 +56,7 @@ export function BulkTagInput({ onAdd }: Props) {
         <IconPlus size={14} />
       </button>
       {error && (
-        <span className="tag-input-error" role="alert" style={{ marginTop: 0 }}>
+        <span className="tag-input-error bulk-tag-error" role="alert">
           {error}
         </span>
       )}

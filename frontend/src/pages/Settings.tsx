@@ -897,7 +897,7 @@ export function Settings() {
                 key={value}
                 type="radio"
                 name="import-select-default"
-                checked={(importSettings?.select_default ?? "select") === value}
+                checked={(importSettings?.select_default ?? "deselect") === value}
                 disabled={!importSettings}
                 busy={updateImportSettings.isPending}
                 onChange={() => updateImportSettings.mutate({ select_default: value })}
@@ -974,7 +974,7 @@ export function Settings() {
             {saveImmich.isPending ? (
               <>
                 <Spinner tone="inherit" inline />
-                Saving...
+                Saving…
               </>
             ) : (
               "Save Immich settings"
@@ -989,7 +989,7 @@ export function Settings() {
             {testImmich.isPending ? (
               <>
                 <Spinner tone="inherit" inline />
-                Testing...
+                Testing…
               </>
             ) : (
               "Test connection"
@@ -1278,7 +1278,7 @@ export function Settings() {
                     }}
                     disabled={placeRadius === "" || saveSmartAlbums.isPending}
                   >
-                    {saveSmartAlbums.isPending ? "Saving..." : "Save"}
+                    {saveSmartAlbums.isPending ? "Saving…" : "Save"}
                   </button>
                   {radiusSaved && <span className="status-note">Saved.</span>}
                 </div>
@@ -1356,7 +1356,7 @@ export function Settings() {
             onClick={() => saveTrash.mutate()}
             disabled={trashDays === "" || saveTrash.isPending}
           >
-            {saveTrash.isPending ? "Saving..." : "Save"}
+            {saveTrash.isPending ? "Saving…" : "Save"}
           </button>
           {trashSaved && (
             <span className="status-note">
@@ -1385,7 +1385,7 @@ export function Settings() {
               {sync.isPending ? (
                 <>
                   <Spinner tone="inherit" inline />
-                  Syncing...
+                  Syncing…
                 </>
               ) : (
                 "Sync database to library"
@@ -1419,7 +1419,7 @@ export function Settings() {
               {rebuildThumbnails.isPending ? (
                 <>
                   <Spinner tone="inherit" inline />
-                  Rebuilding...
+                  Rebuilding…
                 </>
               ) : (
                 "Rebuild all thumbnails"
@@ -1446,7 +1446,7 @@ export function Settings() {
             {repairDates.isPending ? (
               <>
                 <Spinner tone="inherit" inline />
-                Repairing dates...
+                Repairing dates…
               </>
             ) : (
               "Repair capture dates"
@@ -1494,7 +1494,7 @@ export function Settings() {
               {restore.isPending ? (
                 <>
                   <Spinner tone="inherit" inline />
-                  Restoring...
+                  Restoring…
                 </>
               ) : (
                 "Restore from backup"

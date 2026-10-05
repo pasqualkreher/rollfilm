@@ -1141,6 +1141,19 @@ button {
   padding-bottom: 96px;
 }
 
+/* The import review's selection row: a line of its own above the bar's
+   standing controls, with the extra foot room that taller bar needs. */
+.action-bar-selection {
+  flex-basis: 100%;
+  /* Wider than the swatches' own spacing, so count, stars, colours and the
+     import box read as four things rather than one run of symbols. */
+  column-gap: 20px;
+}
+
+.page:has(.action-bar-selection) .page-scroll {
+  padding-bottom: 140px;
+}
+
 /* Narrow windows: the selection bar wraps onto several rows - cap it and let
    it scroll internally so it can never swallow the whole photo grid, and
    reserve more foot room for the extra rows it does show. */
@@ -1168,15 +1181,58 @@ button {
   display: none;
 }
 
-/* Status messages get their own full-width row below the button groups, so
-   even a short message never sits inline crowding the actions. */
+/* Status messages ride on top of the bar, as a strip of their own along its
+   upper edge. They used to be a row inside it - and the bar is pinned to the
+   window's bottom edge, so a row that came and went lifted every control in
+   it for as long as the message stood. */
 .action-bar-messages {
-  flex-basis: 100%;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+}
+
+.action-bar-messages-list {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 12px;
+}
+
+.action-bar-messages-close {
+  flex: none;
+  display: inline-flex;
+  padding: 3px;
   color: var(--text-muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.action-bar-messages-close:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* The bar scrolls at this width (see above), which would clip a strip hanging
+   over its edge - here the messages are a row inside the bar again. */
+@media (max-width: 700px) {
+  .action-bar-messages {
+    position: static;
+    flex-basis: 100%;
+    padding: 0;
+    border-top: none;
+  }
 }
 
 /* A failed action in that row must not read like the muted confirmations
@@ -1427,6 +1483,13 @@ textarea:focus-visible {
 .filter-bar.filter-bar--sticky .tag-filter-btn.active {
   background: var(--accent-soft);
   border-color: transparent;
+}
+
+/* The library's sort order. A fixed width, fitted to the longest name, so
+   picking another order moves nothing beside it. */
+.sort-dropdown .dropdown-btn {
+  width: 132px;
+  justify-content: space-between;
 }
 
 /* Chip + popover (FilterChip): a quiet toolbar chip that opens a panel. The
@@ -1963,6 +2026,88 @@ textarea:focus-visible {
   justify-content: center;
 }
 
+/* Export dialog. Two columns of options with a few full-width rows; every
+   row is always there (one that doesn't apply is disabled) and the status
+   line keeps its room, so nothing moves while the options are changed or an
+   export runs. */
+.export-modal {
+  width: min(660px, 100%);
+}
+
+.export-body {
+  overflow-y: auto;
+}
+
+.export-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px 20px;
+}
+
+.export-wide {
+  grid-column: 1 / -1;
+}
+
+/* A long option label is cut short inside its cell, it doesn't widen it. */
+.export-grid .dropdown {
+  min-width: 0;
+}
+
+@media (max-width: 620px) {
+  .export-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* "Save… / Delete" beside the Preset label. Pulled up into the label's line
+   so the two small buttons don't make that row taller than the others. */
+.export-preset-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin: -6px -8px -6px 0;
+}
+
+/* The watermark's text, then where, how big and how strong. */
+.export-watermark {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px 104px 84px;
+  gap: 8px;
+}
+
+@media (max-width: 620px) {
+  .export-watermark {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .export-watermark > input {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Progress bar plus its line, or an error: room for both, always. */
+.export-status {
+  min-height: 34px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.export-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* The example name under the File name field, and a folder path: one line,
+   cut short rather than wrapping, so neither changes the dialog's height. */
+.export-name-hint,
+.export-dest-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* The recommended (take-both) choice reads as a solid destructive action; the
    "only this file" choice keeps the quieter outlined danger look. */
 .btn.danger.danger-filled {
@@ -2219,8 +2364,10 @@ textarea:focus-visible {
   flex-direction: column;
 }
 
+/* Much more room above a header than below it, so it belongs to the photos
+   under it (the virtual grids take the same spacing from justifiedLayout.ts). */
 .timeline-section {
-  margin-bottom: 8px;
+  margin-bottom: 28px;
 }
 
 /* Floating month pill, same visual language as the vertical scrubber:
@@ -2231,7 +2378,7 @@ textarea:focus-visible {
   z-index: 4;
   width: fit-content;
   /* Left inset so the floating pill doesn't sit flush on the grid's left edge. */
-  margin: 0 0 12px 10px;
+  margin: 0 0 10px 10px;
   padding: 5px 12px;
   font-size: 13px;
   font-weight: 650;
@@ -2640,9 +2787,10 @@ textarea:focus-visible {
   border-radius: var(--radius-xs);
 }
 
-/* A Trash-restore duplicate keeps its tick box (importing it restores the
-   photo), so its badge steps aside from the checkbox's corner. */
-.thumb-card .select-checkbox ~ .duplicate-badge {
+/* A Trash-restore duplicate can be picked (importing it restores the photo),
+   so its badge sits clear of the corner the selection checkbox appears in -
+   always, not only while the checkbox is there, so it never jumps. */
+.thumb-card .duplicate-badge.beside-checkbox {
   left: 30px;
 }
 
@@ -2927,6 +3075,33 @@ textarea:focus-visible {
   container-type: inline-size;
 }
 
+/* Not going to be imported: a veil in the skin's own background colour over
+   the photo, lifted while the pointer is on the card so it can still be judged
+   at full strength. A painted layer rather than a `filter` on the img - a
+   batch that arrives unticked dims every tile at once, and a filter would make
+   each of them a compositing layer of its own. Above the img, which becomes a
+   layer while it fades in or is hovered and would otherwise paint over it; the
+   selection checkbox shares this level and, coming later, stays on top. */
+.import-card.skipped .thumb-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg) 58%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.12s ease;
+}
+
+.import-card.skipped .thumb-card:hover::before {
+  opacity: 0;
+}
+
+/* The selection ring stays at full strength on a dimmed card. */
+.import-card .thumb-card.selected::after {
+  z-index: 2;
+}
+
 .import-card .thumb-card {
   /* Top corners carry the OUTER card's radius (bottom stays square - the
      footer continues below). Zeroing the radius here relied on the outer
@@ -2941,12 +3116,14 @@ textarea:focus-visible {
    (the grid Size control), not the individual tile, so a portrait card's
    controls match its landscape neighbors' exactly. The clamps floor at the
    M-grid sizes (11px stars / 9px swatches) - symbols never get smaller than
-   that. The footer is always the same two stacked rows (stars, then swatches)
-   so every card reads identically - a conditional single row on wide cards
-   made the grid look inconsistent. */
+   that. The footer is two stacked rows (stars and import box, then swatches)
+   or, where there is room, one line (--inline below). The grid decides that
+   per ROW of cards, never per card: a single row on just the wide cards made
+   the grid look inconsistent. */
 .import-card-footer {
-  /* One shared symbol size: stars and color circles are always exactly the
-     same size as each other, on every card and at every grid size. Two caps:
+  /* One shared symbol size: stars and color circles follow it together (the
+     circles a touch under it, see .color-swatch below), on every card and at
+     every grid size. Two caps:
      the grid-size term (bigger grid -> bigger symbols) and the card-width
      term ((100cqw - padding - swatch gaps) / 8 swatches) - the second is
      what keeps the 8-swatch row and the 5 stars INSIDE a narrow XS/portrait
@@ -2974,6 +3151,99 @@ textarea:focus-visible {
   flex: none;
 }
 
+/* Stars on the left, the import checkbox on the right. */
+.import-card-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+/* Every card of the row is wide enough for all of it on one line: stars,
+   swatches, and the import box at the right edge. Set by the grid, which also
+   reserves the lower height (footerSizes in ImportReviewGrid.tsx - the widths
+   it adds up are the ones drawn here). */
+.import-card-footer--inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  height: var(--card-footer-inline-h, auto);
+}
+
+.import-card-footer--inline .import-card-footer-row {
+  display: contents;
+}
+
+.import-card-footer--inline .import-check {
+  order: 1;
+  margin-left: auto;
+}
+
+/* Room for the word is part of what made the row inline. */
+.import-card-footer--inline .import-check-text {
+  max-width: 6em;
+}
+
+/* A touch smaller than a star, so the box sits quietly beside its label
+   instead of outweighing the stars; the star buttons go on setting the row's
+   (and the fixed footer's) height. The tick scales along; the global checkbox
+   rule draws it at a fixed 9px for a 15px box. */
+.import-card-footer .import-checkbox {
+  width: calc(var(--sym) - 1px);
+  height: calc(var(--sym) - 1px);
+}
+
+/* What the box is for: the Import symbol and, where there is room, the word.
+   Quiet while the photo is left out, full strength once it is in. */
+.import-card-footer .import-check {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.import-card-footer .import-check:has(input:checked) {
+  color: var(--text);
+}
+
+.import-card-footer .import-check.disabled {
+  cursor: default;
+}
+
+.import-card-footer .import-check svg {
+  width: var(--sym);
+  height: var(--sym);
+  flex: none;
+  margin-right: 3px;
+}
+
+/* All or nothing, never cut mid-word: the clamp's middle term is hugely
+   positive once the card has room for stars, symbol, word and box side by
+   side (about ten symbols plus the paddings and gaps) and hugely negative
+   below that, so the width is either the whole word or zero. Measured on the
+   card itself (cqw), like --sym. */
+.import-card-footer .import-check-text {
+  font-size: max(9px, calc(var(--sym) * 0.8));
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: clamp(0px, calc((100cqw - 10 * var(--sym) - 56px) * 9999), 6em);
+}
+
+/* The gap to the box, inside the clipped width so it goes when the word goes. */
+.import-card-footer .import-check-text::after {
+  content: "";
+  display: inline-block;
+  width: 4px;
+}
+
+.import-card-footer .import-checkbox:checked::before {
+  width: calc((var(--sym) - 1px) * 0.6);
+  height: calc((var(--sym) - 1px) * 0.6);
+}
+
 .import-card-footer .rating-stars {
   gap: 1px;
 }
@@ -2999,9 +3269,11 @@ textarea:focus-visible {
   gap: max(1px, calc(var(--row-h, 240px) * 0.008));
 }
 
+/* A filled circle reads larger than a star drawn in the same box, so the
+   swatches are a little smaller than --sym to look the stars' size. */
 .import-card-footer .color-swatch {
-  width: var(--sym);
-  height: var(--sym);
+  width: max(8px, calc(var(--sym) * 0.82));
+  height: max(8px, calc(var(--sym) * 0.82));
 }
 
 /* ---- Adjustments editor (Exposure/Contrast/… with live canvas preview) ---- */
@@ -3824,26 +4096,70 @@ input.editor-preset-select {
 }
 
 /* Film simulation picker: a two-column grid of look tiles, each a palette
-   swatch + name, with the same active treatment as the mixer bands. */
+   swatch + name, with the same active treatment as the mixer bands. Forty
+   looks are too many to lay out in full, so the grid is a list of its own
+   that scrolls inside the section, seven compact rows of it showing and the
+   next one cut, which says there is more; it is always longer than that, so
+   the section's height never changes. */
 .film-sim-grid {
   display: grid;
   /* minmax(0, ...): a bare 1fr never shrinks below its longest label, so one
      long name ("Eterna Bleach Bypass") widened its column past the panel. */
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
+  gap: 5px;
   margin: 8px 0 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  /* The tiles' offsetTop is measured from here (PhotoEditor centres the look
+     in use), and the active tile's ring needs a pixel of room at the edges. */
+  position: relative;
+  padding: 0 2px 2px;
+}
+
+/* Above the list: the look in use between a previous and a next button. The
+   row is always there and one height, so stepping moves nothing but the name. */
+.film-sim-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.film-sim-current {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* A section heading inside the list, across both columns. It stays at the top
+   while its looks scroll under it, so it needs the panel's own background. */
+.film-sim-group {
+  grid-column: 1 / -1;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 0 2px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .film-sim-tile {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 7px;
+  padding: 4px 7px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
   text-align: left;
   transition: border-color 0.1s ease, box-shadow 0.1s ease;
@@ -3858,11 +4174,15 @@ input.editor-preset-select {
   box-shadow: 0 0 0 1px var(--accent);
 }
 
+/* The disc is two flat halves (the gradient's stops meet): blended into each
+   other the two colours were a brown in the middle at this size. A hairline
+   keeps a pale half off a pale tile. */
 .film-sim-swatch {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   flex: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
 }
 
 .film-sim-label {
@@ -4050,6 +4370,17 @@ input.editor-preset-select {
   align-items: baseline;
   font-size: var(--text-sm);
   font-weight: 500;
+}
+
+/* The colour a slider works on, as a small patch before its name
+   (Calibration: red, green or blue primary). */
+.editor-slider-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  flex: none;
 }
 
 /* "Something in here is off its default." Sits on a group header, a sub-heading
@@ -4970,6 +5301,25 @@ input.editor-preset-select {
   margin-top: 6px;
 }
 
+/* In the bulk bar the reason hangs above the field as a small label: set
+   inline beside it, it pushed every control to its right along the bar. */
+.bulk-tag-form {
+  position: relative;
+}
+
+.bulk-tag-error {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  margin: 0;
+  padding: 4px 8px;
+  white-space: nowrap;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
 .lightbox-close {
   position: absolute;
   top: 16px;
@@ -5307,6 +5657,19 @@ input.editor-preset-select {
   padding: 32px;
   font-size: var(--text-base);
   text-align: center;
+}
+
+/* The reason under a failed load, and the one button that leads out of an
+   empty view ("Try again", "Clear filters"). */
+.empty-state-detail {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.empty-state-action {
+  margin-top: 14px;
 }
 
 /* No fixed/computed height here (previously `calc(100vh - 100px)`, which is
@@ -6356,6 +6719,18 @@ input.editor-preset-select {
   margin: 0 0 2px;
 }
 
+/* Title and explanation run on in one line where the window is wide enough;
+   where it is not, the text wraps on like a paragraph that starts with the
+   title. */
+.import-review-intro .section-title {
+  display: inline;
+  margin: 0 8px 0 0;
+}
+
+.import-review-intro .import-review-sub {
+  display: inline;
+}
+
 .import-review-sub {
   margin: 0;
   color: var(--text-muted);
@@ -6473,6 +6848,51 @@ input.editor-preset-select {
 .import-add-hint {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* The session's folder on the review page: label, path, "Show in Finder".
+   The path only takes the room it needs, so the button stays beside it. */
+.import-folder-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.import-folder-path {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+/* Label and path as the one thing to click (desktop app: shows the folder in
+   the file manager). Laid out exactly as the two were on their own in the
+   row, so it reads as text until the pointer is on it. */
+.import-folder-reveal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  text-align: left;
+}
+
+/* After the Add buttons in the same row: a little more air than between the
+   buttons, so the folder reads as its own thing. */
+.import-add-row > .btn + .import-folder-reveal,
+.import-add-row > .btn + .import-folder-label {
+  margin-left: 8px;
+}
+
+.import-folder-reveal:hover .import-folder-path {
+  color: var(--text);
+  text-decoration: underline;
 }
 
 /* Inside a panel the toolbar shouldn't add its own bottom gap. */
@@ -7254,14 +7674,21 @@ kbd {
   flex-shrink: 0;
 }
 
-/* Targeted-adjustment toggle + mode toggle (Point / Parametric) + Reset curve
-   on one row. */
+/* Targeted-adjustment toggle + mode toggle (Point / Parametric) + Reset on one
+   row. */
 .curve-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin: 2px 0 8px;
+}
+
+/* The controls are a fixed height, so a label that wraps spills out of its
+   button; the row keeps each one on a single line at its own width. */
+.curve-toolbar > * {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* Square icon button for the targeted-adjustment picker. */
@@ -9214,6 +9641,46 @@ button.smart-card {
      the short one doesn't drag the stars sideways. */
   min-width: 172px;
   justify-content: center;
+}
+
+/* The bar is one row whenever the name, the counter and the review controls
+   fit: name and counter on the left, import/stars/colour on the right. The
+   keyboard hints are the part that gives way. They used to count towards the
+   left group's width, so a bar a few pixels short of holding everything broke
+   into two half-empty, left-aligned rows - which is exactly the width the
+   stage has with the camera-settings panel collapsed. */
+.lightbox-overlay--page .lightbox-controls-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.lightbox-overlay--page .lightbox-controls-actions {
+  flex: 0 0 auto;
+}
+
+/* Takes whatever the row has left and nothing more: a zero base width keeps
+   the hints out of the "does it fit on one row" sum, and a one-line-high
+   wrapping box clips every hint that doesn't fit whole - none is cut mid-word.
+   The dot belongs to the hint it precedes, so it leaves with it. */
+.lightbox-overlay--page .lightbox-controls-meta .lightbox-hints {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  height: 20px;
+  line-height: 20px;
+  overflow: hidden;
+}
+
+.lightbox-overlay--page .lightbox-hints > span {
+  white-space: nowrap;
+}
+
+.lightbox-overlay--page .lightbox-hints > span + span::before {
+  content: "·";
+  margin: 0 6px;
 }
 
 /* ---- The album canvas ----------------------------------------------------
