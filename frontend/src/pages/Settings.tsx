@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
-import type { ImmichSyncMode, ImmichTestResult, ImportSettings } from "../api/types";
+import type { ImmichSyncMode, ImmichTestResult, ImportSettings, TagUsage } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
-import { IconCheck, IconX } from "../components/Icons";
+import { IconCheck, IconExport, IconImport, IconRename, IconX } from "../components/Icons";
+import { tagTreeRows } from "../utils/tagPaths";
 import { useAppDialogs } from "../components/AppDialogs";
 import { skinInfo, useAppearance, type Appearance } from "../state/theme";
 import { useCorners } from "../state/corners";
@@ -69,7 +70,7 @@ const SETTINGS_TABS: { id: string; label: string; sections: string[] }[] = [
   {
     id: "library",
     label: "Library",
-    sections: ["Library folder", "Library data", "Smart albums", "Tags", "Trash"],
+    sections: ["Library folder", "Library data", "Smart albums", "Tags", "Sidecars", "Trash"],
   },
   { id: "photos", label: "Photos", sections: ["RAW files", "Photo editor", "Auto develop"] },
   { id: "integrations", label: "Integrations", sections: ["Immich integration"] },
@@ -737,26 +738,116 @@ export function Settings() {
   // here (they come and go with the photos' state) and tags nobody carries
   // any more are gone on their own already.
   const { data: tagUsage } = useQuery({ queryKey: ["tag-usage"], queryFn: () => api.tags.usage() });
+  const invalidateTags = () => {
+    queryClient.invalidateQueries({ queryKey: ["tag-usage"] });
+    queryClient.invalidateQueries({ queryKey: ["tags"] });
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+    queryClient.invalidateQueries({ queryKey: ["facets"] });
+  };
   const deleteTag = useMutation({
-    mutationFn: (name: string) => api.tags.remove(name),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tag-usage"] });
-      queryClient.invalidateQueries({ queryKey: ["tags"] });
-      queryClient.invalidateQueries({ queryKey: ["images"] });
-      queryClient.invalidateQueries({ queryKey: ["facets"] });
-    },
+    mutationFn: ({ name, withChildren }: { name: string; withChildren: boolean }) =>
+      api.tags.remove(name, withChildren),
+    onSuccess: invalidateTags,
   });
-  async function confirmDeleteTag(tag: { name: string; count: number }) {
-    const ok = await dialogs.confirm({
-      title: `Delete the tag “${tag.name}”?`,
+  const renameTag = useMutation({
+    mutationFn: ({ name, newName }: { name: string; newName: string }) => api.tags.rename(name, newName),
+    onSuccess: invalidateTags,
+  });
+  const importTags = useMutation({
+    mutationFn: (text: string) => api.tags.importList(text),
+    onSuccess: invalidateTags,
+  });
+  const [tagListMessage, setTagListMessage] = useTransientMessage(6000);
+  const tagListFileRef = useRef<HTMLInputElement | null>(null);
+  // The tag tree as rows: a parent no photo carries as a tag of its own is a
+  // row too, implied by its children, so the branch can be renamed or
+  // deleted as one.
+  const tagRows = useMemo(() => {
+    const byName = new Map((tagUsage ?? []).map((t) => [t.name, t]));
+    return tagTreeRows((tagUsage ?? []).map((t) => t.name)).map((row) => ({
+      ...row,
+      usage: byName.get(row.path) as TagUsage | undefined,
+      // Photos under the branch, the tag's own included.
+      branchCount: (tagUsage ?? [])
+        .filter((t) => t.name === row.path || t.name.startsWith(row.path + "/"))
+        .reduce((n, t) => n + t.count, 0),
+      children: (tagUsage ?? []).filter((t) => t.name.startsWith(row.path + "/")).length,
+    }));
+  }, [tagUsage]);
+  async function promptRenameTag(path: string) {
+    const newName = await dialogs.prompt({
+      title: "Rename tag",
       message:
-        tag.count === 0
-          ? "No photo currently uses it. It is also removed from photos in the Trash."
-          : `The tag is removed from ${tag.count === 1 ? "one photo" : `${tag.count} photos`}, including any in the Trash. The photos themselves are not deleted.`,
-      confirmLabel: "Delete tag",
+        "The full path. Everything filed under the tag is renamed with it, and a path with other parents moves it in the tree.",
+      initial: path,
+      confirmLabel: "Rename",
+    });
+    if (newName === null || newName.trim() === "" || newName.trim() === path) return;
+    renameTag.mutate({ name: path, newName: newName.trim() });
+  }
+  async function exportTagList() {
+    try {
+      const text = await api.tags.exportList();
+      const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "keywords.txt";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setTagListMessage((e as Error).message);
+    }
+  }
+  async function importTagListFile(file: File | undefined) {
+    if (!file) return;
+    const text = await file.text();
+    importTags.mutate(text, {
+      onSuccess: (r) =>
+        setTagListMessage(
+          `${r.created} new tag${r.created === 1 ? "" : "s"} added, ${r.existing} already there.`
+        ),
+      onError: (e) => setTagListMessage((e as Error).message),
+    });
+  }
+
+  // Sidecars: the switch, and the "write them all" pass polled while it runs.
+  const { data: sidecarSettings } = useQuery({
+    queryKey: ["sidecar-settings"],
+    queryFn: () => api.settings.getSidecar(),
+    refetchInterval: (q) => (q.state.data?.active ? 1000 : false),
+  });
+  const setSidecar = useMutation({
+    mutationFn: (enabled: boolean) => api.settings.updateSidecar(enabled),
+    onSuccess: (r) => queryClient.setQueryData(["sidecar-settings"], r),
+  });
+  const writeAllSidecars = useMutation({
+    mutationFn: () => api.settings.writeAllSidecars(),
+    onSuccess: (r) => queryClient.setQueryData(["sidecar-settings"], r),
+  });
+  async function confirmDeleteTag(tag: { name: string; count: number; children: number }) {
+    const photos =
+      tag.count === 0
+        ? "No photo currently uses it. It is also removed from photos in the Trash."
+        : `The tag is removed from ${tag.count === 1 ? "one photo" : `${tag.count} photos`}, including any in the Trash. The photos themselves are not deleted.`;
+    if (tag.children === 0) {
+      const ok = await dialogs.confirm({
+        title: `Delete the tag “${tag.name}”?`,
+        message: photos,
+        confirmLabel: "Delete tag",
+        danger: true,
+      });
+      if (ok) deleteTag.mutate({ name: tag.name, withChildren: false });
+      return;
+    }
+    const choice = await dialogs.choose({
+      title: `Delete the tag “${tag.name}”?`,
+      message: `${photos} ${tag.children === 1 ? "One tag is" : `${tag.children} tags are`} filed under it: delete them too, or keep them and take only this one off.`,
+      confirmLabel: "Delete with everything under it",
+      altLabel: "Only this tag",
       danger: true,
     });
-    if (ok) deleteTag.mutate(tag.name);
+    if (choice === "confirm") deleteTag.mutate({ name: tag.name, withChildren: true });
+    else if (choice === "alt") deleteTag.mutate({ name: tag.name, withChildren: false });
   }
 
   // Surface the running maintenance task to the app shell, which locks the nav
@@ -905,6 +996,18 @@ export function Settings() {
                 desc={desc}
               />
             ))}
+          </div>
+          <div className="settings-subgroup">
+            <h4 className="settings-subhead">What the files already say</h4>
+            <OptionRow
+              type="checkbox"
+              checked={importSettings?.read_file_metadata ?? true}
+              disabled={!importSettings}
+              busy={updateImportSettings.isPending}
+              onChange={(on) => updateImportSettings.mutate({ read_file_metadata: on })}
+              title="Take over stars, labels, keywords and captions from the files"
+              desc="What Lightroom, Bridge, darktable or digiKam wrote into a photo - or into an .xmp sidecar beside it - comes in with it. Keywords become tags, folder paths and all. Stars you give in the review are never replaced."
+            />
           </div>
         </Section>
       )}
@@ -1298,34 +1401,136 @@ export function Settings() {
 
       <Section {...sectionProps("Tags")}>
         <Desc>
-          The tags you have added to your photos, with the number of photos for each. Deleting a
-          tag removes it from every photo. Tags the app assigns itself (edit copy, virtual copy, …)
-          are not listed and are managed automatically.
+          The tags you have added to your photos, with the number of photos for each. A tag can
+          be filed under another: <code>Travel/Italy/Rome</code> is Rome under Italy under Travel,
+          and filtering by Travel finds all of it. Renaming a tag renames everything under it;
+          deleting one removes it from every photo. Tags the app assigns itself (edit copy,
+          virtual copy, …) are not listed and are managed automatically.
         </Desc>
         {!tagUsage ? (
           <Desc>Loading…</Desc>
         ) : tagUsage.length === 0 ? (
           <Desc>No tags of your own yet.</Desc>
         ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}>
-            {tagUsage.map((t) => (
-              <span key={t.name} className="tag-chip" title={`${t.count} photo${t.count === 1 ? "" : "s"}`}>
-                {t.name}
-                <span style={{ color: "var(--text-muted)", fontSize: 11 }}>{t.count}</span>
+          <ul className="settings-tag-tree">
+            {tagRows.map((row) => (
+              <li
+                key={row.path}
+                className={`settings-tag-row${row.usage ? "" : " settings-tag-row--implied"}`}
+                style={{ paddingLeft: row.depth * 18 }}
+              >
+                <span className="settings-tag-name" title={row.path}>
+                  {row.leaf}
+                </span>
+                <span
+                  className="settings-tag-count"
+                  title={
+                    row.children > 0
+                      ? `${row.usage?.count ?? 0} on this tag, ${row.branchCount} with everything under it`
+                      : `${row.branchCount} photo${row.branchCount === 1 ? "" : "s"}`
+                  }
+                >
+                  {row.usage?.kept && row.branchCount === 0 ? "kept" : row.branchCount}
+                </span>
                 <button
                   type="button"
-                  onClick={() => void confirmDeleteTag(t)}
-                  disabled={deleteTag.isPending}
-                  aria-label={`Delete tag ${t.name}`}
-                  title={`Delete “${t.name}” from every photo`}
+                  className="icon-btn"
+                  onClick={() => void promptRenameTag(row.path)}
+                  disabled={renameTag.isPending}
+                  aria-label={`Rename tag ${row.path}`}
+                  title={row.children > 0 ? "Rename, with everything under it" : "Rename"}
                 >
-                  <IconX size={11} />
+                  <IconRename size={13} />
                 </button>
-              </span>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() =>
+                    void confirmDeleteTag({
+                      name: row.path,
+                      count: row.usage?.count ?? 0,
+                      children: row.children,
+                    })
+                  }
+                  disabled={deleteTag.isPending}
+                  aria-label={`Delete tag ${row.path}`}
+                  title={`Delete “${row.path}” from every photo`}
+                >
+                  <IconX size={13} />
+                </button>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
         {deleteTag.isError && <Note error>{(deleteTag.error as Error).message}</Note>}
+        {renameTag.isError && <Note error>{(renameTag.error as Error).message}</Note>}
+        <div className="settings-subgroup">
+          <h4 className="settings-subhead">Keyword list</h4>
+          <Desc>
+            The tag tree as a text file, one tag per line and children indented - the list
+            Lightroom, Bridge and digiKam export and import. Tags that come in from a list stay
+            in the list to pick from, with or without photos, until you delete them.
+          </Desc>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn" type="button" onClick={() => void exportTagList()} disabled={!tagUsage}>
+              <IconExport size={14} /> Export keyword list
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => tagListFileRef.current?.click()}
+              disabled={importTags.isPending}
+            >
+              <IconImport size={14} /> Import keyword list…
+            </button>
+            <input
+              ref={tagListFileRef}
+              type="file"
+              accept=".txt,text/plain"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                void importTagListFile(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          {tagListMessage && <Note>{tagListMessage}</Note>}
+        </div>
+      </Section>
+
+      <Section {...sectionProps("Sidecars")}>
+        <Desc>
+          Stars, colour labels, tags and notes live in this library's database. Switched on,
+          Rollfilm also writes them into an <code>.xmp</code> file beside each photo in the library
+          folder - the sidecar Lightroom, Bridge, darktable and digiKam read - so what you give a
+          photo here is there in every other program. The photo itself is never written to, and
+          whatever another program keeps in the same file stays. Photos indexed from external
+          folders get no sidecar.
+        </Desc>
+        <OptionRow
+          type="checkbox"
+          checked={sidecarSettings?.enabled ?? false}
+          disabled={!sidecarSettings}
+          busy={setSidecar.isPending}
+          onChange={(c) => setSidecar.mutate(c)}
+          title="Write XMP sidecars beside the originals"
+          desc="Every change to a photo's stars, label, tags or note is written a moment later."
+        />
+        <div className="settings-subgroup--indent">
+          <button
+            className="btn"
+            type="button"
+            onClick={() => writeAllSidecars.mutate()}
+            disabled={!sidecarSettings?.enabled || sidecarSettings.active || writeAllSidecars.isPending}
+            title="For a library that just switched this on, and after a restore"
+          >
+            {sidecarSettings?.active
+              ? `Writing… ${sidecarSettings.done} of ${sidecarSettings.total}`
+              : "Write sidecars for every photo now"}
+          </button>
+        </div>
+        {setSidecar.isError && <Note error>{(setSidecar.error as Error).message}</Note>}
+        {writeAllSidecars.isError && <Note error>{(writeAllSidecars.error as Error).message}</Note>}
       </Section>
 
       <Section {...sectionProps("Trash")}>

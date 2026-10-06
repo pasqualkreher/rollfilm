@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { IconPlus, IconX } from "./Icons";
 import { TagSuggestInput } from "./TagSuggestInput";
 import { AUTO_TAG_CHIP_TITLE, autoTagMessage, isAutoTag, withoutMembershipNames } from "../utils/autoTags";
+import { TagChipName } from "./TagChipName";
 
 interface Props {
   tags: string[];
@@ -50,8 +51,8 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
                 {t}
               </span>
             ) : (
-              <span key={t} className="tag-chip">
-                {t}
+              <span key={t} className="tag-chip" title={t}>
+                <TagChipName path={t} />
                 <button type="button" onClick={() => onRemove(t)} aria-label={`Remove tag ${t}`} title={`Remove tag ${t}`}>
                   <IconX size={11} />
                 </button>
@@ -62,7 +63,7 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
       )}
       <form onSubmit={submit} style={{ display: "flex", gap: 6 }}>
         <TagSuggestInput
-          placeholder="Add tag…"
+          placeholder="Add tag… (Travel/Italy files it under Travel)"
           ariaLabel="Add tag"
           value={value}
           onChange={(v) => {

@@ -728,11 +728,10 @@ function LibraryPage() {
         dateTo={dateTo}
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
-        viewExtras={
+        sort={
           // Search results are ranked by how well they match, so there the
           // control says so and rests - in place, rather than disappearing.
           <Dropdown
-            className="sort-dropdown"
             value={q ? "relevance" : sort}
             onChange={(v) => setSort(v as SortKey)}
             disabled={Boolean(q)}

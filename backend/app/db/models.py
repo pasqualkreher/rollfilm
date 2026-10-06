@@ -301,12 +301,23 @@ class Image(Base):
 
 
 class Tag(Base):
+    """A tag is its full path: "Rome" is a tag, "Travel/Italy/Rome" is the
+    same word filed under Italy under Travel. The hierarchy lives in the name
+    (see services/tags.py), so every place that reads, filters or writes a
+    tag by name keeps working - a parent is matched by prefix. The app's own
+    tags (see services/auto_tags.py) are always flat."""
+
     __tablename__ = "tags"
     __table_args__ = (UniqueConstraint("owner_id", "name"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
     name: Mapped[str] = mapped_column(String, index=True)
+    # A tag normally exists because a photo carries it and goes with the last
+    # photo that does (services/tag_cleanup.py). A keyword list imported from
+    # another program is a vocabulary to pick from, so its tags are kept
+    # without photos until the user deletes them.
+    kept: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
 
 class ImageTag(Base):

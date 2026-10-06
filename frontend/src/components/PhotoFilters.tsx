@@ -161,6 +161,11 @@ interface Props {
   // view group, left of the divider - so they read as a display option rather
   // than a page action.
   viewExtras?: ReactNode;
+  // The order control (the Library's sort dropdown). It lives inside the
+  // Filter menu as its first row: sorting is set in the same place as the
+  // rest of what shapes the grid, and the bar stays one calm row. It is not a
+  // filter, so it neither counts on the chip nor resets with "Clear".
+  sort?: ReactNode;
   // Extra actions (e.g. import's Select / Select all buttons) render after the
   // shared filters, right of the divider, so every screen keeps an identical
   // filter core.
@@ -207,6 +212,7 @@ export function PhotoFilters({
   onDateTo,
   showMerge = true,
   viewExtras,
+  sort,
   children,
   trailing,
 }: Props) {
@@ -274,6 +280,12 @@ export function PhotoFilters({
       <div className="filter-menu-head">
         <span className="filter-menu-title">Filter</span>
       </div>
+      {sort && (
+        <div className="filter-menu-row filter-menu-row--sort">
+          <span className="filter-menu-label">Sort</span>
+          {sort}
+        </div>
+      )}
       {albums && onAlbumId && (
         <div className="filter-menu-row filter-menu-row--album">
           <span className="filter-menu-label">{canvases ? "Album / Canvas" : "Album"}</span>
@@ -428,7 +440,7 @@ export function PhotoFilters({
           control, where that verbosity belongs. Sits between the view
           controls and the page actions. Pinned, the chip collapses the docked
           row instead of opening a popover. */}
-      <div className="control-group">
+      <div className="control-group control-group--filter">
         {pinned ? (
           <button
             type="button"

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { IconChevronDown } from "./Icons";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
+import { tagLeaf, tagTreeRows } from "../utils/tagPaths";
 
 interface Props {
   // All tag names the user can filter by.
@@ -65,12 +66,16 @@ export function TagFilter({
     searchRef.current?.focus();
   }
 
-  const filtered = query.trim()
-    ? options.filter((t) => t.toLowerCase().includes(query.trim().toLowerCase()))
-    : options;
+  // The list is the tag tree: "Travel/Italy/Rome" sits indented under Italy
+  // under Travel, and a parent no photo carries on its own is still a row -
+  // ticking it finds everything filed under it (the backend matches the
+  // prefix). A search shows the matching paths flat, parents and all.
+  const rows = useMemo(() => tagTreeRows(options), [options]);
+  const needle = query.trim().toLowerCase();
+  const filtered = needle ? rows.filter((r) => r.path.toLowerCase().includes(needle)) : rows;
 
   const label =
-    value.length === 0 ? emptyLabel : value.length === 1 ? value[0] : `${value.length} tags`;
+    value.length === 0 ? emptyLabel : value.length === 1 ? tagLeaf(value[0]) : `${value.length} tags`;
 
   return (
     <div className="tag-filter" ref={wrapRef}>
@@ -101,7 +106,7 @@ export function TagFilter({
                 // Enter takes the first match - type, Enter, type, Enter.
                 if (e.key === "Enter" && filtered.length > 0) {
                   e.preventDefault();
-                  toggle(filtered[0]);
+                  toggle(filtered[0].path);
                 }
               }}
               ref={searchRef}
@@ -111,10 +116,19 @@ export function TagFilter({
               {filtered.length === 0 ? (
                 <div className="tag-filter-empty">No matching tags</div>
               ) : (
-                filtered.map((tag) => (
-                  <label key={tag} className="tag-filter-item">
-                    <input type="checkbox" checked={value.includes(tag)} onChange={() => toggle(tag)} />
-                    <span>{tag}</span>
+                filtered.map((row) => (
+                  <label
+                    key={row.path}
+                    className={`tag-filter-item${row.own ? "" : " tag-filter-item--implied"}`}
+                    style={needle ? undefined : { paddingLeft: 6 + row.depth * 16 }}
+                    title={row.path}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={value.includes(row.path)}
+                      onChange={() => toggle(row.path)}
+                    />
+                    <span>{needle ? row.path : row.leaf}</span>
                   </label>
                 ))
               )}

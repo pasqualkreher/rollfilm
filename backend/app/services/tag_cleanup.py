@@ -5,7 +5,9 @@ reset, trashed for good, left an album or canvas) the row would only linger in
 the filter list and the autocomplete, so every path that removes tag links
 calls `prune_unused_tags` and the empty rows go with the links. The app's own
 tags ("edit", "virtual copy", the membership tags...) are no exception: they
-are created again the moment a photo needs one.
+are created again the moment a photo needs one. The one exception is a tag
+marked `kept`: it came in with an imported keyword list and is a word to pick
+from, photos or not, until the user deletes it (see services/tags.py).
 """
 from sqlalchemy.orm import Session
 
@@ -19,7 +21,7 @@ def prune_unused_tags(db: Session, owner_id: int) -> list[str]:
     used = db.query(ImageTag.tag_id).distinct().subquery()
     unused = (
         db.query(Tag)
-        .filter(Tag.owner_id == owner_id, Tag.id.notin_(used.select()))
+        .filter(Tag.owner_id == owner_id, Tag.id.notin_(used.select()), Tag.kept.is_(False))
         .all()
     )
     names = sorted(tag.name for tag in unused)

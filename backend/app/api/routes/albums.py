@@ -18,6 +18,7 @@ from app.db.models import (
     User,
 )
 from app.db.session import get_db
+from app.services import tags as tags_service
 from app.services.filesystem import resolve_image_path
 from app.services.membership_tags import sync_membership_tags
 from app.services.settings_store import IMMICH_MODE_FULL, ImmichConfig, get_immich_config
@@ -74,11 +75,12 @@ def _clean_tag_filter(tags: list[str]) -> list[str]:
 
 
 def _tagged_image_ids(db: Session, owner_id: int, tag_names: list[str]):
-    """Subquery of image ids carrying ANY of the given tags."""
+    """Subquery of image ids carrying ANY of the given tags - a parent tag
+    in the rule counting everything filed under it (see services/tags.py)."""
     return (
         db.query(ImageTag.image_id)
         .join(Tag, Tag.id == ImageTag.tag_id)
-        .filter(Tag.owner_id == owner_id, Tag.name.in_(tag_names))
+        .filter(Tag.owner_id == owner_id, tags_service.any_of_criterion(tag_names))
     )
 
 

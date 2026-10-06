@@ -991,6 +991,20 @@ class _ProfileMaps:
         return maps
 
 
+# How the remap samples the source. Bilinear halved the detail energy of
+# every corrected raw (measured on a 40MP RAF, Laplacian variance 214 -> 121
+# on the half-size base, 100 -> 54 at 100%): every pixel lands at a fractional
+# offset, and the autoscale zoom magnifies slightly on top, so each output
+# pixel averages two source pixels. Bicubic reads a 4x4 neighbourhood and
+# keeps ~90% of the detail (193 / 83) at the same cost. It can overshoot, so
+# the result is clamped at 0 (linear light has no negative energy; the clip
+# above 1 is the tone block's). The window variant must read the same taps:
+# _REMAP_HALO is how many source pixels beyond the sampled position they
+# reach (floor-1 .. floor+2).
+_REMAP_INTERPOLATION = cv2.INTER_CUBIC
+_REMAP_HALO = 2
+
+
 # The maps of the last few frame sizes: a zoomed editor asks for the native
 # frame's maps once per tile (and once per noise-probe block), and the coarse
 # grid is ~0.6M samples per map there. A handful of MB each.
@@ -1013,8 +1027,9 @@ def apply_profile(arr: np.ndarray, profile: LensProfile | RadialProfile, fd: flo
         y1 = min(h, y0 + band)
         for c, (mx, my) in enumerate(maps.channel_maps(y0, y1, 0, w)):
             out[y0:y1, :, c] = cv2.remap(
-                planes[c], mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+                planes[c], mx, my, _REMAP_INTERPOLATION, borderMode=cv2.BORDER_REPLICATE
             )
+        np.maximum(out[y0:y1], 0.0, out=out[y0:y1])
         if maps.vignette:
             out[y0:y1] *= maps.window("gain", y0, y1, 0, w)[:, :, None]
     return out
@@ -1040,12 +1055,14 @@ def apply_profile_window(
         return base[y0:y1, x0:x1].astype(np.float32)
     channel_maps = maps.channel_maps(y0, y1, x0, x1)
     # The source rectangle every sample of every channel reads from, with the
-    # bilinear neighbour on each side. Clamped to the frame, where the cut's
-    # edge IS the frame's edge, so BORDER_REPLICATE replicates the same pixels.
-    sx0 = max(0, int(math.floor(min(float(mx.min()) for mx, _ in channel_maps))) - 1)
-    sx1 = min(w, int(math.ceil(max(float(mx.max()) for mx, _ in channel_maps))) + 2)
-    sy0 = max(0, int(math.floor(min(float(my.min()) for _, my in channel_maps))) - 1)
-    sy1 = min(h, int(math.ceil(max(float(my.max()) for _, my in channel_maps))) + 2)
+    # interpolation's taps on each side (_REMAP_HALO). Clamped to the frame,
+    # where the cut's edge IS the frame's edge, so BORDER_REPLICATE replicates
+    # the same pixels.
+    halo = _REMAP_HALO
+    sx0 = max(0, int(math.floor(min(float(mx.min()) for mx, _ in channel_maps))) - halo)
+    sx1 = min(w, int(math.ceil(max(float(mx.max()) for mx, _ in channel_maps))) + halo + 1)
+    sy0 = max(0, int(math.floor(min(float(my.min()) for _, my in channel_maps))) - halo)
+    sy1 = min(h, int(math.ceil(max(float(my.max()) for _, my in channel_maps))) + halo + 1)
     if sx1 <= sx0 or sy1 <= sy0:  # the box maps entirely outside the frame
         sx0, sx1 = (0, w) if sx1 <= sx0 else (sx0, sx1)
         sy0, sy1 = (0, h) if sy1 <= sy0 else (sy0, sy1)
@@ -1060,8 +1077,9 @@ def apply_profile_window(
             shifted[key] = (mx - np.float32(sx0), my - np.float32(sy0))
         smx, smy = shifted[key]
         out[:, :, c] = cv2.remap(
-            src[:, :, c], smx, smy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+            src[:, :, c], smx, smy, _REMAP_INTERPOLATION, borderMode=cv2.BORDER_REPLICATE
         )
+    np.maximum(out, 0.0, out=out)
     if maps.vignette:
         out *= maps.window("gain", y0, y1, x0, x1)[:, :, None]
     return out

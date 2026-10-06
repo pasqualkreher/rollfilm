@@ -601,10 +601,21 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>Tags</strong> — free-form keywords with autocomplete. Add them to one photo
-                in its side panel, or to a whole selection at once. A tag exists only while a photo
-                carries it: the last photo dropping one takes it out of the filter list too. To
-                take a tag off every photo at once, delete it under{" "}
-                <em>Settings → Library → Tags</em>.
+                in its side panel, or to a whole selection at once. A tag can be filed under
+                another: type <code>Travel/Italy/Rome</code> and Rome sits under Italy under Travel;
+                the filter shows the tree, and ticking Travel finds everything under it. A tag
+                exists only while a photo carries it: the last photo dropping one takes it out of
+                the filter list too. To rename a tag (with everything under it), take it off every
+                photo at once, or move the whole tree to or from another program as a keyword
+                list, go to <em>Settings → Library → Tags</em>.
+              </li>
+              <li>
+                <strong>From and to other programs</strong> — stars, labels, keywords and captions
+                that Lightroom, Bridge, darktable or digiKam wrote into a photo, or into an{" "}
+                <code>.xmp</code> sidecar beside it, come in with the photo on import. The other
+                way round, <em>Settings → Library → Sidecars</em> keeps an <code>.xmp</code> beside
+                each photo in the library folder up to date, so what you give a photo here reads
+                everywhere. The photo itself is never written to.
               </li>
             </ul>
             <h4>Tags the app gives out itself</h4>
@@ -739,8 +750,12 @@ const CHAPTERS: Chapter[] = [
             <li>
               <strong>Statistics</strong> (the chart icon, top right) counts what you have: photos,
               library size, the years they span, how many are rated, edited or located, photos per
-              year, your most-used bodies, lenses and focal ranges, and what kind of files the
-              library is made of.
+              year and month, your most-used bodies, lenses, focal ranges, ISO, aperture
+              and shutter speeds, where you shot, and what kind of files the library is made of.
+              Every bar and column is a filter: click a camera and the whole page shows only what
+              that camera shot, click a year or an ISO stop on top to narrow further, click a
+              selected value again to let it go. The chips above the tiles list what is pinned,
+              and <em>Show in library</em> opens the grid with the same photos.
             </li>
           </ul>
         ),
@@ -982,7 +997,11 @@ const CHAPTERS: Chapter[] = [
               brighter than the plain picture, with the highlights running to white. Ten looks
               come from Fujifilm's own LUTs; the others are built on those, Nostalgic Neg. and Pro
               Neg. Hi with data from abpy/FujifilmCameraProfiles (CC BY-NC-SA 4.0), the
-              monochrome ones with Stuart Sowerby's Fuji XTrans III profiles.
+              monochrome ones with Stuart Sowerby's Fuji XTrans III profiles. Those LUTs are fed
+              the colours they were made for, measured against Fujifilm's own rendering of the
+              looks, so foliage comes out as green and as deep as in the camera's JPEG. An edit
+              made before this keeps looking as it did; choosing a look again brings it up to
+              date.
             </p>
             <p>
               Below the Fujifilm looks the list goes on with film stocks, in sections:{" "}

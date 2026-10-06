@@ -439,6 +439,46 @@ def test_process_5_with_basic_is_process_4_and_agx_is_only_heard_on_5():
     assert np.abs(render(process="5", tone_mapper="agx").astype(int) - on_4.astype(int)).max() > 8
 
 
+# --- process version 7: the scene colours Fujifilm's cubes were made for -------
+
+def test_process_7_mixes_the_scene_for_fujifilm_cubes_only():
+    from app.services import develop_v2
+
+    rng = np.random.default_rng(12)
+    lin = rng.random((16, 16, 3)).astype(np.float32) * 0.9
+    grey = np.repeat(rng.random((16, 16, 1)).astype(np.float32) * 0.9, 3, axis=2)
+
+    def render(frame, **over) -> np.ndarray:
+        adj = develop.normalize({"film_sim": "provia", **over})
+        return np.asarray(thumbnails.apply_adjustments_linear(frame.copy(), 1.0, adj, raw_source=True))
+
+    for adj in ({"process": "7"}, {"process": "7", "tone_mapper": "agx"}):
+        assert film_sims.renders_as_still(adj) and film_sims.mixes_scene(adj)
+        assert film_sims.official_sim({**adj, "film_sim": "provia"}, True) == "provia"
+    assert film_sims.agx_under_look({"process": "7", "tone_mapper": "agx"})
+    assert not film_sims.mixes_scene({"process": "6"})
+    # 6 is untouched: still 5 with Basic. Grey is grey on 7 too (rows sum to 1).
+    np.testing.assert_array_equal(render(lin, process="6"), render(lin, process="5"))
+    np.testing.assert_array_equal(render(grey, process="7"), render(grey, process="6"))
+    # Colours move: a leaf comes out greener and more saturated than on 6.
+    leaf = np.full((4, 4, 3), (0.08, 0.20, 0.05), dtype=np.float32)
+    on_6, on_7 = render(leaf, process="6"), render(leaf, process="7")
+    assert np.abs(on_7.astype(int) - on_6.astype(int)).max() > 4
+    lab_6, lab_7 = (develop_v2.linear_to_oklab(develop_v2._srgb_to_linear(x[0, 0] / 255.0)) for x in (on_6, on_7))
+    hue_6, hue_7 = (np.degrees(np.arctan2(l[2], l[1])) for l in (lab_6, lab_7))
+    assert hue_7 > hue_6 + 2 and np.hypot(*lab_7[1:]) > np.hypot(*lab_6[1:])
+    # A film stock baked from the textbook F-Gamut is not mixed.
+    stock = film_sims.ANALOG_SIMS[0]
+    np.testing.assert_array_equal(render(lin, film_sim=stock, process="7"), render(lin, film_sim=stock, process="6"))
+
+
+def test_process_7_in_bands_is_process_7_whole():
+    lin = np.random.default_rng(13).random((2100, 6, 3)).astype(np.float32) * 0.9
+    whole = film_sims.apply_official(lin, "classic_neg", 1.0, mix=True)
+    bands = np.concatenate([film_sims.apply_official(lin[y:y + 700], "classic_neg", 1.0, mix=True) for y in range(0, 2100, 700)])
+    np.testing.assert_allclose(bands, whole, atol=1e-4)
+
+
 @pytest.mark.parametrize("sim", _LOOKS)
 def test_agx_under_a_look_puts_the_grey_ramp_where_agx_puts_it(sim):
     from app.services import develop_effects

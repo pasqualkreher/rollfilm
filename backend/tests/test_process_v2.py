@@ -34,6 +34,13 @@ def test_an_edit_without_the_key_is_on_the_original_process():
     assert develop.loads('{"saturation": 30}')["process"] == "1"
 
 
+def test_every_version_after_the_first_builds_on_v2():
+    from app.services import develop_v2
+
+    assert all(develop_v2.is_v2({"process": p}) for p in ("2", "3", "4", "5", "6", "7"))
+    assert not develop_v2.is_v2({"process": "1"})
+
+
 def test_the_process_alone_never_makes_a_photo_edited():
     assert develop.is_neutral({"process": "2"})
     assert develop.dumps({"process": "2"}) is None

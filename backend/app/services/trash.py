@@ -23,7 +23,7 @@ from app.db.models import (
     LayoutItem,
 )
 from app.db.session import SessionLocal
-from app.services import thumbnails
+from app.services import sidecar, thumbnails
 from app.services.hashing import sha1_file
 from app.services.immich_sync import immich_flagged
 from app.services.membership_tags import sync_membership_tags
@@ -195,6 +195,9 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
             # copy's path is synthetic and its bytes are the source's: never
             # unlink through it.
             original = settings.library_root / image.file_path
+            # The sidecar the library wrote beside it (if any) goes too,
+            # unless the other half of the pair stays and still owns it.
+            sidecar.remove_sidecar(db, image, going_too=set(image_ids))
             original.unlink(missing_ok=True)
             emptied_dirs.add(original.parent)
         # Deliberately not derivative_dir(), which *creates* the folder before

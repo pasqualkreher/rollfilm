@@ -1608,10 +1608,12 @@ def _linear_tone_block(
         # Process version 5 hands the tone curve back to the tone mapper: Basic
         # is the look's own, as above; with AgX the cube keeps the colour and
         # AgX sets the tones (film_sims.agx_under_look).
+        # Process version 7 feeds Fujifilm's cubes the scene colours they
+        # were made for (film_sims.mixes_scene).
         sim, weight = official
         stills_white = max(g, 1.0) if film_sims.renders_as_still(adj) else None
         look = film_sims.apply_official(
-            arr, sim, stills_white, agx=film_sims.agx_under_look(adj)
+            arr, sim, stills_white, agx=film_sims.agx_under_look(adj), mix=film_sims.mixes_scene(adj)
         )
         if wh < 0:
             look = _linear_to_srgb(

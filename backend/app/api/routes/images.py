@@ -54,6 +54,8 @@ from app.services import (
 )
 from app.services.auto_tags import auto_tag_criterion, auto_tag_error, is_auto_tag
 from app.services.membership_tags import sync_membership_tags
+from app.services import sidecar as sidecar_service
+from app.services import tags as tags_service
 from app.services.tag_cleanup import prune_unused_tags
 from app.services.filesystem import (
     VIRTUAL_PATH_MARKER,
@@ -191,27 +193,17 @@ def _apply_to_pair(
 
 
 def _get_or_create_tag(db: Session, owner_id: int, name: str) -> Tag:
-    tag = db.query(Tag).filter(Tag.owner_id == owner_id, Tag.name == name).first()
-    if tag is None:
-        tag = Tag(owner_id=owner_id, name=name)
-        db.add(tag)
-        db.flush()
-    return tag
+    return tags_service.get_or_create_tag(db, owner_id, name)
 
 
 def _add_tag_to_image(db: Session, owner_id: int, image: Image, name: str) -> None:
-    name = name.strip()
-    if not name:
-        return
-    tag = _get_or_create_tag(db, owner_id, name)
-    exists = db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).first()
-    if not exists:
-        db.add(ImageTag(image_id=image.id, tag_id=tag.id))
+    tags_service.add_tag_to_image(db, owner_id, image, name)
 
 
 def _remove_tag_from_image(
     db: Session, owner_id: int, image: Image, name: str, prune: bool = True
 ) -> None:
+    name = tags_service.normalize(name)
     tag = db.query(Tag).filter(Tag.owner_id == owner_id, Tag.name == name).first()
     if tag is None:
         return
@@ -323,10 +315,11 @@ def _filtered_images_query(
         album = db.get(Album, album_id)
         rule_tags = album.tag_filter_list if album is not None else []
         if rule_tags:
+            # A rule naming a parent tag takes everything filed under it.
             tagged_ids = (
                 db.query(ImageTag.image_id)
                 .join(Tag, Tag.id == ImageTag.tag_id)
-                .filter(Tag.owner_id == current_user.id, Tag.name.in_(rule_tags))
+                .filter(Tag.owner_id == current_user.id, tags_service.any_of_criterion(rule_tags))
             )
             query = query.filter(
                 or_(Image.id.in_(manual_ids), Image.id.in_(tagged_ids))
@@ -368,15 +361,16 @@ def _filtered_images_query(
         query = query.filter(Image.taken_at <= date_to)
     if tags:
         # AND semantics: keep only photos carrying *every* selected tag, so each
-        # extra tag narrows the results further (like the other filters).
-        wanted = [t for t in tags if t]
-        if wanted:
+        # extra tag narrows the results further (like the other filters). A
+        # selected parent ("Travel") is met by any tag filed under it
+        # ("Travel/Italy/Rome"), see services/tags.py.
+        for path in (tags_service.normalize(t) for t in tags if t):
+            if not path:
+                continue
             matching_ids = (
                 db.query(ImageTag.image_id)
                 .join(Tag, Tag.id == ImageTag.tag_id)
-                .filter(Tag.owner_id == current_user.id, Tag.name.in_(wanted))
-                .group_by(ImageTag.image_id)
-                .having(func.count(func.distinct(Tag.name)) == len(wanted))
+                .filter(Tag.owner_id == current_user.id, tags_service.matches_criterion(path))
             )
             query = query.filter(Image.id.in_(matching_ids))
 
@@ -850,6 +844,7 @@ def bulk_update_images(
             image.color_label = update.color_label
         _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
     db.commit()
+    sidecar_service.touch(db, images)
     for image in images:
         db.refresh(image)
     return images
@@ -1489,6 +1484,7 @@ def bulk_add_tags(
             if partner is not None:
                 _add_tag_to_image(db, current_user.id, partner, name)
     db.commit()
+    sidecar_service.touch(db, images)
     for image in images:
         db.refresh(image)
     return images
@@ -1567,6 +1563,8 @@ def bulk_reset_metadata(
 
     changed = [image for image in images if _edit_state(image) != before[image.id]]
     db.commit()
+    if payload.rating or payload.color_label or payload.tags:
+        sidecar_service.touch(db, images)
     for image in images:
         db.refresh(image)
     _rerender_later(changed, before)
@@ -1725,6 +1723,7 @@ def update_image(
             partner.description = image.description
     _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
     db.commit()
+    sidecar_service.touch(db, [image])
     db.refresh(image)
     return image
 
@@ -1861,9 +1860,16 @@ def rename_image(
     try:
         source.rename(target)
         renamed.append((target, source))
+        # The sidecar (if the library writes one) is named after the stem too.
+        moved_sidecar = sidecar_service.move_sidecar(source, target)
+        if moved_sidecar is not None:
+            renamed.append(moved_sidecar)
         if partner is not None and partner_source is not None and partner_target is not None:
             partner_source.rename(partner_target)
             renamed.append((partner_target, partner_source))
+            moved_sidecar = sidecar_service.move_sidecar(partner_source, partner_target)
+            if moved_sidecar is not None:
+                renamed.append(moved_sidecar)
 
         image.file_path = _stored_path(image, target)
         image.original_filename = target.name
@@ -1921,6 +1927,7 @@ def add_tag(
     if partner is not None:
         _add_tag_to_image(db, current_user.id, partner, payload.name)
     db.commit()
+    sidecar_service.touch(db, [image])
     db.refresh(image)
     return image
 
@@ -1935,7 +1942,11 @@ def remove_tag(
     image = get_owned_image(db, current_user.id, image_id)
     if is_auto_tag(tag_name):
         raise HTTPException(status_code=400, detail=auto_tag_error(tag_name))
-    tag = db.query(Tag).filter(Tag.owner_id == current_user.id, Tag.name == tag_name).first()
+    tag = (
+        db.query(Tag)
+        .filter(Tag.owner_id == current_user.id, Tag.name == tags_service.normalize(tag_name))
+        .first()
+    )
     if tag:
         db.query(ImageTag).filter(ImageTag.image_id == image.id, ImageTag.tag_id == tag.id).delete()
         # A RAW+JPEG pair is one shot: the tag comes off both halves.
@@ -1945,6 +1956,7 @@ def remove_tag(
         # A tag no photo carries any more disappears with its last photo.
         prune_unused_tags(db, current_user.id)
         db.commit()
+        sidecar_service.touch(db, [image])
     db.refresh(image)
     return image
 

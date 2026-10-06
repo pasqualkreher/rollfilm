@@ -1048,6 +1048,9 @@ button {
   position: static;
   margin: 0;
   padding: 8px 20px;
+  /* One 8px step along the whole row: the gap between the groups is the same
+     as the gap within them (the actions group keeps its own divider). */
+  column-gap: 8px;
   border: none;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
@@ -1260,6 +1263,13 @@ button {
 /* With every filter behind the single Filter chip, the whole bar fits one
    row: Filter · view controls · actions. It only wraps when it must. */
 
+/* The Filter chip stands a step further from the view controls than the 8px
+   grid would put it, so it reads as its own thing and not as the last of the
+   view toggles. */
+.control-group--filter {
+  margin-left: 8px;
+}
+
 /* One divider, right before the actions group - so the Select button reads
    clearly apart from the Merge toggle next to it. */
 .control-group--actions {
@@ -1330,7 +1340,7 @@ button {
 .filter-field {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -1471,6 +1481,14 @@ textarea:focus-visible {
 .filter-bar.filter-bar--sticky .tag-filter-btn {
   background: transparent;
   border-color: transparent;
+  /* The same height as the boxed controls beside it. The invisible padding
+     and border (5 + 1px) are pulled back by the negative margin, so the eye
+     measures the row's 8px step from the neighbour's edge to the label, not
+     to a box it cannot see. The hover fill then stops 2px short of the
+     neighbour. */
+  height: var(--control-h-sm);
+  padding: 0 5px;
+  margin: 0 -6px;
 }
 
 .filter-bar.filter-bar--sticky select:hover,
@@ -1483,13 +1501,6 @@ textarea:focus-visible {
 .filter-bar.filter-bar--sticky .tag-filter-btn.active {
   background: var(--accent-soft);
   border-color: transparent;
-}
-
-/* The library's sort order. A fixed width, fitted to the longest name, so
-   picking another order moves nothing beside it. */
-.sort-dropdown .dropdown-btn {
-  width: 132px;
-  justify-content: space-between;
 }
 
 /* Chip + popover (FilterChip): a quiet toolbar chip that opens a panel. The
@@ -1537,6 +1548,9 @@ textarea:focus-visible {
 .filter-bar.filter-bar--sticky .filter-dock .tag-filter-btn {
   background: var(--bg);
   border-color: var(--border);
+  height: auto;
+  padding: 5px 9px;
+  margin: 0;
 }
 
 /* The filter menu: one labelled row per filter, full-width controls. Relative,
@@ -1650,6 +1664,12 @@ textarea:focus-visible {
 
 .filter-menu--docked .filter-menu-row--rating {
   flex: 0 0 96px;
+}
+
+/* Sort only ever says one of four short names; fitted to the longest so
+   picking another order moves nothing beside it. */
+.filter-menu--docked .filter-menu-row--sort {
+  flex: 0 0 124px;
 }
 
 /* The focal row carries its readout on the caption line (below), so it needs
@@ -4884,6 +4904,18 @@ input.editor-preset-select {
 
 .tag-filter-item input {
   cursor: pointer;
+}
+
+/* A parent in the tag tree that no photo carries as a tag of its own: it is
+   a row because something is filed under it, and ticking it finds all of
+   that. Quieter, so the eye reads it as a folder, not a tag. */
+.tag-filter-item--implied > span {
+  color: var(--text-muted);
+}
+
+/* The parents of a tag inside a chip ("Travel/Italy/" before "Rome"). */
+.tag-chip-path {
+  color: var(--text-muted);
 }
 
 .tag-filter-empty {
@@ -8759,6 +8791,44 @@ kbd {
   margin-left: 24px;
 }
 
+/* Settings > Tags: the tag tree, one row per tag, children indented. */
+.settings-tag-tree {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.settings-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 13px;
+}
+.settings-tag-row .settings-tag-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A parent no photo carries as a tag of its own: a folder, not a tag. */
+.settings-tag-row--implied .settings-tag-name {
+  color: var(--text-muted);
+}
+.settings-tag-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-right: 2px;
+}
+.settings-tag-row .icon-btn {
+  /* Always in the row, so nothing shifts; only the colour comes and goes. */
+  color: transparent;
+}
+.settings-tag-row:hover .icon-btn,
+.settings-tag-row .icon-btn:focus-visible {
+  color: var(--text-muted);
+}
+
 /* A toggle row: checkbox/radio + a title and optional description. Used for
    every checkbox and radio in Settings so they line up identically. */
 .settings-option {
@@ -9133,7 +9203,8 @@ button.smart-card {
 .stats-card--wide,
 .stats-cards,
 .stats-page-sub,
-.stats-section-label {
+.stats-section-label,
+.stats-filterbar {
   max-width: 1080px;
 }
 
@@ -9347,7 +9418,7 @@ button.smart-card {
   );
   animation: stats-grow-x 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
   transform-origin: left center;
-  transition: opacity 0.14s ease;
+  transition: opacity 0.14s ease, width 0.35s ease;
 }
 
 .stats-bar-count {
@@ -9465,7 +9536,7 @@ button.smart-card {
   opacity: 0.85;
   animation: stats-grow-y 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
   transform-origin: bottom center;
-  transition: opacity 0.14s ease;
+  transition: opacity 0.14s ease, height 0.35s ease, background-color 0.14s ease;
 }
 
 /* The busiest year (called out in the card's header) stands at full strength,
@@ -9495,6 +9566,166 @@ button.smart-card {
   color: var(--text);
 }
 
+/* --- Cross-filtering: every bar and column is a button that pins its value.
+   The pinned row/column holds full strength with an accent tint, the rest of
+   its chart steps back (opacity is set inline alongside the bar's length);
+   other charts simply show fewer/shorter bars. */
+.stats-content {
+  transition: opacity 0.14s ease;
+}
+
+/* The previous numbers stay up while a new pinned set loads, just quieter. */
+.stats-content.is-refetching {
+  opacity: 0.72;
+}
+
+/* Pinned-value chips on the left, Clear / Show in library on the right. Fixed
+   minimum height and hidden-not-removed actions: pinning the first value must
+   not push the tiles down. */
+.stats-filterbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  max-width: 1080px;
+  margin: 0 0 12px;
+}
+
+.stats-filterbar-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stats-filterbar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stats-chip {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.stats-chip-dim {
+  color: var(--text-muted);
+}
+
+.stats-filterbar-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stats-filterbar.is-idle .stats-filterbar-actions {
+  visibility: hidden;
+}
+
+/* Bar rows: the clickable ones are real buttons in the row's clothes. The
+   row's padding is pulled back out with negative margins so bars and divs
+   line up to the pixel. */
+.stats-bar-row {
+  padding: 2px 6px;
+  margin: 0 -6px;
+}
+
+button.stats-bar-row {
+  width: calc(100% + 12px);
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.14s ease;
+}
+
+.stats-bar-row.is-clickable:hover {
+  background: var(--hover);
+}
+
+.stats-bar-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.stats-bar-row.is-selected {
+  background: var(--accent-soft);
+}
+
+.stats-bar-row.is-selected .stats-bar-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.stats-bar-row.is-selected .stats-bar-count {
+  color: var(--text);
+}
+
+/* Columns: same deal, a button per column. */
+button.stats-col {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+button.stats-col:disabled {
+  cursor: default;
+}
+
+.stats-col:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.stats-cols.has-selection .stats-col:not(.is-selected) .stats-col-bar {
+  opacity: 0.35;
+}
+
+.stats-cols.has-selection .stats-col:not(.is-selected):hover:not(:disabled) .stats-col-bar,
+.stats-col.is-selected .stats-col-bar {
+  opacity: 1;
+}
+
+.stats-col.is-selected .stats-col-bar {
+  background: var(--accent);
+}
+
+.stats-col.is-selected .stats-col-count,
+.stats-col.is-selected .stats-col-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* A chart emptied by the current filters keeps its card. The wide (column)
+   cards match the chart's height so the timeline doesn't jump. */
+.stats-card-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* The timeline stacks several wide cards; same gap as the card grid. */
+.stats-card--wide + .stats-card--wide {
+  margin-top: 10px;
+}
+
+.stats-card--wide .stats-card-empty {
+  height: 200px;
+  margin-top: 10px;
+}
+
 /* Bars and columns grow in once, from their own baseline, so the page reads
    as data arriving rather than as a static table. */
 @keyframes stats-grow-x {
@@ -9520,6 +9751,7 @@ button.smart-card {
   .stat-tile-meter-fill,
   .stats-col-bar {
     animation: none;
+    transition: none;
   }
 
   .stat-tile:hover {

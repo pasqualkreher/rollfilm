@@ -119,6 +119,19 @@ export interface ImportSettings {
   // Whether a copy session keeps its import folder as a backup: pre-selected
   // in the start dialog, and the answer when the dialog is skipped.
   backup_default: ImportBackupDefault;
+  // Whether stars, colour labels, keywords and captions another program wrote
+  // into the files (or .xmp sidecars beside them) come in with the photos.
+  read_file_metadata: boolean;
+}
+
+export interface SidecarSettings {
+  // Whether an .xmp sidecar beside each managed original is kept up to date
+  // with the photo's stars, label, tags and note.
+  enabled: boolean;
+  // The "write them all now" pass: running, and how far it is.
+  active: boolean;
+  total: number;
+  done: number;
 }
 
 export interface AutoDevelopSettings {
@@ -676,13 +689,38 @@ export interface DirListing {
 }
 
 // One labeled count in the stats dashboard (a camera, a year, a bucket).
+// `key` is what gets sent back to pin the value as a filter; `lo`/`hi` are the
+// bucket's numeric bounds where it has them (focal, ISO, aperture).
 export interface StatCount {
+  key: string;
   name: string;
   count: number;
+  lo?: number | null;
+  hi?: number | null;
 }
 
-// Aggregate snapshot for the statistics dashboard (GET /stats/library).
+// One pinned value per dimension on the statistics page (GET /stats/library
+// query params). Bucket dimensions carry the bucket's key ("wide", "iso_400").
+export interface StatsFilters {
+  camera?: string;
+  lens?: string;
+  focal?: string;
+  year?: string;
+  month?: string;
+  rating?: string;
+  file_type?: string;
+  iso?: string;
+  aperture?: string;
+  shutter?: string;
+  country?: string;
+}
+
+// Aggregate snapshot for the statistics dashboard (GET /stats/library). The
+// headline counts honour every pinned filter; each list is computed with its
+// own dimension lifted, so the chart you clicked keeps its alternatives.
 export interface LibraryStats {
+  library_total_photos: number;
+  available: string[];
   total_photos: number;
   total_bytes: number;
   raw_count: number;
@@ -695,9 +733,15 @@ export interface LibraryStats {
   lens_count: number;
   cameras: StatCount[];
   lenses: StatCount[];
+  countries: StatCount[];
   focal_buckets: StatCount[];
+  isos: StatCount[];
+  apertures: StatCount[];
+  shutters: StatCount[];
   years: StatCount[];
+  months: StatCount[];
   ratings: StatCount[];
+  file_types: StatCount[];
   first_taken_at: string | null;
   last_taken_at: string | null;
 }
@@ -822,6 +866,14 @@ export interface LibraryMergeProgress {
 // One of the user's own tags with how many photos (outside the Trash) carry
 // it - the Settings list that deletes a tag from every photo at once.
 export interface TagUsage {
+  // The full path: "Travel/Italy/Rome" is Rome filed under Italy under Travel.
   name: string;
   count: number;
+  // From an imported keyword list: stays without photos until deleted.
+  kept: boolean;
+}
+
+export interface TagImportResult {
+  created: number;
+  existing: number;
 }

@@ -39,10 +39,21 @@ class ExifData:
     focal_length: float | None = None
     gps_lat: float | None = None
     gps_lon: float | None = None
+    # What another program - or the photographer, through it - said about the
+    # photo: stars, colour label, keywords, title and caption, from the XMP /
+    # IPTC blocks in the file or a sidecar beside it (see read_exif). Keywords
+    # are "/"-joined paths ("Travel/Italy/Rome") when the writer kept a
+    # hierarchy, plain words otherwise - the same shape the tag service uses.
+    rating: int | None = None
+    label: str | None = None
+    keywords: tuple[str, ...] = ()
+    title: str | None = None
+    caption: str | None = None
 
     def to_json(self) -> str:
         data = asdict(self)
         data["taken_at"] = self.taken_at.isoformat() if self.taken_at else None
+        data["keywords"] = list(self.keywords)
         return json.dumps(data)
 
 
@@ -251,11 +262,154 @@ _EXIF_TAGS = [
     "EXIF:FocalLength",
     "Composite:GPSLatitude",
     "Composite:GPSLongitude",
+    # The library-side metadata other programs write (group-0 names, which is
+    # how -G reports them: XMP-dc:Subject comes back as "XMP:Subject").
+    "XMP:Rating",
+    "XMP:Label",
+    "XMP:ColorLabel",  # digiKam: a number, see _DIGIKAM_COLOR_LABELS
+    "XMP:Subject",
+    "XMP:HierarchicalSubject",  # Lightroom / Bridge / darktable: "A|B|C"
+    "XMP:TagsList",  # digiKam: "A/B/C"
+    "IPTC:Keywords",
+    "XMP:Title",
+    "XMP:Description",
+    "IPTC:Caption-Abstract",
 ]
+
+# The colour labels the two big writers use, mapped onto the library's own.
+# Lightroom and Bridge write a word in the UI language (the English and
+# German sets cover most libraries); digiKam writes a number.
+_LABEL_WORDS = {
+    "red": "red", "rot": "red",
+    "orange": "orange",
+    "yellow": "yellow", "gelb": "yellow",
+    "green": "green", "grün": "green", "gruen": "green",
+    "blue": "blue", "blau": "blue",
+    "purple": "magenta", "lila": "magenta", "violett": "magenta", "magenta": "magenta",
+    "gray": "gray", "grey": "gray", "grau": "gray",
+}
+_DIGIKAM_COLOR_LABELS = {
+    1: "red", 2: "orange", 3: "yellow", 4: "green", 5: "blue", 6: "magenta", 7: "gray",
+}
+
+# Where a sidecar can sit, in the order they are tried: "IMG_0001.xmp" is what
+# Lightroom, Bridge, darktable and digiKam's default write; "IMG_0001.RAF.xmp"
+# is digiKam's (and exiftool's) other convention. Both spellings of the
+# extension, for file systems that care.
+_SIDECAR_SUFFIXES = (".xmp", ".XMP")
+
+
+def sidecar_path(path: Path) -> Path | None:
+    """The XMP sidecar lying beside `path`, if there is one."""
+    for suffix in _SIDECAR_SUFFIXES:
+        for candidate in (path.with_suffix(suffix), path.with_name(path.name + suffix)):
+            if candidate != path and candidate.is_file():
+                return candidate
+    return None
+
+
+def _as_list(value) -> list[str]:
+    """exiftool hands a list tag back as a list when it has several values
+    and as a bare string when it has one; a number can slip through too."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, (list, tuple)):
+        items = value
+    else:
+        items = [value]
+    out: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _keyword_paths(metadata: dict) -> tuple[str, ...]:
+    """The photo's keywords as "/"-joined paths, hierarchy first.
+
+    A hierarchical writer stores the same keyword twice - the path in
+    lr:hierarchicalSubject (or digiKam's TagsList) and the leaf in dc:Subject -
+    so a flat word that is the leaf of a path already taken is the same tag
+    and is dropped; any other flat word is a tag of its own."""
+    paths: list[str] = []
+    seen: set[str] = set()
+
+    def _take(path: str) -> None:
+        parts = [p.strip() for p in path.split("/")]
+        parts = [p for p in parts if p]
+        if not parts:
+            return
+        joined = "/".join(parts)
+        if joined.casefold() in seen:
+            return
+        seen.add(joined.casefold())
+        paths.append(joined)
+
+    for raw in _as_list(metadata.get("XMP:HierarchicalSubject")):
+        _take(raw.replace("|", "/"))
+    for raw in _as_list(metadata.get("XMP:TagsList")):
+        _take(raw)
+    leaves = {p.rsplit("/", 1)[-1].casefold() for p in paths}
+    for raw in _as_list(metadata.get("XMP:Subject")) + _as_list(metadata.get("IPTC:Keywords")):
+        word = raw.strip()
+        if word and word.casefold() not in leaves and "/" not in word and "|" not in word:
+            _take(word)
+        elif word and ("/" in word or "|" in word) and word.replace("|", "/").casefold() not in seen:
+            # A path written into the flat field (some tools do): still a path.
+            _take(word.replace("|", "/"))
+    return tuple(paths)
+
+
+def _rating(value) -> int | None:
+    """xmp:Rating, 0-5. -1 means "rejected" in Lightroom, Bridge and
+    digiKam; the library has no reject flag, so that reads as unrated."""
+    rating = to_int(value)
+    if rating is None:
+        return None
+    return max(0, min(5, rating))
+
+
+def _label(metadata: dict) -> str | None:
+    """The colour label, as the library names it, or None for none/unknown.
+    digiKam's number wins over the word: it is the explicit one."""
+    number = to_int(metadata.get("XMP:ColorLabel"))
+    if number is not None:
+        return _DIGIKAM_COLOR_LABELS.get(number) if number != 0 else None
+    word = metadata.get("XMP:Label")
+    if word in (None, ""):
+        return None
+    return _LABEL_WORDS.get(str(word).strip().casefold())
+
+
+def _text(value) -> str | None:
+    """A lang-alt / string tag as one trimmed string, or None when empty."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> ExifData:
-    metadata = (helper or _get_helper()).get_tags([str(path)], _EXIF_TAGS)[0]
+    """Everything the library records about a file at import: the camera's
+    data, and what another program left in the XMP/IPTC blocks or in a
+    sidecar next to the file. The sidecar is read in the same exiftool call
+    and its values win over the file's own: every program that writes one
+    treats it as the newer truth, and so does this one."""
+    files = [str(path)]
+    sidecar = sidecar_path(path)
+    if sidecar is not None:
+        files.append(str(sidecar))
+    results = (helper or _get_helper()).get_tags(files, _EXIF_TAGS)
+    metadata = dict(results[0]) if results else {}
+    if sidecar is not None and len(results) > 1:
+        for key, value in results[1].items():
+            # Only the library-side tags: a sidecar's "SourceFile" and its
+            # own dates must not displace what the camera wrote.
+            if key.startswith(("XMP:", "IPTC:")):
+                metadata[key] = value
 
     width = to_int(metadata.get("EXIF:ExifImageWidth") or metadata.get("File:ImageWidth"))
     height = to_int(metadata.get("EXIF:ExifImageHeight") or metadata.get("File:ImageHeight"))
@@ -323,12 +477,19 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
         focal_length=to_float(metadata.get("EXIF:FocalLength")),
         gps_lat=to_float(metadata.get("Composite:GPSLatitude")),
         gps_lon=to_float(metadata.get("Composite:GPSLongitude")),
+        rating=_rating(metadata.get("XMP:Rating")),
+        label=_label(metadata),
+        keywords=_keyword_paths(metadata),
+        title=_text(metadata.get("XMP:Title")),
+        caption=_text(metadata.get("XMP:Description"))
+        or _text(metadata.get("IPTC:Caption-Abstract")),
     )
 
 
 # ---- Writing ----------------------------------------------------------------
-# The one place the app writes metadata - and only ever into a file it has
-# just made itself (an export). A photo of the user's is never written to.
+# Metadata is written in two places, and never into a photo of the user's:
+# here, into a file the app has just made itself (an export), and in
+# services/sidecar.py, into an .xmp file beside the original.
 
 
 @dataclass
@@ -338,6 +499,7 @@ class LibraryMetadata:
 
     rating: int = 0
     label: str | None = None
+    # Tag paths as the library keeps them ("Travel/Italy/Rome" or "Rome").
     keywords: tuple[str, ...] = ()
 
 
@@ -354,6 +516,31 @@ _LOCATION_NAME_TAGS = (
     "IPTC:Country-PrimaryLocationCode",
     "IPTC:Sub-location",
 )
+
+
+def keyword_args(paths: tuple[str, ...] | list[str]) -> list[str]:
+    """The exiftool arguments that put tag paths into a file the way the
+    hierarchical writers do: the leaf in dc:Subject and IPTC:Keywords (what
+    every reader shows), the whole path in lr:hierarchicalSubject
+    ("A|B|C", Lightroom, Bridge, darktable) and digiKam's TagsList ("A/B/C").
+    Remove-then-add, so a tag the file already carries isn't doubled."""
+    args: list[str] = []
+    for path in paths:
+        parts = [p for p in path.split("/") if p]
+        if not parts:
+            continue
+        leaf = parts[-1]
+        args += [
+            f"-XMP-dc:Subject-={leaf}", f"-XMP-dc:Subject+={leaf}",
+            f"-IPTC:Keywords-={leaf}", f"-IPTC:Keywords+={leaf}",
+        ]
+        piped = "|".join(parts)
+        slashed = "/".join(parts)
+        args += [
+            f"-XMP-lr:HierarchicalSubject-={piped}", f"-XMP-lr:HierarchicalSubject+={piped}",
+            f"-XMP-digiKam:TagsList-={slashed}", f"-XMP-digiKam:TagsList+={slashed}",
+        ]
+    return args
 
 
 def write_export_metadata(
@@ -410,12 +597,7 @@ def write_export_metadata(
             args.append(f"-XMP:Rating={int(library.rating)}")
         if library.label:
             args.append(f"-XMP:Label={library.label.capitalize()}")
-        for word in library.keywords:
-            # Remove-then-add: a tag the file already carries isn't doubled.
-            args += [
-                f"-XMP-dc:Subject-={word}", f"-XMP-dc:Subject+={word}",
-                f"-IPTC:Keywords-={word}", f"-IPTC:Keywords+={word}",
-            ]
+        args += keyword_args(library.keywords)
         if library.keywords:
             args.append("-IPTC:CodedCharacterSet=UTF8")
 

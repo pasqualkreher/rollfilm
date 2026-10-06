@@ -29,6 +29,7 @@ import type {
   ImportMode,
   ImportSessionOut,
   ImportSettings,
+  SidecarSettings,
   ImportSessionRescan,
   ImportSessionSummary,
   LibraryFacets,
@@ -37,6 +38,7 @@ import type {
   LibraryMergeProgress,
   LibraryMergeSummary,
   LibraryStats,
+  StatsFilters,
   RawDecodeSettings,
   ScanStatus,
   SearchResultOut,
@@ -46,6 +48,7 @@ import type {
   SourceRoot,
   StagedFileOut,
   StagedFileUpdatePatch,
+  TagImportResult,
   TagUsage,
   TrashSettings,
 } from "./types";
@@ -1313,6 +1316,8 @@ export const api = {
     },
   },
   tags: {
+    // Every tag a live photo carries, plus the kept ones from an imported
+    // keyword list. A name is a full path ("Travel/Italy/Rome").
     list(): Promise<string[]> {
       return request(`/tags`);
     },
@@ -1320,8 +1325,28 @@ export const api = {
     usage(): Promise<TagUsage[]> {
       return request(`/tags/usage`);
     },
-    remove(name: string): Promise<void> {
-      return request(`/tags/${encodeURIComponent(name)}`, { method: "DELETE" });
+    // With `withChildren`, everything filed under the tag goes too.
+    remove(name: string, withChildren = false): Promise<void> {
+      const query = withChildren ? "?with_children=true" : "";
+      return request(`/tags/${encodeURIComponent(name)}${query}`, { method: "DELETE" });
+    },
+    // Renames the tag and everything filed under it; a path with other
+    // parents moves it in the tree.
+    rename(name: string, newName: string): Promise<TagUsage[]> {
+      return request(`/tags/${encodeURIComponent(name)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: newName }),
+      });
+    },
+    // The tag tree as the tab-indented keyword list Lightroom, Bridge and
+    // digiKam read and write.
+    async exportList(): Promise<string> {
+      const res = await fetch(`${BASE_URL}/tags/export`);
+      if (!res.ok) throw new Error(`GET /tags/export failed: ${res.status}`);
+      return res.text();
+    },
+    importList(text: string): Promise<TagImportResult> {
+      return request(`/tags/import`, { method: "POST", body: JSON.stringify({ text }) });
     },
   },
   settings: {
@@ -1360,6 +1385,17 @@ export const api = {
     // Partial: only the fields sent change.
     updateImport(patch: Partial<ImportSettings>): Promise<ImportSettings> {
       return request(`/settings/import`, { method: "PUT", body: JSON.stringify(patch) });
+    },
+    // Whether .xmp sidecars are written beside the originals, and how far a
+    // running "write them all" pass is.
+    getSidecar(): Promise<SidecarSettings> {
+      return request(`/settings/sidecar`);
+    },
+    updateSidecar(enabled: boolean): Promise<SidecarSettings> {
+      return request(`/settings/sidecar`, { method: "PUT", body: JSON.stringify({ enabled }) });
+    },
+    writeAllSidecars(): Promise<SidecarSettings> {
+      return request(`/settings/sidecar/write-all`, { method: "POST" });
     },
     // The export dialog's saved presets and the options it was last used with.
     getExport(): Promise<ExportSettings> {
@@ -1426,8 +1462,13 @@ export const api = {
   },
 
   stats: {
-    library(): Promise<LibraryStats> {
-      return request(`/stats/library`);
+    library(filters: StatsFilters = {}): Promise<LibraryStats> {
+      const params = new URLSearchParams();
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+      });
+      const qs = params.toString();
+      return request(`/stats/library${qs ? `?${qs}` : ""}`);
     },
   },
 };

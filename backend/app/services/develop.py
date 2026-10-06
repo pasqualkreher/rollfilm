@@ -135,7 +135,10 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     # "6" is "5" with a Calibration primary moving its whole band of colours
     # by the same amount (develop_color.apply_color_calibration); before, a
     # colour off the centre of its band - a leaf under Green - got part of it.
-    "process": ("1", ("1", "2", "3", "4", "5", "6")),
+    # "7" is "6" with Fujifilm's cubes fed the scene colours they were made
+    # for (film_sims._SCENE_MIX): greens no longer yellowish and flat against
+    # the camera's own rendering of the look.
+    "process": ("1", ("1", "2", "3", "4", "5", "6", "7")),
     # Which exposure a RAW is developed from (see thumbnails._browsing_gain).
     # "standard" lifts every raw to the same brightness with the auto-exposure
     # gain the grid already uses (raw.compute_base_gain), so a photo opens the
@@ -205,7 +208,7 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # The process version a photo's first edit starts on (see ENUM_SPEC["process"]).
-CURRENT_PROCESS = "6"
+CURRENT_PROCESS = "7"
 
 # Identity point curve: pass-through on the 0..255 grid.
 _IDENTITY_CURVE = [[0, 0], [255, 255]]

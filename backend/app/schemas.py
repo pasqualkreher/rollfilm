@@ -108,10 +108,31 @@ class ImageRenameResult(BaseModel):
 
 class TagUsage(BaseModel):
     """One of the user's own tags with how many photos (not in the Trash)
-    carry it - the Settings list that lets a tag be deleted outright."""
+    carry it - the Settings list that lets a tag be deleted outright. A tag
+    is its full path ("Travel/Italy/Rome"); `kept` marks one that stays
+    without photos because it came in with an imported keyword list."""
 
     name: str
     count: int
+    kept: bool = False
+
+
+class TagRenameRequest(BaseModel):
+    # The tag's new full path. Renaming "Travel" to "Trips" renames every
+    # "Travel/…" tag along with it; a path can also move a tag under another.
+    name: str
+
+
+class TagImportRequest(BaseModel):
+    # A keyword list as Lightroom, Bridge and digiKam export it: one tag per
+    # line, children indented by a tab under their parent. "A/B/C" lines are
+    # taken as paths too.
+    text: str
+
+
+class TagImportResult(BaseModel):
+    created: int
+    existing: int
 
 
 class AddTagRequest(BaseModel):
@@ -941,6 +962,9 @@ class ImportSettingsOut(BaseModel):
     # Whether a copy session keeps its collection folder as a backup: the
     # start dialog's pre-selection, and the answer when the dialog is skipped.
     backup_default: Literal["keep", "delete"]
+    # Whether stars, colour labels, keywords and captions another program
+    # wrote into the files (or .xmp sidecars beside them) come in with them.
+    read_file_metadata: bool
 
 
 class ImportSettingsUpdate(BaseModel):
@@ -949,6 +973,21 @@ class ImportSettingsUpdate(BaseModel):
     after_commit: Literal["ask", "keep", "close"] | None = None
     select_default: Literal["select", "deselect"] | None = None
     backup_default: Literal["keep", "delete"] | None = None
+    read_file_metadata: bool | None = None
+
+
+class SidecarSettingsOut(BaseModel):
+    # Whether an .xmp sidecar beside each managed original is kept up to date
+    # with the photo's stars, label, tags and note (see services/sidecar.py).
+    enabled: bool
+    # The "write them all now" job: running, and how far it is.
+    active: bool
+    total: int
+    done: int
+
+
+class SidecarSettingsUpdate(BaseModel):
+    enabled: bool
 
 
 class TrashSettingsOut(BaseModel):
@@ -1179,15 +1218,28 @@ class LibraryMergeProgressOut(BaseModel):
 
 
 class StatCount(BaseModel):
-    """One labeled count in the stats dashboard (a camera, a year, a bucket)."""
+    """One labeled count in the stats dashboard (a camera, a year, a bucket).
+    `key` is what the client sends back to pin this value as a filter; for
+    buckets it is a stable id ("wide", "iso_400"), otherwise the name."""
 
+    key: str
     name: str
     count: int
+    # Numeric bucket bounds (focal, ISO, aperture; lo <= v < hi, hi open-ended
+    # when None) so the client can translate a bucket into a library filter.
+    lo: float | None = None
+    hi: float | None = None
 
 
 class LibraryStats(BaseModel):
-    """Aggregate snapshot for the statistics dashboard."""
+    """Aggregate snapshot for the statistics dashboard. The headline counts
+    honour every pinned filter; each list is computed with its own dimension
+    lifted (see routes/stats.py)."""
 
+    # The whole library, no filters - for "1,234 of 56,789 photos".
+    library_total_photos: int
+    # Dimensions the unfiltered library has any data for (chart shown at all).
+    available: list[str]
     total_photos: int
     total_bytes: int
     raw_count: int
@@ -1200,9 +1252,15 @@ class LibraryStats(BaseModel):
     lens_count: int
     cameras: list[StatCount]
     lenses: list[StatCount]
+    countries: list[StatCount]
     focal_buckets: list[StatCount]
+    isos: list[StatCount]
+    apertures: list[StatCount]
+    shutters: list[StatCount]
     years: list[StatCount]
+    months: list[StatCount]
     ratings: list[StatCount]
+    file_types: list[StatCount]
     first_taken_at: datetime | None = None
     last_taken_at: datetime | None = None
 

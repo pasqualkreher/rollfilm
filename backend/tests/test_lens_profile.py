@@ -281,6 +281,32 @@ def test_a_radial_profile_corrects_like_the_fuji_tables():
     assert np.abs(a - b).max() < 2e-3
 
 
+def test_the_correction_keeps_fine_detail():
+    """The remap resamples every pixel at a fractional offset. Bilinear
+    averaged neighbours there and halved the detail energy of every corrected
+    raw (the "RAWs look soft" complaint, 2026-10-06); bicubic keeps it. The
+    Laplacian energy of a corrected detailed frame stays close to the
+    uncorrected frame's - a tolerance, not an exact figure (cv2 differs by an
+    ulp across platforms)."""
+    import cv2
+
+    h, w = 600, 900
+    rng = np.random.default_rng(3)
+    # Fine detail: a noise texture in the band the remap blurs first.
+    arr = np.repeat(cv2.GaussianBlur(rng.random((h, w), dtype=np.float32), (0, 0), 0.6)[..., None], 3, axis=2)
+    arr = np.ascontiguousarray(arr)
+    prof = _profile(dist=-3.0)
+
+    def energy(a: np.ndarray) -> float:
+        c = a[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4, 1]
+        return float(cv2.Laplacian(c, cv2.CV_32F).var())
+
+    out = lens_profile.apply_profile(arr, prof, 1.0, 0.0)
+    assert np.abs(out - arr).max() > 0.01  # the correction did move pixels
+    assert energy(out) >= 0.8 * energy(arr)  # bilinear left ~0.55 here
+    assert float(out.min()) >= 0.0  # bicubic overshoot is clamped
+
+
 def _structured(h: int, w: int) -> np.ndarray:
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
     g = 0.5 + 0.3 * np.sin(xs / 7.0) * np.cos(ys / 5.0)

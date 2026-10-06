@@ -62,6 +62,19 @@ AgX: like the stills shoulder it is a factor per scene luminance in front of
 the untouched cube, the one that makes the cube's grey ramp come out where
 AgX puts it (_agx_factors).
 
+Process version 7 feeds Fujifilm's cubes the colours they were made for.
+Measured against Fujifilm's stills rendering (the camera-matching profiles
+Adobe ships, as cubes; tools/film_sim_fit/reference.py --hues --candidates),
+the textbook BT.709 -> BT.2020 matrix in front of F-Log2 left every look's
+greens 6-8 degrees toward yellow (Classic Neg. 12), a lightness step too
+light and 10-15 % short of chroma - the "different green" of the camera's
+foliage. One 3x3 on the scene colours in front of that matrix (_SCENE_MIX,
+rows summing to 1 so grey stays grey) takes it out for all of them at once:
+foliage within 2 degrees and dE 0.3-0.8 against the still, the colour error
+halved overall. A chroma factor alone moved nothing of the drift. The film
+looks baked from the textbook F-Gamut (ANALOG_SIMS) are not mixed: for them
+that matrix is right by construction.
+
 The analog film looks (ANALOG_SIMS) are film stocks, not camera simulations: a
 negative, developed and printed on its paper, or a slide, scanned - rendered
 by spektrafilm, Andrea Volpato's spectral simulation, into cubes of the same
@@ -229,6 +242,16 @@ _FILM_TONE = 0.75
 _FGAMUT_FROM_709 = np.array([[0.627404, 0.329283, 0.043313],
                              [0.069097, 0.919540, 0.011362],
                              [0.016391, 0.088013, 0.895595]], dtype=np.float32)
+# Process version 7: the scene colours Fujifilm's cubes expect, in front of
+# the matrix above. Fitted against Fujifilm's stills rendering of the nine
+# looks both publish (tools/film_sim_fit/reference.py --candidates, 2026-10,
+# on 54 RAFs and 20k synthetic colours; the same to +-0.05 fitted on either
+# alone or on one look). Rows sum to 1: grey stays grey.
+_SCENE_MIX = np.array([[1.2536, -0.4129, 0.1593],
+                       [0.0262, 0.9609, 0.0129],
+                       [0.0921, -0.1634, 1.0713]], dtype=np.float64)
+_SCENE_MIX /= _SCENE_MIX.sum(axis=1, keepdims=True)
+_FGAMUT_FROM_709_MIXED = (_FGAMUT_FROM_709.astype(np.float64) @ _SCENE_MIX).astype(np.float32)
 # F-Log2 OETF (Fujifilm's data sheet): scene reflectance -> code value 0..1.
 _FLOG2_A, _FLOG2_B, _FLOG2_C, _FLOG2_D = 5.555556, 0.064829, 0.245281, 0.384316
 _FLOG2_E, _FLOG2_F, _FLOG2_CUT = 8.799461, 0.092864, 0.000889
@@ -586,13 +609,20 @@ def _clut_scene_cube(sim: str) -> np.ndarray | None:
 def renders_as_still(adj: dict) -> bool:
     """Process version 4 and up: a look rendered from a scene cube gets the
     anchor and the stills shoulder, and the derived cubes count."""
-    return adj.get("process") in ("4", "5", "6")
+    return adj.get("process") in ("4", "5", "6", "7")
+
+
+def mixes_scene(adj: dict) -> bool:
+    """Process version 7 and up: a look rendered from one of Fujifilm's cubes
+    (or a cube built on those) gets the scene colours the cube was made for
+    (_SCENE_MIX) instead of the textbook F-Gamut."""
+    return adj.get("process") == "7"
 
 
 def agx_under_look(adj: dict) -> bool:
     """Process version 5 and up with AgX chosen: a look rendered from a scene
     cube takes its tone curve from AgX instead of bringing its own."""
-    return adj.get("process") in ("5", "6") and adj.get("tone_mapper") == "agx"
+    return adj.get("process") in ("5", "6", "7") and adj.get("tone_mapper") == "agx"
 
 
 def _scene_cube(sim: str, still: bool) -> np.ndarray | None:
@@ -611,7 +641,7 @@ def official_sim(adj: dict, raw_source: bool) -> str | None:
     (apply_official) and the display colour block leaves the simulation
     alone."""
     sim = adj.get("film_sim")
-    if not raw_source or adj.get("process") not in ("3", "4", "5", "6") or not sim or sim == "none":
+    if not raw_source or adj.get("process") not in ("3", "4", "5", "6", "7") or not sim or sim == "none":
         return None
     if adj.get("lut_intensity", 100) <= 0 or _scene_cube(sim, renders_as_still(adj)) is None:
         return None
@@ -773,7 +803,7 @@ def _film_factors(sim: str, white: float) -> np.ndarray:
 
 
 def apply_official(
-    scene: np.ndarray, sim: str, stills_white: float | None = None, agx: bool = False
+    scene: np.ndarray, sim: str, stills_white: float | None = None, agx: bool = False, mix: bool = False
 ) -> np.ndarray:
     """Scene-linear BT.709 RGB (HxWx3 float32, 0.18 = middle grey, highlights
     above 1.0 welcome - F-Log2 holds them to about 58) through Fujifilm's cube
@@ -786,9 +816,14 @@ def apply_official(
     (_stills_factors), colour ratios kept, before the cube sees it.
 
     `agx` (process version 5) takes AgX's factors in their place
-    (_agx_factors): the look's colour on AgX's tone curve."""
+    (_agx_factors): the look's colour on AgX's tone curve.
+
+    `mix` (process version 7) puts the scene colours through _SCENE_MIX first,
+    the colours Fujifilm's cubes were made for; a film look baked from the
+    textbook F-Gamut (ANALOG_SIMS) is left as it is."""
     still = stills_white is not None
     cube = _scene_cube(sim, still or agx)
+    to_fgamut = _FGAMUT_FROM_709_MIXED if mix and sim not in ANALOG_SIMS else _FGAMUT_FROM_709
     # AgX's factors, and a film look's as a still, run over stops.
     over_stops = agx or (still and sim in _FILM_SIMS)
     if over_stops:
@@ -820,12 +855,12 @@ def apply_official(
                 cv2.log(at, at)
             at -= first
             at *= per_step
-            x = cv2.transform(band, _FGAMUT_FROM_709)
+            x = cv2.transform(band, to_fgamut)
             x *= cv2.remap(
                 factors, at, np.zeros_like(at), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
             )[..., None]
         else:
-            x = band @ _FGAMUT_FROM_709.T
+            x = band @ to_fgamut.T
         out[y0:y0 + _SAMPLE_BAND_ROWS] = _sample_band(_flog2(np.maximum(x, 0.0, out=x)), cube)
     return np.clip(out, 0.0, 1.0, out=out)
 

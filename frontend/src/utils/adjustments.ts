@@ -341,11 +341,16 @@ export type FilmSim =
 // the tone mapper set the tone curve under such a look (AgX), where "3" and
 // "4" ignore it; "6" has a Calibration primary move its whole band of colours
 // by the same amount, where before a colour off the centre of the band (a
-// leaf under Green) got part of it.
-export type ProcessVersion = "1" | "2" | "3" | "4" | "5" | "6";
-export const CURRENT_PROCESS: ProcessVersion = "6";
+// leaf under Green) got part of it; "7" feeds Fujifilm's film simulation
+// cubes the scene colours they were made for, so greens no longer come out
+// yellowish and flat against the camera's own rendering.
+export type ProcessVersion = "1" | "2" | "3" | "4" | "5" | "6" | "7";
+export const CURRENT_PROCESS: ProcessVersion = "7";
 // The last process on which Calibration renders the old way.
 const LAST_BELL_CALIBRATION: ProcessVersion = "5";
+// The last process on which the looks render from the unmixed scene; the one
+// an edit on "5" moves to when a Calibration slider is first touched.
+const LAST_UNMIXED_LOOK: ProcessVersion = "6";
 
 // Which exposure a RAW is developed from (see develop.ENUM_SPEC["raw_base"]).
 // "standard" opens every raw at the same brightness - the auto-exposed picture
@@ -484,7 +489,8 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
     raw.process === "3" ||
     raw.process === "4" ||
     raw.process === "5" ||
-    raw.process === "6"
+    raw.process === "6" ||
+    raw.process === "7"
       ? raw.process
       : usesLegacyLook(raw)
         ? "1"
@@ -798,10 +804,14 @@ export const FILM_SIM_SECTIONS: { group?: (typeof FILM_SIM_GROUPS)[number]; sims
 export const FILM_SIM_ORDER: FilmSim[] = FILM_SIM_SECTIONS.flatMap((section) => section.sims.map((f) => f.value));
 
 // The process an older edit moves to when it takes a look or a tone mapper in
-// its current form: the current one, unless it has Calibration set - that
-// renders differently there, and the move must change nothing else.
+// its current form: the current one, unless it has Calibration set the old
+// way - that renders differently from "6" on, and the move must change
+// nothing but the look.
 export function processForCurrentLooks(a: Adjustments): ProcessVersion {
-  return calibrationIsNeutral(a) ? CURRENT_PROCESS : LAST_BELL_CALIBRATION;
+  if (calibrationIsNeutral(a) || a.process === LAST_UNMIXED_LOOK || a.process === CURRENT_PROCESS) {
+    return CURRENT_PROCESS;
+  }
+  return LAST_BELL_CALIBRATION;
 }
 
 export function calibrationIsNeutral(a: Adjustments): boolean {
@@ -812,15 +822,15 @@ export function calibrationIsNeutral(a: Adjustments): boolean {
 // whose Calibration was untouched takes Calibration in its current form (an
 // edit on "5" moves on; with Calibration neutral that changes nothing else).
 export function withCalibration(a: Adjustments, key: keyof ColorCalibration, v: number): Adjustments {
-  const process = a.process === LAST_BELL_CALIBRATION && calibrationIsNeutral(a) ? CURRENT_PROCESS : a.process;
+  const process = a.process === LAST_BELL_CALIBRATION && calibrationIsNeutral(a) ? LAST_UNMIXED_LOOK : a.process;
   return { ...a, process, color_calibration: { ...a.color_calibration, [key]: v } };
 }
 
 // An edit with the look `value` chosen. Choosing a look takes it in its current
-// form: an edit on process 2 or 3 moves to the current one, which differs in
-// nothing but how the simulations render.
+// form: an edit on process 2 and up moves to the current one, which differs in
+// nothing but how the simulations render (an edit on "1" keeps its recipes).
 export function withFilmSim(a: Adjustments, value: FilmSim): Adjustments {
-  return { ...a, film_sim: value, process: a.process === "2" || a.process === "3" ? processForCurrentLooks(a) : a.process };
+  return { ...a, film_sim: value, process: a.process === "1" ? a.process : processForCurrentLooks(a) };
 }
 
 // ---- The full non-destructive edit: geometry + the develop object.

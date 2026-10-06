@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -25,7 +25,9 @@ from app.services.settings_store import (
     IMPORT_AFTER_COMMIT,
     IMPORT_BACKUP_DEFAULT,
     IMPORT_MODE_DEFAULT,
+    IMPORT_READ_FILE_METADATA,
     IMPORT_SELECT_DEFAULT,
+    SIDECAR_WRITE,
     RAW_NATIVE_DECODE,
     SMART_ALBUM_PLACE_RADIUS_KM,
     SMART_ALBUM_SECTION_NAMES,
@@ -41,7 +43,9 @@ from app.services.settings_store import (
     get_import_after_commit,
     get_import_backup_default,
     get_import_mode_default,
+    get_import_read_file_metadata,
     get_import_select_default,
+    get_sidecar_write,
     get_raw_native_decode,
     get_setting,
     get_smart_album_config,
@@ -49,6 +53,7 @@ from app.services.settings_store import (
     set_setting,
 )
 from app.services import raw as raw_service
+from app.services import sidecar as sidecar_service
 from app.services import thumbnails as thumbnails_service
 from app.services.immich_sync import run_immich_sync_soon
 from app.services.trash import run_purge_soon
@@ -178,6 +183,7 @@ def _import_settings_out(db: Session) -> schemas.ImportSettingsOut:
         after_commit=get_import_after_commit(db),
         select_default=get_import_select_default(db),
         backup_default=get_import_backup_default(db),
+        read_file_metadata=get_import_read_file_metadata(db),
     )
 
 
@@ -207,8 +213,49 @@ def update_import_settings(
         set_setting(db, IMPORT_SELECT_DEFAULT, payload.select_default)
     if payload.backup_default is not None:
         set_setting(db, IMPORT_BACKUP_DEFAULT, payload.backup_default)
+    if payload.read_file_metadata is not None:
+        set_setting(db, IMPORT_READ_FILE_METADATA, "1" if payload.read_file_metadata else "0")
     db.commit()
     return _import_settings_out(db)
+
+
+def _sidecar_settings_out(db: Session) -> schemas.SidecarSettingsOut:
+    progress = sidecar_service.write_all_progress()
+    return schemas.SidecarSettingsOut(enabled=get_sidecar_write(db), **progress)
+
+
+@router.get("/sidecar", response_model=schemas.SidecarSettingsOut)
+def get_sidecar_settings(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """Whether .xmp sidecars are written beside the originals, and how far a
+    running "write them all" pass is (polled by Settings while it runs)."""
+    return _sidecar_settings_out(db)
+
+
+@router.put("/sidecar", response_model=schemas.SidecarSettingsOut)
+def update_sidecar_settings(
+    payload: schemas.SidecarSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    set_setting(db, SIDECAR_WRITE, "1" if payload.enabled else "0")
+    db.commit()
+    return _sidecar_settings_out(db)
+
+
+@router.post("/sidecar/write-all", response_model=schemas.SidecarSettingsOut, status_code=202)
+def write_all_sidecars(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """Write a sidecar for every managed photo now - for a library that just
+    switched the setting on, and after a restore (sidecars are not part of a
+    backup; they are reproduced from the database). Runs in the background;
+    GET /settings/sidecar says how far it is."""
+    if not get_sidecar_write(db):
+        raise HTTPException(status_code=409, detail="Switch sidecar writing on first.")
+    sidecar_service.start_write_all(current_user.id)
+    return _sidecar_settings_out(db)
 
 
 def _export_settings_out(db: Session) -> schemas.ExportSettingsOut:

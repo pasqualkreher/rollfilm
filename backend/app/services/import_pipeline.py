@@ -43,6 +43,11 @@ from app.services.filesystem import library_relative_path, resolve_image_path
 from app.services.hashing import perceptual_hash, sha256_file
 from app.services.immich_sync import immich_flagged
 from app.services.pairing import pair_library, pair_siblings
+from app.services.file_metadata import (
+    apply_file_metadata,
+    prefill_from_file,
+    share_pair_metadata,
+)
 from app.services.raw import (
     classify_file_type,
     default_tone_to_srgb,
@@ -55,6 +60,7 @@ from app.services.settings_store import (
     IMMICH_MODE_MANUAL,
     IMMICH_MODE_SELECTIVE,
     get_immich_config,
+    get_import_read_file_metadata,
     get_import_select_default,
 )
 from app.services.thumbnails import RENDER_SLOTS, THUMBNAIL_MAX_PX, THUMBNAIL_SCALE, derivative_dir
@@ -773,6 +779,12 @@ def _apply_analysis(session_id: str, owner_id: int, a: _Analyzed) -> None:
 
             staged.perceptual_hash = a.perceptual_hash
             staged.exif_json = a.exif_json
+            # What another program said about the photo comes in with it:
+            # stars and a colour label the user hasn't given in the review
+            # yet are pre-filled from the file (keywords and the caption
+            # follow at commit, see apply_file_metadata).
+            if get_import_read_file_metadata(db):
+                prefill_from_file(staged, a.exif_json)
 
             # A duplicate means byte-identical, and nothing softer. Flagging a
             # photo here unselects it and blocks re-selecting it, which is only
@@ -1646,6 +1658,7 @@ def commit_import_session(
     # (_find_moved_library_copy) adopts whatever the failed remainder left.
     _COMMIT_CHUNK = 200
     rows_since_commit = 0
+    read_file_metadata = get_import_read_file_metadata(db)
 
     for entry in plan:
         _progress_step(session.id)
@@ -1713,6 +1726,8 @@ def commit_import_session(
             )
             db.add(image)
         db.flush()
+        if read_file_metadata:
+            apply_file_metadata(db, owner_id, image, exif_dict)
         new_images.append(image)
         # The session may well stay open (see below): the file stays in it,
         # now reading as "already in library" exactly like a duplicate found at
@@ -1730,6 +1745,9 @@ def commit_import_session(
             rows_since_commit = 0
 
     pair_siblings(new_images)
+    if read_file_metadata and new_images:
+        db.flush()
+        share_pair_metadata(db, owner_id, new_images)
     # Cross-import pairing: a photo's RAW/JPEG partner may already be in the
     # library from an earlier import - link those up too (only the stems this
     # import touched, so the pass stays cheap).

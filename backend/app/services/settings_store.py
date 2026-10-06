@@ -71,6 +71,18 @@ IMPORT_SELECT_DEFAULT_CHOICES = ("select", "deselect")
 IMPORT_BACKUP_DEFAULT = "import_backup_default"
 IMPORT_BACKUP_DEFAULT_CHOICES = ("keep", "delete")
 
+# Whether an import takes over what another program wrote into a photo's XMP /
+# IPTC blocks or an .xmp sidecar beside it: stars, colour label, keywords,
+# caption. On unless switched off ("0") - a library that comes from Lightroom
+# or digiKam should arrive with what the photographer gave it.
+IMPORT_READ_FILE_METADATA = "import_read_file_metadata"
+
+# Whether the library keeps an .xmp sidecar beside each managed original with
+# the photo's stars, label, tags and note, so every other program reads them.
+# Off unless switched on ("1"): it writes files into the library folder, and
+# that is the user's call. See services/sidecar.py.
+SIDECAR_WRITE = "sidecar_write"
+
 # "1" when the Auto develop button is shown in the editor. Off by default: the
 # suggestion only becomes useful once the user has saved a few edits, so it's
 # an explicit opt-in from Settings (which explains how it learns).
@@ -238,6 +250,14 @@ def get_import_select_default(db: Session) -> str:
 def get_import_backup_default(db: Session) -> str:
     value = get_setting(db, IMPORT_BACKUP_DEFAULT)
     return value if value in IMPORT_BACKUP_DEFAULT_CHOICES else "delete"
+
+
+def get_import_read_file_metadata(db: Session) -> bool:
+    return get_setting(db, IMPORT_READ_FILE_METADATA) != "0"
+
+
+def get_sidecar_write(db: Session) -> bool:
+    return get_setting(db, SIDECAR_WRITE) == "1"
 
 
 def get_auto_develop_enabled(db: Session) -> bool:

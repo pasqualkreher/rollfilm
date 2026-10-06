@@ -21,6 +21,8 @@ from sqlalchemy.orm import Query, Session
 from app.db.models import FileType, Image, SourceRoot
 from app.db.session import SessionLocal
 from app.services.exif import capture_date_from_filename, read_exif
+from app.services.file_metadata import apply_file_metadata, apply_file_rating_and_label
+from app.services.settings_store import get_import_read_file_metadata
 from app.services import filesystem
 from app.services.filesystem import resolve_image_path
 from app.services.hashing import perceptual_hash, sha256_file
@@ -225,6 +227,12 @@ def _index_file(db, source_root: SourceRoot, path: Path, sha256: str | None = No
     )
     db.add(image)
     db.flush()
+    # What another program wrote into the file (or a sidecar beside it)
+    # comes in with the photo, as it does on an import - stars, label,
+    # keywords, caption. Same switch (Settings > Import).
+    if get_import_read_file_metadata(db):
+        apply_file_rating_and_label(image, exif)
+        apply_file_metadata(db, source_root.owner_id, image, exif)
     return image
 
 
