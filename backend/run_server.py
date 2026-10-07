@@ -138,6 +138,28 @@ def cap_native_thread_pools() -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
+def configure_api_token() -> None:
+    """Only the Rollfilm app may use the API (app/security.py). The desktop
+    shell writes its per-launch token to stdin; a backend started any other
+    way locks itself with a random token nobody knows. PM_API_OPEN=1 leaves it
+    open, but only from the source tree - the bundled backend ignores it."""
+    import logging
+
+    from app import security
+
+    if os.environ.get("PM_API_TOKEN_STDIN") == "1":
+        token = sys.stdin.readline().strip()
+        if token:
+            security.set_api_token(token)
+            return
+    if os.environ.get("PM_API_OPEN") == "1" and not getattr(sys, "frozen", False):
+        logging.getLogger(__name__).warning("PM_API_OPEN=1: the API accepts requests without a token")
+        security.set_api_token(None)
+        return
+    logging.getLogger(__name__).warning("no API token from the app - the API is locked")
+    security.lock_with_random_token()
+
+
 def main() -> None:
     # Make the backend package importable when frozen or launched from elsewhere.
     if str(BASE_DIR) not in sys.path:
@@ -160,6 +182,8 @@ def main() -> None:
         format="%(asctime)s %(levelname)s:     %(name)s - %(message)s",
         force=True,
     )
+
+    configure_api_token()
 
     import uvicorn
     from app.main import app

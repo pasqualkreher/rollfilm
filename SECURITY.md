@@ -45,17 +45,18 @@ is meant to be reachable only by the app's own window. Things that matter:
   execution when imported, scanned or rendered
 - Anything that leaks the Immich API key, which is stored in the local database
   and deliberately never sent back to the browser
-- Anything that lets a web page you visit in a normal browser reach the local
-  backend and read or change your library
+- Anything that lets a web page you visit in a normal browser, or another
+  program on the machine, use the local backend without the app's per-launch
+  token
 - Path traversal out of the library, staging or thumbnail roots
 - Anything in the auto-updater that would let a third party ship you a build
 
 ## What is out of scope
 
-- **The backend being unauthenticated.** That is the design: a single local user,
-  a backend bound to localhost, CORS open for the app's own UI. It is documented
-  in the README. Exposing that port to a network is unsupported, and there is no
-  authenticated or multi-user mode to fall back on.
+- **Single user, no accounts.** The backend binds to localhost and answers only
+  requests carrying a token the desktop shell generates on every launch; there
+  is no login and no multi-user mode. A way to use the API *without* that token
+  is in scope, see above. Exposing the port to a network is unsupported.
 - **The app not being code-signed or notarized.** Known, documented, and a matter
   of certificate cost rather than a fixable defect.
 - Vulnerabilities in dependencies with no working path to them through Rollfilm.

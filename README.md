@@ -189,7 +189,7 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 - **It saves itself** — no Save button: edits are written a moment after a slider comes to rest and again when you close. Small dots on sliders and sections show where the edits are
 - **Focus mode** — F hides the app's bars, P the panel, so the photo gets the whole window
 - **Lens correction.** RAW files are corrected for distortion and vignetting from the data the camera stored (Fujifilm, Sony, OM System, Panasonic, DNG), with the Lensfun database for the rest. A switch and two strength sliders under Transform
-- **125 film looks** with a strength slider: twenty Fujifilm simulations, from Provia and Velvia to Classic Neg., Acros and Sepia, rendered from Fujifilm's own LUTs fed the colours they were made for (measured against Fujifilm's stills rendering, so greens are as deep as the camera's), and 105 film stocks in sections — negative, cinema, slide, black & white (Tri-X, HP5, Delta, T-Max), instant and cross-processed film — that take the stock's colour and keep to the simulations' tone, so no look crushes the shadows. Twenty-one are derived from [spektrafilm](https://github.com/andreavolpato/spektrafilm) by Andrea Volpato, 72 from the [RawTherapee Film Simulation Collection](http://rawtherapee.com/shared/HaldCLUT.zip) by Pat David, Pavlov Dmitry and Michael Ezra (both CC BY-SA 4.0), seven from [spectral_film_lut](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse and five from [t3mujinpack](https://github.com/t3mujin/t3mujinpack) by João Almeida (both MIT). A Basic or AgX tone mapper keeps a look's colours
+- **125 film looks** with a strength slider: twenty Fujifilm simulations, from Provia and Velvia to Classic Neg., Acros and Sepia, rendered from Fujifilm's own LUTs fed the colours they were made for (measured against Fujifilm's stills rendering, so greens are as deep as the camera's), the ones Fujifilm publishes no LUT for built on top of them, and 105 film stocks from four open sources (see [License](#license)) in sections — negative, cinema, slide, black & white (Tri-X, HP5, Delta, T-Max), instant and cross-processed film — that take the stock's colour and keep to the simulations' tone, so no look crushes the shadows. A Basic or AgX tone mapper keeps a look's colours
 - **Noise reduction** in three sliders: luminance, luminance detail and colour
 - Exposure/contrast/highlights/shadows, white balance in Kelvin with presets for daylight, cloudy, shade, tungsten and fluorescent, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
 - **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives
@@ -355,7 +355,7 @@ rollfilm/
 ```
 
 Notable design decisions:
-- **Single local user, no auth** — this is a personal desktop app. The bundled backend listens on localhost for the app's own UI; don't expose it to a network as-is (CORS is wide open for localhost use).
+- **Single local user, app-only API** — this is a personal desktop app. The bundled backend listens on localhost and answers only requests carrying a secret the desktop shell generates on every launch, so neither a web page in your browser nor another program on the machine can use it.
 - External sources are mounted **read-only** — the app can never modify your originals.
 - Database migrations run automatically on startup, with retry logic for external drives.
 - Handles cloud-synced folders (iCloud/Nextcloud placeholder files) and exFAT/NTFS drives.
@@ -363,7 +363,7 @@ Notable design decisions:
 ## Known limitations
 
 - The photo editor is experimental (see above)
-- **Single user, no authentication** — the backend binds to localhost for the app's own window. Don't put it on a network as-is: there is no login, no accounts and no server mode, and none is planned
+- **Single user, no accounts** — the backend binds to localhost and only the app itself holds the per-launch key to it. There is no login, no accounts and no server mode, and none is planned
 - **Not code-signed or notarized** — hence the one-time Gatekeeper and SmartScreen steps above. A matter of certificate cost, not of anything being wrong with the build
 - The UI is only really exercised on macOS; Windows and Linux get less day-to-day use
 
@@ -390,4 +390,4 @@ Rollfilm has no paid tier, so a donation changes nothing about what the app does
 
 [MIT](LICENSE) — © Pasqual Kreher. You're free to use, modify, and redistribute this software; the copyright notice must be preserved.
 
-The film lookup tables in `backend/app/services/film_luts/analog/` and `backend/app/services/film_luts/clut/` are not MIT: they are derived from [spektrafilm](https://github.com/andreavolpato/spektrafilm) by Andrea Volpato and from the RawTherapee Film Simulation Collection by Pat David, Pavlov Dmitry and Michael Ezra, and licensed CC BY-SA 4.0 (sources and licence in each folder's `SOURCES.txt`). The ones in `backend/app/services/film_luts/spectral/` are derived from [spectral_film_lut](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse, under its MIT licence.
+The film lookup tables in `backend/app/services/film_luts/analog/` and `backend/app/services/film_luts/clut/` are not MIT: they are derived from [spektrafilm](https://github.com/andreavolpato/spektrafilm) by Andrea Volpato and from the RawTherapee Film Simulation Collection by Pat David, Pavlov Dmitry and Michael Ezra, and licensed CC BY-SA 4.0 (sources and licence in each folder's `SOURCES.txt`). The exception are five cubes in `clut/` derived from [t3mujinpack](https://github.com/t3mujin/t3mujinpack) by João Almeida, under its MIT licence (listed in that folder's `SOURCES.txt`, licence in `T3MUJINPACK_LICENSE.txt`). The ones in `backend/app/services/film_luts/spectral/` are derived from [spectral_film_lut](https://github.com/JanLohse/spectral_film_lut) by Jan Lohse, under its MIT licence. In `backend/app/services/film_luts/derived/`, Pro Neg. Hi and the Acros filter, Monochrome and Sepia looks are derived from [Fujifilm Auto Settings for Darktable](https://github.com/bastibe/Fujifilm-Auto-Settings-for-Darktable) by Bastian Bechtold and licensed GPL v3 (sources in that folder's `SOURCES.txt`). The cubes in `backend/app/services/film_luts/official/` are Fujifilm's film simulation LUTs, a free download from Fujifilm.

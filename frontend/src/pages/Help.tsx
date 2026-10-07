@@ -491,7 +491,7 @@ const CHAPTERS: Chapter[] = [
                 closing on the next click — in the Library, an album and the import review alike.
               </li>
               <li>
-                <strong>File types:</strong> show RAW + JPEG, only JPEGs, or only RAWs. With{" "}
+                <strong>File type</strong> (in the Filter menu): show RAW + JPEG, only JPEGs, or only RAWs. With{" "}
                 <strong>Merge RAW+JPG</strong> a pair appears as a single card — rating, labelling
                 or deleting it applies to both files.
               </li>
@@ -790,6 +790,16 @@ const CHAPTERS: Chapter[] = [
                 screen pixel, on a Retina or scaled 4K display too.
               </li>
               <li>
+                <strong>Compare with the original:</strong> for a photo that carries edits, the
+                toolbar has the editor's compare controls. <strong>Hold</strong> the eye to see
+                the original in place, the <strong>split</strong> view lays the original over the
+                left of the photo up to a line you drag, <strong>side by side</strong> shows both
+                as two pictures that zoom and pan together. A RAW shot together with a camera JPG
+                can be compared with that <strong>JPG</strong> instead. The original is shown as
+                the library shows it, with the crop and rotation of the edit kept, so only the
+                tonal edits make the difference.
+              </li>
+              <li>
                 <strong>Slideshow:</strong> the toolbar's <strong>Slideshow</strong> button (or{" "}
                 <kbd>S</kbd>) plays the set you're browsing fullscreen, advancing automatically and
                 wrapping around at the end. <kbd>Space</kbd> pauses, <kbd>←</kbd> / <kbd>→</kbd>{" "}
@@ -995,9 +1005,11 @@ const CHAPTERS: Chapter[] = [
             <p>
               On a RAW a look renders the way the camera renders its JPEG: a little under a stop
               brighter than the plain picture, with the highlights running to white. Ten looks
-              come from Fujifilm's own LUTs; the others are built on those, Nostalgic Neg. and Pro
-              Neg. Hi with data from abpy/FujifilmCameraProfiles (CC BY-NC-SA 4.0), the
-              monochrome ones with Stuart Sowerby's Fuji XTrans III profiles. Those LUTs are fed
+              come from Fujifilm's own LUTs; Pro Neg. Hi and the monochrome ones are built on those
+              with Bastian Bechtold's Fuji LUTs for darktable
+              (github.com/bastibe/Fujifilm-Auto-Settings-for-Darktable, GPL v3), and Nostalgic
+              Neg. is measured
+              from the camera's own JPEGs. Those LUTs are fed
               the colours they were made for, measured against Fujifilm's own rendering of the
               looks, so foliage comes out as green and as deep as in the camera's JPEG. An edit
               made before this keeps looking as it did; choosing a look again brings it up to

@@ -24,12 +24,15 @@ import {
   fileTypeBadge,
   fileTypeBadgeClass,
 } from "../components/ThumbnailGrid";
-import { editsFromImage } from "../utils/adjustments";
+import { adjustmentsAreNeutral, editsFromImage } from "../utils/adjustments";
 import { IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconTrash, IconX } from "../components/Icons";
 import { Slideshow } from "../components/Slideshow";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { useFullResUpgrade } from "../utils/useFullResUpgrade";
+import { useBaselineRender } from "../utils/useBaselineRender";
+import { CompareControls, type CompareMode } from "../components/CompareControls";
+import { BaselinePane, CompareOverlay } from "../components/CompareOverlay";
 import { ZoomReadout } from "../components/ZoomReadout";
 import { StageBackgroundToggle } from "../components/StageBackgroundToggle";
 
@@ -178,7 +181,32 @@ export function ImageDetail() {
     const h = quarter ? image.width : image.height;
     return { w: w * (image.edit_crop_width ?? 1), h: h * (image.edit_crop_height ?? 1) };
   }, [image?.width, image?.height, image?.edit_rotation, image?.edit_crop_width, image?.edit_crop_height]);
-  const zoom = useImageZoomPan(zoomSource);
+  // Compare with the original (or the raw's camera JPEG) - the editor's
+  // compare views for a photo that already carries its edits: hold the eye,
+  // split by a draggable line, or side by side (see CompareControls). The
+  // baseline is rendered by the editor's preview route (useBaselineRender);
+  // none of this is persisted, and it all steps out when the photo changes.
+  const [compareModeState, setCompareModeState] = useState<CompareMode>("off");
+  const [holding, setHolding] = useState(false);
+  const [jpgChosen, setJpgChosen] = useState(false);
+  const [splitPos, setSplitPos] = useState(0.5);
+  // The photo whose baseline has been asked for. The render is kept from the
+  // first activation on until the photo (or its edit) changes, so letting go
+  // of the eye and pressing it again is instant rather than another render.
+  const [primedFor, setPrimedFor] = useState<string | null>(null);
+  const hasJpg = !!image && image.file_type === "raw" && !!image.paired_image_id;
+  const vsJpg = jpgChosen && hasJpg;
+  // Geometry is shared by both sides (the original is shown in the edit's
+  // frame), so only tonal edits make a difference worth showing. The camera
+  // JPEG is another picture altogether - there is always something to compare.
+  const hasTonalEdit = useMemo(() => !!image && !adjustmentsAreNeutral(editsFromImage(image).adjustments), [image]);
+  const nothingToCompare = !vsJpg && !hasTonalEdit;
+  // Never a frame in which the editor mounts over a side-by-side stage.
+  const compareMode: CompareMode = adjustOpen ? "off" : compareModeState;
+  const pairMode = compareMode === "pair";
+  const compareActive = compareMode !== "off" || holding;
+  const baselineLabel = vsJpg ? "JPG" : "Original";
+  const zoom = useImageZoomPan(zoomSource, { pair: pairMode });
   // Swap the preview for the full-resolution render once the user zooms in, so
   // 100% shows true original pixels instead of an upscaled preview. If the
   // full render can't be fetched we fall back to the preview (never a broken img).
@@ -275,6 +303,12 @@ export function ImageDetail() {
     setHalfFailed(false);
     setPreviewFailed(false);
     setRetryNonce(0);
+    // The compare belongs to the photo it was switched on for.
+    setCompareModeState("off");
+    setHolding(false);
+    setJpgChosen(false);
+    setSplitPos(0.5);
+    setPrimedFor(null);
     // Only blank + fade for the first open. When paging through a set, keep the
     // current photo (and its size) on screen until the next one's pixels have
     // decoded, then swap in place - the browser holds the old <img> content
@@ -319,8 +353,28 @@ export function ImageDetail() {
     setFullFailed(false);
     setHalfShown(false);
     setHalfFailed(false);
+    // The baseline render belongs to the edit it was made against.
+    setPrimedFor(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRev]);
+
+  // The editor takes the stage (and the server's per-photo preview slot the
+  // baseline render goes through): the compare steps out while it is up.
+  useEffect(() => {
+    if (!adjustOpen) return;
+    setCompareModeState("off");
+    setHolding(false);
+    setPrimedFor(null);
+  }, [adjustOpen]);
+  // Nothing left to compare (JPG switched off on an untouched raw, say) - the
+  // toggles disable themselves there, so the mode has to step out on its own
+  // rather than leave the user stuck inside it.
+  useEffect(() => {
+    if (nothingToCompare) {
+      setCompareModeState("off");
+      setHolding(false);
+    }
+  }, [nothingToCompare]);
 
   // The raw's full render, fetched off-screen once zoomed and the half tier is
   // up: the <img> shows the half tier meanwhile and switches when this has
@@ -642,6 +696,59 @@ export function ImageDetail() {
   // The raw's full render, once it has landed for the fit view.
   const fitFullSrc = isRaw && fullReady ? full.src : null;
 
+  // The baseline's render for the compare views. At fit the ultra tier sized
+  // to the screen; zoomed in while comparing, the native tier - asked for once
+  // the zoom has rested (a wheel gesture must not start a render per tick).
+  // The ask is rounded up in steps and capped at the photo's own size, so a
+  // window resize doesn't re-render for a few pixels and nothing asks for more
+  // than the photo has.
+  const stageHasPixels = !!image && !imageStale && loadedId === image.id;
+  const baselineUpgrade = compareActive && zoomed;
+  const baselineRawPx = zoom.fit
+    ? Math.ceil(Math.max(zoom.fit.w, zoom.fit.h) * (baselineUpgrade ? zoom.scale : 1) * (window.devicePixelRatio || 1)) + 2
+    : 0;
+  const baselineAskPx = Math.min(Math.ceil(baselineRawPx / 200) * 200, sourcePx || Infinity);
+  const [baselineAsk, setBaselineAsk] = useState<{ tier: "ultra" | "native"; px: number }>({ tier: "ultra", px: 0 });
+  useEffect(() => {
+    const next = { tier: baselineUpgrade ? ("native" as const) : ("ultra" as const), px: baselineAskPx };
+    const t = setTimeout(() => setBaselineAsk((a) => (a.tier === next.tier && a.px === next.px ? a : next)), baselineUpgrade ? 600 : 0);
+    return () => clearTimeout(t);
+  }, [baselineUpgrade, baselineAskPx]);
+  const baselineWanted =
+    !!image &&
+    primedFor === image.id &&
+    !!zoom.fit &&
+    stageHasPixels &&
+    !previewFailed &&
+    !adjustOpen &&
+    !adjustClosing &&
+    !slideshowOpen &&
+    baselineAsk.px > 0;
+  const baseline = useBaselineRender({
+    image,
+    baseline: vsJpg ? "jpg" : "original",
+    wanted: baselineWanted,
+    tier: baselineAsk.tier,
+    px: baselineAsk.px,
+  });
+  // A baseline that can't be rendered: say so and step out of the mode; the
+  // controls stay live, so a click asks again.
+  const baselineFailed = baselineWanted && baseline.state === "failed";
+  const [compareNote, setCompareNote] = useTransientMessage();
+  useEffect(() => {
+    if (!baselineFailed) return;
+    setCompareModeState("off");
+    setHolding(false);
+    setPrimedFor(null);
+    setCompareNote(`Couldn't render the ${vsJpg ? "camera JPG" : "original"} for comparing`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baselineFailed]);
+  const baselineBusy = baselineWanted && (baseline.state === "loading" || baseline.pending);
+  // The first activation asks for the render; later ones find it kept.
+  const prime = () => {
+    if (image) setPrimedFor(image.id);
+  };
+
   // Similar-photos strip: a CLIP search per photo is the most expensive
   // per-view request the lightbox makes - only run it for the rested photo,
   // never for photos zapped past.
@@ -944,6 +1051,17 @@ export function ImageDetail() {
                 <IconChevronLeft size={20} />
               </button>
             )}
+            {pairMode && zoom.fit && !previewFailed && (
+              <BaselinePane
+                src={baseline.src}
+                fit={zoom.fit}
+                imageStyle={zoom.imageStyle}
+                imageHandlers={zoom.imageHandlers}
+                zoomAnim={zoom.zoomAnim}
+                framed={bgMode === "dark"}
+                label={baselineLabel}
+              />
+            )}
             {previewFailed ? (
               <div className="detail-photo-error">
                 <span className="detail-photo-error-icon" aria-hidden="true"><IconImage size={40} /></span>
@@ -960,6 +1078,14 @@ export function ImageDetail() {
                 </button>
               </div>
             ) : (
+            // Only while comparing is this a box of its own (the baseline's
+            // picture, the divider and the tags sit in it, over the photo);
+            // otherwise it is display: contents and the <img> stays the
+            // stage's own child, exactly as before.
+            <div
+              className={`detail-photo-wrap${compareActive ? " is-compare" : ""}${pairMode ? " detail-pane" : ""}`}
+              style={compareActive && zoom.fit ? { width: zoom.fit.w, height: zoom.fit.h } : undefined}
+            >
             <img
               key={retryNonce}
               ref={zoom.setImg}
@@ -1012,6 +1138,21 @@ export function ImageDetail() {
               }}
               {...zoom.imageHandlers}
             />
+            <CompareOverlay
+              src={baseline.src}
+              mode={compareMode}
+              holding={holding}
+              splitPos={splitPos}
+              onSplitPos={setSplitPos}
+              imageStyle={zoom.imageStyle}
+              zoomAnim={zoom.zoomAnim}
+              scale={zoom.scale}
+              pan={zoom.pan}
+              framed={bgMode === "dark"}
+              label={baselineLabel}
+            />
+            {pairMode && <span className="split-tag split-tag-right">Edited</span>}
+            </div>
             )}
             {pixelsPending && !previewFailed && (
               <div className="lightbox-loading-stage" aria-live="polite">
@@ -1025,7 +1166,8 @@ export function ImageDetail() {
             {!pixelsPending &&
               ((hiRes && isRaw && full.state !== "ready" && full.state !== "failed") ||
                 full.state === "loading" ||
-                (!hiRes && sharper.state === "loading")) && (
+                (!hiRes && sharper.state === "loading") ||
+                baselineBusy) && (
               <div className="stage-rendering is-quiet" role="status" aria-label="Rendering full resolution">
                 <Spinner size="sm" tone="inherit" />
               </div>
@@ -1033,6 +1175,11 @@ export function ImageDetail() {
             {hiRes && isRaw && full.state === "failed" && !pixelsPending && (
               <div className="stage-rendering" role="status">
                 Full resolution unavailable – showing a reduced render
+              </div>
+            )}
+            {compareNote && (
+              <div className="stage-rendering" role="status">
+                {compareNote}
               </div>
             )}
             {canPage && (
@@ -1057,6 +1204,31 @@ export function ImageDetail() {
                 Escape), which lead to wherever this photo was opened from. */}
             <StageBackgroundToggle />
             <ZoomReadout zoom={zoom} />
+            <span className="editor-toolbar-sep" aria-hidden />
+            {/* The editor's compare group for the saved edit: hold the eye for
+                the original, split by a line, or side by side; JPG for a raw
+                with a camera JPEG. Greyed out, never gone, so the row never
+                shifts between an edited photo and an untouched one. */}
+            <CompareControls
+              hasJpg={hasJpg}
+              vsJpg={vsJpg}
+              onVsJpg={(on) => {
+                setJpgChosen(on);
+                if (on || hasTonalEdit) prime();
+              }}
+              mode={compareMode}
+              onMode={(m) => {
+                setCompareModeState(m);
+                if (m !== "off") prime();
+              }}
+              holding={holding}
+              onHold={(on) => {
+                setHolding(on);
+                if (on) prime();
+              }}
+              nothingToCompare={nothingToCompare}
+              ready={stageHasPixels && !!zoom.fit && !previewFailed}
+            />
             {/* Hairline between the look-at-it controls (background, zoom) and
                 the slideshow - same divider as the editor's toolbar. */}
             <span className="editor-toolbar-sep" aria-hidden />

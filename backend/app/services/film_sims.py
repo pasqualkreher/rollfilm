@@ -35,12 +35,12 @@ carry the recipe they were shot with (tone, colour, colour chrome), which
 does not come back out cleanly - Classic Neg. showed it.
 
 What Fujifilm's pack lacks keeps a display-referred cube in this module's own
-format (film_luts/<sim>.npy), applied where the recipes are: Pro Neg. Hi,
-Monochrome, Sepia and the yellow / red / green filter variants from Stuart
-Sowerby's "Fuji XTrans III" HaldCLUTs (no licence to redistribute: see the
-note in tools/film_sim_fit/official.py before shipping those nine), and
-Nostalgic Neg., which nobody publishes, from the camera JPEGs after all
-(tools/film_sim_fit/fit.py). A look without any cube keeps its recipe, and
+format (film_luts/<sim>.npy), applied where the recipes are: Nostalgic Neg.,
+which nobody publishes, from the camera JPEGs after all
+(tools/film_sim_fit/fit.py). Pro Neg. Hi, Monochrome, Sepia and the yellow /
+red / green filter variants had cubes here from a source with no licence to
+redistribute (tools/film_sim_fit/official.py) and were taken out; on this
+version they keep their recipes. A look without any cube keeps its recipe, and
 edits made on an earlier process version keep the recipes throughout.
 
 Process version 4 renders them as the camera renders a still. Fujifilm's cubes
@@ -53,8 +53,9 @@ anchor) and a lift of the highlights that puts sensor clipping on white (the
 stills shoulder) - see _stills_factors, measured in tools/film_sim_fit/
 reference.py. The looks Fujifilm publishes no cube for get one of the same
 kind there (film_luts/derived/<sim>.npy, tools/film_sim_fit/derive.py: the
-published look they are closest to, plus what sets them apart from it), so all
-of them share one tone path.
+published look they are closest to, plus what sets them apart from it;
+Nostalgic Neg. the cube measured from the camera's JPEGs), so all of them
+share one tone path.
 
 Process version 5 lets the tone mapper choose that path's tone curve. Basic is
 the look's own, as on 4. AgX keeps the look's colour and takes its tones from

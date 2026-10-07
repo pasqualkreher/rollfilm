@@ -16,6 +16,7 @@ from app.api.routes import (
     tags,
 )
 from app.config import settings as app_settings
+from app.security import ApiTokenMiddleware
 from app.db.models import User
 from app.db.session import SessionLocal, engine, ensure_indexes
 from app.services.cloudfiles import rehydrate_dirs_in_background
@@ -35,6 +36,9 @@ from app.workers.queue import schedule_embedding_backfill
 
 app = FastAPI(title="Rollfilm API")
 
+# Added before CORS so CORS stays the outer layer: it still answers preflights
+# itself and puts its headers on a 401 too.
+app.add_middleware(ApiTokenMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

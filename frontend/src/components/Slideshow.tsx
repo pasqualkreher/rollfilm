@@ -178,17 +178,10 @@ export function Slideshow({
           onClick={() => setPlaying((p) => !p)}
         />
       )}
-      {/* Thin countdown along the bottom edge - says the show is running and
-          how far into this photo's turn it is. Keyed so it restarts whenever
-          the countdown itself does (new photo, or resume after a pause). */}
-      {playing && loadedId === currentId && (
-        <div
-          key={`${currentId}:${seconds}`}
-          className="slideshow-progress"
-          style={{ animationDuration: `${seconds}s` }}
-          aria-hidden
-        />
-      )}
+      {/* No countdown bar along the bottom: a show is for looking at the
+          photos, and a line ticking across the screen under every one of them
+          pulled the eye away. The control pill's play/pause state says
+          whether the show is running. */}
       <div className="slideshow-controls">
         <button onClick={() => step(-1)} title="Previous photo (Left arrow)" aria-label="Previous photo">
           <IconChevronLeft size={16} />

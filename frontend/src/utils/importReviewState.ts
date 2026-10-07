@@ -22,6 +22,13 @@ export interface ImportReviewState {
   viewMode: ViewMode;
   ratingMin: number;
   colorFilter: ColorLabel;
+  // The EXIF filters, as in the library: "" / null for none.
+  camera: string;
+  lens: string;
+  focalMin: string;
+  focalMax: string;
+  dateFrom: string | null;
+  dateTo: string | null;
   uploadToImmich: boolean;
   syncAllToImmich: boolean;
   // The preview that was open, or null for none.
@@ -34,6 +41,12 @@ export const DEFAULT_REVIEW_STATE: ImportReviewState = {
   viewMode: "combined",
   ratingMin: 0,
   colorFilter: "none",
+  camera: "",
+  lens: "",
+  focalMin: "",
+  focalMax: "",
+  dateFrom: null,
+  dateTo: null,
   uploadToImmich: false,
   syncAllToImmich: false,
   lightboxFileId: null,
@@ -71,13 +84,34 @@ export function readReviewState(sessionId: string): ImportReviewState {
   const entry = readAll()[sessionId];
   if (!entry) return DEFAULT_REVIEW_STATE;
   // Fill in anything a record written by an older build lacks.
-  const { hideDuplicates, viewMode, ratingMin, colorFilter, uploadToImmich, syncAllToImmich, lightboxFileId, scroll } = entry;
+  const {
+    hideDuplicates,
+    viewMode,
+    ratingMin,
+    colorFilter,
+    camera,
+    lens,
+    focalMin,
+    focalMax,
+    dateFrom,
+    dateTo,
+    uploadToImmich,
+    syncAllToImmich,
+    lightboxFileId,
+    scroll,
+  } = entry;
   return {
     ...DEFAULT_REVIEW_STATE,
     hideDuplicates,
     viewMode,
     ratingMin,
     colorFilter,
+    camera: camera ?? "",
+    lens: lens ?? "",
+    focalMin: focalMin ?? "",
+    focalMax: focalMax ?? "",
+    dateFrom: dateFrom ?? null,
+    dateTo: dateTo ?? null,
     uploadToImmich,
     syncAllToImmich,
     lightboxFileId,

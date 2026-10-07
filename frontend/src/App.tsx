@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   Navigate,
   NavLink as RouterNavLink,
@@ -12,7 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
-import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconLandfill, IconMail, IconMenu } from "./components/Icons";
+import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconLandfill, IconMail, IconMenu, IconX } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -340,6 +341,89 @@ function NavHistoryButtons({ locked }: { locked: boolean }) {
   );
 }
 
+// The logo, and what a click on it (logo or name) opens: the app's About
+// window, the way a Mac app's name leads to "About" - version, website, the
+// PayPal donate link and contact (the same lines as Settings > About). A modal
+// of its own, portalled to the body: inside the bar it would sit in the
+// window's drag region and under the bar's stacking context.
+function BrandAbout() {
+  const [open, setOpen] = useState(false);
+  const platform = window.photoManager?.platform;
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className="brand"
+        aria-haspopup="dialog"
+        title="About Rollfilm"
+        onClick={() => setOpen(true)}
+      >
+        {/* BASE_URL ("./" in builds) keeps the path working under file:// in Electron,
+    where an absolute "/rollfilm.svg" would point at the filesystem root. */}
+        <img src={`${import.meta.env.BASE_URL}rollfilm.svg`} alt="" style={{ height: 18, width: 18, marginRight: 7 }} />
+        Rollfilm
+      </button>
+      {createPortal(
+        <Presence open={open} ms={MOTION.modal}>
+          {open && (
+            <div className="modal-overlay" onClick={() => setOpen(false)}>
+              <div
+                className="modal about-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label="About Rollfilm"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button type="button" className="modal-close about-modal-close" aria-label="Close" onClick={() => setOpen(false)}>
+                  <IconX size={14} />
+                </button>
+                <img src={`${import.meta.env.BASE_URL}rollfilm.svg`} alt="" className="about-modal-logo" />
+                <div className="about-modal-name">Rollfilm</div>
+                <div className="about-modal-version">
+                  Version {__APP_VERSION__}
+                  {platform ? ` · ${platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : platform}` : " · web"}
+                </div>
+                {/* https links leave the app for the system browser (the
+                    desktop shell routes every external URL to the OS). */}
+                <a className="about-modal-site" href="https://rollfilm.org" target="_blank" rel="noreferrer">
+                  rollfilm.org
+                </a>
+                <p className="about-modal-text">Rollfilm is free. If it is useful to you, a small donation keeps it going.</p>
+                <a
+                  className="btn primary about-modal-donate"
+                  href="https://www.paypal.com/donate/?hosted_button_id=TE6RWWJ7JRPKN"
+                  target="_blank"
+                  rel="noreferrer"
+                  autoFocus
+                >
+                  Donate via PayPal
+                </a>
+                <a
+                  className="about-modal-contact"
+                  href={`mailto:contact@rollfilm.org?subject=${encodeURIComponent(`Rollfilm v${__APP_VERSION__}`)}`}
+                >
+                  contact@rollfilm.org
+                </a>
+              </div>
+            </div>
+          )}
+        </Presence>,
+        document.body
+      )}
+    </>
+  );
+}
+
 // Top bar: while a blocking Settings task runs, the nav is locked (you can't
 // switch tabs) and a spinner + label shows what's happening. On narrow windows
 // the tab row collapses into a burger menu instead of wrapping onto extra rows.
@@ -387,23 +471,103 @@ function TopBar() {
     };
   }, [menuOpen]);
 
+  // The search field sits on the window's midpoint at full width, as in
+  // fullscreen. Where the tabs reach past that spot (a window, with the
+  // traffic-light inset) it moves only as far over as they need, and where
+  // the room between tabs and icons is narrower than the field it shrinks to
+  // fit. Only when even that would leave less than SEARCH_FOLD does the tab
+  // row fold into the burger menu to make room; below SEARCH_MIN (a browser
+  // tab, not the app) the field takes a row of its own. The edges measured
+  // here - the left zone's content and the icon row - don't move when the
+  // field does, and the fold is decided on the tab row's width (remembered
+  // while it's hidden), so neither can oscillate.
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const [searchRow, setSearchRow] = useState(false);
+  const [searchCompact, setSearchCompact] = useState(false);
+  const [navFolded, setNavFolded] = useState(false);
+  useEffect(() => {
+    const bar = barRef.current;
+    const left = bar?.querySelector<HTMLElement>(".top-bar-side--left");
+    const icons = bar?.querySelector<HTMLElement>(".top-icon-links");
+    const tabs = left?.querySelector<HTMLElement>(".nav-links");
+    const burger = left?.querySelector<HTMLElement>(".nav-burger-wrap");
+    if (!bar || !left || !icons || !tabs || !burger) return;
+    const SEARCH_WIDTH = 320;
+    const SEARCH_COMPACT = 280; // below this the long placeholder gets cut off
+    const SEARCH_FOLD = 120;
+    const SEARCH_MIN = 90;
+    let tabsWidth = 0;
+    const measure = () => {
+      const b = bar.getBoundingClientRect();
+      const gap = parseFloat(getComputedStyle(bar).columnGap) || 0;
+      const mid = b.left + b.width / 2;
+      const leftEdge = Math.max(
+        b.left,
+        ...Array.from(left.children)
+          .map((c) => c.getBoundingClientRect())
+          .filter((r) => r.width > 0)
+          .map((r) => r.right)
+      );
+      const rightEdge = icons.getBoundingClientRect().left;
+      const from = leftEdge + gap;
+      const to = rightEdge - gap;
+      // Where the left zone would end with the tab row showing: the burger
+      // takes the tabs' place, so swap one width for the other.
+      const shownTabs = tabs.getBoundingClientRect().width;
+      if (shownTabs > 0) tabsWidth = shownTabs;
+      const withTabs = shownTabs > 0 ? from : from - burger.getBoundingClientRect().width + tabsWidth;
+      setNavFolded(to - withTabs < SEARCH_FOLD);
+      const width = Math.min(SEARCH_WIDTH, to - from);
+      const center = Math.min(Math.max(mid, from + width / 2), to - width / 2);
+      bar.style.setProperty("--search-width", `${Math.floor(width)}px`);
+      bar.style.setProperty("--search-x", `${Math.round(center - b.left)}px`);
+      setSearchCompact(width < SEARCH_COMPACT);
+      setSearchRow(width < SEARCH_MIN);
+    };
+    const ro = new ResizeObserver(measure);
+    // Children come and go (task spinner, sync indicator) without the zone
+    // changing size, so each one is watched too.
+    const observeAll = () => {
+      ro.disconnect();
+      for (const el of [bar, left, icons, ...left.children]) ro.observe(el);
+      measure();
+    };
+    observeAll();
+    const mo = new MutationObserver(observeAll);
+    mo.observe(left, { childList: true });
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, []);
+
+  // Cmd/Ctrl+F jumps into the search field, the way every Mac app finds.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "f") return;
+      const input = barRef.current?.querySelector<HTMLInputElement>(".search-bar input");
+      if (!input) return;
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="top-bar-dock" ref={dockRef}>
-    <div className="top-bar">
-      {/* Three zones: left (brand/nav/status) and right (version/icons) carry
-          equal flex weight, so the search field between them sits exactly on
-          the bar's midpoint - and shrinks instead of overlapping when a zone
-          needs the room. */}
+    <div
+      className={`top-bar${navFolded ? " top-bar--nav-folded" : ""}${searchRow ? " top-bar--search-row" : ""}`}
+      ref={barRef}
+    >
+      {/* Left (brand/nav/status) and right (icons) zones; the search field is
+          pinned to the window's midpoint between them (measured above), so it
+          stays put whatever comes and goes on either side. */}
       <div className="top-bar-side top-bar-side--left">
-      {/* First thing after the traffic lights, where Finder and Music keep
-          theirs. */}
+      {/* The logo opens the bar, right after the traffic lights. */}
+      <BrandAbout />
       <NavHistoryButtons locked={locked} />
-      <span className="brand">
-        {/* BASE_URL ("./" in builds) keeps the path working under file:// in Electron,
-    where an absolute "/rollfilm.svg" would point at the filesystem root. */}
-        <img src={`${import.meta.env.BASE_URL}rollfilm.svg`} alt="" style={{ height: 18, width: 18, marginRight: 7 }} />
-        Rollfilm
-      </span>
       <nav
         className={`nav-links${locked ? " nav-links--locked" : ""}`}
         aria-disabled={locked}
@@ -470,7 +634,6 @@ function TopBar() {
       )}
       <ImmichSyncIndicator />
       </div>
-      <SearchBar />
       <div className="top-bar-side top-bar-side--right">
       <nav
         className={`top-icon-links${locked ? " nav-links--locked" : ""}`}
@@ -527,6 +690,7 @@ function TopBar() {
         </a>
       </nav>
       </div>
+      <SearchBar compact={searchCompact && !searchRow} />
     </div>
     </div>
   );

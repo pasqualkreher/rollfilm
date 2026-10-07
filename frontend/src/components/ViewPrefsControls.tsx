@@ -7,29 +7,19 @@ import {
   useThumbSize,
 } from "../state/viewPrefs";
 
-// Compact "light table" controls: an optional "merge RAW+JPG" toggle plus the
-// thumbnail size (S/M/L/XL). Rendered inside the shared filter bar so every
-// grid screen exposes the same controls. Merge comes first so it sits right
-// next to the RAW/JPEG type toggle it belongs with; Size is a generic display
-// preference and closes the group.
+// Compact "light table" controls: the thumbnail size (XS-XL) plus an optional
+// "merge RAW+JPG" toggle. Rendered inside the shared filter bar so every grid
+// screen exposes the same controls. Size leads the bar (the file type choice
+// lives in the Filter menu now); Merge follows it.
 export function ViewPrefsControls({ showMerge = true }: { showMerge?: boolean }) {
   const size = useThumbSize();
   const merge = useMergePairs();
 
   return (
     <>
-      {showMerge && (
-        <button
-          className={`toggle-chip${merge ? " active" : ""}`}
-          onClick={() => setMergePairs(!merge)}
-          aria-pressed={merge}
-          title="Show each RAW and JPEG pair as one photo. Ratings and color labels apply to both files."
-        >
-          {merge && <IconCheck size={12} />} Merge RAW+JPG
-        </button>
-      )}
-
-      <label className="filter-field">
+      {/* A group, not a <label>: a label belongs to its first control, so
+          hovering anywhere over it lit up XS (and a click on "Size" picked it). */}
+      <span className="filter-field" role="group" aria-label="Thumbnail size">
         Size
         <span className="segmented">
           {THUMB_SIZES.map((s) => (
@@ -43,7 +33,18 @@ export function ViewPrefsControls({ showMerge = true }: { showMerge?: boolean })
             </button>
           ))}
         </span>
-      </label>
+      </span>
+
+      {showMerge && (
+        <button
+          className={`toggle-chip${merge ? " active" : ""}`}
+          onClick={() => setMergePairs(!merge)}
+          aria-pressed={merge}
+          title="Show each RAW and JPEG pair as one photo. Ratings and color labels apply to both files."
+        >
+          {merge && <IconCheck size={12} />} Merge RAW+JPG
+        </button>
+      )}
     </>
   );
 }

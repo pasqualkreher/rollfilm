@@ -134,6 +134,11 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const [stagingSessionId, setStagingSessionId] = useState<string | null>(null);
   const [totalFileCount, setTotalFileCount] = useState<number | null>(null);
   const [stagedFileCount, setStagedFileCount] = useState(0);
+  // The backend's `copied` counts every file the session ever staged, but the
+  // run's readout counts this run only - against the files it still has to
+  // copy. Continuing a session (or adding to one) starts from what is already
+  // there; null while that starting point is still being read.
+  const [copiedBase, setCopiedBase] = useState<number | null>(0);
   // Held for the lifetime of an in-flight upload so cancelUpload() can abort the
   // XHRs; the created staging session id is captured so a mid-upload cancel can
   // clean up whatever was already staged on the backend.
@@ -272,6 +277,7 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     setStagingSessionId(opts.sessionId ?? null);
     setTotalFileCount(null);
     setStagedFileCount(0);
+    setCopiedBase(resuming ? null : 0);
     setIsUploading(true);
     setUploadError(null);
     setStagingError(null);
@@ -289,6 +295,13 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
     (async () => {
       const files = await getFiles(controller.signal);
       setTotalFileCount(files.length);
+      // Nothing else copies into the session now (continuing and adding wait
+      // for the last copy to end), so its counter holds still until the first
+      // batch. No entry yet means the first batch starts one at zero.
+      if (resuming) {
+        const before = await api.import.progress(opts.sessionId!).catch(() => null);
+        if (before) setCopiedBase(before.phase === "staging" ? before.copied : 0);
+      }
       // How many importable files each folder holds, so the session records it
       // as a source with its total. Staging everything a folder has (a fresh
       // folder import) makes that the count of the files themselves;
@@ -423,13 +436,16 @@ export function ImportSessionProvider({ children }: { children: ReactNode }) {
   const folderImportActive = importMode === "folder" && isUploading;
   // Files fully copied into staging - the backend counts them one by one, so
   // this ticks per photo. The client-side per-batch count is the fallback
-  // while the first poll is still on its way.
+  // while the first poll is still on its way. Session-wide on the backend, so
+  // what was copied before this run comes off (see copiedBase) - otherwise a
+  // continued session read "300 / 300, 100%" from its first second.
+  const liveCopied =
+    importProgress?.phase === "staging" && copiedBase !== null
+      ? importProgress.copied - copiedBase
+      : 0;
   const liveStagedCount =
     folderImportActive && totalFileCount
-      ? Math.min(
-          totalFileCount,
-          Math.max(stagedFileCount, importProgress?.phase === "staging" ? importProgress.copied : 0)
-        )
+      ? Math.min(totalFileCount, Math.max(stagedFileCount, liveCopied))
       : null;
   const effectiveUploadPct =
     folderImportActive && totalFileCount && liveStagedCount !== null

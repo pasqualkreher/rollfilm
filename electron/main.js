@@ -26,8 +26,10 @@ const {
   net: electronNet,
   powerMonitor,
   protocol,
+  session,
   shell,
 } = require("electron");
+const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 const { initAutoUpdate } = require("./updater");
 const { spawn, spawnSync } = require("child_process");
@@ -73,6 +75,14 @@ let backendEverHealthy = false;
 
 let apiPort = 0;
 let apiBaseUrl = "";
+// Per-launch secret the backend demands on every request (app/security.py), so
+// only this app - not a web page in the user's browser, not another local
+// program that found the port - can drive the API. It reaches the backend over
+// its stdin (env and argv are readable by `ps`), and the renderer never sees
+// it: installApiTokenHeader() adds it to the windows' requests.
+const apiToken = crypto.randomBytes(32).toString("hex");
+const API_TOKEN_HEADER = "X-Rollfilm-Token";
+const apiHeaders = () => ({ [API_TOKEN_HEADER]: apiToken });
 let mainWindow = null;
 let splashWindow = null;
 
@@ -257,7 +267,6 @@ async function ensureLibraryRoot() {
 // Dropbox), exclude ".photomanager" from syncing - a sync client touching a
 // live SQLite file can hold locks or evict it mid-write, which hangs the
 // backend and can corrupt the database. The first-run dialog says so too.
-const crypto = require("crypto");
 const { isNetworkPath } = require("./networkVolume");
 
 function libraryDataDir(lib) {
@@ -374,7 +383,7 @@ function pumpWarmQueue() {
     warmQueued.delete(url);
     warmActive += 1;
     electronNet
-      .fetch(url)
+      .fetch(url, { headers: apiHeaders() })
       // Read the body so the backend isn't left writing into a dropped socket.
       .then((res) => res.arrayBuffer())
       .catch(() => {})
@@ -462,6 +471,7 @@ async function serveDerivative(request) {
   const query = url.search ? `${separator}${url.search.slice(1)}` : "";
   try {
     return await electronNet.fetch(`${apiBaseUrl}/images/${imageId}/${apiRoute}${query}`, {
+      headers: apiHeaders(),
       // A hard ceiling on how long one tile may hold out for the backend. This
       // path only runs when the photo has no derivative on disk at all, so it
       // is already outside what any budget can promise - but "we cannot show it
@@ -604,7 +614,7 @@ function getFreePort() {
 
 function pingOnce(url) {
   return new Promise((resolve) => {
-    const req = http.get(url, (res) => {
+    const req = http.get(url, { headers: apiHeaders() }, (res) => {
       res.resume();
       resolve(res.statusCode === 200);
     });
@@ -635,6 +645,8 @@ function resolveBackendCommand() {
     ...process.env,
     PM_PORT: String(apiPort),
     PM_HOST: "127.0.0.1",
+    // The token itself follows on stdin (startBackend); this only says to read it.
+    PM_API_TOKEN_STDIN: "1",
     // Model cache and logs are shared/disposable and default under userData...
     PM_DATA_DIR: app.getPath("userData"),
     // ...while the database, thumbnails and import staging live inside the
@@ -694,6 +706,10 @@ function startBackend() {
   log.write(`[main] ${new Date().toISOString()} launching: ${cmd} ${args.join(" ")}\n`);
   const proc = spawn(cmd, args, { cwd, env });
   backendProc = proc;
+  // run_server.py reads this one line before it serves anything. A backend that
+  // failed to launch has no stdin to write to - its "error" handler reports that.
+  proc.stdin.on("error", () => {});
+  proc.stdin.end(`${apiToken}\n`);
 
   proc.stdout.on("data", (d) => {
     process.stdout.write(`[backend] ${d}`);
@@ -769,7 +785,7 @@ let backgroundWaitTimer = null;
 
 function fetchImmichActivity() {
   return new Promise((resolve) => {
-    const req = http.get(`${apiBaseUrl}/settings/immich/activity`, (res) => {
+    const req = http.get(`${apiBaseUrl}/settings/immich/activity`, { headers: apiHeaders() }, (res) => {
       let body = "";
       res.on("data", (chunk) => (body += chunk));
       res.on("end", () => {
@@ -790,7 +806,7 @@ function fetchImmichActivity() {
 
 function fetchBackgroundActivity() {
   return new Promise((resolve) => {
-    const req = http.get(`${apiBaseUrl}/maintenance/background-activity`, (res) => {
+    const req = http.get(`${apiBaseUrl}/maintenance/background-activity`, { headers: apiHeaders() }, (res) => {
       let body = "";
       res.on("data", (chunk) => (body += chunk));
       res.on("end", () => {
@@ -1103,6 +1119,17 @@ function openExternally(rawUrl) {
   return true;
 }
 
+// Every request a window makes to the backend - fetch, XHR, <img src>, a
+// download link, the hidden PDF window - carries the API token. The renderer
+// code stays token-free; the backend answers anything without it with 401.
+function installApiTokenHeader() {
+  const prefix = `${apiBaseUrl}/`;
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: [`${prefix}*`] }, (details, callback) => {
+    if (!details.url.startsWith(prefix)) return callback({});
+    callback({ requestHeaders: { ...details.requestHeaders, [API_TOKEN_HEADER]: apiToken } });
+  });
+}
+
 function routeExternalLinksToTheOS(webContents) {
   webContents.setWindowOpenHandler(({ url }) => {
     openExternally(url);
@@ -1184,10 +1211,15 @@ function createWindow() {
   for (const ev of ["enter-full-screen", "enter-html-full-screen"]) {
     mainWindow.on(ev, () => mainWindow?.webContents.send("pm:fullscreen", true));
   }
+  // Leaving the HTML kind (the slideshow ending, say) while the window itself
+  // is still fullscreen must not report "not fullscreen": the lights stay
+  // hidden, so the inset would come back for nothing and the bar sat shoved
+  // to the right until the window left fullscreen too.
   for (const ev of ["leave-full-screen", "leave-html-full-screen"]) {
     mainWindow.on(ev, () => {
-      mainWindow?.webContents.send("pm:fullscreen", false);
-      reapplyWindowButtons();
+      const still = ev === "leave-html-full-screen" && Boolean(mainWindow?.isFullScreen());
+      mainWindow?.webContents.send("pm:fullscreen", still);
+      if (!still) reapplyWindowButtons();
     });
   }
 }
@@ -1537,6 +1569,7 @@ app.whenReady().then(async () => {
   // handler reads `libraryRoot` per request rather than capturing it - on a
   // first run it is still empty here and gets set by the onboarding wizard.
   protocol.handle("rf", serveDerivative);
+  installApiTokenHeader();
   registerActivateHandler();
 
   // Update checks run detached from startup (first one after a delay, see

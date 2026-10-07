@@ -1,16 +1,21 @@
-Scene cubes for the film simulations Fujifilm publishes no LUT for, built on
-Fujifilm's own cubes by backend/tools/film_sim_fit/derive.py.
+Scene cubes for the film simulations Fujifilm publishes no LUT for, built by
+backend/tools/film_sim_fit/derive.py.
 
-nostalgic_neg.npy, pro_neg_hi.npy
-    Derived from abpy/FujifilmCameraProfiles
-    (https://github.com/abpy/FujifilmCameraProfiles), licensed CC BY-NC-SA 4.0
-    (https://creativecommons.org/licenses/by-nc-sa/4.0/). These two files are
-    under the same licence: attribution, share alike, non-commercial.
+nostalgic_neg.npy
+    The cube measured from the camera's own JPEGs (../nostalgic_neg.npy,
+    backend/tools/film_sim_fit/fit.py), baked into a scene cube. Part of
+    Rollfilm, under its MIT licence.
 
 acros_ye.npy, acros_r.npy, acros_g.npy, monochrome.npy, monochrome_ye.npy,
-monochrome_r.npy, monochrome_g.npy, sepia.npy
-    Derived from Stuart Sowerby's "Fuji XTrans III" film simulation profiles
-    (https://blog.sowerby.me/fuji-film-simulation-profiles/, all rights
-    reserved by their author).
+monochrome_r.npy, monochrome_g.npy, sepia.npy, pro_neg_hi.npy
+    Derived from the "Fuji XTrans V8" LUTs of Fujifilm Auto Settings for
+    Darktable by Bastian Bechtold
+    (https://github.com/bastibe/Fujifilm-Auto-Settings-for-Darktable, commit
+    79a458ce9bc28c870091c978b829aaed8dbdb45a), licensed GPL
+    (version 3, GPL_LICENSE.txt). Modified by Pasqual Kreher: each look is
+    taken as its ratio to (Pro Neg. Hi: its Oklab difference from) the
+    source's own Acros / Provia / Pro Neg. Std, laid over Fujifilm's cube for
+    that look and resampled to a 65-node scene cube. These nine files are
+    under the same licence.
 
 Removing a file puts its look back on the cube or recipe it had before.

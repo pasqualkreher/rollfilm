@@ -100,7 +100,17 @@ export interface ZoomPan {
 // swaps in the full-resolution render the moment you zoom, so the readout would
 // drop from 100% to some third of it while nothing on screen changed. Measured
 // against the original, 100% stays 100%.
-export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
+// Side-by-side compare (the photo view's "pair" mode): the frame holds two
+// pictures with this gap between them, so each may take half the width. Must
+// match .detail-image--pair's gap in index.css.
+export const PAIR_GAP = 12;
+
+export interface ZoomPanOptions {
+  /** Two pictures share the frame side by side: fit and clamp to half its width. */
+  pair?: boolean;
+}
+
+export function useImageZoomPan(sourceSize?: Size | null, options?: ZoomPanOptions): ZoomPan {
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoomAnim, setZoomAnim] = useState(false);
@@ -161,12 +171,19 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
   // the clamp has room the view converges back onto it.
   const idealPanRef = useRef({ x: 0, y: 0 });
   const lastWheelAtRef = useRef(0);
+  // Read by refit/clampPan, which are memoised once and must not go stale.
+  const pair = !!options?.pair;
+  const pairRef = useRef(pair);
+  pairRef.current = pair;
 
-  // Inner size of the frame, i.e. what the photo may occupy.
+  // Inner size of the frame, i.e. what the photo may occupy. Side by side,
+  // each picture gets half of it (less the gap between the two).
   function availableSize(box: HTMLElement): Size {
     const cs = getComputedStyle(box);
+    let w = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    if (pairRef.current) w = Math.max(2, (w - PAIR_GAP) / 2);
     return {
-      w: box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+      w,
       h: box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
     };
   }
@@ -228,6 +245,20 @@ export function useImageZoomPan(sourceSize?: Size | null): ZoomPan {
     },
     [clampPan]
   );
+
+  // Going side by side (or back) halves/doubles the room without the frame
+  // itself resizing, so the observer below never fires: refit by hand, and
+  // once the new fit is in state pull a pan that overhangs the smaller room
+  // back inside it.
+  useEffect(() => {
+    refit();
+  }, [pair, refit]);
+  useEffect(() => {
+    setPan((p) => {
+      const c = clampPan(p, liveRef.current.scale);
+      return c.x === p.x && c.y === p.y ? p : c;
+    });
+  }, [fit, clampPan]);
 
   // Keep the photo fit to its frame while the window or the frame itself
   // resizes (e.g. the side panel wrapping).

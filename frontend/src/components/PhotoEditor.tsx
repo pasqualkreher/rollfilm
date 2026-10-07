@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, saveDownload, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconBulb, IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconEye, IconEyeOff, IconFlipH, IconFlipV, IconImage, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSplit, IconSun, IconTarget, IconTrash, IconTube, IconUndo, IconX } from "./Icons";
+import { IconBookmark, IconBulb, IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconCurve, IconDetail, IconEye, IconEyeOff, IconFilmRoll, IconFlipH, IconFlipV, IconImage, IconMask, IconPalette, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSparkle, IconSplit, IconSun, IconTarget, IconTone, IconTrash, IconTube, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import { FocusButton, useFocusChrome } from "./FocusToggle";
@@ -223,6 +223,18 @@ const BRUSH_FLUSH_MS = 200;
 
 const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "presets"];
 const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String(i + 1));
+// The icon in front of each group's title in the panel.
+const GROUP_ICON: Record<string, (p: { size?: number }) => JSX.Element> = {
+  transform: IconCrop,
+  filmsim: IconFilmRoll,
+  basic: IconTone,
+  curves: IconCurve,
+  color: IconPalette,
+  details: IconDetail,
+  effects: IconSparkle,
+  masks: IconMask,
+  presets: IconBookmark,
+};
 
 // Curves: the four channels share the same key set across point + parametric
 // curves. Each carries a display colour for its graph line / dot.
@@ -1409,6 +1421,21 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // Opens fully collapsed, so the panel starts as a plain list of groups and
   // the photo is what you look at first.
   const [openGroup, setOpenGroup] = useState<string>("");
+
+  // The open group's header pins itself just under the pinned histogram, which
+  // has no fixed height - so its height is handed to the CSS as a variable.
+  const panelBodyRef = useRef<HTMLDivElement | null>(null);
+  const histPinnedRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const body = panelBodyRef.current;
+    const hist = histPinnedRef.current;
+    if (!body || !hist) return;
+    const sync = () => body.style.setProperty("--editor-hist-h", `${hist.offsetHeight}px`);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(hist);
+    return () => ro.disconnect();
+  }, []);
 
   // Leaving the Masks group hides the mask guides/handles on the image (see the
   // MaskOverlay render condition) - also drop out of draw/pick mode so canvas
@@ -4269,7 +4296,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           }
         }}
       >
-        <span>
+        <span className="editor-accordion-title">
+          {GROUP_ICON[id]?.({ size: 14 })}
           {title}
           {edited[id] && <span className="editor-edited-dot" title="This group contains edits" />}
         </span>
@@ -4938,22 +4966,28 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       </div>
 
       <div id="editor-side-panel" className="editor-panel">
-        <div className="editor-panel-body">
-        <h3 className="section-title" style={{ marginBottom: 2 }}>
+        <div ref={panelBodyRef} className="editor-panel-body">
+        {/* The long story (original untouched, saves itself, Save copy) is in
+            the tooltip; the line itself only has to fit beside the heading. */}
+        <h3
+          className="section-title"
+          style={{ marginBottom: 4 }}
+          title={
+            docked
+              ? "The original file is never changed. This virtual copy saves itself as you edit; Save copy creates a new edited photo."
+              : "The original file is never changed. Your edits save themselves as you edit; Save copy creates a new edited photo."
+          }
+        >
           Edit
+          <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 12, fontWeight: 400 }}>non-destructive</span>
         </h3>
-        <p style={{ color: "var(--text-muted)", fontSize: 12, margin: "0 0 4px" }}>
-          {docked
-            ? "The original file is never changed. This virtual copy saves itself as you edit; Save copy creates a new edited photo."
-            : "The original file is never changed. Your edits save themselves as you edit; Save copy creates a new edited photo."}
-        </p>
 
         {/* The histogram belongs to the photo, not to any one group of
             sliders: it is what you watch WHILE dragging exposure, curves or
             colour. It used to live inside the Tone group, so it disappeared
             the moment you opened any other one. Pinned here it stays on screen
             through every group and through the panel's own scrolling. */}
-        <div className="editor-histogram-pinned">
+        <div ref={histPinnedRef} className="editor-histogram-pinned">
           <div className="editor-histogram-slot">
             <Histogram store={histStore} />
             {/* Empty until the photo's first frame is read back - a spinner
@@ -4967,1161 +5001,1179 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             tilt. Opening the group arms the crop box on the photo (see the
             openGroup effect), so everything here is live at once: the two
             labelled selects, then the quarter-turn tools, then the sliders. */}
-        {accordionHeader("transform", "Transform")}
-        {openGroup === "transform" && (
-          <div className="editor-accordion-body">
-            {/* The two labelled selects sit together at the top - one column,
-                one left edge - and the button rows follow underneath. The grid
-                is what you frame *against*, so it leads - and it leaves with
-                the crop in docked (canvas) mode, where framing lives on the
-                page. */}
-            {!docked && (
-            <div className="editor-field-row">
-              <span className="editor-field-label">Grid</span>
-              <Dropdown
-                className="editor-grid-select"
-                value={gridOverlay}
-                onChange={(v) => setGridOverlay(v as GridOverlay)}
-                title="Overlay grid"
-                ariaLabel="Overlay grid"
-                options={GRID_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              />
-            </div>
-            )}
+        <section className="editor-accordion">
+          {accordionHeader("transform", "Transform")}
+          {openGroup === "transform" && (
+            <div className="editor-accordion-body">
+              {/* The two labelled selects sit together at the top - one column,
+                  one left edge - and the button rows follow underneath. The grid
+                  is what you frame *against*, so it leads - and it leaves with
+                  the crop in docked (canvas) mode, where framing lives on the
+                  page. */}
+              {!docked && (
+              <div className="editor-field-row">
+                <span className="editor-field-label">Grid</span>
+                <Dropdown
+                  className="editor-grid-select"
+                  value={gridOverlay}
+                  onChange={(v) => setGridOverlay(v as GridOverlay)}
+                  title="Overlay grid"
+                  ariaLabel="Overlay grid"
+                  options={GRID_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                />
+              </div>
+              )}
 
-            {/* Crop: the ratio it locks to, then take it or drop it - all on one
-                row, so the whole thing is a single line in the panel instead of
-                a select with a bar of buttons parked under it. A tick and a
-                cross sitting on the select need no separator to say they belong
-                to it. Taking a crop re-frames the picture, and masks are stored
-                as fractions of that frame, so they're carried across to the new
-                one or a crop would slide every mask off what it was drawn on.
-                Not in docked (canvas) mode: the frame on the page is the
-                framing tool there. */}
-            {!docked && (
-            <div className="editor-field-row">
-              <span className="editor-field-label">Crop</span>
-              <Dropdown
-                className="editor-grid-select"
-                value={aspectKey}
-                onChange={pickAspect}
-                title="Crop aspect ratio"
-                ariaLabel="Crop aspect ratio"
-                options={ASPECT_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              />
-              {/* One button, two states. With the box open it takes the crop -
-                  and the preview then shows the cropped photo, which is what the
-                  sliders underneath are for. With the crop already taken it
-                  re-opens the box on the full frame, so a crop can be re-framed
-                  and not only cleared. */}
-              {cropMode ? (
-                <button
-                  className="btn btn-sm editor-field-btn editor-field-btn--confirm"
-                  disabled={!cropPending}
-                  onClick={takeCrop}
-                  title="Apply this crop"
-                  aria-label="Apply this crop"
-                >
-                  <IconCheck size={14} />
-                </button>
-              ) : (
+              {/* Crop: the ratio it locks to, then take it or drop it - all on one
+                  row, so the whole thing is a single line in the panel instead of
+                  a select with a bar of buttons parked under it. A tick and a
+                  cross sitting on the select need no separator to say they belong
+                  to it. Taking a crop re-frames the picture, and masks are stored
+                  as fractions of that frame, so they're carried across to the new
+                  one or a crop would slide every mask off what it was drawn on.
+                  Not in docked (canvas) mode: the frame on the page is the
+                  framing tool there. */}
+              {!docked && (
+              <div className="editor-field-row">
+                <span className="editor-field-label">Crop</span>
+                <Dropdown
+                  className="editor-grid-select"
+                  value={aspectKey}
+                  onChange={pickAspect}
+                  title="Crop aspect ratio"
+                  ariaLabel="Crop aspect ratio"
+                  options={ASPECT_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                />
+                {/* One button, two states. With the box open it takes the crop -
+                    and the preview then shows the cropped photo, which is what the
+                    sliders underneath are for. With the crop already taken it
+                    re-opens the box on the full frame, so a crop can be re-framed
+                    and not only cleared. */}
+                {cropMode ? (
+                  <button
+                    className="btn btn-sm editor-field-btn editor-field-btn--confirm"
+                    disabled={!cropPending}
+                    onClick={takeCrop}
+                    title="Apply this crop"
+                    aria-label="Apply this crop"
+                  >
+                    <IconCheck size={14} />
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-sm editor-field-btn"
+                    onClick={armCrop}
+                    title="Change the crop"
+                    aria-label="Change the crop"
+                  >
+                    <IconCrop size={13} />
+                  </button>
+                )}
                 <button
                   className="btn btn-sm editor-field-btn"
-                  onClick={armCrop}
-                  title="Change the crop"
-                  aria-label="Change the crop"
+                  disabled={!crop && !drawn}
+                  onClick={() => {
+                    applyCrop(null);
+                    setDrag(null);
+                    setAspectKey("orig");
+                    // Nothing is cropped any more, so the full frame is what the
+                    // preview shows either way - and the box is the useful thing
+                    // to land on there.
+                    setCropMode(true);
+                  }}
+                  title="Clear the crop"
+                  aria-label="Clear the crop"
                 >
-                  <IconCrop size={13} />
+                  <IconX size={13} />
                 </button>
+              </div>
               )}
-              <button
-                className="btn btn-sm editor-field-btn"
-                disabled={!crop && !drawn}
-                onClick={() => {
-                  applyCrop(null);
-                  setDrag(null);
-                  setAspectKey("orig");
-                  // Nothing is cropped any more, so the full frame is what the
-                  // preview shows either way - and the box is the useful thing
-                  // to land on there.
-                  setCropMode(true);
-                }}
-                title="Clear the crop"
-                aria-label="Clear the crop"
-              >
-                <IconX size={13} />
-              </button>
-            </div>
-            )}
 
-            {/* Rotate / flip: four equal buttons, one row. */}
-            <div className="editor-tool-row">
-              <button
-                className="btn btn-sm"
-                onClick={() => setRotation((r) => (r + 270) % 360)}
-                disabled={busy}
-                title="Rotate left 90°"
-                aria-label="Rotate left 90°"
-              >
-                <IconRotate size={14} className="flip-h" />
-              </button>
-              <button
-                className="btn btn-sm"
-                onClick={() => setRotation((r) => (r + 90) % 360)}
-                disabled={busy}
-                title="Rotate right 90°"
-                aria-label="Rotate right 90°"
-              >
-                <IconRotate size={14} />
-              </button>
-              <button
-                className={`btn btn-sm${flipH ? " primary" : ""}`}
-                onClick={() => setFlipH((v) => !v)}
-                disabled={busy}
-                title="Flip horizontal"
-                aria-label="Flip horizontal"
-                aria-pressed={flipH}
-              >
-                <IconFlipH size={14} />
-              </button>
-              <button
-                className={`btn btn-sm${flipV ? " primary" : ""}`}
-                onClick={() => setFlipV((v) => !v)}
-                disabled={busy}
-                title="Flip vertical"
-                aria-label="Flip vertical"
-                aria-pressed={flipV}
-              >
-                <IconFlipV size={14} />
-              </button>
-            </div>
+              {/* Rotate / flip: four equal buttons, one row. */}
+              <div className="editor-tool-row">
+                <button
+                  className="btn btn-sm"
+                  onClick={() => setRotation((r) => (r + 270) % 360)}
+                  disabled={busy}
+                  title="Rotate left 90°"
+                  aria-label="Rotate left 90°"
+                >
+                  <IconRotate size={14} className="flip-h" />
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => setRotation((r) => (r + 90) % 360)}
+                  disabled={busy}
+                  title="Rotate right 90°"
+                  aria-label="Rotate right 90°"
+                >
+                  <IconRotate size={14} />
+                </button>
+                <button
+                  className={`btn btn-sm${flipH ? " primary" : ""}`}
+                  onClick={() => setFlipH((v) => !v)}
+                  disabled={busy}
+                  title="Flip horizontal"
+                  aria-label="Flip horizontal"
+                  aria-pressed={flipH}
+                >
+                  <IconFlipH size={14} />
+                </button>
+                <button
+                  className={`btn btn-sm${flipV ? " primary" : ""}`}
+                  onClick={() => setFlipV((v) => !v)}
+                  disabled={busy}
+                  title="Flip vertical"
+                  aria-label="Flip vertical"
+                  aria-pressed={flipV}
+                >
+                  <IconFlipV size={14} />
+                </button>
+              </div>
 
-            {/* Straighten (rotation) + perspective / axis tilt. All auto-fill the
-                frame, so nothing shows empty corners. */}
-            <div className="editor-auto-level">
-              <button
-                className="btn btn-sm"
-                disabled={busy || levelling}
-                title="Level the horizon automatically"
-                onClick={() => {
-                  setLevelling(true);
-                  setLevelNote(null);
-                  api.images
-                    .autoStraighten(image.id, { rotation, flipH, flipV })
-                    .then(({ angle }) => {
-                      if (angle === null) setLevelNote("No clear horizon found.");
-                      else if (angle === straighten) setLevelNote("Already level.");
-                      else setStraighten(angle);
-                    })
-                    .catch(() => setLevelNote("Couldn't measure the horizon."))
-                    .finally(() => setLevelling(false));
-                }}
-              >
-                {levelling ? "Levelling…" : "Auto level"}
-              </button>
-              {levelNote && <span className="editor-wb-pick-error">{levelNote}</span>}
-            </div>
-            <div className="editor-sliders">
-              <Slider
-                label="Straighten"
-                value={straighten}
-                onChange={setStraighten}
-                min={-45}
-                max={45}
-                step={0.25}
-                format={(v) => `${v > 0 ? "+" : ""}${v}°`}
-              />
-              <Slider label="Tilt horizontal" value={perspH} onChange={setPerspH} />
-              <Slider label="Tilt vertical" value={perspV} onChange={setPerspV} />
-              <Slider label="Distortion" value={distortion} onChange={setDistortion} />
-              {/* White frame: a matte border added around the photo, drawn last.
-                  Bound to the develop object (not geometry), so it round-trips
-                  through Save and Save copy like every other adjustment. */}
-              <Slider
-                label="White frame"
-                value={adj.frame_width}
-                onChange={(v) => setAdj((a) => ({ ...a, frame_width: v }))}
-                min={SCALAR_SPEC.frame_width.min}
-                max={SCALAR_SPEC.frame_width.max}
-                resetValue={SCALAR_SPEC.frame_width.def}
-                format={(v) => `${v}%`}
-              />
-            </div>
+              {/* Straighten (rotation) + perspective / axis tilt. All auto-fill the
+                  frame, so nothing shows empty corners. */}
+              <div className="editor-auto-level">
+                <button
+                  className="btn btn-sm"
+                  disabled={busy || levelling}
+                  title="Level the horizon automatically"
+                  onClick={() => {
+                    setLevelling(true);
+                    setLevelNote(null);
+                    api.images
+                      .autoStraighten(image.id, { rotation, flipH, flipV })
+                      .then(({ angle }) => {
+                        if (angle === null) setLevelNote("No clear horizon found.");
+                        else if (angle === straighten) setLevelNote("Already level.");
+                        else setStraighten(angle);
+                      })
+                      .catch(() => setLevelNote("Couldn't measure the horizon."))
+                      .finally(() => setLevelling(false));
+                  }}
+                >
+                  {levelling ? "Levelling…" : "Auto level"}
+                </button>
+                {levelNote && <span className="editor-wb-pick-error">{levelNote}</span>}
+              </div>
+              <div className="editor-sliders">
+                <Slider
+                  label="Straighten"
+                  value={straighten}
+                  onChange={setStraighten}
+                  min={-45}
+                  max={45}
+                  step={0.25}
+                  format={(v) => `${v > 0 ? "+" : ""}${v}°`}
+                />
+                <Slider label="Tilt horizontal" value={perspH} onChange={setPerspH} />
+                <Slider label="Tilt vertical" value={perspV} onChange={setPerspV} />
+                <Slider label="Distortion" value={distortion} onChange={setDistortion} />
+                {/* White frame: a matte border added around the photo, drawn last.
+                    Bound to the develop object (not geometry), so it round-trips
+                    through Save and Save copy like every other adjustment. */}
+                <Slider
+                  label="White frame"
+                  value={adj.frame_width}
+                  onChange={(v) => setAdj((a) => ({ ...a, frame_width: v }))}
+                  min={SCALAR_SPEC.frame_width.min}
+                  max={SCALAR_SPEC.frame_width.max}
+                  resetValue={SCALAR_SPEC.frame_width.def}
+                  format={(v) => `${v}%`}
+                />
+              </div>
 
-            {/* Lens profile: the distortion, vignetting and colour-fringe
-                correction the camera recorded in the RAW for the mounted lens.
-                On by default - it's what the camera's own JPEG gets - and only
-                offered when the file carries the data. */}
-            {lensProfile.data?.available && (
-              <>
-                {/* A sub-heading like the Color group's, then a row shaped like
-                    a slider's head: what it is on the left, the switch where a
-                    slider shows its value. */}
-                <div className="editor-section-title">
-                  Lens correction
-                  {LENS_KEYS.some((k) => scalarIsEdited(k, adj[k])) && (
-                    <span className="editor-edited-dot" title="This group contains edits" />
-                  )}
-                </div>
-                <div className="editor-switch-row">
-                  <span className="editor-switch-text">
-                    <span>Profile correction</span>
-                    <span
-                      className="editor-switch-sub"
+              {/* Lens profile: the distortion, vignetting and colour-fringe
+                  correction the camera recorded in the RAW for the mounted lens.
+                  On by default - it's what the camera's own JPEG gets - and only
+                  offered when the file carries the data. */}
+              {lensProfile.data?.available && (
+                <>
+                  {/* A sub-heading like the Color group's, then a row shaped like
+                      a slider's head: what it is on the left, the switch where a
+                      slider shows its value. */}
+                  <div className="editor-section-title">
+                    Lens correction
+                    {LENS_KEYS.some((k) => scalarIsEdited(k, adj[k])) && (
+                      <span className="editor-edited-dot" title="This group contains edits" />
+                    )}
+                  </div>
+                  <div className="editor-switch-row">
+                    <span className="editor-switch-text">
+                      <span>Profile correction</span>
+                      <span
+                        className="editor-switch-sub"
+                        title={
+                          lensProfile.data.source === "lensfun"
+                            ? `${lensProfile.data.lens_model ?? "Lens"} - ${lensProfile.data.label} (Lensfun database)`
+                            : `${lensProfile.data.lens_model ?? "Lens"} - correction data from the camera`
+                        }
+                      >
+                        {lensProfile.data.source === "lensfun"
+                          ? lensProfile.data.label
+                          : lensProfile.data.lens_model ?? "Correction data from the camera"}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!adj.lens_profile}
+                      aria-label="Profile correction"
+                      className={`editor-switch${adj.lens_profile ? " on" : ""}`}
+                      onClick={() => setAdj((a) => ({ ...a, lens_profile: a.lens_profile ? 0 : 1 }))}
+                      disabled={busy}
                       title={
                         lensProfile.data.source === "lensfun"
-                          ? `${lensProfile.data.lens_model ?? "Lens"} - ${lensProfile.data.label} (Lensfun database)`
-                          : `${lensProfile.data.lens_model ?? "Lens"} - correction data from the camera`
+                          ? "Correct distortion, vignetting and colour fringes with the lens's Lensfun profile"
+                          : "Correct distortion, vignetting and colour fringes with the lens data stored in the RAW"
                       }
-                    >
-                      {lensProfile.data.source === "lensfun"
-                        ? lensProfile.data.label
-                        : lensProfile.data.lens_model ?? "Correction data from the camera"}
-                    </span>
-                  </span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={!!adj.lens_profile}
-                    aria-label="Profile correction"
-                    className={`editor-switch${adj.lens_profile ? " on" : ""}`}
-                    onClick={() => setAdj((a) => ({ ...a, lens_profile: a.lens_profile ? 0 : 1 }))}
-                    disabled={busy}
-                    title={
-                      lensProfile.data.source === "lensfun"
-                        ? "Correct distortion, vignetting and colour fringes with the lens's Lensfun profile"
-                        : "Correct distortion, vignetting and colour fringes with the lens data stored in the RAW"
-                    }
-                  />
-                </div>
-                {!!adj.lens_profile && (
-                  <div className="editor-sliders">
-                    <Slider
-                      label="Distortion correction"
-                      value={adj.lens_distortion}
-                      onChange={(v) => setAdj((a) => ({ ...a, lens_distortion: v }))}
-                      min={SCALAR_SPEC.lens_distortion.min}
-                      max={SCALAR_SPEC.lens_distortion.max}
-                      resetValue={SCALAR_SPEC.lens_distortion.def}
-                      format={(v) => `${v}%`}
-                    />
-                    <Slider
-                      label="Vignetting correction"
-                      value={adj.lens_vignetting}
-                      onChange={(v) => setAdj((a) => ({ ...a, lens_vignetting: v }))}
-                      min={SCALAR_SPEC.lens_vignetting.min}
-                      max={SCALAR_SPEC.lens_vignetting.max}
-                      resetValue={SCALAR_SPEC.lens_vignetting.def}
-                      format={(v) => `${v}%`}
                     />
                   </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
+                  {!!adj.lens_profile && (
+                    <div className="editor-sliders">
+                      <Slider
+                        label="Distortion correction"
+                        value={adj.lens_distortion}
+                        onChange={(v) => setAdj((a) => ({ ...a, lens_distortion: v }))}
+                        min={SCALAR_SPEC.lens_distortion.min}
+                        max={SCALAR_SPEC.lens_distortion.max}
+                        resetValue={SCALAR_SPEC.lens_distortion.def}
+                        format={(v) => `${v}%`}
+                      />
+                      <Slider
+                        label="Vignetting correction"
+                        value={adj.lens_vignetting}
+                        onChange={(v) => setAdj((a) => ({ ...a, lens_vignetting: v }))}
+                        min={SCALAR_SPEC.lens_vignetting.min}
+                        max={SCALAR_SPEC.lens_vignetting.max}
+                        resetValue={SCALAR_SPEC.lens_vignetting.def}
+                        format={(v) => `${v}%`}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </section>
 
         {/* Film simulation: built-in looks (Fuji-style simulations, analog film
             stocks) in one scrolling, sectioned list, rendered server-side as
             the base "stock" under curves/mixer/grading, plus a strength blend. */}
-        {accordionHeader("filmsim", "Film Simulation")}
-        {openGroup === "filmsim" && (
-          <div className="editor-accordion-body">
-            {/* The look in use between a previous and a next button: stepping
-                through the list without aiming at its tiles. Always there and
-                always the same height, the buttons greyed at the list's ends. */}
-            <div className="film-sim-stepper">
-              <button
-                className="icon-btn"
-                onClick={() => stepFilmSim(-1)}
-                disabled={FILM_SIM_ORDER.indexOf(adj.film_sim) <= 0}
-                title="Previous look (←)"
-                aria-label="Previous look"
-              >
-                <IconChevronLeft size={14} />
-              </button>
-              <span className="film-sim-current">
-                <span
-                  className="film-sim-swatch"
-                  style={{ background: FILM_SIMS.find((f) => f.value === adj.film_sim)?.swatch }}
-                />
-                <span className="film-sim-label">
-                  {FILM_SIMS.find((f) => f.value === adj.film_sim)?.label}
-                </span>
-              </span>
-              <button
-                className="icon-btn"
-                onClick={() => stepFilmSim(1)}
-                disabled={FILM_SIM_ORDER.indexOf(adj.film_sim) >= FILM_SIM_ORDER.length - 1}
-                title="Next look (→)"
-                aria-label="Next look"
-              >
-                <IconChevronRight size={14} />
-              </button>
-            </div>
-            <div className="film-sim-grid" ref={filmSimGridRef}>
-              {FILM_SIM_SECTIONS.flatMap(({ group, sims }) => [
-                group && (
-                  <div key={`group-${group.value}`} className="film-sim-group">
-                    {group.label}
-                  </div>
-                ),
-                ...sims.map((f) => (
-                  <button
-                    key={f.value}
-                    className={`film-sim-tile${adj.film_sim === f.value ? " active" : ""}`}
-                    onClick={() => setAdj((a) => withFilmSim(a, f.value))}
-                    title={f.label}
-                  >
-                    <span className="film-sim-swatch" style={{ background: f.swatch }} />
-                    <span className="film-sim-label">{f.label}</span>
-                  </button>
-                )),
-              ])}
-            </div>
-            {adj.film_sim !== "none" && (
-              <div className="editor-sliders">
-                <Slider
-                  label="Strength"
-                  value={adj.lut_intensity}
-                  min={SCALAR_SPEC.lut_intensity.min}
-                  max={SCALAR_SPEC.lut_intensity.max}
-                  resetValue={SCALAR_SPEC.lut_intensity.def}
-                  format={(v) => `${v}%`}
-                  onChange={(v) => setAdj((a) => ({ ...a, lut_intensity: v }))}
-                />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Tone: tone mapper + histogram + the tone sliders. */}
-        {accordionHeader("basic", "Tone")}
-        {openGroup === "basic" && (
-          <div className="editor-accordion-body">
-            {/* Base transfer curve the tonal sliders ride on. Laid out like a
-                slider's head - name left, the choice where a value sits - so it
-                reads as the first row of the column, not a box above it. */}
-            <div className="editor-select-row">
-              <span>Tone mapper</span>
-              <Dropdown
-                className="editor-select-inline"
-                value={adj.tone_mapper}
-                onChange={(v) =>
-                  // Process 3 and 4 render a film simulation on its own tone
-                  // curve whatever is chosen here; the current one listens.
-                  // Like choosing a look, choosing a tone mapper takes it in
-                  // its current form.
-                  setAdj((a) => ({
-                    ...a,
-                    tone_mapper: v as Adjustments["tone_mapper"],
-                    process: a.process === "3" || a.process === "4" ? processForCurrentLooks(a) : a.process,
-                  }))
-                }
-                title="Tone mapper"
-                ariaLabel="Tone mapper"
-                options={TONE_MAPPERS.map((t) => ({ value: t.value, label: t.label }))}
-              />
-            </div>
-            {/* The raw base: every RAW opens lifted to the same brightness, the
-                picture the grid shows, and Exposure works from there. Off is
-                the sensor's own exposure (a DR-mode file is 2-3 stops dark).
-                An edit from before the switch existed was made on the native
-                base, so it reads as off. */}
-            {scalarSliders(
-              sectionFields("Basic"),
-              image.file_type === "raw"
-                ? {
-                    key: "exposure",
-                    node: (
-                      <span className="editor-slider-extra">
-                        Normalize
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={adj.raw_base === "standard"}
-                          aria-label="Normalize exposure"
-                          className={`editor-switch editor-switch--sm${adj.raw_base === "standard" ? " on" : ""}`}
-                          onClick={() =>
-                            setAdj((a) => ({ ...a, raw_base: a.raw_base === "standard" ? "native" : "standard" }))
-                          }
-                          disabled={busy}
-                          title="Develop this RAW from the same brightness as every other one. Off shows the exposure the sensor recorded."
-                        />
-                      </span>
-                    ),
-                  }
-                : undefined,
-            )}
-          </div>
-        )}
-
-        {/* Curves: channel tabs + Point/Parametric toggle + editor/sliders. */}
-        {accordionHeader("curves", "Curves")}
-        {openGroup === "curves" && (
-          <div className="editor-accordion-body">
-            <div className="curve-tabs">
-              {CURVE_CHANNELS.map((c) => (
+        <section className="editor-accordion">
+          {accordionHeader("filmsim", "Film Simulation")}
+          {openGroup === "filmsim" && (
+            <div className="editor-accordion-body">
+              {/* The look in use between a previous and a next button: stepping
+                  through the list without aiming at its tiles. Always there and
+                  always the same height, the buttons greyed at the list's ends. */}
+              <div className="film-sim-stepper">
                 <button
-                  key={c.key}
-                  className={`btn btn-sm curve-tab${curveChannel === c.key ? " primary" : ""}`}
-                  onClick={() => setCurveChannel(c.key)}
+                  className="icon-btn"
+                  onClick={() => stepFilmSim(-1)}
+                  disabled={FILM_SIM_ORDER.indexOf(adj.film_sim) <= 0}
+                  title="Previous look (←)"
+                  aria-label="Previous look"
                 >
-                  <span className="curve-tab-dot" style={{ background: c.color }} />
-                  {c.label}
+                  <IconChevronLeft size={14} />
                 </button>
-              ))}
-            </div>
-            <div className="curve-toolbar">
-              {/* Targeted adjustment: point at the tone you want to change on
-                  the photo and drag up/down. */}
-              <button
-                className={`btn btn-sm curve-pick${curvePickMode ? " primary" : ""}`}
-                aria-pressed={curvePickMode}
-                onClick={() =>
-                  setCurvePickMode((on) => {
-                    const next = !on;
-                    if (next) {
-                      setCropMode(false);
-                      setMaskDrawMode(false);
-                      setColorPickMode(false);
-                    } else {
-                      setCurveMarker(null);
-                    }
-                    return next;
-                  })
-                }
-                title="Drag on the photo to adjust the curve at that tone"
-              >
-                <IconTarget />
-              </button>
-              <span className="segmented">
-                {/* Switching modes converts the current curve into the other
-                    representation (sampled points / least-squares fitted
-                    sliders), so the look carries over instead of resetting. */}
-                <button
-                  className={adj.curve_mode === "point" ? "active" : ""}
-                  onClick={() =>
-                    setAdj((a) =>
-                      a.curve_mode === "point"
-                        ? a
-                        : { ...a, curve_mode: "point", point_curves: parametricToPoints(a.parametric_curve) }
-                    )
-                  }
-                >
-                  Point
-                </button>
-                <button
-                  className={adj.curve_mode === "parametric" ? "active" : ""}
-                  onClick={() =>
-                    setAdj((a) =>
-                      a.curve_mode === "parametric"
-                        ? a
-                        : { ...a, curve_mode: "parametric", parametric_curve: pointsToParametric(a.point_curves) }
-                    )
-                  }
-                >
-                  Parametric
-                </button>
-              </span>
-              <button className="btn btn-sm ghost" onClick={resetCurve} title="Reset the active channel">
-                Reset
-              </button>
-            </div>
-            {adj.curve_mode === "point" ? (
-              <LiveCurveEditor
-                store={histStore}
-                points={adj.point_curves[curveChannel]}
-                color={CURVE_CHANNELS.find((c) => c.key === curveChannel)!.color}
-                onChange={(pts) => setPointCurve(curveChannel, pts)}
-                channel={curveChannel}
-                marker={curvePickMode ? curveMarker : null}
-              />
-            ) : (
-              <div className="editor-sliders">
-                {/* Caption to disambiguate these from the Basic panel's
-                    Highlights/Shadows sliders: these reshape the tone curve by
-                    region and stack on top of Basic, they don't replace it. */}
-                <p className="curve-param-hint">
-                  Reshape the tone curve by region. Separate from the Basic
-                  Highlights/Shadows — both apply.
-                </p>
-                <Slider
-                  label="Highlights (curve)"
-                  value={adj.parametric_curve[curveChannel].highlights}
-                  onChange={(v) => setParamCurve(curveChannel, { highlights: v })}
-                />
-                <Slider
-                  label="Lights (curve)"
-                  value={adj.parametric_curve[curveChannel].lights}
-                  onChange={(v) => setParamCurve(curveChannel, { lights: v })}
-                />
-                <Slider
-                  label="Darks (curve)"
-                  value={adj.parametric_curve[curveChannel].darks}
-                  onChange={(v) => setParamCurve(curveChannel, { darks: v })}
-                />
-                <Slider
-                  label="Shadows (curve)"
-                  value={adj.parametric_curve[curveChannel].shadows}
-                  onChange={(v) => setParamCurve(curveChannel, { shadows: v })}
-                />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Color: Color sliders + HSL mixer + Color Grading + Calibration. */}
-        {accordionHeader("color", "Color")}
-        {openGroup === "color" && (
-          <div className="editor-accordion-body">
-            {/* White balance: Temperature in Kelvin where the RAW says what it
-                was shot at (the relative slider otherwise - JPEGs), then the
-                red/blue shift cross as a fine correction on top. */}
-            {asShotKelvin !== null && kelvinNow !== null ? (
-              <>
-              <div className="editor-sliders">
-                {/* Runs in mired (negated, so warmer is to the right): equal
-                    travel is an equal change in colour along the whole range. */}
-                <Slider
-                  label="Temperature"
-                  value={-1e6 / kelvinNow}
-                  min={-1e6 / kelvinRange.min}
-                  max={-1e6 / kelvinRange.max}
-                  step={0.1}
-                  resetValue={-1e6 / asShotKelvin}
-                  format={(v) => `${Math.round(-1e5 / v) * 10} K`}
-                  parse={(text) => {
-                    const typed = Number.parseFloat(text.replace(/[^0-9.]/g, ""));
-                    return Number.isFinite(typed) && typed > 0 ? -1e6 / typed : null;
-                  }}
-                  onArrow={(direction, fine) => {
-                    const step = fine ? 10 : 100;
-                    setKelvin((Math.round(kelvinNow / step) + direction) * step);
-                  }}
-                  onChange={(v) => setKelvin(-1e6 / v)}
-                />
-                <Slider
-                  label="Tint"
-                  value={ownTint}
-                  min={SCALAR_SPEC.tint.min}
-                  max={SCALAR_SPEC.tint.max}
-                  step={(SCALAR_SPEC.tint as ScalarDef).step}
-                  resetValue={0}
-                  uiScale={(SCALAR_SPEC.tint as ScalarDef).uiScale}
-                  onChange={setOwnTint}
-                />
-              </div>
-              {/* The presets: one click sets the Kelvin of that light, the
-                  way dragging the slider there would. */}
-              <div className="editor-tool-row">
-                {WB_PRESETS.map(({ label, kelvin, Icon }) => {
-                  // Lit when the slider reads this preset's value.
-                  const active = Math.round(kelvinNow / 10) * 10 === kelvin;
-                  return (
-                    <button
-                      key={label}
-                      className={`btn btn-sm${active ? " primary" : ""}`}
-                      onClick={() => setKelvin(kelvin)}
-                      title={`${label} · ${kelvin} K`}
-                      aria-label={`${label}, ${kelvin} K`}
-                      aria-pressed={active}
-                    >
-                      <Icon size={14} />
-                    </button>
-                  );
-                })}
-              </div>
-              </>
-            ) : (
-              scalarSliders(sectionFields("Color").filter((f) => f.key === "temperature" || f.key === "tint"))
-            )}
-            {/* The eyedropper: click something that should be white. */}
-            <div className="editor-wb-pick">
-              <button
-                className={`btn btn-sm${wbPickMode ? " primary" : ""}`}
-                onClick={() => {
-                  setWbPickMode((on) => !on);
-                  setWbPickError(null);
-                }}
-                title="Set the white balance from an area that should be white"
-              >
-                {wbPickMode ? "Click a white area…" : "Pick white"}
-              </button>
-              {/* Back to the white balance as shot: temperature, tint and the
-                  shift cross together. */}
-              <button
-                className="btn btn-sm ghost"
-                disabled={
-                  adj.temperature === 0 && adj.tint === 0 && adj.wb_shift_r === 0 && adj.wb_shift_b === 0
-                }
-                onClick={() => {
-                  setWbPickMode(false);
-                  setWbPickError(null);
-                  setAdj((a) => ({ ...a, temperature: 0, tint: 0, wb_shift_r: 0, wb_shift_b: 0 }));
-                }}
-                title="Reset the white balance to as shot"
-              >
-                Reset
-              </button>
-              {wbPickError && <span className="editor-wb-pick-error">{wbPickError}</span>}
-            </div>
-            <WbShiftPad
-              red={adj.wb_shift_r}
-              blue={adj.wb_shift_b}
-              onChange={(v) => setAdj((a) => ({ ...a, wb_shift_r: v.red, wb_shift_b: v.blue }))}
-            />
-            {scalarSliders(
-              sectionFields("Color").filter(
-                (f) =>
-                  f.key !== "temperature" &&
-                  f.key !== "tint" &&
-                  f.key !== "wb_shift_r" &&
-                  f.key !== "wb_shift_b"
-              )
-            )}
-
-            {/* HSL colour mixer: per-band Hue / Saturation / Luminance (adj.hsl). */}
-            <div className="editor-section-title">
-              Color mixer
-              {edited.colorMixer && <span className="editor-edited-dot" title="This group contains edits" />}
-            </div>
-            <div className="mixer-bands">
-              {COLOR_BANDS.map((b) => (
-                <button
-                  key={b}
-                  className={`mixer-band${band === b ? " active" : ""}${
-                    !adj.hsl[b].every((v) => v === 0) || adj.hsl_range[b] !== 0 ? " edited" : ""
-                  }`}
-                  style={{ background: BAND_SWATCH[b] }}
-                  title={b}
-                  onClick={() => setBand(b)}
-                />
-              ))}
-            </div>
-            <div className="editor-sliders">
-              {MIX_CHANNELS.map(([ch, lbl, wide]) => (
-                <Slider
-                  key={ch}
-                  label={lbl}
-                  value={adj.hsl[band][ch]}
-                  min={wide ? -200 : -100}
-                  max={wide ? 200 : 100}
-                  uiScale={wide ? 2 : 1}
-                  onChange={(v) => setBandChannel(ch, v)}
-                />
-              ))}
-              {/* How far this band's three sliders reach into the neighbouring
-                  hues before the next band takes over. Negative keeps the edit
-                  tight around this colour, positive carries it across. */}
-              <Slider label="Range" value={adj.hsl_range[band]} onChange={setBandRange} />
-            </div>
-
-            {/* Colour grading: four hue/saturation wheels + blending / balance. */}
-            <div className="editor-section-title">
-              Color Grading
-              {edited.colorGrading && <span className="editor-edited-dot" title="This group contains edits" />}
-            </div>
-            <div className="grade-wheels">
-              {GRADE_RANGES.map((r) => (
-                <div key={r.key} className="grade-wheel-cell">
-                  <ColorWheel
-                    label={r.label}
-                    hue={adj.color_grading[r.key].hue}
-                    saturation={adj.color_grading[r.key].saturation}
-                    onChange={(v) => setGrade(r.key, v)}
-                    onReset={() => setGrade(r.key, { hue: 0, saturation: 0 })}
+                <span className="film-sim-current">
+                  <span
+                    className="film-sim-swatch"
+                    style={{ background: FILM_SIMS.find((f) => f.value === adj.film_sim)?.swatch }}
                   />
+                  <span className="film-sim-label">
+                    {FILM_SIMS.find((f) => f.value === adj.film_sim)?.label}
+                  </span>
+                </span>
+                <button
+                  className="icon-btn"
+                  onClick={() => stepFilmSim(1)}
+                  disabled={FILM_SIM_ORDER.indexOf(adj.film_sim) >= FILM_SIM_ORDER.length - 1}
+                  title="Next look (→)"
+                  aria-label="Next look"
+                >
+                  <IconChevronRight size={14} />
+                </button>
+              </div>
+              <div className="film-sim-grid" ref={filmSimGridRef}>
+                {FILM_SIM_SECTIONS.flatMap(({ group, sims }) => [
+                  group && (
+                    <div key={`group-${group.value}`} className="film-sim-group">
+                      {group.label}
+                    </div>
+                  ),
+                  ...sims.map((f) => (
+                    <button
+                      key={f.value}
+                      className={`film-sim-tile${adj.film_sim === f.value ? " active" : ""}`}
+                      onClick={() => setAdj((a) => withFilmSim(a, f.value))}
+                      title={f.label}
+                    >
+                      <span className="film-sim-swatch" style={{ background: f.swatch }} />
+                      <span className="film-sim-label">{f.label}</span>
+                    </button>
+                  )),
+                ])}
+              </div>
+              {adj.film_sim !== "none" && (
+                <div className="editor-sliders">
                   <Slider
-                    label="Luminance"
-                    value={adj.color_grading[r.key].luminance}
-                    onChange={(v) => setGrade(r.key, { luminance: v })}
+                    label="Strength"
+                    value={adj.lut_intensity}
+                    min={SCALAR_SPEC.lut_intensity.min}
+                    max={SCALAR_SPEC.lut_intensity.max}
+                    resetValue={SCALAR_SPEC.lut_intensity.def}
+                    format={(v) => `${v}%`}
+                    onChange={(v) => setAdj((a) => ({ ...a, lut_intensity: v }))}
                   />
                 </div>
-              ))}
+              )}
             </div>
-            <div className="editor-sliders">
-              <Slider
-                label="Blending"
-                value={adj.color_grading.blending}
-                min={0}
-                max={100}
-                resetValue={50}
-                onChange={(v) => setGradeScalar("blending", v)}
-              />
-              <Slider label="Balance" value={adj.color_grading.balance} onChange={(v) => setGradeScalar("balance", v)} />
-            </div>
+          )}
+        </section>
 
-            {/* Colour calibration: shadow tint + each primary's hue/saturation/luminance. */}
-            <div className="editor-section-title">
-              Calibration
-              {edited.calibration && <span className="editor-edited-dot" title="This group contains edits" />}
-            </div>
-            <div className="editor-sliders">
-              {CALIB_FIELDS.map((f) => (
-                <Slider
-                  key={f.key}
-                  label={f.label}
-                  value={adj.color_calibration[f.key]}
-                  min={f.wide ? -200 : -100}
-                  max={f.wide ? 200 : 100}
-                  uiScale={f.wide ? 2 : 1}
-                  groupStart={f.groupStart}
-                  swatch={f.primary && BAND_SWATCH[f.primary]}
-                  onChange={(v) => setCalib(f.key, v)}
+        {/* Tone: tone mapper + histogram + the tone sliders. */}
+        <section className="editor-accordion">
+          {accordionHeader("basic", "Tone")}
+          {openGroup === "basic" && (
+            <div className="editor-accordion-body">
+              {/* Base transfer curve the tonal sliders ride on. Laid out like a
+                  slider's head - name left, the choice where a value sits - so it
+                  reads as the first row of the column, not a box above it. */}
+              <div className="editor-select-row">
+                <span>Tone mapper</span>
+                <Dropdown
+                  className="editor-select-inline"
+                  value={adj.tone_mapper}
+                  onChange={(v) =>
+                    // Process 3 and 4 render a film simulation on its own tone
+                    // curve whatever is chosen here; the current one listens.
+                    // Like choosing a look, choosing a tone mapper takes it in
+                    // its current form.
+                    setAdj((a) => ({
+                      ...a,
+                      tone_mapper: v as Adjustments["tone_mapper"],
+                      process: a.process === "3" || a.process === "4" ? processForCurrentLooks(a) : a.process,
+                    }))
+                  }
+                  title="Tone mapper"
+                  ariaLabel="Tone mapper"
+                  options={TONE_MAPPERS.map((t) => ({ value: t.value, label: t.label }))}
                 />
-              ))}
+              </div>
+              {/* The raw base: every RAW opens lifted to the same brightness, the
+                  picture the grid shows, and Exposure works from there. Off is
+                  the sensor's own exposure (a DR-mode file is 2-3 stops dark).
+                  An edit from before the switch existed was made on the native
+                  base, so it reads as off. */}
+              {scalarSliders(
+                sectionFields("Basic"),
+                image.file_type === "raw"
+                  ? {
+                      key: "exposure",
+                      node: (
+                        <span className="editor-slider-extra">
+                          Normalize
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={adj.raw_base === "standard"}
+                            aria-label="Normalize exposure"
+                            className={`editor-switch editor-switch--sm${adj.raw_base === "standard" ? " on" : ""}`}
+                            onClick={() =>
+                              setAdj((a) => ({ ...a, raw_base: a.raw_base === "standard" ? "native" : "standard" }))
+                            }
+                            disabled={busy}
+                            title="Develop this RAW from the same brightness as every other one. Off shows the exposure the sensor recorded."
+                          />
+                        </span>
+                      ),
+                    }
+                  : undefined,
+              )}
             </div>
-          </div>
-        )}
+          )}
+        </section>
+
+        {/* Curves: channel tabs + Point/Parametric toggle + editor/sliders. */}
+        <section className="editor-accordion">
+          {accordionHeader("curves", "Curves")}
+          {openGroup === "curves" && (
+            <div className="editor-accordion-body">
+              <div className="curve-tabs">
+                {CURVE_CHANNELS.map((c) => (
+                  <button
+                    key={c.key}
+                    className={`btn btn-sm curve-tab${curveChannel === c.key ? " primary" : ""}`}
+                    onClick={() => setCurveChannel(c.key)}
+                  >
+                    <span className="curve-tab-dot" style={{ background: c.color }} />
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+              <div className="curve-toolbar">
+                {/* Targeted adjustment: point at the tone you want to change on
+                    the photo and drag up/down. */}
+                <button
+                  className={`btn btn-sm curve-pick${curvePickMode ? " primary" : ""}`}
+                  aria-pressed={curvePickMode}
+                  onClick={() =>
+                    setCurvePickMode((on) => {
+                      const next = !on;
+                      if (next) {
+                        setCropMode(false);
+                        setMaskDrawMode(false);
+                        setColorPickMode(false);
+                      } else {
+                        setCurveMarker(null);
+                      }
+                      return next;
+                    })
+                  }
+                  title="Drag on the photo to adjust the curve at that tone"
+                >
+                  <IconTarget />
+                </button>
+                <span className="segmented">
+                  {/* Switching modes converts the current curve into the other
+                      representation (sampled points / least-squares fitted
+                      sliders), so the look carries over instead of resetting. */}
+                  <button
+                    className={adj.curve_mode === "point" ? "active" : ""}
+                    onClick={() =>
+                      setAdj((a) =>
+                        a.curve_mode === "point"
+                          ? a
+                          : { ...a, curve_mode: "point", point_curves: parametricToPoints(a.parametric_curve) }
+                      )
+                    }
+                  >
+                    Point
+                  </button>
+                  <button
+                    className={adj.curve_mode === "parametric" ? "active" : ""}
+                    onClick={() =>
+                      setAdj((a) =>
+                        a.curve_mode === "parametric"
+                          ? a
+                          : { ...a, curve_mode: "parametric", parametric_curve: pointsToParametric(a.point_curves) }
+                      )
+                    }
+                  >
+                    Parametric
+                  </button>
+                </span>
+                <button className="btn btn-sm ghost" onClick={resetCurve} title="Reset the active channel">
+                  Reset
+                </button>
+              </div>
+              {adj.curve_mode === "point" ? (
+                <LiveCurveEditor
+                  store={histStore}
+                  points={adj.point_curves[curveChannel]}
+                  color={CURVE_CHANNELS.find((c) => c.key === curveChannel)!.color}
+                  onChange={(pts) => setPointCurve(curveChannel, pts)}
+                  channel={curveChannel}
+                  marker={curvePickMode ? curveMarker : null}
+                />
+              ) : (
+                <div className="editor-sliders">
+                  {/* Caption to disambiguate these from the Basic panel's
+                      Highlights/Shadows sliders: these reshape the tone curve by
+                      region and stack on top of Basic, they don't replace it. */}
+                  <p className="curve-param-hint">
+                    Reshape the tone curve by region. Separate from the Basic
+                    Highlights/Shadows — both apply.
+                  </p>
+                  <Slider
+                    label="Highlights (curve)"
+                    value={adj.parametric_curve[curveChannel].highlights}
+                    onChange={(v) => setParamCurve(curveChannel, { highlights: v })}
+                  />
+                  <Slider
+                    label="Lights (curve)"
+                    value={adj.parametric_curve[curveChannel].lights}
+                    onChange={(v) => setParamCurve(curveChannel, { lights: v })}
+                  />
+                  <Slider
+                    label="Darks (curve)"
+                    value={adj.parametric_curve[curveChannel].darks}
+                    onChange={(v) => setParamCurve(curveChannel, { darks: v })}
+                  />
+                  <Slider
+                    label="Shadows (curve)"
+                    value={adj.parametric_curve[curveChannel].shadows}
+                    onChange={(v) => setParamCurve(curveChannel, { shadows: v })}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Color: Color sliders + HSL mixer + Color Grading + Calibration. */}
+        <section className="editor-accordion">
+          {accordionHeader("color", "Color")}
+          {openGroup === "color" && (
+            <div className="editor-accordion-body">
+              {/* White balance: Temperature in Kelvin where the RAW says what it
+                  was shot at (the relative slider otherwise - JPEGs), then the
+                  red/blue shift cross as a fine correction on top. */}
+              {asShotKelvin !== null && kelvinNow !== null ? (
+                <>
+                <div className="editor-sliders">
+                  {/* Runs in mired (negated, so warmer is to the right): equal
+                      travel is an equal change in colour along the whole range. */}
+                  <Slider
+                    label="Temperature"
+                    value={-1e6 / kelvinNow}
+                    min={-1e6 / kelvinRange.min}
+                    max={-1e6 / kelvinRange.max}
+                    step={0.1}
+                    resetValue={-1e6 / asShotKelvin}
+                    format={(v) => `${Math.round(-1e5 / v) * 10} K`}
+                    parse={(text) => {
+                      const typed = Number.parseFloat(text.replace(/[^0-9.]/g, ""));
+                      return Number.isFinite(typed) && typed > 0 ? -1e6 / typed : null;
+                    }}
+                    onArrow={(direction, fine) => {
+                      const step = fine ? 10 : 100;
+                      setKelvin((Math.round(kelvinNow / step) + direction) * step);
+                    }}
+                    onChange={(v) => setKelvin(-1e6 / v)}
+                  />
+                  <Slider
+                    label="Tint"
+                    value={ownTint}
+                    min={SCALAR_SPEC.tint.min}
+                    max={SCALAR_SPEC.tint.max}
+                    step={(SCALAR_SPEC.tint as ScalarDef).step}
+                    resetValue={0}
+                    uiScale={(SCALAR_SPEC.tint as ScalarDef).uiScale}
+                    onChange={setOwnTint}
+                  />
+                </div>
+                {/* The presets: one click sets the Kelvin of that light, the
+                    way dragging the slider there would. */}
+                <div className="editor-tool-row">
+                  {WB_PRESETS.map(({ label, kelvin, Icon }) => {
+                    // Lit when the slider reads this preset's value.
+                    const active = Math.round(kelvinNow / 10) * 10 === kelvin;
+                    return (
+                      <button
+                        key={label}
+                        className={`btn btn-sm${active ? " primary" : ""}`}
+                        onClick={() => setKelvin(kelvin)}
+                        title={`${label} · ${kelvin} K`}
+                        aria-label={`${label}, ${kelvin} K`}
+                        aria-pressed={active}
+                      >
+                        <Icon size={14} />
+                      </button>
+                    );
+                  })}
+                </div>
+                </>
+              ) : (
+                scalarSliders(sectionFields("Color").filter((f) => f.key === "temperature" || f.key === "tint"))
+              )}
+              {/* The eyedropper: click something that should be white. */}
+              <div className="editor-wb-pick">
+                <button
+                  className={`btn btn-sm${wbPickMode ? " primary" : ""}`}
+                  onClick={() => {
+                    setWbPickMode((on) => !on);
+                    setWbPickError(null);
+                  }}
+                  title="Set the white balance from an area that should be white"
+                >
+                  {wbPickMode ? "Click a white area…" : "Pick white"}
+                </button>
+                {/* Back to the white balance as shot: temperature, tint and the
+                    shift cross together. */}
+                <button
+                  className="btn btn-sm ghost"
+                  disabled={
+                    adj.temperature === 0 && adj.tint === 0 && adj.wb_shift_r === 0 && adj.wb_shift_b === 0
+                  }
+                  onClick={() => {
+                    setWbPickMode(false);
+                    setWbPickError(null);
+                    setAdj((a) => ({ ...a, temperature: 0, tint: 0, wb_shift_r: 0, wb_shift_b: 0 }));
+                  }}
+                  title="Reset the white balance to as shot"
+                >
+                  Reset
+                </button>
+                {wbPickError && <span className="editor-wb-pick-error">{wbPickError}</span>}
+              </div>
+              <WbShiftPad
+                red={adj.wb_shift_r}
+                blue={adj.wb_shift_b}
+                onChange={(v) => setAdj((a) => ({ ...a, wb_shift_r: v.red, wb_shift_b: v.blue }))}
+              />
+              {scalarSliders(
+                sectionFields("Color").filter(
+                  (f) =>
+                    f.key !== "temperature" &&
+                    f.key !== "tint" &&
+                    f.key !== "wb_shift_r" &&
+                    f.key !== "wb_shift_b"
+                )
+              )}
+
+              {/* HSL colour mixer: per-band Hue / Saturation / Luminance (adj.hsl). */}
+              <div className="editor-section-title">
+                Color mixer
+                {edited.colorMixer && <span className="editor-edited-dot" title="This group contains edits" />}
+              </div>
+              <div className="mixer-bands">
+                {COLOR_BANDS.map((b) => (
+                  <button
+                    key={b}
+                    className={`mixer-band${band === b ? " active" : ""}${
+                      !adj.hsl[b].every((v) => v === 0) || adj.hsl_range[b] !== 0 ? " edited" : ""
+                    }`}
+                    style={{ background: BAND_SWATCH[b] }}
+                    title={b}
+                    onClick={() => setBand(b)}
+                  />
+                ))}
+              </div>
+              <div className="editor-sliders">
+                {MIX_CHANNELS.map(([ch, lbl, wide]) => (
+                  <Slider
+                    key={ch}
+                    label={lbl}
+                    value={adj.hsl[band][ch]}
+                    min={wide ? -200 : -100}
+                    max={wide ? 200 : 100}
+                    uiScale={wide ? 2 : 1}
+                    onChange={(v) => setBandChannel(ch, v)}
+                  />
+                ))}
+                {/* How far this band's three sliders reach into the neighbouring
+                    hues before the next band takes over. Negative keeps the edit
+                    tight around this colour, positive carries it across. */}
+                <Slider label="Range" value={adj.hsl_range[band]} onChange={setBandRange} />
+              </div>
+
+              {/* Colour grading: four hue/saturation wheels + blending / balance. */}
+              <div className="editor-section-title">
+                Color Grading
+                {edited.colorGrading && <span className="editor-edited-dot" title="This group contains edits" />}
+              </div>
+              <div className="grade-wheels">
+                {GRADE_RANGES.map((r) => (
+                  <div key={r.key} className="grade-wheel-cell">
+                    <ColorWheel
+                      label={r.label}
+                      hue={adj.color_grading[r.key].hue}
+                      saturation={adj.color_grading[r.key].saturation}
+                      onChange={(v) => setGrade(r.key, v)}
+                      onReset={() => setGrade(r.key, { hue: 0, saturation: 0 })}
+                    />
+                    <Slider
+                      label="Luminance"
+                      value={adj.color_grading[r.key].luminance}
+                      onChange={(v) => setGrade(r.key, { luminance: v })}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="editor-sliders">
+                <Slider
+                  label="Blending"
+                  value={adj.color_grading.blending}
+                  min={0}
+                  max={100}
+                  resetValue={50}
+                  onChange={(v) => setGradeScalar("blending", v)}
+                />
+                <Slider label="Balance" value={adj.color_grading.balance} onChange={(v) => setGradeScalar("balance", v)} />
+              </div>
+
+              {/* Colour calibration: shadow tint + each primary's hue/saturation/luminance. */}
+              <div className="editor-section-title">
+                Calibration
+                {edited.calibration && <span className="editor-edited-dot" title="This group contains edits" />}
+              </div>
+              <div className="editor-sliders">
+                {CALIB_FIELDS.map((f) => (
+                  <Slider
+                    key={f.key}
+                    label={f.label}
+                    value={adj.color_calibration[f.key]}
+                    min={f.wide ? -200 : -100}
+                    max={f.wide ? 200 : 100}
+                    uiScale={f.wide ? 2 : 1}
+                    groupStart={f.groupStart}
+                    swatch={f.primary && BAND_SWATCH[f.primary]}
+                    onChange={(v) => setCalib(f.key, v)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
 
         {/* Details */}
-        {accordionHeader("details", "Details")}
-        {openGroup === "details" && <div className="editor-accordion-body">{scalarSliders(sectionFields("Details"))}</div>}
+        <section className="editor-accordion">
+          {accordionHeader("details", "Details")}
+          {openGroup === "details" && <div className="editor-accordion-body">{scalarSliders(sectionFields("Details"))}</div>}
+        </section>
 
         {/* Effects */}
-        {accordionHeader("effects", "Effects")}
-        {openGroup === "effects" && <div className="editor-accordion-body">{scalarSliders(sectionFields("Effects"))}</div>}
+        <section className="editor-accordion">
+          {accordionHeader("effects", "Effects")}
+          {openGroup === "effects" && <div className="editor-accordion-body">{scalarSliders(sectionFields("Effects"))}</div>}
+        </section>
 
         {/* Masks (local / per-region adjustments). Everything writes into
             adj.masks, which rides along in previewEdits, so the server preview
             re-renders on every change. */}
-        {accordionHeader("masks", "Masks")}
-        {openGroup === "masks" && (
-          <div className="editor-accordion-body">
-        <div className="mask-list">
-          {adj.masks.length === 0 && <p className="mask-empty">No masks yet. Add one to adjust only part of the photo.</p>}
-          {adj.masks.map((m) => (
-            <div
-              key={m.id}
-              className={`mask-row${selectedMaskId === m.id ? " active" : ""}`}
-              onClick={() => selectMask(m.id)}
-              // Pointing at a row marks that mask on the photo (see markedMask).
-              onMouseEnter={() => setHoveredMaskId(m.id)}
-              onMouseLeave={() => setHoveredMaskId((id) => (id === m.id ? null : id))}
-              title="Hover to see what this mask covers"
-            >
-              <button
-                className="mask-eye"
-                title={m.visible ? "Hide mask" : "Show mask"}
-                aria-label={m.visible ? `Hide mask ${m.name}` : `Show mask ${m.name}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  updateMask(m.id, { visible: !m.visible });
-                }}
+        <section className="editor-accordion">
+          {accordionHeader("masks", "Masks")}
+          {openGroup === "masks" && (
+            <div className="editor-accordion-body">
+          <div className="mask-list">
+            {adj.masks.length === 0 && <p className="mask-empty">No masks yet. Add one to adjust only part of the photo.</p>}
+            {adj.masks.map((m) => (
+              <div
+                key={m.id}
+                className={`mask-row${selectedMaskId === m.id ? " active" : ""}`}
+                onClick={() => selectMask(m.id)}
+                // Pointing at a row marks that mask on the photo (see markedMask).
+                onMouseEnter={() => setHoveredMaskId(m.id)}
+                onMouseLeave={() => setHoveredMaskId((id) => (id === m.id ? null : id))}
+                title="Hover to see what this mask covers"
               >
-                {m.visible ? <IconEye size={13} /> : <IconEyeOff size={13} />}
-              </button>
-              <span className="mask-row-name">
-                {m.name}
-                <span className="mask-row-type">{maskLabel(m)}</span>
-              </span>
-              <button
-                className="mask-del"
-                title="Delete mask"
-                aria-label={`Delete mask ${m.name}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteMask(m.id);
-                }}
-              >
-                <IconTrash size={13} />
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {/* Subject masks: the server finds the region, so these read as things
-            in the photo rather than as shapes to draw. */}
-        <div className="mask-add-row">
-          <span className="mask-add-label">Select subject</span>
-          <div className="mask-add-btns">
-            {MASK_SUBJECTS.map((s) => (
-              <button
-                key={s.value}
-                className="btn btn-sm mask-add-item"
-                disabled={segmenting !== null}
-                onClick={() => addSemanticMask(s.value)}
-              >
-                {segmenting === s.value ? "Finding…" : s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {segmentError && <p className="mask-hint mask-hint-error">{segmentError}</p>}
-
-        <div className="mask-add-row">
-          <span className="mask-add-label">Add mask</span>
-          <div className="mask-add-btns">
-            {MASK_TYPES.map((t) => (
-              <button key={t.value} className="btn btn-sm mask-add-item" onClick={() => addMask(t.value)}>
-                + {t.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {selectedMask && selSub && (
-          <div className="mask-editor">
-            <Slider
-              label="Opacity"
-              value={selectedMask.opacity}
-              min={0}
-              max={100}
-              resetValue={100}
-              onChange={(v) => updateMask(selectedMask.id, { opacity: v })}
-            />
-            <div className="mask-btn-row">
-              <button
-                className={`btn btn-sm${selectedMask.invert ? " primary" : ""}`}
-                onClick={() => {
-                  flashMask();
-                  updateMask(selectedMask.id, { invert: !selectedMask.invert });
-                }}
-                title="Invert this mask"
-              >
-                Invert
-              </button>
-              <button
-                className={`btn btn-sm${showMaskArea ? " primary" : ""}`}
-                aria-pressed={showMaskArea}
-                onClick={() => setShowMaskArea((v) => !v)}
-                title="Highlight the area this mask covers"
-              >
-                Show mask
-              </button>
-              {isSpatial(selSub.type) && (
                 <button
-                  className={`btn btn-sm${maskDrawMode && !limitEdit ? " primary" : ""}`}
-                  onClick={() => (maskDrawMode && !limitEdit ? toggleMaskDraw() : editShape(false))}
-                  title="Draw this mask directly on the image"
+                  className="mask-eye"
+                  title={m.visible ? "Hide mask" : "Show mask"}
+                  aria-label={m.visible ? `Hide mask ${m.name}` : `Show mask ${m.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    updateMask(m.id, { visible: !m.visible });
+                  }}
                 >
-                  {maskDrawMode && !limitEdit ? "Drawing on image…" : "Edit on image"}
+                  {m.visible ? <IconEye size={13} /> : <IconEyeOff size={13} />}
                 </button>
-              )}
-            </div>
-
-            {/* The mask's own shape (sub-mask 0), when it has one to draw. */}
-            {isSpatial(selSub.type) && shapeControls(selectedMask.id, selSub, 0)}
-
-            {selSub.type === "luminance" && (
-              <>
-                <Slider
-                  label="Range min"
-                  value={subNum(selSub, "range_min", 0)}
-                  min={0}
-                  max={100}
-                  resetValue={0}
-                  onChange={(v) => setSubParams(selectedMask.id, { range_min: v })}
-                />
-                <Slider
-                  label="Range max"
-                  value={subNum(selSub, "range_max", 50)}
-                  min={0}
-                  max={100}
-                  resetValue={50}
-                  onChange={(v) => setSubParams(selectedMask.id, { range_max: v })}
-                />
-                <Slider
-                  label="Feather"
-                  value={subNum(selSub, "feather", 35)}
-                  min={0}
-                  max={100}
-                  resetValue={35}
-                  onChange={(v) => setSubFeather(selectedMask.id, v)}
-                />
-              </>
-            )}
-
-            {selSub.type === "edge" && (
-              <>
-                <p className="mask-hint">
-                  Selects detail rather than tone — hair, branches and fabric, not skin or sky.
-                </p>
-                <Slider
-                  label="Threshold"
-                  value={subNum(selSub, "threshold", 25)}
-                  min={0}
-                  max={100}
-                  resetValue={25}
-                  onChange={(v) => setSubParams(selectedMask.id, { threshold: v })}
-                />
-                <Slider
-                  label="Spread"
-                  value={subNum(selSub, "spread", 30)}
-                  min={0}
-                  max={100}
-                  resetValue={30}
-                  onChange={(v) => setSubParams(selectedMask.id, { spread: v })}
-                />
-                <Slider
-                  label="Feather"
-                  value={subNum(selSub, "feather", 50)}
-                  min={0}
-                  max={100}
-                  resetValue={50}
-                  onChange={(v) => setSubFeather(selectedMask.id, v)}
-                />
-              </>
-            )}
-
-            {selSub.type === "semantic" && (
-              <>
-                {/* The region was found in the frame as it was then, so a crop
-                    or a straighten afterwards leaves it out of line. Recompute
-                    is the fix and sits right here, always available - it used
-                    to be introduced by a red warning line, which shouted at
-                    every crop for something the button already says. */}
-                <div className="mask-btn-row">
-                  <button
-                    className="btn btn-sm"
-                    disabled={segmenting !== null}
-                    onClick={() => runSegment(subStr(selSub, "subject") || "sky", selectedMask.id, selSub.id)}
-                    title="Detect this subject again"
-                  >
-                    {segmenting ? "Finding…" : "Recompute"}
-                  </button>
-                </div>
-                <Slider
-                  label="Feather"
-                  value={subNum(selSub, "feather", 0)}
-                  min={0}
-                  max={100}
-                  resetValue={0}
-                  onChange={(v) => setSubFeather(selectedMask.id, v)}
-                />
-              </>
-            )}
-
-            {selSub.type === "color" && (
-              <>
-                <div className="mask-color-row">
-                  <button
-                    className={`btn btn-sm${colorPickMode ? " primary" : ""}`}
-                    onClick={toggleColorPick}
-                    title="Pick the target color from the image"
-                  >
-                    {colorPickMode ? "Click the image…" : "Pick color"}
-                  </button>
-                  <span
-                    className="mask-swatch"
-                    style={{
-                      background: `rgb(${Math.round(subNum(selSub, "target_r", 0.5) * 255)}, ${Math.round(
-                        subNum(selSub, "target_g", 0.5) * 255
-                      )}, ${Math.round(subNum(selSub, "target_b", 0.5) * 255)})`,
-                    }}
-                  />
-                </div>
-                <Slider
-                  label="Tolerance"
-                  value={subNum(selSub, "tolerance", 20)}
-                  min={1}
-                  max={100}
-                  resetValue={20}
-                  onChange={(v) => setSubParams(selectedMask.id, { tolerance: v })}
-                />
-                <Slider
-                  label="Feather"
-                  value={subNum(selSub, "feather", 35)}
-                  min={0}
-                  max={100}
-                  resetValue={35}
-                  onChange={(v) => setSubFeather(selectedMask.id, v)}
-                />
-              </>
-            )}
-
-            {/* "This selection, but only here." The second sub-mask, intersected. */}
-            <div className="mask-subhead">Limit to area</div>
-            {!selLimit ? (
-              <div className="mask-add-row">
-                <div className="mask-add-btns">
-                  {MASK_LIMIT_TYPES.map((t) => (
-                    <button key={t.value} className="btn btn-sm" onClick={() => addLimit(t.value)}>
-                      + {t.label}
-                    </button>
-                  ))}
-                </div>
+                <span className="mask-row-name">
+                  {m.name}
+                  <span className="mask-row-type">{maskLabel(m)}</span>
+                </span>
+                <button
+                  className="mask-del"
+                  title="Delete mask"
+                  aria-label={`Delete mask ${m.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteMask(m.id);
+                  }}
+                >
+                  <IconTrash size={13} />
+                </button>
               </div>
-            ) : (
-              <>
-                <div className="mask-btn-row">
-                  <button
-                    className={`btn btn-sm${maskDrawMode && limitEdit ? " primary" : ""}`}
-                    onClick={() => editShape(true)}
-                    title="Draw the area this mask is limited to"
-                  >
-                    {maskDrawMode && limitEdit ? "Drawing on image…" : "Edit on image"}
-                  </button>
-                  <button
-                    className={`btn btn-sm${selLimit.invert ? " primary" : ""}`}
-                    onClick={() => updateLimit({ invert: !selLimit.invert })}
-                    title="Limit to everything outside the shape instead"
-                  >
-                    Outside
-                  </button>
-                  <button className="btn btn-sm ghost" onClick={removeLimit} title="Remove the limit. The mask applies to its whole area again.">
-                    Remove
-                  </button>
-                </div>
-                {shapeControls(selectedMask.id, selLimit, 1)}
-              </>
-            )}
+            ))}
+          </div>
 
-            {/* Per-mask local adjustments: MASK_ADJUST_FIELDS -> sparse adjustments. */}
-            <div className="mask-subhead">Adjustments</div>
-            <div className="editor-sliders">
-              {MASK_ADJUST_FIELDS.map((field) => {
-                const spec: ScalarDef = SCALAR_SPEC[field.key];
-                return (
-                  <Slider
-                    key={field.key}
-                    label={field.label}
-                    value={selectedMask.adjustments[field.key] ?? spec.def}
-                    min={spec.min}
-                    max={spec.max}
-                    step={spec.step}
-                    resetValue={spec.def}
-                    uiScale={spec.uiScale}
-                    format={field.format}
-                    onChange={(v) => updateMaskAdjust(selectedMask.id, field.key, v)}
-                  />
-                );
-              })}
+          {/* Subject masks: the server finds the region, so these read as things
+              in the photo rather than as shapes to draw. */}
+          <div className="mask-add-row">
+            <span className="mask-add-label">Select subject</span>
+            <div className="mask-add-btns">
+              {MASK_SUBJECTS.map((s) => (
+                <button
+                  key={s.value}
+                  className="btn btn-sm mask-add-item"
+                  disabled={segmenting !== null}
+                  onClick={() => addSemanticMask(s.value)}
+                >
+                  {segmenting === s.value ? "Finding…" : s.label}
+                </button>
+              ))}
             </div>
-
-            <button
-              className="btn btn-sm quiet-danger"
-              onClick={() => deleteMask(selectedMask.id)}
-              title="Delete this mask"
-              aria-label="Delete this mask"
-            >
-              <IconTrash size={14} />
-            </button>
           </div>
-        )}
-          </div>
-        )}
+          {segmentError && <p className="mask-hint mask-hint-error">{segmentError}</p>}
 
-        {/* Presets */}
-        {accordionHeader("presets", "Presets")}
-        {openGroup === "presets" && (
-          <div className="editor-accordion-body">
-            {/* Every preset is on show, one click applies it, and the one the
-                photo is on carries the accent ring and a tick - the film
-                simulations' way of saying "this one". */}
-            {presetLooks.length === 0 ? (
-              <p className="editor-preset-empty">No presets yet. Set up a look, then save it below.</p>
-            ) : (
-              <div className="editor-preset-list" role="listbox" aria-label="Presets">
-                {presetLooks.map(({ name }) => {
-                  const active = name === activePreset;
+          <div className="mask-add-row">
+            <span className="mask-add-label">Add mask</span>
+            <div className="mask-add-btns">
+              {MASK_TYPES.map((t) => (
+                <button key={t.value} className="btn btn-sm mask-add-item" onClick={() => addMask(t.value)}>
+                  + {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {selectedMask && selSub && (
+            <div className="mask-editor">
+              <Slider
+                label="Opacity"
+                value={selectedMask.opacity}
+                min={0}
+                max={100}
+                resetValue={100}
+                onChange={(v) => updateMask(selectedMask.id, { opacity: v })}
+              />
+              <div className="mask-btn-row">
+                <button
+                  className={`btn btn-sm${selectedMask.invert ? " primary" : ""}`}
+                  onClick={() => {
+                    flashMask();
+                    updateMask(selectedMask.id, { invert: !selectedMask.invert });
+                  }}
+                  title="Invert this mask"
+                >
+                  Invert
+                </button>
+                <button
+                  className={`btn btn-sm${showMaskArea ? " primary" : ""}`}
+                  aria-pressed={showMaskArea}
+                  onClick={() => setShowMaskArea((v) => !v)}
+                  title="Highlight the area this mask covers"
+                >
+                  Show mask
+                </button>
+                {isSpatial(selSub.type) && (
+                  <button
+                    className={`btn btn-sm${maskDrawMode && !limitEdit ? " primary" : ""}`}
+                    onClick={() => (maskDrawMode && !limitEdit ? toggleMaskDraw() : editShape(false))}
+                    title="Draw this mask directly on the image"
+                  >
+                    {maskDrawMode && !limitEdit ? "Drawing on image…" : "Edit on image"}
+                  </button>
+                )}
+              </div>
+
+              {/* The mask's own shape (sub-mask 0), when it has one to draw. */}
+              {isSpatial(selSub.type) && shapeControls(selectedMask.id, selSub, 0)}
+
+              {selSub.type === "luminance" && (
+                <>
+                  <Slider
+                    label="Range min"
+                    value={subNum(selSub, "range_min", 0)}
+                    min={0}
+                    max={100}
+                    resetValue={0}
+                    onChange={(v) => setSubParams(selectedMask.id, { range_min: v })}
+                  />
+                  <Slider
+                    label="Range max"
+                    value={subNum(selSub, "range_max", 50)}
+                    min={0}
+                    max={100}
+                    resetValue={50}
+                    onChange={(v) => setSubParams(selectedMask.id, { range_max: v })}
+                  />
+                  <Slider
+                    label="Feather"
+                    value={subNum(selSub, "feather", 35)}
+                    min={0}
+                    max={100}
+                    resetValue={35}
+                    onChange={(v) => setSubFeather(selectedMask.id, v)}
+                  />
+                </>
+              )}
+
+              {selSub.type === "edge" && (
+                <>
+                  <p className="mask-hint">
+                    Selects detail rather than tone — hair, branches and fabric, not skin or sky.
+                  </p>
+                  <Slider
+                    label="Threshold"
+                    value={subNum(selSub, "threshold", 25)}
+                    min={0}
+                    max={100}
+                    resetValue={25}
+                    onChange={(v) => setSubParams(selectedMask.id, { threshold: v })}
+                  />
+                  <Slider
+                    label="Spread"
+                    value={subNum(selSub, "spread", 30)}
+                    min={0}
+                    max={100}
+                    resetValue={30}
+                    onChange={(v) => setSubParams(selectedMask.id, { spread: v })}
+                  />
+                  <Slider
+                    label="Feather"
+                    value={subNum(selSub, "feather", 50)}
+                    min={0}
+                    max={100}
+                    resetValue={50}
+                    onChange={(v) => setSubFeather(selectedMask.id, v)}
+                  />
+                </>
+              )}
+
+              {selSub.type === "semantic" && (
+                <>
+                  {/* The region was found in the frame as it was then, so a crop
+                      or a straighten afterwards leaves it out of line. Recompute
+                      is the fix and sits right here, always available - it used
+                      to be introduced by a red warning line, which shouted at
+                      every crop for something the button already says. */}
+                  <div className="mask-btn-row">
+                    <button
+                      className="btn btn-sm"
+                      disabled={segmenting !== null}
+                      onClick={() => runSegment(subStr(selSub, "subject") || "sky", selectedMask.id, selSub.id)}
+                      title="Detect this subject again"
+                    >
+                      {segmenting ? "Finding…" : "Recompute"}
+                    </button>
+                  </div>
+                  <Slider
+                    label="Feather"
+                    value={subNum(selSub, "feather", 0)}
+                    min={0}
+                    max={100}
+                    resetValue={0}
+                    onChange={(v) => setSubFeather(selectedMask.id, v)}
+                  />
+                </>
+              )}
+
+              {selSub.type === "color" && (
+                <>
+                  <div className="mask-color-row">
+                    <button
+                      className={`btn btn-sm${colorPickMode ? " primary" : ""}`}
+                      onClick={toggleColorPick}
+                      title="Pick the target color from the image"
+                    >
+                      {colorPickMode ? "Click the image…" : "Pick color"}
+                    </button>
+                    <span
+                      className="mask-swatch"
+                      style={{
+                        background: `rgb(${Math.round(subNum(selSub, "target_r", 0.5) * 255)}, ${Math.round(
+                          subNum(selSub, "target_g", 0.5) * 255
+                        )}, ${Math.round(subNum(selSub, "target_b", 0.5) * 255)})`,
+                      }}
+                    />
+                  </div>
+                  <Slider
+                    label="Tolerance"
+                    value={subNum(selSub, "tolerance", 20)}
+                    min={1}
+                    max={100}
+                    resetValue={20}
+                    onChange={(v) => setSubParams(selectedMask.id, { tolerance: v })}
+                  />
+                  <Slider
+                    label="Feather"
+                    value={subNum(selSub, "feather", 35)}
+                    min={0}
+                    max={100}
+                    resetValue={35}
+                    onChange={(v) => setSubFeather(selectedMask.id, v)}
+                  />
+                </>
+              )}
+
+              {/* "This selection, but only here." The second sub-mask, intersected. */}
+              <div className="mask-subhead">Limit to area</div>
+              {!selLimit ? (
+                <div className="mask-add-row">
+                  <div className="mask-add-btns">
+                    {MASK_LIMIT_TYPES.map((t) => (
+                      <button key={t.value} className="btn btn-sm" onClick={() => addLimit(t.value)}>
+                        + {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="mask-btn-row">
+                    <button
+                      className={`btn btn-sm${maskDrawMode && limitEdit ? " primary" : ""}`}
+                      onClick={() => editShape(true)}
+                      title="Draw the area this mask is limited to"
+                    >
+                      {maskDrawMode && limitEdit ? "Drawing on image…" : "Edit on image"}
+                    </button>
+                    <button
+                      className={`btn btn-sm${selLimit.invert ? " primary" : ""}`}
+                      onClick={() => updateLimit({ invert: !selLimit.invert })}
+                      title="Limit to everything outside the shape instead"
+                    >
+                      Outside
+                    </button>
+                    <button className="btn btn-sm ghost" onClick={removeLimit} title="Remove the limit. The mask applies to its whole area again.">
+                      Remove
+                    </button>
+                  </div>
+                  {shapeControls(selectedMask.id, selLimit, 1)}
+                </>
+              )}
+
+              {/* Per-mask local adjustments: MASK_ADJUST_FIELDS -> sparse adjustments. */}
+              <div className="mask-subhead">Adjustments</div>
+              <div className="editor-sliders">
+                {MASK_ADJUST_FIELDS.map((field) => {
+                  const spec: ScalarDef = SCALAR_SPEC[field.key];
                   return (
-                    <div key={name} className={`editor-preset-item${active ? " active" : ""}`}>
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={active}
-                        className="editor-preset-apply"
-                        onClick={() => applyPreset(presets[name])}
-                        disabled={busy}
-                        title={active ? `“${name}” is the current look` : `Apply “${name}”`}
-                      >
-                        {/* The tick's place is always kept, so a name never
-                            moves when its preset becomes the active one. */}
-                        <span className="editor-preset-tick" style={active ? undefined : { visibility: "hidden" }}>
-                          <IconCheck size={13} />
-                        </span>
-                        <span className="editor-preset-name">{name}</span>
-                      </button>
-                      {/* Take the changes made since into this preset. Off on
-                          the active one: it already is the current look. */}
-                      <button
-                        type="button"
-                        className="editor-preset-action"
-                        onClick={() => void confirmSavePreset(name)}
-                        disabled={busy || active}
-                        title={active ? `“${name}” already is the current look` : `Update “${name}” with the current look`}
-                        aria-label={`Update preset ${name} with the current look`}
-                      >
-                        <IconSave size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        className="editor-preset-action editor-preset-delete"
-                        onClick={() => handleDeletePreset(name)}
-                        disabled={busy}
-                        title={`Delete “${name}”`}
-                        aria-label={`Delete preset ${name}`}
-                      >
-                        <IconTrash size={13} />
-                      </button>
-                    </div>
+                    <Slider
+                      key={field.key}
+                      label={field.label}
+                      value={selectedMask.adjustments[field.key] ?? spec.def}
+                      min={spec.min}
+                      max={spec.max}
+                      step={spec.step}
+                      resetValue={spec.def}
+                      uiScale={spec.uiScale}
+                      format={field.format}
+                      onChange={(v) => updateMaskAdjust(selectedMask.id, field.key, v)}
+                    />
                   );
                 })}
               </div>
-            )}
-            {/* Saving is always here, not behind a button that swaps the row:
-                type a name, Enter. An existing name asks before it replaces. */}
-            <div className="editor-preset-row">
-              <input
-                className="editor-preset-select"
-                type="text"
-                placeholder="Save current look as…"
-                aria-label="Name for a new preset"
-                value={presetName}
-                onChange={(e) => setPresetName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void confirmSavePreset();
-                  else if (e.key === "Escape") setPresetName("");
-                }}
-              />
+
               <button
-                className="btn btn-sm primary"
-                onClick={() => void confirmSavePreset()}
-                disabled={!presetName.trim() || busy}
-                title={
-                  presets[presetName.trim()]
-                    ? "Replace the preset of this name with the current look"
-                    : "Save the current look as a preset"
-                }
+                className="btn btn-sm quiet-danger"
+                onClick={() => deleteMask(selectedMask.id)}
+                title="Delete this mask"
+                aria-label="Delete this mask"
               >
-                {presets[presetName.trim()] ? "Replace" : "Save"}
+                <IconTrash size={14} />
               </button>
             </div>
-            {/* The presets as a file: out to keep or carry over, in from one. */}
-            <div className="editor-preset-row">
-              <button
-                className="btn btn-sm ghost"
-                onClick={() => presetFileRef.current?.click()}
-                disabled={busy}
-                title="Add the presets from a file to the ones here"
-              >
-                Import…
-              </button>
-              <button
-                className="btn btn-sm ghost"
-                onClick={() => void exportPresets()}
-                disabled={presetLooks.length === 0}
-                title="Save all presets into one file, to keep or to use on another computer"
-              >
-                Export…
-              </button>
-              <input
-                ref={presetFileRef}
-                type="file"
-                accept=".json,application/json"
-                hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  // Cleared, so choosing the same file again fires again.
-                  e.target.value = "";
-                  if (file) void importPresets(file);
-                }}
-              />
+          )}
             </div>
-          </div>
-        )}
+          )}
+        </section>
+
+        {/* Presets */}
+        <section className="editor-accordion">
+          {accordionHeader("presets", "Presets")}
+          {openGroup === "presets" && (
+            <div className="editor-accordion-body">
+              {/* Every preset is on show, one click applies it, and the one the
+                  photo is on carries the accent ring and a tick - the film
+                  simulations' way of saying "this one". */}
+              {presetLooks.length === 0 ? (
+                <p className="editor-preset-empty">No presets yet. Set up a look, then save it below.</p>
+              ) : (
+                <div className="editor-preset-list" role="listbox" aria-label="Presets">
+                  {presetLooks.map(({ name }) => {
+                    const active = name === activePreset;
+                    return (
+                      <div key={name} className={`editor-preset-item${active ? " active" : ""}`}>
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className="editor-preset-apply"
+                          onClick={() => applyPreset(presets[name])}
+                          disabled={busy}
+                          title={active ? `“${name}” is the current look` : `Apply “${name}”`}
+                        >
+                          {/* The tick's place is always kept, so a name never
+                              moves when its preset becomes the active one. */}
+                          <span className="editor-preset-tick" style={active ? undefined : { visibility: "hidden" }}>
+                            <IconCheck size={13} />
+                          </span>
+                          <span className="editor-preset-name">{name}</span>
+                        </button>
+                        {/* Take the changes made since into this preset. Off on
+                            the active one: it already is the current look. */}
+                        <button
+                          type="button"
+                          className="editor-preset-action"
+                          onClick={() => void confirmSavePreset(name)}
+                          disabled={busy || active}
+                          title={active ? `“${name}” already is the current look` : `Update “${name}” with the current look`}
+                          aria-label={`Update preset ${name} with the current look`}
+                        >
+                          <IconSave size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className="editor-preset-action editor-preset-delete"
+                          onClick={() => handleDeletePreset(name)}
+                          disabled={busy}
+                          title={`Delete “${name}”`}
+                          aria-label={`Delete preset ${name}`}
+                        >
+                          <IconTrash size={13} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {/* Saving is always here, not behind a button that swaps the row:
+                  type a name, Enter. An existing name asks before it replaces. */}
+              <div className="editor-preset-row">
+                <input
+                  className="editor-preset-select"
+                  type="text"
+                  placeholder="Save current look as…"
+                  aria-label="Name for a new preset"
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void confirmSavePreset();
+                    else if (e.key === "Escape") setPresetName("");
+                  }}
+                />
+                <button
+                  className="btn btn-sm primary"
+                  onClick={() => void confirmSavePreset()}
+                  disabled={!presetName.trim() || busy}
+                  title={
+                    presets[presetName.trim()]
+                      ? "Replace the preset of this name with the current look"
+                      : "Save the current look as a preset"
+                  }
+                >
+                  {presets[presetName.trim()] ? "Replace" : "Save"}
+                </button>
+              </div>
+              {/* The presets as a file: out to keep or carry over, in from one. */}
+              <div className="editor-preset-row">
+                <button
+                  className="btn btn-sm ghost"
+                  onClick={() => presetFileRef.current?.click()}
+                  disabled={busy}
+                  title="Add the presets from a file to the ones here"
+                >
+                  Import…
+                </button>
+                <button
+                  className="btn btn-sm ghost"
+                  onClick={() => void exportPresets()}
+                  disabled={presetLooks.length === 0}
+                  title="Save all presets into one file, to keep or to use on another computer"
+                >
+                  Export…
+                </button>
+                <input
+                  ref={presetFileRef}
+                  type="file"
+                  accept=".json,application/json"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    // Cleared, so choosing the same file again fires again.
+                    e.target.value = "";
+                    if (file) void importPresets(file);
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </section>
 
         </div>
 

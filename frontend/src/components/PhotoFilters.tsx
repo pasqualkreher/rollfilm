@@ -1,6 +1,5 @@
 import { type ReactNode } from "react";
 import type { AlbumOut, CanvasSummary, ColorLabel, Facet, ViewMode } from "../api/types";
-import { ViewModeToggle } from "./ViewModeToggle";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { ViewPrefsControls } from "./ViewPrefsControls";
 import { TagFilter } from "./TagFilter";
@@ -103,7 +102,8 @@ function FocalRangeSlider({
 interface Props {
   viewMode: ViewMode;
   onViewMode: (v: ViewMode) => void;
-  // Whether the RAW+JPG / RAW / JPG toggle is offered at all. Screens that can
+  // Whether the RAW+JPG / RAW / JPG choice (a row of the Filter menu) is
+  // offered at all. Screens that can
   // only work on whole shots (the album canvas) hide it and stay on the app's
   // default pairing rather than letting a filter split a pair under them.
   showViewMode?: boolean;
@@ -233,7 +233,8 @@ export function PhotoFilters({
     ((camera ?? "") !== "" ? 1 : 0) +
     ((lens ?? "") !== "" ? 1 : 0) +
     (focalMin || focalMax ? 1 : 0) +
-    (dateFrom || dateTo ? 1 : 0);
+    (dateFrom || dateTo ? 1 : 0) +
+    (showViewMode && viewMode !== "combined" ? 1 : 0);
   const isFiltering = activeCount > 0;
 
   function clearAll() {
@@ -247,6 +248,7 @@ export function PhotoFilters({
     onFocalRange?.("", "");
     onDateFrom?.(null);
     onDateTo?.(null);
+    if (showViewMode) onViewMode("combined");
   }
 
   const chipLabel = (
@@ -284,6 +286,23 @@ export function PhotoFilters({
         <div className="filter-menu-row filter-menu-row--sort">
           <span className="filter-menu-label">Sort</span>
           {sort}
+        </div>
+      )}
+      {/* Which files of a shot to show: it narrows the grid like any other
+          filter, so it lives here, counts on the chip and resets with Clear. */}
+      {showViewMode && (
+        <div className="filter-menu-row filter-menu-row--filetype">
+          <span className="filter-menu-label">File type</span>
+          <Dropdown
+            ariaLabel="File type"
+            value={viewMode}
+            onChange={(v) => onViewMode(v as ViewMode)}
+            options={[
+              { value: "combined", label: "RAW + JPEG" },
+              { value: "jpeg_only", label: "JPEG" },
+              { value: "raw_only", label: "RAW" },
+            ]}
+          />
         </div>
       )}
       {albums && onAlbumId && (
@@ -427,9 +446,8 @@ export function PhotoFilters({
 
   return (
     <div className="filter-bar filter-bar--sticky">
-      {/* View: how the same photos are displayed (type, size, pairing). */}
+      {/* View: how the same photos are displayed (size, pairing). */}
       <div className="control-group control-group--view">
-        {showViewMode && <ViewModeToggle value={viewMode} onChange={onViewMode} />}
         <ViewPrefsControls showMerge={showMerge} />
         {viewExtras}
       </div>

@@ -10,7 +10,9 @@ function searchBaseFor(pathname: string): string {
   return pathname.startsWith("/albums/") ? pathname : "/";
 }
 
-export function SearchBar() {
+// `compact`: the field has been squeezed beside the tab row (App.tsx), so the
+// example query would be cut off - the placeholder drops to one word.
+export function SearchBar({ compact = false }: { compact?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -53,7 +55,7 @@ export function SearchBar() {
       </span>
       <input
         type="text"
-        placeholder="Search photos, e.g. 'dog on a beach'"
+        placeholder={compact ? "Search" : "Search photos, e.g. 'dog on a beach'"}
         value={value}
         onChange={(e) => setValue(e.target.value)}
       />

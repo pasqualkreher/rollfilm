@@ -864,3 +864,77 @@ export function IconTube(props: IconProps) {
     </svg>
   );
 }
+
+// The editor's section headers.
+
+// A strip of film with its sprocket holes - Film Simulation.
+export function IconFilmRoll(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1" />
+      <path d="M4.75 2.75v10.5M11.25 2.75v10.5" />
+      <path d="M2.25 5.5h2.5M2.25 8h2.5M2.25 10.5h2.5M11.25 5.5h2.5M11.25 8h2.5M11.25 10.5h2.5" />
+    </svg>
+  );
+}
+
+// A circle, light on one side and dark on the other - Tone.
+export function IconTone(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="8" cy="8" r="5.75" />
+      <path d="M8 2.25a5.75 5.75 0 0 1 0 11.5z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+// An S-curve in its frame - Curves.
+export function IconCurve(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.25" y="2.25" width="11.5" height="11.5" rx="1.5" />
+      <path d="M2.75 13.25C6.5 13 5.5 8 8 8s1.5-5 5.25-5.25" />
+    </svg>
+  );
+}
+
+// Three overlapping discs - Color.
+export function IconPalette(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <circle cx="8" cy="5.75" r="3.25" />
+      <circle cx="5.5" cy="10" r="3.25" />
+      <circle cx="10.5" cy="10" r="3.25" />
+    </svg>
+  );
+}
+
+// A sharp-cornered triangle - Details (sharpening, noise).
+export function IconDetail(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M8 2.25 14 13.25H2z" />
+      <path d="M8 7.25v3" />
+    </svg>
+  );
+}
+
+// A four-point sparkle - Effects.
+export function IconSparkle(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M8 1.75c.5 3.25 1.5 4.25 4.75 4.75C9.5 7 8.5 8 8 11.25 7.5 8 6.5 7 3.25 6.5 6.5 6 7.5 5 8 1.75z" />
+      <path d="M12.5 10.5v3.5M10.75 12.25h3.5" />
+    </svg>
+  );
+}
+
+// A frame with a round region cut out of it - Masks.
+export function IconMask(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.25" y="2.25" width="11.5" height="11.5" rx="1.5" />
+      <circle cx="8" cy="8" r="3" strokeDasharray="1.6 1.4" />
+    </svg>
+  );
+}

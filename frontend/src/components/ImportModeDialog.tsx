@@ -11,18 +11,18 @@ type Outcome = "backup" | "copy" | "reference";
 const WHAT_HAPPENS: Record<Outcome, [string, string, string]> = {
   backup: [
     "All photos are copied to the import folder.",
-    "The photos you add are copied into your library.",
-    "When you close the session, the folder stays as your backup.",
+    "Added photos are copied to the library (space twice).",
+    "The folder stays as a backup.",
   ],
   copy: [
     "All photos are copied to the import folder.",
-    "The photos you add are moved into your library.",
-    "When you close the session, the folder is deleted, with the photos you didn't add.",
+    "Added photos are moved to the library.",
+    "Closing deletes the folder and the rest.",
   ],
   reference: [
-    "Nothing is copied. The photos stay where they are.",
-    "The photos you add are listed in your library from there.",
-    "When you close the session, no file is touched.",
+    "Nothing is copied.",
+    "Added photos are listed from where they are.",
+    "They show only while the source is connected.",
   ],
 };
 const OUTCOMES = Object.keys(WHAT_HAPPENS) as Outcome[];
@@ -92,7 +92,6 @@ export function ImportModeDialog({
               autoFocus
             />
           </label>
-          <p className="settings-desc" style={{ margin: 0 }}>Where do the photos go?</p>
           <div className="copy-kind-choice" role="radiogroup" aria-label="Where the photos go">
             <button
               type="button"
@@ -106,7 +105,6 @@ export function ImportModeDialog({
               </span>
               <span className="copy-kind-text">
                 <strong>Copy to an import folder</strong>
-                <span>All photos are copied first, so you can disconnect the source afterwards.</span>
               </span>
             </button>
             <button
@@ -121,7 +119,6 @@ export function ImportModeDialog({
               </span>
               <span className="copy-kind-text">
                 <strong>Leave them where they are</strong>
-                <span>Nothing is copied. The photos are only there while their source is connected.</span>
               </span>
             </button>
           </div>
@@ -165,12 +162,7 @@ export function ImportModeDialog({
                 disabled={!copy}
                 onChange={(e) => setKeepBackup(e.target.checked)}
               />
-              <span>
-                Keep this folder as a backup
-                <span className="import-start-hint">
-                  Every photo stays in the import folder. The ones you add take up space twice.
-                </span>
-              </span>
+              <span>Keep this folder as a backup</span>
             </label>
           </div>
           <div className="import-start-summary">
@@ -187,7 +179,7 @@ export function ImportModeDialog({
           </div>
           <label className="filter-field filter-field-inline">
             <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />{" "}
-            Don't ask again, always import like this (you can change this in Settings)
+            Always import like this (change in Settings)
           </label>
           <div className="import-start-actions">
             <button className="btn" onClick={onClose}>

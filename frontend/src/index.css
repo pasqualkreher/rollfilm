@@ -337,7 +337,9 @@ button {
      :root[data-titlebar="inset"]), so 40px is the native toolbar height, and
      the bar stays that tall everywhere else for one consistent chrome. */
   min-height: 40px;
-  padding: 2px 12px 2px 16px;
+  /* 20px on the left: the logo opens the bar and lines up with the 20px
+     inset of the filter row below. */
+  padding: 2px 12px 2px 20px;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
@@ -361,13 +363,78 @@ button {
   --chrome-top: var(--top-bar-height, 47px);
 }
 
+/* A button now (it opens the About window), dressed as the plain wordmark. */
 .brand {
   display: inline-flex;
   align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
   font-weight: 700;
   font-size: 13px;
   letter-spacing: 0.03em;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+/* The About window: a small centred card like a Mac app's "About" -
+   logo, name, version, website, the donate link, contact. Doubled class
+   so the width beats the generic .modal rule further down. */
+.modal.about-modal {
+  position: relative;
+  width: min(300px, 100%);
+  align-items: center;
+  gap: 4px;
+  padding: 28px 24px 20px;
+  text-align: center;
+}
+
+.about-modal-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+}
+
+.about-modal-logo {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 8px;
+}
+
+.about-modal-name {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.about-modal-version {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.about-modal-site {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.about-modal-text {
+  margin: 14px 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.about-modal-donate {
+  text-decoration: none;
+}
+
+.about-modal-contact {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .nav-links {
@@ -932,29 +999,57 @@ button {
   font-weight: 600;
 }
 
-/* Centered between the nav and the right-hand icons via auto margins on both
-   sides - staying in the flex flow means it shrinks when space runs out
-   instead of overlapping its neighbours (absolute 50%-pinning did overlap the
-   nav tabs on wide layouts). */
-/* The bar's flanks: equal flex weight on both sides centers the search field
-   exactly on the bar's midpoint. A side never shrinks below its content
-   (flex-basis 0 + min-width auto), so when space gets tight the search field
-   gives way instead of anything overlapping or clipping. */
+/* The left zone takes the free room (never less than its content), the icons
+   sit at the right end. The search field is out of the flow, pinned to the
+   window's midpoint. App.tsx measures the room between the tabs and the
+   icons and sets --search-x/--search-width: centred at full width where it
+   fits, moved over only as far as the tabs need where it doesn't, and with
+   too little room .top-bar--search-row puts it on a row under the bar. */
 .top-bar-side {
   display: flex;
   align-items: center;
   gap: 14px;
-  flex: 1 1 0;
+  flex: 1 1 auto;
 }
 
 .top-bar-side--right {
+  flex: none;
   justify-content: flex-end;
 }
 
 .search-bar {
-  flex: 0 1 420px;
-  min-width: 0;
+  position: absolute;
+  left: var(--search-x, 50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: var(--search-width, 320px);
+}
+
+/* The search field has shrunk as far as it usefully can beside the tab row
+   (App.tsx measures it): the tabs fold into the burger menu, as on a narrow
+   window. */
+.top-bar--nav-folded .nav-links {
+  display: none;
+}
+
+.top-bar--nav-folded .nav-burger-wrap {
+  display: inline-flex;
+}
+
+.top-bar--search-row {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  padding-bottom: 6px;
+}
+
+.top-bar--search-row .search-bar {
   position: relative;
+  left: auto;
+  top: auto;
+  transform: none;
+  width: auto;
+  flex: 1 1 100%;
+  order: 10;
 }
 
 /* Recessed into the elevated chrome: the field uses the plain background so it
@@ -1323,6 +1418,11 @@ button {
   }
 
   .search-bar {
+    position: relative;
+    left: auto;
+    top: auto;
+    transform: none;
+    width: auto;
     flex: 1 1 100%;
     order: 10;
   }
@@ -1565,6 +1665,28 @@ textarea:focus-visible {
   padding-right: 28px;
 }
 
+/* The popover lays its fields out in two columns, so ten short fields don't
+   stack into a panel taller than the grid beneath it. The DOM order pairs up
+   on its own: Sort | File type, Album | Rating, Color | Tags, Camera | Lens,
+   Focal length | Date. 230px fits the date row's two native pickers. The docked
+   row has its own horizontal layout and is left alone. */
+.filter-menu:not(.filter-menu--docked) {
+  display: grid;
+  grid-template-columns: repeat(2, 230px);
+  gap: 12px 18px;
+  align-items: start;
+}
+
+.filter-menu:not(.filter-menu--docked) .filter-menu-head {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 640px) {
+  .filter-menu:not(.filter-menu--docked) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Menu header: the panel's own title (the pin sits in the corner, not here). */
 .filter-menu-head {
   display: flex;
@@ -1662,14 +1784,31 @@ textarea:focus-visible {
   flex-grow: 1.5;
 }
 
-.filter-menu--docked .filter-menu-row--rating {
-  flex: 0 0 96px;
+/* File type says one of three short names, like Sort: capped at the
+   longest ("RAW + JPEG"), giving ground when the row is tight. */
+.filter-menu--docked .filter-menu-row--filetype {
+  flex: 1 1 0;
+  min-width: 72px;
+  max-width: 124px;
 }
 
-/* Sort only ever says one of four short names; fitted to the longest so
-   picking another order moves nothing beside it. */
+/* Rating and Sort below are the short fields: capped at their natural width,
+   but free to give ground when the row is tight, so the pin still fits on the
+   line instead of wrapping onto one of its own. */
+.filter-menu--docked .filter-menu-row--rating {
+  flex: 1 1 0;
+  min-width: 72px;
+  max-width: 96px;
+}
+
+/* Sort only ever says one of four short names: it stops growing at the
+   longest, and when the row is tight it gives ground like the other fields
+   (its name ellipsizes) so the album name keeps more room. Its width never
+   depends on the value, so picking another order moves nothing beside it. */
 .filter-menu--docked .filter-menu-row--sort {
-  flex: 0 0 124px;
+  flex: 1 1 0;
+  min-width: 72px;
+  max-width: 124px;
 }
 
 /* The focal row carries its readout on the caption line (below), so it needs
@@ -1677,13 +1816,29 @@ textarea:focus-visible {
 .filter-menu--docked .filter-menu-row--focal {
   position: relative;
   flex-grow: 1.2;
-  min-width: 178px;
+  min-width: 130px;
 }
 
-/* Colour and Date cannot usefully shrink: the swatches are fixed circles, and
-   the date range is two native pickers whose text clips rather than ellipsizes.
-   They keep their natural width and the flexible fields absorb the difference. */
-.filter-menu--docked .filter-menu-row--color,
+/* Colour keeps a fixed width: exactly its eight 16px swatches and their gaps,
+   so the dots are the same size pinned as in the popover and never shrink with
+   the row - the other fields give ground instead. */
+.filter-menu--docked .filter-menu-row--color {
+  flex: 0 0 156px;
+  min-width: 156px;
+  max-width: 156px;
+}
+
+.filter-menu--docked .filter-menu-row--color .color-label-picker {
+  width: 100%;
+}
+
+.filter-menu--docked .filter-menu-row--color .color-swatch {
+  flex: 0 0 16px;
+}
+
+/* Date cannot usefully shrink: two native pickers whose text clips rather than
+   ellipsizes. It keeps its natural width and the flexible fields absorb the
+   difference. */
 .filter-menu--docked .filter-menu-row--date {
   flex: 0 0 auto;
   min-width: 0;
@@ -1727,14 +1882,19 @@ textarea:focus-visible {
 /* Docked, the pin joins the row as its last item, parked at the far right on
    the control line - as a corner overlay it floated above the fields with
    nothing to relate to. */
+/* The pin travels with the last filter: that field keeps room for it at its
+   end, and the pin sits in the bottom-right corner - the end of the last line.
+   So it can only drop to a new line together with a filter, never alone. */
 .filter-menu--docked .filter-pin {
-  position: static;
-  order: 99;
-  flex: 0 0 auto;
-  align-self: flex-end;
-  margin-left: auto;
+  top: auto;
+  bottom: 0;
+  right: 0;
   width: var(--filter-field-h);
   height: var(--filter-field-h);
+}
+
+.filter-menu--docked > .filter-menu-row:last-child {
+  margin-right: calc(var(--filter-field-h) + 18px);
 }
 
 /* The docked row has the bar's own "Filter" chip right above it, so the panel's
@@ -1785,11 +1945,12 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-/* In the panel the swatches can afford to be comfortable click targets. */
+/* In the panel the swatches are a touch larger click targets - one size in the
+   popover and the docked row alike. */
 .filter-chip-pop .color-swatch,
 .filter-dock .color-swatch {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
 }
 
 /* A bare swatch row is shorter than the boxed fields beside it, so give it a
@@ -3596,7 +3757,8 @@ textarea:focus-visible {
   padding: 0 9px;
 }
 
-.editor-compare-modes button:disabled {
+.editor-compare-modes button:disabled,
+.editor-baseline button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -5294,12 +5456,6 @@ input.editor-preset-select {
   align-items: flex-start;
 }
 
-.import-start-hint {
-  display: block;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
 /* The three outcomes share one grid cell: the box is as tall as the longest
    of them at any width, and only the one that applies is visible. */
 .import-start-steps {
@@ -5816,6 +5972,55 @@ input.editor-preset-select {
   transition: transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.32s ease-out;
 }
 
+/* ---- Compare in the photo view (CompareControls / CompareOverlay) --------
+   The photo's wrap is nothing at all until a compare is on: display: contents
+   keeps the <img> the stage's own flex child, so the fit maths, the fallback
+   max-* sizing and the framed shadow see exactly what they always saw. While
+   comparing it becomes a fit-sized box the baseline's picture, the divider and
+   the tags sit in, over the photo. The box does not clip: a zoomed photo
+   spills over it and the stage clips it, as before. */
+.detail-photo-wrap {
+  display: contents;
+}
+
+.detail-photo-wrap.is-compare {
+  display: block;
+  position: relative;
+  flex: none;
+  line-height: 0;
+}
+
+/* The baseline over the edited photo (hold / split): the same size and the
+   same zoom/pan transform as the <img> under it, so the two stay registered;
+   clipped by the split's clip-path, which is applied before the transform. */
+.detail-photo--baseline {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  transform-origin: center center;
+}
+
+/* Side by side: each picture in a pane of the fit size that clips its own, so
+   a zoomed photo can't spill over its neighbour (both carry the same
+   transform, so they zoom and pan together). As .editor-pane. */
+.detail-pane {
+  position: relative;
+  overflow: hidden;
+  flex: none;
+  line-height: 0;
+}
+
+.detail-photo--pane {
+  transform-origin: center center;
+}
+
+/* The gap between the two panes - PAIR_GAP in useImageZoomPan.ts, which
+   halves the room each picture may take; keep the two in step. */
+.detail-image--pair {
+  gap: 12px;
+}
+
 /* Shown in place of the photo when its preview can't be loaded (damaged or
    unreadable file) - a clean message instead of the browser's broken-image
    icon. Also reused by the import lightbox (.lightbox-image-error). */
@@ -5944,27 +6149,6 @@ input.editor-preset-select {
 /* Thin countdown along the bottom edge: fills over exactly one photo's turn
    (the duration is set inline from the pace preference). Dim on purpose -
    a status whisper, not a chrome element. */
-.slideshow-progress {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 2px;
-  width: 0;
-  background: rgba(255, 255, 255, 0.35);
-  animation-name: slideshow-progress;
-  animation-timing-function: linear;
-  animation-fill-mode: forwards;
-}
-
-@keyframes slideshow-progress {
-  from {
-    width: 0;
-  }
-  to {
-    width: 100%;
-  }
-}
-
 /* The control pill, floating bottom-centre. Deliberately its own dark styling
    rather than the themed .btn/.segmented: the show is black in both themes, so
    its chrome has to be too. Fades with the cursor; pausing keeps it up. */
@@ -8323,6 +8507,8 @@ kbd {
   color: var(--text-muted);
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
+  /* Scrolled to with the 1-9 keys: land below the pinned histogram. */
+  scroll-margin-top: var(--editor-hist-h, 0px);
 }
 
 .editor-accordion-header:hover {
@@ -8336,9 +8522,51 @@ kbd {
   color: var(--text);
 }
 
-/* The open group's header reads as active. */
+/* The open group's header reads as active - and stays in view while its body
+   scrolls, pinned just under the histogram (--editor-hist-h, measured in
+   PhotoEditor), so you can always tell which group you are in. Each group is
+   its own <section>, so the header lets go when its group ends. The -1px lays
+   its top border over the histogram's bottom one instead of doubling it. It
+   needs an opaque background, and the box-shadows cover the panel's 20px
+   gutters so the sliders don't show either side of it. */
 .editor-accordion-header.open {
+  position: sticky;
+  top: calc(var(--editor-hist-h, 0px) - 1px);
+  z-index: 2;
   color: var(--text);
+  background: var(--bg-elevated);
+  box-shadow:
+    -20px 0 0 var(--bg-elevated),
+    20px 0 0 var(--bg-elevated);
+}
+
+.editor-accordion-header.open:hover,
+.editor-accordion-header.open:focus-visible {
+  background: linear-gradient(var(--hover), var(--hover)), var(--bg-elevated);
+}
+
+/* Icon, title and the edited dot in one row. */
+.editor-accordion-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-accordion-title .icon {
+  flex: none;
+}
+
+/* The dot keeps its usual 6px from the title; the row's gap would add 8. */
+.editor-accordion-title .editor-edited-dot {
+  margin-left: -2px;
+}
+
+/* A group (header + body). Same 4px gap between the two as the panel body
+   put between them when they were siblings there. */
+.editor-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* Caret points right when collapsed, rotates down when the group is open. */
@@ -9582,6 +9810,18 @@ button.smart-card {
 /* Pinned-value chips on the left, Clear / Show in library on the right. Fixed
    minimum height and hidden-not-removed actions: pinning the first value must
    not push the tiles down. */
+/* The page head sticks to the top of the scrolling page. It reaches up over
+   the page's 16px top padding (negative margin, matching padding) so cards
+   scrolling past don't show through that strip above it. */
+.stats-head {
+  position: sticky;
+  top: -16px;
+  z-index: 5;
+  margin: -16px -16px 0;
+  padding: 16px 16px 0;
+  background: var(--bg);
+}
+
 .stats-filterbar {
   display: flex;
   align-items: center;
@@ -12086,12 +12326,20 @@ a.info-card-chip--canvas:hover {
 :root[data-titlebar="inset"] .top-bar {
   /* 12px offset + three 12px buttons with 8px gaps + air. */
   padding-left: 78px;
+  /* The lights hang at y 14 (main.js) and read centred at about 21px; the
+     bar's content sat 2-3px above that (measured on a screenshot). Moving the
+     bottom padding to the top puts logo, tabs and icons on the lights' line. */
+  padding-top: 4px;
+  padding-bottom: 0;
   /* The bar is the title bar now: drag it to move the window. */
   -webkit-app-region: drag;
 }
-/* Fullscreen hides the lights, so the inset goes. */
+/* Fullscreen hides the lights, so the inset goes (back to the plain bar's
+   20px, which lines the logo up with the filter row). */
 :root[data-titlebar="inset"][data-fullscreen] .top-bar {
-  padding-left: 16px;
+  padding-left: 20px;
+  padding-top: 2px;
+  padding-bottom: 2px;
 }
 /* Everything you click in the bar opts out of the drag region, or the click
    would move the window instead. */

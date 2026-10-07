@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type {
   ColorLabel,
+  Facet,
   ImportChoice,
   ImportSessionSummary,
   StagedFileOut,
@@ -207,6 +208,13 @@ export function ImportWizard() {
   const [viewMode, setViewMode] = useState<ViewMode>(initial.current?.viewMode ?? "combined");
   const [ratingMin, setRatingMin] = useState(initial.current?.ratingMin ?? 0);
   const [colorFilter, setColorFilter] = useState<ColorLabel>(initial.current?.colorFilter ?? "none");
+  // The library's EXIF filters, read from the staged files' own analysis.
+  const [camera, setCamera] = useState(initial.current?.camera ?? "");
+  const [lens, setLens] = useState(initial.current?.lens ?? "");
+  const [focalMin, setFocalMin] = useState(initial.current?.focalMin ?? "");
+  const [focalMax, setFocalMax] = useState(initial.current?.focalMax ?? "");
+  const [dateFrom, setDateFrom] = useState<string | null>(initial.current?.dateFrom ?? null);
+  const [dateTo, setDateTo] = useState<string | null>(initial.current?.dateTo ?? null);
   // Flash message - auto-dismisses after a moment.
   const [pickError, setPickError] = useTransientMessage(8000);
   // "N photos added" after a partial import that leaves the session open.
@@ -253,6 +261,12 @@ export function ImportWizard() {
     setViewMode(st.viewMode);
     setRatingMin(st.ratingMin);
     setColorFilter(st.colorFilter);
+    setCamera(st.camera);
+    setLens(st.lens);
+    setFocalMin(st.focalMin);
+    setFocalMax(st.focalMax);
+    setDateFrom(st.dateFrom);
+    setDateTo(st.dateTo);
     setUploadToImmich(st.uploadToImmich);
     setSyncAllToImmich(st.syncAllToImmich);
     setLightboxFileId(st.lightboxFileId);
@@ -267,7 +281,7 @@ export function ImportWizard() {
   useEffect(() => {
     setMarked(new Set());
     setLastIndex(null);
-  }, [hideDuplicates, ratingMin, colorFilter]);
+  }, [hideDuplicates, ratingMin, colorFilter, camera, lens, focalMin, focalMax, dateFrom, dateTo]);
 
   // Keep the record current. Skipped until the session's own values are in
   // place, or the defaults of the previous render would overwrite them.
@@ -278,11 +292,32 @@ export function ImportWizard() {
       viewMode,
       ratingMin,
       colorFilter,
+      camera,
+      lens,
+      focalMin,
+      focalMax,
+      dateFrom,
+      dateTo,
       uploadToImmich,
       syncAllToImmich,
       lightboxFileId,
     });
-  }, [sessionId, hideDuplicates, viewMode, ratingMin, colorFilter, uploadToImmich, syncAllToImmich, lightboxFileId]);
+  }, [
+    sessionId,
+    hideDuplicates,
+    viewMode,
+    ratingMin,
+    colorFilter,
+    camera,
+    lens,
+    focalMin,
+    focalMax,
+    dateFrom,
+    dateTo,
+    uploadToImmich,
+    syncAllToImmich,
+    lightboxFileId,
+  ]);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
@@ -604,35 +639,81 @@ export function ImportWizard() {
     },
   });
 
-  // Memoized as one unit: the review grid lays out (and re-anchors) whenever
-  // this array's identity changes, so rebuilding it on every unrelated render
-  // would have the grid correcting its own scroll position under the user.
-  const filteredFiles: StagedFileOut[] = useMemo(
-    () =>
-      (files ?? []).filter((f) => {
-        // Trash-restores stay visible even under "Hide duplicates": unlike
-        // blocked duplicates they actively do something on import (restore
-        // the photo). What an earlier partial import added hides with them.
-        if (hideDuplicates && isDuplicate(f)) return false;
-        if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
-        if (viewMode === "raw_only" && f.file_type !== "raw") return false;
-        if (ratingMin > 0 && f.rating < ratingMin) return false;
-        if (colorFilter !== "none" && f.color_label !== colorFilter) return false;
-        return true;
-      }),
-    [files, hideDuplicates, viewMode, ratingMin, colorFilter]
-  );
   // A file's capture date, falling back to its RAW/JPEG partner's (same shot,
   // same moment). Mid-analysis one half of a pair can have its EXIF read while
   // the other hasn't - without the fallback, pair-adjacent grouping would drag
   // an undated file into a dated month run and split the section in two.
-  // Sorting and section labels below MUST both use this, never raw taken_at.
+  // Sorting, section labels and the date filter MUST all use this, never raw
+  // taken_at.
   const effectiveTakenAt = useCallback(
     (f: StagedFileOut): string | null =>
       f.taken_at ??
       (f.paired_staged_file_id ? filesById.get(f.paired_staged_file_id)?.taken_at ?? null : null),
     [filesById]
   );
+
+  // The whole filter set as one predicate, with one EXIF dimension optionally
+  // lifted - the same cross-filtering as the library's facets: the camera list
+  // is counted under every filter but the camera itself, so picking a camera
+  // narrows the lenses and focal lengths while its alternatives stay listed.
+  const passesFilters = useCallback(
+    (f: StagedFileOut, without?: "camera" | "lens" | "focal") => {
+      // Trash-restores stay visible even under "Hide duplicates": unlike
+      // blocked duplicates they actively do something on import (restore
+      // the photo). What an earlier partial import added hides with them.
+      if (hideDuplicates && isDuplicate(f)) return false;
+      if (viewMode === "jpeg_only" && f.file_type !== "jpeg") return false;
+      if (viewMode === "raw_only" && f.file_type !== "raw") return false;
+      if (ratingMin > 0 && f.rating < ratingMin) return false;
+      if (colorFilter !== "none" && f.color_label !== colorFilter) return false;
+      if (without !== "camera" && camera && f.camera_model !== camera) return false;
+      if (without !== "lens" && lens && f.lens_model !== lens) return false;
+      if (without !== "focal" && (focalMin || focalMax)) {
+        // 0.05mm either side, the library's tolerance for its rounded stops.
+        if (f.focal_length == null) return false;
+        if (focalMin && f.focal_length < parseFloat(focalMin) - 0.05) return false;
+        if (focalMax && f.focal_length > parseFloat(focalMax) + 0.05) return false;
+      }
+      if (dateFrom || dateTo) {
+        const day = effectiveTakenAt(f)?.slice(0, 10);
+        if (!day) return false;
+        if (dateFrom && day < dateFrom) return false;
+        if (dateTo && day > dateTo) return false;
+      }
+      return true;
+    },
+    [hideDuplicates, viewMode, ratingMin, colorFilter, camera, lens, focalMin, focalMax, dateFrom, dateTo, effectiveTakenAt]
+  );
+
+  // Memoized as one unit: the review grid lays out (and re-anchors) whenever
+  // this array's identity changes, so rebuilding it on every unrelated render
+  // would have the grid correcting its own scroll position under the user.
+  const filteredFiles: StagedFileOut[] = useMemo(
+    () => (files ?? []).filter((f) => passesFilters(f)),
+    [files, passesFilters]
+  );
+
+  // Camera, lens and focal-length options for the filter menu, built from the
+  // staged files the way the library's /images/facets builds them: most-used
+  // first, focal lengths rounded to 0.1mm and in numeric order.
+  const facets = useMemo(() => {
+    const count = (without: "camera" | "lens" | "focal", key: (f: StagedFileOut) => string | null) => {
+      const counts = new Map<string, number>();
+      for (const f of files ?? []) {
+        const v = key(f);
+        if (v && passesFilters(f, without)) counts.set(v, (counts.get(v) ?? 0) + 1);
+      }
+      return [...counts].map(([value, n]) => ({ value, count: n }));
+    };
+    const byCount = (a: Facet, b: Facet) => b.count - a.count;
+    return {
+      cameras: count("camera", (f) => f.camera_model).sort(byCount),
+      lenses: count("lens", (f) => f.lens_model).sort(byCount),
+      focalLengths: count("focal", (f) =>
+        f.focal_length && f.focal_length > 0 ? String(Math.round(f.focal_length * 10) / 10) : null
+      ).sort((a, b) => parseFloat(a.value) - parseFloat(b.value)),
+    };
+  }, [files, passesFilters]);
 
   // Chronological review, OLDEST first (shooting order, like a culling app) -
   // deliberately the reverse of the library timeline: files stage in roughly
@@ -1517,6 +1598,23 @@ export function ImportWizard() {
         onRatingMin={setRatingMin}
         colorLabel={colorFilter}
         onColorLabel={setColorFilter}
+        cameras={facets.cameras}
+        camera={camera}
+        onCamera={setCamera}
+        lenses={facets.lenses}
+        lens={lens}
+        onLens={setLens}
+        focalLengths={facets.focalLengths}
+        focalMin={focalMin}
+        focalMax={focalMax}
+        onFocalRange={(min, max) => {
+          setFocalMin(min);
+          setFocalMax(max);
+        }}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onDateFrom={setDateFrom}
+        onDateTo={setDateTo}
         viewExtras={
           <label className="filter-field filter-field-inline">
             <input type="checkbox" checked={hideDuplicates} onChange={(e) => setHideDuplicates(e.target.checked)} />{" "}
@@ -1757,7 +1855,7 @@ export function ImportWizard() {
           // Only the *set-narrowing* filters reset the scroll. The view mode
           // and pair merging are handled by the anchor's partner lookup, which
           // keeps the same shot on screen across the switch.
-          resetKey={`${hideDuplicates}|${ratingMin}|${colorFilter}`}
+          resetKey={`${hideDuplicates}|${ratingMin}|${colorFilter}|${camera}|${lens}|${focalMin}|${focalMax}|${dateFrom}|${dateTo}`}
         />
       )}
       </div>

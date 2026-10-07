@@ -1,7 +1,9 @@
 """Step 2b: the simulations nobody shot, from published cubes.
 
-What the app ships from this file today is the `--source sowerby` half: the
-nine looks Fujifilm publishes no cube for. Fujifilm's own ten are no longer
+The app ships nothing from this file today. The `--source sowerby` half made
+the nine looks Fujifilm publishes no cube for, for process version 3; those
+cubes were taken out (see Licences below), and on version 4 and up derive.py
+builds the nine from other sources. Fujifilm's own ten are no longer
 bent into the app's display space through the bridge below - the app applies
 them where they are defined, on scene values (import_official.py,
 film_sims.apply_official), with nothing fitted to a camera JPEG. The Fujifilm
@@ -41,10 +43,9 @@ the plain sRGB encoding in place of F-Log2 / F-Gamut.
 Licences. Fujifilm offers its cubes as a free download and states no terms.
 Sowerby's page says "All Rights Reserved" and grants nothing beyond use. The
 cubes written here are derived from those files (run through the bridge, not
-copies), which does not settle whether they may be shipped in a distributed
-app - that is a decision for whoever publishes it. The nine from Sowerby's
-set are: pro_neg_hi, monochrome(+_ye/_r/_g), sepia, acros_ye/_r/_g; removing
-their .npy files puts those looks back on the hand-made recipes.
+copies), which does not make them free to pass on, so the app does not ship
+them: pro_neg_hi, monochrome(+_ye/_r/_g), sepia, acros_ye/_r/_g render from
+the hand-made recipes on process version 3.
 """
 
 from __future__ import annotations

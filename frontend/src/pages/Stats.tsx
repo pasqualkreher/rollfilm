@@ -463,6 +463,9 @@ export function Stats() {
 
   return (
     <div className="page stats-page">
+      {/* Title, summary and the filter chips stay in view while the cards
+          scroll under them: what the page is filtered by is always visible. */}
+      <div className="stats-head">
       <h2 className="section-title">Statistics</h2>
       <p className="stats-page-sub">{subtitle}</p>
 
@@ -502,6 +505,7 @@ export function Stats() {
             Show in library
           </button>
         </div>
+      </div>
       </div>
 
       <div className={`stats-content${isFetching ? " is-refetching" : ""}`}>
