@@ -3,7 +3,7 @@ import type { ImageOut } from "../api/types";
 import { collapsePairsBy } from "../utils/pairing";
 
 // Global, persisted "light table" view preferences shared by every grid
-// (Library, Album detail, Selects). Kept outside React-Query/router state so a
+// (Library, Album detail, Trash). Kept outside React-Query/router state so a
 // single control on one screen changes the look everywhere at once and the
 // choice survives reloads.
 

@@ -26,9 +26,6 @@ import {
   IconCrop,
   IconDuplicate,
   IconEraser,
-  IconFitAll,
-  IconFitPage,
-  IconFocus,
   IconGrid,
   IconGuide,
   IconHelp,
@@ -41,7 +38,6 @@ import {
   IconPencil,
   IconPlay,
   IconPlus,
-  IconPrinter,
   IconRedo,
   IconRestore,
   IconRotate,
@@ -70,7 +66,7 @@ import {
   type Rect,
 } from "../utils/canvasLayout";
 import { ExportChip } from "./CanvasExportChip";
-import { FocusButton, FocusToggle, useFocusChrome } from "./FocusToggle";
+import { useFocusMode, setFocusMode, toggleFocusMode, useFocusChrome } from "../state/focusMode";
 import { Presence } from "./Presence";
 import { rangeFillStyle } from "../utils/rangeFill";
 import { shortcutLabel } from "../utils/selection";
@@ -438,11 +434,11 @@ export function CanvasEditor({
   // edit, cleared once the autosave below has written it.
   const [dirty, setDirty] = useState(false);
   const [showFilmstrip, setShowFilmstrip] = useState(true);
-  // Focus mode (F): toolbar, action bar, page rail and filmstrip put away,
-  // and the app's top bar with them - only the page, still fully editable.
-  // A docked photo editor stays: it is in use, not in the way.
-  const [focusMode, setFocusMode] = useState(false);
-  useFocusChrome(focusMode);
+  // Focus mode (F, the View menu): toolbar, action bar, page rail and
+  // filmstrip put away, and the app's top bar with them - only the page,
+  // still fully editable. App-wide state (state/focusMode.ts). A docked
+  // photo editor stays: it is in use, not in the way.
+  const focusMode = useFocusMode();
   // Holding Space turns any drag into a pan. Every canvas editor works this
   // way, and once the paper is covered in photos it is the only place left to
   // grab: dragging the background would otherwise always mean "select".
@@ -968,19 +964,6 @@ export function CanvasEditor({
     [world.x, world.y, world.w, world.h]
   );
   const origin = originAt(zoom);
-
-  // The print view: nothing but the paper, the whole window, and Escape to
-  // come back. The number is the sheet it opened on - the one centred in the
-  // window at the time, so "show me this page" is one key.
-  const [printPage, setPrintPage] = useState<number | null>(null);
-  const openPrint = useCallback(() => {
-    if (!doc) return;
-    setPrintPage(
-      doc.page_mode === "pages"
-        ? pageAtMm((view.top + view.height / 2 - view.offsetY - origin.y) / zoom, doc, pageCount)
-        : 0
-    );
-  }, [doc, origin.y, pageCount, view.height, view.offsetY, view.top, zoom]);
 
   // Applied after every render, and this is what keeps a drag feeling solid.
   //
@@ -2067,14 +2050,11 @@ export function CanvasEditor({
       const target = event.target as HTMLElement | null;
       // Never steal keys from a text box - including the canvas's own.
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
-      // The print view has the keyboard while it is up: its Escape closes it,
-      // and must not also drop the selection underneath.
-      if (printPage !== null) return;
       // F: focus mode. Ahead of the docked editor's claim on the keyboard -
       // it has no F of its own, and focus is the whole canvas's business.
       if (!event.metaKey && !event.ctrlKey && !event.altKey && (event.key === "f" || event.key === "F")) {
         event.preventDefault();
-        setFocusMode((on) => !on);
+        toggleFocusMode();
         return;
       }
       // Same for the docked photo editor: while it is open the keyboard is
@@ -2109,11 +2089,6 @@ export function CanvasEditor({
       if (!meta && event.key === "0") {
         event.preventDefault();
         fitToView();
-        return;
-      }
-      if (!meta && !event.altKey && (event.key === "p" || event.key === "P")) {
-        event.preventDefault();
-        openPrint();
         return;
       }
       if (!meta && (event.key === ")" || (event.shiftKey && event.code === "Digit0"))) {
@@ -2211,7 +2186,7 @@ export function CanvasEditor({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [croppingId, editingTextId, fitToView, focusMode, requestExit, openPrint, printPage, redo, removeSelected, restack, selected, undo, updateItems, zoomAt]);
+  }, [croppingId, editingTextId, fitToView, focusMode, requestExit, redo, removeSelected, restack, selected, undo, updateItems, zoomAt]);
 
   // --- Render ---------------------------------------------------------------
 
@@ -2378,11 +2353,6 @@ export function CanvasEditor({
         commit={commit}
         zoom={zoom}
         onZoom={zoomAt}
-        onFit={() => fitToView()}
-        onFitAll={() => fitToView(true)}
-        onPrint={openPrint}
-        onFocus={() => setFocusMode((on) => !on)}
-        focused={focusMode}
         canUndo={past.current.length > 0}
         canRedo={future.current.length > 0}
         historyTick={historyTick}
@@ -2503,10 +2473,16 @@ export function CanvasEditor({
             onPointerCancel={onPointerUp}
             onDoubleClick={(event) => {
               // Only a double-click on the canvas ITSELF - one on a photo means
-              // "crop this", and that handler has already run.
-              if (!endless) return;
+              // "crop this", and that handler has already run. On the free
+              // canvas it jumps back to the work; on pages it fits one page in
+              // the window again (Shift: the whole book), the same as 0 and
+              // Shift-0 on the keyboard.
               if ((event.target as Element | null)?.closest?.(".canvas-item")) return;
-              jumpToWork();
+              if (endless) {
+                jumpToWork();
+                return;
+              }
+              fitToView(event.shiftKey);
             }}
             style={{
               // The free canvas's colour is painted by the frame behind, so
@@ -2869,12 +2845,6 @@ export function CanvasEditor({
           )}
         </Presence>
       </div>
-
-      {printPage !== null &&
-        createPortal(
-          <PrintView doc={doc} byId={byId} pageCount={pageCount} start={printPage} title={title} onClose={() => setPrintPage(null)} />,
-          document.body
-        )}
     </div>
   );
 }
@@ -2960,13 +2930,11 @@ export function PrintView({
   title: string;
   onClose: () => void;
   closeTitle?: string;
-  // The editor's own print view is a layer over the editor and closes with
-  // this Back; the canvas view is a page, whose way back is the top bar's
-  // Back (and Escape), so it shows none.
+  // The canvas view is a page whose way back is the top bar's Back (and
+  // Escape), so it shows no Back of its own.
   showBack?: boolean;
   // What the bottom bar says about the whole document, before the page
-  // count: the canvas view puts the canvas's name here; the editor's own
-  // print view says "Print view".
+  // count: the canvas view puts the canvas's name here.
   caption?: string;
   // The canvas view's pencil: hands over to the editor.
   onEdit?: () => void;
@@ -2989,13 +2957,17 @@ export function PrintView({
   const pan = useRef<{ id: number; x: number; y: number; moved: boolean } | null>(null);
   const [panning, setPanning] = useState(false);
   // Focus mode: the same view with the bar gone and the screen taken - the
-  // pages as large as they go on black, nothing else. F toggles it; Esc (or
-  // leaving fullscreen any other way) comes back to the view, not out of it.
+  // pages as large as they go on black, nothing else. F and the View menu
+  // toggle it; Esc (or leaving fullscreen any other way) comes back to the
+  // view, not out of it. It is the app-wide focus mode (state/focusMode.ts)
+  // seen from here: the switch flips this view into its presentation, and
+  // the presentation ending flips the switch back.
   const [focused, setFocused] = useState(false);
   const focusedRef = useRef(false);
   focusedRef.current = focused;
   // Where fullscreen is refused, the app's top bar must still go.
   useFocusChrome(focused);
+  const focusWanted = useFocusMode();
   // When focus mode last ended: in fullscreen the browser takes Esc for
   // itself, and a keydown that still arrives afterwards must not also close
   // the view behind it.
@@ -3010,6 +2982,7 @@ export function PrintView({
   const enterFocus = useCallback(() => {
     focusedRef.current = true;
     setFocused(true);
+    setFocusMode(true);
     setLook({ scale: 1, x: 0, y: 0 });
     // The whole screen if the browser allows it; the overlay covers the
     // window either way.
@@ -3022,10 +2995,17 @@ export function PrintView({
     focusedRef.current = false;
     focusEndedAt.current = performance.now();
     setFocused(false);
+    setFocusMode(false);
     setLook({ scale: 1, x: 0, y: 0 });
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
     wake();
   }, [wake]);
+
+  // The app-wide switch (menu, Cmd+F) turning while this view is up.
+  useEffect(() => {
+    if (focusWanted && !focusedRef.current) enterFocus();
+    else if (!focusWanted && focusedRef.current) leaveFocus();
+  }, [focusWanted, enterFocus, leaveFocus]);
 
   // Leaving fullscreen by any route (Esc, the OS's own control) ends the
   // focus mode, so the two never come apart.
@@ -3297,10 +3277,6 @@ export function PrintView({
         </>
       )}
 
-      {/* In focus mode the bar is gone; the one way back sits where it was,
-          fading with the rest of the chrome. */}
-      {focused && <FocusToggle onToggle={leaveFocus} className="canvas-print-chrome" />}
-
       {/* One bottom bar, like the photo stages' toolbars: the way out of the
           editor's print view (Back) flush left, the caption centred, Focus
           and Export flush right - and on the canvas page, last on the right,
@@ -3318,7 +3294,6 @@ export function PrintView({
         {sheets.length > 1 ? ` · Page ${index + 1} of ${sheets.length}` : ""}
         <span className="canvas-print-hint">Scroll to zoom · drag to move · Esc to go back</span>
         <span className="canvas-print-export">
-          <FocusButton onClick={enterFocus} className="canvas-tool canvas-view-edit" />
           <ExportChip doc={doc} byId={byId} title={title} drop="up" />
           {onEdit && (
             <button
@@ -3853,11 +3828,6 @@ function CanvasToolbar({
   commit,
   zoom,
   onZoom,
-  onFit,
-  onFitAll,
-  onPrint,
-  onFocus,
-  focused,
   canUndo,
   canRedo,
   onUndo,
@@ -3878,11 +3848,6 @@ function CanvasToolbar({
   commit: (next: Doc | ((current: Doc) => Doc), options?: { history?: boolean }) => void;
   zoom: number;
   onZoom: (factor: number) => void;
-  onFit: () => void;
-  onFitAll: () => void;
-  onPrint: () => void;
-  onFocus: () => void;
-  focused: boolean;
   canUndo: boolean;
   canRedo: boolean;
   historyTick: number;
@@ -3910,11 +3875,11 @@ function CanvasToolbar({
   // icons and tooltips carry on. Toggles carry aria-pressed + the is-on tint.
   return (
     <div className="filter-bar canvas-toolbar">
-      <div className="control-group">
-        <span className="canvas-title" title={title}>
-          {title}
-        </span>
-      </div>
+      {/* The name first and then a divider, exactly as the album's bar. */}
+      <span className="bar-title" title={title}>
+        {title}
+      </span>
+      <span className="bar-sep" aria-hidden />
 
       {/* Page first, then what goes on it, then (far right) how it is viewed.
           Nothing to save here: the canvas writes itself. */}
@@ -4025,8 +3990,8 @@ function CanvasToolbar({
               </div>
               <div className="canvas-panel-row">
                 <span className="canvas-panel-note">
-                  The margins are guide lines on every page: photos snap to them and placed
-                  photos flow inside them. They are never printed. 0 hides a line.
+                  Guide lines on every page. Photos snap to and flow inside them. Never printed;
+                  0 hides a line.
                 </span>
               </div>
             </div>
@@ -4148,47 +4113,6 @@ function CanvasToolbar({
         </span>
         <button className="btn btn-sm" onClick={() => onZoom(1.2)} aria-label="Zoom in" title="Zoom in (+)">
           <IconPlus size={14} />
-        </button>
-        <button
-          className="btn btn-sm canvas-tool"
-          onClick={onFit}
-          aria-label="Fit one page"
-          title="Fit one page in the window (press 0)"
-        >
-          <IconFitPage size={15} />
-          <span className="canvas-tool-label">Fit page</span>
-        </button>
-        <button
-          className="btn btn-sm canvas-tool"
-          onClick={onFitAll}
-          aria-label="Fit the whole layout"
-          title="Fit all pages in the window (Shift-0)"
-        >
-          <IconFitAll size={15} />
-          <span className="canvas-tool-label">Fit all</span>
-        </button>
-        <button
-          className="btn btn-sm canvas-tool"
-          onClick={onPrint}
-          aria-label="Print view"
-          title="Print view: show the pages as they will print (P). Escape to go back."
-        >
-          <IconPrinter size={15} />
-          <span className="canvas-tool-label">Print view</span>
-        </button>
-        <button
-          className={`btn btn-sm canvas-tool focus-btn${focused ? " active" : ""}`}
-          onClick={onFocus}
-          aria-pressed={focused}
-          aria-label={focused ? "Leave focus mode" : "Focus mode"}
-          title={
-            focused
-              ? "Leave focus mode (F)"
-              : "Focus mode: put the app's top bar away and keep working on the page (F)"
-          }
-        >
-          <IconFocus size={15} />
-          <span className="canvas-tool-label">Focus</span>
         </button>
         {exportChip}
         <CanvasHelp />
@@ -4360,8 +4284,8 @@ function FontEditor({
             }}
           />
           <span className="canvas-panel-note">
-            Type the name of a font on this computer exactly as it appears in Font Book or the Fonts
-            settings. It prints from this machine; on another one the closest match is used.
+            Type a font name as it appears in Font Book. On another computer the closest match is
+            used.
           </span>
         </label>
 
@@ -4443,9 +4367,9 @@ function CanvasHelp() {
     ["Select several items", "Drag across an empty area, or Shift-click"],
     ["Move the view", "Hold Space and drag · Alt-drag · scroll, the scrollbars, or the arrow keys with nothing selected"],
     ["Zoom the canvas", "+ and − · Alt and scroll · hold Space and scroll"],
-    ["Fit one page in the window", "0 (⌘+ and ⌘− zoom the whole app, not the canvas)"],
-    ["Fit all pages", "Shift-0"],
-    ["Print view", "P · ← → turn pages · scroll to zoom, drag to move, 0 to fit · Escape to go back"],
+    ["Fit one page in the window", "Double-click an empty area, or 0 (⌘+ and ⌘− zoom the whole app, not the canvas)"],
+    ["Fit all pages", "Shift-double-click an empty area, or Shift-0"],
+    ["See the pages as they will print", "E with nothing selected, or Escape: back to the canvas view"],
     ["Crop inside a frame", "Double-click the photo, then drag to move and scroll to zoom"],
     ["Resize", "Drag a corner or a side · Shift ignores the aspect lock · or type a size in the bar"],
     ["Rotate", "Drag the round handle above the item · Shift for 15° steps"],

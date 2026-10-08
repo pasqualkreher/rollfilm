@@ -28,7 +28,7 @@ export function DirectoryPicker({ onSelect, onClose, closing = false }: Props) {
     <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={onClose}>
       <div className="modal dir-picker" onClick={(e) => e.stopPropagation()}>
         <div className="dir-picker-header">
-          <h3 className="section-title" style={{ margin: 0, fontSize: 15 }}>
+          <h3 className="section-title" style={{ margin: 0 }}>
             Choose a folder
           </h3>
           <button className="modal-close" onClick={onClose} aria-label="Close">

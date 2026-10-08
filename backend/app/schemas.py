@@ -187,12 +187,6 @@ class BulkDevelopRequest(BaseModel):
     adjustments: dict[str, Any] = Field(default_factory=dict)
 
 
-class Selects(BaseModel):
-    """The Selects tray: image ids in the order they were added."""
-
-    ids: list[str] = Field(default_factory=list)
-
-
 class BulkAutoDevelopRequest(BaseModel):
     image_ids: list[str]
 

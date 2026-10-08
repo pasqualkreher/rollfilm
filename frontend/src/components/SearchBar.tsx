@@ -1,7 +1,18 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import type { NavigateFunction } from "react-router-dom";
 import { IconSearch, IconX } from "./Icons";
-import { runLeaveGuards } from "../state/navHistory";
+import { rememberSearchOrigin, runLeaveGuards, stepsBackToSearchOrigin } from "../state/navHistory";
+
+// Clearing a search goes back to where the search was started from (the
+// album, the photo), when that entry is still behind us; otherwise `fallback`
+// decides (the Library drops `q` in place). Shared with the results banner's
+// "Clear search" so both ways out behave the same.
+export function leaveSearch(navigate: NavigateFunction, fallback: () => void) {
+  const back = stepsBackToSearchOrigin();
+  if (back > 0) navigate(-back);
+  else fallback();
+}
 
 // Which routes have a grid that search filters in place. On any other page a
 // search falls back to the Library. Album detail keeps its own path so the
@@ -34,12 +45,23 @@ export function SearchBar({ compact = false }: { compact?: boolean }) {
     // a different page are dropped: they don't describe the grid we land on.
     const carried = base === location.pathname ? new URLSearchParams(params) : new URLSearchParams();
     const query = next.trim();
+    const hadQuery = params.get("q") !== null;
+    if (!query && !hadQuery) return;
     if (query) carried.set("q", query);
     else carried.delete("q");
     const qs = carried.toString();
     // A search from the photo editor leaves it for the Library: its save
     // lands first, like any other way out through the top bar.
-    void runLeaveGuards().then(() => navigate(qs ? `${base}?${qs}` : base));
+    void runLeaveGuards().then(() => {
+      if (!query) {
+        leaveSearch(navigate, () => navigate(qs ? `${base}?${qs}` : base));
+        return;
+      }
+      // The first search from a page notes the place to come back to;
+      // refining the query keeps it.
+      if (!hadQuery) rememberSearchOrigin();
+      navigate(qs ? `${base}?${qs}` : base);
+    });
   }
 
   return (

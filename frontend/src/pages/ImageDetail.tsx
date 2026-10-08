@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
+import { cachedImageRow } from "../utils/cachedImageRow";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { PhotoEditor } from "../components/PhotoEditor";
@@ -10,7 +11,6 @@ import { MembershipChips } from "../components/MembershipChips";
 import { AddToPicker } from "../components/AddToPicker";
 import { useAppDialogs } from "../components/AppDialogs";
 import { MiniMap } from "../components/MiniMap";
-import { useSelects } from "../state/selects";
 import { setDetailPanelOpen, useAskSaveCopyOptions, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
 import { useWait } from "../state/wait";
 import { useNavHistory } from "../state/navHistory";
@@ -150,7 +150,12 @@ export function ImageDetail() {
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
   // Fetched up here because the zoom below needs the photo's true pixel size.
-  const { data: image } = useQuery({
+  // Opened from a grid, the photo's row is already in that grid's cached data
+  // (utils/cachedImageRow.ts): the view starts from it in the same frame as
+  // the click, the preview request goes out at once, and the full record
+  // fills in the panel a round-trip later.
+  const seed = useMemo(() => cachedImageRow(queryClient, activeId), [queryClient, activeId]);
+  const { data: image, isPlaceholderData } = useQuery({
     queryKey: ["image", activeId],
     queryFn: () => api.images.get(activeId),
     enabled: !!activeId,
@@ -159,12 +164,17 @@ export function ImageDetail() {
     // layout - panel and all - away and back on every step. The previous
     // photo's data stays in place; the stage shows that the next one is on
     // its way (see pixelsPending), and the keys that act on "the photo"
-    // wait until it is really the one on screen (see imageStale).
-    placeholderData: keepPreviousData,
+    // wait until it is really the one on screen (see imageStale). With no
+    // previous photo (the first open from a grid) the grid's row stands in.
+    placeholderData: (prev) => prev ?? seed,
   });
   // The row on screen belongs to the photo the user just LEFT: the next one's
   // hasn't arrived yet.
   const imageStale = !!image && image.id !== activeId;
+  // The row IS this photo's, but it came from a grid and may not carry the
+  // edits (the library index's rows don't): nothing that reads the develop
+  // state - the editor, a saved copy - may start from it.
+  const seeded = !!image && !imageStale && isPlaceholderData;
 
   // Scroll / trackpad-pinch to zoom (toward the cursor), drag to pan, and the
   // fit-to-frame sizing underneath it - shared with the import review's preview
@@ -199,7 +209,15 @@ export function ImageDetail() {
   // Geometry is shared by both sides (the original is shown in the edit's
   // frame), so only tonal edits make a difference worth showing. The camera
   // JPEG is another picture altogether - there is always something to compare.
-  const hasTonalEdit = useMemo(() => !!image && !adjustmentsAreNeutral(editsFromImage(image).adjustments), [image]);
+  // While the record is still the grid's row, "has ever been edited" stands
+  // in for it: the row's edit_rev is right, its develop state is not. That
+  // keeps the compare control from appearing a beat after the toolbar.
+  const hasTonalEdit = useMemo(
+    () =>
+      !!image &&
+      (seeded ? image.edit_rev > 0 : !adjustmentsAreNeutral(editsFromImage(image).adjustments)),
+    [image, seeded]
+  );
   const nothingToCompare = !vsJpg && !hasTonalEdit;
   // Never a frame in which the editor mounts over a side-by-side stage.
   const compareMode: CompareMode = adjustOpen ? "off" : compareModeState;
@@ -252,7 +270,6 @@ export function ImageDetail() {
   // open (from the grid): while paging through a set we keep the current frame
   // on screen and swap in place, so there's no fade-out/in wash between photos.
   const shownOnceRef = useRef(false);
-  const selects = useSelects();
   const { zoomed, resetZoom } = zoom;
 
   // Escape's way out: one step back through the history, the same step the
@@ -973,10 +990,18 @@ export function ImageDetail() {
   // new photo into the browsed set right after its original so the arrow keys
   // keep working.
   async function saveCopyRun(req: SaveCopyRequest) {
+    // The copy carries the photo's edits, so it needs the real record, not a
+    // grid row that stood in for it (see `seeded`).
+    const source = seeded
+      ? await queryClient.ensureQueryData({
+          queryKey: ["image", activeId],
+          queryFn: () => api.images.get(activeId),
+        })
+      : image!;
     const created =
       req.kind === "virtual"
-        ? await api.images.virtualCopy(image!.id)
-        : await api.images.saveCopy(image!.id, editsFromImage(image!), {
+        ? await api.images.virtualCopy(source.id)
+        : await api.images.saveCopy(source.id, editsFromImage(source), {
             quality: req.quality,
             maxSize: req.maxSize,
           });
@@ -1008,7 +1033,6 @@ export function ImageDetail() {
     await withWait(`Moving ${ids.length === 1 ? "photo" : "photos"} to trash…`, () =>
       api.images.bulkDelete(ids)
     );
-    ids.forEach((delId) => selects.has(delId) && selects.remove(delId));
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["trash"] });
     // Trashing or restoring photos changes which tags live photos carry.
@@ -1199,7 +1223,7 @@ export function ImageDetail() {
               </button>
             )}
           </div>
-          <div className="detail-image-toolbar">
+          <div className="filter-bar filter-bar--stage detail-image-toolbar">
             {/* No Back of its own: the way out is the top bar's Back (and
                 Escape), which lead to wherever this photo was opened from. */}
             <StageBackgroundToggle />
@@ -1252,7 +1276,7 @@ export function ImageDetail() {
                 onClick={openAdjust}
                 title="Edit this photo (E)"
               >
-                <IconPencil size={13} /> Edit
+                <IconPencil size={13} /> <span className="stage-btn-text">Edit</span>
               </button>
               <button
                 className="btn btn-sm detail-panel-toggle"
@@ -1262,7 +1286,8 @@ export function ImageDetail() {
                 aria-expanded={panelOpen}
                 aria-controls="detail-side-panel"
               >
-                Panel {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
+                <span className="stage-btn-text">Panel</span>{" "}
+                {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
               </button>
             </span>
           </div>
@@ -1350,7 +1375,7 @@ export function ImageDetail() {
               <button
                 className="detail-trash-btn"
                 onClick={deletePhoto}
-                title="Delete this photo. Library photos move to the Trash, photos from external sources are only removed from the library."
+                title="Delete. Library photos go to the Trash, external photos are only removed from the library."
                 aria-label="Delete photo"
               >
                 <IconTrash size={15} />
@@ -1379,17 +1404,17 @@ export function ImageDetail() {
               <ImmichSyncToggle
                 on={image.immich_sync}
                 onToggle={toggleImageImmichSync}
-                title="Upload this photo to Immich automatically. RAW files only when “Also upload RAW files” is on in Settings."
+                title="Upload this photo to Immich automatically. RAW files only if enabled in Settings."
               />
             )}
             {/* Manual mode only: selective shows the sync checkbox instead, and
                 in full mode everything uploads automatically anyway. */}
             {immichConfigured && immich?.sync_mode === "manual" && (
               <button
-                className="btn"
+                className="btn btn-sm"
                 onClick={addToImmich}
                 disabled={immichBusy}
-                title="Upload this photo to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
+                title="Upload this photo to your Immich server. RAW files only if enabled in Settings."
               >
                 <IconCloudUp size={13} /> {immichBusy ? "Uploading…" : "Add to Immich"}
               </button>
@@ -1457,10 +1482,8 @@ export function ImageDetail() {
           </div>
           <div className="detail-section">
             {/* "Add to" rather than "Albums": the picker below also covers
-                Selects and canvases, and the chips are the memberships it
-                created - albums and canvases, each a link into it. Selects
-                used to be its own button in the action row above, where three
-                buttons ellipsized to "E… / + Add to …". */}
+                canvases, and the chips are the memberships it created -
+                albums and canvases, each a link into it. */}
             <div className="detail-section-label">Add to</div>
             <MembershipChips
               albumIds={image.album_ids}
@@ -1472,9 +1495,6 @@ export function ImageDetail() {
               <AddToPicker
                 onAddToAlbum={addToAlbum}
                 onAddToCanvas={addToCanvas}
-                onAddToSelects={() => selects.add(image!.id)}
-                onRemoveFromSelects={() => selects.remove(image!.id)}
-                inSelects={selects.has(image.id)}
               />
             </div>
           </div>
@@ -1484,7 +1504,7 @@ export function ImageDetail() {
             <ExifTable image={image} />
 
             <button
-              className="btn"
+              className="btn btn-sm"
               style={{ display: "block", width: "100%", marginTop: 14, textAlign: "center" }}
               onClick={() => setExportOpen(true)}
               title="Export a JPEG with your edits applied, or download the original file unchanged"
@@ -1492,7 +1512,7 @@ export function ImageDetail() {
               <IconExport size={13} /> Export…
             </button>
             <button
-              className="btn"
+              className="btn btn-sm"
               style={{ display: "block", width: "100%", marginTop: 8, textAlign: "center" }}
               onClick={() => setSaveCopyOpen(true)}
               title="Create a new photo from the saved edits: a new JPEG file or a virtual copy that shares the original file"
@@ -1557,7 +1577,10 @@ export function ImageDetail() {
         </div>
       </div>
 
-      {(adjustOpen || adjustClosing) && (
+      {/* Never over a grid's stand-in row (`seeded`): the editor reads the
+          develop state once, on mount. E pressed in that moment still opens
+          it - the mode is in the URL - a round-trip later, with the edits. */}
+      {(adjustOpen || adjustClosing) && !seeded && (
         <PhotoEditor key={editorKey} image={image} onClose={leaveEditor} closing={!adjustOpen} />
       )}
       <Presence open={slideshowOpen} ms={MOTION.overlay}>

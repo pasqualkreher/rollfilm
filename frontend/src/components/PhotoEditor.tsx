@@ -7,7 +7,7 @@ import type { CropBox, ImageOut } from "../api/types";
 import { IconBookmark, IconBulb, IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconCurve, IconDetail, IconEye, IconEyeOff, IconFilmRoll, IconFlipH, IconFlipV, IconImage, IconMask, IconPalette, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSparkle, IconSplit, IconSun, IconTarget, IconTone, IconTrash, IconTube, IconUndo, IconX } from "./Icons";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
-import { FocusButton, useFocusChrome } from "./FocusToggle";
+import { useFocusMode, setFocusMode, toggleFocusMode } from "../state/focusMode";
 import { isBipolar, rangeFillStyle } from "../utils/rangeFill";
 import {
   adjustmentsFromImage,
@@ -1553,11 +1553,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // editor. Its own state: hiding the info panel to look at a photo must
   // not hide the sliders you open the editor for.
   const [panelOpen, setPanelOpen] = useState(true);
-  // Focus mode (F): the panel and the control row put away, and the app's
-  // top bar with them - the photo alone, as big as the window allows. Not
-  // when docked: there the canvas editor's own focus mode is the one.
-  const [focusMode, setFocusMode] = useState(false);
-  useFocusChrome(focusMode && !docked);
+  // Focus mode (F, the View menu): the app's top bar put away - the photo
+  // with more of the window to itself. App-wide state (state/focusMode.ts);
+  // docked, the canvas editor underneath owns it.
+  const focusMode = useFocusMode() && !docked;
   const placeholderUrl = useMemo(
     () => api.images.previewUrl(image.id, editVersion(image)),
     [image],
@@ -2689,7 +2688,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       presets[name] &&
       !(await dialogs.confirm({
         title: `Replace preset “${name}”?`,
-        message: "The preset is overwritten with the current look. Photos it was applied to keep their edits.",
+        message: "The preset is overwritten. Edited photos keep their edits.",
         confirmLabel: "Replace preset",
       }))
     )
@@ -2704,7 +2703,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     if (
       !(await dialogs.confirm({
         title: `Delete preset “${name}”?`,
-        message: "The preset is removed from this computer. Photos it was applied to keep their edits.",
+        message: "The preset is removed. Edited photos keep their edits.",
         confirmLabel: "Delete preset",
         danger: true,
       }))
@@ -2743,7 +2742,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       clashes.length === 0 ||
       (await dialogs.confirm({
         title: `Replace ${clashes.length} preset(s) of the same name?`,
-        message: `Already here: ${clashes.join(", ")}. Replace them with the ones from the file, or keep yours and import only the others.`,
+        message: `Already here: ${clashes.join(", ")}. Replace them, or keep yours and import the rest.`,
         confirmLabel: "Replace",
         cancelLabel: "Keep mine",
       }));
@@ -3123,7 +3122,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
 
       // F: focus mode (see focusMode).
       if (!docked && (e.key === "f" || e.key === "F")) {
-        setFocusMode((on) => !on);
+        toggleFocusMode();
         return;
       }
 
@@ -4821,7 +4820,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             (below), in the spot the photo view keeps its Edit. The row is
             rendered even while the photo is still loading or failed to load,
             so there's always a visible way out. */}
-        <div className="editor-bg-toggle">
+        <div className="filter-bar filter-bar--stage editor-bg-toggle">
           {/* The whole row is there from the first frame - the editor must
               look complete the moment it opens, not assemble itself as the
               first render lands. The background switch works right away (it
@@ -4837,6 +4836,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 zoomToNative,
               }}
             />
+            {/* Same divider as the photo view between zoom and compares. */}
+            <span className="editor-toolbar-sep" aria-hidden />
             {/* Kept as one group so the row never wraps between the baseline
                 switch and the compares it feeds. Icon-only, like everything in
                 this row except the zoom steps: the captions and words moved
@@ -4948,7 +4949,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               disabled={busy}
               title={busy ? "Saving…" : docked ? "Close the editor (Esc)" : "Back to the photo view (Esc)"}
             >
-              {docked ? <IconX size={13} /> : <IconImage size={13} />} {docked ? "Close" : "View"}
+              {docked ? <IconX size={13} /> : <IconImage size={13} />}{" "}
+              <span className="stage-btn-text">{docked ? "Close" : "View"}</span>
             </button>
             <button
               className="btn btn-sm detail-panel-toggle"
@@ -4958,10 +4960,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               aria-expanded={panelOpen}
               aria-controls="editor-side-panel"
             >
-              Panel {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
+              <span className="stage-btn-text">Panel</span>{" "}
+              {panelOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
             </button>
           </span>
-          {!docked && <FocusButton active={focusMode} onClick={() => setFocusMode((on) => !on)} />}
         </div>
       </div>
 
@@ -4979,7 +4981,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           }
         >
           Edit
-          <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 12, fontWeight: 400 }}>non-destructive</span>
+          <span className="editor-head-sub">non-destructive</span>
         </h3>
 
         {/* The histogram belongs to the photo, not to any one group of

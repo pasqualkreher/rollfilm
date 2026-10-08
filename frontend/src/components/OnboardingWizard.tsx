@@ -159,9 +159,8 @@ export function OnboardingWizard() {
           {step === "welcome" && (
             <div>
               <p className="onboarding-lead">
-                Rollfilm is a desktop photo library with a film-style editor. Your photos and their
-                database stay on your own computer. This setup takes about a minute. You can skip
-                it and change everything later in <strong>Settings</strong>.
+                Rollfilm is a desktop photo library with a film-style editor. Everything stays on your
+                computer. This setup takes a minute and can be skipped.
               </p>
               <ul className="onboarding-list">
                 <li>Remove leftovers from an older version.</li>
@@ -177,9 +176,8 @@ export function OnboardingWizard() {
             <div>
               <h3 className="onboarding-step-title">Clean up old files</h3>
               <p className="onboarding-lead">
-                An earlier version of this app (then called <em>Photo Manager</em>) left cache and log
-                files on your system. They are safe to remove. Your photos and library are{" "}
-                <strong>not</strong> affected.
+                An earlier version (<em>Photo Manager</em>) left cache and log files behind. Removing
+                them does not touch your photos or library.
               </p>
               {legacy && legacy.length > 0 ? (
                 <>
@@ -209,10 +207,8 @@ export function OnboardingWizard() {
             <div>
               <h3 className="onboarding-step-title">Where your library lives</h3>
               <p className="onboarding-lead">
-                Your photos are stored in the folder you chose at startup. The database, thumbnails and
-                import staging live in a hidden <code>.photomanager</code> folder inside it. The
-                library is self-contained and can be moved as a whole, for example to an external
-                drive.
+                Your photos live in the folder you chose. Database and thumbnails sit in a hidden{" "}
+                <code>.photomanager</code> folder inside it, so the library moves as a whole.
               </p>
               <div className="onboarding-field">
                 <span className="onboarding-field-label">Library folder</span>
@@ -223,10 +219,8 @@ export function OnboardingWizard() {
                 <code className="onboarding-field-value">{dataRoot ?? "…"}</code>
               </div>
               <p style={{ color: "var(--text-muted)", marginTop: 12 }}>
-                <strong>You can have more than one library.</strong> Choose a different folder anytime
-                under Settings → Library folder. Each library keeps its own database and
-                thumbnails. If the folder is synced to the cloud (iCloud, Dropbox, Nextcloud),
-                exclude <code>.photomanager</code> from syncing.
+                <strong>You can have more than one library.</strong> Switch under Settings → Library
+                folder. If the folder is cloud-synced, exclude <code>.photomanager</code>.
               </p>
               {desktop?.changeLibraryRoot && (
                 <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
@@ -255,26 +249,23 @@ export function OnboardingWizard() {
               </p>
               <ol className="onboarding-workflow">
                 <li>
-                  <strong>Import</strong>: drop in files or choose a folder. Photos first appear in a
-                  review area. Nothing enters your library until you click <em>Add to library</em>.
-                  Duplicates are detected automatically.
+                  <strong>Import</strong>: drop in files or pick a folder. Nothing enters your library
+                  until you click <em>Add to library</em>.
                 </li>
                 <li>
-                  <strong>Browse &amp; cull</strong>: rate photos with stars, add color labels and
-                  tags, then filter to the ones you want to keep. The search box understands plain
-                  language, such as <em>"dog on a beach"</em>.
+                  <strong>Browse &amp; cull</strong>: rate, label and tag, then filter. The search
+                  understands plain language, such as <em>"dog on a beach"</em>.
                 </li>
                 <li>
-                  <strong>Collect</strong>: add photos to <em>Selects</em> to build a shortlist, then
-                  download them as a zip or turn them into an album.
+                  <strong>Collect</strong>: gather photos into albums, or tick a few and export them
+                  as a zip.
                 </li>
                 <li>
                   <strong>Edit</strong>: adjust tone, color and film-style effects. The original file
                   is never changed.
                 </li>
                 <li>
-                  <strong>Immich</strong>: optionally connect an Immich photo server in Settings to
-                  upload photos and albums. RAW files only if you turn that on in Settings.
+                  <strong>Immich</strong>: optionally upload to an Immich server. Set it up in Settings.
                 </li>
               </ol>
             </div>
@@ -284,14 +275,12 @@ export function OnboardingWizard() {
             <div>
               <h3 className="onboarding-step-title">Make it yours in Settings</h3>
               <p className="onboarding-lead">
-                Everything you just saw and more can be adjusted in <strong>Settings</strong>: how RAW
-                files are displayed, auto develop, smart albums, Immich, Trash retention and
-                backups.
+                Everything else lives in <strong>Settings</strong>: RAW display, auto develop, smart
+                albums, Immich, Trash and backups.
               </p>
               <p className="onboarding-lead">
-                Want a short guided tour of the settings now? It takes under a minute and can be
-                skipped at any step. You can restart it anytime with <em>"Show me around"</em> on
-                the Settings page.
+                Want a one-minute tour now? You can restart it anytime with <em>"Show me around"</em>{" "}
+                on the Settings page.
               </p>
               <button
                 className="btn primary"

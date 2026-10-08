@@ -63,6 +63,12 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
+// The UI is English, so Chromium's own widgets speak English too: the native
+// date pickers (the Date filter's from/to fields) and the formats in them
+// otherwise follow the system language, and a German calendar sat in an
+// English menu. Must run before app.whenReady().
+app.commandLine.appendSwitch("lang", "en-US");
+
 let backendProc = null;
 // A backend that dies mid-session (an out-of-memory kill during a big import
 // is the usual way) used to leave the window up with every request failing
@@ -235,8 +241,8 @@ async function ensureLibraryRoot() {
         ? "Your photo library folder can't be found."
         : "Welcome to Rollfilm",
       detail: missing
-        ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive/folder, or choose a new location. Each library carries its own database and thumbnails (in a hidden .photomanager subfolder), so pointing at a different folder switches to that library.`
-        : "Pick a folder to hold your photos. The database and thumbnails live inside it, in a hidden .photomanager subfolder, so the whole library is self-contained and moves with the folder. If the folder is cloud-synced (iCloud, Dropbox, Nextcloud), exclude .photomanager from syncing - sync clients can corrupt an active database.",
+        ? `The library was at:\n${cfg.libraryRoot}\n\nReconnect that drive, or choose another folder. Each library carries its own database, so another folder opens another library.`
+        : "Pick a folder for your photos. Database and thumbnails go into a hidden .photomanager subfolder, so the library moves as a whole. If the folder is cloud-synced, exclude .photomanager.",
       buttons: ["Choose folder…", "Quit"],
       defaultId: 0,
       cancelId: 1,
@@ -884,8 +890,8 @@ async function confirmCloseWithSyncCheck() {
     title: "Rollfilm is still working",
     message: `Still running: ${work.parts.join(", ")}.`,
     detail: manualUploadsLost
-      ? "Finish in background: the window closes and the app quits by itself once it's done.\n\nQuit now: the remaining work stops. The renders and the search index are caught up automatically next time, but the queued Immich uploads are not (manual sync mode) — you'd have to push them again."
-      : "Finish in background: the window closes and the app quits by itself once it's done.\n\nQuit now: the remaining work stops — it's picked up again automatically the next time the app runs. Your photos and edits are already saved either way.",
+      ? "Finish in background: the window closes and the app quits when done.\n\nQuit now: remaining work stops. Renders and search index catch up next start, queued Immich uploads do not."
+      : "Finish in background: the window closes and the app quits when done.\n\nQuit now: remaining work stops and is picked up next start. Your photos and edits are already saved.",
     buttons: ["Finish in background", "Quit now", "Keep app open"],
     defaultId: 0,
     cancelId: 2,
@@ -1005,6 +1011,26 @@ function zoomBy(contents, delta) {
   if (!contents || contents.isDestroyed()) return;
   const level = delta === 0 ? 0 : contents.getZoomLevel() + delta;
   contents.setZoomLevel(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, level)));
+  syncZoomChrome(contents);
+}
+
+// The zoom scales the page, not the window chrome: on macOS the traffic
+// lights keep their native 12px and their native spot, so a zoomed-out top
+// bar shrank around them and the lights sat on the filter row below, over
+// the size buttons. Two things keep them in the bar at every zoom: the
+// renderer gets the factor (--zoom, index.css divides the bar's inset and
+// floor by it, so both stay 78 and 40 NATIVE pixels), and the lights are
+// re-centred on a bar that grows with the page when zoomed in (the bar keeps
+// its 40 native pixels when zoomed out, so y stays at 14 there). Chromium
+// remembers the zoom per origin across launches, so this runs on load too.
+function syncZoomChrome(contents) {
+  if (!contents || contents.isDestroyed()) return;
+  const factor = contents.getZoomFactor();
+  contents.send("pm:zoom", factor);
+  if (process.platform !== "darwin" || !mainWindow || mainWindow.isDestroyed()) return;
+  if (contents !== mainWindow.webContents) return;
+  const barNative = 40 * Math.max(1, factor);
+  mainWindow.setWindowButtonPosition({ x: 12, y: Math.round(barNative / 2 - 6) });
 }
 
 // Menu items zoom whichever window is focused, falling back to the main one
@@ -1053,7 +1079,7 @@ function attachZoomShortcuts(contents) {
 // On Windows and Linux the menu bar can go entirely. On macOS it cannot: the
 // app-name menu belongs to the system, and every app has one - what an app can
 // decide is what sits NEXT to it, which here is Edit and View - Zoom In, Zoom
-// Out and Actual Size, the one thing the window itself has no control for.
+// Out, Actual Size and Focus, the things the window itself has no control for.
 // Edit has to be there in the flesh: macOS takes the clipboard shortcuts from
 // the menu, and a hidden top-level menu is no menu at all - it is dropped from
 // the bar along with its key equivalents, which is why Cmd-C/V/X/A did nothing
@@ -1073,6 +1099,15 @@ function buildApplicationMenu() {
           zoomMenuItem("Zoom In", "CommandOrControl+Plus", ZOOM_STEP),
           zoomMenuItem("Zoom Out", "CommandOrControl+-", -ZOOM_STEP),
           zoomMenuItem("Actual Size", "CommandOrControl+0", 0),
+          { type: "separator" },
+          {
+            // Focus mode: the app's top bar put away, in every view. The
+            // renderer keeps the state (state/focusMode.ts); this only flips it.
+            label: "Focus",
+            accelerator: "CommandOrControl+F",
+            click: (_item, browserWindow) =>
+              ((browserWindow || mainWindow)?.webContents ?? null)?.send("pm:toggle-focus"),
+          },
           hiddenZoomItem("Zoom In", "CommandOrControl+=", ZOOM_STEP),
           hiddenZoomItem("Zoom In", "CommandOrControl+numadd", ZOOM_STEP),
           hiddenZoomItem("Zoom Out", "CommandOrControl+numsub", -ZOOM_STEP),
@@ -1154,7 +1189,10 @@ function createWindow() {
     ...(process.platform === "darwin"
       ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 12, y: 14 } }
       : {}),
-    minWidth: 960,
+    // Narrow enough for a split screen: below ~900px the tabs fold into the
+    // burger menu and the search field shrinks (App.tsx measures both), the
+    // editor and photo view keep their side panel down to this width.
+    minWidth: 720,
     minHeight: 600,
     // Paint before the renderer's theme runs (it lives in localStorage, out of
     // reach here): the default Stone skins by the OS mode, the same pair
@@ -1192,6 +1230,8 @@ function createWindow() {
   };
   mainWindow.once("ready-to-show", revealWindow);
   mainWindow.webContents.once("did-finish-load", revealWindow);
+  // The remembered zoom (see syncZoomChrome) is in place by now.
+  mainWindow.webContents.on("did-finish-load", () => syncZoomChrome(mainWindow?.webContents));
 
   // Ask before a close that would drop running Immich uploads (see
   // confirmCloseWithSyncCheck) - forceClose marks a decision already made.
@@ -1269,6 +1309,7 @@ ipcMain.handle("pm:set-window-buttons", (_event, visible) => {
   applyWindowButtons();
 });
 ipcMain.handle("pm:is-full-screen", () => Boolean(mainWindow?.isFullScreen()));
+ipcMain.handle("pm:get-zoom", (event) => event.sender.getZoomFactor());
 
 // Native folder picker: the app's core new capability. Returns an absolute host
 // path the native backend can read directly (no Docker mounts involved).
@@ -1401,10 +1442,8 @@ ipcMain.handle("pm:change-library-root", async () => {
     message: "Restart Rollfilm with the new library folder?",
     detail:
       `New location:\n${chosen}\n\n` +
-      "Each library keeps its own database, thumbnails and staging inside its folder, so this " +
-      "switches to the library in the new folder. If it's a folder that hasn't been used as a " +
-      "library yet, a fresh empty library is started there. Your existing photo files are not " +
-      "moved automatically.",
+      "Each library has its own database and thumbnails. An unused folder starts a new empty " +
+      "library. Your photo files are not moved.",
     buttons: ["Restart now", "Cancel"],
     defaultId: 0,
     cancelId: 1,
@@ -1522,8 +1561,7 @@ async function startBackendAndWait(isFirstStart) {
       title: "Backend is taking a while",
       message: "The Rollfilm backend is still starting.",
       detail:
-        "The first launch can take several minutes (macOS verifies the app and the " +
-        `image engine loads). You can keep waiting or quit.\n\nLog file:\n${backendLogPath()}`,
+        `The first launch can take a few minutes. Keep waiting or quit.\n\nLog file:\n${backendLogPath()}`,
       buttons: ["Keep waiting", "Quit"],
       defaultId: 0,
       cancelId: 1,

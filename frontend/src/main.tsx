@@ -48,10 +48,26 @@ if (window.photoManager?.platform === "darwin") {
   window.addEventListener("resize", apply);
   displayModeFullscreen.addEventListener("change", apply);
   apply();
+
+  // The zoom (Cmd +/-) scales the page but not the traffic lights, so the
+  // bar's inset and floor are divided by the factor in index.css (--zoom) to
+  // stay the lights' native size. The shell reports the factor on load and
+  // on every change (main.js syncZoomChrome).
+  const setZoom = (factor: number) =>
+    document.documentElement.style.setProperty("--zoom", String(factor > 0 ? factor : 1));
+  window.photoManager.getZoom?.().then(setZoom).catch(() => {});
+  window.photoManager.onZoom?.(setZoom);
 }
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
+  // gcTime: how long a page's data outlives the page. The default (5 min)
+  // meant that coming back to Albums or Stats after a longer stay elsewhere
+  // showed a spinner and repainted from nothing. Half an hour keeps every
+  // area's last data in memory for the length of a normal session, so a
+  // revisit paints at once and only refreshes in the background (staleTime).
+  // The largest entries - the library index at ~100 bytes a row and the
+  // per-photo records - stay in the low tens of MB.
+  defaultOptions: { queries: { retry: 1, staleTime: 10_000, gcTime: 30 * 60_000 } },
 });
 
 // On the desktop first run the shell opens the window before a library (and
@@ -74,7 +90,11 @@ function Root() {
   if (mode === "loading") return null;
   if (mode === "setup") return <LibrarySetup />;
   return (
-    <HashRouter>
+    // v7_startTransition: a navigation is committed inside React.startTransition,
+    // so while a lazily loaded page's chunk is still on its way the current
+    // page stays mounted and usable instead of the Suspense fallback blanking
+    // the window; old and new page then swap in one commit.
+    <HashRouter future={{ v7_startTransition: true }}>
       <App />
     </HashRouter>
   );

@@ -7,7 +7,7 @@ import { IconAlbum, IconPlus } from "./Icons";
 // The import review's album target: picking one only remembers it - the
 // photos go into it when "Add to library" has put them in the library (the
 // review does that right after the commit). Unlike AddToPicker, which acts
-// the moment an entry is picked, and without its Canvas and Selects groups.
+// the moment an entry is picked, and without its Canvas group.
 // "+ New album…" creates the album right here (name asked via the app's
 // prompt) and makes it the target.
 export function ImportAlbumPicker({

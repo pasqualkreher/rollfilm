@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import type { LibraryIndexImage } from "../api/types";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
@@ -23,6 +23,7 @@ import {
   rememberLastViewedImageAt,
 } from "../utils/lastViewed";
 import { preloadImage } from "../utils/preload";
+import { readScroll, useScrollMemory } from "../utils/scrollMemory";
 import {
   GAP,
   overscanFor,
@@ -80,6 +81,10 @@ export function VirtualTimeline({
   resetKey,
 }: Props) {
   const navigate = useNavigate();
+  // The scroll offset is remembered per view (path + filters: the Library's
+  // filters live in its URL, and each filtered set has its own length).
+  const location = useLocation();
+  const scrollKey = location.pathname + location.search;
   const mergePairs = useMergePairs();
   const thumbSize = useThumbSize();
   const rowH = thumbPx(thumbSize);
@@ -102,7 +107,8 @@ export function VirtualTimeline({
   const allIds = useMemo(() => images.map((im) => im.id), [images]);
   const { width, window: window_, scrollerRef, lastScrollRef } = useVirtualWindow(
     rootRef,
-    images.length > 0
+    images.length > 0,
+    "library-timeline"
   );
   const layout = useMemo(
     () =>
@@ -185,12 +191,20 @@ export function VirtualTimeline({
   // Returning from the detail view: jump straight to the photo the user was
   // looking at. With the full layout known this works for ANY photo in the
   // library - including ones far beyond where scrolling had reached before.
+  // Returning from anywhere else (Albums, Settings): back to where the grid
+  // was scrolled to when it was left. The scroller is only known once the
+  // layout is (useVirtualWindow measures in an effect), hence `ready`.
+  useScrollMemory(scrollerRef, scrollKey, { restore: false, ready: layout !== null });
   const restoredRef = useRef(false);
   useEffect(() => {
     if (restoredRef.current || !layout || !scrollerRef.current || images.length === 0) return;
     restoredRef.current = true;
     const target = peekLastViewedTarget();
-    if (!target) return;
+    if (!target) {
+      const top = readScroll(scrollKey);
+      if (top !== undefined && top > 0) scrollerRef.current.scrollTop = top;
+      return;
+    }
     clearLastViewedImage();
     for (const s of layout.sections) {
       for (const r of s.rows) {

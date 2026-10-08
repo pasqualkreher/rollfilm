@@ -101,7 +101,7 @@ function usable(stored: ExportOptions): ExportOptions {
 }
 
 // One export dialog for both entry points: the photo page passes a single id,
-// the Selects toolbar the whole selection. Same options either way - a
+// the grids' context menu the whole selection. Same options either way - a
 // download is a plain file for one photo and a zip for several, a folder
 // export writes the files side by side. Every row is always there (one that
 // doesn't apply is disabled), so nothing moves as the options change.

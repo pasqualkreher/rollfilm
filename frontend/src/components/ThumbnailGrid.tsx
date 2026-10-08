@@ -6,7 +6,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
 import { COLOR_HEX } from "./ColorLabelPicker";
@@ -26,6 +26,7 @@ import {
   watchNearViewport,
 } from "../utils/preload";
 import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
+import { readScroll, useScrollMemory } from "../utils/scrollMemory";
 import { isSelectClick } from "../utils/selection";
 import { onlySelected, revealInScroller, useGridArrowKeys } from "../utils/gridKeys";
 import { onThumbNudge } from "../utils/thumbNudge";
@@ -776,10 +777,25 @@ export function ThumbnailGrid({
     },
   });
 
+  // Two ways back into a grid, both land where the user was: from the photo
+  // view, on the photo that was open (the marker in lastViewed); from another
+  // area, at the remembered scroll offset (scrollMemory). Both are applied
+  // under .grid-restoring, so the top of the grid never flashes first.
+  const location = useLocation();
+  const scrollKey = location.pathname + location.search;
   const pendingScrollId = useRef<string | null>(peekLastViewedImage());
-  const fadesIn = useRef(pendingScrollId.current !== null);
-  const [restoring, setRestoring] = useState(pendingScrollId.current !== null);
+  const pendingScrollTop = useRef<number | null>(
+    pendingScrollId.current === null ? readScroll(scrollKey) ?? null : null
+  );
+  const fadesIn = useRef(pendingScrollId.current !== null || pendingScrollTop.current !== null);
+  const [restoring, setRestoring] = useState(fadesIn.current);
   const hasImages = images.length > 0;
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    scrollerRef.current =
+      (rootRef.current?.closest(".page-scroll") ?? rootRef.current?.closest(".page")) as HTMLElement | null;
+  });
+  useScrollMemory(scrollerRef, scrollKey, { restore: false, ready: hasImages });
   useLayoutEffect(() => {
     if (!restoring) return;
     // Still waiting for the photos themselves; nothing to scroll to yet.
@@ -789,6 +805,10 @@ export function ThumbnailGrid({
       pendingScrollId.current = null;
       clearLastViewedImage();
       target?.scrollIntoView({ block: "center" });
+    } else if (pendingScrollTop.current !== null) {
+      const top = pendingScrollTop.current;
+      pendingScrollTop.current = null;
+      if (scrollerRef.current && top > 0) scrollerRef.current.scrollTop = top;
     }
     // Next frame, so the browser has the grid at opacity 0 in its "before"
     // state and the class removal actually transitions instead of snapping.

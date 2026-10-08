@@ -82,11 +82,11 @@ Three quiet skins, each in light and dark, with a switch that can follow the sys
 | | Highlights |
 | :--- | :--- |
 | **Import** | Staged import wizard with a light table, one start dialog (copy the card or leave the photos in place, with an optional backup folder), sessions that stay open until you end them, RAW+JPEG pairing, byte-identical duplicate detection, EXIF and lens data, reverse geocoding |
-| **Organize** | Albums, smart albums, hierarchical tags (`Travel/Italy/Rome`) with bulk tagging, star ratings, color labels, selects/picks, per-photo notes, trash with retention, a right-click menu on every photo, chips that say which albums and canvases a photo is in |
+| **Organize** | Albums, smart albums, hierarchical tags (`Travel/Italy/Rome`) with bulk tagging, star ratings, color labels, picks, per-photo notes, trash with retention, a right-click menu on every photo, chips that say which albums and canvases a photo is in |
 | **Portable** | Stars, labels, keywords and captions from Lightroom, Bridge, darktable or digiKam come in on import, from the file or its `.xmp` sidecar; optional sidecars beside your originals carry them out again; the tag tree moves as a keyword list |
 | **Search** | Local semantic search, image-to-image similarity, gear filters that cross-filter each other, map, exact-scrolling timeline, statistics |
 | **Immich** | Three sync modes, background reconciliation every 60 s, album mirroring, durable deletion queue, optional RAW upload |
-| **Edit** *(experimental)* | Non-destructive, backend-rendered, lens correction from the camera's own data, twenty film simulations and 105 film stocks, masks with local AI subject selection, tone curves on the histogram, Kelvin white balance, luminance and color noise reduction, presets, auto develop learned from your own edits, virtual copies |
+| **Edit** *(experimental)* | Non-destructive, backend-rendered, lens correction from the camera's own data, twenty film simulations and 112 film stocks, masks with local AI subject selection, tone curves on the histogram, Kelvin white balance, luminance and color noise reduction, presets, auto develop learned from your own edits, virtual copies |
 | **Canvas** | Pages or one free sheet, A4/A3/Letter/square or any size in mm, drag, crop-in-frame, rotate, snap, captions, the editor docked beside the page, print view and lossless PDF export |
 | **Safety** | Originals never modified, renames survive Finder, backup and restore as one zip, external folders mounted read-only |
 
@@ -105,7 +105,7 @@ Three quiet skins, each in light and dark, with a switch that can follow the sys
 - **What the files already say comes along** — stars, colour labels, keywords (tree and all) and captions that Lightroom, Bridge, darktable or digiKam wrote into a photo, or into an `.xmp` sidecar beside it, are read on import; a sidecar wins over the file. Off in Settings if you'd rather start clean
 - **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
 - **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
-- Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a selects/picks workflow
+- Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a pick/reject workflow
 - **Tags with a tree** — `Travel/Italy/Rome` files Rome under Italy under Travel; the filter shows the tree and a tick on Travel finds everything under it; rename a parent and the branch follows. The tree exports and imports as the keyword list Lightroom, Bridge and digiKam use
 - **XMP sidecars, if you want them** — a switch in Settings keeps an `.xmp` beside each photo in the library with its stars, label, tags and note, so every other program reads them. The photo itself is never written to, and whatever another program keeps in the same sidecar stays
 - **Select without a mode** — Cmd/Ctrl-click or Shift-click the first photo and checkboxes appear on every tile; Cmd/Ctrl+A takes everything, Esc clears, E opens a single picked photo in the editor. A plain click still opens the photo
@@ -157,7 +157,7 @@ One of the highlights of the project: keep your library mirrored to an existing 
 
 A free design surface: place photos where you want them instead of where the grid puts them, then print or export the result.
 
-- **Make one from a selection** — pick photos in the Library, an album or Selects and choose *Add to… → canvas*; in merged view the RAW partner comes along. A canvas has its own photos, kept on a filmstrip along the bottom until you put them on the paper
+- **Make one from a selection** — pick photos in the Library or an album and choose *Add to… → canvas*; in merged view the RAW partner comes along. A canvas has its own photos, kept on a filmstrip along the bottom until you put them on the paper
 - **Two kinds of paper** — *Pages* is a run of sheets of one size, like a photo book, with a rail to add, copy and reorder pages; *Free canvas* is one endless sheet with an optional page guide so you can still design for print
 - **Any paper size** — A4, A3, US Letter, two squares, or a width and height in millimetres; separate side and top/bottom margins; a measuring grid that is never printed
 - **Laying out** — drag from the filmstrip, resize with locked or free proportions, rotate (Shift for 15° steps), *crop in frame* to move and zoom the picture inside its frame, a coloured border per photo, copy and paste settings between items, stack with bring-to-front / send-to-back, snapping to other items, page edges, centre lines and margins
@@ -165,7 +165,7 @@ A free design surface: place photos where you want them instead of where the gri
 - **Edit a photo on the page** — *Edit photo* docks the full editor beside the paper and develops a virtual copy, so each canvas can have its own version of a picture and the library original is never changed; masks are drawn on the frame itself
 - **Print view and export** — the paper alone, page by page, in a focus mode that takes the whole screen; export is a PDF at the exact page size with every photo lossless at full resolution and text as real text, or a single self-contained HTML file. Never a re-compressed JPEG
 - **It saves itself** — no Save button and no "discard changes?" question; every change is written a moment later, and undo/redo covers every step
-- **Focus mode** — F hides every bar; the paper stays editable and gets the whole window
+- **Focus mode** — F (or View → Focus, ⌘F) hides every bar; the paper stays editable and gets the whole window
 
 </details>
 
@@ -187,9 +187,9 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 - **Built to keep up** — while a slider is being dragged, only the pixels your screen can actually show are rendered (zoomed in, only the visible tile), so editing stays fluid even on 40MP RAWs
 - Edits are stored as values in the database; originals are never touched
 - **It saves itself** — no Save button: edits are written a moment after a slider comes to rest and again when you close. Small dots on sliders and sections show where the edits are
-- **Focus mode** — F hides the app's bars, P the panel, so the photo gets the whole window
+- **Focus mode** — F (or View → Focus, ⌘F, which works in every view) hides the app's bar, P the panel, so the photo gets the whole window
 - **Lens correction.** RAW files are corrected for distortion and vignetting from the data the camera stored (Fujifilm, Sony, OM System, Panasonic, DNG), with the Lensfun database for the rest. A switch and two strength sliders under Transform
-- **125 film looks** with a strength slider: twenty Fujifilm simulations, from Provia and Velvia to Classic Neg., Acros and Sepia, rendered from Fujifilm's own LUTs fed the colours they were made for (measured against Fujifilm's stills rendering, so greens are as deep as the camera's), the ones Fujifilm publishes no LUT for built on top of them, and 105 film stocks from four open sources (see [License](#license)) in sections — negative, cinema, slide, black & white (Tri-X, HP5, Delta, T-Max), instant and cross-processed film — that take the stock's colour and keep to the simulations' tone, so no look crushes the shadows. A Basic or AgX tone mapper keeps a look's colours
+- **132 film looks** with a strength slider: twenty Fujifilm simulations, from Provia and Velvia to Classic Neg., Acros and Sepia, rendered from Fujifilm's own LUTs fed the colours they were made for (measured against Fujifilm's stills rendering, so greens are as deep as the camera's), the ones Fujifilm publishes no LUT for built on top of them, and 112 film stocks from four open sources (see [License](#license)) in sections — negative, cinema, slide, black & white (Tri-X, HP5, Delta, T-Max), instant and cross-processed film — that take the stock's colour and keep to the simulations' tone, so no look crushes the shadows. A Basic or AgX tone mapper keeps a look's colours
 - **Noise reduction** in three sliders: luminance, luminance detail and colour
 - Exposure/contrast/highlights/shadows, white balance in Kelvin with presets for daylight, cloudy, shade, tungsten and fluorescent, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
 - **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives

@@ -63,8 +63,14 @@ declare global {
       isFullScreen?: () => Promise<boolean>;
       /** Fullscreen changes; returns the unsubscribe. Absent in older builds. */
       onFullScreen?: (callback: (on: boolean) => void) => () => void;
+      /** The page zoom factor (1 = actual size). Absent in older builds. */
+      getZoom?: () => Promise<number>;
+      /** Zoom changes; returns the unsubscribe. Absent in older builds. */
+      onZoom?: (callback: (factor: number) => void) => () => void;
       /** macOS: show/hide the traffic lights (focus mode). Absent in older builds. */
       setWindowButtonsVisible?: (visible: boolean) => Promise<void>;
+      /** View → Focus in the menu bar; returns the unsubscribe. Absent in older builds. */
+      onToggleFocus?: (callback: () => void) => () => void;
     };
   }
 }

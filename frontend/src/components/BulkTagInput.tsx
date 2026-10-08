@@ -32,7 +32,7 @@ export function BulkTagInput({ onAdd }: Props) {
   }
 
   return (
-    <form onSubmit={submit} className="bulk-tag-form" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+    <form onSubmit={submit} className="tag-form bulk-tag-form">
       <TagSuggestInput
         placeholder="Add tag to selection…"
         ariaLabel="Add tag to selection"
@@ -47,7 +47,7 @@ export function BulkTagInput({ onAdd }: Props) {
         invalid={!!error}
       />
       <button
-        className="btn"
+        className="tag-form-add"
         type="submit"
         disabled={!value.trim()}
         title="Add this tag to the selection"

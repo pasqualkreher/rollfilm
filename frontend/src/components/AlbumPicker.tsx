@@ -106,7 +106,7 @@ export function AlbumPicker({ onAdd, currentAlbumIds, onRemove, onResult, chipsO
       )}
       {noAlbums && (
         // The button already says "No albums yet"; this only adds the where.
-        <p className="album-picker-hint" style={{ color: "var(--text-muted)", fontSize: 12, margin: "6px 0 0" }}>
+        <p className="album-picker-hint" style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)", margin: "6px 0 0" }}>
           Create one on the Albums page.
         </p>
       )}

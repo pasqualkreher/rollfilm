@@ -4,7 +4,10 @@ import { api } from "../api/client";
 import { pairUnits } from "../utils/batchUnits";
 import { membershipWarning } from "../utils/deleteMessage";
 import { useAppDialogs } from "../components/AppDialogs";
-import { IconLandfill, IconRestore, IconTrash } from "../components/Icons";
+import { IconCheck, IconRestore, IconTrash, IconX } from "../components/Icons";
+import { Presence } from "../components/Presence";
+import { MOTION } from "../utils/usePresence";
+import { modKeyLabel, useSelectionKeys } from "../utils/selection";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import type { ImageOut } from "../api/types";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
@@ -23,7 +26,7 @@ export function Trash() {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const mergePairs = useMergePairs();
-  const { withBatches } = useWait();
+  const { withWait, withBatches } = useWait();
 
   const { data: trashed, isLoading } = useQuery({
     queryKey: ["trash"],
@@ -158,56 +161,107 @@ export function Trash() {
     }
   }
 
+  async function emptyTrash() {
+    if (!trashed || trashed.length === 0) return;
+    if (
+      !(await dialogs.confirm({
+        title: "Empty the Trash?",
+        message: `All ${trashed.length} photo(s) in the Trash are deleted permanently. The original files are deleted from your library. This cannot be undone.`,
+        confirmLabel: "Empty Trash",
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+    setActionError(null);
+    try {
+      await withWait("Emptying the Trash…", () => api.images.emptyTrash());
+      queryClient.setQueryData<ImageOut[]>(["trash"], []);
+      queryClient.invalidateQueries({ queryKey: ["image"] });
+    } catch (e) {
+      setActionError(`Emptying the Trash failed: ${(e as Error).message}`, { keep: true });
+    } finally {
+      refreshAfterChange();
+    }
+  }
+
+  function selectAll() {
+    setSelected(new Set(images.map((im) => im.id)));
+  }
+  function clearSelection() {
+    setSelected(new Set());
+    setLastIndex(null);
+  }
+
+  // Cmd/Ctrl+A, Esc and Delete work on the grid like they do in the library.
+  useSelectionKeys({
+    onSelectAll: selectAll,
+    onClear: clearSelection,
+    hasSelection: selected.size > 0,
+    onDelete: () => void deleteSelectedForever(),
+  });
+
+  const trashExplainer =
+    "Photos stay here until you restore or delete them." +
+    (trashSettings && trashSettings.retention_days > 0
+      ? ` Deleted automatically after ${trashSettings.retention_days} days (Settings).`
+      : "");
+
   return (
     <div className="page page-timeline">
-      <div className="filter-bar">
-        <strong className="trash-title">
-          <IconLandfill size={16} /> Trash
-        </strong>
-        <span style={{ color: "var(--text-muted)" }}>
-          Deleted photos stay here until you restore them or delete them permanently.
-          {trashSettings && trashSettings.retention_days > 0
-            ? ` Photos are deleted automatically after ${trashSettings.retention_days} days (change this in Settings).`
-            : ""}
+      <div className="filter-bar filter-bar--sticky">
+        {/* One muted line that gives way to the buttons when the window
+            narrows; the full sentence stays in the tooltip. It also takes the
+            free space, which pushes the actions to the right edge. */}
+        <span className="trash-explainer" title={trashExplainer}>
+          {trashExplainer}
         </span>
-        <span style={{ flex: 1 }} />
-        <div className="control-group" style={{ flexWrap: "nowrap" }}>
-          <button
-            className="btn"
-            onClick={() => setSelected(new Set(images.map((im) => im.id)))}
-            disabled={images.length === 0}
-          >
-            Select all
-          </button>
-          <button className="btn" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
-            Clear selection
-          </button>
-          <button
-            className="btn btn-sm"
-            onClick={restoreSelected}
-            disabled={selected.size === 0}
-            title="Restore the selected photos to the library"
-            aria-label="Restore the selected photos to the library"
-          >
-            <IconRestore size={15} />
-          </button>
+        <div className="control-group control-group--actions">
           <button
             className="btn btn-sm quiet-danger"
-            onClick={deleteSelectedForever}
-            disabled={selected.size === 0}
-            title="Delete the selected photos permanently"
-            aria-label="Delete the selected photos permanently"
+            onClick={emptyTrash}
+            disabled={!trashed || trashed.length === 0}
+            title="Delete every photo in the Trash permanently"
           >
-            <IconTrash size={15} />
+            Empty Trash
           </button>
         </div>
       </div>
+      {/* The selection's own bar, risen from the bottom edge like the
+          library's: it only exists while something is picked. */}
+      <Presence open={selected.size > 0} ms={MOTION.bar}>
+        {selected.size > 0 && (
+          <div className="filter-bar action-bar--bottom">
+            <div className="control-group">
+              <span>{selected.size} selected</span>
+              <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
+                <span className="btn-label"><IconCheck size={13} /> Select all</span>
+              </button>
+              <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
+                <span className="btn-label"><IconX size={13} /> Clear selection</span>
+              </button>
+            </div>
+            <span className="bar-sep" aria-hidden />
+            <div className="control-group">
+              <button className="btn" onClick={restoreSelected} title="Restore the selected photos to the library">
+                <span className="btn-label"><IconRestore size={13} /> Restore</span>
+              </button>
+            </div>
+            <button
+              className="btn btn-sm quiet-danger"
+              style={{ marginLeft: "auto" }}
+              onClick={deleteSelectedForever}
+              title="Delete the selected photos permanently (Delete)"
+              aria-label="Delete the selected photos permanently"
+            >
+              <IconTrash size={15} />
+            </button>
+          </div>
+        )}
+      </Presence>
       <div className="page-scroll">
         {actionError && (
-          <p className="status-note status-note--error" style={{ marginBottom: 16 }}>{actionError}</p>
-        )}
-        {selected.size > 0 && (
-          <p style={{ color: "var(--text-muted)", marginBottom: 16 }}>{selected.size} selected</p>
+          <p className="status-note status-note--error page-note">{actionError}</p>
         )}
         {isLoading ? (
           <LoadingState />

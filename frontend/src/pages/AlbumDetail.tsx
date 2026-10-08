@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useSessionState } from "../utils/useSessionState";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,11 +16,12 @@ import { AlbumNameField } from "../components/AlbumNameField";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { EditPicker } from "../components/EditPicker";
-import { IconCloudUp, IconRename, IconTrash } from "../components/Icons";
+import { IconCheck, IconCloudUp, IconMinus, IconRename, IconSort, IconTrash, IconX } from "../components/Icons";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
+import { Dropdown } from "../components/Dropdown";
+import { SORT_OPTIONS, sortImages, type SortKey } from "../utils/sortOrder";
 import { loadPresets, presetAdjustments } from "../utils/presets";
-import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
@@ -45,13 +46,24 @@ export function AlbumDetail() {
   const [selectedTags, setSelectedTags] = useSessionState<string[]>(`album:${id}:selectedTags`, []);
   const [dateFrom, setDateFrom] = useSessionState<string | null>(`album:${id}:dateFrom`, null);
   const [dateTo, setDateTo] = useSessionState<string | null>(`album:${id}:dateTo`, null);
+  // The same gear filters and orders as the Library, so an album can be
+  // narrowed and ordered the way the whole library can. Only the album/canvas
+  // picker is left out: this page is one album already.
+  const [camera, setCamera] = useSessionState<string>(`album:${id}:camera`, "");
+  const [lens, setLens] = useSessionState<string>(`album:${id}:lens`, "");
+  const [focalMin, setFocalMin] = useSessionState<string>(`album:${id}:focalMin`, "");
+  const [focalMax, setFocalMax] = useSessionState<string>(`album:${id}:focalMax`, "");
+  const setFocalRange = (min: string, max: string) => {
+    setFocalMin(min);
+    setFocalMax(max);
+  };
+  const [sort, setSort] = useSessionState<SortKey>(`album:${id}:sort`, "newest");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const { withBatches } = useWait();
   const navigate = useNavigate();
-  const selects = useSelects();
   // The album always collapses each RAW+JPEG pair to one card (see
   // orderedImages), so in the combined view the pair-aware bulk/remove helpers
   // below must treat the shown JPEG as standing for its hidden RAW partner.
@@ -132,7 +144,20 @@ export function AlbumDetail() {
     tags: selectedTags.length ? selectedTags : undefined,
     date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
     date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
+    camera_model: camera || undefined,
+    lens_model: lens || undefined,
+    focal_min: focalMin || undefined,
+    focal_max: focalMax || undefined,
   };
+
+  // Camera/lens/focal dropdown options, cross-filtered against the album and
+  // the other filters, like the Library's. Keyed under "facets" so
+  // invalidateQueries(["facets"]) catches this variant too.
+  const { data: facets } = useQuery({
+    queryKey: ["facets", filters],
+    queryFn: () => api.images.facets(filters),
+    enabled: !!id,
+  });
 
   const { data: images, isLoading } = useQuery({
     queryKey: ["images", { ...filters, q }],
@@ -150,7 +175,13 @@ export function AlbumDetail() {
   // Default view shows one card per shot: the JPEG of each RAW+JPEG pair, and a
   // lone RAW only when it has no JPEG sibling. The JPEG/RAW view-mode buttons
   // still give a flat, type-filtered list when the user wants just one kind.
-  const orderedImages = viewMode === "combined" ? collapsePairs(images ?? []) : images ?? [];
+  // The chosen order is made before the pairs are collapsed, so a pair's
+  // shown card lands where its JPEG sorts. Search results keep their ranking.
+  const sortedImages = useMemo(() => {
+    const list = images ?? [];
+    return q ? list : sortImages(list, sort);
+  }, [images, q, sort]);
+  const orderedImages = viewMode === "combined" ? collapsePairs(sortedImages) : sortedImages;
 
   const sharedMeta = selectionSharedMeta(images ?? [], selected);
 
@@ -350,7 +381,7 @@ export function AlbumDetail() {
 
   function reportAddTo({ kind, name, ok }: AddToResult) {
     const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
-    const what = kind === "canvas" ? `canvas “${name}”` : kind === "selects" ? "selects" : `“${name}”`;
+    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
     setAlbumMsg(
       ok
         ? { text: `Added ${takeAddedCount()} photo(s) to ${what}.${cancelNote}`, error: false }
@@ -505,79 +536,81 @@ export function AlbumDetail() {
     }
   }
 
-  /* The album's own row - Back, name, delete - lives UNDER the content in
-     both modes, the same as the editor's and the photo view's stage rows: the
-     name centred, Back flush left and the destructive action flush right,
-     both out of the row's flow so the centre stays centred. */
-  const albumBar = (
-    <h2 className="section-title album-bottom-bar">
-      {/* No Back of its own: the top bar's Back leads to wherever the album
-          was opened from. */}
-      {album ? (
-        /* The album's name is the user's own - the pencil next to it renames
-           it right here. */
-        <>
-          <AlbumNameField
-            albumId={album.id}
-            name={album.name}
-            editing={renaming}
-            onEditingChange={setRenaming}
-            inputClassName="album-title-input"
-          />
-          {!renaming && (
-            <button
-              className="btn btn-sm ghost album-rename-btn"
-              title="Rename this album"
-              aria-label="Rename this album"
-              onClick={() => setRenaming(true)}
-            >
-              <IconRename size={14} />
-            </button>
-          )}
-        </>
-      ) : (
-        "Album"
+  /* The album's name heads the bar, like a canvas's name heads its bar; the
+     count sits next to it and the pencil renames in place. Immich sync and
+     Delete go in the bar's action group at the right. */
+  const albumTitle = album ? (
+    <>
+      <AlbumNameField
+        albumId={album.id}
+        name={album.name}
+        editing={renaming}
+        onEditingChange={setRenaming}
+        className="bar-title-name"
+        inputClassName="album-title-input"
+      />
+      {!renaming && (
+        <button
+          className="btn btn-sm ghost album-rename-btn"
+          title="Rename this album"
+          aria-label="Rename this album"
+          onClick={() => setRenaming(true)}
+        >
+          <IconRename size={12} />
+        </button>
       )}
-      {album && <span className="count-pill">{album.image_count} photos</span>}
-      {album && immichConfigured && immich?.sync_mode === "selective" && (
+      <span className="count-pill">{album.image_count} photos</span>
+    </>
+  ) : (
+    "Album"
+  );
+
+  const albumActions = album && (
+    <>
+      {immichConfigured && immich?.sync_mode === "selective" && (
         <ImmichSyncToggle
           small
           on={album.immich_sync}
           onToggle={toggleAlbumImmichSync}
-          title="Keep this album in sync with Immich. RAW files only when “Also upload RAW files” is on in Settings."
+          title="Keep this album in sync with Immich. RAW files only if enabled in Settings."
         />
       )}
-      {album && (
-        <button
-          className="btn btn-sm quiet-danger album-bottom-delete"
-          title="Delete this album. Its photos stay in the library."
-          aria-label="Delete this album"
-          onClick={async () => {
-            if (
-              !(await dialogs.confirm({
-                title: `Delete album “${album.name}”?`,
-                message: `Its ${album.image_count} photo(s) stay in your library.`,
-                confirmLabel: "Delete album",
-                danger: true,
-              }))
-            ) {
-              return;
-            }
-            await api.albums.remove(album.id);
-            queryClient.invalidateQueries({ queryKey: ["albums"] });
-            navigate("/albums");
-          }}
-        >
-          <IconTrash size={14} />
-        </button>
-      )}
-    </h2>
+    </>
+  );
+
+  /* Delete stands alone at the far right of the bar, away from the
+     everyday controls. */
+  const albumDelete = album && (
+    <button
+      className="btn btn-sm quiet-danger"
+      title="Delete this album. Its photos stay in the library."
+      aria-label="Delete this album"
+      onClick={async () => {
+        if (
+          !(await dialogs.confirm({
+            title: `Delete album “${album.name}”?`,
+            message: `Its ${album.image_count} photo(s) stay in your library.`,
+            confirmLabel: "Delete album",
+            danger: true,
+          }))
+        ) {
+          return;
+        }
+        await api.albums.remove(album.id);
+        queryClient.invalidateQueries({ queryKey: ["albums"] });
+        navigate("/albums");
+      }}
+    >
+      <IconTrash size={14} />
+    </button>
   );
 
   return (
     <div className="page page-timeline">
       {pairDeleteDialog}
       <PhotoFilters
+        title={albumTitle}
+        trailing={albumDelete}
         viewMode={viewMode}
         onViewMode={setViewMode}
         showMerge={false}
@@ -588,23 +621,33 @@ export function AlbumDetail() {
         allTags={allTags}
         selectedTags={selectedTags}
         onTags={setSelectedTags}
+        cameras={facets?.cameras}
+        camera={camera}
+        onCamera={setCamera}
+        lenses={facets?.lenses}
+        lens={lens}
+        onLens={setLens}
+        focalLengths={facets?.focal_lengths}
+        focalMin={focalMin}
+        focalMax={focalMax}
+        onFocalRange={setFocalRange}
         dateFrom={dateFrom}
         dateTo={dateTo}
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
+        sort={
+          <Dropdown
+            value={q ? "relevance" : sort}
+            onChange={(v) => setSort(v as SortKey)}
+            disabled={Boolean(q)}
+            title={q ? "Search results are ordered by how well they match" : "The order the photos are shown in"}
+            ariaLabel="Sort order"
+            icon={<IconSort size={13} />}
+            options={q ? [{ value: "relevance", label: "Best match", short: "Relevance" }] : SORT_OPTIONS}
+          />
+        }
       >
-        {/* Both only once a photo is picked (Cmd/Ctrl-click) - the toolbar
-            stays clean while nothing is selected; Cmd/Ctrl+A works anytime. */}
-        {hasSelection && (
-          <>
-            <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
-              Select all
-            </button>
-            <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
-              Clear selection
-            </button>
-          </>
-        )}
+        {albumActions}
       </PhotoFilters>
             <div className="page-scroll">
       {q && (
@@ -614,7 +657,7 @@ export function AlbumDetail() {
             {!isLoading && images ? ` (${images.length})` : ""}
           </span>
           <button
-            className="btn ghost"
+            className="btn btn-sm ghost"
             onClick={() => {
               const next = new URLSearchParams(searchParams);
               next.delete("q");
@@ -632,6 +675,17 @@ export function AlbumDetail() {
           <div className="filter-bar action-bar--bottom">
             <div className="control-group">
               <span>{selected.size} selected</span>
+              <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
+                <span className="btn-label"><IconCheck size={13} /> Select all</span>
+              </button>
+              <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
+                <span className="btn-label"><IconX size={13} /> Clear selection</span>
+              </button>
+            </div>
+            {/* The selection itself on the left, what is done to it on the
+                right of the line. */}
+            <span className="bar-sep" aria-hidden />
+            <div className="control-group">
               <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
               <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
             </div>
@@ -640,20 +694,19 @@ export function AlbumDetail() {
               <AddToPicker
                 onAddToAlbum={addSelectedToAlbum}
                 onAddToCanvas={addSelectedToCanvas}
-                onAddToSelects={() => selects.add(Array.from(selected))}
                 onResult={reportAddTo}
               />
             </div>
             {/* Hidden in full sync mode - everything uploads automatically there.
                 The whole group goes, not just the button, so no empty gap is
-                left now that "Add to selects" lives in the picker above. */}
+                left. */}
             {immichConfigured && immich?.sync_mode !== "full" && (
               <div className="control-group">
                 <button
                   className="btn"
                   onClick={addSelectedToImmich}
                   disabled={immichBusy}
-                  title="Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
+                  title="Upload the selected photos to your Immich server. RAW files only if enabled in Settings."
                 >
                   <IconCloudUp size={13} /> {immichBusy ? "Uploading to Immich…" : "Add to Immich"}
                 </button>
@@ -667,7 +720,7 @@ export function AlbumDetail() {
               />
               <ResetMenu count={selected.size} onReset={resetSelected} />
               <button className="btn" onClick={removeSelectedFromAlbum}>
-                Remove from this album
+                <span className="btn-label"><IconMinus size={13} /> Remove from this album</span>
               </button>
             </div>
             <button
@@ -705,7 +758,6 @@ export function AlbumDetail() {
         />
       )}
       </div>
-      {albumBar}
     </div>
   );
 }

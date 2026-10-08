@@ -118,6 +118,8 @@ CLUTS = {
     "polaroid_690": "instant_pro/polaroid_690",
     "polaroid_px_70": "instant_consumer/polaroid_px-70",
     "polaroid_px_680": "instant_consumer/polaroid_px-680",
+    "polaroid_px_100uv_cold": "instant_consumer/polaroid_px-100uv+_cold",
+    "polaroid_px_100uv_warm": "instant_consumer/polaroid_px-100uv+_warm",
     "polaroid_time_zero": "instant_consumer/polaroid_time_zero_(expired)",
     "polaroid_polachrome": "colorslide/polaroid_polachrome",
     "fuji_fp_100c": "instant_pro/fuji_fp-100c",

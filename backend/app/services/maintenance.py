@@ -31,7 +31,6 @@ from app.services.exif import capture_date_from_filename, new_helper, read_exif
 from app.services.filesystem import VIRTUAL_PATH_MARKER, resolve_image_path
 from app.services.hashing import sha256_file
 from app.services.membership_tags import sync_membership_tags
-from app.services.settings_store import get_selects, set_selects
 from app.services.raw import classify_file_type, raw_dimensions
 from app.services import lens_profile
 from app.services.thumbnails import (
@@ -847,8 +846,6 @@ def build_backup_zip(db: Session, owner_id: int) -> Path:
         "album_images": [
             {"album_id": ai.album_id, "image_id": ai.image_id, "position": ai.position} for ai in album_images
         ],
-        # The Selects tray, as far as it holds photos this backup carries.
-        "selects": [image_id for image_id in get_selects(db) if image_id in backed_up],
     }
 
     fd, tmp_path_str = tempfile.mkstemp(suffix=".zip")
@@ -922,10 +919,6 @@ def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dic
 
         # Restored album members get their "album" / "album: …" tags back.
         sync_membership_tags(db, owner_id)
-        # The tray as the backup had it (none in an older backup) - never the
-        # one of the library that was just replaced.
-        restored_ids = {image_data["id"] for image_data in manifest["images"]}
-        set_selects(db, [image_id for image_id in manifest.get("selects", []) if image_id in restored_ids])
         db.commit()
 
         restored_images = db.query(Image).filter(Image.owner_id == owner_id).all()

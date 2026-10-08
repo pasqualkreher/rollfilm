@@ -54,9 +54,8 @@ export function LibrarySetup() {
         />
         <h1 className="setup-title">Welcome to Rollfilm</h1>
         <p className="setup-lead">
-          Choose a folder for your photo library. The database and thumbnails are stored in a
-          hidden <code>.photomanager</code> folder inside it, so the library can be moved as a
-          whole.
+          Choose a folder for your photo library. Database and thumbnails go into a hidden{" "}
+          <code>.photomanager</code> folder inside it.
         </p>
 
         {busy ? (
@@ -73,9 +72,8 @@ export function LibrarySetup() {
         {error && <p className="setup-error">{error}</p>}
 
         <p className="setup-note">
-          You can have more than one library and switch between them in Settings. If the folder is
-          synced to the cloud (iCloud, Dropbox, Nextcloud), exclude <code>.photomanager</code> from
-          syncing.
+          You can switch libraries later in Settings. If the folder is cloud-synced, exclude{" "}
+          <code>.photomanager</code>.
         </p>
       </div>
     </div>

@@ -12,7 +12,7 @@ import type { ImageOut } from "../api/types";
 
 // Fullscreen slideshow over the set of photos being browsed - started from the
 // photo view's toolbar, so it plays whatever the grid you came from was
-// showing (the Library's filtered set, an album, the selects...). Auto-advances
+// showing (the Library's filtered set, an album...). Auto-advances
 // on a fixed pace and wraps around at the end; Space pauses, the arrow keys
 // step manually, Esc (or leaving fullscreen) ends it. The controls fade out
 // while the show is running and come back on a mouse move or a pause.

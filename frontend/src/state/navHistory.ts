@@ -68,6 +68,28 @@ export function NavHistoryTracker() {
   return null;
 }
 
+// Where a search was started from. Typing into the search field pushes the
+// results page on top of wherever the user was (an album, a photo); clearing
+// the search should then step back there, not land on the Library. Position
+// and path are both kept: the position alone could have been reused by a
+// later push that cut the history.
+let searchOrigin: { idx: number; path: string } | null = null;
+
+export function rememberSearchOrigin() {
+  const idx = currentIdx();
+  searchOrigin = { idx, path: state.paths[idx] ?? window.location.pathname };
+}
+
+// How many steps back the origin lies from here - 0 when it is unknown, not
+// behind us any more, or no longer the entry it was.
+export function stepsBackToSearchOrigin(): number {
+  if (!searchOrigin) return 0;
+  const now = currentIdx();
+  if (now <= searchOrigin.idx) return 0;
+  if (state.paths[searchOrigin.idx] !== searchOrigin.path) return 0;
+  return now - searchOrigin.idx;
+}
+
 export function useNavHistory() {
   const s = useSyncExternalStore(subscribe, () => state);
   return {

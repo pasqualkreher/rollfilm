@@ -15,21 +15,21 @@ const TOUR_TEXT: Record<string, string> = {
   Appearance:
     "Choose a color theme or follow your system's light/dark mode. You can change this anytime.",
   "Library folder":
-    "The folder that holds your photos. Choose a different folder to switch libraries, for example one for work and one for private photos.",
+    "The folder with your photos. Pick another folder to switch libraries.",
   "Library data":
-    "The database and thumbnails live in a hidden .photomanager folder inside the library folder, so the library can be moved as a whole. Exclude it from cloud sync.",
+    "Database and thumbnails live in a hidden .photomanager folder inside the library. Exclude it from cloud sync.",
   "Immich integration":
     "Optional: connect an Immich photo server to upload photos and albums. Skip this if you don't use Immich.",
   "RAW files":
     "How unedited RAW photos look while browsing: brightened automatically (default) or unprocessed and dark, as in the editor.",
   "Photo editor":
-    "Save copy in the editor creates a new edited JPEG at full quality in one click. Turn this on to be asked for quality and size each time. Working resolution sets how sharp the preview renders while you adjust.",
+    "Save copy makes a new edited JPEG in one click. Turn this on to choose quality and size each time.",
   "Auto develop":
     "Adds an Auto button to the editor that suggests settings based on your own saved edits. The more you edit, the better it gets.",
   "Smart albums":
     "Automatic collections on the Albums page: similar photos, places, countries and time periods. Choose which ones to show.",
   Trash:
-    "Deleted photos stay in the Trash and can be restored. Choose how long they are kept before they are deleted permanently (0 = forever).",
+    "Deleted photos can be restored from the Trash. Set how long they are kept; 0 means forever.",
   Tags: "Your tags and how many photos use each. Delete tags you no longer need.",
   "Library maintenance":
     "Repair tools for when the library looks out of sync. They clean up stale entries and regenerate missing thumbnails.",

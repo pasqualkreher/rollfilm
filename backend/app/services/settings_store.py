@@ -176,30 +176,6 @@ def set_setting(db: Session, key: str, value: str) -> None:
         row.value = value
 
 
-# The Selects tray: the ids of the photos gathered there, in the order they
-# were added, as a JSON list. In the library's own database, so the tray
-# survives a restart and belongs to this library - a different library folder
-# has its own.
-SELECTS = "selects"
-
-
-def get_selects(db: Session) -> list[str]:
-    """The stored Selects ids, in order, each once. Anything unreadable counts
-    as an empty tray. Not checked against the photos - see routes/selects.py."""
-    raw = get_setting(db, SELECTS)
-    try:
-        data = json.loads(raw) if raw else []
-    except ValueError:
-        data = []
-    if not isinstance(data, list):
-        return []
-    return list(dict.fromkeys(x for x in data if isinstance(x, str)))
-
-
-def set_selects(db: Session, ids: list[str]) -> None:
-    set_setting(db, SELECTS, json.dumps(list(dict.fromkeys(ids))))
-
-
 def get_export_settings(db: Session) -> dict:
     """The stored export presets and last-used options. Anything unreadable
     counts as nothing stored - a preset list is never worth failing over."""

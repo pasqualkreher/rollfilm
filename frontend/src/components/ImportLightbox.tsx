@@ -240,7 +240,7 @@ export function ImportLightbox({
               {showImmichSync && !isDuplicate ? (
                 <label
                   className="lightbox-import-toggle"
-                  title="Upload this photo to Immich right after import. RAW files only when “Also upload RAW files” is on in Settings."
+                  title="Upload this photo to Immich right after import. RAW files only if enabled in Settings."
                 >
                   <input
                     type="checkbox"
@@ -379,7 +379,7 @@ export function ImportLightbox({
               <IconChevronRight size={20} />
             </button>
           </div>
-          <div className="detail-image-toolbar">
+          <div className="filter-bar filter-bar--stage detail-image-toolbar">
             {/* Back sits with the other stage controls under the photo (same as
                 the library's photo view), labelled rather than a bare arrow. */}
             <button

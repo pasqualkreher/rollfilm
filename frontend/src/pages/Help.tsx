@@ -14,7 +14,9 @@
 // subjects (the editor, masks, shortcuts) are their own topics rather than
 // long ones.
 
-import { useRef, useState } from "react";
+import { useRef } from "react";
+import { useSessionState } from "../utils/useSessionState";
+import { useScrollMemory } from "../utils/scrollMemory";
 import type { ReactNode } from "react";
 
 // ---- Building blocks so every topic reads the same way --------------------
@@ -165,10 +167,10 @@ const CHAPTERS: Chapter[] = [
                 masks — the original file is never written to, so nothing you do here can go wrong.
               </li>
               <li>
-                <strong>Hand them out.</strong> Collect the ones you want in <strong>Selects</strong>
-                , then <strong>Export…</strong> — as JPEGs with your edits baked in, or as the
-                original files 1:1. Or lay them out by hand on a <strong>Canvas</strong> and print
-                the pages.
+                <strong>Hand them out.</strong> Tick the ones you want, right-click and{" "}
+                <strong>Export…</strong> — as JPEGs with your edits baked in, or as the original
+                files 1:1. Or lay them out by hand on a <strong>Canvas</strong> and print the
+                pages.
               </li>
             </ol>
             <Tip title="Want a tour instead?">
@@ -487,8 +489,10 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>Docking the filters:</strong> the pin in the menu's top-right corner keeps
-                the filters open as a row of the bar, so they stay put while you cull instead of
-                closing on the next click — in the Library, an album and the import review alike.
+                the filters open as a second row of the bar, so they stay put while you cull
+                instead of closing on the next click — the same row in the Library, an album and
+                the import review alike. The pin is only offered while the window is wide enough
+                for the whole row; narrower, the filters fold back into the menu.
               </li>
               <li>
                 <strong>File type</strong> (in the Filter menu): show RAW + JPEG, only JPEGs, or only RAWs. With{" "}
@@ -539,8 +543,8 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>The bar at the bottom acts on all of them:</strong> set stars or a color
-                label, add a tag, <strong>Add to…</strong> an album, a canvas or Selects (with "+
-                New" right in the list), send to Immich, <strong>Edit…</strong> the whole
+                label, add a tag, <strong>Add to…</strong> an album or a canvas (with "+ New"
+                right in the list), send to Immich, <strong>Edit…</strong> the whole
                 selection (apply auto edit, or apply one of your saved presets), delete.
               </li>
               <li>
@@ -1044,10 +1048,14 @@ const CHAPTERS: Chapter[] = [
               Kodachrome 64, Ektachrome 100, Provia 100F, Velvia 100 and Double-X) are derived
               from spektrafilm by Andrea Volpato
               (github.com/andreavolpato/spektrafilm), a spectral simulation of film, development
-              and print. Seven more (Vericolor III, Aerocolor IV, Fuji Pro 160S, Natura 1600,
-              Eterna 500 and 500 Vivid, Instax Color) are derived from spectral_film_lut by Jan
-              Lohse (github.com/JanLohse/spectral_film_lut), a simulation from the stocks'
-              datasheets, licensed MIT. The others are derived from the RawTherapee Film
+              and print. Twelve more (Vericolor III, Aerocolor IV, Fuji Pro 160S, Natura 1600,
+              Eterna 500 and 500 Vivid, Instax Color, CineStill 800T and the Eastman cine
+              negatives 5247 II, EXR 100T and 200T and Vision 320T on the print film of their
+              years) are derived from spectral_film_lut by Jan Lohse
+              (github.com/JanLohse/spectral_film_lut), a simulation from the stocks'
+              datasheets, licensed MIT; CineStill 800T is Vision3 500T printed on paper, the
+              way its C-41 development has it, and its halation is the Halation slider's. The
+              others are derived from the RawTherapee Film
               Simulation Collection by Pat David, Pavlov Dmitry and Michael Ezra, which
               approximates each stock on the finished picture; it and spektrafilm are licensed
               CC BY-SA 4.0. ColorPlus 200, Agfa Vista 100 and 400, Ektachrome 100 G and Fortia
@@ -1220,8 +1228,8 @@ const CHAPTERS: Chapter[] = [
         title: "Physical and virtual copies",
         where: (
           <>
-            Editor → Save copy · Photo view → Save copy · Right-click a photo in the Library, an
-            album or Selects
+            Editor → Save copy · Photo view → Save copy · Right-click a photo in the Library or an
+            album
           </>
         ),
         lead: (
@@ -1390,7 +1398,7 @@ const CHAPTERS: Chapter[] = [
             <ul>
               <li>
                 <strong>Make one</strong> on the Canvas page (a name and <em>Create canvas</em>), or
-                straight from a selection: pick photos in the Library, an album or Selects, open{" "}
+                straight from a selection: pick photos in the Library or an album, open{" "}
                 <strong>Add to…</strong> in the bulk bar and choose a canvas or{" "}
                 <em>+ New canvas…</em>. A single photo's page has the same picker. In merged view
                 the RAW partner comes along, so the canvas holds the whole shot.
@@ -1665,28 +1673,29 @@ const CHAPTERS: Chapter[] = [
       },
       {
         id: "canvas-export",
-        title: "Print view and export",
-        where: <>Toolbar → Print view (<kbd>P</kbd>) · Export</>,
+        title: "Canvas view and export",
+        where: <>Editor → <kbd>E</kbd> or <kbd>Esc</kbd> · Export</>,
         lead: (
           <>
-            Print view shows only the paper, as it will print. Export writes a PDF at the exact
-            page size with every photo lossless at full resolution.
+            The canvas view shows only the paper, as it will print. Export writes a PDF at the
+            exact page size with every photo lossless at full resolution.
           </>
         ),
         body: (
           <>
-            <h4>Print view</h4>
+            <h4>Canvas view</h4>
             <ul>
               <li>
                 <kbd>←</kbd> / <kbd>→</kbd> turn the pages, scroll to zoom, drag to move,{" "}
-                <kbd>0</kbd> fits again, <kbd>Esc</kbd> comes back. The controls fade while you look
-                and return on any movement.
+                <kbd>0</kbd> fits again, <kbd>E</kbd> opens the editor again. The controls fade
+                while you look and return on any movement.
               </li>
               <li>
-                <strong>Focus</strong> (<kbd>F</kbd>) takes the whole screen: only the pages on
-                black, nothing else; <kbd>F</kbd> or <kbd>Esc</kbd> ends it. The canvas editor and
-                the photo editor have the same <kbd>F</kbd>: every bar put away, the work area
-                stays.
+                <strong>Focus</strong> (<kbd>F</kbd>, or View → Focus, <kbd>⌘F</kbd>) takes the
+                whole screen: only the pages on black, nothing else; <kbd>F</kbd> or <kbd>Esc</kbd>{" "}
+                ends it. Focus mode is one switch for the whole app: in every other view it puts
+                the app's top bar away and leaves the rest - in the canvas editor and the photo
+                editor every bar goes and the work area stays.
               </li>
             </ul>
             <h4>Export</h4>
@@ -1716,60 +1725,14 @@ const CHAPTERS: Chapter[] = [
   {
     id: "share",
     label: "Getting photos out",
-    blurb: "Collect the ones that are finished, then export them as files or push them to an Immich server.",
+    blurb: "Export the finished ones as files or push them to an Immich server.",
     topics: [
-      {
-        id: "selects",
-        title: "Selects — your shortlist",
-        where: <>Selects (the nav shows a live count)</>,
-        lead: (
-          <>
-            A tray, not an album: while you browse, drop in the shots you want to hand out, then
-            deal with all of them in one go.
-          </>
-        ),
-        body: (
-          <>
-            <p>
-              Add photos from the Library's bulk bar ("Add to…" → Selects), from inside an album, or
-              on a photo's own page. Nothing about the photos changes by being in there. The tray is
-              kept with the library: it is still there when you open the app again, and it goes
-              into the backup.
-            </p>
-            <ul>
-              <li>
-                <strong>Review the set.</strong> Everything starts ticked; untick what should stay
-                out (<kbd>⌘</kbd>/<kbd>Ctrl</kbd>-click, or shift-click for a range) — or clear the
-                selection and the actions apply to the whole list.
-              </li>
-              <li>
-                <strong>Export…</strong> gets them out; see the next topic.
-              </li>
-              <li>
-                <strong>Add to…</strong> puts the set into an album or onto a canvas — pick an
-                existing one, or "+ New" right in the list. In merged view the RAW partner rides
-                along, so a canvas holds the whole shot.
-              </li>
-              <li>
-                <strong>Add to Immich</strong> uploads the set's JPEGs to your server (shown only
-                when the integration is configured; RAW files only with "Also upload RAW files"
-                on in Settings).
-              </li>
-              <li>
-                <strong>Remove from selects</strong> empties the tray again. The photos themselves
-                stay untouched in your library.
-              </li>
-            </ul>
-          </>
-        ),
-      },
       {
         id: "export",
         title: "Export",
         where: (
           <>
-            Photo view → Export… · Selects → Export… · Right-click a photo in the Library, an album
-            or Selects
+            Photo view → Export… · Right-click a photo in the Library or an album
           </>
         ),
         lead: <>Two kinds of file, depending on who is getting it.</>,
@@ -1831,7 +1794,7 @@ const CHAPTERS: Chapter[] = [
             <h4>Good to know</h4>
             <ul>
               <li>
-                <strong>Right-click</strong> a photo in the Library, an album or Selects for Export
+                <strong>Right-click</strong> a photo in the Library or an album for Export
                 — on a ticked photo it takes the whole selection. The same menu has{" "}
                 <strong>Save copy</strong> and <strong>Show in Finder</strong> (Explorer on
                 Windows), which selects the photo's file on disk.
@@ -2278,7 +2241,7 @@ const CHAPTERS: Chapter[] = [
                 { keys: <kbd>P</kbd>, does: "Show / hide the edit panel, so the photo gets the whole window" },
                 {
                   keys: <kbd>F</kbd>,
-                  does: "Focus mode — the app's top bar put away, the editing tools stay; F or Esc brings it back",
+                  does: "Focus mode (also View → Focus, ⌘F) — the app's top bar put away, the editing tools stay; F or Esc brings it back",
                 },
                 {
                   keys: <kbd>Esc</kbd>,
@@ -2331,10 +2294,9 @@ const CHAPTERS: Chapter[] = [
                   does: "One step forward / back in the stack (Shift: all the way)",
                 },
                 { keys: <kbd>Delete</kbd>, does: "Take the selected items off the page (the photos stay in the library)" },
-                { keys: <kbd>P</kbd>, does: "Print view — only the paper, filling the window; Esc comes back" },
                 {
                   keys: <kbd>F</kbd>,
-                  does: "Focus mode — the app's top bar put away, the tools stay; F or Esc brings it back",
+                  does: "Focus mode (also View → Focus, ⌘F) — the app's top bar put away, the tools stay; F or Esc brings it back",
                 },
                 { keys: <kbd>Esc</kbd>, does: "Step out: end crop, end typing, clear the selection, leave the canvas" },
               ]}
@@ -2352,7 +2314,7 @@ const CHAPTERS: Chapter[] = [
                 },
                 { keys: <kbd>0</kbd>, does: "Fit the page again" },
                 { keys: <kbd>E</kbd>, does: "Edit this canvas (E in the editor brings you back)" },
-                { keys: <kbd>F</kbd>, does: "Focus mode — full screen, only the pages on black; F or Esc ends it" },
+                { keys: <kbd>F</kbd>, does: "Focus mode (also View → Focus, ⌘F) — full screen, only the pages on black; F or Esc ends it" },
                 { keys: <kbd>Esc</kbd>, does: "Back to where the canvas was opened from" },
               ]}
             />
@@ -2446,8 +2408,12 @@ const CHAPTERS: Chapter[] = [
 ];
 
 export function Help() {
-  const [activeId, setActiveId] = useState(CHAPTERS[0].id);
+  // Chapter and scroll offset survive leaving the page: Help is consulted in
+  // the middle of something else, and coming back should land where the
+  // reading stopped, not on the first chapter's top.
+  const [activeId, setActiveId] = useSessionState("help:chapter", CHAPTERS[0].id);
   const pageRef = useRef<HTMLDivElement>(null);
+  useScrollMemory(pageRef, "help");
   const chapter = CHAPTERS.find((c) => c.id === activeId) ?? CHAPTERS[0];
 
   // Plain anchors would fight the HashRouter (#/help vs #basics), so the topic
@@ -2465,26 +2431,28 @@ export function Help() {
 
   return (
     <div className="page help-page" ref={pageRef}>
+      {/* Title and chapter row span the page like the Settings tabs do; only
+          the reading column below is width-limited (.help-inner). */}
+      <h2 className="section-title">Help</h2>
+      <p className="help-sub">
+        Everything Rollfilm can do, in the order you'll meet it. Eight chapters — pick one.
+      </p>
+
+      <nav className="help-tabs" role="tablist" aria-label="Help chapters">
+        {CHAPTERS.map((c) => (
+          <button
+            key={c.id}
+            role="tab"
+            aria-selected={activeId === c.id}
+            className={`help-tab${activeId === c.id ? " active" : ""}`}
+            onClick={() => openChapter(c.id)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </nav>
+
       <div className="help-inner">
-        <h2 className="section-title">Help</h2>
-        <p className="help-sub">
-          Everything Rollfilm can do, in the order you'll meet it. Eight chapters — pick one.
-        </p>
-
-        <nav className="help-tabs" role="tablist" aria-label="Help chapters">
-          {CHAPTERS.map((c) => (
-            <button
-              key={c.id}
-              role="tab"
-              aria-selected={activeId === c.id}
-              className={`help-tab${activeId === c.id ? " active" : ""}`}
-              onClick={() => openChapter(c.id)}
-            >
-              {c.label}
-            </button>
-          ))}
-        </nav>
-
         <p className="help-blurb">{chapter.blurb}</p>
 
         {/* Jump list for the chapter, so a five-topic chapter can still be

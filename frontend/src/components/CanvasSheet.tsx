@@ -2,7 +2,9 @@
 // the renderer behind the Canvas page's cards - "the paper itself with the
 // photos on it", at card size. The full-screen canvas view is the editor's
 // own print view (CanvasEditor's PrintView), so it shows the real thing.
+import { useState, type CSSProperties } from "react";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
+import { forgetThumbLoaded, isThumbLoaded, markThumbLoaded } from "../utils/preload";
 import { boundsOf, PAGE_GAP_MM, worldRect } from "../utils/canvasLayout";
 import type { LayoutItem } from "../api/types";
 
@@ -78,6 +80,28 @@ export function shelfSheets(canvas: CanvasSheetDoc): ShelfSheet[] {
 }
 
 // The items of one sheet, percent-positioned, at card size.
+// A photo on the shelf eases in once decoded, and paints at once when the
+// thumbnail was already seen this session (same memo as the grid's tiles) -
+// see .canvas-shelf-photo.
+function ShelfPhoto({ src, style }: { src: string; style: CSSProperties }) {
+  const [loaded, setLoaded] = useState(() => isThumbLoaded(src));
+  return (
+    <img
+      className={`canvas-shelf-photo${loaded ? " loaded" : ""}`}
+      style={style}
+      src={src}
+      alt=""
+      loading="lazy"
+      draggable={false}
+      onLoad={() => {
+        markThumbLoaded(src);
+        setLoaded(true);
+      }}
+      onError={() => forgetThumbLoaded(src)}
+    />
+  );
+}
+
 export function ShelfSheetItems({ canvas, sheet }: { canvas: CanvasSheetDoc; sheet: ShelfSheet }) {
   return (
     <>
@@ -117,14 +141,10 @@ export function ShelfSheetItems({ canvas, sheet }: { canvas: CanvasSheetDoc; she
           if (item.kind === "photo" && item.image_id && item.available !== false) {
             const version = canvas.thumb_versions[item.image_id] ?? DEFAULT_EDIT_VERSION;
             return (
-              <img
+              <ShelfPhoto
                 key={item.id}
-                className="canvas-shelf-photo"
                 style={box}
                 src={api.images.thumbnailUrl(item.image_id, version, "small")}
-                alt=""
-                loading="lazy"
-                draggable={false}
               />
             );
           }

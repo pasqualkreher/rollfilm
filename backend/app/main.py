@@ -8,7 +8,6 @@ from app.api.routes import (
     import_,
     maintenance,
     search,
-    selects,
     settings,
     smart_albums,
     sources,
@@ -58,7 +57,6 @@ app.include_router(import_.router)
 app.include_router(search.router)
 app.include_router(maintenance.router)
 app.include_router(settings.router)
-app.include_router(selects.router)
 app.include_router(sources.router)
 app.include_router(tags.router)
 app.include_router(stats.router)

@@ -23,6 +23,16 @@ fuji_eterna_500_vivid.npy
     Fuji Eterna 500 Vivid printed on Fuji Eterna-CP Type 3513DI
 fuji_instax_color.npy
     Fuji Instax color as its own positive
+cinestill_800t.npy
+    Kodak Vision3 500T 5219 printed on Kodak Portra Endura Paper
+kodak_5247_ii.npy
+    Kodak 5247 II printed on Kodak 5383
+kodak_exr_200t_5293.npy
+    Kodak EXR 200T 5293 printed on Kodak 5384
+kodak_exr_100t_5248.npy
+    Kodak EXR 100T 5248 printed on Kodak EXR 5386
+kodak_vision_320t_5277.npy
+    Kodak Vision 320T 5277 printed on Kodak Vision 2383
 
 The trademarked names are there to say which film stock a cube is made to
 approximate. Neither the author nor Rollfilm are affiliated with or endorsed

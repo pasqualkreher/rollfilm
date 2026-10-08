@@ -623,7 +623,7 @@ def test_an_analog_look_without_its_cube_leaves_the_picture_alone(measured_dir):
 _CLUT = list(film_sims.CLUT_SIMS)
 # Expired or first-generation instant film: the scan's black is a grey and its
 # white a cream, which is the look.
-_FADED = {"polaroid_px_70", "polaroid_px_680", "polaroid_time_zero"}
+_FADED = {"polaroid_px_70", "polaroid_px_680", "polaroid_px_100uv_cold", "polaroid_px_100uv_warm", "polaroid_time_zero"}
 
 
 @pytest.mark.parametrize("sim", _CLUT)

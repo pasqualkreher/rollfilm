@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useSearchParams } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { rememberLibraryFilters, rememberedLibraryFilters } from "../utils/libraryFilterMemory";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -22,12 +22,13 @@ import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { Dropdown } from "../components/Dropdown";
+import { SORT_OPTIONS, isSortKey, sortImages, type SortKey } from "../utils/sortOrder";
 import { EditPicker } from "../components/EditPicker";
-import { IconCloudUp, IconTrash } from "../components/Icons";
+import { IconCheck, IconCloudUp, IconSort, IconTrash, IconX } from "../components/Icons";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
+import { leaveSearch } from "../components/SearchBar";
 import { loadPresets, presetAdjustments } from "../utils/presets";
-import { useSelects } from "../state/selects";
 import { useTasks } from "../state/tasks";
 import { useWait } from "../state/wait";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
@@ -42,17 +43,6 @@ import { LoadingState } from "../components/Spinner";
 import { ActionBarMessages } from "../components/ActionBarMessages";
 import { errorText, failureReason } from "../utils/apiError";
 
-// How the browsed library is ordered. The server sends it newest first; the
-// other orders are made here from the same index, which carries the name and
-// the stars of every photo anyway.
-type SortKey = "newest" | "oldest" | "name" | "rating";
-const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-  { value: "newest", label: "Newest first" },
-  { value: "oldest", label: "Oldest first" },
-  { value: "name", label: "File name" },
-  { value: "rating", label: "Rating" },
-];
-const NAME_ORDER = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 // The section headings of the orders that are not by date: the name's first
 // character, or the stars. Module-level, so their identity is stable - the
@@ -84,6 +74,7 @@ export function Library() {
 
 function LibraryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   // Keep the session's memory of the filter set in step with the URL (see
   // utils/libraryFilterMemory.ts) - clearing the filters clears it too.
   useEffect(() => {
@@ -148,7 +139,7 @@ function LibraryPage() {
   const setDateTo = (v: string | null) => setParams({ to: v });
   // In the URL like the filters, so it survives the trip into a photo and back.
   const sortParam = searchParams.get("sort");
-  const sort: SortKey = SORT_OPTIONS.some((o) => o.value === sortParam) ? (sortParam as SortKey) : "newest";
+  const sort: SortKey = isSortKey(sortParam) ? sortParam : "newest";
   const setSort = (v: SortKey) => setParams({ sort: v === "newest" ? null : v });
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -156,7 +147,6 @@ function LibraryPage() {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const { withBatches } = useWait();
-  const selects = useSelects();
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
   const q = (searchParams.get("q") ?? "").trim();
@@ -312,14 +302,10 @@ function LibraryPage() {
   // which is a long frame on a big one. Now it only rebuilds when the photos or
   // the pairing mode actually change.
   // The chosen order, made before the pairs are put together so a pair still
-  // ends up side by side. Search results keep their ranking. Array.sort is
-  // stable: within one rating the photos stay newest first.
+  // ends up side by side. Search results keep their ranking.
   const sortedImages: GridImage[] = useMemo(() => {
     const list = images ?? [];
-    if (q || sort === "newest") return list;
-    if (sort === "oldest") return [...list].reverse();
-    if (sort === "name") return [...list].sort((a, b) => NAME_ORDER.compare(a.original_filename, b.original_filename));
-    return [...list].sort((a, b) => b.rating - a.rating);
+    return q ? list : sortImages(list, sort);
   }, [images, q, sort]);
   const orderedImages: GridImage[] = useMemo(
     () =>
@@ -506,7 +492,7 @@ function LibraryPage() {
 
   function reportAddTo({ kind, name, ok }: AddToResult) {
     const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
-    const what = kind === "canvas" ? `canvas “${name}”` : kind === "selects" ? "selects" : `“${name}”`;
+    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
     setAlbumMsg(
       ok
         ? { text: `Added ${takeAddedCount()} photo(s) to ${what}.${cancelNote}`, error: false }
@@ -737,22 +723,11 @@ function LibraryPage() {
             disabled={Boolean(q)}
             title={q ? "Search results are ordered by how well they match" : "The order the photos are shown in"}
             ariaLabel="Sort order"
-            options={q ? [{ value: "relevance", label: "Best match" }] : SORT_OPTIONS}
+            icon={<IconSort size={13} />}
+            options={q ? [{ value: "relevance", label: "Best match", short: "Relevance" }] : SORT_OPTIONS}
           />
         }
       >
-        {/* Both only once a photo is picked (Cmd/Ctrl-click) - the toolbar
-            stays clean while nothing is selected; Cmd/Ctrl+A works anytime. */}
-        {selected.size > 0 && (
-          <>
-            <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
-              Select all
-            </button>
-            <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
-              Clear selection
-            </button>
-          </>
-        )}
       </PhotoFilters>
       <div className="page-scroll">
       {q && (
@@ -762,8 +737,8 @@ function LibraryPage() {
             {!isLoading && images ? ` (${images.length})` : ""}
           </span>
           <button
-            className="btn ghost"
-            onClick={() => setParams({ q: null })}
+            className="btn btn-sm ghost"
+            onClick={() => leaveSearch(navigate, () => setParams({ q: null }))}
           >
             Clear search
           </button>
@@ -777,6 +752,17 @@ function LibraryPage() {
           <div className="filter-bar action-bar--bottom">
             <div className="control-group">
               <span>{selected.size} selected</span>
+              <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
+                <span className="btn-label"><IconCheck size={13} /> Select all</span>
+              </button>
+              <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
+                <span className="btn-label"><IconX size={13} /> Clear selection</span>
+              </button>
+            </div>
+            {/* The selection itself on the left, what is done to it on the
+                right of the line. */}
+            <span className="bar-sep" aria-hidden />
+            <div className="control-group">
               <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
               <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
             </div>
@@ -785,7 +771,6 @@ function LibraryPage() {
               <AddToPicker
                 onAddToAlbum={addSelectedToAlbum}
                 onAddToCanvas={addSelectedToCanvas}
-                onAddToSelects={() => selects.add(Array.from(selected))}
                 onResult={reportAddTo}
               />
             </div>
@@ -796,7 +781,7 @@ function LibraryPage() {
                     on={allSelectedSynced}
                     disabled={immichBusy}
                     onToggle={toggleSelectedImmichSync}
-                    title="Upload the selected photos to Immich in the background. RAW files only when “Also upload RAW files” is on in Settings. Press again to stop syncing them."
+                    title="Upload the selected photos to Immich in the background. RAW files only if enabled in Settings. Press again to stop."
                   />
                 )}
                 {/* Manual mode only: selective shows the sync checkbox instead, and
@@ -806,7 +791,7 @@ function LibraryPage() {
                     className="btn"
                     onClick={addSelectedToImmich}
                     disabled={immichBusy}
-                    title="Upload the selected photos to your Immich server. RAW files only when “Also upload RAW files” is on in Settings."
+                    title="Upload the selected photos to your Immich server. RAW files only if enabled in Settings."
                   >
                     <IconCloudUp size={13} /> {immichBusy ? "Uploading to Immich…" : "Add to Immich"}
                   </button>

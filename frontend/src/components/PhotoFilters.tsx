@@ -1,12 +1,63 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import type { AlbumOut, CanvasSummary, ColorLabel, Facet, ViewMode } from "../api/types";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { ViewPrefsControls } from "./ViewPrefsControls";
 import { TagFilter } from "./TagFilter";
 import { FilterChip } from "./FilterChip";
 import { Dropdown } from "./Dropdown";
-import { IconChevronDown, IconFilter, IconPin } from "./Icons";
+import { IconAlbum, IconAperture, IconCamera, IconChevronDown, IconFilter, IconImage, IconPin, IconStar, IconTag, IconX } from "./Icons";
 import { setFilterPinned, useFilterPinned } from "../state/viewPrefs";
+
+// Whether the pinned fields fit the bar in two lines. The docked fields have
+// fixed widths (index.css, .filter-menu--docked .filter-menu-row), so the
+// line count is a function of the bar's width alone: the widths are read
+// off the dock whenever it is on screen and remembered, and the same greedy
+// wrap that flex does is run over them on every bar resize - also while the
+// dock is folded away, when there is nothing to measure. Deciding both ways
+// from the same numbers is what keeps the edge from flickering. A layout
+// effect, so a dock that opens on a too-narrow bar folds before it paints.
+function useDockFits(barRef: { current: HTMLElement | null }, pinned: boolean, rowKey: string) {
+  const [fits, setFits] = useState(true);
+  const widths = useRef<number[]>([]);
+  useLayoutEffect(() => {
+    if (!pinned) return;
+    const bar = barRef.current;
+    if (!bar) return;
+    const measure = () => {
+      const dock = bar.querySelector<HTMLElement>(".filter-menu--docked");
+      if (dock) {
+        const seen = Array.from(dock.children)
+          .map((c) => (c as HTMLElement).offsetWidth)
+          .filter((w) => w > 0);
+        if (seen.length) widths.current = seen;
+      }
+      if (!widths.current.length) return;
+      // The dock runs the bar's full width and carries the bar's own insets,
+      // so the bar's content box is the room the fields have.
+      const cs = getComputedStyle(bar);
+      const room = bar.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const gap = parseFloat(cs.columnGap) || 0;
+      let lines = 1;
+      let x = 0;
+      for (const w of widths.current) {
+        if (x > 0 && x + gap + w > room) {
+          lines += 1;
+          x = w;
+        } else {
+          x += x > 0 ? gap + w : w;
+        }
+      }
+      setFits(lines <= 2);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(bar);
+    return () => ro.disconnect();
+    // Re-run when the dock (re)appears so the widths are fresh, and when the
+    // set of rows changes, since a remembered sum would be stale.
+  }, [barRef, pinned, rowKey, fits]);
+  return fits;
+}
 
 // Dual-thumb slider over the focal lengths actually present in the library
 // (the facet's sorted, formatted mm values are its stops). Dragging both
@@ -16,11 +67,15 @@ function FocalRangeSlider({
   min,
   max,
   onChange,
+  compact = false,
 }: {
   options: Facet[];
   min: string;
   max: string;
   onChange: (min: string, max: string) => void;
+  // Docked in the bar: a field-sized box with a "mm" prefix in place of the
+  // hidden caption, and a short readout ("24–70") so the slider keeps room.
+  compact?: boolean;
 }) {
   const values = options.map((o) => parseFloat(o.value));
   const last = values.length - 1;
@@ -52,14 +107,33 @@ function FocalRangeSlider({
 
   if (values.length === 0) return null;
   if (values.length === 1) {
+    if (compact) {
+      return (
+        <div className="focal-range focal-range--compact">
+          <span className="focal-range-unit" aria-hidden>
+            mm
+          </span>
+          <span className="focal-range-value">{options[0].value}</span>
+        </div>
+      );
+    }
     return <span className="focal-range-value">{options[0].value}mm</span>;
   }
 
   const active = Boolean(min || max);
   return (
-    <div className="focal-range">
+    <div className={`focal-range${compact ? " focal-range--compact" : ""}`}>
+      {compact && (
+        <span className="focal-range-unit" aria-hidden>
+          mm
+        </span>
+      )}
       <span className={`focal-range-value${active ? " active" : ""}`}>
-        {active ? `${options[lo].value}mm – ${options[hi].value}mm` : "Any"}
+        {active
+          ? compact
+            ? `${options[lo].value}–${options[hi].value}`
+            : `${options[lo].value}mm – ${options[hi].value}mm`
+          : "Any"}
       </span>
       <div className="dual-range">
         <div className="dual-range-track" />
@@ -100,6 +174,11 @@ function FocalRangeSlider({
 }
 
 interface Props {
+  // Where you are, first in the bar ("Library", "Album · <name>"). Wrapped in
+  // .bar-title and followed by a divider here, so every screen's title sits at
+  // the same spot. Pass .bar-title-sub / .bar-title-name spans for a muted
+  // prefix and an ellipsised name; a plain string is fine too.
+  title?: ReactNode;
   viewMode: ViewMode;
   onViewMode: (v: ViewMode) => void;
   // Whether the RAW+JPG / RAW / JPG choice (a row of the Filter menu) is
@@ -154,8 +233,9 @@ interface Props {
   dateTo?: string | null;
   onDateFrom?: (d: string | null) => void;
   onDateTo?: (d: string | null) => void;
-  // Whether to show the "Merge RAW+JPG" toggle. Off for the import review grid,
-  // which works on staged files rather than library pairs.
+  // Whether to show the "Merge RAW+JPG" toggle. On for the Library and the
+  // import review (which honours the same preference for its staged pairs);
+  // off for albums, which always collapse each pair to one card.
   showMerge?: boolean;
   // Extra view controls (e.g. import's "Hide duplicates") rendered inside the
   // view group, left of the divider - so they read as a display option rather
@@ -180,6 +260,7 @@ interface Props {
 // The shared filter row used by the Library, Album detail, and Import review
 // screens - so rating and color filtering behave identically everywhere.
 export function PhotoFilters({
+  title,
   viewMode,
   onViewMode,
   showViewMode = true,
@@ -216,13 +297,39 @@ export function PhotoFilters({
   children,
   trailing,
 }: Props) {
-  // Pinned: the same menu docks as a second row of the bar instead of hanging
-  // off the chip as a popover, so it survives every click while culling.
+  // Pinned: the same menu docks as the bar's second row instead of hanging
+  // off the chip as a popover, so it survives every click while culling. The
+  // same on every screen: the first row stays as it is unpinned, the fields
+  // line up under it.
   const pinned = useFilterPinned();
   const showDates = Boolean(onDateFrom && onDateTo);
   const showCamera = Boolean(cameras && onCamera);
   const showLens = Boolean(lenses && onLens);
   const showFocal = Boolean(focalLengths && onFocalRange);
+
+  // Pinned is docked while the fields fit in two lines: the docked row
+  // wraps its fields onto a second line when the bar is narrower than their
+  // sum (a 13" laptop in full screen shows the Library's full set on two
+  // lines, a wide monitor on one). A bar so narrow that they would need a
+  // third folds the dock away and the chip opens the same menu as a popover
+  // again, with the pin still set - the pin is a saved preference, the fold
+  // only follows the window, so a wider window brings the dock straight
+  // back. The fields keep the same fixed widths on every screen; only the
+  // number of lines changes with the window.
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const rowKey = [
+    Boolean(sort),
+    showViewMode,
+    Boolean(albums && onAlbumId),
+    Boolean(allTags && onTags),
+    showCamera,
+    showLens,
+    showFocal && (focalLengths?.length ?? 0) > 0,
+    showDates,
+  ].join();
+  const dockFits = useDockFits(barRef, pinned, rowKey);
+  const docked = pinned && dockFits;
+
   // How many filters are engaged - shown on the closed Filter chip so the
   // state stays visible while the menu is shut.
   const activeCount =
@@ -254,7 +361,12 @@ export function PhotoFilters({
   const chipLabel = (
     <>
       <IconFilter size={12} /> Filter
-      {activeCount > 0 ? ` · ${activeCount}` : ""}
+      {/* The count's cell is always there (two digits wide, blank when nothing
+          filters), so the chip keeps one width and the controls after it stay
+          put when the first filter is set. */}
+      <span className={`filter-chip-count${activeCount > 0 ? "" : " filter-chip-count--idle"}`}>
+        {activeCount > 0 ? `· ${activeCount}` : ""}
+      </span>
     </>
   );
 
@@ -277,7 +389,7 @@ export function PhotoFilters({
   );
 
   const menu = (
-    <div className={`filter-menu${pinned ? " filter-menu--docked" : ""}`}>
+    <div className={`filter-menu${docked ? " filter-menu--docked" : ""}`}>
       {pinButton}
       <div className="filter-menu-head">
         <span className="filter-menu-title">Filter</span>
@@ -295,6 +407,7 @@ export function PhotoFilters({
           <span className="filter-menu-label">File type</span>
           <Dropdown
             ariaLabel="File type"
+            icon={<IconImage size={13} />}
             value={viewMode}
             onChange={(v) => onViewMode(v as ViewMode)}
             options={[
@@ -305,11 +418,34 @@ export function PhotoFilters({
           />
         </div>
       )}
+      {showDates && (
+        <div className="filter-menu-row filter-menu-row--date">
+          <span className="filter-menu-label">Date</span>
+          <span className="date-range">
+            <input
+              type="date"
+              value={dateFrom ?? ""}
+              max={dateTo ?? undefined}
+              onChange={(e) => onDateFrom?.(e.target.value || null)}
+              aria-label="From date"
+            />
+            <span className="date-range-sep">–</span>
+            <input
+              type="date"
+              value={dateTo ?? ""}
+              min={dateFrom ?? undefined}
+              onChange={(e) => onDateTo?.(e.target.value || null)}
+              aria-label="To date"
+            />
+          </span>
+        </div>
+      )}
       {albums && onAlbumId && (
         <div className="filter-menu-row filter-menu-row--album">
           <span className="filter-menu-label">{canvases ? "Album / Canvas" : "Album"}</span>
           <Dropdown
             ariaLabel={canvases ? "Album or canvas" : "Album"}
+            icon={<IconAlbum size={13} />}
             searchable
             value={albumId ? `album:${albumId}` : canvasId ? `canvas:${canvasId}` : ""}
             onChange={(v) => {
@@ -345,11 +481,14 @@ export function PhotoFilters({
         <span className="filter-menu-label">Rating</span>
         <Dropdown
           ariaLabel="Rating"
+          icon={<IconStar size={13} />}
           value={String(ratingMin)}
           onChange={(v) => onRatingMin(Number(v))}
           options={[0, 1, 2, 3, 4, 5].map((n) => ({
             value: String(n),
             label: n === 0 ? "Any" : `${"★".repeat(n)}+`,
+            // The closed field reads "★ 3+" with its own star in front.
+            short: n === 0 ? "Any" : `${n}+`,
           }))}
         />
       </div>
@@ -362,7 +501,7 @@ export function PhotoFilters({
       {allTags && onTags && (
         <div className="filter-menu-row filter-menu-row--tags">
           <span className="filter-menu-label">Tags</span>
-          <TagFilter options={allTags} value={selectedTags ?? []} onChange={onTags} />
+          <TagFilter icon={<IconTag size={13} />} options={allTags} value={selectedTags ?? []} onChange={onTags} />
         </div>
       )}
 
@@ -371,6 +510,7 @@ export function PhotoFilters({
           <span className="filter-menu-label">Camera</span>
           <Dropdown
             ariaLabel="Camera"
+            icon={<IconCamera size={13} />}
             searchable
             value={camera ?? ""}
             onChange={(v) => onCamera?.(v)}
@@ -393,6 +533,7 @@ export function PhotoFilters({
           <span className="filter-menu-label">Lens</span>
           <Dropdown
             ariaLabel="Lens"
+            icon={<IconAperture size={13} />}
             searchable
             value={lens ?? ""}
             onChange={(v) => onLens?.(v)}
@@ -415,37 +556,22 @@ export function PhotoFilters({
             min={focalMin ?? ""}
             max={focalMax ?? ""}
             onChange={(min, max) => onFocalRange?.(min, max)}
+            compact={docked}
           />
-        </div>
-      )}
-
-      {showDates && (
-        <div className="filter-menu-row filter-menu-row--date">
-          <span className="filter-menu-label">Date</span>
-          <span className="date-range">
-            <input
-              type="date"
-              value={dateFrom ?? ""}
-              max={dateTo ?? undefined}
-              onChange={(e) => onDateFrom?.(e.target.value || null)}
-              aria-label="From date"
-            />
-            <span className="date-range-sep">–</span>
-            <input
-              type="date"
-              value={dateTo ?? ""}
-              min={dateFrom ?? undefined}
-              onChange={(e) => onDateTo?.(e.target.value || null)}
-              aria-label="To date"
-            />
-          </span>
         </div>
       )}
     </div>
   );
 
   return (
-    <div className="filter-bar filter-bar--sticky">
+    <div className="filter-bar filter-bar--sticky" ref={barRef}>
+      {title != null && (
+        <>
+          <span className="bar-title">{title}</span>
+          <span className="bar-sep" aria-hidden />
+        </>
+      )}
+
       {/* View: how the same photos are displayed (size, pairing). */}
       <div className="control-group control-group--view">
         <ViewPrefsControls showMerge={showMerge} />
@@ -459,7 +585,7 @@ export function PhotoFilters({
           controls and the page actions. Pinned, the chip collapses the docked
           row instead of opening a popover. */}
       <div className="control-group control-group--filter">
-        {pinned ? (
+        {docked ? (
           <button
             type="button"
             className={`tag-filter-btn${isFiltering ? " active" : ""}`}
@@ -478,11 +604,20 @@ export function PhotoFilters({
           </FilterChip>
         )}
 
-        {isFiltering && (
-          <button className="btn btn-sm ghost" onClick={clearAll}>
-            Clear
-          </button>
-        )}
+        {/* Always in the row, only hidden while nothing filters: mounting it
+            with the first filter shifted whatever followed it. Hidden, it is
+            out of the tab order and the accessibility tree too. */}
+        <button
+          type="button"
+          className={`btn btn-sm ghost bar-clear${isFiltering ? "" : " bar-clear--idle"}`}
+          onClick={clearAll}
+          title="Clear all filters"
+          aria-label="Clear all filters"
+          aria-hidden={!isFiltering || undefined}
+          tabIndex={isFiltering ? undefined : -1}
+        >
+          <IconX size={12} />
+        </button>
       </div>
 
       {/* Page-specific actions (Select, Select all, ...). */}
@@ -490,8 +625,13 @@ export function PhotoFilters({
 
       {trailing && <div className="control-group control-group--trailing">{trailing}</div>}
 
-      {/* Pinned: the same menu as a full-width second row of the bar. */}
-      {pinned && <div className="filter-dock">{menu}</div>}
+      {/* Pinned: the same menu docked as the bar's own second row of bare
+          controls (the captions are for screen readers only). Always a row of
+          its own, full width, so the first row is the same pinned or not;
+          too many fields for the width wrap onto a second line, and past
+          that the dock folds away (useDockFits) until the bar is wide
+          enough again. */}
+      {docked && <div className="filter-dock">{menu}</div>}
     </div>
   );
 }

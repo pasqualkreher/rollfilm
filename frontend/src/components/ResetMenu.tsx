@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BulkResetOptions } from "../api/types";
 import { useWait } from "../state/wait";
-import { IconChevronDown } from "./Icons";
+import { IconChevronDown, IconRestore } from "./Icons";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
 
@@ -97,7 +97,7 @@ export function ResetMenu({ count, onReset }: Props) {
         onClick={() => setOpen((o) => !o)}
         title="Reset the selected properties to their state right after import"
       >
-        Reset… <span className="reset-menu-caret"><IconChevronDown size={12} /></span>
+        <span className="btn-label"><IconRestore size={13} /> Reset…</span> <span className="reset-menu-caret"><IconChevronDown size={12} /></span>
       </button>
 
       <Presence open={open} ms={MOTION.pop}>

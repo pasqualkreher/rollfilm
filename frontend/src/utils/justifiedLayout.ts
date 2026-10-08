@@ -222,13 +222,23 @@ export interface VirtualWindow {
 // there because a grid that renders an empty state doesn't mount the root at
 // all: the effect has to re-run once the first photos arrive, or width stays 0
 // and no layout is ever built.
+//
+// `seedKey`: the width this container had the last time it was measured, kept
+// across unmounts. A grid that comes back (Settings -> Library) then has a
+// layout on its very first render instead of an empty frame followed by the
+// ResizeObserver's round-trip; if the window was resized in between the
+// observer corrects it before the next paint, at the cost of one extra
+// layout. Only for grids whose container is the same every time.
+const lastWidths = new Map<string, number>();
+
 export function useVirtualWindow(
   rootRef: RefObject<HTMLDivElement | null>,
-  enabled: boolean
+  enabled: boolean,
+  seedKey?: string
 ): VirtualWindow {
   const scrollerRef = useRef<HTMLElement | null>(null);
   const lastScrollRef = useRef(0);
-  const [width, setWidth] = useState(0);
+  const [width, setWidth] = useState(() => (seedKey && lastWidths.get(seedKey)) || 0);
   const [window_, setWindow] = useState({ top: 0, bottom: 0 });
 
   useEffect(() => {
@@ -239,6 +249,7 @@ export function useVirtualWindow(
 
     const measure = () => {
       setWidth(root.clientWidth);
+      if (seedKey && root.clientWidth > 0) lastWidths.set(seedKey, root.clientWidth);
       const rootTop =
         root.getBoundingClientRect().top -
         scroller.getBoundingClientRect().top +

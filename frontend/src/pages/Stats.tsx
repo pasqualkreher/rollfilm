@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { LibraryStats, StatCount, StatsFilters } from "../api/types";
 import {
@@ -14,6 +14,7 @@ import {
   IconX,
 } from "../components/Icons";
 import { LoadingState } from "../components/Spinner";
+import { useScrollMemory } from "../utils/scrollMemory";
 
 // Statistics dashboard (top-bar chart icon): what's in the library and what
 // it was shot with. Every chart is a single accent-colored series with its
@@ -374,11 +375,24 @@ export function Stats() {
 
   // The previous snapshot stays on screen while the pinned set is refetched:
   // bars slide to their new lengths instead of the page blinking to a spinner.
+  // The bars grow in once, when their numbers first arrive. On a revisit the
+  // numbers are already in the cache and the bars stand where they were -
+  // replaying the growth on every visit made the page feel like it was
+  // reloading. Decided once at mount (state, not a flag read on each render):
+  // the on-mount refetch resolves within the animation's length, and dropping
+  // the class then would cut the growth short.
+  const queryClient = useQueryClient();
+  const [grow] = useState(
+    () => queryClient.getQueryData(["library-stats", filters]) === undefined
+  );
   const { data: s, isLoading, error, isFetching } = useQuery({
     queryKey: ["library-stats", filters],
     queryFn: () => api.stats.library(filters),
     placeholderData: (prev) => prev,
   });
+  // Same place in the cards as when the user left - once there are cards.
+  const pageRef = useRef<HTMLDivElement>(null);
+  useScrollMemory(pageRef, "stats", { ready: !!s });
 
   // Replace, not push: refining the pinned set is not a new place to go back
   // to (same convention as the library's filters).
@@ -462,7 +476,7 @@ export function Stats() {
       : "Pin a value first";
 
   return (
-    <div className="page stats-page">
+    <div className={`page stats-page${grow ? " stats-grow" : ""}`} ref={pageRef}>
       {/* Title, summary and the filter chips stay in view while the cards
           scroll under them: what the page is filtered by is always visible. */}
       <div className="stats-head">

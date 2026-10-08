@@ -187,6 +187,16 @@ export function IconStar({ filled = false, ...props }: IconProps & { filled?: bo
   );
 }
 
+// Up and down arrow side by side: the order the grid is sorted in.
+export function IconSort(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M5 13.25V2.75M5 2.75L2.5 5.25M5 2.75l2.5 2.5" />
+      <path d="M11 2.75v10.5M11 13.25l-2.5-2.5M11 13.25l2.5-2.5" />
+    </svg>
+  );
+}
+
 export function IconFilter(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
@@ -546,28 +556,6 @@ export function IconFocus(props: IconProps) {
     <svg {...svgProps(props)}>
       <path d="M2.5 5.5v-2a1 1 0 0 1 1-1h2M13.5 5.5v-2a1 1 0 0 0-1-1h-2M2.5 10.5v2a1 1 0 0 0 1 1h2M13.5 10.5v2a1 1 0 0 1-1 1h-2" />
       <circle cx="8" cy="8" r="1.6" />
-    </svg>
-  );
-}
-
-// Corner brackets closing in - fit one page in the window.
-export function IconFitPage(props: IconProps) {
-  return (
-    <svg {...svgProps(props)}>
-      <path d="M2.5 5.5v-2a1 1 0 0 1 1-1h2M13.5 5.5v-2a1 1 0 0 0-1-1h-2M2.5 10.5v2a1 1 0 0 0 1 1h2M13.5 10.5v2a1 1 0 0 1-1 1h-2" />
-      <rect x="6" y="6.4" width="4" height="3.2" rx="0.6" />
-    </svg>
-  );
-}
-
-// Four sheets at once - fit the whole layout.
-export function IconFitAll(props: IconProps) {
-  return (
-    <svg {...svgProps(props)}>
-      <rect x="2.5" y="2.5" width="4.6" height="4.6" rx="0.8" />
-      <rect x="8.9" y="2.5" width="4.6" height="4.6" rx="0.8" />
-      <rect x="2.5" y="8.9" width="4.6" height="4.6" rx="0.8" />
-      <rect x="8.9" y="8.9" width="4.6" height="4.6" rx="0.8" />
     </svg>
   );
 }
@@ -935,6 +923,18 @@ export function IconMask(props: IconProps) {
     <svg {...svgProps(props)}>
       <rect x="2.25" y="2.25" width="11.5" height="11.5" rx="1.5" />
       <circle cx="8" cy="8" r="3" strokeDasharray="1.6 1.4" />
+    </svg>
+  );
+}
+
+// Two frames overlapping, both drawn whole - a RAW and its JPEG shown as one
+// photo (the bar's Merge toggle). Unlike IconDuplicate, neither frame hides
+// behind the other: the pair are equals, not a copy and its original.
+export function IconPair(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="2.25" y="2.5" width="7.5" height="9" rx="1.2" />
+      <rect x="6.25" y="4.5" width="7.5" height="9" rx="1.2" />
     </svg>
   );
 }

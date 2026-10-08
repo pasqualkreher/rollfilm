@@ -93,10 +93,8 @@ export function ExternalSources() {
     <section className="import-panel">
       <h3 className="section-title">External photo sources</h3>
       <p className="import-panel-desc">
-        Show photos from a folder, such as a NAS or an archive, without copying them. The files
-        stay where they are. Each source is scanned at startup and when you click its scan
-        button - except a folder an import added by leaving its photos in place, which only
-        scans when you ask.
+        Show photos from a folder, such as a NAS, without copying them. Sources are scanned at
+        startup and when you click scan. Folders left in place by an import scan only on request.
       </p>
       <div className="import-toolbar" style={{ flexWrap: "wrap" }}>
         <input

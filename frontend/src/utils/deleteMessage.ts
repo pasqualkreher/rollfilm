@@ -18,12 +18,12 @@ export function deleteConfirmMessage(
   const parts: string[] = [];
   if (managed > 0) {
     parts.push(
-      `${managed} photo(s) will be moved to the Trash. You can restore them from there later.`
+      `${managed} photo(s) go to the Trash and can be restored.`
     );
   }
   if (referenced > 0) {
     parts.push(
-      `${referenced} photo(s) from external sources will be removed from the library only. The original files stay on disk.`
+      `${referenced} photo(s) from external sources are removed from the library only. The files stay.`
     );
   }
   return `Delete ${images.length - hiddenPaired} photo(s)${pairSuffix}?\n\n${parts.join("\n")}`;

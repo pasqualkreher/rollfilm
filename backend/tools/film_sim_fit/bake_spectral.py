@@ -28,9 +28,27 @@ channel each (a paper's black sits near 0.09 on the screen and its white is
 tinted), and the exposure is moved until 18% grey is the middle grey the other
 analog cubes show. The grey ramps are printed.
 
+CineStill 800T is Kodak's Vision3 500T with the remjet layer taken off, sold
+for C-41 development: here it is the Vision3 negative printed on paper, as a
+C-41 film is, where the Vision3 looks print on cine print film. The program
+has no ECN-2 / C-41 switch; the halation CineStill is known for is the
+editor's Halation slider. CineStill 50D, made the same way from Vision3 50D,
+rendered within 1.0 CIELAB of 800T on photographs (the paper takes out what
+the two differ by) and is left out as a lookalike. The older Eastman cine
+negatives print on the print film of their own years.
+
+Colour is taken out of the scene below a two-hundredth of middle grey (the
+chroma floor, _NEUTRAL_BELOW): what the sensor records there is noise, and
+a saturated colour there - a cube node with red and no green or blue - is
+one the simulation renders as a bright red that trilinear lookup would
+otherwise pull into the greys next to it, so a grey ramp turns back in its
+deepest black.
+
 Not every stock the program has that the app lacks: Aerochrome III, an
 infrared film, renders false colour from what a camera's three channels say
-about the infrared, which is nothing - foliage comes out blue, not red.
+about the infrared, which is nothing - foliage comes out blue, not red; the
+1950s stocks (5247, 5248, 5250, the 5381 print) are marked "unreliable data"
+by the author, Technicolor "very experimental".
 """
 
 from __future__ import annotations
@@ -48,6 +66,10 @@ COMMIT = "b8d69398fc71038579c20473378be22103695dd5"
 _ENDURA = "Kodak Portra Endura Paper"
 _CRYSTAL = "Fuji Crystal Archive DPII"
 _ETERNA_CP = "Fuji Eterna-CP Type 3513DI"
+_5383 = "Kodak 5383"
+_5384 = "Kodak 5384"
+_EXR_5386 = "Kodak EXR 5386"
+_2383 = "Kodak Vision 2383"
 # Look id -> the stock's name in spectral_film_lut and the print it is made on;
 # None for a film that is its own positive.
 FILMS: dict[str, tuple[str, str | None]] = {
@@ -58,11 +80,23 @@ FILMS: dict[str, tuple[str, str | None]] = {
     "fuji_eterna_500": ("Fuji Eterna 500", _ETERNA_CP),
     "fuji_eterna_500_vivid": ("Fuji Eterna 500 Vivid", _ETERNA_CP),
     "fuji_instax_color": ("Fuji Instax color", None),
+    "cinestill_800t": ("Kodak Vision3 500T 5219", _ENDURA),
+    "kodak_5247_ii": ("Kodak 5247 II", _5383),
+    "kodak_exr_200t_5293": ("Kodak EXR 200T 5293", _5384),
+    "kodak_exr_100t_5248": ("Kodak EXR 100T 5248", _EXR_5386),
+    "kodak_vision_320t_5277": ("Kodak Vision 320T 5277", _2383),
 }
 # The negative the program balances its intermediate encoding on (its GUI's).
 _REFERENCE = "Kodak Vision3 250D 5207"
 # Display luma of 18% grey in the analog cubes (bake_analog.py's grey ramps).
 _MIDDLE_GREY = 0.45
+# Scene luminance (18% grey = 0.18) under which colour fades out to grey.
+_NEUTRAL_BELOW = 0.18 / 200
+# Stops over 18% grey the medium's white is read at. The seven cubes baked
+# before 2026-10-08 read it at F-Log2 code 1.0 (half a stop higher) and at
+# exposure compensation 0, and had no chroma floor; rebaking them with this
+# would move their top end by under 2%.
+_WHITE_STOPS = 6.0
 
 _DEFAULT_OUT = Path(__file__).resolve().parents[2] / "app" / "services" / "film_luts" / "spectral"
 
@@ -107,6 +141,15 @@ def _srgb_encode(lin: np.ndarray) -> np.ndarray:
     return np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
 
 
+def _neutral_black(reflectance: np.ndarray) -> np.ndarray:
+    """The scene with its colour faded to grey below _NEUTRAL_BELOW (none at
+    all at black, all of it from the floor up, smoothly in between)."""
+    luma = reflectance @ _LUMA
+    keep = np.clip(luma / _NEUTRAL_BELOW, 0.0, 1.0)
+    keep = keep * keep * (3.0 - 2.0 * keep)
+    return luma[..., None] + (reflectance - luma[..., None]) * keep[..., None]
+
+
 def _bake(stocks: dict, film: str, print_stock: str | None, resolution: int) -> tuple[np.ndarray, float]:
     """The levelled cube of `film`, and the exposure compensation (in stops)
     that puts 18% grey on middle grey."""
@@ -127,26 +170,29 @@ def _bake(stocks: dict, film: str, print_stock: str | None, resolution: int) -> 
     def xyz_of(reflectance: np.ndarray) -> np.ndarray:
         return colour.RGB_to_XYZ(reflectance, "ITU-R BT.2020", apply_cctf_decoding=False)
 
-    # The medium's black and white, a channel each: what no light and what
-    # the cube's brightest neutral leave on it. Neither moves with exposure
-    # compensation by more than the ramp's last step.
-    neutral = np.array([[[0.0] * 3, [float(_flog2_inverse(np.array(1.0)))] * 3]])
-    black, white = render(xyz_of(neutral), 0.0)[0]
+    # The medium's black and white, a channel each: what no light leaves on
+    # it, and what six stops over 18% grey leave - where a sensor has long
+    # clipped, and as far as a long cine-print shoulder (Vision 320T on 2383)
+    # is read. The white is taken at the exposure the look ends up with.
+    black = render(xyz_of(np.zeros((1, 1, 3))), 0.0)[0, 0]
+    top = xyz_of(np.full((1, 1, 3), 0.18 * 2.0 ** _WHITE_STOPS))
 
-    def level(lin: np.ndarray) -> np.ndarray:
+    def level(lin: np.ndarray, white: np.ndarray) -> np.ndarray:
         return np.clip((lin - black) / (white - black), 0.0, 1.0)
 
     grey = xyz_of(np.full((1, 1, 3), 0.18))
     low, high = -4.0, 4.0
     for _ in range(24):
         exp_comp = (low + high) / 2
-        shown = float(_srgb_encode(level(render(grey, exp_comp)))[0, 0] @ _LUMA)
+        white = render(top, exp_comp)[0, 0]
+        shown = float(_srgb_encode(level(render(grey, exp_comp), white))[0, 0] @ _LUMA)
         low, high = (exp_comp, high) if shown < _MIDDLE_GREY else (low, exp_comp)
     exp_comp = (low + high) / 2
+    white = render(top, exp_comp)[0, 0]
 
     axis = np.linspace(0.0, 1.0, resolution)
     grid = np.stack(np.meshgrid(axis, axis, axis, indexing="ij"), axis=-1)
-    cube = _srgb_encode(level(render(xyz_of(np.clip(_flog2_inverse(grid), 0.0, None)), exp_comp)))
+    cube = _srgb_encode(level(render(xyz_of(_neutral_black(np.clip(_flog2_inverse(grid), 0.0, None))), exp_comp), white))
     return np.ascontiguousarray(cube, dtype=np.float32), exp_comp
 
 

@@ -141,7 +141,7 @@ function ImportFolder({ folder, backup }: { folder: string; backup: boolean }) {
         where
       )}
       <span className="import-add-hint">
-        {backup ? "Kept as a backup" : "Deleted"} when you close the session.
+        {backup ? "Kept as a backup." : "Deleted when the session closes."}
       </span>
     </>
   );
@@ -516,7 +516,7 @@ export function ImportWizard() {
           const message = err instanceof Error ? err.message : String(err);
           await dialogs.alert({
             title: "Could not add the photos to the album",
-            message: `${added.length.toLocaleString()} photo(s) were added to your library, but not to “${targetAlbum.name}”: ${message}\n\nYou can add them from the Library with “Add to…”.`,
+            message: `${added.length.toLocaleString()} photo(s) were added to your library but not to “${targetAlbum.name}”: ${message}\n\nAdd them from the Library with “Add to…”.`,
           });
         }
       }
@@ -1126,11 +1126,10 @@ export function ImportWizard() {
       const includeBoth = await dialogs.confirm({
         title: one ? "Import the matching file too?" : "Import the matching files too?",
         message: one
-          ? "This photo exists as both a RAW and a JPEG file, but only one of them is selected. " +
-            "Importing both keeps them together as one photo in your library."
-          : `${missingHalf.length} of these photos exist as both a RAW and a JPEG file, but only ` +
-            "one of each is selected. Importing both keeps each pair together as one photo in " +
-            "your library.",
+          ? "This photo exists as RAW and JPEG, but only one is selected. " +
+            "Importing both keeps them as one photo."
+          : `${missingHalf.length} of these photos exist as RAW and JPEG, but only one of each ` +
+            "is selected. Importing both keeps each pair as one photo.",
         confirmLabel: "Import both files",
         cancelLabel: "Import only the selected",
       });
@@ -1236,8 +1235,8 @@ export function ImportWizard() {
       (await dialogs.confirm({
         title: "Continue the open session?",
         message:
-          `There is already an open import session for “${same.source_path}”. Continuing it ` +
-          "keeps your selection and ratings and copies only photos that aren't copied yet.",
+          `An import session for “${same.source_path}” is already open. Continuing it ` +
+          "keeps your selection and ratings.",
         confirmLabel: "Continue session",
         cancelLabel: "Start a new session",
       }))
@@ -1317,9 +1316,8 @@ export function ImportWizard() {
         <h2 className="section-title">Import photos</h2>
         <ImportSteps current={1} />
         <p className="import-intro">
-          <strong>Import</strong> copies photos into your library, or adds them from where they are -
-          you are asked which. An <strong>external source</strong> shows a whole folder without
-          copying it.
+          <strong>Import</strong> copies photos into your library or adds them in place; you are
+          asked which. An <strong>external source</strong> shows a folder without copying.
         </p>
         <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} />
         <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
@@ -1491,12 +1489,10 @@ export function ImportWizard() {
           <p className="import-review-sub">
             From <strong>{sourceLabel}</strong>.{" "}
             {importedCount > 0
-              ? `${importedCount.toLocaleString()} photo(s) from this session are already in your library.`
+              ? `${importedCount.toLocaleString()} photo(s) already in your library.`
               : "Nothing is in your library yet."}{" "}
-            {inPlace &&
-              "The photos stay where they are; the ones you add are listed in your library from there. "}
-            Rate, compare and select, then click "Add to library". You can add a few at a time; the
-            session stays open until you close it.
+            {inPlace && "Added photos stay where they are. "}
+            Select what to keep, then click "Add to library".
           </p>
         </div>
         {/* A session can collect from more than one card or folder - add the
@@ -1508,7 +1504,7 @@ export function ImportWizard() {
             {nativePick?.pickFolder && (
               <>
                 <button
-                  className="btn btn-slim"
+                  className="btn btn-sm"
                   onClick={addFolderToOpenSession}
                   disabled={isUploading}
                   title={addHint}
@@ -1517,7 +1513,7 @@ export function ImportWizard() {
                 </button>
                 {nativePick.pickFiles && (
                   <button
-                    className="btn btn-slim"
+                    className="btn btn-sm"
                     onClick={addFilesToOpenSession}
                     disabled={isUploading}
                     title={addHint}
@@ -1542,7 +1538,7 @@ export function ImportWizard() {
               : ""}{" "}
             You can start reviewing now.
             <button
-              className="btn btn-slim"
+              className="btn btn-sm"
               onClick={stopStaging}
               disabled={stagingStopped}
               title={`Stop ${inPlace ? "reading" : "copying"} and keep the photos ${inPlace ? "read" : "copied"} so far`}
@@ -1581,7 +1577,7 @@ export function ImportWizard() {
             {analysisTotal > 0
               ? `${analysisProcessed.toLocaleString()} / ${analysisTotal.toLocaleString()}`
               : ""}{" "}
-            You can review now. Importing becomes available when the analysis finishes.
+            You can review now; importing unlocks when the analysis is done.
           </p>
         )}
         {stagingError && !stagingInBackground && (
@@ -1616,10 +1612,20 @@ export function ImportWizard() {
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
         viewExtras={
-          <label className="filter-field filter-field-inline">
-            <input type="checkbox" checked={hideDuplicates} onChange={(e) => setHideDuplicates(e.target.checked)} />{" "}
+          // A toggle chip like its neighbours rather than a checkbox label:
+          // the same height and on-state as every other toggle in the bar.
+          // data-label reserves the chip's bold width, so turning it on
+          // doesn't push the Filter chip along.
+          <button
+            type="button"
+            className={`toggle-chip toggle-chip--steady${hideDuplicates ? " active" : ""}`}
+            aria-pressed={hideDuplicates}
+            onClick={() => setHideDuplicates(!hideDuplicates)}
+            title="Hide photos that are already in the library"
+            data-label="Hide duplicates"
+          >
             Hide duplicates
-          </label>
+          </button>
         }
       >
         {/* The library's two selection buttons, shown as there: only once a
@@ -1629,10 +1635,10 @@ export function ImportWizard() {
             import checkbox in the bottom bar's selection row. */}
         {marked.size > 0 && (
           <>
-            <button className="btn" onClick={markAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
+            <button className="btn btn-sm" onClick={markAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
               Select all
             </button>
-            <button className="btn" onClick={() => setMarked(new Set())} title="Clear the selection (Esc)">
+            <button className="btn btn-sm" onClick={() => setMarked(new Set())} title="Clear the selection (Esc)">
               Clear selection
             </button>
           </>
@@ -1721,14 +1727,14 @@ export function ImportWizard() {
               on={uploadToImmich}
               onToggle={setUploadToImmich}
               label="Add to Immich"
-              title="Upload the selected photos to Immich after import. RAW files only when “Also upload RAW files” is on in Settings."
+              title="Upload the selected photos to Immich after import. RAW files only if enabled in Settings."
             />
           )}
           {immichConfigured && immichMode === "selective" && (
             <ImmichSyncToggle
               on={syncAllToImmich}
               onToggle={setSyncAllToImmich}
-              title="Mark every imported photo for Immich sync. RAW files only when “Also upload RAW files” is on in Settings. You can also mark single photos in the preview."
+              title="Mark every imported photo for Immich sync. RAW files only if enabled in Settings."
             />
           )}
           {immichConfigured && immichMode === "full" && (
@@ -1787,7 +1793,7 @@ export function ImportWizard() {
               queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
             }}
             disabled={commit.isPending || discard.isPending}
-            title="Leave the review and keep the session open. Nothing is deleted; your selection and ratings are kept, and you can continue from the Import page."
+            title="Keep the session open and come back from the Import page. Nothing is deleted."
           >
             <IconBookmark size={14} /> Continue later
           </button>

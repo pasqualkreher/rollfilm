@@ -57,9 +57,9 @@ export async function confirmCloseSession(
     title: `Close the session “${label}”?`,
     message: folder
       ? notAdded +
-        `Closing deletes the import folder ${folder} and these copies with it. ` +
-        "The files on your card or source folder are not touched."
-      : notAdded + "Closing deletes their copies. Your original files are not touched.",
+        `Closing deletes the import folder ${folder}. ` +
+        "Files on your card or source are not touched."
+      : notAdded + "Closing deletes their copies. Originals are not touched.",
     confirmLabel: folder ? "Close and delete folder" : "Close session",
     danger: true,
   });
@@ -124,8 +124,7 @@ export function ImportSessions() {
     <section className="import-panel">
       <h3 className="section-title">Open import sessions</h3>
       <p className="import-panel-desc">
-        Continue where you left off. Your selection and ratings are kept, and only photos that
-        aren't copied yet are copied.
+        Continue where you left off. Selection and ratings are kept; only missing copies are made.
       </p>
       <div className="source-list">
         {sessions.map((s) => {

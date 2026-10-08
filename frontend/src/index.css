@@ -47,17 +47,6 @@
      <html> with the chosen stack; the value here is Rollfilm, its default
      (the OS's own UI face), for the instant before that runs. */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  /* Focus mode's chip (components/FocusToggle.tsx): the toolbar button while
-     the mode is on and the canvas view's pill wear the same dark grey, a
-     little see-through. Like the stage greys above, deliberately NOT themed -
-     it reads as a thing laid over the picture, not as part of the app. */
-  --focus-chip-bg: rgba(34, 34, 37, 0.72);
-  --focus-chip-bg-hover: rgba(52, 52, 56, 0.85);
-  --focus-chip-border: rgba(255, 255, 255, 0.18);
-  /* ...and the same chip while focus mode is actually on: lighter, so the
-     button says at a glance which side of the switch you are on. */
-  --focus-chip-bg-on: rgba(104, 104, 112, 0.88);
-  --focus-chip-bg-on-hover: rgba(124, 124, 132, 0.94);
   /* Radii: five steps, all riding --corner-scale so Settings > Corners >
      Square flattens every one of them. */
   --radius-xs: calc(4px * var(--corner-scale));
@@ -90,6 +79,19 @@
   /* One height for every small control that shares a bar: .btn-sm, and the
      chips and segmented tools that sit beside them. */
   --control-h-sm: 24px;
+  /* The toolbar system: every bar in the app (the filter bars, the stage bars
+     under a photo, the canvas toolbar, the bottom action bars) takes its
+     height, insets, spacing, divider and type from these, so they all read
+     as the same chrome as the top bar. */
+  --bar-h: 40px;
+  /* 16px: the bars' controls line up with the grid's left edge
+     (.page-scroll padding). */
+  --bar-pad-x: 16px;
+  --bar-gap: 8px;
+  --bar-sep: var(--border);
+  --bar-label-size: var(--label-micro-size);
+  --bar-label-tracking: var(--label-micro-tracking);
+  --bar-control-size: var(--text-sm);
   /* Stacking order, lowest to highest. */
   --z-bar: 25;
   --z-popover: 60;
@@ -250,7 +252,7 @@ body {
   font-family: var(--font-ui);
   /* Desktop-tool density: the browser's 16px default reads like a website;
      pro imaging apps sit around 13-14px for everything that isn't a heading. */
-  font-size: 14px;
+  font-size: var(--text-md);
   -webkit-font-smoothing: antialiased;
   background: var(--bg);
   color: var(--text);
@@ -336,10 +338,10 @@ button {
   /* Title-bar height: on macOS the traffic lights sit in here (see
      :root[data-titlebar="inset"]), so 40px is the native toolbar height, and
      the bar stays that tall everywhere else for one consistent chrome. */
-  min-height: 40px;
-  /* 20px on the left: the logo opens the bar and lines up with the 20px
-     inset of the filter row below. */
-  padding: 2px 12px 2px 20px;
+  min-height: var(--bar-h);
+  /* The logo opens the bar and lines up with the inset of the filter row
+     below (--bar-pad-x). */
+  padding: 2px 12px 2px var(--bar-pad-x);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
@@ -373,7 +375,7 @@ button {
   color: var(--text);
   font: inherit;
   font-weight: 700;
-  font-size: 13px;
+  font-size: var(--text-base);
   letter-spacing: 0.03em;
   white-space: nowrap;
   cursor: pointer;
@@ -405,24 +407,24 @@ button {
 }
 
 .about-modal-name {
-  font-size: 17px;
+  font-size: var(--text-lg);
   font-weight: 700;
 }
 
 .about-modal-version {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .about-modal-site {
   margin-top: 4px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--accent);
 }
 
 .about-modal-text {
   margin: 14px 0 10px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--text-muted);
 }
@@ -433,7 +435,7 @@ button {
 
 .about-modal-contact {
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -454,7 +456,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-muted);
   white-space: nowrap;
@@ -641,6 +643,9 @@ button {
 :root {
   --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  /* A new page (Library -> Albums -> Settings) eases in over this: short
+     enough to read as "instant", long enough to take the edge off the cut. */
+  --dur-page: 140ms;
 }
 
 /* Anchored surfaces hanging down from a trigger: grow out of its bottom edge. */
@@ -927,14 +932,14 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 30px;
+  /* The same 28px box as the icon links at the bar's other end. */
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: 16px;
   line-height: 1;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
@@ -981,10 +986,10 @@ button {
 }
 
 .nav-menu a {
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
   text-decoration: none;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 500;
   color: var(--text);
 }
@@ -1064,7 +1069,7 @@ button {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* Magnifier sitting inside the field's left edge. */
@@ -1088,8 +1093,16 @@ button {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  /* No entrance animation: a desktop app switches views instantly. (Banners
-     and dialogs keep theirs - they arrive, a page is already there.) */
+  /* A new page eases in rather than cutting in. Opacity ONLY: a transform on
+     .page once turned it into the containing block of its position:fixed
+     children (the timeline scrubber, the bottom action bar) and moved them.
+     No fill-mode either, so once the 140ms are over opacity falls back to its
+     natural 1 and no stacking context or compositor layer lingers. The
+     animation runs when the element is created, which is exactly a change of
+     area: a page that stays mounted and only changes its URL (Library
+     filters, arrowing through photos, the editor opening over the photo
+     view) does not re-fade. */
+  animation: pm-fade-in var(--dur-page) var(--ease-out);
 }
 
 /* Hide the native OS scrollbar on the app's scroll containers - the timeline
@@ -1117,17 +1130,23 @@ button {
   height: 0;
 }
 
+/* The toolbar base. On its own it is a boxed bar (frame, radius, a step of
+   room below); the modifiers below only change where it sits. The height is
+   a floor (min-height), not a sum of paddings, so a row of 24px controls and
+   a row with a slightly taller one come out the same 40px as the top bar. One
+   8px step within and between the groups; .control-group--actions and
+   .bar-sep draw the dividers where the row needs one. */
 .filter-bar {
+  box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
-  /* Wider gap between groups (see .control-group, gap 8px) than within them
-     clusters related controls without needing dividers. */
-  gap: 10px 16px;
+  gap: var(--bar-gap);
   align-items: center;
+  min-height: var(--bar-h);
   margin-bottom: 12px;
-  padding: 8px 12px;
+  padding: 0 12px;
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  border: 1px solid var(--bar-sep);
   border-radius: var(--radius);
 }
 
@@ -1142,15 +1161,44 @@ button {
 .filter-bar--sticky {
   position: static;
   margin: 0;
-  padding: 8px 20px;
-  /* One 8px step along the whole row: the gap between the groups is the same
-     as the gap within them (the actions group keeps its own divider). */
-  column-gap: 8px;
+  /* The same 20px inset as the top bar, so the first control lines up with
+     the logo above it. */
+  padding: 0 var(--bar-pad-x);
+  min-height: var(--bar-h);
   border: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--bar-sep);
   border-radius: 0;
   background: var(--bg-elevated);
   flex-shrink: 0;
+}
+
+/* Pinned, the filter dock is always the bar's second row. With no vertical
+   padding that row would push the first up against the top edge and sit on
+   the bottom hairline itself. The padding here is exactly what centring a
+   control in the 40px floor gives, so pinning the dock doesn't move the first
+   row by a pixel. */
+.filter-bar--sticky:has(> .filter-dock) {
+  padding-block: calc((var(--bar-h) - 1px - var(--control-h-sm)) / 2);
+}
+
+/* The centred bar under a photo (photo view, editor, import lightbox): full
+   width, a hairline above, the controls centred. The 160px side padding keeps
+   them clear of the right-flush pair (.stage-end) without pulling them off
+   centre; position: relative anchors that pair and the left-flush Back. It is
+   a size container so its rows tighten on the stage's width, not the
+   window's. Only this modifier may carry the container: on the canvas
+   toolbar it would trap its popovers under the canvas. */
+.filter-bar--stage {
+  position: relative;
+  flex: none;
+  justify-content: center;
+  margin: 0;
+  padding: 0 160px;
+  border: none;
+  border-top: 1px solid var(--bar-sep);
+  border-radius: 0;
+  container-type: inline-size;
+  container-name: stage-toolbar;
 }
 
 /* A page with a docked filter bar becomes a fixed-header column: the page itself
@@ -1160,11 +1208,9 @@ button {
   overflow: hidden;
 }
 
-/* Any heading above the bar (e.g. the album title) keeps page-like insets since
-   the page padding is now zero. The album's bottom Back/name/delete row is a
-   section-title too but NOT a header - excluded, or this higher-specificity
-   rule would override its own margins/gutters (see .album-bottom-bar). */
-.page:has(.filter-bar--sticky) > .section-title:not(.album-bottom-bar) {
+/* Any heading above the bar keeps page-like insets since the page padding is
+   now zero. */
+.page:has(.filter-bar--sticky) > .section-title {
   margin: 0;
   padding: 16px 20px 10px;
 }
@@ -1193,14 +1239,6 @@ button {
   padding-right: 16px;
 }
 
-/* The album's grid is followed by its own Back/name/delete bar, which already
-   keeps the 10px the other stage rows keep - the deep foot on top of that
-   pushed Back well below where it sits under a photo or in the editor. The
-   bar IS the foot here (same reasoning as .page-scroll--canvas). */
-.page-timeline .page-scroll:has(+ .album-bottom-bar) {
-  padding-bottom: 0;
-}
-
 /* Bulk-action bar (shown when photos are selected): pinned to the bottom of the
    window like Photos/Finder, so its actions stay put while the grid scrolls.
    A fully opaque fill + top border/shadow so the photos never show through. */
@@ -1211,8 +1249,11 @@ button {
   bottom: 0;
   z-index: 25;
   margin: 0;
+  /* The toolbar's 40px floor (from .filter-bar) and the top bar's 20px
+     inset: the row centres in the floor, so it needs no vertical padding. */
+  padding: 0 var(--bar-pad-x);
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--bar-sep);
   border-radius: 0;
   background: var(--bg-elevated);
   box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.14);
@@ -1246,6 +1287,22 @@ button {
   /* Wider than the swatches' own spacing, so count, stars, colours and the
      import box read as four things rather than one run of symbols. */
   column-gap: 20px;
+}
+
+/* With no vertical padding the selection row would sit on the bar's top
+   edge. It gets the inset a control has in the 40px floor, and the standing
+   controls under it keep a line exactly as tall as the floor they centre in
+   when they are alone - so ticking the first photo grows the bar upward and
+   moves nothing below by a pixel. Wide windows only: the narrow bar below
+   scrolls with its own padding and wraps the groups onto several rows. */
+@media (min-width: 701px) {
+  .action-bar--bottom:has(> .action-bar-selection) {
+    padding-top: calc((var(--bar-h) - 1px - var(--control-h-sm)) / 2);
+  }
+
+  .action-bar--bottom:has(> .action-bar-selection) > .control-group:not(.action-bar-selection) {
+    min-height: calc(var(--bar-h) - 1px);
+  }
 }
 
 .page:has(.action-bar-selection) .page-scroll {
@@ -1290,12 +1347,13 @@ button {
   bottom: 100%;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 6px 12px;
-  font-size: 12px;
+  gap: var(--bar-gap);
+  /* The bar's own inset, so a message starts flush with its first control. */
+  padding: 6px var(--bar-pad-x);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   background: var(--bg-elevated);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--bar-sep);
 }
 
 .action-bar-messages-list {
@@ -1339,6 +1397,26 @@ button {
   color: var(--danger);
 }
 
+/* Every boxed control in the bar - Select all, the Add to/Edit/Reset
+   triggers, the tag field, Import/Delete - stands as tall as the toolbar's
+   XS-XL segments and its .btn-sm neighbours (--control-h-sm), with the same
+   label size. A fixed height rather than padding, so a button with a glyph,
+   a dropdown with a caret and a text field all come out one line. */
+.action-bar--bottom .btn,
+.action-bar--bottom .tag-filter-btn,
+.action-bar--bottom input[type="text"] {
+  box-sizing: border-box;
+  height: var(--control-h-sm);
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: var(--bar-control-size);
+}
+
+.action-bar--bottom .btn {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 /* Let the tag input give up width on narrow windows instead of forcing its
    whole group onto the next line prematurely. */
 .action-bar--bottom input[type="text"] {
@@ -1352,7 +1430,7 @@ button {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--bar-gap);
 }
 
 /* With every filter behind the single Filter chip, the whole bar fits one
@@ -1362,14 +1440,15 @@ button {
    grid would put it, so it reads as its own thing and not as the last of the
    view toggles. */
 .control-group--filter {
-  margin-left: 8px;
+  margin-left: var(--bar-gap);
 }
 
 /* One divider, right before the actions group - so the Select button reads
-   clearly apart from the Merge toggle next to it. */
+   clearly apart from the Merge toggle next to it. Two steps of room after the
+   line, one (the row gap) before it. */
 .control-group--actions {
-  padding-left: 16px;
-  border-left: 1px solid var(--border);
+  padding-left: calc(var(--bar-gap) * 2);
+  border-left: 1px solid var(--bar-sep);
 }
 
 /* Every action in the group can be conditional (the album page hides all of
@@ -1386,6 +1465,54 @@ button {
   margin-left: auto;
 }
 
+/* The toolbar divider: a hairline one control tall. A fixed height rather
+   than stretching to the row, because dividers also sit inside nested groups
+   (the editor's compare group) that are only a control tall themselves - a
+   stretched line came out 33px in the bar and 18px in the group. Centred, so
+   in a 40px bar it leaves the same 8px above and below as the controls do.
+   .editor-toolbar-sep is the older name for the same line. */
+.bar-sep,
+.editor-toolbar-sep {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: var(--control-h-sm);
+  background: var(--bar-sep);
+}
+
+/* The bar's context title (Library, an album's name, Trash ...): the one
+   word in the row that says where you are, so a step bigger and bolder than
+   the controls. A long album name is capped and gives way first; the muted
+   prefix (.bar-title-sub, "Album") stays whole. The same type as the canvas
+   bar's name, so every screen's name reads alike. Wrap the name in
+   .bar-title-name to get the ellipsis - a flex container can't put one on
+   its bare text. */
+.bar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 32ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0 2px;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bar-title-sub {
+  flex: none;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.bar-title-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @media (max-width: 900px) {
   /* Once the bar wraps, a divider at the start of a new line looks broken. */
   .control-group--actions {
@@ -1393,20 +1520,15 @@ button {
     border-left: none;
   }
 
-  /* Swap the full tab row for the burger menu instead of wrapping the nav
-     onto extra rows - the top bar stays one line tall. */
-  .nav-links {
-    display: none;
+  /* The bar may run to a second row here, and without vertical padding the
+     rows would sit on its edges. Same inset as the dock case above. */
+  .filter-bar--sticky {
+    padding-block: calc((var(--bar-h) - 1px - var(--control-h-sm)) / 2);
   }
 
-  .nav-burger-wrap {
-    display: inline-flex;
-  }
-
-  .top-bar {
-    gap: 12px;
-    padding: 6px 12px;
-  }
+  /* The tab row's fold into the burger menu is not a breakpoint: App.tsx
+     measures the room the search field has left and folds the tabs exactly
+     when that runs short (.top-bar--nav-folded), so the bar never jumps. */
 }
 
 /* Really narrow: the search field gets its own full-width row below the
@@ -1441,9 +1563,9 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 10.5px;
+  font-size: var(--bar-label-size);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--bar-label-tracking);
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -1452,7 +1574,7 @@ button {
   text-transform: none;
   letter-spacing: 0;
   font-weight: 400;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text);
 }
 
@@ -1462,7 +1584,7 @@ button {
   border-radius: var(--radius-pill);
   background: var(--bg);
   border: 1px solid var(--border);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
@@ -1484,7 +1606,7 @@ button {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--bar-control-size);
   font-weight: 500;
   transition: background 0.12s ease, color 0.12s ease;
 }
@@ -1523,7 +1645,7 @@ textarea {
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-base);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -1589,6 +1711,8 @@ textarea:focus-visible {
   height: var(--control-h-sm);
   padding: 0 5px;
   margin: 0 -6px;
+  /* And the bar's label size, like the size buttons and chips beside it. */
+  font-size: var(--bar-control-size);
 }
 
 .filter-bar.filter-bar--sticky select:hover,
@@ -1642,15 +1766,30 @@ textarea:focus-visible {
    treatment is for the bar itself, not its dropdown. */
 .filter-bar.filter-bar--sticky .filter-chip-pop select,
 .filter-bar.filter-bar--sticky .filter-chip-pop input[type="date"],
-.filter-bar.filter-bar--sticky .filter-chip-pop .tag-filter-btn,
-.filter-bar.filter-bar--sticky .filter-dock select,
-.filter-bar.filter-bar--sticky .filter-dock input[type="date"],
-.filter-bar.filter-bar--sticky .filter-dock .tag-filter-btn {
+.filter-bar.filter-bar--sticky .filter-chip-pop .tag-filter-btn {
   background: var(--bg);
   border-color: var(--border);
   height: auto;
   padding: 5px 9px;
   margin: 0;
+  font-size: var(--text-base);
+}
+
+/* In the docked row they are boxed too, but exactly one control tall
+   (--control-h-sm), the same as the size buttons in the row above: every
+   element of the bar shares that one height. */
+.filter-bar.filter-bar--sticky .filter-dock select,
+.filter-bar.filter-bar--sticky .filter-dock input[type="date"],
+.filter-bar.filter-bar--sticky .filter-dock .tag-filter-btn {
+  background: var(--bg);
+  border-color: var(--border);
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  margin: 0;
+}
+
+.filter-bar.filter-bar--sticky .filter-dock input[type="date"] {
+  padding: 0 6px;
 }
 
 /* The filter menu: one labelled row per filter, full-width controls. Relative,
@@ -1660,31 +1799,36 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-width: 250px;
-  /* Room for the pin so no control ever runs under it. */
-  padding-right: 28px;
+  /* As wide as its widest control, the two date pickers side by side, and
+     no wider: a fixed number rather than fit-content, so a long camera or
+     lens name picked in a dropdown ellipsizes instead of widening the panel.
+     The pin sits in the corner on the head line, whose title is short, so
+     it needs no reserved column on the right. Wide enough for two native
+     date pickers to show "mm/dd/yyyy" plus the calendar icon in full: at
+     13px each picker needs ~96px of content, and 240px cut the year to its
+     first two digits. */
+  width: 256px;
+  min-width: 0;
 }
 
-/* The popover lays its fields out in two columns, so ten short fields don't
-   stack into a panel taller than the grid beneath it. The DOM order pairs up
-   on its own: Sort | File type, Album | Rating, Color | Tags, Camera | Lens,
-   Focal length | Date. 230px fits the date row's two native pickers. The docked
-   row has its own horizontal layout and is left alone. */
-.filter-menu:not(.filter-menu--docked) {
-  display: grid;
-  grid-template-columns: repeat(2, 230px);
-  gap: 12px 18px;
-  align-items: start;
+/* The date pickers fill the panel width exactly rather than stopping a
+   couple of pixels short of the fields above them. */
+.filter-menu:not(.filter-menu--docked) .date-range {
+  display: flex;
 }
 
-.filter-menu:not(.filter-menu--docked) .filter-menu-head {
-  grid-column: 1 / -1;
+.filter-menu:not(.filter-menu--docked) .date-range input[type="date"] {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
 }
 
-@media (max-width: 640px) {
-  .filter-menu:not(.filter-menu--docked) {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* Tighter side padding than the other boxed fields in the panel: the native
+   picker's text plus icon is wide, and 9px a side ate the year's last digits.
+   The doubled .filter-bar class outranks the popover rule above. */
+.filter-bar.filter-bar--sticky .filter-chip-pop .filter-menu:not(.filter-menu--docked) .date-range input[type="date"] {
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 /* Menu header: the panel's own title (the pin sits in the corner, not here). */
@@ -1695,9 +1839,9 @@ textarea:focus-visible {
 }
 
 .filter-menu-title {
-  font-size: 11px;
+  font-size: var(--bar-label-size);
   font-weight: 600;
-  letter-spacing: 0.07em;
+  letter-spacing: var(--bar-label-tracking);
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -1712,8 +1856,8 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -1732,100 +1876,106 @@ textarea:focus-visible {
   color: var(--accent);
 }
 
-/* Pinned: the menu docks as its own full-width row under the bar's controls,
-   laid out horizontally so it reads as a filter row rather than a tall column
-   that would eat the grid's height. */
+/* Pinned: the menu docks into the bar as a SECOND ROW of bare controls, the
+   same on every screen (Library, album, smart album, import review): the
+   first row keeps its title, view controls, Filter chip and actions exactly
+   as unpinned, and the fields line up left-aligned under them. Full width,
+   so the bar's own wrapping always puts it on a line of its own - it never
+   shares the first row, whatever that row holds. Narrower than the sum of
+   the fields' fixed widths (a 13" laptop in full screen with the Library's
+   full set) the fields wrap onto a second line of the dock rather than the
+   pin being withheld; the bar sits above the scroll region, so the taller
+   bar just starts the grid lower. Past two lines PhotoFilters folds the dock
+   away (the pin stays set) and the chip serves the same menu as a popover
+   until the bar is wide enough again. */
 .filter-dock {
-  flex-basis: 100%;
+  /* The bar's full width PLUS the two insets the negative margins below pull
+     it out by - a plain 100% basis would stop one inset short of the right
+     edge, because flex sizes the border box and the margins only shift it. */
+  flex: 0 0 calc(100% + 2 * var(--bar-pad-x));
   min-width: 0;
-  margin-top: 2px;
-  padding-top: 10px;
-  padding-bottom: 2px;
-  border-top: 1px solid var(--border);
+  /* A hairline above the fields, full bleed like the bar's own bottom line
+     (the negative side margins reach past the bar's inset and the padding
+     restores it), so the docked row reads as a second bar stacked under the
+     first. One row gap below the line, the same step the rows keep above it,
+     puts the fields in the middle of their own 40px band. */
+  margin: 0 calc(-1 * var(--bar-pad-x));
+  padding: var(--bar-gap) var(--bar-pad-x) 0;
+  border: none;
+  border-top: 1px solid var(--bar-sep);
 }
 
 .filter-menu--docked {
   /* One field height for the whole row (see below): every control is built
      differently - a button, a native date input, a swatch strip, a slider - and
-     left alone they end up 28-39px tall. Bottom-aligned rows then push the
-     taller ones' captions a step above the rest, which is what made the row
-     read as ragged. Pinning one height puts every caption on one line and every
-     control on one band. */
-  --filter-field-h: 30px;
+     left alone they end up 28-39px tall. Pinned to the bar's control height
+     they form one band with the view controls beside them. */
+  --filter-field-h: var(--control-h-sm);
   flex-direction: row;
+  /* Fields that don't fit the bar's width continue on the next line, each
+     line on the bar's own 40px rhythm (field height plus the row gap). */
   flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 10px 18px;
+  align-items: center;
+  column-gap: var(--bar-gap);
+  row-gap: calc(var(--bar-h) - var(--filter-field-h));
+  /* The popover's fixed width is the popover's: docked, the row spans the
+     bar, so the pin's auto margin can push it to the right edge. */
+  width: auto;
   min-width: 0;
   /* The pin is a row item here, not the corner overlay it is in the popover. */
   padding-right: 0;
 }
 
-/* The docked row is meant to be ONE row. The fields share the width and give
-   ground as the window narrows (their labels ellipsize), so the whole filter
-   set stays on one line instead of Date dropping to a second one the moment the
-   bar is a little too tight. Wrapping is still allowed - it is the fallback for
-   a genuinely narrow window, not the normal state.
-
-   The share is weighted rather than equal: an even split makes Rating (which
-   only ever says "Any" or up to five stars) exactly as wide as Camera, and on a
-   wide monitor stretches every dropdown into a bar of empty space. So the
-   name-carrying fields get the larger share, and all of them stop growing at a
-   sane field width. */
+/* In the bar the captions (SORT, CAMERA, ...) would double the row's height,
+   and every control already shows its icon and value. They stay in the
+   accessibility tree only: visually hidden, not removed. */
 .filter-menu--docked .filter-menu-row {
-  flex: 1 1 0;
-  min-width: 96px;
-  max-width: 230px;
+  display: block;
 }
 
-.filter-menu--docked .filter-menu-row--album,
-.filter-menu--docked .filter-menu-row--camera,
-.filter-menu--docked .filter-menu-row--lens {
-  flex-grow: 1.5;
+.filter-menu--docked .filter-menu-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-/* File type says one of three short names, like Sort: capped at the
-   longest ("RAW + JPEG"), giving ground when the row is tight. */
-.filter-menu--docked .filter-menu-row--filetype {
-  flex: 1 1 0;
-  min-width: 72px;
-  max-width: 124px;
+/* The docked row is a left-aligned line of fields. The dropdown fields
+   (sort, file type, rating, tags, album, camera, lens) share the room: each
+   starts at the compact width the tags field needs for its icon, "Any" and
+   caret, and grows evenly with the bar up to a cap, so on a wide window
+   "All cameras" and lens names read in full and on a narrow one they
+   ellipsize (.dropdown-btn has min-width: 0). The width follows the bar,
+   never the chosen value, so picking an option moves nothing. A bar
+   narrower than the fields' sum wraps the surplus onto a second line.
+   Colour, focal length and date are other kinds of control and keep their
+   own fixed widths (below). */
+.filter-menu--docked .filter-menu-row {
+  flex: 1 1 84px;
+  min-width: 0;
+  max-width: 180px;
 }
 
-/* Rating and Sort below are the short fields: capped at their natural width,
-   but free to give ground when the row is tight, so the pin still fits on the
-   line instead of wrapping onto one of its own. */
-.filter-menu--docked .filter-menu-row--rating {
-  flex: 1 1 0;
-  min-width: 72px;
-  max-width: 96px;
-}
-
-/* Sort only ever says one of four short names: it stops growing at the
-   longest, and when the row is tight it gives ground like the other fields
-   (its name ellipsizes) so the album name keeps more room. Its width never
-   depends on the value, so picking another order moves nothing beside it. */
-.filter-menu--docked .filter-menu-row--sort {
-  flex: 1 1 0;
-  min-width: 72px;
-  max-width: 124px;
-}
-
-/* The focal row carries its readout on the caption line (below), so it needs
-   room for both. */
+/* The focal row carries its readout beside the slider (below), so it needs
+   room for both - and the slider itself needs enough track to pick one
+   focal length out of a dozen (at 150px it had about 50px of track, here
+   about 100px). */
 .filter-menu--docked .filter-menu-row--focal {
   position: relative;
-  flex-grow: 1.2;
-  min-width: 130px;
+  flex: 0 0 auto;
+  width: 200px;
+  max-width: none;
 }
 
-/* Colour keeps a fixed width: exactly its eight 16px swatches and their gaps,
-   so the dots are the same size pinned as in the popover and never shrink with
-   the row - the other fields give ground instead. */
+/* Colour: exactly its eight 16px swatches and their gaps, so the dots are the
+   same size pinned as in the popover. */
 .filter-menu--docked .filter-menu-row--color {
-  flex: 0 0 156px;
-  min-width: 156px;
-  max-width: 156px;
+  flex: 0 0 auto;
+  width: 156px;
+  max-width: none;
 }
 
 .filter-menu--docked .filter-menu-row--color .color-label-picker {
@@ -1836,12 +1986,11 @@ textarea:focus-visible {
   flex: 0 0 16px;
 }
 
-/* Date cannot usefully shrink: two native pickers whose text clips rather than
-   ellipsizes. It keeps its natural width and the flexible fields absorb the
-   difference. */
+/* Date: two native pickers whose text clips rather than ellipsizes, so it
+   takes its natural width (about 236px). */
 .filter-menu--docked .filter-menu-row--date {
   flex: 0 0 auto;
-  min-width: 0;
+  width: auto;
   max-width: none;
 }
 
@@ -1849,8 +1998,7 @@ textarea:focus-visible {
    so the fields form one band with their captions on one line. */
 .filter-menu--docked .tag-filter-btn,
 .filter-menu--docked .color-label-picker,
-.filter-menu--docked .focal-range,
-.filter-menu--docked .dual-range {
+.filter-menu--docked .focal-range {
   min-height: var(--filter-field-h);
 }
 
@@ -1859,42 +2007,68 @@ textarea:focus-visible {
   height: var(--filter-field-h);
 }
 
-/* Focal length: the readout rides up onto the caption line, right-aligned, so
-   the control below is a single slider of field height instead of a two-line
-   block that would drag its caption out of the row. (A library with just one
+/* Focal length: the readout sits at the slider's right end on the same line,
+   so the control is a single slider of field height instead of a two-line
+   block that would make the bar taller. Boxed like the dropdown fields beside
+   it, with a "mm" prefix where the others carry their icon - a bare slider in
+   the row said nothing about what it ranges over. (A library with just one
    focal length renders a bare value with no slider - that one stays inline.) */
 .filter-menu--docked .focal-range {
-  justify-content: center;
+  box-sizing: border-box;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  height: var(--filter-field-h);
+  padding: 0 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
+.filter-menu--docked .focal-range > .focal-range-unit {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  line-height: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.filter-menu--docked .focal-range > .dual-range {
+  flex: 1 1 0;
+  min-width: 50px;
+  /* Inside the 24px box: the slider's own 22px, not the field floor, so it
+     doesn't poke a pixel out above and below. */
+  min-height: 0;
+  height: 22px;
+}
+
+/* The readout is a fixed cell ("600–1200" fits), right-aligned: a readout
+   that grew with its digits made the slider beside it shrink while the
+   thumb was being dragged, so the thumb slid out from under the pointer. */
 .filter-menu--docked .focal-range > .focal-range-value {
-  position: absolute;
-  top: 0;
-  right: 0;
-  max-width: 55%;
+  order: 2;
+  flex: 0 0 4.5em;
+  width: 4.5em;
+  text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 14px;
 }
 
-/* Docked, the pin joins the row as its last item, parked at the far right on
-   the control line - as a corner overlay it floated above the fields with
-   nothing to relate to. */
-/* The pin travels with the last filter: that field keeps room for it at its
-   end, and the pin sits in the bottom-right corner - the end of the last line.
-   So it can only drop to a new line together with a filter, never alone. */
+/* Docked, the pin joins the row as its last item, after the last filter - as
+   a corner overlay it floated above the fields with nothing to relate to. */
 .filter-menu--docked .filter-pin {
-  top: auto;
-  bottom: 0;
-  right: 0;
+  position: static;
+  order: 100;
+  flex: 0 0 auto;
+  /* Flush with the bar's right edge, under the first row's trailing control,
+     with the fields' empty room between: the pin is about the row, not the
+     last field. Wrapped, it closes the last line the same way. */
+  margin-left: auto;
   width: var(--filter-field-h);
   height: var(--filter-field-h);
-}
-
-.filter-menu--docked > .filter-menu-row:last-child {
-  margin-right: calc(var(--filter-field-h) + 18px);
 }
 
 /* The docked row has the bar's own "Filter" chip right above it, so the panel's
@@ -1930,12 +2104,12 @@ textarea:focus-visible {
 }
 
 .filter-menu-label {
-  font-size: 10.5px;
+  font-size: var(--bar-label-size);
   font-weight: 600;
   /* Fixed, so a caption is exactly one line box tall everywhere - the docked
      row hangs the focal readout on that line and needs it not to drift. */
   line-height: 14px;
-  letter-spacing: 0.07em;
+  letter-spacing: var(--bar-label-tracking);
   text-transform: uppercase;
   color: var(--text-muted);
   /* A caption never widens its field or wraps to two lines; the row can be
@@ -1972,7 +2146,9 @@ textarea:focus-visible {
 }
 
 .date-range input[type="date"] {
-  width: 8.4em;
+  /* Room for "mm/dd/yyyy" and the calendar icon: at 7em the year was cut
+     off after its first digit. */
+  width: 9.5em;
 }
 
 .date-range-sep {
@@ -1986,7 +2162,6 @@ textarea:focus-visible {
 .filter-bar input[type="date"] {
   background: var(--bg);
   color: var(--text);
-  min-height: 32px;
   font-family: inherit;
   text-transform: none;
   letter-spacing: normal;
@@ -2016,7 +2191,7 @@ textarea:focus-visible {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text);
 }
 
@@ -2050,7 +2225,7 @@ textarea:focus-visible {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 16px;
+  font-size: var(--text-lg);
   line-height: 1;
   padding: 4px 8px;
   cursor: pointer;
@@ -2101,7 +2276,7 @@ textarea:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-modal);
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .wait-overlay-progress {
@@ -2141,7 +2316,7 @@ textarea:focus-visible {
 
 .confirm-modal-body h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-lg);
 }
 
 .confirm-modal-body p {
@@ -2173,14 +2348,14 @@ textarea:focus-visible {
 
 .pair-delete-body h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-lg);
 }
 
 /* deleteConfirmMessage carries its own blank-line breaks between the question
    and the "what happens" paragraphs - keep them. */
 .pair-delete-message {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-md);
   line-height: 1.5;
   color: var(--text);
   white-space: pre-line;
@@ -2189,7 +2364,7 @@ textarea:focus-visible {
 /* "n of them are in an album or canvas" - the one line worth reading twice. */
 .pair-delete-warning {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-md);
   line-height: 1.5;
   color: var(--danger);
   white-space: pre-line;
@@ -2306,14 +2481,15 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 18px;
+  /* The dialogs' one inset (.confirm-modal-body, .pair-delete-body). */
+  padding: 20px 22px;
   border-bottom: 1px solid var(--border);
 }
 
 .dir-picker-path {
   padding: 8px 18px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
@@ -2339,7 +2515,7 @@ textarea:focus-visible {
   color: var(--text);
   padding: 9px 12px;
   border-radius: var(--radius);
-  font-size: 14px;
+  font-size: var(--text-md);
   cursor: pointer;
 }
 
@@ -2358,8 +2534,8 @@ textarea:focus-visible {
 .dir-picker-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  padding: 14px 18px;
+  gap: 8px;
+  padding: 16px 22px 20px;
   border-top: 1px solid var(--border);
 }
 
@@ -2405,7 +2581,7 @@ textarea:focus-visible {
 }
 
 .source-disconnected-badge {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -2421,13 +2597,13 @@ textarea:focus-visible {
 
 .source-path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   word-break: break-all;
 }
 
 .source-meta {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -2452,7 +2628,7 @@ textarea:focus-visible {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
   padding: 4px;
 }
@@ -2467,7 +2643,7 @@ textarea:focus-visible {
   padding: 12px 0 4px;
   text-align: center;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* Justified rows (Google-Photos / Lightroom style): every row shares one
@@ -2518,6 +2694,17 @@ textarea:focus-visible {
   height: auto;
 }
 
+/* This grid mounts every tile (an album of thousands, the trash, search
+   results), unlike the Library's timeline. Tiles far outside the viewport
+   skip rendering until they come near: their box is set by flex-basis and
+   the aspect ratio, not by their contents, so nothing collapses and the
+   scroll height is exact; the tile's own viewport watchers still fire and
+   load the thumbnail as it approaches. The import review has the same rule
+   further down. */
+.thumbnail-grid > .thumb-card {
+  content-visibility: auto;
+}
+
 /* The image box carries the aspect ratio so rows line up even before images
    load; the box ratio equals the photo's own ratio, so object-fit: cover fills
    it without any real cropping. */
@@ -2561,7 +2748,7 @@ textarea:focus-visible {
   /* Left inset so the floating pill doesn't sit flush on the grid's left edge. */
   margin: 0 0 10px 10px;
   padding: 5px 12px;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 650;
   color: var(--text);
   border-radius: var(--radius-lg);
@@ -2574,7 +2761,7 @@ textarea:focus-visible {
 }
 
 .timeline-header-count {
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-muted);
 }
@@ -2602,7 +2789,7 @@ textarea:focus-visible {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   line-height: 1;
   padding: 3px 7px;
@@ -2677,7 +2864,7 @@ textarea:focus-visible {
 }
 
 .scrubber-year {
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 800;
   color: var(--text);
 }
@@ -2738,7 +2925,7 @@ textarea:focus-visible {
   border-radius: var(--radius);
   background: var(--accent);
   color: var(--accent-contrast);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   pointer-events: none;
@@ -2886,7 +3073,8 @@ textarea:focus-visible {
 }
 
 /* Users who prefer reduced motion get everything immediately, no fades or
-   entrance animations. */
+   entrance animations - thumbnails, the photo on the stage, the editor
+   overlay, and the page fade itself (.page). */
 @media (prefers-reduced-motion: reduce) {
   /* .is-instant is listed explicitly: it carries its own transition at a
      higher specificity than the plain img selector, so without it that rule
@@ -2894,7 +3082,8 @@ textarea:focus-visible {
   .thumb-card img,
   .thumb-card img.is-instant,
   .thumb-card .thumb-skeleton.is-done,
-  .detail-photo {
+  .detail-photo,
+  .canvas-shelf-photo {
     transition: none;
   }
   .thumb-card .thumb-skeleton,
@@ -2916,7 +3105,7 @@ textarea:focus-visible {
      active skin — see badge-raw / badge-pair below for the other two kinds. */
   background: var(--text);
   color: var(--bg);
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   padding: 2px 6px;
   border-radius: var(--radius-xs);
   letter-spacing: 0.02em;
@@ -2963,7 +3152,7 @@ textarea:focus-visible {
   left: 6px;
   background: var(--danger);
   color: #fff;
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   padding: 2px 6px;
   border-radius: var(--radius-xs);
 }
@@ -2986,38 +3175,6 @@ textarea:focus-visible {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
-/* Quick add-to-selects button, revealed on hover so it doesn't clutter the
-   grid; stays visible once the photo is actually in the selects set. */
-.selects-toggle {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--radius);
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 18px;
-  line-height: 1;
-  opacity: 0;
-  transition: opacity 0.1s ease, background 0.1s ease;
-  z-index: 1;
-}
-
-.thumb-card:hover .selects-toggle {
-  opacity: 1;
-}
-
-.selects-toggle.in-selects {
-  opacity: 1;
-  background: var(--accent);
-}
-
-.selects-remove,
 .card-remove {
   position: absolute;
   top: 6px;
@@ -3036,13 +3193,11 @@ textarea:focus-visible {
   z-index: 1;
 }
 
-.selects-remove:hover,
 .card-remove:hover {
   background: var(--danger);
 }
 
-/* Card-remove (× ) sits top-right so it doesn't collide with the top-left
-   add-to-selects button. */
+/* Card-remove (×) sits top-right. */
 .card-remove {
   left: auto;
   right: 6px;
@@ -3092,7 +3247,7 @@ textarea:focus-visible {
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
   line-height: 1.2;
 }
@@ -3114,74 +3269,38 @@ textarea:focus-visible {
   min-width: 12ch;
 }
 
-/* The pencil next to the album title stays quiet until the header is hovered
-   or it is tabbed to. */
-.album-rename-btn {
-  padding: 2px 5px;
+/* The pencil next to the album's name in the bar takes no room until the
+   title is hovered or it is tabbed to - the count sits right by the name,
+   the same as on a smart album. On hover it opens its slot (the bar's 8px gap
+   plus its own width), fading and growing in as it does. Scoped to the
+   title: .btn-sm sits later in the file and would otherwise put its 8px side
+   padding back on the closed button. */
+.bar-title .album-rename-btn {
+  box-sizing: border-box;
+  width: 0;
+  padding: 2px 0;
+  /* Its own 1px borders still stand at width 0, so they come off the gap
+     too - the count then sits exactly one bar gap from the name. */
+  margin-left: calc(var(--bar-gap) * -1 - 2px);
+  overflow: hidden;
   line-height: 0;
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transform: scale(0.7);
+  transition:
+    width 0.14s var(--ease-out),
+    margin-left 0.14s var(--ease-out),
+    padding 0.14s var(--ease-out),
+    opacity 0.14s ease,
+    transform 0.14s var(--ease-out);
 }
 
-/* The album's Back/name/delete row, moved under the content like the stage
-   rows of the editor and the photo view: centred, with Back and Delete taken
-   out of the flow on either end (the side padding reserves their room). */
-/* Doubled with .section-title: that rule sits later in the file and would
-   otherwise win the margin back. */
-.section-title.album-bottom-bar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  /* The same clearances as the photo view's stage toolbar: 10px up to the
-     content and the 96px side gutters that anchor Back and Delete - so the
-     Back button sits exactly where it does under a photo. The 20px side and
-     bottom margins ARE the page frame here (see below - the page's own
-     padding is zeroed on every album page), mirroring .page-scroll's side
-     padding so Back lines up with the grid's left edge. As margin, not
-     padding: the absolute Back/Delete anchor to the box edge, and padding
-     would leave them flush with the window. */
-  margin: 10px 20px 20px;
-  padding: 0 96px;
-}
-
-/* A page with a docked filter bar already zeroes its padding (see
-   .page:has(.filter-bar--sticky)). The smart album page has no filter bar but
-   ends in the same bottom bar - without this its .page padding would stack
-   onto .page-scroll's, indenting the grid AND Back 20px deeper than on the
-   manual album. Zeroed too: the scroll region's padding and the bar's margins
-   carry the frame, so both album pages line up exactly. */
-.page:has(> .album-bottom-bar):not(:has(.filter-bar--sticky)) {
-  padding: 0;
-}
-
-.album-bottom-delete {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-/* Same ladder as the photo view's toolbar: on a narrow window the gutters go
-   and the end buttons wrap with the rest of the row. */
-@media (max-width: 800px) {
-  .section-title.album-bottom-bar {
-    padding-left: 0;
-    padding-right: 0;
-  }
-
-  .album-bottom-bar .stage-back-btn,
-  .album-bottom-bar .album-bottom-delete {
-    position: static;
-    transform: none;
-  }
-}
-
-.section-title:hover .album-rename-btn,
-.album-rename-btn:focus-visible {
+.bar-title:hover .album-rename-btn,
+.bar-title .album-rename-btn:focus-visible {
+  width: 22px;
+  padding: 2px 4px;
+  margin-left: 0;
   opacity: 1;
+  transform: scale(1);
 }
 
 /* A tile with a remove × (an album's photos): on hover the file-type badge
@@ -3223,7 +3342,7 @@ textarea:focus-visible {
   padding: 8px 10px;
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
   color: #fff;
-  font-size: 12px;
+  font-size: var(--text-sm);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3513,6 +3632,14 @@ textarea:focus-visible {
   border-bottom: 1px solid var(--border);
 }
 
+/* The quiet word after the panel's heading ("non-destructive"). */
+.editor-head-sub {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+
 /* Stage + panel sit below the header. */
 /* Framed like the detail lightbox: page-like padding around everything, the
    back-arrow column left of the image box, and the image in a rounded elevated
@@ -3579,35 +3706,15 @@ textarea:focus-visible {
   background: var(--stage-light);
 }
 
-/* Light/Black background switch in its own row under the image (like the
-   lightbox toolbar), not floating over the photo. */
-.editor-bg-toggle {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  /* Background steps, the zoom control, hold-to-compare and the two compare
-     modes share this row. Everything but the zoom steps is icon-only (the
-     words live in the tooltips), so the row fits one line even in a narrow
-     stage; the wrap stays as the last-resort fallback. */
-  flex-wrap: wrap;
-  gap: 8px;
-  /* Measured by the row itself, not the window: the editor's stage is a side
-     panel narrower than the viewport, so a viewport breakpoint kept the hint
-     on a "wide" window and wrapped the row anyway. */
-  container-type: inline-size;
-  container-name: stage-toolbar;
-  /* A toolbar strip under the stage, on the chrome tone with a hairline above:
-     the same bar the photo view has (.detail-image-toolbar). */
-  flex: none;
-  min-height: 40px;
-  margin: 0;
-  background: var(--bg-elevated);
-  border-top: 1px solid var(--border);
-  /* As on the photo view: anchors the right-flush pair (.stage-end), side
-     padding keeps the centred controls clear of it. */
-  position: relative;
-  padding: 0 160px;
-}
+/* The editor's row under the image (background steps, zoom, hold-to-compare,
+   the two compare modes) is the shared stage bar: `filter-bar
+   filter-bar--stage editor-bg-toggle` in the markup, so its height, inset,
+   hairline, the right-flush .stage-end anchor and the stage-toolbar size
+   container all come from there - the same bar the photo view has
+   (.detail-image-toolbar). Everything but the zoom steps is icon-only (the
+   words live in the tooltips), so the row fits one line even in a narrow
+   stage; the base's wrap stays as the last-resort fallback. The class stays
+   for the stacked-layout rule that drops the side gutters. */
 
 /* The baseline switch, a divider, then the compares it feeds - one unit, so the
    row wraps around it rather than through it. Same gap as the row itself. */
@@ -3638,7 +3745,7 @@ textarea:focus-visible {
 /* The third step has no icon that says "the camera's JPEG" - it is the three
    letters, small enough to sit level with the icons beside them. */
 .editor-baseline .editor-baseline-jpg {
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -3665,12 +3772,8 @@ textarea:focus-visible {
   background: var(--stage-dark);
 }
 
-.editor-toolbar-sep {
-  width: 1px;
-  align-self: stretch;
-  margin: 3px 0;
-  background: var(--border);
-}
+/* .editor-toolbar-sep: styled with .bar-sep (the toolbar block near
+   .control-group), one divider for every bar. */
 
 /* Hold-to-compare button (icon-only, the eye); highlights while the baseline
    is being shown. */
@@ -3814,7 +3917,7 @@ textarea:focus-visible {
   border-radius: var(--radius-xs);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  font-size: 10.5px;
+  font-size: var(--label-micro-size);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3841,7 +3944,7 @@ textarea:focus-visible {
 }
 
 .editor-grid-select {
-  font-size: 12px;
+  font-size: var(--text-sm);
   padding: 4px 8px;
   width: 100%;
 }
@@ -3862,13 +3965,13 @@ textarea:focus-visible {
 .editor-select-inline {
   flex: none;
   min-width: 96px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 400;
 }
 
 .editor-select-inline .dropdown-btn {
   padding: 3px 8px;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 /* The histogram's slot at the top of the edit panel. Sticky, so it stays in
@@ -3956,7 +4059,7 @@ textarea:focus-visible {
 }
 
 .editor-wb-pick-error {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
@@ -4041,7 +4144,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 6px;
   padding: 6px 4px 6px 8px;
-  font-size: 13px;
+  font-size: var(--text-base);
   text-align: left;
 }
 
@@ -4100,14 +4203,14 @@ textarea:focus-visible {
 
 .editor-preset-empty {
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .editor-preset-select {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* The inline preset-name field reuses the select's sizing but needs input chrome. */
@@ -4314,7 +4417,7 @@ input.editor-preset-select {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text);
 }
 
@@ -4375,7 +4478,7 @@ input.editor-preset-select {
 
 .editor-hint {
   color: #9a9aa0;
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .editor-hint-loading {
@@ -4407,7 +4510,7 @@ input.editor-preset-select {
   border-radius: var(--radius-pill);
   background: rgba(20, 20, 22, 0.72);
   color: #e6e6ea;
-  font-size: 12px;
+  font-size: var(--text-sm);
   pointer-events: none;
   user-select: none;
   animation: stage-wait-in 0.15s ease 0.25s both;
@@ -4588,7 +4691,7 @@ input.editor-preset-select {
 .editor-slider-val {
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 /* A number being typed for the slider (click the slider, type): shown in
@@ -4622,7 +4725,7 @@ input.editor-preset-select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 400;
   color: var(--text-muted);
 }
@@ -4637,7 +4740,7 @@ input.editor-preset-select {
   margin-left: 12px;
   margin-right: auto;
   align-self: center;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 400;
   color: var(--text-muted);
 }
@@ -4744,16 +4847,11 @@ input.editor-preset-select {
 
 /* Undo / redo sit at the left end of the secondary row, opposite Reset all -
    the three are the same kind of action (they move the edit around) and none of
-   them is what the footer is primarily for. Sized down from the standard 36px
-   icon button so they match the small ghost buttons beside them. */
+   them is what the footer is primarily for. The standard 28px icon button,
+   level with the small ghost buttons beside them. */
 .editor-history-btns {
   display: flex;
   gap: 4px;
-}
-
-.editor-history-btns .icon-btn {
-  width: 30px;
-  height: 30px;
 }
 
 .editor-footer-primary {
@@ -4770,7 +4868,7 @@ input.editor-preset-select {
 
 .editor-footer-error {
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--text-sm);
   margin: 0;
 }
 
@@ -4780,7 +4878,7 @@ input.editor-preset-select {
   flex: 1;
   text-align: center;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   padding: 9px 0;
 }
 
@@ -4791,8 +4889,10 @@ input.editor-preset-select {
 }
 
 /* Narrow windows: the fixed 320px side panel would squeeze the photo into a
-   sliver - stack the panel (with its own scroll area) below the stage instead. */
-@media (max-width: 760px) {
+   sliver - stack the panel (with its own scroll area) below the stage instead.
+   700px is under the app window's 720px minimum (main.js): in the app the
+   panel always stays beside the stage, only a browser tab stacks. */
+@media (max-width: 700px) {
   .editor-body {
     flex-direction: column;
   }
@@ -4878,7 +4978,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 12px 24px;
   color: #fff;
-  font-size: 13px;
+  font-size: var(--text-base);
   flex-wrap: wrap;
   flex-shrink: 0;
   justify-content: space-between;
@@ -4944,7 +5044,7 @@ input.editor-preset-select {
   background: rgba(255, 255, 255, 0.15);
   padding: 2px 8px;
   border-radius: var(--radius-xs);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 .tag-chip {
@@ -4956,7 +5056,7 @@ input.editor-preset-select {
   color: var(--text);
   padding: 3px 6px 3px 10px;
   border-radius: var(--radius-pill);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 /* Multi-select tag filter (button + checkbox popover) used in the filter bar. */
@@ -4974,7 +5074,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--text-base);
   cursor: pointer;
   max-width: 160px;
 }
@@ -4994,6 +5094,11 @@ input.editor-preset-select {
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 600;
+}
+
+.tag-filter-btn > .icon {
+  flex: none;
+  opacity: 0.8;
 }
 
 .tag-filter-btn-label {
@@ -5036,9 +5141,13 @@ input.editor-preset-select {
   box-shadow: var(--shadow-menu);
 }
 
-.tag-filter-search {
+/* Same story as input.dropdown-search: outrank input[type="text"] and keep
+   the box one control tall. */
+input.tag-filter-search {
   width: 100%;
+  height: var(--control-h-sm);
   margin-bottom: 6px;
+  padding: 0 8px;
   box-sizing: border-box;
 }
 
@@ -5053,9 +5162,9 @@ input.editor-preset-select {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 6px;
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text);
   cursor: pointer;
 }
@@ -5082,7 +5191,7 @@ input.editor-preset-select {
 
 .tag-filter-empty {
   padding: 8px 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -5094,7 +5203,7 @@ input.editor-preset-select {
   border-top: 1px solid var(--border);
   background: none;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--text-base);
   cursor: pointer;
 }
 
@@ -5134,28 +5243,38 @@ input.editor-preset-select {
   gap: 1px;
 }
 
-/* Searchable menus: the box stays put while the matches scroll under it. */
-.dropdown-search {
+/* Searchable menus: a boxed field like the tag popover's "Find a tag...",
+   inset inside the menu's padding with the options, one control tall. It
+   stays put while the matches scroll under it. Written as
+   input.dropdown-search so it outranks the form-field rule
+   input[type="text"] (0,1,1), which would otherwise bring its 7px padding
+   and make the box a third taller than the options. Stretched to the menu
+   (with size=1 in Dropdown.tsx) rather than sized by itself, so the menu is
+   as wide as its entries or the field it hangs from, never as wide as a
+   20-character text box. */
+input.dropdown-search {
   position: sticky;
-  top: -4px;
+  top: 0;
   z-index: 1;
-  width: 100%;
-  margin: -4px 0 4px;
-  padding: 7px 8px;
+  width: auto;
+  min-width: 0;
+  align-self: stretch;
+  height: var(--control-h-sm);
+  margin: 0 0 4px;
+  padding: 0 8px;
   box-sizing: border-box;
-  background: var(--bg-elevated);
-  border: none;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--text-base);
   outline: none;
   flex-shrink: 0;
 }
 
 .dropdown-empty {
   padding: 6px 8px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -5167,12 +5286,12 @@ input.editor-preset-select {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 5px 8px;
+  padding: 6px 10px;
   border: none;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--text-base);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -5211,7 +5330,7 @@ input.editor-preset-select {
 }
 
 .focal-range-value {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -5305,9 +5424,9 @@ input.editor-preset-select {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px;
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text);
   cursor: pointer;
 }
@@ -5330,7 +5449,7 @@ input.editor-preset-select {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--text-md);
   line-height: 1;
   padding: 0 2px;
   cursor: pointer;
@@ -5399,7 +5518,7 @@ input.editor-preset-select {
 }
 
 .copy-kind-text > span {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -5428,7 +5547,7 @@ input.editor-preset-select {
 
 .import-start-folder-label {
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .import-start-folder-path {
@@ -5436,7 +5555,7 @@ input.editor-preset-select {
   min-width: 0;
   display: flex;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -5467,7 +5586,7 @@ input.editor-preset-select {
   visibility: hidden;
   margin: 0;
   padding-left: 1.4em;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--text-muted);
 }
@@ -5485,16 +5604,63 @@ input.editor-preset-select {
 
 .tag-input-error {
   color: var(--danger, #d33);
-  font-size: 12px;
+  font-size: var(--text-sm);
   margin-top: 6px;
+}
+
+/* A tag field with the plus inside its right edge, so box and action read
+   as one control rather than two neighbours. Shared by the bulk bar and the
+   photo view's tag editor. */
+.tag-form {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+}
+
+/* The same width at both places, a touch narrower than the bar's old cap
+   (200px), so the field reads as a small control rather than a wide box;
+   the right padding leaves room for the plus inside. */
+.tag-form input[type="text"] {
+  width: 180px;
+  max-width: 100%;
+  min-width: 0;
+  padding-right: 28px;
+}
+
+/* The plus inside the field: no border or fill of its own, dimmed until a
+   tag is typed, so it belongs to the box rather than standing beside it. */
+.tag-form-add {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.tag-form-add:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.tag-form-add:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* In the bulk bar the reason hangs above the field as a small label: set
    inline beside it, it pushed every control to its right along the bar. */
-.bulk-tag-form {
-  position: relative;
-}
-
 .bulk-tag-error {
   position: absolute;
   left: 0;
@@ -5506,17 +5672,6 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-}
-
-.lightbox-close {
-  position: absolute;
-  top: 16px;
-  right: 20px;
-  background: none;
-  border: none;
-  color: #fff;
-  font-size: 24px;
-  cursor: pointer;
 }
 
 .lightbox-nav-btn {
@@ -5659,7 +5814,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 500;
   transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
 }
@@ -5669,13 +5824,28 @@ input.editor-preset-select {
   background: var(--hover);
 }
 
+/* A word with its glyph in front, as the bar buttons carry one: the icon
+   sits on the text line and keeps a fixed gap, whether the button is a plain
+   .btn or a dropdown trigger. */
+.btn-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.btn-label svg {
+  flex: none;
+  opacity: 0.8;
+}
+
 /* Compact variant for inline secondary actions (e.g. "Clear"). */
 .btn-sm {
   /* A fixed height, not padding, so an icon, a word or both come out the same
      size; a <button> centres its content vertically on its own. */
   height: var(--control-h-sm);
   padding: 0 8px;
-  font-size: 12px;
+  font-size: var(--bar-control-size);
 }
 
 /* Round icon button - a small circle with a single glyph (e.g. the back arrow
@@ -5750,7 +5920,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--bar-control-size);
   font-weight: 500;
   transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
@@ -5765,6 +5935,100 @@ input.editor-preset-select {
   border-color: transparent;
   color: var(--accent);
   font-weight: 600;
+}
+
+/* Icon-only toggle: a square cell the height of its neighbours, the glyph
+   centred, the word in its tooltip. Hover and on-state come from
+   .toggle-chip, so it reads like every other toggle in the bar. */
+.toggle-chip--icon {
+  flex: none;
+  justify-content: center;
+  width: var(--control-h-sm);
+  padding: 0;
+}
+
+/* ---- The grid filter bar's own controls (components/PhotoFilters,
+   ViewPrefsControls) ---------------------------------------------------- */
+
+/* XS-XL: tighter cells than a worded segment, and a floor so the one-letter
+   sizes aren't slimmer than XS/XL. Column flex, so the reserving ::after
+   below stacks under the label instead of beside it. */
+.segmented--sizes button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The on-state is bolder, and a bolder word is wider - picking a size or
+   turning a worded toggle on nudged every control after it by a pixel or
+   three. An invisible, zero-height bold copy of the label (data-label) holds
+   the bold width at all times, so the cell is the same size either way. The
+   "/ ''" alt text keeps the copy out of the accessible name. */
+.segmented--sizes button::after,
+.toggle-chip--steady::after {
+  content: attr(data-label) / "";
+  display: block;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: 600;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* A worded toggle chip that keeps its width (see above); used for the
+   import review's "Hide duplicates". */
+.toggle-chip--steady {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+}
+
+/* A steady chip with an icon before its word: the row keeps icon and word
+   side by side, and the hidden bold copy is padded by the icon's width so
+   the reserved width covers the whole row, not just the word. */
+.toggle-chip-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.toggle-chip--iconlabel::after {
+  padding-left: 19px;
+}
+
+/* Clear all filters: a square icon cell, the height of the chip beside it.
+   Always in the row and only hidden while nothing filters, so setting the
+   first filter doesn't shift what follows. */
+.btn.bar-clear {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  padding: 0;
+}
+
+.btn.bar-clear--idle {
+  visibility: hidden;
+}
+
+/* The Filter chip's count: a fixed cell ("· 12" wide) so the chip is the same
+   width with and without a count and nothing after it moves. */
+.filter-chip-count {
+  display: inline-block;
+  min-width: 2em;
+  margin-left: 2px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+.filter-chip-count--idle {
+  visibility: hidden;
 }
 
 .btn.primary {
@@ -6040,7 +6304,7 @@ input.editor-preset-select {
 }
 
 .detail-photo-error-name {
-  font-size: 12px;
+  font-size: var(--text-sm);
   word-break: break-all;
 }
 
@@ -6055,28 +6319,14 @@ input.editor-preset-select {
   box-shadow: none;
 }
 
-.detail-image-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Same compact, icon-first row as the editor's toolbar; the gaps tighten on
-     narrow stages and wrapping is the last resort. */
-  gap: 8px;
-  flex-wrap: wrap;
-  container-type: inline-size;
-  container-name: stage-toolbar;
-  /* A toolbar strip under the stage, on the chrome tone with a hairline above
-     (the editor's .editor-bg-toggle is the same bar). */
-  flex: none;
-  min-height: 40px;
-  background: var(--bg-elevated);
-  border-top: 1px solid var(--border);
-  /* Anchors the right-flush pair (.stage-end: Edit/View + Panel); the side
-     padding, the same on both sides, keeps the centred controls clear of it
-     without pulling them off-centre. */
-  position: relative;
-  padding: 0 160px;
-}
+/* The row under the photo (photo view, import lightbox) is the shared stage
+   bar - `filter-bar filter-bar--stage detail-image-toolbar` in the markup -
+   so the layout, the hairline above, the 160px gutters that keep the centred
+   controls clear of the right-flush pair (.stage-end: Edit/View + Panel) and
+   the stage-toolbar size container all come from .filter-bar--stage. The
+   same compact, icon-first row as the editor's (.editor-bg-toggle); the gaps
+   tighten on narrow stages and wrapping is the last resort. The class stays
+   for the stacked-layout rule that drops the gutters. */
 
 /* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps and
    the live percentage. One row, same height as the background toggle beside
@@ -6089,11 +6339,11 @@ input.editor-preset-select {
 
 /* Tabular figures so the number doesn't jitter while the wheel is turning. */
 .zoom-readout-value {
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   color: var(--text);
   min-width: 44px;
-  text-align: right;
+  text-align: center;
 }
 
 /* The stage toolbars are size containers, so this fires on the ROW's width,
@@ -6107,6 +6357,30 @@ input.editor-preset-select {
 
   .zoom-readout-value {
     min-width: 36px;
+  }
+}
+
+/* The bar's own insets can't follow its container query (a container
+   doesn't query itself), so they step down with the window: with the side
+   panel open a 900px window leaves the stage ~560px, a 720px window ~400px.
+   The insets keep the centred group clear of Back on the left and the
+   Edit/Panel pair on the right; 100px is what those need with their words,
+   84px once the pair keeps only its glyphs. Panel hidden, the stage is
+   wider than it needs to be for these - no harm. */
+@media (max-width: 900px) {
+  .filter-bar--stage {
+    padding: 0 100px;
+  }
+}
+
+@media (max-width: 800px) {
+  .filter-bar--stage {
+    padding: 0 84px;
+  }
+
+  .stage-switch-btn .stage-btn-text,
+  .detail-panel-toggle .stage-btn-text {
+    display: none;
   }
 }
 
@@ -6190,7 +6464,7 @@ input.editor-preset-select {
 }
 
 .slideshow-counter {
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.7);
   min-width: 56px;
@@ -6209,7 +6483,7 @@ input.editor-preset-select {
 }
 
 .slideshow-speeds button {
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   color: rgba(255, 255, 255, 0.65);
@@ -6354,13 +6628,13 @@ input.editor-preset-select {
   background: none;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-base);
   outline: none;
 }
 
 .detail-rename-ext {
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -6452,7 +6726,7 @@ input.editor-preset-select {
 
 .ctx-menu-head {
   padding: 6px 10px 4px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
@@ -6461,13 +6735,13 @@ input.editor-preset-select {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 5px 10px;
+  padding: 6px 10px;
   border: none;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-base);
   text-align: left;
   cursor: pointer;
 }
@@ -6536,7 +6810,7 @@ input.editor-preset-select {
 
 .info-card-stars {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
   letter-spacing: 1px;
 }
@@ -6579,7 +6853,7 @@ input.editor-preset-select {
   margin: 10px 0 0;
   padding-top: 9px;
   border-top: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   display: -webkit-box;
   -webkit-line-clamp: 5;
@@ -6599,7 +6873,7 @@ input.editor-preset-select {
   border-radius: var(--radius-pill);
   background: var(--hover);
   color: var(--text-muted);
-  font-size: 10.5px;
+  font-size: var(--label-micro-size);
   line-height: 1.6;
   white-space: nowrap;
 }
@@ -6611,7 +6885,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
 }
 
-/* The action buttons under the filename (Edit / Add to selects ...):
+/* The action buttons under the filename (Edit / Add to ...):
    always one row - buttons shrink and ellipsize their label rather than
    wrapping onto a second line in the narrow sidebar. */
 .detail-action-row {
@@ -6754,11 +7028,12 @@ input.editor-preset-select {
   aspect-ratio: 1 / 1;
 }
 
-/* 800px, not 700: the side panel starts wrapping under the photo at ~760px
-   (400px image basis + 40px gap + 280px panel + page padding), and once it
-   wraps the non-scrolling desktop layout would clip it - so the stacked,
-   scrollable layout must kick in before that point. */
-@media (max-width: 800px) {
+/* Under the app window's 720px minimum (main.js), so in the app the panel
+   always stays beside the photo: .detail-layout is nowrap and .detail-main
+   has min-width: 0, so the photo column shrinks rather than clips (the
+   stage toolbar tightens with its container query). Only a browser tab
+   gets the stacked, scrollable layout. */
+@media (max-width: 700px) {
   /* Stacked layout: let the page scroll as a whole again so the image and panel
      don't get clipped when they can't sit side by side. */
   .detail-page {
@@ -6839,7 +7114,7 @@ input.editor-preset-select {
 .exif-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .exif-table td {
@@ -6853,7 +7128,7 @@ input.editor-preset-select {
 
 .import-toolbar {
   display: flex;
-  gap: 12px;
+  gap: var(--bar-gap);
   align-items: center;
   margin-bottom: 16px;
 }
@@ -6885,7 +7160,7 @@ input.editor-preset-select {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 500;
   color: var(--text-muted);
 }
@@ -6908,7 +7183,7 @@ input.editor-preset-select {
   border-radius: 50%;
   border: 1px solid var(--border);
   background: var(--bg);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 700;
 }
 
@@ -6950,7 +7225,7 @@ input.editor-preset-select {
 .import-review-sub {
   margin: 0;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* "Still loading in the background" notice on the review page: photos keep
@@ -6964,18 +7239,12 @@ input.editor-preset-select {
   border-radius: var(--radius);
   background: var(--accent-soft, rgba(80, 120, 255, 0.12));
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--text-base);
   width: fit-content;
 }
 
 /* Inline action inside a banner - "Stop copying & keep these". Sized down so
    the banner stays a sentence with a button in it, not a toolbar. */
-.import-staging-banner .btn-slim {
-  padding: 2px 8px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .import-staging-banner--error {
   background: rgba(220, 80, 80, 0.14);
 }
@@ -7021,13 +7290,12 @@ input.editor-preset-select {
 }
 
 .import-panel > .section-title {
-  font-size: 15px;
   margin: 0 0 4px;
 }
 
 .import-panel-desc {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
   margin: 0 0 14px;
 }
 
@@ -7041,7 +7309,7 @@ input.editor-preset-select {
   margin: 0 0 14px;
   padding-left: 18px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.7;
 }
 
@@ -7063,7 +7331,7 @@ input.editor-preset-select {
 
 .import-add-hint {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 /* The session's folder on the review page: label, path, "Show in Finder".
@@ -7073,7 +7341,7 @@ input.editor-preset-select {
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .import-folder-path {
@@ -7137,8 +7405,9 @@ input.editor-preset-select {
   left: 0;
   z-index: 30;
   min-width: 220px;
-  padding: 6px;
-  border-radius: var(--radius-lg);
+  /* The same box as .dropdown-menu and the other menus. */
+  padding: 4px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
@@ -7153,7 +7422,8 @@ input.editor-preset-select {
   gap: 8px;
   width: 100%;
   text-align: left;
-  padding: 9px 12px;
+  padding: 6px 10px;
+  font-size: var(--text-base);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -7212,7 +7482,7 @@ input.editor-preset-select {
 }
 
 .section-title {
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 650;
   letter-spacing: -0.01em;
   margin: 0 0 12px;
@@ -7251,7 +7521,7 @@ input.editor-preset-select {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* Photo "pins": the thumbnail itself, framed - closer to Apple Photos than a
@@ -7291,7 +7561,7 @@ input.editor-preset-select {
   border-radius: var(--radius);
   background: var(--accent, #3b82f6);
   color: #fff;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 700;
   line-height: 18px;
   text-align: center;
@@ -7345,7 +7615,7 @@ input.editor-preset-select {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   background: var(--accent, #3b82f6);
   color: #fff;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -7418,7 +7688,7 @@ input.editor-preset-select {
 .onboarding-progress-label {
   display: block;
   margin-top: 2px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -7451,7 +7721,7 @@ input.editor-preset-select {
 
 .onboarding-step-title {
   margin: 0 0 6px;
-  font-size: 15px;
+  font-size: var(--text-lg);
 }
 
 .onboarding-lead {
@@ -7491,13 +7761,13 @@ input.editor-preset-select {
 }
 
 .onboarding-paths code {
-  font-size: 12px;
+  font-size: var(--text-sm);
   word-break: break-all;
 }
 
 .onboarding-size {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -7509,13 +7779,13 @@ input.editor-preset-select {
 .onboarding-field-label {
   display: block;
   margin-bottom: 3px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .onboarding-field-value {
   display: block;
-  font-size: 13px;
+  font-size: var(--text-base);
   word-break: break-all;
   padding: 7px 9px;
   border: 1px solid var(--border);
@@ -7603,13 +7873,13 @@ input.editor-preset-select {
 
 .setup-error {
   margin: 14px 0 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--danger);
 }
 
 .setup-note {
   margin: 22px 0 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   line-height: 1.5;
   text-align: left;
@@ -7619,7 +7889,7 @@ input.editor-preset-select {
    otherwise the vertical scrollbar sits at the content edge instead of the
    window's right edge. Only the inner column is width-limited. */
 .help-inner {
-  max-width: 820px;
+  max-width: 640px; /* same reading column as Settings (.settings-page section > *) */
 }
 
 /* Exactly what Settings does (see .settings-page): the page's own 20px top
@@ -7671,8 +7941,8 @@ input.editor-preset-select {
   background: none;
   color: var(--text-muted);
   font: inherit;
-  font-size: 14px;
-  padding: 8px 8px 10px;
+  font-size: var(--text-md);
+  padding: 8px 14px 10px;
   white-space: nowrap;
   flex: 0 0 auto;
   cursor: pointer;
@@ -7696,7 +7966,7 @@ input.editor-preset-select {
 .help-blurb {
   margin: 0 0 14px;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 /* Jump list for the topics inside the open chapter. */
@@ -7713,7 +7983,7 @@ input.editor-preset-select {
   background: var(--bg-elevated);
   color: var(--text-muted);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-base);
   padding: 4px 12px;
   cursor: pointer;
 }
@@ -7746,7 +8016,7 @@ input.editor-preset-select {
   align-items: baseline;
   gap: 8px;
   margin: 0 0 10px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -7756,7 +8026,7 @@ input.editor-preset-select {
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--bg-elevated);
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -7777,7 +8047,7 @@ input.editor-preset-select {
   border-left: 3px solid var(--accent);
   border-radius: var(--radius);
   background: var(--bg-elevated);
-  font-size: 14px;
+  font-size: var(--text-md);
   line-height: 1.55;
 }
 
@@ -7788,7 +8058,7 @@ input.editor-preset-select {
   margin: 26px 0 8px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border);
-  font-size: 14px;
+  font-size: var(--text-md);
   font-weight: 650;
   color: var(--text);
 }
@@ -7827,14 +8097,14 @@ kbd {
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: center;
 }
 
 .help-shortcuts {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .help-shortcuts th,
@@ -7920,7 +8190,7 @@ kbd {
    curve's regions and distinct from the Basic Highlights/Shadows sliders. */
 .curve-param-hint {
   margin: 0 0 8px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--text-muted);
 }
@@ -7992,7 +8262,7 @@ kbd {
   border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   color: var(--text-muted);
-  font-size: 10.5px;
+  font-size: var(--label-micro-size);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
   pointer-events: none;
@@ -8051,7 +8321,7 @@ kbd {
 
 .wb-pad-axis {
   position: absolute;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   color: var(--text-muted);
   line-height: 1;
@@ -8100,7 +8370,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   color: var(--text-muted);
 }
@@ -8158,7 +8428,7 @@ kbd {
 }
 
 .grade-wheel-label {
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text);
 }
@@ -8205,7 +8475,7 @@ kbd {
 }
 
 .grade-wheel-readout {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -8307,7 +8577,7 @@ kbd {
 /* One-line helper under a mask's type controls (e.g. linear gradient width). */
 .mask-hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -8328,7 +8598,7 @@ kbd {
 
 .mask-empty {
   margin: 4px 0 6px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -8358,7 +8628,7 @@ kbd {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
   padding: 2px;
 }
@@ -8373,7 +8643,7 @@ kbd {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8381,7 +8651,7 @@ kbd {
 }
 
 .mask-row-type {
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -8393,7 +8663,8 @@ kbd {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 16px;
+  /* The glyph size of .icon-btn. */
+  font-size: 15px;
   line-height: 1;
   padding: 0 4px;
 }
@@ -8705,7 +8976,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 500;
   color: var(--text);
 }
@@ -8713,13 +8984,13 @@ kbd {
 .theme-tile-check {
   margin-left: auto;
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
 }
 
 /* One line on what the skin is for, under its name. */
 .theme-tile-hint {
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.3;
   color: var(--text-muted);
 }
@@ -8730,7 +9001,7 @@ kbd {
   align-items: center;
   gap: 8px;
   margin: 18px 0 0;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -8744,7 +9015,7 @@ kbd {
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   letter-spacing: 0.04em;
 }
 
@@ -8795,13 +9066,13 @@ kbd {
 }
 
 .theme-summary-label {
-  font-size: 14px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--text);
 }
 
 .theme-summary-sub {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -8825,7 +9096,7 @@ kbd {
 .theme-modal-footer {
   display: flex;
   justify-content: flex-end;
-  padding: 12px 18px;
+  padding: 16px 22px 20px;
   border-top: 1px solid var(--border);
 }
 
@@ -8866,7 +9137,7 @@ kbd {
   background: none;
   color: var(--text-muted);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--text-md);
   padding: 8px 14px 10px;
   cursor: pointer;
   /* The underline is always there, transparent until active - so nothing
@@ -8940,17 +9211,17 @@ kbd {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 15px;
+  font-size: var(--text-lg);
 }
 
 .settings-tour-progress {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .settings-tour-text {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-md);
   line-height: 1.5;
   color: var(--text);
 }
@@ -8984,7 +9255,7 @@ kbd {
 
 /* Status / result line after an action; the error variant recolours only. */
 .settings-note {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   margin: 10px 0 0;
 }
@@ -8995,7 +9266,7 @@ kbd {
 /* A read-only path (library folder, data folder). */
 .settings-path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
   word-break: break-all;
   margin: 0 0 12px;
@@ -9004,7 +9275,7 @@ kbd {
 /* A minor heading inside a section (e.g. "Sync mode"). */
 .settings-subhead {
   margin: 0 0 4px;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
@@ -9026,18 +9297,26 @@ kbd {
   padding: 0;
   max-height: 360px;
   overflow-y: auto;
+  /* Narrower than the reading column so the buttons stay near the names. */
+  max-width: 300px;
 }
 .settings-tag-row {
-  display: flex;
+  /* Name, count, then the two buttons in fixed columns so every row's
+     controls line up regardless of the name's length or indent. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 6px;
   padding: 2px 0;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .settings-tag-row .settings-tag-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.settings-tag-row .settings-tag-count {
+  text-align: right;
 }
 /* A parent no photo carries as a tag of its own: a folder, not a tag. */
 .settings-tag-row--implied .settings-tag-name {
@@ -9045,7 +9324,7 @@ kbd {
 }
 .settings-tag-count {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   margin-right: 2px;
 }
 .settings-tag-row .icon-btn {
@@ -9110,7 +9389,7 @@ kbd {
 .font-tile-sample > small {
   display: block;
   margin-top: 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 .settings-option.busy {
@@ -9131,7 +9410,7 @@ kbd {
 }
 .settings-option-desc {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 
@@ -9150,7 +9429,7 @@ kbd {
   display: block;
   margin-bottom: 4px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .settings-field > input {
   width: 100%;
@@ -9180,7 +9459,7 @@ kbd {
   margin: 0;
   padding-left: 0;
   list-style: none;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .settings-list li {
   padding: 3px 0;
@@ -9208,7 +9487,7 @@ kbd {
 }
 
 .maintenance-eta {
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -9315,7 +9594,7 @@ kbd {
 
 .smart-card-name {
   color: #fff;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
@@ -9325,7 +9604,7 @@ kbd {
 
 .smart-card-count {
   color: rgba(255, 255, 255, 0.8);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 /* Moments tree: same-label moments ("Mountains · Alpine", "Mountains ·
@@ -9367,7 +9646,7 @@ button.smart-card {
    --error variant for failures. The auto-dismiss lives in
    utils/transientMessage.ts. */
 .status-note {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -9405,7 +9684,7 @@ button.smart-card {
 /* Muted inline hint next to a smart row's title ("Analyzing your photos…"). */
 .smart-row-hint {
   margin-left: 8px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 400;
   color: var(--text-muted);
 }
@@ -9440,7 +9719,7 @@ button.smart-card {
    numbers below don't start cold. */
 .stats-page-sub {
   margin: -6px 0 14px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -9448,7 +9727,7 @@ button.smart-card {
    uppercase labels, not competing with the page title or the card titles. */
 .stats-section-label {
   margin: 22px 0 8px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -9517,7 +9796,7 @@ button.smart-card {
 }
 
 .stat-tile-label {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -9538,12 +9817,17 @@ button.smart-card {
   height: 100%;
   border-radius: var(--radius-xs);
   background: var(--accent);
-  animation: stats-grow-x 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
   transform-origin: left center;
 }
 
+/* The growth plays only on the visit that fetched the numbers (.stats-grow,
+   set by the page) - not again on every return to the page. */
+.stats-page.stats-grow .stat-tile-meter-fill {
+  animation: stats-grow-x 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
 .stat-tile-sub {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
   margin-top: 3px;
 }
@@ -9579,7 +9863,7 @@ button.smart-card {
 
 .stats-card-note {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -9590,12 +9874,12 @@ button.smart-card {
 
 .stats-card-title {
   margin: 0 0 2px;
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .stats-card-desc {
   margin: 0 0 10px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -9610,7 +9894,7 @@ button.smart-card {
   grid-template-columns: minmax(90px, 38%) 1fr auto;
   align-items: center;
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   border-radius: var(--radius-sm);
 }
 
@@ -9644,9 +9928,12 @@ button.smart-card {
     color-mix(in srgb, var(--accent) 82%, transparent),
     var(--accent)
   );
-  animation: stats-grow-x 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
   transform-origin: left center;
   transition: opacity 0.14s ease, width 0.35s ease;
+}
+
+.stats-page.stats-grow .stats-bar-fill {
+  animation: stats-grow-x 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
 
 .stats-bar-count {
@@ -9662,7 +9949,7 @@ button.smart-card {
 .stats-bar-share {
   min-width: 30px;
   text-align: right;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
   opacity: 0.75;
 }
@@ -9683,7 +9970,7 @@ button.smart-card {
   /* Matches the year-label row under the plot (16px label + 4px gap) so the
      ticks sit level with the gridlines. */
   margin-bottom: 20px;
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   line-height: 1;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -9744,7 +10031,7 @@ button.smart-card {
 }
 
 .stats-col-count {
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   transition: color 0.14s ease;
@@ -9762,9 +10049,12 @@ button.smart-card {
     color-mix(in srgb, var(--accent) 62%, transparent)
   );
   opacity: 0.85;
-  animation: stats-grow-y 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
   transform-origin: bottom center;
   transition: opacity 0.14s ease, height 0.35s ease, background-color 0.14s ease;
+}
+
+.stats-page.stats-grow .stats-col-bar {
+  animation: stats-grow-y 0.6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
 
 /* The busiest year (called out in the card's header) stands at full strength,
@@ -9782,7 +10072,7 @@ button.smart-card {
 .stats-col-label {
   height: 16px;
   line-height: 16px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
   text-align: center;
   white-space: nowrap;
@@ -9827,13 +10117,13 @@ button.smart-card {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  min-height: 34px;
+  min-height: var(--bar-h);
   max-width: 1080px;
   margin: 0 0 12px;
 }
 
 .stats-filterbar-hint {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -9950,7 +10240,7 @@ button.stats-col:disabled {
   align-items: center;
   justify-content: center;
   min-height: 120px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
@@ -9989,7 +10279,10 @@ button.stats-col:disabled {
 @media (prefers-reduced-motion: reduce) {
   .stats-bar-fill,
   .stat-tile-meter-fill,
-  .stats-col-bar {
+  .stats-col-bar,
+  .stats-page.stats-grow .stats-bar-fill,
+  .stats-page.stats-grow .stat-tile-meter-fill,
+  .stats-page.stats-grow .stats-col-bar {
     animation: none;
     transition: none;
   }
@@ -10048,7 +10341,7 @@ button.stats-col:disabled {
   gap: 8px;
   z-index: 2;
   pointer-events: none;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted, inherit);
 }
 
@@ -10087,8 +10380,10 @@ button.stats-col:disabled {
    Longest values sized in: "RAW+JPG", "Already in library", "999 / 999". */
 .lightbox-overlay--page .lightbox-filename {
   flex: 0 0 auto;
-  width: 24ch;
-  max-width: 24ch;
+  /* Room for a camera name (DSCF1234.jpeg) and little more, so the badge
+     sits next to it instead of across a gap; longer names ellipsize. */
+  width: 16ch;
+  max-width: 16ch;
 }
 
 .lightbox-overlay--page .lightbox-controls-meta .badge-inline {
@@ -10172,8 +10467,12 @@ button.stats-col:disabled {
 /* The toolbar holds only what is ALWAYS available, so it never reshuffles
    under the pointer; the selection's own tools live in the bar below it. The
    two read as one header, hence no gap between them. */
+/* Height and gaps are the toolbar's own (.filter-bar: the 40px floor, one
+   8px step), restated here so this bar reads as one of the set. */
 .canvas-toolbar {
   flex-wrap: wrap;
+  gap: var(--bar-gap);
+  min-height: var(--bar-h);
   margin-bottom: 0;
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
@@ -10191,7 +10490,7 @@ button.stats-col:disabled {
 .canvas-print-export .tag-filter-btn {
   height: var(--control-h-sm);
   padding-block: 0;
-  font-size: 12px;
+  font-size: var(--bar-control-size);
 }
 
 /* Tools: an icon with its name beside it and the explanation in the
@@ -10213,7 +10512,7 @@ button.stats-col:disabled {
    a stacking context, and its popovers (page setup, versions, export) would
    then sit under the canvas instead of over it. */
 .canvas-tool-label {
-  font-size: 12px;
+  font-size: var(--bar-control-size);
   line-height: 1;
 }
 
@@ -10249,7 +10548,7 @@ button.stats-col:disabled {
   border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--bg);
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   font-weight: 700;
   line-height: 15px;
   text-align: center;
@@ -10264,19 +10563,23 @@ button.stats-col:disabled {
 /* The second bar: what is selected, and what can be done with it. Always
    present - when nothing is selected it says how to select something - so the
    canvas below never jumps as a selection comes and goes. */
+/* The toolbar's 40px floor and 8px step; the height comes from the floor, so
+   no vertical padding. Boxed (on its own) it keeps the boxed bar's 12px
+   inset; hung off the page's bar it takes the 20px one (.page-scroll--canvas
+   below). */
 .canvas-action-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  min-height: 38px;
+  gap: var(--bar-gap);
+  min-height: var(--bar-h);
   margin-bottom: 12px;
-  padding: 5px 14px;
+  padding: 0 12px;
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--bar-sep);
   border-top: none;
   border-radius: 0 0 var(--radius) var(--radius);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* The blank canvas explaining itself: one light-grey line over the middle
@@ -10289,7 +10592,7 @@ button.stats-col:disabled {
   left: 50%;
   transform: translate(-50%, -50%);
   max-width: calc(100% - 48px);
-  font-size: 14px;
+  font-size: var(--text-md);
   line-height: 1.4;
   text-align: center;
   color: rgba(128, 128, 128, 0.75);
@@ -10303,11 +10606,15 @@ button.stats-col:disabled {
   white-space: nowrap;
 }
 
+/* The toolbar divider's shape (.bar-sep): one control tall and centred - a
+   stretched line came out 33px in the 40px bar, taller than the other bars'. */
 .canvas-action-divider {
+  flex: none;
   width: 1px;
-  align-self: stretch;
-  margin: 3px 4px;
-  background: var(--border);
+  align-self: center;
+  height: var(--control-h-sm);
+  margin: 0 4px;
+  background: var(--bar-sep);
 }
 
 /* The action bar is always ONE row. When it is too narrow for the full
@@ -10356,7 +10663,7 @@ button.stats-col:disabled {
 .canvas-action-group {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--bar-gap);
   flex-wrap: nowrap;
 }
 
@@ -10383,7 +10690,7 @@ button.stats-col:disabled {
 
 .canvas-panel-label {
   flex: 1 0 auto;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -10391,7 +10698,7 @@ button.stats-col:disabled {
    canvas" is not something a two-word label can carry. */
 .canvas-panel-note {
   flex: 1 0 100%;
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--text-muted);
 }
@@ -10402,7 +10709,7 @@ button.stats-col:disabled {
   gap: 7px;
   min-width: 300px;
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .canvas-help > div {
@@ -10451,7 +10758,7 @@ button.stats-col:disabled {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -10462,7 +10769,7 @@ button.stats-col:disabled {
 }
 
 .page-rail-hint {
-  font-size: 10px;
+  font-size: var(--label-micro-size);
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
@@ -10553,7 +10860,7 @@ button.stats-col:disabled {
 }
 
 .page-card-number {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -10625,12 +10932,12 @@ button.stats-col:disabled {
 
 .crash-panel h3 {
   margin: 0 0 8px;
-  font-size: 16px;
+  font-size: var(--text-lg);
 }
 
 .crash-panel p {
   margin: 0 0 14px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-muted);
 }
 
@@ -10639,7 +10946,7 @@ button.stats-col:disabled {
   padding: 10px 12px;
   overflow-x: auto;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--danger);
   background: var(--bg);
   border: 1px solid var(--border);
@@ -10741,7 +11048,7 @@ button.stats-col:disabled {
   gap: 10px;
   max-width: calc(100% - 32px);
   padding: 7px 10px 7px 12px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.35;
   color: var(--text);
   background: var(--bg-elevated);
@@ -11031,7 +11338,7 @@ button.stats-col:disabled {
   align-items: center;
   justify-content: center;
   gap: 14px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: rgba(255, 255, 255, 0.7);
   pointer-events: none;
 }
@@ -11102,44 +11409,6 @@ button.stats-col:disabled {
 
 .canvas-print.is-focus .canvas-print-sheet {
   box-shadow: none;
-}
-
-/* Focus mode's one remaining control in the canvas view
-   (components/FocusToggle.tsx): a small dark-grey pill centred at the bottom
-   of the picture, half there until the pointer finds it. It sits low enough
-   to clear the sheet's bottom edge - straddling it, the blur behind the pill
-   picked up the white paper and the grey turned pale. Dark in every theme:
-   it belongs to the picture's surround, not to the app. */
-.focus-toggle {
-  position: absolute;
-  left: 50%;
-  bottom: 8px;
-  transform: translateX(-50%);
-  z-index: 20;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border: 1px solid var(--focus-chip-border);
-  border-radius: var(--radius-pill);
-  background: var(--focus-chip-bg);
-  backdrop-filter: blur(8px);
-  color: rgba(255, 255, 255, 0.85);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  opacity: 0.45;
-  transition: opacity 0.2s ease;
-}
-
-.focus-toggle:hover,
-.focus-toggle:focus-visible {
-  opacity: 1;
-}
-
-/* In the canvas view the pill fades with the rest of its chrome instead. */
-.canvas-print:not(.is-idle) .focus-toggle {
-  opacity: 0.8;
 }
 
 /* Alignment guides: only ever drawn while something is being dragged, and only
@@ -11316,7 +11585,7 @@ button.stats-col:disabled {
 }
 
 .canvas-field-label {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   margin-right: 2px;
 }
@@ -11334,7 +11603,7 @@ button.stats-col:disabled {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--bar-control-size);
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -11344,13 +11613,14 @@ button.stats-col:disabled {
 .canvas-number,
 .filter-bar .canvas-number {
   width: 74px;
-  padding: 5px 6px 5px 8px;
+  height: var(--control-h-sm);
+  padding: 0 6px 0 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--bar-control-size);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -11369,7 +11639,7 @@ button.stats-col:disabled {
   min-width: 5ch;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: var(--bar-control-size);
   color: var(--text-muted);
 }
 
@@ -11389,7 +11659,7 @@ button.stats-col:disabled {
   gap: 6px;
   padding: 3px 4px;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .canvas-version:hover {
@@ -11417,7 +11687,7 @@ button.stats-col:disabled {
 
 .canvas-version-date {
   flex: none;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
@@ -11524,8 +11794,18 @@ button.stats-col:disabled {
   position: absolute;
 }
 
+/* Photos on a shelf sheet ease in once decoded, like the album covers - and
+   like them paint at once when the thumbnail was already seen this session
+   (CanvasSheet's ShelfPhoto starts them in .loaded then). Opacity only, the
+   frame's geometry is set by the layout. */
 .canvas-shelf-photo {
   object-fit: cover;
+  opacity: 0;
+  transition: opacity 240ms ease;
+}
+
+.canvas-shelf-photo.loaded {
+  opacity: 1;
 }
 
 .canvas-shelf-text {
@@ -11548,7 +11828,7 @@ button.stats-col:disabled {
 }
 
 .canvas-shelf-name {
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
   overflow: hidden;
@@ -11637,7 +11917,7 @@ button.stats-col:disabled {
 
 .canvas-filmstrip-note {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   padding: 4px 2px 8px;
 }
 
@@ -11714,7 +11994,7 @@ button.stats-col:disabled {
   position: absolute;
   right: 3px;
   bottom: 2px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1;
   padding: 2px 4px;
   border-radius: var(--radius-sm);
@@ -11744,17 +12024,21 @@ button.stats-col:disabled {
    docked bar with a floating box under it. The negative side margins undo the
    scroll region's inset; the padding matches the sticky bar's, so the controls
    line up with the ones above them. */
+/* Not .filter-bar--sticky: that modifier would switch the page onto the
+   docked-header layout (.page:has(.filter-bar--sticky)), and these bars
+   already sit outside the canvas's pan area. The height is the toolbar's
+   40px floor, not a sum of paddings. */
 .page-scroll--canvas .canvas-toolbar {
   margin: 0 -20px;
-  padding: 8px 20px;
+  padding: 0 var(--bar-pad-x);
   border: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--bar-sep);
   border-radius: 0;
 }
 
 .page-scroll--canvas .canvas-action-bar {
   margin: 0 -20px 12px;
-  padding: 5px 20px;
+  padding: 0 var(--bar-pad-x);
   border-left: none;
   border-right: none;
   border-radius: 0;
@@ -11805,7 +12089,7 @@ button.stats-col:disabled {
 
 .canvas-list-meta {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .canvas-list-actions {
@@ -11930,7 +12214,7 @@ button.stats-col:disabled {
 
 /* Group headers inside the combined "Add to..." dropdown. */
 .dropdown-group-label {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -11978,17 +12262,6 @@ button.stats-col:disabled {
      action bar above: the strip runs the full window width, edge to edge. */
   margin-left: -20px;
   margin-right: -20px;
-}
-
-.canvas-title {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-  font-size: 13px;
-  align-self: center;
-  padding: 0 2px;
 }
 
 /* While the edit panel is docked it takes its own column: the WHOLE canvas
@@ -12206,15 +12479,54 @@ a.info-card-chip--canvas:hover {
   align-items: center;
   justify-content: center;
   color: rgba(0, 0, 0, 0.35);
-  font-size: 13px;
+  font-size: var(--text-base);
   pointer-events: none;
 }
 
-/* The Trash page's title wears the page's own icon, like the nav. */
-.trash-title {
+/* Trash on the shared docked bar (.filter-bar--sticky): title, divider,
+   actions, the same as the Library. The Trash title wears the page's own
+   icon, like the nav; .bar-title already lays it out, so the old .trash-title
+   rule is gone. */
+
+/* The pill's own 10px lead is for a pill after a heading's bare text; inside
+   .bar-title the title's 8px gap already spaces it, and both together pushed
+   the count off from the title. */
+.bar-title .count-pill {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  box-sizing: border-box;
+  height: var(--control-h-sm);
+  margin-left: 0;
+  padding: 0 9px;
+}
+
+/* The rename field, the one text input in a bar: control height like the
+   buttons around it. input[type="text"] (0,1,1) would otherwise outrank the
+   class and bring its 7px form padding. */
+.bar-title input.album-title-input {
+  box-sizing: border-box;
+  height: var(--control-h-sm);
+  padding: 0 6px;
+}
+
+/* Trash's explanation, after the divider: muted, one line, cut short with an
+   ellipsis (the tooltip carries the whole sentence). A zero basis rather than
+   its text width, so the wrapping bar shrinks the sentence instead of
+   breaking the actions onto a second row; it then grows into the free space
+   and so pushes the actions to the right edge. */
+.trash-explainer {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+/* Outcome lines ("Added 3 photos ...", errors) at the top of the scroll
+   region, above the grid. Only the spacing - the look is .status-note's. */
+.page-note {
+  margin: 0 0 12px;
 }
 
 /* The full-window workspaces start under the app's top bar (--chrome-top,
@@ -12232,22 +12544,22 @@ a.info-card-chip--canvas:hover {
   top: var(--chrome-top);
 }
 
-/* Focus mode (F - components/FocusToggle.tsx): the app's top bar goes, and
-   nothing else. <html data-focus> hides it, and with --chrome-top at zero
-   every full-window workspace (the rule above) starts at the very top, so
-   the editors get that height for the picture while keeping their own panel,
-   toolbar, rail and filmstrip - focus mode is for working, not for looking.
-   (The canvas view is the exception and hides its own chrome as well; that
-   lives with the rest of .canvas-print.is-focus above.) Last in the file so
-   these win over the panel-hidden rules above.
+/* Focus mode (View menu, Cmd+F, F in the editors - state/focusMode.ts): the
+   app's top bar goes, and nothing else. <html data-focus> hides it, and with
+   --chrome-top at zero every full-window workspace (the rule above) starts
+   at the very top, so the editors get that height for the picture while
+   keeping their own panel, toolbar, rail and filmstrip - focus mode is for
+   working, not for looking. (The canvas view is the exception and hides its
+   own chrome as well; that lives with the rest of .canvas-print.is-focus
+   above.) Last in the file so these win over the panel-hidden rules above.
 
    Eased both ways, like the side panel: the bar slides up out of the window
    while the workspace's top edge rises with it - same length, same curve, so
    the edge stays on the bar's bottom the whole way and the picture grows with
    the slide (the editor refits inside its ResizeObserver, frame for frame).
-   The bar's dock keeps its place in the layout: the workspace covers that
-   strip anyway, and collapsing it would reflow the page underneath (the
-   library grid) for nothing. */
+   The bar's dock rises with it too (a negative top margin of its own height,
+   on the same curve), so the pages in the flow - the library grid, an album,
+   the settings - take the strip as well and start at the window's top. */
 .editor-overlay:not(.editor-overlay--docked),
 .canvas-workspace,
 .canvas-print {
@@ -12263,6 +12575,14 @@ a.info-card-chip--canvas:hover {
 
 :root[data-focus] {
   --chrome-top: 0px;
+}
+
+.top-bar-dock {
+  transition: margin-top 0.28s var(--ease-out);
+}
+
+:root[data-focus] .top-bar-dock {
+  margin-top: calc(-1 * var(--top-bar-height, 47px));
 }
 
 :root[data-focus] .top-bar {
@@ -12282,50 +12602,23 @@ a.info-card-chip--canvas:hover {
   .canvas-workspace,
   .canvas-print,
   .top-bar,
+  .top-bar-dock,
   :root[data-focus] .top-bar {
     transition: none;
   }
 }
 
-/* Focus mode's button, in the photo editor's toolbar and the canvas
-   editor's: the way in, and - since the toolbars stay - the way back out.
-   Dark grey and a little see-through rather than the accent, the same chip
-   in every theme and in every view, matching the canvas view's pill. */
-.btn.focus-btn {
-  background: var(--focus-chip-bg);
-  border-color: var(--focus-chip-border);
-  color: rgba(255, 255, 255, 0.78);
-}
-
-.btn.focus-btn:hover:not(:disabled) {
-  background: var(--focus-chip-bg-hover);
-  border-color: var(--focus-chip-border);
-  color: #fff;
-}
-
-/* On, and it has to look it: the grey lightens, the edge turns bright and
-   the label goes fully white, with a soft halo around the chip. Still the
-   same dark-grey chip - lit, not recoloured. */
-.btn.focus-btn.active {
-  background: var(--focus-chip-bg-on);
-  border-color: rgba(255, 255, 255, 0.6);
-  color: #fff;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12);
-}
-
-.btn.focus-btn.active:hover:not(:disabled) {
-  background: var(--focus-chip-bg-on-hover);
-  border-color: rgba(255, 255, 255, 0.75);
-  color: #fff;
-}
-
-
 /* ==== Native chrome pass ================================================== */
 
 /* ---- macOS: the traffic lights sit inside the top bar (main.js hiddenInset) */
 :root[data-titlebar="inset"] .top-bar {
-  /* 12px offset + three 12px buttons with 8px gaps + air. */
-  padding-left: 78px;
+  /* 12px offset + three 12px buttons with 8px gaps + air. In NATIVE pixels:
+     the page zoom (Cmd +/-, main.js hands the factor over as --zoom) scales
+     the bar but not the lights, so the inset is divided by it - zoomed out,
+     the bar keeps the lights' 40px and their 78px of room; zoomed in, the
+     shell moves the lights down to the bar's new middle. */
+  padding-left: calc(78px / var(--zoom, 1));
+  min-height: max(var(--bar-h), calc(var(--bar-h) / var(--zoom, 1)));
   /* The lights hang at y 14 (main.js) and read centred at about 21px; the
      bar's content sat 2-3px above that (measured on a screenshot). Moving the
      bottom padding to the top puts logo, tabs and icons on the lights' line. */
@@ -12335,9 +12628,9 @@ a.info-card-chip--canvas:hover {
   -webkit-app-region: drag;
 }
 /* Fullscreen hides the lights, so the inset goes (back to the plain bar's
-   20px, which lines the logo up with the filter row). */
+   --bar-pad-x, which lines the logo up with the filter row). */
 :root[data-titlebar="inset"][data-fullscreen] .top-bar {
-  padding-left: 20px;
+  padding-left: var(--bar-pad-x);
   padding-top: 2px;
   padding-bottom: 2px;
 }

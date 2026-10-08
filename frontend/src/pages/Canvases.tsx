@@ -3,7 +3,7 @@
 // photos reach them from the library's Select mode ("Add to canvas") or from
 // the filmstrip inside the canvas itself. A card opens the canvas as it will
 // print (the view); the pencil on the card, or in the view, opens the editor.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -12,6 +12,7 @@ import { useAppDialogs } from "../components/AppDialogs";
 import { EMPTY_SHEET_DOC, shelfSheets, ShelfSheetItems } from "../components/CanvasSheet";
 import { IconCanvas, IconPencil, IconPlus, IconRename, IconTrash } from "../components/Icons";
 import { errorText } from "../utils/apiError";
+import { useScrollMemory } from "../utils/scrollMemory";
 import { LoadingState } from "../components/Spinner";
 
 // The card's preview: the working layout's first sheet - the paper itself
@@ -52,6 +53,10 @@ export function Canvases() {
     queryKey: ["canvas-list"],
     queryFn: () => api.canvases.list(),
   });
+  // Back on the shelf where it was left; the canvases must be there first,
+  // the spinner has nothing to scroll.
+  const pageRef = useRef<HTMLDivElement>(null);
+  useScrollMemory(pageRef, "canvases", { ready: !!canvases });
 
   const createCanvas = useMutation({
     mutationFn: () => api.canvases.create(name.trim() || "Canvas"),
@@ -112,12 +117,11 @@ export function Canvases() {
   const openView = (id: string) => navigate(`/canvas/${id}/view`);
 
   return (
-    <div className="page">
+    <div className="page" ref={pageRef}>
       <h2 className="section-title">Canvas</h2>
       <p className="page-subtitle" style={{ color: "var(--text-muted)", marginTop: -8 }}>
-        Free design surfaces: place photos by hand on pages or an endless sheet, print or export.
-        Everything you do is saved as you go. Click a canvas to see it as it will print; the
-        pencil opens it for editing. Add photos from the library&rsquo;s Select mode.
+        Place photos by hand on pages or an endless sheet, then print or export. Click a canvas to
+        preview it, the pencil edits it. Add photos from the library&rsquo;s Select mode.
       </p>
 
       <div className="album-create-row" style={{ display: "flex", gap: 8, margin: "16px 0" }}>

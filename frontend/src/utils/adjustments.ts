@@ -253,6 +253,11 @@ export type FilmSim =
   | "fuji_eterna_500"
   | "fuji_eterna_500_vivid"
   | "fuji_instax_color"
+  | "cinestill_800t"
+  | "kodak_5247_ii"
+  | "kodak_exr_200t_5293"
+  | "kodak_exr_100t_5248"
+  | "kodak_vision_320t_5277"
   // The film scan looks (film_sims.CLUT_SIMS).
   | "kodak_portra_160_nc"
   | "kodak_portra_160_vc"
@@ -321,6 +326,8 @@ export type FilmSim =
   | "polaroid_690"
   | "polaroid_px_70"
   | "polaroid_px_680"
+  | "polaroid_px_100uv_cold"
+  | "polaroid_px_100uv_warm"
   | "polaroid_time_zero"
   | "polaroid_polachrome"
   | "fuji_fp_100c"
@@ -724,6 +731,11 @@ export const FILM_SIMS: { value: FilmSim; label: string; swatch: string; group?:
   { value: "agfa_vista_200", label: "Agfa Vista 200", group: "negative", swatch: "linear-gradient(135deg, #0285c9 50%, #ec9a03 50%)" },
   { value: "agfa_vista_400", label: "Agfa Vista 400", group: "negative", swatch: "linear-gradient(135deg, #1faffa 50%, #d69c11 50%)" },
   { value: "agfa_ultra_color_100", label: "Agfa Ultra Color 100", group: "negative", swatch: "linear-gradient(135deg, #0e98d3 50%, #f16f0a 50%)" },
+  { value: "cinestill_800t", label: "CineStill 800T", group: "negative", swatch: "linear-gradient(135deg, #5990c9 50%, #b28b05 50%)" },
+  { value: "kodak_5247_ii", label: "Eastman 100T 5247 II", group: "cinema", swatch: "linear-gradient(135deg, #578ba2 50%, #9e8d2a 50%)" },
+  { value: "kodak_exr_200t_5293", label: "EXR 200T 5293", group: "cinema", swatch: "linear-gradient(135deg, #5c8eb6 50%, #9b8908 50%)" },
+  { value: "kodak_exr_100t_5248", label: "EXR 100T 5248", group: "cinema", swatch: "linear-gradient(135deg, #5c94c7 50%, #a68236 50%)" },
+  { value: "kodak_vision_320t_5277", label: "Vision 320T 5277", group: "cinema", swatch: "linear-gradient(135deg, #558ab4 50%, #a68b48 50%)" },
   { value: "kodak_vision3_50d", label: "Vision3 50D", group: "cinema", swatch: "linear-gradient(135deg, #247d9b 50%, #c3901d 50%)" },
   { value: "kodak_vision3_250d", label: "Vision3 250D", group: "cinema", swatch: "linear-gradient(135deg, #198091 50%, #c18a14 50%)" },
   { value: "kodak_verita_200d", label: "Verita 200D", group: "cinema", swatch: "linear-gradient(135deg, #27859a 50%, #bd891b 50%)" },
@@ -781,6 +793,8 @@ export const FILM_SIMS: { value: FilmSim; label: string; swatch: string; group?:
   { value: "polaroid_690", label: "Polaroid 690", group: "instant", swatch: "linear-gradient(135deg, #06cdda 50%, #be8103 50%)" },
   { value: "polaroid_px_70", label: "Polaroid PX-70", group: "instant", swatch: "linear-gradient(135deg, #dbd300 50%, #c0990d 50%)" },
   { value: "polaroid_px_680", label: "Polaroid PX-680", group: "instant", swatch: "linear-gradient(135deg, #c7b84c 50%, #c1922b 50%)" },
+  { value: "polaroid_px_100uv_cold", label: "Polaroid PX-100 UV+ · Cold", group: "instant", swatch: "linear-gradient(135deg, #ffd77a 50%, #2171a7 50%)" },
+  { value: "polaroid_px_100uv_warm", label: "Polaroid PX-100 UV+ · Warm", group: "instant", swatch: "linear-gradient(135deg, #ffe1b5 50%, #3b6ba5 50%)" },
   { value: "polaroid_time_zero", label: "Time Zero · Expired", group: "instant", swatch: "linear-gradient(135deg, #fee4d2 50%, #d68b0b 50%)" },
   { value: "polaroid_polachrome", label: "Polachrome", group: "instant", swatch: "linear-gradient(135deg, #d9bdad 50%, #a9996f 50%)" },
   { value: "fuji_fp_100c", label: "Fuji FP-100C", group: "instant", swatch: "linear-gradient(135deg, #3469ba 50%, #bb8611 50%)" },

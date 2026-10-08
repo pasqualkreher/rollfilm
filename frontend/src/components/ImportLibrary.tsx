@@ -94,9 +94,8 @@ export function ImportLibrary() {
     <div className="import-panel">
       <h3 className="section-title">Import a library</h3>
       <p className="import-panel-desc">
-        Merge another Rollfilm library into this one, for example from a second drive. Photos
-        come across <strong>with</strong> their ratings, color labels, edits, tags and albums.
-        Nothing here is removed, and the other library is only read.
+        Merge another Rollfilm library into this one. Ratings, labels, edits, tags and albums come
+        along. The other library is only read.
       </p>
 
       {running && (

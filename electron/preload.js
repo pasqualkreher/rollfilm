@@ -54,6 +54,20 @@ contextBridge.exposeInMainWorld("photoManager", {
     ipcRenderer.on("pm:fullscreen", handler);
     return () => ipcRenderer.removeListener("pm:fullscreen", handler);
   },
+  // The page zoom factor (Cmd +/-, 1 = actual size) and a subscription to
+  // changes; the top bar keeps the traffic lights' inset in native pixels.
+  getZoom: () => ipcRenderer.invoke("pm:get-zoom"),
+  onZoom: (callback) => {
+    const handler = (_event, factor) => callback(Number(factor) || 1);
+    ipcRenderer.on("pm:zoom", handler);
+    return () => ipcRenderer.removeListener("pm:zoom", handler);
+  },
   // Hide/show the traffic lights (focus mode takes the top bar away).
   setWindowButtonsVisible: (visible) => ipcRenderer.invoke("pm:set-window-buttons", visible),
+  // View → Focus (Cmd+F) in the menu bar; the return value unsubscribes.
+  onToggleFocus: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("pm:toggle-focus", handler);
+    return () => ipcRenderer.removeListener("pm:toggle-focus", handler);
+  },
 });

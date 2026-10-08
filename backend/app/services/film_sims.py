@@ -161,6 +161,8 @@ SPECTRAL_SIMS: tuple[str, ...] = (
     "kodak_vericolor_iii", "kodak_aerocolor_iv", "fuji_pro_160s", "fuji_natura_1600",
     "fuji_eterna_500", "fuji_eterna_500_vivid",
     "fuji_instax_color",
+    "cinestill_800t",
+    "kodak_5247_ii", "kodak_exr_200t_5293", "kodak_exr_100t_5248", "kodak_vision_320t_5277",
 )
 ANALOG_SIMS: tuple[str, ...] = (
     "kodak_portra_400", "kodak_portra_800_push1", "kodak_portra_800_push2", "kodak_ektar_100",
@@ -217,7 +219,8 @@ CLUT_SIMS: tuple[str, ...] = (
     "rollei_retro_80s", "rollei_retro_100_tonal", "rollei_ortho_25", "rollei_ir_400",
     # Instant film
     "polaroid_664", "polaroid_665", "polaroid_667", "polaroid_669", "polaroid_672",
-    "polaroid_690", "polaroid_px_70", "polaroid_px_680", "polaroid_time_zero",
+    "polaroid_690", "polaroid_px_70", "polaroid_px_680", "polaroid_px_100uv_cold",
+    "polaroid_px_100uv_warm", "polaroid_time_zero",
     "polaroid_polachrome", "fuji_fp_100c", "fuji_fp_100c_cool", "fuji_fp_100c_negative",
     "fuji_fp_3000b",
     # Cross-processed

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
@@ -6,6 +6,8 @@ import { withoutMembershipNames } from "../utils/autoTags";
 import { useAppDialogs } from "../components/AppDialogs";
 import { TagFilter } from "../components/TagFilter";
 import { errorText } from "../utils/apiError";
+import { useScrollMemory } from "../utils/scrollMemory";
+import { forgetThumbLoaded, isThumbLoaded, markThumbLoaded } from "../utils/preload";
 import {
   IconAlbum,
   IconChevronDown,
@@ -18,16 +20,25 @@ import { AlbumNameField } from "../components/AlbumNameField";
 import type { AlbumOut, SmartAlbumOut } from "../api/types";
 
 // Cover thumbnail that fades in once decoded (see .smart-card img in CSS)
-// instead of popping into the card.
+// instead of popping into the card. A cover seen earlier this session starts
+// out loaded: rendered with the class from the first frame there is no
+// previous opacity to transition from, so it simply paints - the grid's tiles
+// do the same (isThumbLoaded), and a revisit to Albums shows every cover at
+// once instead of fading them all in again.
 function SmartCover({ imageId }: { imageId: string }) {
-  const [loaded, setLoaded] = useState(false);
+  const url = api.images.thumbnailUrl(imageId, DEFAULT_EDIT_VERSION);
+  const [loaded, setLoaded] = useState(() => isThumbLoaded(url));
   return (
     <img
-      src={api.images.thumbnailUrl(imageId, DEFAULT_EDIT_VERSION)}
+      src={url}
       alt=""
       loading="lazy"
       className={loaded ? "loaded" : undefined}
-      onLoad={() => setLoaded(true)}
+      onLoad={() => {
+        markThumbLoaded(url);
+        setLoaded(true);
+      }}
+      onError={() => forgetThumbLoaded(url)}
     />
   );
 }
@@ -231,6 +242,12 @@ export function Albums() {
     },
   });
 
+  // Where the page was scrolled to when the user last left it. Waits for both
+  // lists: before them the page is skeletons, and a restore would be clamped
+  // to the top.
+  const pageRef = useRef<HTMLDivElement>(null);
+  useScrollMemory(pageRef, "albums", { ready: !!albums && !!smart });
+
   const createAlbum = useMutation({
     mutationFn: () => api.albums.create(name, undefined, newTags),
     onSuccess: () => {
@@ -276,7 +293,7 @@ export function Albums() {
       clustersPending);
 
   return (
-    <div className="page albums-page">
+    <div className="page albums-page" ref={pageRef}>
       <h2 className="section-title">Albums</h2>
 
       {smartLoading && (
@@ -341,7 +358,7 @@ export function Albums() {
       </form>
       {/* Under the row, not in it, and always there: picking tags changes the
           words, never the size of the field or where the albums start. */}
-      <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "-8px 0 16px" }}>
+      <p style={{ color: "var(--text-muted)", fontSize: "var(--text-base)", margin: "-8px 0 16px" }}>
         {newTags.length > 0
           ? `Auto-includes photos tagged ${newTags.join(", ")}`
           : "Pick tags to add matching photos to the album automatically."}
@@ -379,7 +396,7 @@ export function Albums() {
               ) : (
                 <div style={{ textAlign: "center", color: "var(--text)" }}>
                   <div style={{ fontWeight: 600 }}>{nameField("album-card-input album-card-input--plain")}</div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{albumCount(album)}</div>
+                  <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>{albumCount(album)}</div>
                 </div>
               )}
               {!renaming && (

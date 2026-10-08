@@ -4,10 +4,10 @@ import { api } from "../api/client";
 import { useTransientValue } from "../utils/transientMessage";
 import { useAppDialogs } from "./AppDialogs";
 import { Dropdown } from "./Dropdown";
-import { IconAlbum, IconCanvas, IconCheck, IconPlus } from "./Icons";
+import { IconAlbum, IconCanvas, IconPlus } from "./Icons";
 
 export interface AddToResult {
-  kind: "album" | "canvas" | "selects";
+  kind: "album" | "canvas";
   name: string;
   ok: boolean;
 }
@@ -15,30 +15,23 @@ export interface AddToResult {
 interface Props {
   onAddToAlbum: (albumId: string) => void | Promise<unknown>;
   onAddToCanvas: (canvasId: string) => void | Promise<unknown>;
-  // Optional third destination: Selects, the shortlist. Folded in here so the
-  // toolbars carry one "Add to..." instead of a separate button that got
-  // squeezed to "+ Add to ..." in the narrow sidebar. When `inSelects` is
-  // true (single-photo view) the entry flips to "Remove from selects".
-  onAddToSelects?: () => void | Promise<unknown>;
-  onRemoveFromSelects?: () => void | Promise<unknown>;
-  inSelects?: boolean;
   // The bulk action bars own the shared message row; where this is passed the
   // outcome lands there instead of stacking under the dropdown.
   onResult?: (result: AddToResult) => void;
+  // Greys the picker out when there is nothing to add, so the control keeps
+  // its place in the bar instead of coming and going.
+  disabled?: boolean;
 }
 
 // ONE "Add to..." for every destination: albums and canvases in a single
 // dropdown, each group with a "+ New ..." entry that creates the target right
 // here (name asked via the app's prompt dialog) and adds the photos to it in
-// the same breath - no detour over the Albums or Canvas page - plus Selects
-// where the caller wires it up.
+// the same breath - no detour over the Albums or Canvas page.
 export function AddToPicker({
   onAddToAlbum,
   onAddToCanvas,
-  onAddToSelects,
-  onRemoveFromSelects,
-  inSelects = false,
   onResult,
+  disabled = false,
 }: Props) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
@@ -70,11 +63,9 @@ export function AddToPicker({
       // album_ids and its derived "canvas: …" tags, which the server has just
       // rewritten. Every caller used to refresh only the album/canvas lists,
       // so the new mark turned up whenever something else happened to refetch.
-      if (kind !== "selects") {
-        queryClient.invalidateQueries({ queryKey: ["image"] });
-        queryClient.invalidateQueries({ queryKey: ["images"] });
-        queryClient.invalidateQueries({ queryKey: ["tags"] });
-      }
+      queryClient.invalidateQueries({ queryKey: ["image"] });
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
       report(kind, name, true);
     } catch {
       report(kind, name, false);
@@ -104,22 +95,6 @@ export function AddToPicker({
         queryClient.invalidateQueries({ queryKey: ["albums"] });
         await onAddToAlbum(created.id);
       });
-    } else if (value === "selects-add" && onAddToSelects) {
-      await run("selects", "Selects", () => Promise.resolve(onAddToSelects()));
-    } else if (value === "selects-remove" && onRemoveFromSelects) {
-      // Removal reports through the same channel; the caller's message row
-      // (or the flash below) words it from `kind` and the name.
-      setBusy(true);
-      try {
-        await onRemoveFromSelects();
-        if (onResult) onResult({ kind: "selects", name: "Selects", ok: true });
-        else setFlash({ text: "Removed from Selects", error: false });
-      } catch {
-        if (onResult) onResult({ kind: "selects", name: "Selects", ok: false });
-        else setFlash({ text: "Could not remove from Selects", error: true });
-      } finally {
-        setBusy(false);
-      }
     } else if (value === "new-canvas") {
       const name = await dialogs.prompt({
         title: "New canvas",
@@ -136,27 +111,6 @@ export function AddToPicker({
   }
 
   const options = [
-    // Selects first: it is the one-click destination, the lists below can be
-    // long.
-    ...(onAddToSelects
-      ? [
-          {
-            value: "h-selects",
-            label: <span className="dropdown-group-label">Selects</span>,
-            disabled: true,
-          },
-          inSelects && onRemoveFromSelects
-            ? {
-                value: "selects-remove",
-                label: (
-                  <>
-                    <IconCheck size={12} /> In selects — remove
-                  </>
-                ),
-              }
-            : { value: "selects-add", label: "Add to selects" },
-        ]
-      : []),
     { value: "h-albums", label: <span className="dropdown-group-label">Albums</span>, disabled: true },
     ...(albums ?? []).map((a) => ({
       value: `album:${a.id}`,
@@ -199,9 +153,9 @@ export function AddToPicker({
     <div className="album-picker">
       <Dropdown
         value=""
-        placeholder="Add to…"
-        disabled={busy}
-        ariaLabel={onAddToSelects ? "Add to selects, album or canvas" : "Add to album or canvas"}
+        placeholder={<span className="btn-label"><IconAlbum size={13} /> Add to…</span>}
+        disabled={busy || disabled}
+        ariaLabel="Add to album or canvas"
         onChange={(v) => {
           if (v) void handle(v);
         }}

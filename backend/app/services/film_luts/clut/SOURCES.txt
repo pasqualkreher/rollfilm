@@ -135,6 +135,10 @@ polaroid_px_70.npy
     instant_consumer/polaroid_px-70.png
 polaroid_px_680.npy
     instant_consumer/polaroid_px-680.png
+polaroid_px_100uv_cold.npy
+    instant_consumer/polaroid_px-100uv+_cold.png
+polaroid_px_100uv_warm.npy
+    instant_consumer/polaroid_px-100uv+_warm.png
 polaroid_time_zero.npy
     instant_consumer/polaroid_time_zero_(expired).png
 polaroid_polachrome.npy

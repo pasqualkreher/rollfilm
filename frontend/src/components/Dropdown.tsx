@@ -12,6 +12,11 @@ export interface DropdownOption {
   // when that is plain text; options with a richer label (icons, stars)
   // pass the words a user would type for them.
   search?: string;
+  // What the closed button shows for this option when that should be
+  // shorter than the menu's wording ("Newest" for "Newest first", "3+" for
+  // three stars): the button's own icon already says what the value is, so
+  // the field can stay narrow in the pinned filter row.
+  short?: ReactNode;
 }
 
 interface Props {
@@ -20,6 +25,8 @@ interface Props {
   onChange: (value: string) => void;
   // Button text while no option matches `value` (e.g. options still loading).
   placeholder?: ReactNode;
+  // A glyph in front of the label that stays whatever is picked.
+  icon?: ReactNode;
   // Button text when there is nothing to pick at all. An option-less menu
   // would open as an empty sliver of border and shadow, so the button states
   // the situation instead and stays shut (same as TagFilter's "No tags").
@@ -56,6 +63,7 @@ export function Dropdown({
   options,
   onChange,
   placeholder,
+  icon,
   emptyLabel,
   disabled = false,
   title,
@@ -231,8 +239,9 @@ export function Dropdown({
           }
         }}
       >
+        {icon}
         <span className="tag-filter-btn-label">
-          {selected?.label ?? (isEmpty ? emptyLabel ?? placeholder : placeholder) ?? ""}
+          {selected?.short ?? selected?.label ?? (isEmpty ? emptyLabel ?? placeholder : placeholder) ?? ""}
         </span>
         <span className="tag-filter-caret">
           <IconChevronDown size={11} />
@@ -256,6 +265,11 @@ export function Dropdown({
                   ref={searchRef}
                   type="text"
                   className="dropdown-search"
+                  // A text input is 20 characters wide by nature and the menu
+                  // has no width of its own, so it would grow to the box
+                  // instead of the box filling the menu. size=1 takes that
+                  // claim away; the CSS stretches it to the menu's width.
+                  size={1}
                   placeholder="Type to find…"
                   value={query}
                   aria-label={ariaLabel ? `Find ${ariaLabel.toLowerCase()}` : "Find"}

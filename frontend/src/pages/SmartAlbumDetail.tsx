@@ -114,6 +114,12 @@ export function SmartAlbumDetail() {
           smart album is looked through the same way as everything else. Merge
           is hidden: the combined view always collapses pairs here. */}
       <PhotoFilters
+        title={
+          <>
+            <span className="bar-title-name">{meta?.name ?? "Smart album"}</span>
+            {meta && <span className="count-pill">{meta.image_count} photos</span>}
+          </>
+        }
         viewMode={viewMode}
         onViewMode={setViewMode}
         showMerge={false}
@@ -149,15 +155,6 @@ export function SmartAlbumDetail() {
         {orderedImages.length > 0 && <ThumbnailGrid images={orderedImages} groupByDate />}
       </div>
 
-      {/* The album's row - Back and name - lives UNDER the content, like the
-          manual albums' row and the stage rows of the editor and photo view:
-          the name centred, Back flush left and out of the row's flow. */}
-      <h2 className="section-title album-bottom-bar">
-        {/* No Back of its own: the top bar's Back leads to wherever the album
-            was opened from. */}
-        {meta?.name ?? "Smart album"}
-        {meta && <span className="count-pill">{meta.image_count} photos</span>}
-      </h2>
     </div>
   );
 }

@@ -138,7 +138,7 @@ export function ImportModeDialog({
               </span>
               <button
                 type="button"
-                className="btn btn-slim"
+                className="btn btn-sm"
                 title="Put the import folder somewhere else, for example on a bigger disk"
                 onClick={pickFolder}
                 disabled={!copy || !desktop?.pickFolder}
@@ -147,7 +147,7 @@ export function ImportModeDialog({
               </button>
               <button
                 type="button"
-                className="btn btn-slim"
+                className="btn btn-sm"
                 title="Use the Import folder in your library"
                 onClick={() => setStagingFolder(null)}
                 disabled={!copy || stagingFolder == null}

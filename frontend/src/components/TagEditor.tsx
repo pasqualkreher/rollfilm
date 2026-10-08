@@ -61,9 +61,9 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
           })}
         </div>
       )}
-      <form onSubmit={submit} style={{ display: "flex", gap: 6 }}>
+      <form onSubmit={submit} className="tag-form">
         <TagSuggestInput
-          placeholder="Add tag… (Travel/Italy files it under Travel)"
+          placeholder="Add tag…"
           ariaLabel="Add tag"
           value={value}
           onChange={(v) => {
@@ -75,7 +75,7 @@ export function TagEditor({ tags, onAdd, onRemove }: Props) {
           exclude={tags}
           keepFocus={false}
         />
-        <button className="btn" type="submit" disabled={!value.trim()} title="Add tag" aria-label="Add tag">
+        <button className="tag-form-add" type="submit" disabled={!value.trim()} title="Add tag" aria-label="Add tag">
           <IconPlus size={14} />
         </button>
       </form>

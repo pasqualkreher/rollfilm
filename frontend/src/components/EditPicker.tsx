@@ -39,7 +39,7 @@ export function EditPicker({ onAutoEdit, onApplyPreset, busy = false }: Props) {
   return (
     <Dropdown
       value=""
-      placeholder={busy ? "Working…" : "Edit…"}
+      placeholder={<span className="btn-label"><IconPencil size={13} /> {busy ? "Working…" : "Edit…"}</span>}
       disabled={busy}
       title="Apply automatic edits or a saved editor preset to the selected photos"
       ariaLabel="Apply auto edit or preset"

@@ -14,7 +14,6 @@ from app.config import settings
 from app.db.base import Base
 from app.db.models import Album, AlbumImage, ColorLabel, FileType, Image, ImageTag, Tag, User
 from app.services import maintenance
-from app.services.settings_store import get_selects, set_selects
 
 
 @pytest.fixture()
@@ -132,24 +131,6 @@ def test_backup_restore_round_trip(db: Session, monkeypatch):
     assert [link.image_id for link in album.images] == ["img-edited"]
 
     assert (settings.library_root / "2026/2026-07-01/edited.jpg").read_bytes() == b"jpg"
-
-
-def test_backup_carries_the_selects_tray(db: Session, monkeypatch):
-    monkeypatch.setattr(maintenance, "enqueue_post_import", lambda *a, **k: None)
-    _seed_library(db)
-    set_selects(db, ["img-edited", "not-in-this-library"])
-    db.commit()
-    zip_path = maintenance.build_backup_zip(db, owner_id=1)
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            assert json.loads(zf.read("manifest.json"))["selects"] == ["img-edited"]
-        # Whatever the library holds when the backup comes back is replaced.
-        set_selects(db, ["img-trashed"])
-        db.commit()
-        maintenance.restore_from_backup(db, owner_id=1, upload=_Upload(zip_path))
-    finally:
-        zip_path.unlink(missing_ok=True)
-    assert get_selects(db) == ["img-edited"]
 
 
 def test_wipe_library_clears_tags(db: Session):

@@ -19,7 +19,6 @@ import { DialogProvider } from "./components/AppDialogs";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UnhandledErrors } from "./components/UnhandledErrors";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
-import { SelectsProvider, useSelects } from "./state/selects";
 import { TasksProvider, useTasks } from "./state/tasks";
 import { WaitProvider } from "./state/wait";
 import { Presence } from "./components/Presence";
@@ -27,6 +26,7 @@ import { MOTION } from "./utils/usePresence";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NavHistoryTracker, hasLeaveGuards, runLeaveGuards, useNavHistory } from "./state/navHistory";
 import { isMac } from "./utils/selection";
+import { useFocusModeSwitch } from "./state/focusMode";
 import { Spinner, LoadingState } from "./components/Spinner";
 
 // Every screen except the Library is code-split. The app used to ship as one
@@ -48,41 +48,67 @@ const page = <T extends Record<string, unknown>, K extends keyof T>(
 
 const importWizard = () => import("./pages/ImportWizard");
 const imageDetail = () => import("./pages/ImageDetail");
+const albums = () => import("./pages/Albums");
+const canvases = () => import("./pages/Canvases");
+const canvasDetail = () => import("./pages/CanvasDetail");
+const canvasView = () => import("./pages/CanvasView");
+const albumDetail = () => import("./pages/AlbumDetail");
+const smartAlbumDetail = () => import("./pages/SmartAlbumDetail");
+const settings = () => import("./pages/Settings");
+const stats = () => import("./pages/Stats");
+const trash = () => import("./pages/Trash");
+const mapView = () => import("./pages/MapView");
+const help = () => import("./pages/Help");
 
 const ImportWizard = page(importWizard, "ImportWizard");
 const ImageDetail = page(imageDetail, "ImageDetail");
-const Albums = page(() => import("./pages/Albums"), "Albums");
-const Canvases = page(() => import("./pages/Canvases"), "Canvases");
-const CanvasDetail = page(() => import("./pages/CanvasDetail"), "CanvasDetail");
-const CanvasView = page(() => import("./pages/CanvasView"), "CanvasView");
-const AlbumDetail = page(() => import("./pages/AlbumDetail"), "AlbumDetail");
-const SmartAlbumDetail = page(() => import("./pages/SmartAlbumDetail"), "SmartAlbumDetail");
-const Settings = page(() => import("./pages/Settings"), "Settings");
-const Stats = page(() => import("./pages/Stats"), "Stats");
-const Selects = page(() => import("./pages/Selects"), "Selects");
-const Trash = page(() => import("./pages/Trash"), "Trash");
-const MapView = page(() => import("./pages/MapView"), "MapView");
-const Help = page(() => import("./pages/Help"), "Help");
+const Albums = page(albums, "Albums");
+const Canvases = page(canvases, "Canvases");
+const CanvasDetail = page(canvasDetail, "CanvasDetail");
+const CanvasView = page(canvasView, "CanvasView");
+const AlbumDetail = page(albumDetail, "AlbumDetail");
+const SmartAlbumDetail = page(smartAlbumDetail, "SmartAlbumDetail");
+const Settings = page(settings, "Settings");
+const Stats = page(stats, "Stats");
+const Trash = page(trash, "Trash");
+const MapView = page(mapView, "MapView");
+const Help = page(help, "Help");
 
 // Splitting a route moves its cost from startup to the first navigation, which
 // would be the wrong trade for the two screens the Library leads to constantly:
 // opening a photo is the single most common thing anyone does here, and a fresh
 // launch with an empty library goes straight to Import. So fetch those two
 // chunks once the app has settled - off the startup critical path, and long
-// before the click that needs them. Everything else loads when it is asked for.
+// before the click that needs them. The remaining pages follow in a second
+// idle slot: they come off local disk and together weigh less than one
+// preview, and having them in memory is what makes the first click on Albums
+// or Settings swap the view in a single frame rather than after a load.
 function usePrefetchLikelyRoutes() {
   useEffect(() => {
+    const idle = window.requestIdleCallback;
+    const later = (fn: () => void, timeout: number, delay: number) =>
+      idle
+        ? { cancel: window.cancelIdleCallback!.bind(window, idle(fn, { timeout })) }
+        : { cancel: window.clearTimeout.bind(window, window.setTimeout(fn, delay)) };
+    let rest: { cancel: () => void } | null = null;
+    const warmRest = () => {
+      for (const load of [
+        albums, settings, stats, help, trash, canvases,
+        albumDetail, smartAlbumDetail, canvasDetail, canvasView, mapView,
+      ]) {
+        void load();
+      }
+    };
     const warm = () => {
       void imageDetail();
       void importWizard();
+      rest = later(warmRest, 5000, 1500);
     };
-    const idle = window.requestIdleCallback;
-    if (idle) {
-      const handle = idle(warm, { timeout: 3000 });
-      return () => window.cancelIdleCallback?.(handle);
-    }
-    const timer = window.setTimeout(warm, 1500);
-    return () => window.clearTimeout(timer);
+    const first = later(warm, 3000, 1500);
+    return () => {
+      first.cancel();
+      rest?.cancel();
+    };
   }, []);
 }
 
@@ -188,31 +214,31 @@ function ImportNavLink({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function SelectsNavLink({ onNavigate }: { onNavigate?: () => void }) {
-  const { count } = useSelects();
-  return (
-    <NavLink to="/selects" onClick={onNavigate}>
-      {/* Non-breaking space: the count must never wrap onto its own line. */}
-      Selects{count > 0 ? `\u00A0(${count})` : ""}
-    </NavLink>
-  );
-}
-
 // The core photo modules shown as the wide-window tab row. Settings and Help
 // are deliberately not tabs: they're utility pages, shown as small icon
 // buttons on the far right of the bar (like every pro imaging app), so the
 // module switcher stays about the photos.
 function ModuleLinks({ onNavigate }: { onNavigate?: () => void }) {
+  // Smart albums live under their own route (/smart-albums/:id), so the
+  // router's automatic prefix match for /albums would leave the Albums tab
+  // unmarked while one is open. They're still albums to the user.
+  const { pathname } = useLocation();
+  const inSmartAlbum = pathname.startsWith("/smart-albums");
   return (
     <>
       <NavLink to="/" end onClick={onNavigate}>
         Library
       </NavLink>
-      <NavLink to="/albums" onClick={onNavigate}>Albums</NavLink>
+      <NavLink
+        to="/albums"
+        onClick={onNavigate}
+        className={({ isActive }) => (isActive || inSmartAlbum ? "active" : "")}
+      >
+        Albums
+      </NavLink>
       <NavLink to="/canvas" onClick={onNavigate}>Canvas</NavLink>
       <NavLink to="/map" onClick={onNavigate}>Map</NavLink>
       <ImportNavLink onNavigate={onNavigate} />
-      <SelectsNavLink onNavigate={onNavigate} />
     </>
   );
 }
@@ -236,10 +262,10 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 // collapsed away on narrow windows.
 const PAGE_TITLES: Array<[string, string]> = [
   ["/albums", "Albums"],
+  ["/smart-albums", "Albums"],
   ["/canvas", "Canvas"],
   ["/map", "Map"],
   ["/import", "Import"],
-  ["/selects", "Selects"],
   ["/trash", "Trash"],
   ["/settings", "Settings"],
   ["/help", "Help"],
@@ -541,10 +567,14 @@ function TopBar() {
     };
   }, []);
 
-  // Cmd/Ctrl+F jumps into the search field, the way every Mac app finds.
+  // The app-wide focus mode (View menu, Cmd/Ctrl+F): the bar this component
+  // draws is what it puts away.
+  useFocusModeSwitch();
+
+  // Cmd/Ctrl+Shift+F jumps into the search field (plain Cmd+F is focus mode).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "f") return;
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || !e.shiftKey || e.key.toLowerCase() !== "f") return;
       const input = barRef.current?.querySelector<HTMLInputElement>(".search-bar input");
       if (!input) return;
       e.preventDefault();
@@ -626,7 +656,7 @@ function TopBar() {
             className="btn btn-sm ghost"
             onClick={cancelRenders}
             disabled={cancellingRenders}
-            title="Stop here: the photos already rendered keep the edit, the rest go back to how they were."
+            title="Stop. Photos already rendered keep the edit, the rest stay as they were."
           >
             Cancel
           </button>
@@ -737,7 +767,6 @@ export default function App() {
   return (
     <TasksProvider>
       <WaitProvider>
-      <SelectsProvider>
         <ImportSessionProvider>
           <DialogProvider>
           <div className="app-shell">
@@ -748,11 +777,15 @@ export default function App() {
             <TooltipLayer />
             <UnhandledErrors />
 
-            {/* Same wording and styling as a page waiting on its own data, so a
-                chunk that isn't in memory yet reads as the page loading rather
-                than as the app blanking out. In practice it is rarely seen: the
-                chunks come off local disk, and the two routes the Library leads
-                to are prefetched while the app idles. */}
+            {/* Only ever seen on a cold first mount - a reload straight onto
+                #/settings, or the empty-library redirect to Import before its
+                chunk is warm. A navigation from one page to another runs as a
+                transition (HashRouter's v7_startTransition), which keeps the
+                current page up until the next one can render; and every page
+                chunk is prefetched while the app idles anyway. Same wording
+                and styling as a page waiting on its own data, so the rare
+                sighting reads as the page loading rather than the app blanking
+                out. */}
             <PageBoundary>
             <Suspense fallback={<LoadingState />}>
             <Routes>
@@ -770,7 +803,6 @@ export default function App() {
                 two. */}
             <Route path="/image/:id/:mode?" element={<ImageDetail />} />
             <Route path="/map" element={<MapView />} />
-            <Route path="/selects" element={<Selects />} />
             <Route path="/trash" element={<Trash />} />
             <Route path="/stats" element={<Stats />} />
             <Route path="/settings" element={<Settings />} />
@@ -786,7 +818,6 @@ export default function App() {
           </div>
           </DialogProvider>
         </ImportSessionProvider>
-      </SelectsProvider>
       </WaitProvider>
     </TasksProvider>
   );

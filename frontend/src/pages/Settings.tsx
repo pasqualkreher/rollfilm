@@ -21,6 +21,8 @@ import {
 } from "../state/viewPrefs";
 import { SettingsTour, SETTINGS_TOUR_KEY } from "../components/SettingsTour";
 import { useTransientFlag, useTransientMessage, useTransientValue } from "../utils/transientMessage";
+import { useSessionState } from "../utils/useSessionState";
+import { useScrollMemory } from "../utils/scrollMemory";
 import {
   estimateText,
   estimateSeconds,
@@ -307,7 +309,7 @@ function AppearanceSetting() {
               aria-label="Choose appearance"
             >
               <div className="dir-picker-header">
-                <h3 className="section-title" style={{ margin: 0, fontSize: 15 }}>
+                <h3 className="section-title" style={{ margin: 0 }}>
                   Appearance
                 </h3>
                 <button className="modal-close" onClick={() => setOpen(false)} aria-label="Close">
@@ -370,7 +372,11 @@ export function Settings() {
 
   // The open tab. sectionProps stays the single indirection every section call
   // site goes through, so grouping them cost no change at the call sites.
-  const [activeTab, setActiveTab] = useState(SETTINGS_TABS[0].id);
+  // Kept for the session: leaving Settings for a look at the library and
+  // coming back lands on the same tab, at the same place in it.
+  const [activeTab, setActiveTab] = useSessionState("settings:tab", SETTINGS_TABS[0].id);
+  const pageRef = useRef<HTMLDivElement>(null);
+  useScrollMemory(pageRef, "settings");
   const sectionProps = (title: string) => ({
     title,
     hidden: tabOfSection(title) !== activeTab,
@@ -698,9 +704,8 @@ export function Settings() {
       const rebuild = await dialogs.confirm({
         title: "Apply to existing photos too?",
         message:
-          "The setting is saved. It applies to new imports and to the editor right away. " +
-          "Thumbnails of photos already in your library keep their current look until they " +
-          "are rebuilt. You can rebuild them now" +
+          "Saved. New imports and the editor use it now. Rebuild the thumbnails of existing " +
+          "photos now" +
           (est ? ` (${est})` : "") +
           ' or later with "Rebuild all thumbnails" under Library maintenance.',
         confirmLabel: "Rebuild thumbnails now",
@@ -868,12 +873,12 @@ export function Settings() {
   useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
   return (
-    <div className="page settings-page">
+    <div className="page settings-page" ref={pageRef}>
       <h2 className="section-title">
         Settings
         <button
           className="btn subtle"
-          style={{ marginLeft: 12, fontSize: 13 }}
+          style={{ marginLeft: 12 }}
           onClick={() => setTourOpen(true)}
           title="A short guided tour of the settings"
         >
@@ -902,8 +907,8 @@ export function Settings() {
       {desktop?.changeLibraryRoot && (
         <Section {...sectionProps("Library folder")}>
           <Desc>
-            The folder that holds your photos and this library's database. Changing it restarts
-            the app and opens the library in the new folder. Your existing photos are not moved.
+            Holds your photos and the library database. Changing it restarts the app. Photos are
+            not moved.
           </Desc>
           <p className="settings-path">{libraryRoot ?? "…"}</p>
           <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
@@ -912,11 +917,8 @@ export function Settings() {
           <div className="settings-subgroup">
             <h4 className="settings-subhead">When importing</h4>
             <Desc>
-              Photos you pick for import are either copied into an import folder of the session's
-              own (inside this folder's "Import" folder, or wherever you choose) and sorted into
-              the library when you add them, or added from where they are without copying (their
-              folder is then listed under External photo sources). A remembered answer skips the
-              start dialog; sessions then use the library's Import folder.
+              Photos you import are either copied into an import folder and then sorted into the
+              library, or added from where they are. Choose whether to ask each time.
             </Desc>
             {(
               [
@@ -924,12 +926,12 @@ export function Settings() {
                 [
                   "copy",
                   "Always copy to an import folder",
-                  "Each session copies its cards into the library's Import folder; the photos you add are sorted into the library by date.",
+                  "Copies into the library's Import folder, then sorts added photos by date.",
                 ],
                 [
                   "reference",
                   "Always leave photos where they are",
-                  "Nothing is copied; the photos you add are listed in the library from their current folder.",
+                  "Nothing is copied. Added photos stay in their folder.",
                 ],
               ] as const
             ).map(([value, title, desc]) => (
@@ -949,8 +951,8 @@ export function Settings() {
           <div className="settings-subgroup">
             <h4 className="settings-subhead">Import folder</h4>
             <Desc>
-              An import session lives until you close it. Closing deletes its import folder, with
-              the photos you didn't add - unless the folder is kept as a backup.
+              Closing a session deletes its import folder and the photos you did not add, unless
+              it is kept as a backup.
             </Desc>
             <OptionRow
               type="checkbox"
@@ -961,14 +963,13 @@ export function Settings() {
                 updateImportSettings.mutate({ backup_default: keep ? "keep" : "delete" })
               }
               title="Keep the import folder as a backup"
-              desc="Every photo stays in the import folder, and the ones you add are copied into the library, so they take up space twice. Pre-selected in the start dialog, and applied directly when the dialog is skipped."
+              desc="Photos you add are copied into the library, so they take up space twice."
             />
           </div>
           <div className="settings-subgroup">
             <h4 className="settings-subhead">New photos in an import</h4>
             <Desc>
-              Whether each photo that arrives in the review starts out selected for import. Photos
-              you pick while a card is still loading stay as you left them either way.
+              Whether new photos in the review start out selected.
             </Desc>
             {(
               [
@@ -1006,7 +1007,7 @@ export function Settings() {
               busy={updateImportSettings.isPending}
               onChange={(on) => updateImportSettings.mutate({ read_file_metadata: on })}
               title="Take over stars, labels, keywords and captions from the files"
-              desc="What Lightroom, Bridge, darktable or digiKam wrote into a photo - or into an .xmp sidecar beside it - comes in with it. Keywords become tags, folder paths and all. Stars you give in the review are never replaced."
+              desc="Stars, labels, keywords and captions written by other programs or an .xmp sidecar come in with the photo. Keywords become tags. Stars you give in the review are kept."
             />
           </div>
         </Section>
@@ -1015,10 +1016,8 @@ export function Settings() {
       {desktop?.getDataRoot && (
         <Section {...sectionProps("Library data")}>
           <Desc>
-            The database, thumbnails and import staging are stored in a hidden{" "}
-            <code>.photomanager</code> folder inside the library folder. The library is
-            self-contained and can be moved as a whole. If the folder is synced to the cloud,
-            exclude <code>.photomanager</code> from syncing.
+            Database, thumbnails and import staging live in a hidden <code>.photomanager</code>{" "}
+            folder inside the library. Exclude it from cloud sync.
           </Desc>
           <p className="settings-path">{dataRoot ?? "…"}</p>
         </Section>
@@ -1226,11 +1225,10 @@ export function Settings() {
           RAW files usually look flat and dark until they are processed.
         </Desc>
         <Desc>
-          <strong>Off (default):</strong> RAW photos are brightened automatically so they look
-          normal while browsing. Bright areas such as sky or snow are preserved.
+          <strong>Off (default):</strong> RAW photos are brightened automatically for browsing.
           <br />
-          <strong>On:</strong> RAW photos are shown exactly as the camera recorded them, usually
-          darker and flatter. You set the look yourself in the editor.
+          <strong>On:</strong> RAW photos are shown as the camera recorded them, usually darker
+          and flatter.
         </Desc>
         <OptionRow
           type="checkbox"
@@ -1242,26 +1240,23 @@ export function Settings() {
           desc={
             rebuildThumbnails.isPending
               ? `Rebuilding thumbnails so the change applies to existing photos… ${rebuildProgressLine()}`
-              : "Applies to new imports and to the editor right away. For photos already in " +
-                "your library you will be asked whether to rebuild their thumbnails, which " +
-                "can take a while."
+              : "Applies to new imports and the editor at once. Existing thumbnails can be " +
+                "rebuilt on request."
           }
         />
       </Section>
 
       <Section {...sectionProps("Photo editor")}>
         <Desc>
-          <strong>Save copy</strong> in the editor creates a new photo from your edits and leaves
-          the original unchanged. A physical copy is a new JPEG file with the edits applied. A
-          virtual copy shares the original file and only stores its own edits. Physical copies are
-          made at full quality and full size.
+          <strong>Save copy</strong> creates a new photo from your edits. A physical copy is a new
+          full-size JPEG. A virtual copy shares the original file and keeps only its edits.
         </Desc>
         <OptionRow
           type="checkbox"
           checked={askSaveCopyOptions}
           onChange={setAskSaveCopyOptions}
           title="Ask for quality and size before saving a copy"
-          desc="Shows JPEG quality and size controls when saving a physical copy, so you can make a smaller file."
+          desc="Lets you pick JPEG quality and size for a physical copy."
         />
         <div className="settings-corners">
           <span className="settings-option-body">
@@ -1288,10 +1283,9 @@ export function Settings() {
 
       <Section {...sectionProps("Auto develop")}>
         <Desc>
-          Adds an <strong>Auto</strong> button to the photo editor. It suggests editing settings
-          based on photos you have already edited and saved, by finding the most similar ones and
-          blending their settings. The more you edit, the better the suggestions get. Nothing is
-          applied until you save.
+          Adds an <strong>Auto</strong> button to the editor. It suggests settings from your most
+          similar saved edits. The more you edit, the better it gets. Nothing changes until you
+          press it.
         </Desc>
         <OptionRow
           type="checkbox"
@@ -1335,9 +1329,8 @@ export function Settings() {
 
       <Section {...sectionProps("Smart albums")}>
         <Desc>
-          The Albums page can show automatic collections above your own albums: similar photos,
-          places, countries and time periods. They are generated from your library and update on
-          their own. Choose which sections to show:
+          Automatic collections above your own albums. They update on their own. Choose which to
+          show:
         </Desc>
         {SMART_ALBUM_SECTIONS.map((s) => (
           <div key={s.key}>
@@ -1401,11 +1394,9 @@ export function Settings() {
 
       <Section {...sectionProps("Tags")}>
         <Desc>
-          The tags you have added to your photos, with the number of photos for each. A tag can
-          be filed under another: <code>Travel/Italy/Rome</code> is Rome under Italy under Travel,
-          and filtering by Travel finds all of it. Renaming a tag renames everything under it;
-          deleting one removes it from every photo. Tags the app assigns itself (edit copy,
-          virtual copy, …) are not listed and are managed automatically.
+          Your tags with the number of photos each. <code>Travel/Italy/Rome</code> files Rome
+          under Italy under Travel; filtering by Travel finds all of it. Renaming or deleting a
+          tag applies to everything under it. Tags the app sets itself are not listed.
         </Desc>
         {!tagUsage ? (
           <Desc>Loading…</Desc>
@@ -1467,9 +1458,8 @@ export function Settings() {
         <div className="settings-subgroup">
           <h4 className="settings-subhead">Keyword list</h4>
           <Desc>
-            The tag tree as a text file, one tag per line and children indented - the list
-            Lightroom, Bridge and digiKam export and import. Tags that come in from a list stay
-            in the list to pick from, with or without photos, until you delete them.
+            The tag tree as a text file, as Lightroom, Bridge and digiKam export it. Imported tags
+            stay in the list until you delete them.
           </Desc>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn" type="button" onClick={() => void exportTagList()} disabled={!tagUsage}>
@@ -1500,12 +1490,9 @@ export function Settings() {
 
       <Section {...sectionProps("Sidecars")}>
         <Desc>
-          Stars, colour labels, tags and notes live in this library's database. Switched on,
-          Rollfilm also writes them into an <code>.xmp</code> file beside each photo in the library
-          folder - the sidecar Lightroom, Bridge, darktable and digiKam read - so what you give a
-          photo here is there in every other program. The photo itself is never written to, and
-          whatever another program keeps in the same file stays. Photos indexed from external
-          folders get no sidecar.
+          Stars, color labels, tags and notes live in the database. Switched on, they are also
+          written to an <code>.xmp</code> sidecar beside each photo, which other programs read.
+          The photo file itself is never changed. External sources get no sidecar.
         </Desc>
         <OptionRow
           type="checkbox"
@@ -1514,7 +1501,7 @@ export function Settings() {
           busy={setSidecar.isPending}
           onChange={(c) => setSidecar.mutate(c)}
           title="Write XMP sidecars beside the originals"
-          desc="Every change to a photo's stars, label, tags or note is written a moment later."
+          desc="Every change is written a moment later."
         />
         <div className="settings-subgroup--indent">
           <button
@@ -1535,10 +1522,9 @@ export function Settings() {
 
       <Section {...sectionProps("Trash")}>
         <Desc>
-          Deleted photos are moved to the Trash and can be restored from there. Photos that have
-          been in the Trash longer than this are deleted permanently when the app starts. Set 0 to
-          keep them forever. Photos from external sources are never moved to the Trash: deleting
-          one only removes it from the library, the file stays on the source.
+          Deleted photos go to the Trash and can be restored. After this many days they are
+          deleted for good; 0 keeps them forever. Photos from external sources are only removed
+          from the library.
         </Desc>
         <div className="import-toolbar" style={{ alignItems: "center" }}>
           <label className="filter-field">
@@ -1611,9 +1597,8 @@ export function Settings() {
 
         <div className="settings-block">
           <Desc>
-            Rebuilds <em>every</em> thumbnail and preview from the original files. This can take a
-            long time. Normally "Sync database to library" is enough. Use this only if thumbnails
-            still look wrong afterwards.
+            Rebuilds <em>every</em> thumbnail and preview from the originals. Takes a long time.
+            Try "Sync database to library" first.
           </Desc>
           <div className="maintenance-run">
             <button
@@ -1643,9 +1628,8 @@ export function Settings() {
 
         <div className="settings-block">
           <Desc>
-            Photos imported with older versions may be sorted by import date instead of capture
-            date. This re-reads the capture date from every photo file and corrects it where
-            needed. Nothing else changes.
+            Re-reads the capture date from every file and corrects photos that were sorted by
+            import date. Nothing else changes.
           </Desc>
           <button className="btn" onClick={() => repairDates.mutate()} disabled={repairDates.isPending}>
             {repairDates.isPending ? (
@@ -1664,8 +1648,8 @@ export function Settings() {
       <Section {...sectionProps("Backup & restore")}>
         <div className="settings-block">
           <Desc>
-            Download a backup of your library: every imported photo file plus ratings, color labels,
-            albums and edits. Photos from external sources and tags are not included.
+            Downloads every imported photo plus ratings, labels, albums and edits. External sources
+            and tags are not included.
           </Desc>
           <a className="btn primary" href={api.maintenance.backupUrl()} style={{ display: "inline-block" }}>
             Download backup

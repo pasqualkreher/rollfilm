@@ -409,6 +409,10 @@ export const api = {
     deleteFromTrash(image_ids: string[]): Promise<void> {
       return request(`/images/trash/delete`, { method: "POST", body: JSON.stringify({ image_ids }) });
     },
+    // Permanently deletes everything in the Trash.
+    emptyTrash(): Promise<void> {
+      return request(`/images/trash/empty`, { method: "POST" });
+    },
     // Fetches a server-built zip of the originals and saves it via a temporary
     // object URL - keeps the potentially large binary out of React state.
     async downloadZip(image_ids: string[]): Promise<void> {
@@ -1302,17 +1306,6 @@ export const api = {
         xhr.onerror = () => reject(new Error("Restore failed: network error"));
         xhr.send(formData);
       });
-    },
-  },
-  // The Selects tray, stored with the library (see state/selects.tsx). `set`
-  // replaces the whole list and answers with what was kept - ids of photos
-  // that are gone or in the Trash drop out.
-  selects: {
-    get(): Promise<{ ids: string[] }> {
-      return request(`/selects`);
-    },
-    set(ids: string[]): Promise<{ ids: string[] }> {
-      return request(`/selects`, { method: "PUT", body: JSON.stringify({ ids }) });
     },
   },
   tags: {
