@@ -270,7 +270,18 @@ export function VirtualTimeline({
   // be built fresh on every render, and they sit in the scrubber's recompute
   // deps - so its scroll listener was torn down and re-attached on every
   // scroll step.
-  const getScroller = useCallback(() => scrollerRef.current, []);
+  // Resolved from the DOM when the ref is still empty: the scrubber's mount
+  // effect runs BEFORE useVirtualWindow's (child effects first), and since the
+  // grid comes back with a seeded width it has a layout - and so sections for
+  // the scrubber - on its very first render. Handing it null there left it
+  // without a scroll listener for good: its sections never changed afterwards,
+  // so its effect never re-ran (no ticks, a drag that moved the grid a pixel).
+  const getScroller = useCallback(
+    () =>
+      scrollerRef.current ??
+      ((rootRef.current?.closest(".page-scroll") ?? rootRef.current?.parentElement) as HTMLElement | null),
+    [scrollerRef]
+  );
   const getSectionEl = useCallback((key: string) => sectionEls.current.get(key) ?? null, []);
   // Identified by `key`, not by the month's name: a photo sitting out of date
   // order splits a month into two sections that are both called "June 2024",
