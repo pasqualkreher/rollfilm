@@ -634,6 +634,16 @@ export function IconPlay(props: IconProps) {
   );
 }
 
+// A square - stop what is running (an import's copying) and keep what is
+// there; unlike IconX nothing is thrown away.
+export function IconStop(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="4" y="4" width="8" height="8" rx="1" />
+    </svg>
+  );
+}
+
 // Two bars - pauses the running slideshow.
 export function IconPause(props: IconProps) {
   return (

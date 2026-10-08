@@ -6,7 +6,7 @@ import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
 import { flaggedDuplicate } from "./ImportReviewGrid";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
-import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconImage } from "./Icons";
+import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconImage, IconRotate } from "./Icons";
 import { ExifTable } from "./ExifTable";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { useFullResUpgrade } from "../utils/useFullResUpgrade";
@@ -295,7 +295,7 @@ export function ImportLightbox({
                     setRetryNonce((n) => n + 1);
                   }}
                 >
-                  Retry
+                  <IconRotate size={13} /> Retry
                 </button>
               </div>
             ) : (

@@ -39,11 +39,16 @@ import {
 import {
   IconCheck,
   IconChevronDown,
+  IconDuplicate,
   IconFolder,
   IconImage,
   IconBookmark,
   IconImport,
   IconLeave,
+  IconMinus,
+  IconPlus,
+  IconStop,
+  IconX,
 } from "../components/Icons";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
@@ -1376,7 +1381,7 @@ export function ImportWizard() {
                   onClick={() => void confirmCancelUpload()}
                   title="Stop and discard everything copied so far"
                 >
-                  Cancel
+                  <IconX size={13} /> Cancel
                 </button>
               )}
               {/* The other way out of a long copy: stop asking for more photos
@@ -1390,7 +1395,7 @@ export function ImportWizard() {
                   disabled={stagingStopped}
                   title="Stop copying and review the photos copied so far"
                 >
-                  {stagingStopped ? "Stopping…" : "Stop & keep"}
+                  <IconStop size={13} /> {stagingStopped ? "Stopping…" : "Stop & keep"}
                 </button>
               )}
               <Presence open={importMenuOpen && !isUploading} ms={MOTION.pop}>
@@ -1543,7 +1548,7 @@ export function ImportWizard() {
               disabled={stagingStopped}
               title={`Stop ${inPlace ? "reading" : "copying"} and keep the photos ${inPlace ? "read" : "copied"} so far`}
             >
-              {stagingStopped ? "Stopping…" : inPlace ? "Stop" : "Stop copying"}
+              <IconStop size={12} /> {stagingStopped ? "Stopping…" : inPlace ? "Stop" : "Stop copying"}
             </button>
           </p>
         )}
@@ -1618,13 +1623,15 @@ export function ImportWizard() {
           // doesn't push the Filter chip along.
           <button
             type="button"
-            className={`toggle-chip toggle-chip--steady${hideDuplicates ? " active" : ""}`}
+            className={`toggle-chip toggle-chip--steady toggle-chip--iconlabel${hideDuplicates ? " active" : ""}`}
             aria-pressed={hideDuplicates}
             onClick={() => setHideDuplicates(!hideDuplicates)}
             title="Hide photos that are already in the library"
             data-label="Hide duplicates"
           >
-            Hide duplicates
+            <span className="toggle-chip-row">
+              <IconDuplicate size={14} /> Hide duplicates
+            </span>
           </button>
         }
       >
@@ -1636,10 +1643,10 @@ export function ImportWizard() {
         {marked.size > 0 && (
           <>
             <button className="btn btn-sm" onClick={markAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
-              Select all
+              <span className="btn-label"><IconCheck size={13} /> Select all</span>
             </button>
             <button className="btn btn-sm" onClick={() => setMarked(new Set())} title="Clear the selection (Esc)">
-              Clear selection
+              <span className="btn-label"><IconX size={13} /> Clear selection</span>
             </button>
           </>
         )}
@@ -1689,7 +1696,7 @@ export function ImportWizard() {
             disabled={visibleFiles.length === 0 || allShownTicked}
             title="Import every photo shown"
           >
-            Import all
+            <span className="btn-label"><IconImport size={13} /> Import all</span>
           </button>
           <button
             className="btn"
@@ -1697,7 +1704,7 @@ export function ImportWizard() {
             disabled={selectedCount === 0}
             title="Import none of the photos"
           >
-            Import none
+            <span className="btn-label"><IconMinus size={13} /> Import none</span>
           </button>
           {/* What the two buttons before it add up to. A slot as wide as the
               longest count this batch can show, in digits of equal width, so
@@ -1779,7 +1786,9 @@ export function ImportWizard() {
             ) : analysisPending ? (
               `Analyzing… ${analysisProcessed}/${analysisTotal}`
             ) : (
-              `Add ${selectedCount} photo(s) to library`
+              <>
+                <IconPlus size={13} /> {`Add ${selectedCount} photo(s) to library`}
+              </>
             )}
           </button>
         </div>

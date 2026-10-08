@@ -5,7 +5,7 @@ import type { LibraryMergeSummary } from "../api/types";
 import { useWait } from "../state/wait";
 import { formatEta } from "../utils/duration";
 import { useTransientMessage } from "../utils/transientMessage";
-import { IconFolder } from "./Icons";
+import { IconFolder, IconImport, IconX } from "./Icons";
 import { Spinner } from "./Spinner";
 
 function size(bytes: number): string {
@@ -113,7 +113,7 @@ export function ImportLibrary() {
           </p>
           <div className="merge-summary-actions">
             <button className="btn" onClick={cancel}>
-              Cancel
+              <IconX size={13} /> Cancel
             </button>
           </div>
         </div>
@@ -150,10 +150,10 @@ export function ImportLibrary() {
           </ul>
           <div className="merge-summary-actions">
             <button className="btn primary" onClick={start} disabled={summary.photos === 0}>
-              {summary.photos === 0 ? "Nothing to import" : "Import into this library"}
+              <IconImport size={13} /> {summary.photos === 0 ? "Nothing to import" : "Import into this library"}
             </button>
             <button className="btn" onClick={() => setSummary(null)}>
-              Cancel
+              <IconX size={13} /> Cancel
             </button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ImportChoice, ImportMode } from "../api/types";
-import { IconDisk, IconFolder } from "./Icons";
+import { IconDisk, IconFolder, IconRestore } from "./Icons";
 import { useEscapeToClose } from "../utils/modalKeys";
 
 type Outcome = "backup" | "copy" | "reference";
@@ -143,7 +143,7 @@ export function ImportModeDialog({
                 onClick={pickFolder}
                 disabled={!copy || !desktop?.pickFolder}
               >
-                Change…
+                <IconFolder size={12} /> Change…
               </button>
               <button
                 type="button"
@@ -152,7 +152,7 @@ export function ImportModeDialog({
                 onClick={() => setStagingFolder(null)}
                 disabled={!copy || stagingFolder == null}
               >
-                Use default
+                <IconRestore size={12} /> Use default
               </button>
             </div>
             <label className="filter-field filter-field-inline import-start-backup">
