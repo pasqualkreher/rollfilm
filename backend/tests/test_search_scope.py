@@ -130,3 +130,13 @@ def test_more_candidates_than_one_sql_chunk(db: Session, ranked):
         q="sunset", limit=1500, db=db, current_user=db.get(User, 1), tags=None
     )
     assert [r.image.id for r in results] == names
+
+
+def test_the_exposure_filters_scope_the_search(db: Session, ranked):
+    db.add(_image("fast", iso=200, shutter_speed="0.004"))
+    db.add(_image("fast2", iso=800, shutter_speed="1/250"))
+    db.add(_image("slow", iso=3200, shutter_speed="2"))
+    db.commit()
+    ranked("fast", "fast2", "slow")
+    assert [r.image.id for r in _search(db, "sunset", shutter_min=0.004, shutter_max=0.004)] == ["fast", "fast2"]
+    assert [r.image.id for r in _search(db, "sunset", iso_min=800)] == ["fast2", "slow"]

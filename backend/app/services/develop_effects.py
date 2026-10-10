@@ -36,7 +36,7 @@ def _gaussian_gray(mask: np.ndarray, radius: float) -> np.ndarray:
     return _gaussian(mask, radius)
 
 
-def apply_structure(arr: np.ndarray, amount: int) -> np.ndarray:
+def apply_structure(arr: np.ndarray, amount: int, ref_long_edge: float | None = None) -> np.ndarray:
     """Medium-scale local contrast ("structure"): like clarity but on a broader
     band than fine sharpening. Positive adds punch / definition to medium-scale
     detail; negative smooths it. amount -100..100.
@@ -48,7 +48,9 @@ def apply_structure(arr: np.ndarray, amount: int) -> np.ndarray:
     HDR-ish glow (the same trick `_clarity` uses in thumbnails.py)."""
     if not amount:
         return arr
-    long_edge = max(arr.shape[:2])
+    # `ref_long_edge`: the frame's long edge when `arr` is only a part of it
+    # (a mask's box, a zoomed tile), so the radius is the whole frame's.
+    long_edge = ref_long_edge or max(arr.shape[:2])
     radius = max(2.0, long_edge / 120.0)
     band = arr - _gaussian(arr, radius)
     luma = arr @ _LUMA

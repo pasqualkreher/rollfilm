@@ -442,10 +442,15 @@ class LocalToneGuide:
 
     __slots__ = ("_a", "_b", "_sx", "_sy")
 
-    def __init__(self, rgb_weights: np.ndarray, lin: np.ndarray, ref_long_edge: float | None = None):
+    def __init__(
+        self, rgb_weights: np.ndarray, lin: np.ndarray, ref_long_edge: float | None = None,
+        patches: list | None = None,
+    ):
         """`lin` is the linear frame (or the tile of it) being toned;
         `rgb_weights` turns one of its pixels into the luminance the tone
-        curve will see (luma weights x gain x white balance)."""
+        curve will see (luma weights x gain x white balance). `patches` are
+        the retouch spots rendered for `lin` (spots.render_patches): the map
+        is read off the healed picture, while `lin` itself stays as it is."""
         import cv2
 
         h, w = lin.shape[:2]
@@ -455,6 +460,12 @@ class LocalToneGuide:
             step = max(1, int(1.0 / max(f, 1e-6)) // 2)
             lin = lin[::step, ::step].astype(np.float32)
         small = cv2.resize(lin, (sw, sh), interpolation=cv2.INTER_AREA) if (sw, sh) != (lin.shape[1], lin.shape[0]) else lin
+        if patches:
+            from app.services import spots
+
+            if small is lin:
+                small = small.copy()
+            spots.paste_scaled(small, patches, sw / float(w), sh / float(h))
         y = small.reshape(sh, sw, 3) @ rgb_weights.astype(np.float32)
         l = np.clip(np.log2(np.maximum(y, 1e-6) / _MIDDLE_GREY), _LOCAL_L_MIN, _LOCAL_L_MAX).astype(np.float32)
         k = (2 * _LOCAL_RADIUS + 1, 2 * _LOCAL_RADIUS + 1)

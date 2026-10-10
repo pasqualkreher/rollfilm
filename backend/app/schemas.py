@@ -194,11 +194,13 @@ class BulkAutoDevelopRequest(BaseModel):
 class BulkAutoDevelopResult(BaseModel):
     """Outcome of a bulk auto-develop: the (possibly partially) updated rows,
     plus how many photos actually got a suggestion vs. were skipped for having
-    no embedding yet or nothing similar to learn from."""
+    no embedding yet or nothing similar to learn from - and which ones did,
+    for "apply auto edit and save copy", which copies only those."""
 
     images: list[ImageOut]
     applied: int
     skipped: int
+    applied_ids: list[str] = []
 
 
 class RotateRequest(BaseModel):
@@ -337,6 +339,30 @@ class ExportStartRequest(ExportRequest):
 class ExportStartResponse(BaseModel):
     job_id: str
     total: int
+
+
+class CopyJobStartRequest(BaseModel):
+    """Save a copy of each photo from its saved edits (services/copy_jobs):
+    the grid's bulk Save copy and "Apply ... and save copy"."""
+
+    image_ids: list[str]
+    quality: int = 100
+    max_size: int | None = None
+
+
+class CopyJobStartResponse(BaseModel):
+    job_id: str
+    total: int
+
+
+class CopyJobProgress(BaseModel):
+    state: Literal["running", "ready", "error", "cancelled"]
+    done: int
+    written: int
+    skipped: int
+    total: int
+    error: str | None = None
+    created_ids: list[str] = []
 
 
 class ExportNamePreview(BaseModel):
@@ -1079,12 +1105,28 @@ class Facet(BaseModel):
     count: int
 
 
+class ShutterFacet(BaseModel):
+    """One shutter-speed stop: the stored EXIF string (what the filter matches)
+    and its exposure time in seconds (what the slider sorts and sends back)."""
+
+    value: str
+    count: int
+    seconds: float
+
+
 class LibraryFacets(BaseModel):
     cameras: list[Facet]
+    # Camera makes ("FUJIFILM", "SONY"), most photos first.
+    makes: list[Facet]
     # Lens names present in the library, and the distinct focal lengths (facet
     # values are the formatted mm numbers, e.g. "23" or "8.8").
     lenses: list[Facet]
     focal_lengths: list[Facet]
+    # The exposure sliders' stops, ascending: ISO ("100", "400"), aperture
+    # ("1.4", "2", "2.8") and shutter speed (by seconds).
+    isos: list[Facet]
+    apertures: list[Facet]
+    shutters: list[ShutterFacet]
     regions: list[Facet]
     # Photos with no GPS at all - offered as an explicit "no location" bucket.
     no_location_count: int
@@ -1164,6 +1206,9 @@ class BackgroundActivityOut(BaseModel):
     embeddings_running: bool
     # A library merge copying photos in from another drive.
     merge_active: bool
+    # Photos still to be saved as copies by the grid's bulk copy jobs. These
+    # do NOT resume: a copy not written when the app quits is not made later.
+    copy_jobs_running: int = 0
     # Everything above resumes by itself on the next start, which is what makes
     # "quit now" a safe offer rather than a loss.
     resumes_next_run: bool = True

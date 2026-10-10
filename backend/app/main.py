@@ -21,7 +21,10 @@ from app.db.session import SessionLocal, engine, ensure_indexes
 from app.services.cloudfiles import rehydrate_dirs_in_background
 from app.services.embeddings import ensure_embeddings_table
 from app.services.embeddings import start_background_warmup as start_background_clip_warmup
-from app.services.exif import reap_orphaned_helpers
+from app.services.exif import reap_orphaned_helpers, terminate_own_helpers
+from app.services.exif import close_helper as close_exif_helper
+from app.services.lens_profile import close_helper as close_lens_helper
+from app.services.white_balance import close_helper as close_white_balance_helper
 from app.services.geocode import warm_in_background as warm_geocoder
 from app.services import machine
 from app.services.idle_reaper import start_idle_reaper
@@ -147,6 +150,23 @@ def on_startup() -> None:
     # Release the editor's caches and the ML models once they have sat idle
     # (services/idle_reaper.py) - nothing held them back before except quitting.
     start_idle_reaper()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    # The exiftool -stay_open helpers do not exit when the backend does: the
+    # bundled exiftool sleeps and re-reads its closed stdin forever, so each
+    # one left behind became an orphan polling a hundred times a second
+    # after every quit (the "app still running" dock dot). Close the module
+    # helpers, then sweep whatever the pool threads and routes still hold.
+    # uvicorn runs this before it re-raises SIGTERM and dies; atexit never
+    # runs for that, so this hook is the one place cleanup can happen.
+    for close in (close_exif_helper, close_lens_helper, close_white_balance_helper):
+        try:
+            close()
+        except Exception:
+            pass
+    terminate_own_helpers()
 
 
 @app.get("/health")

@@ -195,8 +195,52 @@ export interface MaskDef {
   opacity: number; // 0..100
   invert: boolean;
   sub_masks: SubMask[];
-  // Sparse local adjustments (only changed scalar keys); backend merges defaults.
-  adjustments: Partial<Record<ScalarKey, number>>;
+  // Sparse local adjustments (only changed scalar keys, plus the mask's own
+  // curve / colour mixer / colour grading while they are off their rest
+  // state); the backend merges the defaults (develop._norm_mask_adjustments).
+  adjustments: MaskAdjustments;
+}
+export type MaskAdjustments = Partial<Record<ScalarKey, number>> & {
+  curve_mode?: "point" | "parametric";
+  point_curves?: PointCurves;
+  parametric_curve?: ParametricCurve;
+  hsl?: HslMix;
+  hsl_range?: HslRange;
+  color_grading?: ColorGrading;
+};
+
+// A retouch spot (develop._norm_spot): a disc on the finished frame whose
+// pixels are replaced by those of a second disc, the source. `heal` matches
+// the source's tone to the spot's surroundings first; `clone` copies it as it
+// is. Positions are fractions of the finished (cropped) frame, like a mask's;
+// the radius a fraction of its long edge, like a brush size.
+export type SpotKind = "heal" | "clone";
+export interface SpotDef {
+  id: string;
+  kind: SpotKind;
+  x: number;
+  y: number;
+  src_x: number;
+  src_y: number;
+  radius: number;
+  feather: number; // 0..100
+  opacity: number; // 0..100
+}
+export const SPOT_RADIUS_DEFAULT = 0.02;
+export const SPOT_RADIUS_MIN = 0.001;
+export const SPOT_RADIUS_MAX = 0.25;
+export function newSpot(kind: SpotKind, x: number, y: number, radius: number, src?: { x: number; y: number }): SpotDef {
+  return {
+    id: _uid(),
+    kind,
+    x,
+    y,
+    src_x: src?.x ?? x,
+    src_y: src?.y ?? y,
+    radius: Math.max(SPOT_RADIUS_MIN, Math.min(SPOT_RADIUS_MAX, radius)),
+    feather: 50,
+    opacity: 100,
+  };
 }
 
 // Built-in film simulation looks (rendered server-side in film_sims.py; the
@@ -380,15 +424,16 @@ export type Adjustments = { [K in ScalarKey]: number } & {
   color_grading: ColorGrading;
   color_calibration: ColorCalibration;
   masks: MaskDef[];
+  spots: SpotDef[];
 };
 
-function neutralHsl(): HslMix {
+export function neutralHsl(): HslMix {
   return Object.fromEntries(COLOR_BANDS.map((b) => [b, [0, 0, 0]])) as HslMix;
 }
-function neutralHslRange(): HslRange {
+export function neutralHslRange(): HslRange {
   return Object.fromEntries(COLOR_BANDS.map((b) => [b, 0])) as HslRange;
 }
-function identityPointCurves(): PointCurves {
+export function identityPointCurves(): PointCurves {
   const id = (): Curve => [
     [0, 0],
     [255, 255],
@@ -409,7 +454,7 @@ function neutralParametricCurve(): ParametricCurve {
 function neutralWheel(): GradeWheel {
   return { hue: 0, saturation: 0, luminance: 0 };
 }
-function neutralColorGrading(): ColorGrading {
+export function neutralColorGrading(): ColorGrading {
   return { shadows: neutralWheel(), midtones: neutralWheel(), highlights: neutralWheel(), global: neutralWheel(), blending: 50, balance: 0 };
 }
 function neutralCalibration(): ColorCalibration {
@@ -439,6 +484,7 @@ export function defaultAdjustments(): Adjustments {
     color_grading: neutralColorGrading(),
     color_calibration: neutralCalibration(),
     masks: [],
+    spots: [],
   };
 }
 
@@ -530,6 +576,7 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
   if (raw.color_calibration)
     base.color_calibration = { ...neutralCalibration(), ...(raw.color_calibration as Partial<ColorCalibration>) };
   if (Array.isArray(raw.masks)) base.masks = raw.masks as MaskDef[];
+  if (Array.isArray(raw.spots)) base.spots = raw.spots as SpotDef[];
   return base;
 }
 
@@ -671,7 +718,10 @@ export const FILM_SIM_GROUPS: { value: FilmSimGroup; label: string }[] = [
 // the cube renders them for a black & white one. "None" belongs to no section
 // and leads the list; a section shows its looks in the order they stand here:
 // by maker (Kodak, Fujifilm, Agfa, Ilford, Rollei), a maker's by family and
-// speed - whichever of the backend's two lists a look comes from.
+// speed, with a family's plain line (Superia 100 to 1600) kept together and
+// its variants (X-tra, HG, Natura, Reala) after it, so that the speeds read in
+// a row across the picker's two columns - whichever of the backend's two
+// lists a look comes from.
 export const FILM_SIMS: { value: FilmSim; label: string; swatch: string; group?: FilmSimGroup }[] = [
   { value: "none", label: "None", swatch: "linear-gradient(135deg, #888 50%, #bbb 50%)" },
   { value: "provia", label: "Provia · Standard", group: "fujifilm", swatch: "linear-gradient(135deg, #4a7bc8 50%, #d8a05a 50%)" },
@@ -716,10 +766,10 @@ export const FILM_SIMS: { value: FilmSim; label: string; swatch: string; group?:
   { value: "fuji_superia_100", label: "Superia 100", group: "negative", swatch: "linear-gradient(135deg, #53a1fa 50%, #c19e2f 50%)" },
   { value: "fuji_superia_200", label: "Superia 200", group: "negative", swatch: "linear-gradient(135deg, #74b9e9 50%, #d38002 50%)" },
   { value: "fuji_superia_400", label: "Superia 400", group: "negative", swatch: "linear-gradient(135deg, #2393e3 50%, #d0a116 50%)" },
-  { value: "fujifilm_xtra_400", label: "Superia X-tra 400", group: "negative", swatch: "linear-gradient(135deg, #086fa6 50%, #e19b11 50%)" },
   { value: "fuji_superia_800", label: "Superia 800", group: "negative", swatch: "linear-gradient(135deg, #417bce 50%, #d0a215 50%)" },
-  { value: "fuji_superia_xtra_800", label: "Superia X-tra 800", group: "negative", swatch: "linear-gradient(135deg, #4ba2b6 50%, #c77a60 50%)" },
   { value: "fuji_superia_1600", label: "Superia 1600", group: "negative", swatch: "linear-gradient(135deg, #077ccd 50%, #cfa50b 50%)" },
+  { value: "fujifilm_xtra_400", label: "Superia X-tra 400", group: "negative", swatch: "linear-gradient(135deg, #086fa6 50%, #e19b11 50%)" },
+  { value: "fuji_superia_xtra_800", label: "Superia X-tra 800", group: "negative", swatch: "linear-gradient(135deg, #4ba2b6 50%, #c77a60 50%)" },
   { value: "fuji_superia_hg_1600", label: "Superia HG 1600", group: "negative", swatch: "linear-gradient(135deg, #0c989b 50%, #c88c72 50%)" },
   { value: "fuji_natura_1600", label: "Natura 1600", group: "negative", swatch: "linear-gradient(135deg, #0581e6 50%, #c69903 50%)" },
   { value: "fuji_superia_reala_100", label: "Superia Reala 100", group: "negative", swatch: "linear-gradient(135deg, #69a3c3 50%, #d9884e 50%)" },
@@ -990,6 +1040,14 @@ export const MASK_LIMIT_TYPES: { value: SubMaskType; label: string }[] = [
   { value: "linear", label: "Linear" },
   { value: "brush", label: "Brush" },
 ];
+export const SUBMASK_MODES: { value: SubMaskMode; label: string; hint: string }[] = [
+  { value: "additive", label: "Add", hint: "The shape joins the selection" },
+  { value: "subtractive", label: "Subtract", hint: "The shape is taken out of the selection" },
+  { value: "intersect", label: "Intersect", hint: "The selection is confined to the shape" },
+];
+export function newShapeSubMask(type: SubMaskType, mode: SubMaskMode): SubMask {
+  return { ...newSubMask(type), mode };
+}
 export function newLimitSubMask(type: SubMaskType): SubMask {
   return { ...newSubMask(type), mode: "intersect" };
 }
@@ -1076,6 +1134,37 @@ function remapSubMaskParams(
   // re-projected without losing the detection's edges, so it keeps its `geom`
   // signature and the panel offers "Recompute" instead.
   return null;
+}
+
+// The spots, re-expressed from the frame cropped by `from` into the one cropped
+// by `to` (null = the uncropped frame) - centre and source like a radial
+// mask's centre, the radius like a brush size (a fraction of the long edge).
+// The same array comes back when nothing needed moving.
+export function remapSpotsForCrop(
+  spots: SpotDef[],
+  from: CropBox | null,
+  to: CropBox | null,
+  base: { width: number; height: number }
+): SpotDef[] {
+  const f = from ?? FULL_CROP;
+  const t = to ?? FULL_CROP;
+  if (!spots.length || t.width <= 0 || t.height <= 0) return spots;
+  if (f.x === t.x && f.y === t.y && f.width === t.width && f.height === t.height) return spots;
+  const sx = f.width / t.width;
+  const sy = f.height / t.height;
+  const ox = (f.x - t.x) / t.width;
+  const oy = (f.y - t.y) / t.height;
+  const longFrom = Math.max(base.width * f.width, base.height * f.height);
+  const longTo = Math.max(base.width * t.width, base.height * t.height);
+  const ss = longTo > 0 ? longFrom / longTo : 1;
+  return spots.map((s) => ({
+    ...s,
+    x: ox + s.x * sx,
+    y: oy + s.y * sy,
+    src_x: ox + s.src_x * sx,
+    src_y: oy + s.src_y * sy,
+    radius: Math.max(SPOT_RADIUS_MIN, Math.min(SPOT_RADIUS_MAX, s.radius * ss)),
+  }));
 }
 
 // Re-express every mask's geometry from the frame cropped by `from` into the one
@@ -1165,6 +1254,7 @@ export function editedGroups(a: Adjustments, g: GeometryEditState): Record<strin
     details: fieldsEdited("Details"),
     effects: fieldsEdited("Effects"),
     masks: a.masks.length > 0,
+    retouch: a.spots.length > 0,
     colorMixer,
     colorGrading,
     calibration,

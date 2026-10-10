@@ -710,7 +710,10 @@ function startBackend() {
   const { cmd, args, cwd, env } = resolveBackendCommand();
   const log = openBackendLogStream();
   log.write(`[main] ${new Date().toISOString()} launching: ${cmd} ${args.join(" ")}\n`);
-  const proc = spawn(cmd, args, { cwd, env });
+  // Its own process group (detached) so stopBackend can signal the backend
+  // and every helper it spawned (exiftool -stay_open) in one go. The pipes
+  // stay: stdin carries the token, stdout/stderr go to the log.
+  const proc = spawn(cmd, args, { cwd, env, detached: process.platform !== "win32" });
   backendProc = proc;
   // run_server.py reads this one line before it serves anything. A backend that
   // failed to launch has no stdin to write to - its "error" handler reports that.
@@ -761,23 +764,69 @@ function startBackend() {
   });
 }
 
+// How long the backend gets to finish its shutdown hook (close exiftool
+// helpers, end in-flight requests) before the whole tree is killed outright.
+const BACKEND_STOP_GRACE_MS = 4000;
+let backendStopPromise = null;
+
+function backendAlive(proc) {
+  // exitCode stays null for a process that a signal ended; signalCode tells.
+  return proc && proc.exitCode === null && proc.signalCode === null;
+}
+
+// Stop the backend and everything it spawned. Resolves once the process is
+// gone (or the grace period ran out and it was killed). One SIGTERM to the
+// pid alone used to leave the exiftool helpers alive and never waited: the
+// shell exited first and the backend lived on as an orphan with the dock
+// still showing the app as running.
 function stopBackend() {
-  if (backendProc && backendProc.exitCode === null) {
-    if (process.platform === "win32") {
-      // kill() is TerminateProcess on Windows: the backend's own children
-      // (exiftool -stay_open) survive it, keep holding files in the install
-      // dir, and the NSIS updater then fails to remove the old version
-      // ("error uninstalling, retry"). /T takes down the whole tree.
-      try {
-        spawnSync("taskkill", ["/pid", String(backendProc.pid), "/T", "/F"], { windowsHide: true });
-      } catch {
-        backendProc.kill();
-      }
-    } else {
-      backendProc.kill("SIGTERM");
+  const proc = backendProc;
+  if (!backendAlive(proc)) return backendStopPromise || Promise.resolve();
+  // Cleared BEFORE killing: the exit handler reads a still-registered process
+  // as an unexpected death and would relaunch it.
+  backendProc = null;
+  if (process.platform === "win32") {
+    // kill() is TerminateProcess on Windows: the backend's own children
+    // (exiftool -stay_open) survive it, keep holding files in the install
+    // dir, and the NSIS updater then fails to remove the old version
+    // ("error uninstalling, retry"). /T takes down the whole tree.
+    try {
+      spawnSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true });
+    } catch {
+      proc.kill();
     }
-    backendProc = null;
+    backendStopPromise = Promise.resolve();
+    return backendStopPromise;
   }
+  const signalTree = (sig) => {
+    try {
+      process.kill(-proc.pid, sig); // the whole process group (spawned detached)
+    } catch {
+      try {
+        proc.kill(sig);
+      } catch {
+        /* already gone */
+      }
+    }
+  };
+  signalTree("SIGTERM");
+  backendStopPromise = new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      process.stderr.write("[main] backend did not stop in time, killing its process group\n");
+      signalTree("SIGKILL");
+      // A process that ignores SIGKILL is not ours to wait for.
+      setTimeout(resolve, 500);
+    }, BACKEND_STOP_GRACE_MS);
+    proc.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    if (!backendAlive(proc)) {
+      clearTimeout(timer);
+      resolve();
+    }
+  });
+  return backendStopPromise;
 }
 
 // --- Quit protection while Immich uploads are running -----------------------
@@ -788,6 +837,12 @@ function stopBackend() {
 
 let forceClose = false;
 let backgroundWaitTimer = null;
+// "Finish in background" polls the backend this often, quits once the counts
+// have not moved for this many polls (three minutes - a large video can take
+// a while to upload) and in any case after the deadline.
+const BACKGROUND_POLL_MS = 5000;
+const BACKGROUND_STALL_POLLS = 36;
+const BACKGROUND_FINISH_MAX_MS = 15 * 60 * 1000;
 
 function fetchImmichActivity() {
   return new Promise((resolve) => {
@@ -845,12 +900,21 @@ async function outstandingWork() {
   const derivatives = background ? background.derivatives_pending || 0 : 0;
   const embeddings = Boolean(background && background.embeddings_running);
   const merging = Boolean(background && background.merge_active);
+  const copies = background ? background.copy_jobs_running || 0 : 0;
   const parts = [];
   if (uploads > 0) parts.push(`${uploads} photo${uploads === 1 ? "" : "s"} uploading to Immich`);
   if (merging) parts.push("a library being imported");
+  if (copies > 0) parts.push(`${copies} ${copies === 1 ? "copy" : "copies"} being saved`);
   if (derivatives > 0) parts.push(`${derivatives} thumbnail${derivatives === 1 ? "" : "s"} to render`);
-  if (embeddings) parts.push("the search index catching up");
-  return { immich, uploads, derivatives, embeddings, merging, parts, busy: parts.length > 0 };
+  // The search index catching up is not a reason to wait: it resumes on the
+  // next start, and it once held "finish in background" open for hours.
+  return {
+    immich, uploads, derivatives, embeddings, merging, copies, parts,
+    busy: parts.length > 0,
+    // What a poll compares against the last one to see whether anything
+    // moves: a merge has no count, it is bounded by the deadline alone.
+    counts: `${uploads}/${derivatives}/${copies}`,
+  };
 }
 
 function cancelBackgroundWait() {
@@ -885,12 +949,15 @@ async function confirmCloseWithSyncCheck() {
   // start, so "quit now" costs time, not work.
   const manualUploadsLost =
     work.uploads > 0 && work.immich && work.immich.sync_mode === "manual";
+  const lost = [];
+  if (manualUploadsLost) lost.push("queued Immich uploads");
+  if (work.copies > 0) lost.push("copies not saved yet");
   const { response } = await dialog.showMessageBox(mainWindow, {
     type: "info",
     title: "Rollfilm is still working",
     message: `Still running: ${work.parts.join(", ")}.`,
-    detail: manualUploadsLost
-      ? "Finish in background: the window closes and the app quits when done.\n\nQuit now: remaining work stops. Renders and search index catch up next start, queued Immich uploads do not."
+    detail: lost.length
+      ? `Finish in background: the window closes and the app quits when done.\n\nQuit now: remaining work stops. Renders and search index catch up next start, ${lost.join(" and ")} do not.`
       : "Finish in background: the window closes and the app quits when done.\n\nQuit now: remaining work stops and is picked up next start. Your photos and edits are already saved.",
     buttons: ["Finish in background", "Quit now", "Keep app open"],
     defaultId: 0,
@@ -907,19 +974,34 @@ async function confirmCloseWithSyncCheck() {
 
   // Finish in background: hide the window, poll until the queue drains, then
   // quit for real. Clicking the dock icon meanwhile brings the window back
-  // and cancels the auto-quit (see the activate handler).
+  // and cancels the auto-quit (see the activate handler). Bounded: a deadline
+  // for the whole wait, and a quit as soon as the counts stop moving - a
+  // stuck queue once kept the hidden app alive for good, with the dock still
+  // showing it running and no window to quit it from.
   mainWindow.hide();
+  const startedAt = Date.now();
+  let lastCounts = work.counts;
+  let stillPolls = 0;
   backgroundWaitTimer = setInterval(async () => {
     const current = await outstandingWork();
+    stillPolls = current.counts === lastCounts ? stillPolls + 1 : 0;
+    lastCounts = current.counts;
+    const stalled = !current.merging && stillPolls >= BACKGROUND_STALL_POLLS;
+    const overdue = Date.now() - startedAt > BACKGROUND_FINISH_MAX_MS;
     // A backend that stopped answering can't be working anymore - quit too
     // (outstandingWork reads that as nothing outstanding).
-    if (!current.busy) {
+    if (!current.busy || stalled || overdue) {
+      if (current.busy) {
+        process.stderr.write(
+          `[main] finish in background ${stalled ? "made no progress" : "ran past its deadline"}, quitting with: ${current.parts.join(", ")}\n`
+        );
+      }
       cancelBackgroundWait();
       forceClose = true;
       if (mainWindow) mainWindow.close();
       else app.quit();
     }
-  }, 5000);
+  }, BACKGROUND_POLL_MS);
 }
 
 // --- Library-disconnect watchdog --------------------------------------------
@@ -1670,7 +1752,22 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
-app.on("will-quit", stopBackend);
+// Quitting waits for the backend to be gone: will-quit is held back once,
+// the stop runs, then quit goes through. Without the wait the shell exited
+// while the backend was still shutting down and the backend stayed behind.
+let backendStopDone = false;
+app.on("will-quit", (event) => {
+  if (backendStopDone) return;
+  event.preventDefault();
+  const settle = () => {
+    backendStopDone = true;
+    app.quit();
+  };
+  Promise.race([stopBackend(), new Promise((r) => setTimeout(r, BACKEND_STOP_GRACE_MS + 1000))]).then(
+    settle,
+    settle
+  );
+});
 process.on("exit", stopBackend);
 
 // External termination (Ctrl-C in the dev terminal, `concurrently -k`, a parent
@@ -1683,8 +1780,7 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     // Skip the "uploads still running" close dialog - an external kill must
     // never hang on a message box.
     forceClose = true;
-    stopBackend();
-    app.quit();
-    process.exit(0);
+    const leave = () => process.exit(0);
+    stopBackend().then(leave, leave);
   });
 }

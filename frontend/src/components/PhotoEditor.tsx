@@ -4,7 +4,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, saveDownload, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconBookmark, IconBulb, IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconCurve, IconDetail, IconEye, IconEyeOff, IconFilmRoll, IconFlipH, IconFlipV, IconImage, IconMask, IconPalette, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSparkle, IconSplit, IconSun, IconTarget, IconTone, IconTrash, IconTube, IconUndo, IconX } from "./Icons";
+import { IconBookmark, IconBulb, IconCamera, IconCheck, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconCurve, IconDetail, IconDuplicate, IconEye, IconEyeOff, IconFilmRoll, IconFlipH, IconFlipV, IconHeal, IconImage, IconMask, IconPalette, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSparkle, IconSplit, IconSun, IconTarget, IconTone, IconTrash, IconTube, IconUndo, IconX } from "./Icons";
+import { SpotOverlay } from "./SpotOverlay";
 import { Dropdown } from "./Dropdown";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import { useFocusMode, setFocusMode, toggleFocusMode } from "../state/focusMode";
@@ -27,9 +28,7 @@ import {
   MASK_LIMIT_TYPES,
   MASK_SUBJECTS,
   MASK_TYPES,
-  maskLimit,
   neutralEdits,
-  newLimitSubMask,
   newMask,
   normalizeAdjustments,
   remapMasksForCrop,
@@ -55,6 +54,23 @@ import {
   type SubMaskType,
   LENS_KEYS,
   scalarIsEdited,
+  type HslMix,
+  type HslRange,
+  type MaskAdjustments,
+  type SubMaskMode,
+  identityPointCurves,
+  neutralColorGrading,
+  neutralHsl,
+  neutralHslRange,
+  newShapeSubMask,
+  newSpot,
+  remapSpotsForCrop,
+  SUBMASK_MODES,
+  SPOT_RADIUS_DEFAULT,
+  SPOT_RADIUS_MAX,
+  SPOT_RADIUS_MIN,
+  type SpotDef,
+  type SpotKind,
 } from "../utils/adjustments";
 import {
   PARAM_BASES,
@@ -221,8 +237,9 @@ const AUTOSAVE_IDLE_MS = 1000;
 // stroke of the mask server-side, and re-rendered the editor.
 const BRUSH_FLUSH_MS = 200;
 
-const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "presets"];
-const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String(i + 1));
+const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "retouch", "presets"];
+// The keys that open the groups, in the same order: 1..9, then 0 for the tenth.
+const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String((i + 1) % 10));
 // The icon in front of each group's title in the panel.
 const GROUP_ICON: Record<string, (p: { size?: number }) => JSX.Element> = {
   transform: IconCrop,
@@ -233,6 +250,7 @@ const GROUP_ICON: Record<string, (p: { size?: number }) => JSX.Element> = {
   details: IconDetail,
   effects: IconSparkle,
   masks: IconMask,
+  retouch: IconHeal,
   presets: IconBookmark,
 };
 
@@ -273,6 +291,12 @@ const MASK_FLASH_MS = 1500;
 const BRUSH_PEN_DOWN = 1;
 const BRUSH_ERASE = 2;
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+// Ids for copied masks and their shapes (adjustments.newMask makes the originals').
+function _maskUid(): string {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
 // Gap between the two panes of the side-by-side compare (matches .editor-pair's
 // CSS gap, which the fit maths has to subtract before halving the stage).
 const PAIR_GAP = 12;
@@ -1324,7 +1348,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // and the overlays' live painters (MaskOverlay registers one per brush).
   const pendingStrokesRef = useRef<{ maskId: string; idx: number; pts: number[][] } | null>(null);
   const strokeFlushTimer = useRef(0);
-  const brushSink = useMemo(() => new Set<(pts: number[][]) => void>(), []);
+  const brushSink = useMemo(() => new Set<(subId: string, pts: number[][]) => void>(), []);
   useEffect(() => () => clearTimeout(strokeFlushTimer.current), []);
   // Eraser latch for the brush; Alt inverts it for one stroke.
   const [brushErase, setBrushErase] = useState(false);
@@ -1340,10 +1364,25 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // (mutually exclusive with crop mode). The colour eyedropper samples the next
   // canvas click for a colour sub-mask's target.
   const [selectedMaskId, setSelectedMaskId] = useState<string | null>(null);
+  const [renamingMaskId, setRenamingMaskId] = useState<string | null>(null);
   const [maskDrawMode, setMaskDrawMode] = useState(false);
-  // Drawing the LIMIT shape (sub-mask 1) rather than the mask's own selection.
-  // Both use the same canvas gestures; this only says which sub-mask they write.
-  const [limitEdit, setLimitEdit] = useState(false);
+  // Which of the selected mask's sub-masks the canvas gestures write: 0 is
+  // the mask's own selection, 1.. the shapes added to it. `limitEdit` is the
+  // old name for "not the base", kept for the sites that only need that.
+  const [editSubIdx, setEditSubIdx] = useState(0);
+  const limitEdit = editSubIdx > 0;
+  const setLimitEdit = (on: boolean) => setEditSubIdx(on ? 1 : 0);
+  // Retouch: spot heal / clone. The spots live in the edit like the masks do
+  // (adj.spots); the on-image tool places and moves them while `spotMode` is
+  // on, with the same gestures on the stage and on the canvas's docked
+  // surface. `spotRadius` is the size the next spot is placed at - the size
+  // slider, [ and ] set it, and dragging a spot out sets it too.
+  const [spotMode, setSpotMode] = useState(false);
+  const [spotKind, setSpotKind] = useState<SpotKind>("heal");
+  const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
+  const [spotsHidden, setSpotsHidden] = useState(false);
+  const [spotRadius, setSpotRadius] = useState(SPOT_RADIUS_DEFAULT);
+  const spotGesture = useRef<{ id: string; mode: "create" | "move" | "source"; start: Pt; orig: SpotDef } | null>(null);
   const [colorPickMode, setColorPickMode] = useState(false);
   // The white-balance eyedropper: the next click on the photo names an area
   // that should be white.
@@ -1800,8 +1839,15 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     let adjustments = snapshot.adjustments;
     // Masks are fractions of the cropped frame; the crop may have moved since
     // the capture, so re-express them for the frame shown now.
-    if (adjustments.masks.length && JSON.stringify(snapshot.crop ?? null) !== JSON.stringify(shownCrop)) {
-      adjustments = { ...adjustments, masks: remapMasksForCrop(adjustments.masks, snapshot.crop, shownCrop, frameBase()) };
+    if (
+      (adjustments.masks.length || adjustments.spots.length) &&
+      JSON.stringify(snapshot.crop ?? null) !== JSON.stringify(shownCrop)
+    ) {
+      adjustments = {
+        ...adjustments,
+        masks: remapMasksForCrop(adjustments.masks, snapshot.crop, shownCrop, frameBase()),
+        spots: remapSpotsForCrop(adjustments.spots, snapshot.crop, shownCrop, frameBase()),
+      };
     }
     // Same rule as the edit below: no white frame under an overlay.
     if (overlayActive && adjustments.frame_width) adjustments = { ...adjustments, frame_width: 0 };
@@ -1815,8 +1861,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     // the cropped one - so re-express them for this preview or every mask's
     // effect sits somewhere else for as long as the crop box is open. Preview
     // only: the stored masks move when the crop is actually applied.
-    if (cropMode && crop && adjustments.masks.length) {
-      adjustments = { ...adjustments, masks: remapMasksForCrop(adjustments.masks, crop, null, frameBase()) };
+    if (cropMode && crop && (adjustments.masks.length || adjustments.spots.length)) {
+      adjustments = {
+        ...adjustments,
+        masks: remapMasksForCrop(adjustments.masks, crop, null, frameBase()),
+        spots: remapSpotsForCrop(adjustments.spots, crop, null, frameBase()),
+      };
     }
     return { ...edits, crop: cropMode ? null : crop, adjustments };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3059,6 +3109,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           setCurvePickMode(false);
           setCurveMarker(null);
         } else if (maskDrawMode) setMaskDrawMode(false);
+        else if (spotMode) setSpotMode(false);
         // The crop box belongs to the open Transform group, so putting it away
         // means closing that group - dropping crop mode alone would leave the
         // panel showing crop controls with no box on the photo.
@@ -3138,7 +3189,31 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         return;
       }
 
-      // 1..9 open the matching control section (same order as the panel).
+      // Retouch, with its group open: [ and ] size the spot tool (and the
+      // selected spot, so a placed spot can still be resized), H hides the
+      // circles to judge the result, Delete / Backspace removes the selected
+      // spot.
+      if (openGroup === "retouch") {
+        if (e.key === "[" || e.key === "]") {
+          e.preventDefault();
+          const k = e.key === "]" ? 1.15 : 1 / 1.15;
+          const size = (r: number) => Math.max(SPOT_RADIUS_MIN, Math.min(SPOT_RADIUS_MAX, r * k));
+          setSpotRadius((r) => size(r));
+          if (selectedSpotId) updateSpot(selectedSpotId, (s) => ({ ...s, radius: size(s.radius) }));
+          return;
+        }
+        if (e.key === "h" || e.key === "H") {
+          setSpotsHidden((v) => !v);
+          return;
+        }
+        if ((e.key === "Delete" || e.key === "Backspace") && selectedSpotId) {
+          e.preventDefault();
+          deleteSpot(selectedSpotId);
+          return;
+        }
+      }
+
+      // 1..9 and 0 open the matching control section (same order as the panel).
       const idx = SECTION_KEY_ORDER.indexOf(e.key);
       if (idx === -1) return;
       const groupId = GROUP_ORDER[idx];
@@ -3152,7 +3227,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, busy, cropMode, maskDrawMode, colorPickMode, wbPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, focusMode, undo, redo]);
+  }, [onClose, busy, cropMode, maskDrawMode, spotMode, openGroup, selectedSpotId, colorPickMode, wbPickMode, curvePickMode, saveCopyOpen, saveCopy.isPending, focusMode, undo, redo]);
 
   function fractionAt(clientX: number, clientY: number) {
     const clamp = (v: number) => Math.min(Math.max(v, 0), 1);
@@ -3216,7 +3291,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   function applyCrop(next: CropBox | null) {
     setAdj((a) => {
       const masks = remapMasksForCrop(a.masks, crop, next, frameBase());
-      return masks === a.masks ? a : { ...a, masks };
+      const spots = remapSpotsForCrop(a.spots, crop, next, frameBase());
+      return masks === a.masks && spots === a.spots ? a : { ...a, masks, spots };
     });
     setCrop(next);
   }
@@ -3434,6 +3510,49 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       masks: a.masks.map((m) => (m.id === id ? { ...m, adjustments: { ...m.adjustments, [key]: v } } : m)),
     }));
   }
+  // A mask's own nested groups - its curve, colour mixer, colour grading -
+  // written like its scalars; the backend keeps a group only while it is off
+  // its rest state (develop._norm_mask_adjustments).
+  function updateMaskNested<K extends keyof MaskAdjustments>(id: string, key: K, value: MaskAdjustments[K]) {
+    setAdj((a) => ({
+      ...a,
+      masks: a.masks.map((m) => (m.id === id ? { ...m, adjustments: { ...m.adjustments, [key]: value } } : m)),
+    }));
+  }
+  // A copy of a mask, right after it, with ids of its own; the usual start of
+  // a second mask that differs from the first in one thing.
+  function duplicateMask(id: string) {
+    const src = adj.masks.find((m) => m.id === id);
+    if (!src) return;
+    const copy: MaskDef = {
+      ...src,
+      id: _maskUid(),
+      name: `${src.name} copy`,
+      sub_masks: src.sub_masks.map((s) => ({ ...s, id: _maskUid(), parameters: { ...s.parameters } })),
+      adjustments: JSON.parse(JSON.stringify(src.adjustments)) as MaskAdjustments,
+    };
+    setAdj((a) => {
+      const i = a.masks.findIndex((m) => m.id === id);
+      const masks = a.masks.slice();
+      masks.splice(i + 1, 0, copy);
+      return { ...a, masks };
+    });
+    setSelectedMaskId(copy.id);
+    setMaskDrawMode(false);
+    setLimitEdit(false);
+  }
+  // The list's order is the order the masks are applied in: a later
+  // luminance or colour mask selects on the picture the earlier ones made.
+  function moveMask(id: string, dir: -1 | 1) {
+    setAdj((a) => {
+      const i = a.masks.findIndex((m) => m.id === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= a.masks.length) return a;
+      const masks = a.masks.slice();
+      [masks[i], masks[j]] = [masks[j], masks[i]];
+      return { ...a, masks };
+    });
+  }
   // Append one brush point to the index-0 sub-mask's strokes. `flags` marks the
   // pointer-down sample and whether this is an erase stroke - the renderer needs
   // the stroke boundaries to sweep each one as a continuous segment run (and to
@@ -3450,7 +3569,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // edit state, flushed after BRUSH_FLUSH_MS (or when the gesture ends).
   function queueStrokes(id: string, pts: number[][], idx = 0) {
     if (pts.length === 0) return;
-    brushSink.forEach((paint) => paint(pts));
+    const subId = adj.masks.find((m) => m.id === id)?.sub_masks[idx]?.id ?? "";
+    brushSink.forEach((paint) => paint(subId, pts));
     const pend = pendingStrokesRef.current;
     if (pend && pend.maskId === id && pend.idx === idx) pend.pts.push(...pts);
     else {
@@ -3570,56 +3690,62 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // The sub-mask the canvas gestures read and write. Kept as a plain derived
   // value rather than state: it only ever mirrors which of the two shapes the
   // panel says you are editing.
-  const canvasSubIdx = limitEdit ? 1 : 0;
+  const canvasSubIdx = editSubIdx;
 
-  // "Limit to area": give the mask a second, intersected sub-mask (see
-  // adjustments.newLimitSubMask). This is what makes the selections that have no
-  // place of their own usable - an edge mask finds every edge in the frame, so
-  // sharpening through it lands on the whole picture until it can be confined to
-  // the part you meant. Adding one drops straight into drawing it, exactly like
-  // adding a radial mask does.
-  function addLimit(type: SubMaskType) {
-    if (!selectedMaskId) return;
+  // Shapes added to a mask's selection: each joins it, is taken out of it or
+  // confines it (the backend combines them in list order, masks.
+  // generate_mask_field). This is what makes the selections that have no
+  // place of their own usable - an edge mask finds every edge in the frame,
+  // so sharpening through it lands on the whole picture until it can be
+  // confined to the part you meant - and what lets a radial mask spare the
+  // face inside it. A new shape confines a selection that has no place of its
+  // own and is taken out of one that has; adding it drops straight into
+  // drawing it, exactly like adding a radial mask does.
+  function addShape(type: SubMaskType, mode?: SubMaskMode) {
+    const mask = adj.masks.find((m) => m.id === selectedMaskId);
+    if (!mask) return;
+    const base = mask.sub_masks[0];
+    const chosen: SubMaskMode = mode ?? (base && isSpatial(base.type) ? "subtractive" : "intersect");
+    const idx = mask.sub_masks.length;
     setAdj((a) => ({
       ...a,
-      masks: a.masks.map((m) =>
-        m.id === selectedMaskId && m.sub_masks.length < 2
-          ? { ...m, sub_masks: [...m.sub_masks, newLimitSubMask(type)] }
-          : m
-      ),
+      masks: a.masks.map((m) => (m.id === mask.id ? { ...m, sub_masks: [...m.sub_masks, newShapeSubMask(type, chosen)] } : m)),
     }));
     setCropMode(false);
     setColorPickMode(false);
-    setLimitEdit(true);
+    setEditSubIdx(idx);
     setMaskDrawMode(true);
   }
-  function removeLimit() {
-    if (!selectedMaskId) return;
+  function removeShape(idx: number) {
+    if (!selectedMaskId || idx < 1) return;
     setAdj((a) => ({
       ...a,
-      masks: a.masks.map((m) => (m.id === selectedMaskId ? { ...m, sub_masks: m.sub_masks.slice(0, 1) } : m)),
+      masks: a.masks.map((m) =>
+        m.id === selectedMaskId ? { ...m, sub_masks: m.sub_masks.filter((_, i) => i !== idx) } : m
+      ),
     }));
-    setLimitEdit(false);
+    setEditSubIdx(0);
     // The shape that was being drawn no longer exists, so the canvas has nothing
     // left to edit - leaving draw mode armed would just swallow clicks.
     setMaskDrawMode(false);
   }
-  function updateLimit(patch: Partial<SubMask>) {
+  function updateShape(idx: number, patch: Partial<SubMask>) {
     if (!selectedMaskId) return;
     setAdj((a) => ({
       ...a,
       masks: a.masks.map((m) => {
-        const limit = m.id === selectedMaskId ? maskLimit(m) : null;
-        if (!limit) return m;
-        return { ...m, sub_masks: [m.sub_masks[0], { ...limit, ...patch }] };
+        if (m.id !== selectedMaskId || !m.sub_masks[idx]) return m;
+        const subs = m.sub_masks.slice();
+        subs[idx] = { ...subs[idx], ...patch };
+        return { ...m, sub_masks: subs };
       }),
     }));
   }
-  // Which of the two shapes the canvas edits. Switching also enters draw mode:
-  // asking to edit a shape and then having to arm the canvas separately is a
-  // step that never means anything else.
-  function editShape(limit: boolean) {
-    setLimitEdit(limit);
+  // Which of the mask's shapes the canvas edits. Switching also enters draw
+  // mode: asking to edit a shape and then having to arm the canvas separately
+  // is a step that never means anything else.
+  function editShape(idx: number) {
+    setEditSubIdx(idx);
     setCropMode(false);
     setColorPickMode(false);
     setMaskDrawMode(true);
@@ -4002,7 +4128,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       // the server sees); the guide paints it first, like every sample.
       const down = [p.x, p.y, subNum(sub, "size", 0.06), BRUSH_PEN_DOWN | (erasing ? BRUSH_ERASE : 0)];
       flushStrokes();
-      brushSink.forEach((paint) => paint([down]));
+      brushSink.forEach((paint) => paint(sub.id, [down]));
       appendStrokes(mask.id, [down], idx);
     }
   }
@@ -4110,6 +4236,188 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     brushLast.current = null;
   }
 
+  // ---- Retouch spots ---------------------------------------------------------
+  // A spot's radius is a fraction of the frame's long edge; as fractions of
+  // the two axes (the units the pointer is read in) it is this.
+  function spotRadii(r: number): { rx: number; ry: number } {
+    const a = canvasAspect();
+    return a >= 1 ? { rx: r, ry: r * a } : { rx: r / a, ry: r };
+  }
+  // The selected spot's source handle first, then every spot's own disc, so
+  // a spot sitting on another's source is still the one picked up.
+  function spotHitTest(p: Pt): { id: string; mode: "move" | "source" } | null {
+    const { tolX, tolY } = maskTol();
+    const inside = (s: SpotDef, cx: number, cy: number) => {
+      const { rx, ry } = spotRadii(s.radius);
+      const dx = (p.x - cx) / (rx + tolX);
+      const dy = (p.y - cy) / (ry + tolY);
+      return dx * dx + dy * dy <= 1;
+    };
+    const sel = adj.spots.find((s) => s.id === selectedSpotId);
+    if (sel && inside(sel, sel.src_x, sel.src_y)) return { id: sel.id, mode: "source" };
+    for (const s of adj.spots) if (inside(s, s.x, s.y)) return { id: s.id, mode: "move" };
+    return null;
+  }
+  function updateSpot(id: string, fn: (s: SpotDef) => SpotDef) {
+    setAdj((a) => ({ ...a, spots: a.spots.map((s) => (s.id === id ? fn(s) : s)) }));
+  }
+  function deleteSpot(id: string) {
+    setAdj((a) => ({ ...a, spots: a.spots.filter((s) => s.id !== id) }));
+    setSelectedSpotId((cur) => (cur === id ? null : cur));
+  }
+  // A clone's first source: beside the spot, 2.5 radii to the right (to the
+  // left when that would leave the frame) - near enough to be the same
+  // material, far enough not to overlap.
+  function cloneSource(x: number, y: number, r: number): { x: number; y: number } {
+    const { rx } = spotRadii(r);
+    const off = 2.5 * rx;
+    const sx = x + off + rx <= 1 ? x + off : x - off;
+    return { x: clamp01(sx), y };
+  }
+  // A heal's source: the patch around the spot that looks most like the
+  // spot's own surroundings, judged on the preview. Candidates sit on two
+  // rings, at 2 and 3.2 radii; each is scored by how far the ring just
+  // outside it is from the ring just outside the spot (the tone the heal has
+  // to blend into), plus how flat its own disc is against that tone (a
+  // candidate holding another speck would carry it over). Falls back to the
+  // clone's fixed offset when the preview can't be read.
+  function autoSource(x: number, y: number, r: number): { x: number; y: number } {
+    const fallback = cloneSource(x, y, r);
+    const canvas = canvasRef.current;
+    if (!canvas || !canvas.width || !canvas.height || compare) return fallback;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return fallback;
+    const W = canvas.width;
+    const H = canvas.height;
+    const rp = Math.max(2, r * Math.max(W, H)); // the radius in canvas pixels
+    const cx = x * W;
+    const cy = y * H;
+    const reach = Math.ceil(4.5 * rp);
+    const x0 = Math.max(0, Math.floor(cx) - reach);
+    const y0 = Math.max(0, Math.floor(cy) - reach);
+    const x1 = Math.min(W, Math.ceil(cx) + reach);
+    const y1 = Math.min(H, Math.ceil(cy) + reach);
+    if (x1 - x0 < 4 || y1 - y0 < 4) return fallback;
+    let data: Uint8ClampedArray;
+    try {
+      data = ctx.getImageData(x0, y0, x1 - x0, y1 - y0).data;
+    } catch {
+      return fallback;
+    }
+    const w = x1 - x0;
+    const h = y1 - y0;
+    // Mean colour over sample points on a circle (`ring`) or over a disc
+    // (centre + a ring at half the radius), or null when a point falls
+    // outside the window.
+    const mean = (px: number, py: number, radius: number, ring: boolean): number[] | null => {
+      const pts: [number, number][] = ring ? [] : [[px, py]];
+      const n = ring ? 16 : 8;
+      const rr = ring ? radius : radius * 0.5;
+      for (let i = 0; i < n; i++) {
+        const t = (i / n) * Math.PI * 2;
+        pts.push([px + Math.cos(t) * rr, py + Math.sin(t) * rr]);
+      }
+      const acc = [0, 0, 0];
+      for (const [qx, qy] of pts) {
+        const ix = Math.round(qx) - x0;
+        const iy = Math.round(qy) - y0;
+        if (ix < 0 || iy < 0 || ix >= w || iy >= h) return null;
+        const o = (iy * w + ix) * 4;
+        acc[0] += data[o];
+        acc[1] += data[o + 1];
+        acc[2] += data[o + 2];
+      }
+      return acc.map((v) => v / pts.length);
+    };
+    const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const want = mean(cx, cy, rp * 1.2, true);
+    if (!want) return fallback;
+    let best: { x: number; y: number } | null = null;
+    let bestScore = Infinity;
+    for (const k of [2.0, 3.2]) {
+      for (let i = 0; i < 12; i++) {
+        const t = (i / 12) * Math.PI * 2;
+        const px = cx + Math.cos(t) * rp * k;
+        const py = cy + Math.sin(t) * rp * k;
+        const ring = mean(px, py, rp * 1.2, true);
+        const disc = mean(px, py, rp, false);
+        if (!ring || !disc) continue;
+        const score = dist(ring, want) + 0.5 * dist(disc, want) + k; // nearer wins a tie
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: px / W, y: py / H };
+        }
+      }
+    }
+    return best ? { x: clamp01(best.x), y: clamp01(best.y) } : fallback;
+  }
+  function spotSourceFor(kind: SpotKind, x: number, y: number, r: number) {
+    return kind === "heal" ? autoSource(x, y, r) : cloneSource(x, y, r);
+  }
+  // Pointer-down: pick up a spot (or the selected one's source) under the
+  // pointer, else place a new one at the tool's size; dragging on from there
+  // sizes it instead.
+  function spotPointerDown(clientX: number, clientY: number) {
+    const p = fractionAt(clientX, clientY);
+    const hit = spotHitTest(p);
+    if (hit) {
+      const orig = adj.spots.find((s) => s.id === hit.id);
+      if (!orig) return;
+      setSelectedSpotId(hit.id);
+      spotGesture.current = { id: hit.id, mode: hit.mode, start: p, orig };
+      return;
+    }
+    const spot = newSpot(spotKind, p.x, p.y, spotRadius, spotSourceFor(spotKind, p.x, p.y, spotRadius));
+    setAdj((a) => ({ ...a, spots: [...a.spots, spot] }));
+    setSelectedSpotId(spot.id);
+    spotGesture.current = { id: spot.id, mode: "create", start: p, orig: spot };
+  }
+  function spotPointerMove(clientX: number, clientY: number) {
+    const g = spotGesture.current;
+    if (!g) return;
+    const p = fractionAt(clientX, clientY);
+    const dx = p.x - g.start.x;
+    const dy = p.y - g.start.y;
+    if (g.mode === "create") {
+      // x and y are fractions of different edges: measure the drag in
+      // fractions of the long edge, the unit the radius is in.
+      const a = canvasAspect();
+      const d = Math.hypot(dx * (a >= 1 ? 1 : a), dy * (a >= 1 ? 1 / a : 1));
+      if (d < SPOT_RADIUS_MIN * 2) return; // a click, not a drag: the preset size stands
+      const r = Math.max(SPOT_RADIUS_MIN, Math.min(SPOT_RADIUS_MAX, d));
+      setSpotRadius(r);
+      const src = spotSourceFor(g.orig.kind, g.orig.x, g.orig.y, r);
+      updateSpot(g.id, (s) => ({ ...s, radius: r, src_x: src.x, src_y: src.y }));
+    } else if (g.mode === "move") {
+      updateSpot(g.id, (s) => ({
+        ...s,
+        x: clamp01(g.orig.x + dx),
+        y: clamp01(g.orig.y + dy),
+        src_x: clamp01(g.orig.src_x + dx),
+        src_y: clamp01(g.orig.src_y + dy),
+      }));
+    } else {
+      updateSpot(g.id, (s) => ({ ...s, src_x: clamp01(g.orig.src_x + dx), src_y: clamp01(g.orig.src_y + dy) }));
+    }
+  }
+  function endSpotGesture() {
+    spotGesture.current = null;
+  }
+  // The on-image spot tool belongs to the open Retouch group, like the crop
+  // box to Transform: closing the group puts it away.
+  useEffect(() => {
+    if (openGroup !== "retouch") setSpotMode(false);
+  }, [openGroup]);
+  function toggleSpotMode() {
+    setSpotMode((on) => {
+      if (!on) {
+        setMaskDrawMode(false);
+        setCropMode(false);
+      }
+      return !on;
+    });
+  }
+
   // The controls a drawn shape needs, bound to one sub-mask of one mask. The
   // same set serves the mask's own shape (index 0) and the shape it is limited
   // to (index 1) - one block, two callers, so the two can't drift apart.
@@ -4127,7 +4435,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             onChange={(v) => setSubParams(maskId, { size: v / 500 }, idx)}
           />
         )}
-        {(sub.type === "radial" || sub.type === "brush") && (
+        {(sub.type === "radial" || sub.type === "brush" || sub.type === "linear") && (
           <Slider
             label="Feather"
             value={subNum(sub, "feather", 50)}
@@ -4277,6 +4585,80 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   }
   // A clickable group header (editor-section-title look) + a caret that rotates
   // when this group is open. Clicking an open group collapses it ("").
+  // The colour mixer's controls over one HSL set: the global one (adj.hsl)
+  // and a mask's own share them, and the band picked stays picked across
+  // the two. `setChannel(ch, v)` / `setRange(v)` write the picked band.
+  function mixerControls(
+    hsl: HslMix,
+    hslRange: HslRange,
+    setChannel: (ch: number, v: number) => void,
+    setRange: (v: number) => void
+  ) {
+    return (
+      <>
+        <div className="mixer-bands">
+          {COLOR_BANDS.map((b) => (
+            <button
+              key={b}
+              className={`mixer-band${band === b ? " active" : ""}${
+                !hsl[b].every((v) => v === 0) || hslRange[b] !== 0 ? " edited" : ""
+              }`}
+              style={{ background: BAND_SWATCH[b] }}
+              title={b}
+              onClick={() => setBand(b)}
+            />
+          ))}
+        </div>
+        <div className="editor-sliders">
+          {MIX_CHANNELS.map(([ch, lbl, wide]) => (
+            <Slider
+              key={ch}
+              label={lbl}
+              value={hsl[band][ch]}
+              min={wide ? -200 : -100}
+              max={wide ? 200 : 100}
+              uiScale={wide ? 2 : 1}
+              onChange={(v) => setChannel(ch, v)}
+            />
+          ))}
+          {/* How far this band's three sliders reach into the neighbouring
+              hues before the next band takes over. Negative keeps the edit
+              tight around this colour, positive carries it across. */}
+          <Slider label="Range" value={hslRange[band]} onChange={setRange} />
+        </div>
+      </>
+    );
+  }
+  // The colour grading's controls over one grading set, likewise.
+  function gradingControls(
+    grading: ColorGrading,
+    setWheel: (range: GradeRange, patch: Partial<GradeWheel>) => void,
+    setScalar: (key: "blending" | "balance", v: number) => void
+  ) {
+    return (
+      <>
+        <div className="grade-wheels">
+          {GRADE_RANGES.map((r) => (
+            <div key={r.key} className="grade-wheel-cell">
+              <ColorWheel
+                label={r.label}
+                hue={grading[r.key].hue}
+                saturation={grading[r.key].saturation}
+                onChange={(v) => setWheel(r.key, v)}
+                onReset={() => setWheel(r.key, { hue: 0, saturation: 0 })}
+              />
+              <Slider label="Luminance" value={grading[r.key].luminance} onChange={(v) => setWheel(r.key, { luminance: v })} />
+            </div>
+          ))}
+        </div>
+        <div className="editor-sliders">
+          <Slider label="Blending" value={grading.blending} min={0} max={100} resetValue={50} onChange={(v) => setScalar("blending", v)} />
+          <Slider label="Balance" value={grading.balance} onChange={(v) => setScalar("balance", v)} />
+        </div>
+      </>
+    );
+  }
+
   function accordionHeader(id: string, title: string) {
     const open = openGroup === id;
     const toggle = () => setOpenGroup(open ? "" : id);
@@ -4344,7 +4726,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // editor is bound to.
   const selectedMask = selectedMaskId ? adj.masks.find((m) => m.id === selectedMaskId) ?? null : null;
   const selSub = selectedMask?.sub_masks[0] ?? null;
-  const selLimit = selectedMask ? maskLimit(selectedMask) : null;
+  const selShapes = selectedMask ? selectedMask.sub_masks.slice(1) : [];
   // Which mask the overlay is about: the one being pointed at in the list, else
   // the one being drawn on the image. Pointing at a row is the explicit request,
   // so it wins.
@@ -4357,7 +4739,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // The limit shape shows whenever its mask's overlay is up - including for a
   // luminance / colour / edge mask, whose own selection draws nothing: seeing
   // where the limit sits is most of the point of having drawn one.
-  const overlayLimitSub = overlayMask ? maskLimit(overlayMask) : null;
+  const overlayShapes = overlayMask ? overlayMask.sub_masks.slice(1) : [];
   const canvasAspectForOverlay = () =>
     canvasRef.current && canvasRef.current.height ? canvasRef.current.width / canvasRef.current.height : 1;
   // Two separate things over the photo. The zebra MARKING - what does this mask
@@ -4369,7 +4751,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const overlayIsHovered = hoveredMask != null;
   const overlayIsSelected = overlayMask != null && overlayMask.id === selectedMaskId;
   const overlayMark =
-    !overlayLimitSub &&
+    overlayShapes.length === 0 &&
     (overlayIsHovered ||
       ((showMaskArea || flashMaskArea) && overlayIsSelected) ||
       (maskDrawMode && overlayIsSelected && overlaySpatialSub?.type === "brush"));
@@ -4391,44 +4773,49 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           is being drawn; otherwise the frame underneath keeps working. */}
       {docked &&
         maskHost &&
-        openGroup === "masks" &&
+        (openGroup === "masks" || openGroup === "retouch") &&
         (() => {
           const aspect = canvasAspectForOverlay();
           return createPortal(
             <div
-              className={`canvas-mask-surface${maskDrawMode ? " is-drawing" : ""}`}
+              className={`canvas-mask-surface${maskDrawMode || spotMode ? " is-drawing" : ""}`}
               style={{
                 aspectRatio: `${aspect}`,
                 width: `max(100%, calc(100cqh * ${aspect}))`,
-                cursor: maskDrawMode ? maskCursor : undefined,
+                cursor: spotMode ? "crosshair" : maskDrawMode ? maskCursor : undefined,
               }}
               onPointerDown={(e) => {
-                if (!maskDrawMode || e.button !== 0) return;
+                if (!(maskDrawMode || spotMode) || e.button !== 0) return;
                 // Ours, not the frame's: a drag here paints, it does not move
                 // the frame or start a marquee on the page.
                 e.stopPropagation();
                 e.preventDefault();
                 e.currentTarget.setPointerCapture?.(e.pointerId);
-                maskPointerDown(e.clientX, e.clientY, e.altKey);
+                if (spotMode) spotPointerDown(e.clientX, e.clientY);
+                else maskPointerDown(e.clientX, e.clientY, e.altKey);
               }}
               onPointerMove={(e) => {
-                if (!maskDrawMode) return;
-                maskPointerMove(e.clientX, e.clientY);
+                if (spotMode) spotPointerMove(e.clientX, e.clientY);
+                else if (maskDrawMode) maskPointerMove(e.clientX, e.clientY);
               }}
               onPointerUp={(e) => {
-                if (maskGesture.current) e.stopPropagation();
+                if (maskGesture.current || spotGesture.current) e.stopPropagation();
                 endMaskGesture();
+                endSpotGesture();
                 if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
               }}
-              onPointerCancel={() => endMaskGesture()}
+              onPointerCancel={() => {
+                endMaskGesture();
+                endSpotGesture();
+              }}
               onPointerLeave={() => {
                 if (!maskGesture.current) hideMaskCursor();
               }}
               onClick={(e) => {
-                if (maskDrawMode) e.stopPropagation();
+                if (maskDrawMode || spotMode) e.stopPropagation();
               }}
               onDoubleClick={(e) => {
-                if (maskDrawMode) e.stopPropagation();
+                if (maskDrawMode || spotMode) e.stopPropagation();
               }}
             >
               <svg
@@ -4453,22 +4840,26 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   }
                 />
               )}
-              {overlayLimitSub && (
+              {openGroup === "retouch" && (
+                <SpotOverlay spots={adj.spots} selectedId={selectedSpotId} hidden={spotsHidden} aspect={aspect} />
+              )}
+              {overlayShapes.map((shape, i) => (
                 <MaskOverlay
-                  sub={overlayLimitSub}
+                  key={shape.id}
+                  sub={shape}
                   mark={false}
                   dashed
-                  handles={maskDrawMode && overlayIsSelected && limitEdit}
+                  handles={maskDrawMode && overlayIsSelected && editSubIdx === i + 1}
                   aspect={aspect}
                   cursorSink={maskCursorSink}
                   brushSink={brushSink}
                   cursor={
-                    overlayLimitSub.type === "brush" && maskDrawMode && overlayIsSelected && limitEdit && maskCursorPos
-                      ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlayLimitSub, "size", 0.06) }
+                    shape.type === "brush" && maskDrawMode && overlayIsSelected && editSubIdx === i + 1 && maskCursorPos
+                      ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(shape, "size", 0.06) }
                       : null
                   }
                 />
-              )}
+              ))}
             </div>,
             maskHost
           );
@@ -4541,7 +4932,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             className="editor-canvas"
             style={{
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-              cursor: colorPickMode || curvePickMode || wbPickMode
+              cursor: colorPickMode || curvePickMode || wbPickMode || spotMode
                 ? "crosshair"
                 : maskDrawMode
                   ? maskCursor
@@ -4569,6 +4960,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               // takes several pulls at different tones.
               if (curvePickMode) {
                 curvePickDown(e.clientX, e.clientY);
+                return;
+              }
+              if (spotMode) {
+                spotPointerDown(e.clientX, e.clientY);
                 return;
               }
               if (maskDrawMode) {
@@ -4599,6 +4994,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 // input value the tone under the pointer maps to.
                 if (curvePickDrag.current) curvePickMove(e.clientY);
                 else curvePickHover(e.clientX, e.clientY);
+                return;
+              }
+              if (spotMode) {
+                spotPointerMove(e.clientX, e.clientY);
                 return;
               }
               if (maskDrawMode) {
@@ -4641,6 +5040,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               panDragRef.current = null;
               curvePickDrag.current = null;
               endMaskGesture();
+              endSpotGesture();
             }}
             onMouseLeave={() => {
               setDragging(false);
@@ -4648,6 +5048,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               panDragRef.current = null;
               curvePickDrag.current = null;
               endMaskGesture();
+              endSpotGesture();
               hideMaskCursor();
               setCurveMarker(null);
             }}
@@ -4796,23 +5197,36 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
               for each other. Never zebra-marked - what the mask covers is the
               INTERSECTION of the two, which only the render knows, so a limited
               mask is marked by the render's peek instead (see peekMaskId). */}
-          {openGroup === "masks" && overlayLimitSub && (
-            <MaskOverlay
-              sub={overlayLimitSub}
-              mark={false}
-              dashed
-              handles={maskDrawMode && overlayIsSelected && limitEdit}
+          {/* The retouch spots, drawn the same way; the selected one shows its
+              source too. */}
+          {openGroup === "retouch" && (
+            <SpotOverlay
+              spots={adj.spots}
+              selectedId={selectedSpotId}
+              hidden={spotsHidden}
               aspect={canvasAspectForOverlay()}
-              cursorSink={maskCursorSink}
-              brushSink={brushSink}
-              cursor={
-                overlayLimitSub.type === "brush" && maskDrawMode && overlayIsSelected && limitEdit && maskCursorPos
-                  ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(overlayLimitSub, "size", 0.06) }
-                  : null
-              }
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: "center center" }}
             />
           )}
+          {openGroup === "masks" &&
+            overlayShapes.map((shape, i) => (
+              <MaskOverlay
+                key={shape.id}
+                sub={shape}
+                mark={false}
+                dashed
+                handles={maskDrawMode && overlayIsSelected && editSubIdx === i + 1}
+                aspect={canvasAspectForOverlay()}
+                cursorSink={maskCursorSink}
+                brushSink={brushSink}
+                cursor={
+                  shape.type === "brush" && maskDrawMode && overlayIsSelected && editSubIdx === i + 1 && maskCursorPos
+                    ? { x: maskCursorPos.x, y: maskCursorPos.y, size: subNum(shape, "size", 0.06) }
+                    : null
+                }
+                style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: "center center" }}
+              />
+            ))}
         </div>
         </div>
         {/* The stage's control row - the same bar the photo view has. The
@@ -5631,71 +6045,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 Color mixer
                 {edited.colorMixer && <span className="editor-edited-dot" title="This group contains edits" />}
               </div>
-              <div className="mixer-bands">
-                {COLOR_BANDS.map((b) => (
-                  <button
-                    key={b}
-                    className={`mixer-band${band === b ? " active" : ""}${
-                      !adj.hsl[b].every((v) => v === 0) || adj.hsl_range[b] !== 0 ? " edited" : ""
-                    }`}
-                    style={{ background: BAND_SWATCH[b] }}
-                    title={b}
-                    onClick={() => setBand(b)}
-                  />
-                ))}
-              </div>
-              <div className="editor-sliders">
-                {MIX_CHANNELS.map(([ch, lbl, wide]) => (
-                  <Slider
-                    key={ch}
-                    label={lbl}
-                    value={adj.hsl[band][ch]}
-                    min={wide ? -200 : -100}
-                    max={wide ? 200 : 100}
-                    uiScale={wide ? 2 : 1}
-                    onChange={(v) => setBandChannel(ch, v)}
-                  />
-                ))}
-                {/* How far this band's three sliders reach into the neighbouring
-                    hues before the next band takes over. Negative keeps the edit
-                    tight around this colour, positive carries it across. */}
-                <Slider label="Range" value={adj.hsl_range[band]} onChange={setBandRange} />
-              </div>
+              {mixerControls(adj.hsl, adj.hsl_range, setBandChannel, setBandRange)}
 
               {/* Colour grading: four hue/saturation wheels + blending / balance. */}
               <div className="editor-section-title">
                 Color Grading
                 {edited.colorGrading && <span className="editor-edited-dot" title="This group contains edits" />}
               </div>
-              <div className="grade-wheels">
-                {GRADE_RANGES.map((r) => (
-                  <div key={r.key} className="grade-wheel-cell">
-                    <ColorWheel
-                      label={r.label}
-                      hue={adj.color_grading[r.key].hue}
-                      saturation={adj.color_grading[r.key].saturation}
-                      onChange={(v) => setGrade(r.key, v)}
-                      onReset={() => setGrade(r.key, { hue: 0, saturation: 0 })}
-                    />
-                    <Slider
-                      label="Luminance"
-                      value={adj.color_grading[r.key].luminance}
-                      onChange={(v) => setGrade(r.key, { luminance: v })}
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="editor-sliders">
-                <Slider
-                  label="Blending"
-                  value={adj.color_grading.blending}
-                  min={0}
-                  max={100}
-                  resetValue={50}
-                  onChange={(v) => setGradeScalar("blending", v)}
-                />
-                <Slider label="Balance" value={adj.color_grading.balance} onChange={(v) => setGradeScalar("balance", v)} />
-              </div>
+              {gradingControls(adj.color_grading, setGrade, setGradeScalar)}
 
               {/* Colour calibration: shadow tint + each primary's hue/saturation/luminance. */}
               <div className="editor-section-title">
@@ -5763,10 +6120,79 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 >
                   {m.visible ? <IconEye size={13} /> : <IconEyeOff size={13} />}
                 </button>
-                <span className="mask-row-name">
-                  {m.name}
-                  <span className="mask-row-type">{maskLabel(m)}</span>
-                </span>
+                {renamingMaskId === m.id ? (
+                  <input
+                    className="mask-row-rename"
+                    autoFocus
+                    defaultValue={m.name}
+                    aria-label="Mask name"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        const name = (e.target as HTMLInputElement).value.trim();
+                        if (name) updateMask(m.id, { name });
+                        setRenamingMaskId(null);
+                      } else if (e.key === "Escape") setRenamingMaskId(null);
+                      e.stopPropagation();
+                    }}
+                    onBlur={(e) => {
+                      const name = e.target.value.trim();
+                      if (name) updateMask(m.id, { name });
+                      setRenamingMaskId(null);
+                    }}
+                  />
+                ) : (
+                  <span
+                    className="mask-row-name"
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      setRenamingMaskId(m.id);
+                    }}
+                    title="Double-click to rename"
+                  >
+                    {m.name}
+                    <span className="mask-row-type">{maskLabel(m)}</span>
+                  </span>
+                )}
+                {selectedMaskId === m.id && (
+                  <>
+                    <button
+                      className="mask-del"
+                      title="Apply this mask earlier (a later luminance or colour mask selects on the picture the earlier ones made)"
+                      aria-label={`Move mask ${m.name} up`}
+                      disabled={adj.masks[0]?.id === m.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        moveMask(m.id, -1);
+                      }}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      className="mask-del"
+                      title="Apply this mask later"
+                      aria-label={`Move mask ${m.name} down`}
+                      disabled={adj.masks[adj.masks.length - 1]?.id === m.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        moveMask(m.id, 1);
+                      }}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      className="mask-del"
+                      title="Duplicate this mask"
+                      aria-label={`Duplicate mask ${m.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        duplicateMask(m.id);
+                      }}
+                    >
+                      <IconDuplicate size={13} />
+                    </button>
+                  </>
+                )}
                 <button
                   className="mask-del"
                   title="Delete mask"
@@ -5844,7 +6270,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 {isSpatial(selSub.type) && (
                   <button
                     className={`btn btn-sm${maskDrawMode && !limitEdit ? " primary" : ""}`}
-                    onClick={() => (maskDrawMode && !limitEdit ? toggleMaskDraw() : editShape(false))}
+                    onClick={() => (maskDrawMode && !limitEdit ? toggleMaskDraw() : editShape(0))}
                     title="Draw this mask directly on the image"
                   >
                     {maskDrawMode && !limitEdit ? "Drawing on image…" : "Edit on image"}
@@ -5982,42 +6408,68 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 </>
               )}
 
-              {/* "This selection, but only here." The second sub-mask, intersected. */}
-              <div className="mask-subhead">Limit to area</div>
-              {!selLimit ? (
-                <div className="mask-add-row">
-                  <div className="mask-add-btns">
-                    {MASK_LIMIT_TYPES.map((t) => (
-                      <button key={t.value} className="btn btn-sm" onClick={() => addLimit(t.value)}>
-                        + {t.label}
+              {/* Shapes added to the selection: each joins it, is taken out of
+                  it, or confines it, in this order (masks.generate_mask_field).
+                  "This selection, but only here" and "this area, but not
+                  there" are both made this way. */}
+              <div className="mask-subhead">Shapes</div>
+              {selShapes.map((shape, i) => {
+                const idx = i + 1;
+                const editing = maskDrawMode && editSubIdx === idx;
+                const typeLabel = MASK_TYPES.find((t) => t.value === shape.type)?.label ?? shape.type;
+                return (
+                  <div key={shape.id} className={`mask-shape${editSubIdx === idx ? " active" : ""}`}>
+                    {/* Head: what it is, and the one way out. Then the rows:
+                        how it joins the selection, then the tools on it. */}
+                    <div className="mask-shape-head">
+                      <span className="mask-shape-type">{typeLabel}</span>
+                      <button className="btn btn-sm ghost" onClick={() => removeShape(idx)} title="Remove this shape">
+                        Remove
                       </button>
-                    ))}
+                    </div>
+                    <div className="mask-btn-row">
+                      {SUBMASK_MODES.map((o) => (
+                        <button
+                          key={o.value}
+                          className={`btn btn-sm${shape.mode === o.value ? " primary" : ""}`}
+                          aria-pressed={shape.mode === o.value}
+                          onClick={() => updateShape(idx, { mode: o.value })}
+                          title={o.hint}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mask-btn-row">
+                      <button
+                        className={`btn btn-sm${editing ? " primary" : ""}`}
+                        onClick={() => (editing ? toggleMaskDraw() : editShape(idx))}
+                        title="Draw this shape directly on the image"
+                      >
+                        {editing ? "Drawing on image…" : "Edit on image"}
+                      </button>
+                      <button
+                        className={`btn btn-sm${shape.invert ? " primary" : ""}`}
+                        onClick={() => updateShape(idx, { invert: !shape.invert })}
+                        title="Use everything outside the shape instead"
+                      >
+                        Outside
+                      </button>
+                    </div>
+                    {editSubIdx === idx && shapeControls(selectedMask.id, shape, idx)}
                   </div>
+                );
+              })}
+              <div className="mask-add-row">
+                <span className="mask-add-label">Add shape</span>
+                <div className="mask-add-btns">
+                  {MASK_LIMIT_TYPES.map((t) => (
+                    <button key={t.value} className="btn btn-sm" onClick={() => addShape(t.value)}>
+                      + {t.label}
+                    </button>
+                  ))}
                 </div>
-              ) : (
-                <>
-                  <div className="mask-btn-row">
-                    <button
-                      className={`btn btn-sm${maskDrawMode && limitEdit ? " primary" : ""}`}
-                      onClick={() => editShape(true)}
-                      title="Draw the area this mask is limited to"
-                    >
-                      {maskDrawMode && limitEdit ? "Drawing on image…" : "Edit on image"}
-                    </button>
-                    <button
-                      className={`btn btn-sm${selLimit.invert ? " primary" : ""}`}
-                      onClick={() => updateLimit({ invert: !selLimit.invert })}
-                      title="Limit to everything outside the shape instead"
-                    >
-                      Outside
-                    </button>
-                    <button className="btn btn-sm ghost" onClick={removeLimit} title="Remove the limit. The mask applies to its whole area again.">
-                      Remove
-                    </button>
-                  </div>
-                  {shapeControls(selectedMask.id, selLimit, 1)}
-                </>
-              )}
+              </div>
 
               {/* Per-mask local adjustments: MASK_ADJUST_FIELDS -> sparse adjustments. */}
               <div className="mask-subhead">Adjustments</div>
@@ -6041,6 +6493,72 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 })}
               </div>
 
+              {/* The mask's own curve, colour mixer and colour grading: the
+                  global controls, confined to the mask. Folded away until
+                  wanted - most masks are a tone lift, not a grade. */}
+              {(() => {
+                const ma = selectedMask.adjustments;
+                const curve = ma.point_curves ?? identityPointCurves();
+                const hsl = ma.hsl ?? neutralHsl();
+                const hslRange = ma.hsl_range ?? neutralHslRange();
+                const grading = ma.color_grading ?? neutralColorGrading();
+                const curveEdited = JSON.stringify(curve) !== JSON.stringify(identityPointCurves());
+                const mixerEdited = COLOR_BANDS.some((b) => hsl[b].some((v) => v !== 0) || hslRange[b] !== 0);
+                const gradingEdited = JSON.stringify(grading) !== JSON.stringify(neutralColorGrading());
+                const dot = <span className="editor-edited-dot" title="This group contains edits" />;
+                return (
+                  <>
+                    <details className="mask-more" open={curveEdited || undefined}>
+                      <summary>Curve{curveEdited && dot}</summary>
+                      <div className="mask-more-body">
+                        <CurveEditor
+                          points={curve.luma}
+                          color={CURVE_CHANNELS[0].color}
+                          channel="luma"
+                          onChange={(pts) => updateMaskNested(selectedMask.id, "point_curves", { ...curve, luma: pts })}
+                        />
+                        <button
+                          className="btn btn-sm ghost"
+                          disabled={!curveEdited}
+                          onClick={() => updateMaskNested(selectedMask.id, "point_curves", undefined)}
+                        >
+                          Reset curve
+                        </button>
+                      </div>
+                    </details>
+                    <details className="mask-more" open={mixerEdited || undefined}>
+                      <summary>Color mixer{mixerEdited && dot}</summary>
+                      <div className="mask-more-body">
+                        {mixerControls(
+                          hsl,
+                          hslRange,
+                          (ch, v) => {
+                            const next: HslMix = { ...hsl, [band]: [...hsl[band]] as [number, number, number] };
+                            next[band][ch] = v;
+                            updateMaskNested(selectedMask.id, "hsl", next);
+                          },
+                          (v) => updateMaskNested(selectedMask.id, "hsl_range", { ...hslRange, [band]: v })
+                        )}
+                      </div>
+                    </details>
+                    <details className="mask-more" open={gradingEdited || undefined}>
+                      <summary>Color grading{gradingEdited && dot}</summary>
+                      <div className="mask-more-body">
+                        {gradingControls(
+                          grading,
+                          (range, patch) =>
+                            updateMaskNested(selectedMask.id, "color_grading", {
+                              ...grading,
+                              [range]: { ...grading[range], ...patch },
+                            }),
+                          (key, v) => updateMaskNested(selectedMask.id, "color_grading", { ...grading, [key]: v })
+                        )}
+                      </div>
+                    </details>
+                  </>
+                );
+              })()}
+
               <button
                 className="btn btn-sm quiet-danger"
                 onClick={() => deleteMask(selectedMask.id)}
@@ -6053,6 +6571,163 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           )}
             </div>
           )}
+        </section>
+
+        {/* Retouch: spot heal / clone. */}
+        <section className="editor-accordion">
+          {accordionHeader("retouch", "Retouch")}
+          {openGroup === "retouch" &&
+            (() => {
+              const selected = adj.spots.find((s) => s.id === selectedSpotId) ?? null;
+              const kindOf = (s: SpotDef) => (s.kind === "heal" ? "Heal" : "Clone");
+              return (
+                <div className="editor-accordion-body">
+                  <div className="editor-btn-row">
+                    <button
+                      className={`btn btn-sm${spotMode ? " primary" : ""}`}
+                      onClick={toggleSpotMode}
+                      title="Click the photo to place a spot, drag to size it; drag a spot or its source to move it"
+                    >
+                      {spotMode ? "Editing on image…" : "Edit on image"}
+                    </button>
+                    <button
+                      className={`btn btn-sm${spotKind === "heal" ? " primary" : ""}`}
+                      aria-pressed={spotKind === "heal"}
+                      onClick={() => setSpotKind("heal")}
+                      title="New spots heal: brightness and colour stay those around the spot, only the texture comes from the source"
+                    >
+                      Heal
+                    </button>
+                    <button
+                      className={`btn btn-sm${spotKind === "clone" ? " primary" : ""}`}
+                      aria-pressed={spotKind === "clone"}
+                      onClick={() => setSpotKind("clone")}
+                      title="New spots clone: the source is copied exactly, texture, brightness and colour"
+                    >
+                      Clone
+                    </button>
+                    <button
+                      className="btn btn-sm"
+                      aria-pressed={!spotsHidden}
+                      onClick={() => setSpotsHidden((v) => !v)}
+                      title="Hide the circles to judge the result (H)"
+                    >
+                      {spotsHidden ? "Show spots" : "Hide spots"}
+                    </button>
+                  </div>
+                  <p className="mask-hint retouch-hint">
+                    {(selected ? selected.kind : spotKind) === "heal"
+                      ? "Heal: texture from the source, light and colour from around the spot."
+                      : "Clone: the source copied as it is. Drag the dashed circle to pick it."}
+                  </p>
+                  <Slider
+                    label="Size"
+                    value={(selected ? selected.radius : spotRadius) * 100}
+                    min={SPOT_RADIUS_MIN * 100}
+                    max={SPOT_RADIUS_MAX * 100}
+                    step={0.1}
+                    resetValue={SPOT_RADIUS_DEFAULT * 100}
+                    format={(v) => `${v.toFixed(1)} %`}
+                    onChange={(v) => {
+                      const r = Math.max(SPOT_RADIUS_MIN, Math.min(SPOT_RADIUS_MAX, v / 100));
+                      setSpotRadius(r);
+                      if (selected) updateSpot(selected.id, (s) => ({ ...s, radius: r }));
+                    }}
+                  />
+                  {selected && (
+                    <>
+                      <Slider
+                        label="Feather"
+                        value={selected.feather}
+                        min={0}
+                        max={100}
+                        resetValue={50}
+                        onChange={(v) => updateSpot(selected.id, (s) => ({ ...s, feather: Math.round(v) }))}
+                      />
+                      <Slider
+                        label="Opacity"
+                        value={selected.opacity}
+                        min={0}
+                        max={100}
+                        resetValue={100}
+                        onChange={(v) => updateSpot(selected.id, (s) => ({ ...s, opacity: Math.round(v) }))}
+                      />
+                      <div className="editor-btn-row">
+                        <button
+                          className="btn btn-sm"
+                          onClick={() =>
+                            updateSpot(selected.id, (s) => {
+                              const kind: SpotKind = s.kind === "heal" ? "clone" : "heal";
+                              return { ...s, kind };
+                            })
+                          }
+                          title="Switch this spot: a clone copies the source exactly, a heal keeps the surroundings' brightness and colour"
+                        >
+                          {selected.kind === "heal" ? "Make it a clone" : "Make it a heal"}
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => {
+                            const src = autoSource(selected.x, selected.y, selected.radius);
+                            updateSpot(selected.id, (s) => ({ ...s, src_x: src.x, src_y: src.y }));
+                          }}
+                          title="Pick the source again from the surroundings"
+                        >
+                          Re-pick source
+                        </button>
+                        <button
+                          className="btn btn-sm quiet-danger"
+                          onClick={() => deleteSpot(selected.id)}
+                          title="Delete this spot (Delete)"
+                          aria-label="Delete this spot"
+                        >
+                          <IconTrash size={14} />
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  <div className="mask-list">
+                    {adj.spots.length === 0 && (
+                      <p className="mask-empty">No spots yet. Turn on Edit on image and click a speck to heal it.</p>
+                    )}
+                    {adj.spots.map((s, i) => (
+                      <div
+                        key={s.id}
+                        className={`mask-row${selectedSpotId === s.id ? " active" : ""}`}
+                        onClick={() => setSelectedSpotId(s.id)}
+                      >
+                        <span className="mask-row-name">
+                          {kindOf(s)} {i + 1}
+                        </span>
+                        <button
+                          className="btn btn-sm quiet-danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteSpot(s.id);
+                          }}
+                          title="Delete this spot"
+                          aria-label={`Delete ${kindOf(s)} ${i + 1}`}
+                        >
+                          <IconTrash size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {adj.spots.length > 0 && (
+                    <button
+                      className="btn btn-sm quiet-danger"
+                      onClick={() => {
+                        setAdj((a) => ({ ...a, spots: [] }));
+                        setSelectedSpotId(null);
+                      }}
+                      title="Remove every spot"
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
         </section>
 
         {/* Presets */}

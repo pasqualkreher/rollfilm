@@ -278,6 +278,17 @@ def _libraw_model(xyz_cam, cam_rgb, wb) -> tuple[float | None, list[list[float]]
     return kelvin, table
 
 
+def close_helper() -> None:
+    """End this module's exiftool process on backend shutdown (exif.close_helper)."""
+    global _helper
+    helper, _helper = _helper, None
+    if helper is not None:
+        try:
+            helper.terminate()
+        except Exception:
+            pass
+
+
 def _read(path: Path) -> tuple[float | None, list[list[float]] | None]:
     global _helper
     import exiftool

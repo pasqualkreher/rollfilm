@@ -870,9 +870,9 @@ const CHAPTERS: Chapter[] = [
             <h4>How it is laid out</h4>
             <ul>
               <li>
-                <strong>Nine sections, one open at a time</strong> — Transform, Film Simulation,
-                Tone, Curves, Color, Details, Effects, Masks, Presets. <kbd>1</kbd>–<kbd>9</kbd>{" "}
-                jump straight to one. Each is described in the next topic; masks have a topic of
+                <strong>Ten sections, one open at a time</strong> — Transform, Film Simulation,
+                Tone, Curves, Color, Details, Effects, Masks, Retouch, Presets. <kbd>1</kbd>–<kbd>9</kbd>{" "}
+                and <kbd>0</kbd> jump straight to one. Each is described in the next topic; masks have a topic of
                 their own.
               </li>
               <li>
@@ -962,8 +962,8 @@ const CHAPTERS: Chapter[] = [
       },
       {
         id: "editor-sections",
-        title: "The nine sections",
-        where: <>Editor panel · <kbd>1</kbd>–<kbd>9</kbd></>,
+        title: "The sections",
+        where: <>Editor panel · <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd></>,
         lead: (
           <>
             In the order they sit in the panel, which is also the order worth working in: frame the
@@ -1187,20 +1187,48 @@ const CHAPTERS: Chapter[] = [
                 instant.
               </li>
             </ul>
-            <h4>Limiting a mask to an area</h4>
+            <h4>Shapes: adding to, taking from and confining a mask</h4>
             <ul>
               <li>
-                <strong>Add a shape to a mask</strong> — a radial, linear or brush — and it applies
-                only where the two overlap. With <em>Outside</em>, only where they don't.
+                <strong>Add a shape to a mask</strong> — a radial, linear or brush — and say what it
+                does: <em>Add</em> joins it to the selection, <em>Subtract</em> takes it out,{" "}
+                <em>Intersect</em> keeps the selection only inside it. <em>Outside</em> flips the
+                shape. Add as many as you need; they apply in the order listed.
               </li>
               <li>
-                <strong>That is what makes the shapeless masks usable.</strong> An edge mask finds
-                every edge in the frame, a colour mask every pixel of that colour — limit it to the
-                part of the picture you meant.
+                <strong>That is what makes the shapeless masks usable</strong> — an edge mask finds
+                every edge in the frame, a colour mask every pixel of that colour; intersect it with
+                the part of the picture you meant — <strong>and what lets a radial mask spare the
+                face inside it</strong>: subtract a brush over the face.
+              </li>
+              <li>
+                <strong>Feather</strong> on a linear mask sets how much of the band the fade takes:
+                the whole band as before, a hard edge at its middle, or wider than the band.
               </li>
               <li>
                 <strong>Changed the crop or straighten afterwards?</strong> A subject mask says so,
                 with a button to find the subject again in the new frame.
+              </li>
+            </ul>
+            <h4>What a mask can change</h4>
+            <ul>
+              <li>
+                <strong>Its sliders</strong> — exposure, contrast, highlights and shadows, white
+                balance, vibrance and saturation, clarity, dehaze and sharpness.
+              </li>
+              <li>
+                <strong>Its own curve, colour mixer and colour grading</strong>, folded away under the
+                sliders: the same controls as the global ones, confined to the mask. The band you pick
+                in the mixer stays picked between the global mixer and a mask's.
+              </li>
+            </ul>
+            <h4>Managing masks</h4>
+            <ul>
+              <li>
+                <strong>Double-click a mask's name</strong> to rename it. On the selected mask's row,
+                the arrows move it up or down the list — the order the masks are applied in, so a
+                later luminance or colour mask selects on the picture the earlier ones made — and the
+                copy button duplicates it, shapes, sliders and all.
               </li>
             </ul>
             <h4>Seeing what a mask covers</h4>
@@ -1314,6 +1342,60 @@ const CHAPTERS: Chapter[] = [
               the new JPEG then uploads like any other photo (its RAW original, as always, stays
               local).
             </Tip>
+          </>
+        ),
+      },
+      {
+        id: "retouch",
+        title: "Retouch — healing specks and cloning",
+        where: <>Editor → section 9, or press <kbd>9</kbd></>,
+        lead: (
+          <>
+            A spot replaces a small round patch of the photo — a sensor dust speck, a blemish, a
+            stray wire — with the pixels of another patch nearby, its <em>source</em>.
+          </>
+        ),
+        body: (
+          <>
+            <h4>Placing spots</h4>
+            <ul>
+              <li>
+                <strong>Edit on image, then click the speck.</strong> A spot lands at the size the
+                Size slider shows; drag instead of clicking to size it as you go. <kbd>[</kbd> and{" "}
+                <kbd>]</kbd> step the size too.
+              </li>
+              <li>
+                <strong>Heal or Clone</strong> decides what the next spot does. A <em>heal</em> keeps
+                the brightness and colour of the spot's own surroundings and borrows only the texture of
+                the source, which it picks by itself — so a speck on a sky that runs from deep blue to
+                pale vanishes without a step. Right for specks on skies, walls and skin. A{" "}
+                <em>clone</em> copies the source exactly, texture, brightness and colour — right when a
+                line or a texture has to continue, and you choose the source yourself. On a plain, even
+                area the two look the same; the difference shows across gradients and differing shades.
+              </li>
+              <li>
+                <strong>Move things:</strong> drag a spot to move it (its source comes along); drag the
+                dashed source circle of the selected spot to read from somewhere else.{" "}
+                <em>Re-pick source</em> lets the editor choose again.
+              </li>
+              <li>
+                <strong>Feather</strong> softens the spot's edge, <strong>Opacity</strong> lets some of
+                the original show through. <kbd>H</kbd> hides the circles to judge the result;{" "}
+                <kbd>Delete</kbd> removes the selected spot.
+              </li>
+            </ul>
+            <h4>Good to know</h4>
+            <ul>
+              <li>
+                Spots are healed on the raw picture before any tone or colour work, so every slider,
+                mask and film look sees the repaired photo — nothing can draw a seam around a spot
+                later.
+              </li>
+              <li>
+                Spots move with a crop, like masks do. Presets and <em>Edit…</em> on a selection do
+                not carry them: a healed speck belongs to the photo it sat on.
+              </li>
+            </ul>
           </>
         ),
       },
@@ -2203,7 +2285,15 @@ const CHAPTERS: Chapter[] = [
                       <kbd>1</kbd>–<kbd>9</kbd>
                     </>
                   ),
-                  does: "Open a section: 1 Transform, 2 Film Simulation, 3 Tone, 4 Curves, 5 Color, 6 Details, 7 Effects, 8 Masks, 9 Presets",
+                  does: "Open a section: 1 Transform, 2 Film Simulation, 3 Tone, 4 Curves, 5 Color, 6 Details, 7 Effects, 8 Masks, 9 Retouch, 0 Presets",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>[</kbd> / <kbd>]</kbd>, <kbd>H</kbd>, <kbd>Delete</kbd>
+                    </>
+                  ),
+                  does: "With Retouch open: a smaller / larger spot, hide the circles, remove the selected spot",
                 },
                 {
                   keys: (

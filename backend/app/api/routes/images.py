@@ -54,6 +54,9 @@ from app.services import (
 )
 from app.services.auto_tags import auto_tag_criterion, auto_tag_error, is_auto_tag
 from app.services.membership_tags import sync_membership_tags
+from app.services import copy_jobs
+from app.services import exposure
+from app.services import save_copy as save_copy_service
 from app.services import sidecar as sidecar_service
 from app.services import tags as tags_service
 from app.services.tag_cleanup import prune_unused_tags
@@ -299,10 +302,20 @@ def _filtered_images_query(
     date_from: datetime | None,
     date_to: datetime | None,
     tags: list[str] | None,
+    *,
+    camera_make: str | None = None,
+    iso_min: int | None = None,
+    iso_max: int | None = None,
+    aperture_min: float | None = None,
+    aperture_max: float | None = None,
+    shutter_min: float | None = None,
+    shutter_max: float | None = None,
 ):
     """The library listing's filter set, shared by the list endpoint and the
     count endpoint so the total the scrollbar is sized from can never drift
-    from what scrolling actually returns."""
+    from what scrolling actually returns. The camera make and the exposure
+    ranges (ISO, aperture, shutter seconds) are keyword-only, after the
+    positional set the older callers pass."""
     query = db.query(Image).filter(
         Image.owner_id == current_user.id, Image.deleted_at.is_(None)
     )
@@ -340,6 +353,8 @@ def _filtered_images_query(
         query = query.filter(Image.rating >= rating_min)
     if color_label is not None:
         query = query.filter(Image.color_label == color_label)
+    if camera_make:
+        query = query.filter(Image.camera_make == camera_make)
     if camera_model:
         query = query.filter(Image.camera_model == camera_model)
     if lens_model:
@@ -351,6 +366,23 @@ def _filtered_images_query(
         query = query.filter(Image.focal_length >= focal_min - 0.05)
     if focal_max is not None:
         query = query.filter(Image.focal_length <= focal_max + 0.05)
+    # The exposure sliders: ISO is exact, aperture gets the focal slider's
+    # tolerance (its stops are rounded to 0.1), shutter speed is matched by
+    # value against the stored strings (services/exposure).
+    if iso_min is not None:
+        query = query.filter(Image.iso >= iso_min)
+    if iso_max is not None:
+        query = query.filter(Image.iso <= iso_max)
+    if aperture_min is not None:
+        query = query.filter(Image.aperture >= aperture_min - 0.05)
+    if aperture_max is not None:
+        query = query.filter(Image.aperture <= aperture_max + 0.05)
+    if shutter_min is not None or shutter_max is not None:
+        query = query.filter(
+            Image.shutter_speed.in_(
+                exposure.shutter_strings_between(db, current_user.id, shutter_min, shutter_max)
+            )
+        )
     if country == geocode.NO_LOCATION:
         query = query.filter(Image.gps_lat.is_(None))
     elif country:
@@ -406,6 +438,13 @@ def list_images(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     tags: list[str] | None = Query(None),
+    camera_make: str | None = None,
+    iso_min: int | None = None,
+    iso_max: int | None = None,
+    aperture_min: float | None = None,
+    aperture_max: float | None = None,
+    shutter_min: float | None = None,
+    shutter_max: float | None = None,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -414,6 +453,9 @@ def list_images(
     query = _filtered_images_query(
         db, current_user, view_mode, album_id, canvas_id, rating_min, color_label,
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
+        camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
+        aperture_min=aperture_min, aperture_max=aperture_max,
+        shutter_min=shutter_min, shutter_max=shutter_max,
     )
     # Newest capture first. The extra keys make the order total: burst shots
     # share the same capture second and photos without any capture date all
@@ -459,6 +501,13 @@ def library_index(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     tags: list[str] | None = Query(None),
+    camera_make: str | None = None,
+    iso_min: int | None = None,
+    iso_max: int | None = None,
+    aperture_min: float | None = None,
+    aperture_max: float | None = None,
+    shutter_min: float | None = None,
+    shutter_max: float | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -475,6 +524,9 @@ def library_index(
     query = _filtered_images_query(
         db, current_user, view_mode, album_id, canvas_id, rating_min, color_label,
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
+        camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
+        aperture_min=aperture_min, aperture_max=aperture_max,
+        shutter_min=shutter_min, shutter_max=shutter_max,
     )
     # file_type, color_label and taken_at are asked for as plain strings rather
     # than as their mapped types. The database already holds exactly what this
@@ -601,6 +653,13 @@ def count_images(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     tags: list[str] | None = Query(None),
+    camera_make: str | None = None,
+    iso_min: int | None = None,
+    iso_max: int | None = None,
+    aperture_min: float | None = None,
+    aperture_max: float | None = None,
+    shutter_min: float | None = None,
+    shutter_max: float | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -610,6 +669,9 @@ def count_images(
     query = _filtered_images_query(
         db, current_user, view_mode, album_id, canvas_id, rating_min, color_label,
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
+        camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
+        aperture_min=aperture_min, aperture_max=aperture_max,
+        shutter_min=shutter_min, shutter_max=shutter_max,
     )
     return schemas.ImageCountOut(count=query.count())
 
@@ -629,6 +691,13 @@ def list_facets(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     tags: list[str] | None = Query(None),
+    camera_make: str | None = None,
+    iso_min: int | None = None,
+    iso_max: int | None = None,
+    aperture_min: float | None = None,
+    aperture_max: float | None = None,
+    shutter_min: float | None = None,
+    shutter_max: float | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -661,47 +730,78 @@ def list_facets(
             None if without == "focal" else focal_max,
             None if without == "country" else country,
             date_from, date_to, tags,
+            camera_make=None if without == "make" else camera_make,
+            iso_min=None if without == "iso" else iso_min,
+            iso_max=None if without == "iso" else iso_max,
+            aperture_min=None if without == "aperture" else aperture_min,
+            aperture_max=None if without == "aperture" else aperture_max,
+            shutter_min=None if without == "shutter" else shutter_min,
+            shutter_max=None if without == "shutter" else shutter_max,
         )
 
-    cameras = [
-        schemas.Facet(value=value, count=count)
-        for value, count in (
-            scoped(without="camera")
-            .with_entities(Image.camera_model, func.count(Image.id))
-            .filter(Image.camera_model.isnot(None), Image.camera_model != "")
-            .group_by(Image.camera_model)
-            .order_by(func.count(Image.id).desc())
-            .all()
-        )
-    ]
-    lenses = [
-        schemas.Facet(value=value, count=count)
-        for value, count in (
-            scoped(without="lens")
-            .with_entities(Image.lens_model, func.count(Image.id))
-            .filter(Image.lens_model.isnot(None), Image.lens_model != "")
-            .group_by(Image.lens_model)
-            .order_by(func.count(Image.id).desc())
-            .all()
-        )
-    ]
-    # Focal lengths grouped to 0.1mm (matches the filter's tolerance) and sorted
-    # numerically - the slider's stops; values formatted for display ("23", not
-    # "23.0").
-    focal_expr = func.round(Image.focal_length, 1)
-    focal_lengths = [
-        schemas.Facet(
-            value=str(int(value)) if float(value).is_integer() else str(value),
-            count=count,
-        )
-        for value, count in (
-            scoped(without="focal")
-            .with_entities(focal_expr, func.count(Image.id))
-            .filter(Image.focal_length.isnot(None), Image.focal_length > 0)
-            .group_by(focal_expr)
-            .order_by(focal_expr.asc())
-            .all()
-        )
+    def _stop(value) -> str:
+        """A slider stop for display: "23", not "23.0"; "2.8" stays."""
+        return str(int(value)) if float(value).is_integer() else str(value)
+
+    def _named(column, *, without: str) -> list[schemas.Facet]:
+        """Distinct values of a text column, most photos first."""
+        return [
+            schemas.Facet(value=value, count=count)
+            for value, count in (
+                scoped(without=without)
+                .with_entities(column, func.count(Image.id))
+                .filter(column.isnot(None), column != "")
+                .group_by(column)
+                .order_by(func.count(Image.id).desc())
+                .all()
+            )
+        ]
+
+    def _stops(column, expr, *, without: str) -> list[schemas.Facet]:
+        """Distinct positive values of a number column (grouped by `expr`),
+        ascending - a slider's stops."""
+        return [
+            schemas.Facet(value=_stop(value), count=count)
+            for value, count in (
+                scoped(without=without)
+                .with_entities(expr, func.count(Image.id))
+                .filter(column.isnot(None), column > 0)
+                .group_by(expr)
+                .order_by(expr.asc())
+                .all()
+            )
+        ]
+
+    cameras = _named(Image.camera_model, without="camera")
+    makes = _named(Image.camera_make, without="make")
+    lenses = _named(Image.lens_model, without="lens")
+    # Focal lengths and apertures grouped to 0.1 (matches the filters'
+    # tolerance), ISO exact - each the slider's stops, ascending.
+    focal_lengths = _stops(Image.focal_length, func.round(Image.focal_length, 1), without="focal")
+    isos = _stops(Image.iso, Image.iso, without="iso")
+    apertures = _stops(Image.aperture, func.round(Image.aperture, 1), without="aperture")
+    # Shutter speeds are text: grouped as stored, parsed, two spellings of
+    # one stop ("1/250", "0.004") merged, sorted by exposure time.
+    stops: dict[float, tuple[str, int, float]] = {}
+    for text, count in (
+        scoped(without="shutter")
+        .with_entities(Image.shutter_speed, func.count(Image.id))
+        .filter(Image.shutter_speed.isnot(None), Image.shutter_speed != "")
+        .group_by(Image.shutter_speed)
+        .all()
+    ):
+        seconds = exposure.shutter_seconds(text)
+        if seconds is None:
+            continue
+        key = exposure.shutter_key(seconds)
+        if key in stops:
+            value, had, _ = stops[key]
+            stops[key] = (value, had + count, seconds)
+        else:
+            stops[key] = (text, count, seconds)
+    shutters = [
+        schemas.ShutterFacet(value=value, count=count, seconds=seconds)
+        for _, (value, count, seconds) in sorted(stops.items())
     ]
     region_base = scoped(without="country")
     regions = [
@@ -717,8 +817,12 @@ def list_facets(
     no_location = region_base.filter(Image.gps_lat.is_(None)).count()
     return schemas.LibraryFacets(
         cameras=cameras,
+        makes=makes,
         lenses=lenses,
         focal_lengths=focal_lengths,
+        isos=isos,
+        apertures=apertures,
+        shutters=shutters,
         regions=regions,
         no_location_count=no_location,
     )
@@ -1042,14 +1146,7 @@ def _export_library_metadata(db: Session, image: Image) -> exif_service.LibraryM
     """Stars, colour label and the tags the user gave a photo - not the ones
     the app keeps for itself ("edit", "album: ..."), which say where a photo
     sits in this library and mean nothing outside it."""
-    names = [
-        name
-        for (name,) in db.query(Tag.name)
-        .join(ImageTag, ImageTag.tag_id == Tag.id)
-        .filter(ImageTag.image_id == image.id)
-        .order_by(Tag.name)
-        if not is_auto_tag(name)
-    ]
+    names = tags_service.user_tags(db, image)
     label = image.color_label
     return exif_service.LibraryMetadata(
         rating=image.rating or 0,
@@ -1355,6 +1452,54 @@ def export_cancel(job_id: str, current_user: User = Depends(get_current_user)):
     return Response(status_code=204)
 
 
+# ---- Copies of many photos, in the background ---------------------------------
+# The grid's "Save copy of N photos" and "Apply ... and save copy": one job per
+# selection (services/copy_jobs), polled for its count, stopped between photos.
+
+
+@router.post("/copy-jobs", response_model=schemas.CopyJobStartResponse, status_code=202)
+def copy_job_start(
+    payload: schemas.CopyJobStartRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Validate ownership up front so the worker can assume clean input.
+    for image_id in payload.image_ids:
+        get_owned_image(db, current_user.id, image_id)
+    quality = max(1, min(100, payload.quality))
+    max_size = max(16, payload.max_size) if payload.max_size else None
+    job_id = copy_jobs.start_copy_job(current_user.id, payload.image_ids, quality, max_size)
+    return schemas.CopyJobStartResponse(job_id=job_id, total=len(payload.image_ids))
+
+
+def _get_copy_job(job_id: str, user: User) -> dict:
+    job = copy_jobs.get_job(job_id)
+    if job is None or job["owner_id"] != user.id:
+        raise HTTPException(status_code=404, detail="Unknown copy job")
+    return job
+
+
+@router.get("/copy-jobs/{job_id}", response_model=schemas.CopyJobProgress)
+def copy_job_progress(job_id: str, current_user: User = Depends(get_current_user)):
+    job = _get_copy_job(job_id, current_user)
+    return schemas.CopyJobProgress(
+        state=job["state"],
+        done=job["done"],
+        written=job["written"],
+        skipped=job["skipped"],
+        total=job["total"],
+        error=job["error"],
+        created_ids=list(job["created_ids"]),
+    )
+
+
+@router.delete("/copy-jobs/{job_id}")
+def copy_job_cancel(job_id: str, current_user: User = Depends(get_current_user)):
+    _get_copy_job(job_id, current_user)
+    copy_jobs.cancel_job(job_id)
+    return Response(status_code=204)
+
+
 @router.post("/immich", response_model=schemas.ImmichPushResult)
 def push_images_to_immich(
     payload: schemas.ImmichPushRequest,
@@ -1626,6 +1771,9 @@ def bulk_develop(
     # the "legacy" default would drop every photo to its dark native exposure.
     if look.get("raw_base") not in ("standard", "native"):
         look["raw_base"] = "standard"
+    # Retouch spots are a composition too: a healed speck sits where it sat on
+    # the photo it was healed on, so a look applied to many photos carries none.
+    look["spots"] = []
     blob = develop.dumps(develop.normalize(look))
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     before = {image.id: _edit_state(image) for image in images}
@@ -1697,7 +1845,8 @@ def bulk_auto_develop(
         db.refresh(image)
     _rerender_later(rendered, before)
     return schemas.BulkAutoDevelopResult(
-        images=images, applied=len(changed), skipped=len(images) - len(changed)
+        images=images, applied=len(changed), skipped=len(images) - len(changed),
+        applied_ids=[image.id for image in changed],
     )
 
 
@@ -2581,10 +2730,11 @@ def save_copy(
     current_user: User = Depends(get_current_user),
 ):
     """Bake the given edit into a brand-new managed library photo (a flattened
-    JPEG), tagged "edited" so edited shots are easy to find. The source photo -
-    and every original file on disk - is left completely untouched. `quality`
-    and `max_size` (long edge) mirror the export options; a size cap also lets
-    the render decode economically instead of at full sensor size."""
+    JPEG), tagged "edit copy" and carrying the source's tags, stars, label and
+    camera data (services/save_copy). The source photo - and every original
+    file on disk - is left completely untouched. `quality` and `max_size`
+    (long edge) mirror the export options; a size cap also lets the render
+    decode economically instead of at full sensor size."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
@@ -2596,100 +2746,35 @@ def save_copy(
     crop = None
     if payload.crop is not None:
         crop = (payload.crop.x, payload.crop.y, payload.crop.width, payload.crop.height)
-    adjustments = _payload_adjustments(payload)
-
+    edits = save_copy_service.CopyEdits(
+        rotation=payload.rotation % 360,
+        crop=crop,
+        adjustments=_payload_adjustments(payload),
+        distortion=_clamp100(payload.distortion),
+        flip_h=bool(payload.flip_h),
+        flip_v=bool(payload.flip_v),
+        straighten=max(-45.0, min(45.0, float(payload.straighten))),
+        persp_h=_clamp100(payload.persp_h),
+        persp_v=_clamp100(payload.persp_v),
+    )
     try:
-        edited = thumbnails.render_edited_image(
-            src,
-            payload.rotation % 360,
-            crop,
-            adjustments,
-            distortion=_clamp100(payload.distortion),
-            flip_h=bool(payload.flip_h),
-            flip_v=bool(payload.flip_v),
-            straighten=max(-45.0, min(45.0, float(payload.straighten))),
-            persp_h=_clamp100(payload.persp_h),
-            persp_v=_clamp100(payload.persp_v),
-            max_px=max_size,
-        )
+        edited = save_copy_service.render_copy_frame(src, edits, max_size)
     except Exception:
         logger.exception("Failed to render edited copy of %s", src.id)
         raise HTTPException(status_code=500, detail="Could not render the edited copy")
 
-    if max_size and max(edited.size) > max_size:
-        edited.thumbnail((max_size, max_size), PILImage.LANCZOS)
-    buf = io.BytesIO()
-    # At the top of the quality range the copy is meant as a keeper, so drop
-    # chroma subsampling too (4:4:4): quality=100 alone still throws away half
-    # the colour resolution at libjpeg's default, which shows on saturated
-    # edges. Below 95 the copy is deliberately a smaller file - leave the
-    # default subsampling there, where it buys most of the size saving.
-    subsampling = 0 if quality >= 95 else -1
-    edited.save(buf, "JPEG", quality=quality, subsampling=subsampling)
-    data = buf.getvalue()
-
-    # Name edited copies "<stem>_edit-1.jpg", "_edit-2", ... - the first free
-    # number, so repeated copies of the same photo don't overwrite each other.
-    # Strip an existing "_edit-<n>" suffix first, so a copy of a copy counts up
-    # (DSCF0048_edit-2.jpg) instead of stacking (DSCF0048_edit-1_edit-1.jpg).
-    # library_relative_path itself de-dupes with a "_1" suffix, so probe with it:
-    # a taken name comes back changed (e.g. "_edit-1_1.jpg") - bump n and retry -
-    # while a free name comes back verbatim. (The old plain exists() check always
-    # saw a de-duped, not-yet-existing path, so it never counted past _edit-1.)
-    stem = re.sub(r"_edit-\d+$", "", Path(src.original_filename).stem)
-    taken_at = src.taken_at or datetime.now(timezone.utc)
-    n = 1
-    while True:
-        candidate = f"{stem}_edit-{n}.jpg"
-        rel_path = library_relative_path(taken_at, candidate, settings.library_root)
-        if Path(rel_path).name == candidate:
-            break
-        n += 1
-    filename = Path(rel_path).name
-    (settings.library_root / rel_path).write_bytes(data)
-
-    new_image = Image(
-        owner_id=current_user.id,
-        file_path=rel_path,
-        source_root_id=None,  # a managed library file, regardless of the source's origin
-        original_filename=filename,
-        file_hash=hashlib.sha256(data).hexdigest(),
-        perceptual_hash=perceptual_hash(edited),
-        file_type=FileType.jpeg,
-        raw_format=None,
-        width=edited.width,
-        height=edited.height,
-        file_size=len(data),
-        taken_at=src.taken_at,
-        camera_make=src.camera_make,
-        camera_model=src.camera_model,
-        iso=src.iso,
-        aperture=src.aperture,
-        shutter_speed=src.shutter_speed,
-        focal_length=src.focal_length,
-        gps_lat=src.gps_lat,
-        gps_lon=src.gps_lon,
-        # Remember the develop settings baked into this copy - not for rendering
-        # (the pixels already contain them), but so auto-develop can learn from
-        # saved copies too (see services/auto_develop.py).
-        applied_adjustments=develop.dumps(adjustments),
-    )
-    db.add(new_image)
-    db.flush()
-    _add_tag_to_image(db, current_user.id, new_image, "edit copy")
-    db.commit()
-    db.refresh(new_image)
-    # Generate the copy's thumbnail/preview *synchronously* so the photo is
-    # viewable the instant the editor navigates to it - the flattened JPEG is
-    # cheap to derive, and doing it async left a blank "no image" for a beat
-    # (longer on slow machines). The search embedding still runs in the
-    # background since it isn't needed to display the photo.
+    # This request's own exiftool for the copy's metadata: the shared helper
+    # is one pipe, and an import may be reading through it right now.
+    helper = exif_service.new_helper()
     try:
-        thumbnails.regenerate_for_image(new_image)
-    except Exception:
-        logger.exception("Derivative generation failed for edited copy %s", new_image.id)
+        new_image = save_copy_service.write_copy(db, current_user.id, src, edited, edits, quality, helper=helper)
+    finally:
+        try:
+            helper.terminate()
+        except Exception:
+            pass
     # The search embedding isn't needed to display the photo - the backfill
-    # worker picks the copy up (its preview.jpg was just rendered above).
+    # worker picks the copy up (its preview.jpg was just rendered).
     schedule_embedding_backfill()
     return new_image
 
@@ -2779,6 +2864,8 @@ def create_virtual_copy(
         copy.edit_rev = max(1, template.edit_rev) + 1
     db.add(copy)
     db.flush()
+    # The template's tags come along too (stars, label and note already did).
+    save_copy_service.copy_library_metadata(db, current_user.id, template, copy)
     _add_tag_to_image(db, current_user.id, copy, "virtual copy")
     # Like any photo, a copy that carries develop or geometry work is "edit"
     # too (save_edits keeps that in step from here on).

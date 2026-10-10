@@ -580,7 +580,11 @@ def test_tone_stage_cache_key_splits_at_the_denoise_cut():
     assert stage_key(base | {"luma_noise_reduction": 10}) != reference  # the cut itself
     assert stage_key(base | {"exposure": 1.0}) != reference      # above it
 
-    probes = {"tone_mapper": "agx", "film_sim": "provia", "curve_mode": "parametric"}
+    probes = {
+        "tone_mapper": "agx", "film_sim": "provia", "curve_mode": "parametric",
+        "spots": [{"id": "s", "kind": "heal", "x": 0.5, "y": 0.5, "src_x": 0.7, "src_y": 0.5,
+                   "radius": 0.1, "feather": 50, "opacity": 100}],
+    }
     stale = [
         key for key in develop.defaults()
         if key not in thumbnails._POST_DENOISE_KEYS
@@ -761,7 +765,11 @@ def test_detail_stage_cache_key_splits_below_the_detail_block():
     assert stage_key(base | {"clarity": -80}) != reference       # the block itself
     assert stage_key(base | {"exposure": 1.0}) != reference      # above it
 
-    probes = {"tone_mapper": "agx", "film_sim": "provia", "curve_mode": "parametric"}
+    probes = {
+        "tone_mapper": "agx", "film_sim": "provia", "curve_mode": "parametric",
+        "spots": [{"id": "s", "kind": "heal", "x": 0.5, "y": 0.5, "src_x": 0.7, "src_y": 0.5,
+                   "radius": 0.1, "feather": 50, "opacity": 100}],
+    }
     stale = [
         key for key in develop.defaults()
         if key not in thumbnails._POST_DETAIL_KEYS
@@ -1148,3 +1156,52 @@ def test_chromatic_aberration_resamples_between_pixels():
     red_edge = out[h // 2, 295:305, 0]
     assert ((red_edge > 0.05) & (red_edge < 0.95)).any(), "red edge moved by a whole pixel or not at all"
     assert np.array_equal(out[..., 1], arr[..., 1]), "green must stay put"
+
+
+# --- a mask's own curve / mixer / grading ----------------------------------------
+
+def test_mask_adjustments_keep_curves_mixer_and_grading_sparsely():
+    """The nested groups ride along only when they do something, so a stored
+    mask from before they existed - and one whose groups are at rest - keeps
+    the exact sparse shape it had."""
+    at_rest = {"exposure": 0.5, "point_curves": develop._default_point_curves(),
+               "hsl": develop._default_hsl(), "color_grading": develop._default_color_grading(),
+               "curve_mode": "point"}
+    assert develop._norm_mask_adjustments(at_rest) == {"exposure": 0.5}
+    curve = {"luma": [[0, 0], [128, 160], [255, 255]]}
+    kept = develop._norm_mask_adjustments({"point_curves": curve, "hsl": {"red": [0, 40, 0]},
+                                           "curve_mode": "parametric"})
+    assert kept["point_curves"]["luma"] == curve["luma"]
+    assert kept["hsl"]["red"] == [0, 40, 0] and kept["hsl"]["blue"] == [0, 0, 0]
+    assert kept["curve_mode"] == "parametric"
+    assert "color_grading" not in kept and "parametric_curve" not in kept
+    assert not develop.is_neutral({"masks": [{"id": "m", "visible": True, "opacity": 100,
+                                              "sub_masks": [{"type": "all"}],
+                                              "adjustments": {"point_curves": curve}}]})
+
+
+def _radial_mask(adjustments: dict) -> dict:
+    return {"id": "m1", "visible": True, "opacity": 100,
+            "sub_masks": [{"type": "radial", "mode": "additive", "visible": True,
+                           "parameters": {"center_x": 0.3, "center_y": 0.5, "radius_x": 0.15,
+                                          "radius_y": 0.2, "feather": 30}}],
+            "adjustments": adjustments}
+
+
+def test_a_mask_curve_changes_pixels_only_inside_the_mask():
+    arr = np.full((120, 160, 3), 0.45, dtype=np.float32)
+    curve = {"luma": [[0, 0], [115, 60], [255, 255]]}
+    out, _ = thumbnails.apply_masks(arr, {"process": "7", "masks": [_radial_mask({"point_curves": curve})]})
+    assert out[60, 48, 0] < 0.40  # inside: pulled down by the curve
+    assert abs(out[60, 140, 0] - 0.45) < 1e-6  # outside: untouched
+
+
+def test_a_mask_mixer_shifts_only_its_band_inside_the_mask():
+    arr = np.empty((120, 160, 3), dtype=np.float32)
+    arr[..., 0], arr[..., 1], arr[..., 2] = 0.7, 0.2, 0.2  # red everywhere
+    out, _ = thumbnails.apply_masks(
+        arr, {"process": "7", "masks": [_radial_mask({"hsl": {"red": [0, -100, 0]}})]}
+    )
+    inside, outside = out[60, 48], out[60, 140]
+    assert inside.max() - inside.min() < 0.12  # red drained to near grey
+    assert np.allclose(outside, [0.7, 0.2, 0.2], atol=1e-6)

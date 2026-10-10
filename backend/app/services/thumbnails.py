@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image as PILImage, ImageOps
 
 from app.config import settings
+from app.services import spots
 from app.services import develop, develop_color, develop_effects, develop_v2, film_sims, lens_profile, masks
 from app.services import machine
 from app.services import export_finish
@@ -437,9 +438,12 @@ def apply_edits_array(
     to the display path - one geometry implementation, two pixel formats."""
     if not (flip_h or flip_v or rotation or straighten or persp_h or persp_v or crop):
         return arr
+    # One plane at a time, as float32: a float16 base (the editor's native
+    # frame, handed over as it is) is upcast per plane here, a third of the
+    # frame at a time, instead of as a whole beforehand.
     planes = [
         apply_edits(
-            PILImage.fromarray(np.ascontiguousarray(arr[..., c]), "F"),
+            PILImage.fromarray(np.ascontiguousarray(arr[..., c], dtype=np.float32), "F"),
             rotation, crop, flip_h, flip_v, straighten, persp_h, persp_v,
         )
         for c in range(arr.shape[-1])
@@ -1802,7 +1806,8 @@ def _to_output_depth(arr: np.ndarray, depth16: bool) -> np.ndarray:
 
 
 def _local_tone_guide(
-    lin: np.ndarray, adj: dict, base_gain: float, ref_long_edge: float | None
+    lin: np.ndarray, adj: dict, base_gain: float, ref_long_edge: float | None,
+    patches: "list[spots.Patch] | None" = None,
 ) -> "develop_v2.LocalToneGuide | None":
     """The surroundings map Highlights/Shadows read under process version 2,
     or None when the plain per-pixel curve applies. It is the one thing in the
@@ -1812,17 +1817,43 @@ def _local_tone_guide(
         return None
     g, gain = _tone_gains(adj, base_gain)
     weights = _LUMA * np.float32(g) if gain is None else _LUMA * gain * np.float32(g)
-    return develop_v2.LocalToneGuide(weights, lin, ref_long_edge)
+    return develop_v2.LocalToneGuide(weights, lin, ref_long_edge, patches=patches)
+
+
+def _spot_patches(
+    lin: np.ndarray, adj: dict, view, source: "spots.Source | None"
+) -> "list[spots.Patch] | None":
+    """The retouch spots of the edit rendered for `lin` (spots.render_patches),
+    or None when it has none. The one pass that reads the base before the tone
+    block: healing happens on the scene-linear picture, so every pass after
+    sees the healed pixels and none can draw a seam around them."""
+    sp = adj.get("spots")
+    if not sp:
+        return None
+    h, w = lin.shape[:2]
+    return spots.render_patches(lin, sp, view or masks.FieldView.whole(h, w), source) or None
+
+
+def _patched(rows: np.ndarray, patches: "list[spots.Patch] | None", y0: int) -> np.ndarray:
+    """Rows y0.. of the base with the retouch patches pasted in - as a float32
+    copy of their own - or the rows themselves when no patch lands in them.
+    The base is never written: it is the cached array every render shares."""
+    if not patches or not spots.any_in_rows(patches, y0, y0 + rows.shape[0]):
+        return rows
+    rows = rows.astype(np.float32, copy=True)
+    spots.paste(rows, patches, y0)
+    return rows
 
 
 def _linear_tone_block_banded(
     lin: np.ndarray, adj: dict, base_gain: float = 1.0,
     ref_long_edge: float | None = None, white_floor: float = 1.0,
+    patches: "list[spots.Patch] | None" = None,
 ) -> np.ndarray:
     h, w = lin.shape[:2]
-    guide = _local_tone_guide(lin, adj, base_gain, ref_long_edge)
+    guide = _local_tone_guide(lin, adj, base_gain, ref_long_edge, patches)
     if h * w < _TONE_BAND_MIN_PX or _band_pool() is None:
-        return _linear_tone_block(lin, adj, base_gain, guide, 0, white_floor)
+        return _linear_tone_block(_patched(lin, patches, 0), adj, base_gain, guide, 0, white_floor)
     out = np.empty((h, w, 3), dtype=np.float32)
 
     # Bands of _BAND_ROWS, not one band per worker: a quarter of a 40MP frame
@@ -1830,7 +1861,9 @@ def _linear_tone_block_banded(
     # size were ~1GB between them. Measured on that frame, on an 8GB machine
     # in swap: 5.9-6.9s with four bands, 2.1-4.5s with these.
     def run(y0: int, y1: int) -> None:
-        out[y0:y1] = _linear_tone_block(lin[y0:y1], adj, base_gain, guide, y0, white_floor)
+        out[y0:y1] = _linear_tone_block(
+            _patched(lin[y0:y1], patches, y0), adj, base_gain, guide, y0, white_floor
+        )
 
     _band_map(run, h, w)
     return out
@@ -1878,6 +1911,7 @@ def _display_color_block(
     arr = develop_color.apply_color_calibration(
         arr, adj.get("color_calibration") or {},
         whole_band=develop_v2.calibration_moves_whole_bands(adj), ref_long_edge=ref_long_edge,
+        pool=_band_pool(),
     )
 
     if develop_v2.is_v2(adj):
@@ -2298,7 +2332,7 @@ def _apply_local_adjustments(
         arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
     st = full.get("structure", 0)
     if st:
-        arr = develop_effects.apply_structure(arr, st)
+        arr = develop_effects.apply_structure(arr, st, long_edge)
     sp = full.get("sharpness", 0)
     if sp:
         arr = _sharpen(
@@ -2309,6 +2343,50 @@ def _apply_local_adjustments(
     if dh:
         arr = _dehaze(arr, dh, long_edge)
     return _adjust_array(arr, full, long_edge, tone_white if v2 else 1.0)
+
+
+# A mask whose padded box covers this much of the frame (or more) renders on
+# the whole frame: the cut would save nothing and cost a copy.
+_MASK_BBOX_MAX_FRAC = 0.7
+
+
+def _mask_reach(madj: dict, process: str, long_edge: float) -> int | None:
+    """How far beyond the pixels a mask covers its passes read - the padding a
+    box cut around the mask needs so the box renders as the whole frame would
+    - or None for a pass that reads the whole frame (dehaze's atmospheric
+    light is a percentile of all of it)."""
+    full = develop.normalize(madj)
+    if full.get("dehaze", 0):
+        return None
+    reach = 0.0
+    if full.get("clarity", 0):
+        reach = max(reach, 3.0 * max(4.0, long_edge / 50.0))
+    if full.get("structure", 0):
+        reach = max(reach, 4.0 * max(2.0, long_edge / 120.0))
+    if full.get("sharpness", 0):
+        reach = max(reach, float(_sharpen_halo(min(2.0, max(0.6, long_edge / 2000.0)))))
+    full["process"] = process
+    if develop_v2.local_tone_active(full):
+        # The surroundings map: three box blurs of _LOCAL_RADIUS at the
+        # _LOCAL_SMALL_PX scale, in the frame's pixels.
+        reach = max(reach, 3.0 * develop_v2._LOCAL_RADIUS * long_edge / develop_v2._LOCAL_SMALL_PX)
+    return int(np.ceil(reach)) + 2
+
+
+def _mask_box(m: np.ndarray, pad: int) -> tuple[int, int, int, int] | None:
+    """The rows and columns (y0, y1, x0, x1) the mask's local pass has to run
+    on: where the field is above zero, grown by `pad` - or None when that is
+    most of the frame anyway."""
+    h, w = m.shape
+    ys = np.flatnonzero(m.max(axis=1) > 0.0)
+    xs = np.flatnonzero(m.max(axis=0) > 0.0)
+    if not len(ys) or not len(xs):
+        return None
+    y0, y1 = max(0, int(ys[0]) - pad), min(h, int(ys[-1]) + 1 + pad)
+    x0, x1 = max(0, int(xs[0]) - pad), min(w, int(xs[-1]) + 1 + pad)
+    if (y1 - y0) * (x1 - x0) >= _MASK_BBOX_MAX_FRAC * h * w:
+        return None
+    return y0, y1, x0, x1
 
 
 def apply_masks(
@@ -2330,6 +2408,7 @@ def apply_masks(
     if not mask_list:
         return arr, None
     peek_field: np.ndarray | None = None
+    owned = False  # whether `arr` is this pass's own copy, free to write into
     for mask in mask_list:
         if not mask.get("sub_masks"):
             continue
@@ -2347,11 +2426,26 @@ def apply_masks(
             peek_field = m
         if not renders or float(m.max()) <= 0.0:
             continue
-        adjusted = _apply_local_adjustments(
-            arr.copy(), madj, ref_long_edge, adj.get("process", "1"), tone_white
-        )
-        m3 = m[..., None]
-        arr = arr * (1.0 - m3) + adjusted * m3
+        process = adj.get("process", "1")
+        # The local pass runs on the box around what the mask covers, padded
+        # by what its spatial passes read beyond it (_mask_reach); outside the
+        # box the blend was `arr * 1 + adjusted * 0` - the pixels as they were.
+        reach = _mask_reach(madj, process, ref_long_edge or max(arr.shape[:2]))
+        box = _mask_box(m, reach) if reach is not None else None
+        if box is None:
+            adjusted = _apply_local_adjustments(arr.copy(), madj, ref_long_edge, process, tone_white)
+            m3 = m[..., None]
+            arr = arr * (1.0 - m3) + adjusted * m3
+            owned = True
+            continue
+        y0, y1, x0, x1 = box
+        if not owned:
+            arr = arr.copy()  # the caller's frame is never written
+            owned = True
+        orig = arr[y0:y1, x0:x1]
+        adjusted = _apply_local_adjustments(orig.copy(), madj, ref_long_edge, process, tone_white)
+        m3 = m[y0:y1, x0:x1, None]
+        arr[y0:y1, x0:x1] = orig * (1.0 - m3) + adjusted * m3
     return np.clip(arr, 0.0, 1.0), peek_field
 
 
@@ -2694,7 +2788,7 @@ def stage_breakdown(timing: dict) -> str:
     from the dict _mark fills in. A `*` marks a stage answered from its cache;
     `nr` is the denoise pass, timed apart from the tone block it follows."""
     parts = []
-    for key in ("wait", "base", "geom", "tone", "nr", "detail", "color", "masks", "fx", "encode"):
+    for key in ("wait", "decode", "base", "geom", "tone", "nr", "detail", "color", "masks", "fx", "encode"):
         if key in timing:
             hit = "*" if timing.get(f"{key}_hit") else ""
             parts.append(f"{key}={timing[key]:.0f}{hit}")
@@ -2709,13 +2803,19 @@ def apply_adjustments_linear(
     tone_cache_key: str | None = None, peek: str | None = None, view=None,
     is_stale: Callable[[], bool] | None = None, noise_probe: np.ndarray | None = None,
     timing: dict | None = None, depth16: bool = False, raw_source: bool = False,
+    array: bool = False, spot_source: "spots.Source | None" = None,
 ) -> "PILImage.Image | np.ndarray":
     """The develop pipeline on a scene-referred linear float base (the RAW
     demosaic, values may exceed 1.0 after the gain).
 
+    `spot_source` reads a box of the whole frame `view` belongs to, for the
+    retouch spots of a tile whose source lies outside it (spots.Source); a
+    whole-frame render leaves it None and the spots read the base.
+
     `depth16` hands the result back as an HxWx3 uint16 array instead of an
     8-bit image - the 16-bit TIFF export, the one caller that keeps the tonal
-    resolution the float pipeline has.
+    resolution the float pipeline has. `array` hands the 8-bit frame back as
+    the HxWx3 uint8 array it is before it becomes an image.
 
     `raw_source` says the base is a RAW demosaic. Only then does process
     version 3 render the film simulations from cubes (film_sims): Fujifilm's
@@ -2809,8 +2909,8 @@ def apply_adjustments_linear(
         # fall through the rest of the pipeline instead of returning here.
         arr = _linear_tone_block_banded(lin, adj, base_gain, long_edge)
         _mark(timing, "tone", t0)
-        if depth16:
-            return _to_output_depth(arr, True)
+        if depth16 or array:
+            return _to_output_depth(arr, depth16)
         return PILImage.fromarray(_to_output_depth(arr, False), "RGB")
 
     # Tone + denoise depend on their own sliders and nothing else, so when
@@ -2849,7 +2949,9 @@ def apply_adjustments_linear(
         key = _tone_stage_key(tone_cache_key, base_gain, adj, fast) if tone_cache_key else None
         arr = _tone_stage_get(key)
         if arr is None:
-            arr = _linear_tone_block_banded(lin, adj, base_gain, long_edge)
+            arr = _linear_tone_block_banded(
+                lin, adj, base_gain, long_edge, patches=_spot_patches(lin, adj, view, spot_source)
+            )
             if _denoise_wanted(adj, fast):
                 t0 = _mark(timing, "tone", t0)
                 _abort_if_stale()
@@ -2967,7 +3069,7 @@ def apply_adjustments_linear(
         arr = paint_mask_peek(arr, peek_field, view=view)
     out = _to_output_depth(arr, depth16)
     _mark(timing, "fx", t0)
-    return out if depth16 else PILImage.fromarray(out, "RGB")
+    return out if depth16 or array else PILImage.fromarray(out, "RGB")
 
 
 def add_frame(image: PILImage.Image, adj: dict | None) -> PILImage.Image:
@@ -2993,13 +3095,15 @@ def add_frame(image: PILImage.Image, adj: dict | None) -> PILImage.Image:
 
 
 def _add_frame_array(arr: np.ndarray, adj: dict | None) -> np.ndarray:
-    """add_frame for the 16-bit render's uint16 array."""
+    """add_frame for a render's integer array (uint16 for the 16-bit render,
+    uint8 for a copy's frame): white is the type's full value."""
     pct = adj.get("frame_width", 0) if adj else 0
     h, w = arr.shape[:2]
     border = int(round(min(w, h) * pct / 100.0)) if pct and pct > 0 else 0
     if border <= 0:
         return arr
-    return np.pad(arr, ((border, border), (border, border), (0, 0)), constant_values=65535)
+    white = np.iinfo(arr.dtype).max
+    return np.pad(arr, ((border, border), (border, border), (0, 0)), constant_values=white)
 
 
 def _browsing_gain(base_gain: float, adjustments: dict | None) -> float:
@@ -3631,6 +3735,34 @@ def warm_editor_base(
 _native_editor_base: tuple[str, int, np.ndarray, float] | None = None
 
 
+# The most recent full-resolution render, as the 8-bit frame it came out as,
+# held for ONE render at a time (a 40MP frame is 120MB) under its key: the
+# photo (id and file mtime), the edit and geometry it was rendered with, and
+# the size cap. "Save copy" from the editor comes right after the full.jpg
+# warmer rendered the very same edit; a second export of a photo repeats the
+# first. Both used to render the 5-15s frame again - now they encode it. Read
+# and written under _full_render_lock, like the native base; dropped with it.
+_last_full_render: tuple[tuple, np.ndarray] | None = None
+
+
+def _full_render_key(
+    image: "Image", mtime_ns: int, rotation: int, crop: CropBox | None, adjustments: dict,
+    distortion: int, flip_h: bool, flip_v: bool, straighten: float, persp_h: int, persp_v: int,
+    max_px: int | None,
+) -> tuple:
+    return (
+        image.id, mtime_ns, develop.dumps(adjustments), int(rotation or 0) % 360,
+        tuple(float(c) for c in crop) if crop else None, int(distortion or 0),
+        bool(flip_h), bool(flip_v), float(straighten or 0.0), int(persp_h or 0), int(persp_v or 0),
+        int(max_px) if max_px else None,
+    )
+
+
+def _drop_last_full_render() -> None:
+    global _last_full_render
+    _last_full_render = None
+
+
 # Serialises the full-resolution decode itself - and nothing else. It is NOT
 # _full_render_lock on purpose: the decode runs 6-20s, and holding the render
 # lock for it meant every settled preview queued behind a background warm-up.
@@ -3658,6 +3790,8 @@ def _cached_native_base(
         if is_stale is not None and is_stale():
             raise PreviewSuperseded()
         _native_editor_base = None  # free the old frame before decoding the next
+        if _last_full_render is not None and _last_full_render[0][0] != image_id:
+            _drop_last_full_render()
         lin, gain = raw_service.load_linear_base(Path(path_str), half_size=False)
         out = lin.astype(np.float16)
         out.flags.writeable = False
@@ -3778,6 +3912,7 @@ def clear_editor_base_caches() -> None:
     _native_editor_base = None
     _native_rung_base = None
     _pair_reference_frame = None
+    _drop_last_full_render()
     # The tone/denoise stage was computed from one of those bases, so it has to
     # go with them - its own key can't see a decode setting change.
     invalidate_tone_stage()
@@ -3805,7 +3940,7 @@ def editor_caches_empty() -> bool:
         grain = bool(_GRAIN_CACHE)
     return not (
         bases or stages or grain or _native_editor_base is not None or _native_rung_base is not None
-        or _pair_reference_frame is not None
+        or _pair_reference_frame is not None or _last_full_render is not None
     )
 
 
@@ -4159,6 +4294,40 @@ def _region_box(
     )
 
 
+def _tile_spot_source(
+    base: np.ndarray, scale: float, lens_in_tile: bool, path: Path, adjustments: dict,
+) -> "spots.Source":
+    """A spots.Source over the whole base for an early-cut tile: the box asked
+    for is in the pixels of the frame the tile lives in - the base scaled by
+    `scale` - and comes back from the base cut (lens-corrected the way the
+    tile was, when the correction runs in the tile), downscaled the way the
+    tile was and edge-padded past the frame. Not bit-identical to the tile's
+    own pixels when `scale` < 1: a box resized on its own rounds differently
+    from the whole; at 100% zoom (scale 1) it is exact."""
+    h, w = base.shape[:2]
+
+    def read_base(x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+        if lens_in_tile:
+            return lens_profile.correct_window(base, path, adjustments, (x0, y0, x1, y1))
+        return base[y0:y1, x0:x1]
+
+    if scale >= 1.0:
+        return lambda x0, y0, x1, y1: spots.take_from(h, w, read_base, x0, y0, x1, y1)
+
+    def read_scaled(x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+        # The base box that covers the scaled one, resized as a whole and the
+        # asked-for box cut out of it, so its pixels line up with the tile's.
+        bx0, by0 = int(np.floor(x0 / scale)), int(np.floor(y0 / scale))
+        bx1, by1 = int(np.ceil(x1 / scale)), int(np.ceil(y1 / scale))
+        cut = spots.take_from(h, w, read_base, bx0, by0, bx1, by1)
+        tw, th = max(1, int(round((bx1 - bx0) * scale))), max(1, int(round((by1 - by0) * scale)))
+        small = cv2.resize(cut, (tw, th), interpolation=cv2.INTER_AREA)
+        ox, oy = int(round(x0 - bx0 * scale)), int(round(y0 - by0 * scale))
+        return spots._take(small, ox, oy, ox + (x1 - x0), oy + (y1 - y0))
+
+    return read_scaled
+
+
 def _render_editor_bytes(
     image: "Image",
     path: Path,
@@ -4263,6 +4432,11 @@ def _render_editor_bytes(
     early_box: tuple[int, int, int, int] | None = None
     tile_scale = 1.0
     noise_probe: np.ndarray | None = None
+    # What a tile's retouch spots read their source from when it lies outside
+    # the tile (see _tile_spot_source): the whole base before the early cut,
+    # or the whole finished frame before the late one. References, not copies.
+    base_whole: np.ndarray | None = None
+    whole_frame: np.ndarray | None = None
     if region is not None and not geometry_moves_pixels:
         base_h, base_w = lin16.shape[:2]
         early_cut = _region_box(region, base_w, base_h)
@@ -4302,6 +4476,7 @@ def _render_editor_bytes(
             ],
             separators=(",", ":"),
         )
+        base_whole = lin16
         tile = _tile_cache_get(tile_key)
         if tile is not None:
             lin16 = tile
@@ -4387,6 +4562,7 @@ def _render_editor_bytes(
         px1, py1 = min(full_w, x1 + REGION_PAD_PX), min(full_h, y1 + REGION_PAD_PX)
         if _denoise_wanted(adjustments, fast):
             noise_probe = _noise_probe(arr)
+        whole_frame = arr
         arr = arr[py0:py1, px0:px1]
         view = masks.FieldView(px0, py0, full_w, full_h)
         trim = (x0 - px0, y0 - py0, x1 - x0, y1 - y0)
@@ -4427,11 +4603,18 @@ def _render_editor_bytes(
     # demosaics 2-3 stops dark, so comparing an edit against the native render
     # would only ever say "the edit is brighter" - the honest before/after is
     # against the auto-exposed picture the user actually saw before opening it.
+    spot_source: "spots.Source | None" = None
+    if adjustments.get("spots"):
+        if early_cut is not None and base_whole is not None:
+            spot_source = _tile_spot_source(base_whole, tile_scale, lens_in_tile, path, adjustments)
+        elif whole_frame is not None:
+            frame_ref = whole_frame
+            spot_source = lambda x0, y0, x1, y1: spots._take(frame_ref, x0, y0, x1, y1)
     img = apply_adjustments_linear(
         arr, gain if browse or adjustments.get("raw_base") == "standard" else 1.0,
         adjustments, fast=fast, tone_cache_key=tone_key,
         peek=peek, view=view, is_stale=is_stale, noise_probe=noise_probe, timing=timing,
-        raw_source=raw_service.is_raw(path),
+        raw_source=raw_service.is_raw(path), spot_source=spot_source,
     )
     t0 = time.perf_counter()
     if trim is not None:
@@ -4693,12 +4876,18 @@ def render_edited_image(
     depth16: bool = False,
     timing: dict | None = None,
     is_stale: Callable[[], bool] | None = None,
+    array: bool = False,
 ) -> "PILImage.Image | np.ndarray":
     """TRUE full-resolution RGB render with the given lens/geometry and tonal
     edits baked in - the only path that demosaics a RAW at full sensor size
     (half_size=False). Used for the flattened edited *copy* and the 100%-zoom
     full.jpg. Serialised by _full_render_lock: a 40MP linear float32 frame is
     ~460MB, so exactly one of these may be in flight at a time.
+
+    `array` returns the 8-bit HxWx3 frame itself instead of a PIL image (the
+    same pixels; a copy's encoder takes either). An unbounded 8-bit render is
+    kept as the last full render (_last_full_render) and the next call with
+    the same key gets it back without rendering.
 
     `max_px` is a decode-economy hint for bounded renders (export with a size
     cap): decoding the full sensor only to throw most of it away dominated
@@ -4712,6 +4901,7 @@ def render_edited_image(
     `timing` and `is_stale` are apply_adjustments_linear's: the per-stage
     milliseconds for the slow-render log (plus `base` and `geom` from here),
     and the probe that lets a background render give way between stages."""
+    global _last_full_render
     from app.services.filesystem import resolve_image_path
 
     path = resolve_image_path(image)
@@ -4722,6 +4912,32 @@ def render_edited_image(
             pad = 1.0 / max(0.05, min(float(crop[2]), float(crop[3])))
         decode_px = int(max_px * pad * 1.3)
 
+    interim = half_decode and bool(max_px)
+    # The 8-bit render kept from last time, when this is the same one.
+    key = None
+    if not depth16 and not interim:
+        mtime_ns = path.stat().st_mtime_ns
+        key = _full_render_key(
+            image, mtime_ns, rotation, crop, adjustments, distortion, flip_h, flip_v,
+            straighten, persp_h, persp_v, max_px,
+        )
+        with _full_render_lock:
+            kept = _last_full_render
+        if kept is not None and kept[0] == key:
+            if timing is not None:
+                timing["full_hit"] = True
+            return kept[1] if array else PILImage.fromarray(kept[1], "RGB")
+        if decode_px is None:
+            # The decode first, outside the render lock (decodes serialise on
+            # their own lock): a render that needs the native base waits out
+            # its 6-20s demosaic without holding every other full render -
+            # the editor's settle, a lightbox zoom - behind it. Inside the
+            # lock it is a hit.
+            t_decode = time.perf_counter()
+            _cached_native_base(image.id, str(path), mtime_ns, is_stale=is_stale)
+            if timing is not None:
+                timing["decode"] = (time.perf_counter() - t_decode) * 1000.0
+
     # `half_decode` (the lightbox's half tier, bounded by max_px): a RAW always
     # takes the half-size demosaic, even where the padded decode target asks
     # for more - the tier is an interim picture on the way to full.jpg, and a
@@ -4729,8 +4945,14 @@ def render_edited_image(
     # meant to cover for. At a quarter of the frame it also stays off
     # _full_render_lock (callers serialise it on their own lock), so it no
     # longer queues behind a running full render or warm-up.
-    with contextlib.nullcontext() if half_decode and max_px else _full_render_lock:
+    with contextlib.nullcontext() if interim else _full_render_lock:
         t0 = time.perf_counter()
+        if key is not None:
+            kept = _last_full_render
+            if kept is not None and kept[0] == key:
+                if timing is not None:
+                    timing["full_hit"] = True
+                return kept[1] if array else PILImage.fromarray(kept[1], "RGB")
         if decode_px is None:
             # Unbounded render: reuse (and fill) the editor's native-base cache
             # - the full-resolution linear decode kept for 100% zoom. "Save
@@ -4739,8 +4961,16 @@ def render_edited_image(
             # render pays it once and leaves the base for the next one. It's
             # the same float16 base the editor's 100% preview renders from, so
             # the saved pixels match what the user saw there exactly.
+            #
+            # Handed on as the float16 it is kept as: the lens correction, the
+            # geometry and the tone block each take their rows up to float32
+            # as they go (exactly - a float16 fits), where one whole-frame
+            # upcast was 460MB and a second on a 40MP render. The local tone
+            # guide alone reads the frame differently in float16 (a subsample
+            # in place of an area resize), so with Highlights/Shadows in use
+            # the upcast stays, and the pixels with it.
             lin16, gain = _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
-            lin = lin16.astype(np.float32)
+            lin = lin16.astype(np.float32) if develop_v2.local_tone_active(adjustments) else lin16
         else:
             half_size = False
             if raw_service.is_raw(path):
@@ -4766,11 +4996,15 @@ def render_edited_image(
         source = apply_adjustments_linear(
             handover.pop(), _browsing_gain(gain, adjustments), adjustments, depth16=depth16,
             raw_source=raw_service.is_raw(path), timing=timing, is_stale=is_stale,
+            array=not depth16,
         )
+        source = _add_frame_array(source, adjustments)
         if depth16:
-            return _add_frame_array(source, adjustments)
-        source = add_frame(source, adjustments)
-        return source.convert("RGB")
+            return source
+        if key is not None:
+            source.flags.writeable = False
+            _last_full_render = (key, source)
+        return source if array else PILImage.fromarray(source, "RGB")
 
 
 def render_full_from_stored_edits(
@@ -5187,6 +5421,7 @@ def _drop_native_base_if_idle() -> None:
     _native_editor_base = None
     _native_rung_base = None
     _pair_reference_frame = None
+    _drop_last_full_render()
 
 
 # Full renders in flight (generate_full, decode included). A counter rather

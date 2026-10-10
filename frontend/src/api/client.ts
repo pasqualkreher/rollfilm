@@ -3,6 +3,7 @@ import type {
   AutoAdjustResult,
   AutoDevelopSettings,
   BulkAutoDevelopResult,
+  CopyJobProgress,
   BulkResetOptions,
   CanvasGalleryOut,
   CanvasLayout,
@@ -532,6 +533,24 @@ export const api = {
     },
     exportCancel(job_id: string): Promise<void> {
       return request(`/images/export/${job_id}`, { method: "DELETE" });
+    },
+    // Copies of many photos in the background, each from its saved edits
+    // (tagged "edit copy", carrying the source's tags): start a job, poll
+    // its count, stop it between photos. The title bar counts it down.
+    copyJobStart(
+      image_ids: string[],
+      opts: { quality: number; max_size?: number | null }
+    ): Promise<{ job_id: string; total: number }> {
+      return request(`/images/copy-jobs`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids, quality: opts.quality, max_size: opts.max_size ?? null }),
+      });
+    },
+    copyJobProgress(job_id: string): Promise<CopyJobProgress> {
+      return request(`/images/copy-jobs/${job_id}`);
+    },
+    copyJobCancel(job_id: string): Promise<void> {
+      return request(`/images/copy-jobs/${job_id}`, { method: "DELETE" });
     },
     // Fetch the finished job's file as a blob (the dialog writes it into the
     // save target it picked before starting the job).

@@ -14,6 +14,10 @@ import { nudgeWaitingThumbs } from "../utils/thumbNudge";
 // renders, so the title bar can say how far they are until the last one is
 // through. `cancelRenders` stops them there: a bulk edit is only as far as its
 // pictures are, so the photos not rendered yet go back to how they were.
+//
+// And the copies of a bulk Save copy: a server-side job writes one photo
+// after the other; `trackCopyJob` follows it the same way, and `cancelCopyJob`
+// stops it between photos - the copies written so far stay.
 interface TasksState {
   busyLabel: string | null;
   setBusyLabel: (label: string | null) => void;
@@ -21,6 +25,10 @@ interface TasksState {
   trackRenders: (imageIds: string[]) => void;
   cancelRenders: () => Promise<void>;
   cancellingRenders: boolean;
+  copies: RenderProgress | null;
+  trackCopyJob: (jobId: string, total: number) => void;
+  cancelCopyJob: () => Promise<void>;
+  cancellingCopies: boolean;
 }
 
 export interface RenderProgress {
@@ -107,16 +115,74 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     }
   }, [queryClient]);
 
+  // --- the copy job --------------------------------------------------------
+  const [copies, setCopies] = useState<RenderProgress | null>(null);
+  const [cancellingCopies, setCancellingCopies] = useState(false);
+  const copyJobRef = useRef<string | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+
+  const pollCopies = useCallback(async () => {
+    copyTimerRef.current = null;
+    const jobId = copyJobRef.current;
+    if (!jobId) return;
+    let finished = true;
+    try {
+      const p = await api.images.copyJobProgress(jobId);
+      finished = p.state !== "running";
+      setCopies({ done: p.done, total: p.total });
+    } catch {
+      // The backend is gone or restarting: there is nothing left to follow.
+    }
+    if (!finished) {
+      copyTimerRef.current = window.setTimeout(pollCopies, RENDER_POLL_MS);
+      return;
+    }
+    copyJobRef.current = null;
+    setCopies(null);
+    setCancellingCopies(false);
+    // The copies sit in the grid next to their originals now.
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["images"] }),
+      queryClient.invalidateQueries({ queryKey: ["tags"] }),
+    ]);
+    nudgeWaitingThumbs();
+  }, [queryClient]);
+
+  const trackCopyJob = useCallback(
+    (jobId: string, total: number) => {
+      copyJobRef.current = jobId;
+      setCopies({ done: 0, total });
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = window.setTimeout(pollCopies, RENDER_POLL_MS);
+    },
+    [pollCopies]
+  );
+
+  const cancelCopyJob = useCallback(async () => {
+    const jobId = copyJobRef.current;
+    if (!jobId) return;
+    setCancellingCopies(true);
+    try {
+      await api.images.copyJobCancel(jobId);
+    } catch {
+      // The poll notices a backend that is gone and clears the count.
+    }
+  }, []);
+
   useEffect(
     () => () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
     },
     []
   );
 
   return (
     <TasksContext.Provider
-      value={{ busyLabel, setBusyLabel, renders, trackRenders, cancelRenders, cancellingRenders }}
+      value={{
+        busyLabel, setBusyLabel, renders, trackRenders, cancelRenders, cancellingRenders,
+        copies, trackCopyJob, cancelCopyJob, cancellingCopies,
+      }}
     >
       {children}
     </TasksContext.Provider>

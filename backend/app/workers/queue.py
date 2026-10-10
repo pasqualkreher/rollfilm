@@ -537,6 +537,9 @@ _BACKFILL_EDITOR_IDLE_S = 10.0
 _backfill_lock = Lock()
 _backfill_thread: threading.Thread | None = None
 _backfill_rerun = False
+# True only while the backfill thread is encoding, not while it waits out an
+# import or the editor: a worker asleep in that wait is not work in progress.
+_backfill_encoding = False
 
 # Images whose embedding failed (unreadable/corrupt source): skipped for the
 # rest of this process run instead of being retried on every pass.
@@ -568,12 +571,13 @@ def _import_work_active() -> bool:
 
 
 def embeddings_running() -> bool:
-    """Whether the search-embedding backfill is working right now. Used by the
-    desktop shell's quit check: these are the computations that keep running
-    after an import screen is long gone, and cutting them off silently is what
-    leaves a library that can't be searched until someone notices."""
+    """Whether the search-embedding backfill is encoding right now. Reported
+    to the desktop shell's quit check as information, not as a reason to
+    wait: the backfill picks up where it left off on the next start. A thread
+    that only sits in its wait for an import or the editor to go quiet does
+    not count - it once held "finish in background" open for good."""
     with _backfill_lock:
-        return _backfill_thread is not None and _backfill_thread.is_alive()
+        return _backfill_thread is not None and _backfill_thread.is_alive() and _backfill_encoding
 
 
 def schedule_embedding_backfill() -> None:
@@ -677,15 +681,17 @@ def _embed_batch(items: list[tuple[str, Path]]) -> int:
 
 
 def _backfill_embeddings() -> None:
-    global _backfill_thread, _backfill_rerun
+    global _backfill_thread, _backfill_rerun, _backfill_encoding
     done = 0
     try:
         while True:
             # Never compete with a running import: wait out staging analysis,
             # commits and the derivative renders that follow them. (Checked
             # again between photos, so a new import preempts within one encode.)
+            _backfill_encoding = False
             while _import_work_active():
                 time.sleep(_BACKFILL_IDLE_POLL_S)
+            _backfill_encoding = True
             batch = _images_missing_embeddings(_BACKFILL_CHUNK)
             if not batch:
                 with _backfill_lock:
@@ -702,6 +708,8 @@ def _backfill_embeddings() -> None:
         logger.exception("Embedding backfill crashed")
         with _backfill_lock:
             _backfill_thread = None
+    finally:
+        _backfill_encoding = False
     if done:
         logger.info("Embedding backfill: %d photo(s) embedded", done)
         # Fresh embeddings change what the "Moments" smart albums would find -

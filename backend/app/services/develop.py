@@ -264,6 +264,7 @@ def defaults() -> dict[str, Any]:
     out["color_grading"] = _default_color_grading()
     out["color_calibration"] = dict(_CALIBRATION)
     out["masks"] = []
+    out["spots"] = []
     return out
 
 
@@ -365,9 +366,11 @@ _SUBMASK_MODES = ("additive", "subtractive", "intersect")
 
 def _norm_mask_adjustments(raw: Any) -> dict[str, Any]:
     """A mask's local adjustments, stored *sparsely* (only the scalar develop
-    fields the user actually changed, clamped). thumbnails.apply_masks() merges
-    them over the develop defaults and applies the tonal/colour/detail subset
-    inside the mask; the pixel-level effects (grain/vignette/glow) are global."""
+    fields the user actually changed, clamped, plus the nested groups a mask
+    may carry - its own curve, colour mixer and colour grading - when they are
+    not at rest). thumbnails.apply_masks() merges them over the develop
+    defaults and applies the tonal/colour/detail subset inside the mask; the
+    pixel-level effects (grain/vignette/glow) are global."""
     src = raw if isinstance(raw, dict) else {}
     out: dict[str, Any] = {}
     for k, (default, lo, hi, is_float) in SCALAR_SPEC.items():
@@ -375,6 +378,20 @@ def _norm_mask_adjustments(raw: Any) -> dict[str, Any]:
             v = _clampf(src.get(k, default), lo, hi, default, is_float)
             if v != default:
                 out[k] = v
+    mode = src.get("curve_mode")
+    if mode in ENUM_SPEC["curve_mode"][1] and mode != ENUM_SPEC["curve_mode"][0]:
+        out["curve_mode"] = mode
+    for key, norm, default in (
+        ("point_curves", _norm_point_curves, _default_point_curves),
+        ("parametric_curve", _norm_parametric, _default_parametric_curve),
+        ("hsl", _norm_hsl, _default_hsl),
+        ("hsl_range", _norm_hsl_range, _default_hsl_range),
+        ("color_grading", _norm_color_grading, _default_color_grading),
+    ):
+        if key in src:
+            v = norm(src[key])
+            if v != default():
+                out[key] = v
     return out
 
 
@@ -415,6 +432,44 @@ def _norm_masks(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+# --- Spots (heal / clone retouching) ----------------------------------------
+_SPOT_KINDS = ("heal", "clone")
+
+
+def _norm_spot(raw: Any) -> dict[str, Any] | None:
+    """One retouch spot, or None for an entry that names no place. Its
+    position and source are fractions of the finished frame, like a mask's;
+    the radius is a fraction of the frame's long edge, like a brush size. A
+    spot without a source sits on itself (it then does nothing)."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        x, y = float(raw["x"]), float(raw["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if x != x or y != y:  # NaN
+        return None
+    x, y = max(0.0, min(1.0, x)), max(0.0, min(1.0, y))
+    kind = raw.get("kind", "heal")
+    return {
+        "id": str(raw.get("id", "")),
+        "kind": kind if kind in _SPOT_KINDS else "heal",
+        "x": x,
+        "y": y,
+        "src_x": _clampf(raw.get("src_x", x), 0.0, 1.0, x, True),
+        "src_y": _clampf(raw.get("src_y", y), 0.0, 1.0, y, True),
+        "radius": _clampf(raw.get("radius", 0.02), 0.001, 0.25, 0.02, True),
+        "feather": int(_clampf(raw.get("feather", 50), 0, 100, 50, False)),
+        "opacity": int(_clampf(raw.get("opacity", 100), 0, 100, 100, False)),
+    }
+
+
+def _norm_spots(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    return [s for s in (_norm_spot(x) for x in raw) if s]
+
+
 def normalize(raw: Any) -> dict[str, Any]:
     """Coerce an arbitrary/partial develop object into the full canonical shape:
     every key present, every value the right type and clamped to its range.
@@ -443,6 +498,7 @@ def normalize(raw: Any) -> dict[str, Any]:
     out["color_grading"] = _norm_color_grading(src.get("color_grading"))
     out["color_calibration"] = _norm_calibration(src.get("color_calibration"))
     out["masks"] = _norm_masks(src.get("masks"))
+    out["spots"] = _norm_spots(src.get("spots"))
     return out
 
 

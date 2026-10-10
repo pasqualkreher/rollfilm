@@ -233,3 +233,13 @@ def test_backup_manifest_round_trips_the_virtual_link(db: Session):
     restored = image_row_from_dict(data, owner_id=1)
     assert restored.virtual_of_image_id == "a"
     assert restored.file_path == copy.file_path
+
+
+def test_a_virtual_copy_keeps_the_retouch_spots(db):
+    """Spots are part of the edit like masks are; a copy carries the blob as
+    it is, spots included."""
+    spots = [{"id": "s", "kind": "heal", "x": 0.2, "y": 0.3, "src_x": 0.4, "src_y": 0.3,
+              "radius": 0.05, "feather": 50, "opacity": 100}]
+    _image(db, "a", edit_adjustments=json.dumps({"spots": spots}))
+    copy = _copy(db, "a")
+    assert json.loads(copy.edit_adjustments or "{}")["spots"] == spots

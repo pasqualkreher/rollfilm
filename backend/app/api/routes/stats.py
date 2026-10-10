@@ -27,6 +27,7 @@ from app import schemas
 from app.auth import get_current_user
 from app.db.models import FileType, Image, User
 from app.db.session import get_db
+from app.services.exposure import shutter_seconds  # noqa: F401 - re-exported for tests
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -84,23 +85,6 @@ _SHUTTER_BUCKETS: list[Bucket] = [
 ]
 
 _MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-
-def shutter_seconds(text: str | None) -> float | None:
-    """EXIF ExposureTime as stored: "1/250", "0.5", "2", sometimes with a
-    trailing unit. None for anything that isn't a positive duration."""
-    if not text:
-        return None
-    raw = text.strip().rstrip("s").strip()
-    try:
-        if "/" in raw:
-            num, den = raw.split("/", 1)
-            value = float(num) / float(den)
-        else:
-            value = float(raw)
-    except (ValueError, ZeroDivisionError):
-        return None
-    return value if value > 0 else None
 
 
 def _bucket_of(buckets: list[Bucket], value: float) -> str | None:

@@ -43,8 +43,11 @@ export function presetAdjustments(preset: EditPreset): Adjustments {
 
 // The look as a preset stores it. A photo still on the base of an older edit
 // is shown without the lift in the editor, so that is what the preset keeps.
+// Retouch spots stay out: a healed speck sits where it sat on its own photo,
+// so a look carries none (masks do travel - a sky gradient is part of a look).
 export function presetFromAdjustments(adj: Adjustments): EditPreset {
-  return { adjustments: adj.raw_base === "legacy" ? { ...adj, raw_base: "native" } : adj };
+  const look = { ...adj, spots: [] };
+  return { adjustments: look.raw_base === "legacy" ? { ...look, raw_base: "native" } : look };
 }
 
 // --- Export / import ---------------------------------------------------------

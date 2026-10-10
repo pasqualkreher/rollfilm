@@ -660,7 +660,9 @@ def _read_gate(from_source: bool):
 
 # Each analysis worker thread keeps its own exiftool -stay_open helper (the
 # helper can't be shared between threads). Created lazily, lives as long as
-# the thread; exiftool exits by itself when its stdin pipe closes on shutdown.
+# the thread. exiftool does NOT exit when its stdin closes (it sleeps and
+# re-reads forever): the shutdown hook in app.main terminates these by their
+# parent pid (exif.terminate_own_helpers).
 _thread_helpers = threading.local()
 
 
@@ -1051,6 +1053,24 @@ def _progress_done(session_id: str) -> None:
             p["processed"] = p["total"]
 
 
+def _progress_settle_staging(session_id: str, batch: int, enqueued: int) -> None:
+    """A staging batch that raised part-way through: of its `batch` files
+    only `enqueued` got a row and an analysis job, the rest never will, so
+    they come off the target - otherwise the session counts as active for
+    good (has_active_import_work), the embedding backfill never runs again
+    and the desktop shell's "finish in background" never sees the backend
+    go idle. Rows the failed chunk rolled back were counted as copied; the
+    count is capped so a later batch starts from a consistent record."""
+    lost = batch - enqueued
+    if lost <= 0:
+        return
+    with _progress_lock:
+        p = _progress.get(session_id)
+        if p is not None and p["phase"] == "staging":
+            p["total"] = max(p["processed"], p["total"] - lost)
+            p["copied"] = min(p["copied"], p["total"])
+
+
 def has_active_import_work() -> bool:
     """Whether any import currently has staging/analysis/commit work
     outstanding. The embedding backfill (workers/queue.py) yields to this, so
@@ -1279,82 +1299,91 @@ def _stage_uploads_into(
 
     # Copying stays serial: sequential reads are what source media (SD card,
     # NAS, upload spool) do best, and the analysis pool works alongside.
-    for upload, original_filename, file_type in incoming:
-        original = getattr(upload, "source_path", None)
-        in_place = reference and original is not None
-        if in_place:
-            # Nothing is copied: the row records the original by its absolute
-            # path, and only its hash is read now (the duplicate check's key).
-            staged_path = Path(original)
-            sha256 = sha256_file(staged_path)
-            size = staged_path.stat().st_size
-        else:
-            staged_path = session_dir / original_filename
-            counter = 1
-            while staged_path.exists():
-                staged_path = (
-                    session_dir
-                    / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
+    # Files handed to the analysis pool so far: a batch that raises part-way
+    # settles the progress record by this count (_progress_settle_staging).
+    enqueued = 0
+    try:
+        for upload, original_filename, file_type in incoming:
+            original = getattr(upload, "source_path", None)
+            in_place = reference and original is not None
+            if in_place:
+                # Nothing is copied: the row records the original by its absolute
+                # path, and only its hash is read now (the duplicate check's key).
+                staged_path = Path(original)
+                sha256 = sha256_file(staged_path)
+                size = staged_path.stat().st_size
+            else:
+                staged_path = session_dir / original_filename
+                counter = 1
+                while staged_path.exists():
+                    staged_path = (
+                        session_dir
+                        / f"{Path(original_filename).stem}_{counter}{Path(original_filename).suffix}"
+                    )
+                    counter += 1
+
+                sha256, size = _hash_and_copy(upload.file, staged_path)
+                # Carry the source file's modification time onto the staged
+                # copy. Without this the staged mtime is "just now", and the
+                # commit-time fallback for photos lacking an EXIF capture date
+                # would date them to the import instead of the original file.
+                source_mtime = getattr(upload, "mtime", None)
+                if source_mtime:
+                    try:
+                        os.utime(staged_path, (source_mtime, source_mtime))
+                    except OSError:
+                        pass
+            total_bytes += size
+
+            staged_id = str(uuid.uuid4())
+            source_relpath = _source_relpath(upload, source_root)
+            db.add(
+                ImportStagedFile(
+                    id=staged_id,
+                    import_session_id=session_id,
+                    staged_path=(
+                        str(staged_path)
+                        if in_place or own_folder
+                        else str(staged_path.relative_to(settings.import_staging_root))
+                    ),
+                    original_filename=original_filename,
+                    file_type=FileType(file_type),
+                    sha256=sha256,
+                    processed=False,
+                    selected=select_new,
+                    source_id=source_id if source_relpath is not None else None,
+                    source_relpath=source_relpath,
+                    source_size=size if source_relpath is not None else None,
                 )
-                counter += 1
-
-            sha256, size = _hash_and_copy(upload.file, staged_path)
-            # Carry the source file's modification time onto the staged
-            # copy. Without this the staged mtime is "just now", and the
-            # commit-time fallback for photos lacking an EXIF capture date
-            # would date them to the import instead of the original file.
-            source_mtime = getattr(upload, "mtime", None)
-            if source_mtime:
-                try:
-                    os.utime(staged_path, (source_mtime, source_mtime))
-                except OSError:
-                    pass
-        total_bytes += size
-
-        staged_id = str(uuid.uuid4())
-        source_relpath = _source_relpath(upload, source_root)
-        db.add(
-            ImportStagedFile(
-                id=staged_id,
-                import_session_id=session_id,
-                staged_path=(
-                    str(staged_path)
-                    if in_place or own_folder
-                    else str(staged_path.relative_to(settings.import_staging_root))
-                ),
-                original_filename=original_filename,
-                file_type=FileType(file_type),
-                sha256=sha256,
-                processed=False,
-                selected=select_new,
-                source_id=source_id if source_relpath is not None else None,
-                source_relpath=source_relpath,
-                source_size=size if source_relpath is not None else None,
             )
-        )
-        _progress_copy_step(session_id)
-        # Where the analysis should read this file: the original on the source
-        # medium when there is one (folder import), so the heavy reads stay off
-        # the disk this copy is writing to. Size travels with it as the
-        # identity check (see _usable_source).
-        source_path = getattr(upload, "source_path", None)
-        source = (source_path, size) if source_path is not None else None
-        # Rows must be durable before their background jobs (own DB sessions)
-        # can pick them up - but committing per file meant one fsync per photo,
-        # which on a spinning disk added minutes to a big import. Commit in
-        # small chunks instead and enqueue each chunk once it's on disk; the
-        # review grid still sees new photos every second or two.
-        pending_enqueue.append((staged_id, source))
-        if len(pending_enqueue) >= _COPY_COMMIT_CHUNK:
-            db.commit()
-            for sid, src in pending_enqueue:
-                _enqueue_analysis(session_id, sid, src)
-            pending_enqueue.clear()
+            _progress_copy_step(session_id)
+            # Where the analysis should read this file: the original on the source
+            # medium when there is one (folder import), so the heavy reads stay off
+            # the disk this copy is writing to. Size travels with it as the
+            # identity check (see _usable_source).
+            source_path = getattr(upload, "source_path", None)
+            source = (source_path, size) if source_path is not None else None
+            # Rows must be durable before their background jobs (own DB sessions)
+            # can pick them up - but committing per file meant one fsync per photo,
+            # which on a spinning disk added minutes to a big import. Commit in
+            # small chunks instead and enqueue each chunk once it's on disk; the
+            # review grid still sees new photos every second or two.
+            pending_enqueue.append((staged_id, source))
+            if len(pending_enqueue) >= _COPY_COMMIT_CHUNK:
+                db.commit()
+                for sid, src in pending_enqueue:
+                    _enqueue_analysis(session_id, sid, src)
+                    enqueued += 1
+                pending_enqueue.clear()
 
-    db.commit()
-    for sid, src in pending_enqueue:
-        _enqueue_analysis(session_id, sid, src)
-    pending_enqueue.clear()
+        db.commit()
+        for sid, src in pending_enqueue:
+            _enqueue_analysis(session_id, sid, src)
+            enqueued += 1
+        pending_enqueue.clear()
+    except BaseException:
+        _progress_settle_staging(session_id, len(incoming), enqueued)
+        raise
 
     # One line per batch so a slow import is diagnosable from the server log
     # alone. This measures the copy only, and states its rate outright: compare
@@ -1379,6 +1408,29 @@ def commit_import_session(
     upload_to_immich: bool = False,
     sync_all_to_immich: bool = False,
     keep_open: bool = False,
+) -> list[Image]:
+    """Commit the session's chosen photos into the library. Wraps the work so
+    a failure part-way through the commit phase settles the progress record:
+    left at "commit" with photos outstanding, has_active_import_work() stayed
+    true for good, the embedding backfill never ran again and the desktop
+    shell's "finish in background" never saw the backend go idle."""
+    session_id = session.id
+    try:
+        return _commit_import_session(
+            db, session, owner_id, upload_to_immich, sync_all_to_immich, keep_open
+        )
+    except BaseException:
+        _progress_done(session_id)
+        raise
+
+
+def _commit_import_session(
+    db: Session,
+    session: ImportSession,
+    owner_id: int,
+    upload_to_immich: bool,
+    sync_all_to_immich: bool,
+    keep_open: bool,
 ) -> list[Image]:
     # Leaving photos in place: nothing moves, each chosen file becomes a row
     # at its own absolute path under a source root for its folder.

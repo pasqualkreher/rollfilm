@@ -16,6 +16,7 @@ from app.services.library_merge import (
     request_merge_cancel,
     start_merge,
 )
+from app.services import copy_jobs
 from app.workers.queue import derivatives_pending, embeddings_running
 from app.services.maintenance import (
     build_backup_zip,
@@ -103,6 +104,7 @@ def background_activity(current_user: User = Depends(get_current_user)):
         derivatives_pending=derivatives_pending(),
         embeddings_running=embeddings_running(),
         merge_active=get_merge_progress()["active"],
+        copy_jobs_running=copy_jobs.running_count(),
     )
 
 

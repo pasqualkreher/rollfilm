@@ -80,7 +80,7 @@ GROUP_FIELDS: dict[str, tuple[str, ...]] = {
 # deliberately left out of every group so they're never suggested. Nor is the
 # process version: it says how the photo in hand renders its sliders, not what
 # they should be set to.
-_UNGROUPED = {"masks", "frame_width", "process", *develop.LENS_KEYS}
+_UNGROUPED = {"masks", "spots", "frame_width", "process", *develop.LENS_KEYS}
 assert set(GROUP_FIELDS) == set(AUTO_DEVELOP_GROUP_NAMES)
 _grouped = [f for fields in GROUP_FIELDS.values() for f in fields]
 assert sorted(_grouped) == sorted(set(develop.defaults()) - _UNGROUPED), (
@@ -232,6 +232,7 @@ def blend_adjustments(examples: list[tuple[dict[str, Any], float]]) -> dict[str,
         k: _wmean([a["color_calibration"][k] for a in adjs], w) for k in adjs[0]["color_calibration"]
     }
     out["masks"] = []  # spatial, never transferable between photos
+    out["spots"] = []  # likewise: a healed speck sits where it sat on its own photo
     return develop.normalize(out)
 
 

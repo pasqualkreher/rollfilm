@@ -36,9 +36,10 @@ def test_radial_tile_matches_the_whole_field(x0, y0, w, h):
     assert np.allclose(expected, tile, atol=1e-6)
 
 
+@pytest.mark.parametrize("feather", [50, 0, 100])
 @pytest.mark.parametrize("x0,y0,w,h", TILES)
-def test_linear_tile_matches_the_whole_field(x0, y0, w, h):
-    p = {"start_x": 0.2, "start_y": 0.1, "end_x": 0.8, "end_y": 0.9}
+def test_linear_tile_matches_the_whole_field(x0, y0, w, h, feather):
+    p = {"start_x": 0.2, "start_y": 0.1, "end_x": 0.8, "end_y": 0.9, "feather": feather}
     expected, tile = _whole_and_tile(
         lambda hh, ww, v: masks._linear_field(hh, ww, p, v), x0, y0, w, h
     )

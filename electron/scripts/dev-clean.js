@@ -24,7 +24,7 @@ const BACKEND_PATTERN = "run_server.py";
 // so we never touch the user's editor or unrelated node apps.
 const PATTERNS = [
   "run_server.py", // dev backend (python run_server.py)
-  "photo_manager_backend", // packaged backend exe name, just in case
+  "photo-manager-backend", // packaged backend exe name, just in case
   // The dev Electron instance. We match a marker passed as a *command-line arg*
   // (electron/package.json: `electron . --pm-dev-electron`), NOT the PM_DEV=1
   // env var: env vars don't appear in argv, so `pkill -f` can't see them and the

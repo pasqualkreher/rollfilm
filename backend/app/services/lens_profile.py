@@ -570,6 +570,18 @@ def _read_tags(path: Path) -> dict:
         return _helper.get_tags([str(path)], _TAGS, params=["-u", "-b"])[0]
 
 
+def close_helper() -> None:
+    """End this module's exiftool process on backend shutdown (exif.close_helper)."""
+    global _helper
+    with _helper_lock:
+        helper, _helper = _helper, None
+    if helper is not None:
+        try:
+            helper.terminate()
+        except Exception:
+            pass
+
+
 def _lens_names(tags: dict) -> list[str]:
     """The lens's EXIF names, best first. With -n some makers' LensID /
     LensType come back as numbers, which name nothing."""

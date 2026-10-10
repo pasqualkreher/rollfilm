@@ -378,15 +378,28 @@ def _smoothed_band_fields(arr: np.ndarray, primaries, ref_long_edge: float | Non
     return tuple(out)
 
 
+# The per-pixel part of the calibration goes through a big frame in bands of
+# rows (see apply_color_calibration): its HSL round trip holds about ten
+# whole-frame temporaries, which on a 40MP render was over a gigabyte on one
+# core. Same bands as the perceptual colour pass (develop_v2._BAND_PIXELS).
+_CALIB_BAND_PIXELS = 2_000_000
+
+
 def apply_color_calibration(
-    arr: np.ndarray, cal: dict, whole_band: bool = False, ref_long_edge: float | None = None
+    arr: np.ndarray, cal: dict, whole_band: bool = False, ref_long_edge: float | None = None,
+    pool=None,
 ) -> np.ndarray:
     """Camera-calibration-style primary shifts: rotate/saturate/darken the red,
     green and blue primaries, plus a shadows tint. Approximated as hue/saturation/
     brightness shifts on three wide hue bands centred on the primaries
     (0/120/240 deg). `whole_band` is process version 6: the bands are flat
     instead of bell-shaped (see _CALIB_BAND_BELOW) and read from the colours around
-    a pixel (_CALIB_SMOOTH; `ref_long_edge` as in _smoothed_band_fields)."""
+    a pixel (_CALIB_SMOOTH; `ref_long_edge` as in _smoothed_band_fields).
+
+    The smoothed fields are the one thing here that looks beyond a pixel, and
+    are worked out for the whole frame first; everything after is per pixel
+    and runs in row bands, side by side on `pool` (a ThreadPoolExecutor)
+    when one is given. The bands are the same either way, so the pixels are."""
     sh_tint = cal.get("shadows_tint", 0)
     primaries = (
         (0.0, cal.get("red_hue", 0), cal.get("red_saturation", 0), cal.get("red_luminance", 0)),
@@ -396,9 +409,36 @@ def apply_color_calibration(
     if not sh_tint and not any(h or s or l for _, h, s, l in primaries):
         return arr
 
+    fields = _smoothed_band_fields(arr, primaries, ref_long_edge) if whole_band else None
+    h, w = arr.shape[:2]
+    if h * w <= 2 * _CALIB_BAND_PIXELS:
+        return _calibrate_pixels(arr, primaries, sh_tint, fields)
+    out = np.empty((h, w, 3), dtype=np.float32)
+    rows = max(1, _CALIB_BAND_PIXELS // w)
+
+    def run(y0: int) -> None:
+        band = None
+        if fields is not None:
+            band = tuple(None if f is None else f[y0 : y0 + rows] for f in fields)
+        out[y0 : y0 + rows] = _calibrate_pixels(arr[y0 : y0 + rows], primaries, sh_tint, band)
+
+    starts = range(0, h, rows)
+    if pool is None:
+        for y0 in starts:
+            run(y0)
+    else:
+        # list() drains the map so a worker's exception surfaces here.
+        list(pool.map(run, starts))
+    return out
+
+
+def _calibrate_pixels(arr: np.ndarray, primaries, sh_tint, fields) -> np.ndarray:
+    """The calibration of the pixels of `arr` (any rows of the frame), given
+    the smoothed fields for those rows (process version 6), or None for the
+    bell-shaped bands read off each pixel alone."""
     hue, sat, lum = _rgb_to_hsl(arr)
-    if whole_band:
-        hue_shift, sat_scale, stops = _smoothed_band_fields(arr, primaries, ref_long_edge)
+    if fields is not None:
+        hue_shift, sat_scale, stops = fields
     else:
         hue_shift = np.zeros_like(hue)
         sat_scale = np.ones_like(hue)

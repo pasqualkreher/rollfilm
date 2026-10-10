@@ -86,6 +86,20 @@ def get_or_create_tag(db: Session, owner_id: int, name: str) -> Tag:
     return tag
 
 
+def user_tags(db: Session, image: Image) -> list[str]:
+    """The tags the user gave a photo, by name - not the ones the app keeps
+    for itself ("edit", "album: ...", see auto_tags), which say where a photo
+    sits in this library. What a sidecar, an export and a copy carry."""
+    return [
+        name
+        for (name,) in db.query(Tag.name)
+        .join(ImageTag, ImageTag.tag_id == Tag.id)
+        .filter(ImageTag.image_id == image.id)
+        .order_by(Tag.name)
+        if not is_auto_tag(name)
+    ]
+
+
 def add_tag_to_image(db: Session, owner_id: int, image: Image, name: str) -> None:
     name = normalize(name)
     if not name:

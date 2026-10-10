@@ -56,6 +56,12 @@ def ensure_indexes() -> None:
             "CREATE INDEX IF NOT EXISTS idx_images_owner_country "
             "ON images (owner_id, gps_country)"
         )
+        # The shutter-speed filter reads the owner's distinct shutter strings
+        # on every request (services/exposure): an index walk, not a scan.
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS idx_images_owner_shutter "
+            "ON images (owner_id, shutter_speed)"
+        )
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

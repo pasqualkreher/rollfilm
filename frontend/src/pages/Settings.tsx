@@ -1256,7 +1256,7 @@ export function Settings() {
           checked={askSaveCopyOptions}
           onChange={setAskSaveCopyOptions}
           title="Ask for quality and size before saving a copy"
-          desc="Lets you pick JPEG quality and size for a physical copy."
+          desc="Lets you pick JPEG quality and size for a physical copy — once per batch for the grid's “Apply … and save copy”."
         />
         <div className="settings-corners">
           <span className="settings-option-body">

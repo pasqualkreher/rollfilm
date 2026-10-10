@@ -157,6 +157,12 @@ def _linear_field(h: int, w: int, p: dict, view: FieldView | None = None) -> np.
     l2 = dx * dx + dy * dy + 1e-6
     xs, ys = _mesh(h, w, view)
     t = ((xs - x0) * dx + (ys - y0) * dy) / l2  # 0 at the start line, 1 at the end line
+    # Feather: how much of the band the ramp takes, about its middle. 50 (the
+    # value every stored linear mask carries) is the whole band, as it always
+    # was; 0 is a hard edge at the midpoint, 100 a ramp twice the band's width.
+    f = float(np.clip(float(p.get("feather", 50)) / 50.0, 0.02, 2.0))
+    if f != 1.0:
+        t = (t - 0.5) / f + 0.5
     return _smoothstep(t).astype(np.float32)
 
 

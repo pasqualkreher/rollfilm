@@ -25,7 +25,8 @@ import { loadPresets, presetAdjustments } from "../utils/presets";
 import { useTasks } from "../state/tasks";
 import { useWait } from "../state/wait";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
-import { collapsePairs } from "../state/viewPrefs";
+import { collapsePairs, useAskSaveCopyOptions } from "../state/viewPrefs";
+import { FULL_COPY_QUALITY, SaveCopyDialog } from "../components/SaveCopyDialog";
 import { modKeyLabel, useSelectionKeys } from "../utils/selection";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
@@ -33,6 +34,9 @@ import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { LoadingState } from "../components/Spinner";
 import { ActionBarMessages } from "../components/ActionBarMessages";
+// The JPEG options of "Apply ... and save copy".
+type CopyOpts = { quality: number; maxSize: number | null };
+
 import { errorText } from "../utils/apiError";
 import { isModalOpen } from "../utils/modalKeys";
 
@@ -56,6 +60,25 @@ export function AlbumDetail() {
   const setFocalRange = (min: string, max: string) => {
     setFocalMin(min);
     setFocalMax(max);
+  };
+  const [cameraMake, setCameraMake] = useSessionState<string>(`album:${id}:cameraMake`, "");
+  const [isoMin, setIsoMin] = useSessionState<string>(`album:${id}:isoMin`, "");
+  const [isoMax, setIsoMax] = useSessionState<string>(`album:${id}:isoMax`, "");
+  const setIsoRange = (min: string, max: string) => {
+    setIsoMin(min);
+    setIsoMax(max);
+  };
+  const [apertureMin, setApertureMin] = useSessionState<string>(`album:${id}:apertureMin`, "");
+  const [apertureMax, setApertureMax] = useSessionState<string>(`album:${id}:apertureMax`, "");
+  const setApertureRange = (min: string, max: string) => {
+    setApertureMin(min);
+    setApertureMax(max);
+  };
+  const [shutterMin, setShutterMin] = useSessionState<string>(`album:${id}:shutterMin`, "");
+  const [shutterMax, setShutterMax] = useSessionState<string>(`album:${id}:shutterMax`, "");
+  const setShutterRange = (min: string, max: string) => {
+    setShutterMin(min);
+    setShutterMax(max);
   };
   const [sort, setSort] = useSessionState<SortKey>(`album:${id}:sort`, "newest");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -110,7 +133,10 @@ export function AlbumDetail() {
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Settings maintenance tasks.
-  const { setBusyLabel, trackRenders } = useTasks();
+  const { setBusyLabel, trackRenders, trackCopyJob } = useTasks();
+  const askSaveCopyOptions = useAskSaveCopyOptions();
+  // The options dialog of "Apply ... and save copy", resolved by its answer.
+  const [copyPrompt, setCopyPrompt] = useState<{ resolve: (opts: CopyOpts | null) => void } | null>(null);
   useEffect(() => {
     setBusyLabel(immichBusy ? "Uploading to Immich…" : null);
   }, [immichBusy, setBusyLabel]);
@@ -148,6 +174,13 @@ export function AlbumDetail() {
     lens_model: lens || undefined,
     focal_min: focalMin || undefined,
     focal_max: focalMax || undefined,
+    camera_make: cameraMake || undefined,
+    iso_min: isoMin || undefined,
+    iso_max: isoMax || undefined,
+    aperture_min: apertureMin || undefined,
+    aperture_max: apertureMax || undefined,
+    shutter_min: shutterMin || undefined,
+    shutter_max: shutterMax || undefined,
   };
 
   // Camera/lens/focal dropdown options, cross-filtered against the album and
@@ -444,7 +477,7 @@ export function AlbumDetail() {
     ]);
   }
 
-  async function autoDevelopSelected() {
+  async function autoDevelopSelected(copyOpts?: CopyOpts) {
     if (selected.size === 0) return;
     const editedCount = (images ?? []).filter((im) => selected.has(im.id) && im.edit_rev).length;
     if (
@@ -475,6 +508,7 @@ export function AlbumDetail() {
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["album", id] });
+      if (copyOpts) await startCopies(results.flatMap((r) => r.applied_ids), copyOpts);
     } catch (e) {
       setBarError(errorText(e));
     } finally {
@@ -482,7 +516,8 @@ export function AlbumDetail() {
     }
   }
 
-  async function applyPresetToSelected(name: string) {
+  // Apply a saved editor preset (a full develop look) to the whole selection.
+  async function applyPresetToSelected(name: string, copyOpts?: CopyOpts) {
     const preset = loadPresets()[name];
     if (selected.size === 0 || !preset) return;
     const editedCount = (images ?? []).filter((im) => selected.has(im.id) && im.edit_rev).length;
@@ -508,11 +543,38 @@ export function AlbumDetail() {
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["album", id] });
+      if (copyOpts) await startCopies(done, copyOpts);
     } catch (e) {
       setBarError(errorText(e));
     } finally {
       setDevelopBusy(false);
     }
+  }
+
+  // "Apply ... and save copy": the edit as above, then one JPEG copy of every
+  // photo it was applied to, written in the background (the title bar counts
+  // them down). The options - quality, size - are asked once for the whole
+  // batch when Settings says to ask, before anything is applied.
+  async function startCopies(ids: string[], opts: CopyOpts) {
+    if (ids.length === 0) return;
+    const { job_id, total } = await api.images.copyJobStart(ids, { quality: opts.quality, max_size: opts.maxSize });
+    trackCopyJob(job_id, total);
+    setDevelopMsg(`Edit applied — saving ${total} ${total === 1 ? "copy" : "copies"} in the background.`);
+  }
+
+  async function askCopyOptions(): Promise<CopyOpts | null> {
+    if (!askSaveCopyOptions) return { quality: FULL_COPY_QUALITY, maxSize: null };
+    return new Promise((resolve) => setCopyPrompt({ resolve }));
+  }
+
+  async function autoDevelopAndCopy() {
+    const opts = await askCopyOptions();
+    if (opts) await autoDevelopSelected(opts);
+  }
+
+  async function applyPresetAndCopy(name: string) {
+    const opts = await askCopyOptions();
+    if (opts) await applyPresetToSelected(name, opts);
   }
 
   async function toggleAlbumImmichSync(enabled: boolean) {
@@ -608,6 +670,24 @@ export function AlbumDetail() {
   return (
     <div className="page page-timeline">
       {pairDeleteDialog}
+      <Presence open={copyPrompt !== null} ms={MOTION.modal}>
+        {copyPrompt && (
+          <SaveCopyDialog
+            physicalOnly
+            askOptions
+            count={selected.size}
+            title={`Apply and save copy of ${selected.size} ${selected.size === 1 ? "photo" : "photos"}`}
+            onClose={() => {
+              copyPrompt.resolve(null);
+              setCopyPrompt(null);
+            }}
+            onSave={async (req) => {
+              copyPrompt.resolve(req.kind === "physical" ? { quality: req.quality, maxSize: req.maxSize } : null);
+              setCopyPrompt(null);
+            }}
+          />
+        )}
+      </Presence>
       <PhotoFilters
         title={albumTitle}
         trailing={albumDelete}
@@ -631,6 +711,21 @@ export function AlbumDetail() {
         focalMin={focalMin}
         focalMax={focalMax}
         onFocalRange={setFocalRange}
+        makes={facets?.makes}
+        cameraMake={cameraMake}
+        onCameraMake={setCameraMake}
+        isos={facets?.isos}
+        isoMin={isoMin}
+        isoMax={isoMax}
+        onIsoRange={setIsoRange}
+        apertures={facets?.apertures}
+        apertureMin={apertureMin}
+        apertureMax={apertureMax}
+        onApertureRange={setApertureRange}
+        shutters={facets?.shutters}
+        shutterMin={shutterMin}
+        shutterMax={shutterMax}
+        onShutterRange={setShutterRange}
         dateFrom={dateFrom}
         dateTo={dateTo}
         onDateFrom={setDateFrom}
@@ -714,8 +809,10 @@ export function AlbumDetail() {
             )}
             <div className="control-group">
               <EditPicker
-                onAutoEdit={autoDevelopSelected}
-                onApplyPreset={applyPresetToSelected}
+                onAutoEdit={() => autoDevelopSelected()}
+                onApplyPreset={(name) => applyPresetToSelected(name)}
+                onAutoEditAndCopy={autoDevelopAndCopy}
+                onApplyPresetAndCopy={applyPresetAndCopy}
                 busy={developBusy}
               />
               <ResetMenu count={selected.size} onReset={resetSelected} />

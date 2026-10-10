@@ -384,3 +384,36 @@ def test_sub_masks_combine_and_invert():
     assert sub[H // 2, int(0.2 * W)] > 0.9 and sub[H // 2, int(0.8 * W)] < 0.01
     inv = masks.generate_mask_field({"sub_masks": [{**left, "invert": True}]}, arr)
     assert inv[H // 2, int(0.2 * W)] < 0.01 and inv[H // 2, W // 2] > 0.9
+
+
+# --- linear: feather ------------------------------------------------------------
+
+def _linear_row(feather=None) -> np.ndarray:
+    p = {"start_x": 0.25, "start_y": 0.5, "end_x": 0.75, "end_y": 0.5}
+    if feather is not None:
+        p["feather"] = feather
+    return masks._linear_field(H, W, p)[H // 2]
+
+
+def test_linear_feather_default_is_the_plain_ramp():
+    """50, and no feather at all (an edit from before the key), both give the
+    ramp every stored linear mask has always had: the whole band."""
+    assert np.array_equal(_linear_row(), _linear_row(50))
+    row = _linear_row()
+    assert row[int(W * 0.25) - 1] == 0.0 and row[int(W * 0.75) + 1] == 1.0
+    assert abs(row[W // 2] - 0.5) < 0.02
+
+
+def test_linear_feather_zero_is_a_hard_edge_at_the_midpoint():
+    row = _linear_row(0)
+    assert row[W // 2 - 3] == 0.0 and row[W // 2 + 3] == 1.0
+
+
+def test_linear_feather_widens_the_ramp_symmetrically_about_the_middle():
+    soft = _linear_row(100)
+    plain = _linear_row(50)
+    ramp = lambda r: int(((r > 0.0) & (r < 1.0)).sum())
+    assert ramp(soft) > ramp(plain) * 1.6
+    assert abs(soft[W // 2] - 0.5) < 0.02
+    # Symmetric: the same distance either side of the middle mirrors.
+    assert abs(soft[W // 2 - 20] - (1.0 - soft[W // 2 + 20])) < 0.02

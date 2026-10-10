@@ -121,7 +121,7 @@ function MaskOverlayImpl({
   // canvas paints the live samples at once and skips them again when the
   // batch lands in `sub`, so the guide follows the pointer at pointer rate
   // while the editor re-renders a few times a second.
-  brushSink?: Set<(pts: number[][]) => void>;
+  brushSink?: Set<(subId: string, pts: number[][]) => void>;
   // Draw the drag handles - only while editing on the image. The shape's own
   // outline renders either way, so a mask being edited stays locatable.
   handles?: boolean;
@@ -247,7 +247,10 @@ function MaskOverlayImpl({
   }, [brushStrokes, brushFeather, brushMark, BRUSH_W, BRUSH_H]);
   useEffect(() => {
     if (!brushSink || !isBrush) return;
-    const paint = (pts: number[][]) => {
+    const paint = (subId: string, pts: number[][]) => {
+      // Several brush guides can be up at once (a mask's own brush and the
+      // brush shapes added to it); a stroke's samples belong to one of them.
+      if (subId !== sub.id) return;
       const st = brushStateRef.current;
       if (!st) return;
       stampDabs(pts);
@@ -359,10 +362,25 @@ function MaskOverlayImpl({
     const k = (a2 * dx * dx + dy * dy) / denom;
     const gradId = `mask-linear-ramp-${sub.id}`;
     const maskId = `mask-linear-${sub.id}`;
+    // Feather (masks._linear_field): the ramp takes this much of the band,
+    // about its middle - 50 is the whole band, 0 a hard edge, 100 twice the
+    // band. The gradient's endpoints move in and out about the midpoint.
+    const f = Math.min(2, Math.max(0.02, num("feather", 50) / 50));
+    const gvx = a2 * dx * k;
+    const gvy = dy * k;
+    const gmx = sx + gvx / 2;
+    const gmy = sy + gvy / 2;
     shapes = (
       <>
         <defs>
-          <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1={sx} y1={sy} x2={sx + a2 * dx * k} y2={sy + dy * k}>
+          <linearGradient
+            id={gradId}
+            gradientUnits="userSpaceOnUse"
+            x1={gmx - (gvx * f) / 2}
+            y1={gmy - (gvy * f) / 2}
+            x2={gmx + (gvx * f) / 2}
+            y2={gmy + (gvy * f) / 2}
+          >
             <stop offset="0%" stopColor="#000" />
             <stop offset="100%" stopColor="#fff" />
           </linearGradient>

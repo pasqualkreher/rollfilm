@@ -928,6 +928,19 @@ export function IconSparkle(props: IconProps) {
 }
 
 // A frame with a round region cut out of it - Masks.
+// A plaster over a speck: the retouch section (spot heal / clone).
+export function IconHeal(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <rect x="1.5" y="5.75" width="13" height="4.5" rx="2.25" transform="rotate(-45 8 8)" />
+      <circle cx="6.6" cy="8" r="0.55" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="6.6" r="0.55" fill="currentColor" stroke="none" />
+      <circle cx="9.4" cy="8" r="0.55" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="9.4" r="0.55" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function IconMask(props: IconProps) {
   return (
     <svg {...svgProps(props)}>

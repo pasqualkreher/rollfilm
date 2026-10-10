@@ -28,8 +28,13 @@ const ASK_DELETE_KEY = "pm.askDeletePartner";
 // Pinned filter panel: the Filter chip's menu stays open, docked as a second row
 // of the filter bar, instead of being a popover that closes on the next click.
 // Shared by every screen with a filter bar (Library, Album detail, Import
-// review), so pinning it once keeps it open wherever you cull.
+// review), so pinning it once keeps it open wherever you cull. Pinned from
+// the start: only an explicit unpin ("0") puts the filters away.
 const FILTER_PIN_KEY = "pm.filterPinned";
+// The camera group (make, model, lens, focal length, ISO, aperture, shutter)
+// has a pin of its own: docked, it is one more row of the bar under the
+// general filters. Off until pinned - the row is long.
+const CAMERA_PIN_KEY = "pm.cameraPinned";
 // When on, the editor's "Save copy" button opens the options dialog (JPEG
 // quality slider + size cap) first. Off (default) is one click: the copy is
 // baked at full quality and full size, which is what a copy you keep in the
@@ -136,7 +141,11 @@ function readAskDeletePartner(): boolean {
 }
 
 function readFilterPinned(): boolean {
-  return localStorage.getItem(FILTER_PIN_KEY) === "1";
+  return localStorage.getItem(FILTER_PIN_KEY) !== "0";
+}
+
+function readCameraPinned(): boolean {
+  return localStorage.getItem(CAMERA_PIN_KEY) === "1";
 }
 
 function readAskSaveCopyOptions(): boolean {
@@ -227,6 +236,11 @@ export function setFilterPinned(on: boolean) {
   emit();
 }
 
+export function setCameraPinned(on: boolean) {
+  localStorage.setItem(CAMERA_PIN_KEY, on ? "1" : "0");
+  emit();
+}
+
 export function setAskSaveCopyOptions(on: boolean) {
   localStorage.setItem(ASK_SAVE_COPY_KEY, on ? "1" : "0");
   emit();
@@ -270,7 +284,11 @@ export function useAskDeletePartner(): boolean {
 }
 
 export function useFilterPinned(): boolean {
-  return useSyncExternalStore(subscribe, readFilterPinned, () => false);
+  return useSyncExternalStore(subscribe, readFilterPinned, () => true);
+}
+
+export function useCameraPinned(): boolean {
+  return useSyncExternalStore(subscribe, readCameraPinned, () => false);
 }
 
 export function useAskSaveCopyOptions(): boolean {

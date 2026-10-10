@@ -514,6 +514,15 @@ button {
   flex-shrink: 0;
 }
 
+/* The tab row's first link has 10px of its own padding before its text; the
+   pair would sit 10px further from LIBRARY than from the wordmark. Pull the
+   row in by that much, so the gaps either side of the arrows match (and match
+   the gap between the two). Only when the row is there: the folded bar puts
+   the burger after the pair instead. */
+.nav-history + .nav-links {
+  margin-left: -10px;
+}
+
 .nav-history-btn {
   padding: 0;
   border: none;
@@ -1963,7 +1972,10 @@ textarea:focus-visible {
    room for both - and the slider itself needs enough track to pick one
    focal length out of a dozen (at 150px it had about 50px of track, here
    about 100px). */
-.filter-menu--docked .filter-menu-row--focal {
+.filter-menu--docked .filter-menu-row--focal,
+.filter-menu--docked .filter-menu-row--iso,
+.filter-menu--docked .filter-menu-row--aperture,
+.filter-menu--docked .filter-menu-row--shutter {
   position: relative;
   flex: 0 0 auto;
   width: 200px;
@@ -5495,6 +5507,36 @@ input.dropdown-search {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
+/* The save-copy dialog's long-edge field: a typeable pixel count where a
+   slider head shows its value, with the unit beside it. */
+.copy-size-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.copy-size-px {
+  width: 72px;
+  height: var(--control-h-sm);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.copy-size-px:disabled {
+  opacity: 0.5;
+}
+
+.copy-size-px::placeholder {
+  color: var(--text-muted);
+}
+
 .copy-kind:disabled {
   opacity: 0.6;
   cursor: default;
@@ -6017,18 +6059,46 @@ input.dropdown-search {
   visibility: hidden;
 }
 
-/* The Filter chip's count: a fixed cell ("· 12" wide) so the chip is the same
-   width with and without a count and nothing after it moves. */
+/* The Filter and Camera chips' count: a small pill on the chip's top-right
+   corner, out of the flow - the chip keeps one width with and without a
+   count and nothing after it moves, and an idle chip shows no empty cell
+   (the fixed "· 12" cell it used to reserve read as a hole beside a second
+   chip). The chip is the pill's anchor (.tag-filter-btn is relative). */
 .filter-chip-count {
-  display: inline-block;
-  min-width: 2em;
-  margin-left: 2px;
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--label-micro-size);
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
   font-variant-numeric: tabular-nums;
-  text-align: left;
+  pointer-events: none;
 }
 
 .filter-chip-count--idle {
   visibility: hidden;
+}
+
+.tag-filter-btn {
+  position: relative;
+}
+
+/* Two chips side by side in the bar (Filter, Camera): their flat hover
+   fills reach 6px past their boxes (the negative margin above), so with the
+   row's 8px gap alone the fills touched. A step of their own keeps 8px of
+   air between the fills as well. */
+.filter-bar.filter-bar--sticky .control-group--filter > .filter-chip + .filter-chip,
+.filter-bar.filter-bar--sticky .control-group--filter > .tag-filter-btn + .filter-chip,
+.filter-bar.filter-bar--sticky .control-group--filter > .filter-chip + .tag-filter-btn,
+.filter-bar.filter-bar--sticky .control-group--filter > .tag-filter-btn + .tag-filter-btn {
+  margin-left: 12px;
 }
 
 .btn.primary {
@@ -8563,6 +8633,131 @@ kbd {
   fill: var(--accent);
   stroke: #fff;
   stroke-width: 1.5;
+}
+
+/* A shape added to a mask's selection (the Shapes list in the mask editor):
+   its mode buttons and tools, boxed so several shapes read as a list. */
+.mask-shape {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.mask-shape.active {
+  border-color: var(--accent);
+}
+
+/* The head line: the shape's type on the left, Remove on the right - so the
+   label never shares a wrapping row with the mode buttons, and the quiet
+   Remove isn't a loose word under them. */
+.mask-shape-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.mask-shape-type {
+  font-size: var(--label-micro-size);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* A mask's own curve / mixer / grading, folded away under a summary line. */
+.mask-more {
+  margin-top: 8px;
+}
+
+.mask-more > summary {
+  cursor: pointer;
+  font-size: var(--label-micro-size);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.mask-more-body {
+  margin-top: 6px;
+}
+
+/* Inline rename of a mask (double-click its name). */
+.mask-row-rename {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--text-base);
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* The one-line mode hint in Retouch sits above the sliders: room below it. */
+.mask-hint.retouch-hint {
+  margin-bottom: 12px;
+}
+
+/* A row of small buttons in a panel section (the Retouch tools). */
+.editor-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+/* Retouch spots (SpotOverlay): a thin white circle per spot, so they can be
+   found again without shouting over the photo; the selected one takes the
+   accent and shows its source dashed, with a thread between the two - the
+   source is a place the spot reads from, not a second spot. */
+.spot-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+  transform-origin: center center;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55));
+}
+
+.spot-dest {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.25;
+  opacity: 0.75;
+}
+
+.spot.is-selected .spot-dest {
+  stroke: var(--accent);
+  stroke-width: 1.75;
+  opacity: 1;
+}
+
+.spot-source {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+}
+
+.spot-link {
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.8;
 }
 
 /* Brush-size ring that tracks the pointer while brush mode is active. */

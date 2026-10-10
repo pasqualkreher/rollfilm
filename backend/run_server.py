@@ -200,7 +200,13 @@ def main() -> None:
     # already pulls in uvloop and httptools and auto prefers them, while naming
     # them explicitly would turn a bundle that happens to miss one into a
     # backend that refuses to start.
-    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
+    # On SIGTERM uvicorn stops accepting, then waits for in-flight requests
+    # with no time limit - a full-resolution render in a sync route kept the
+    # process alive for as long as it ran, past the desktop shell's own exit.
+    # Five seconds, then the lifespan shutdown hook runs and the process ends.
+    uvicorn.run(
+        app, host=host, port=port, log_level="info", access_log=False, timeout_graceful_shutdown=5
+    )
 
 
 if __name__ == "__main__":

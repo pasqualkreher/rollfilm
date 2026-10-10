@@ -33,7 +33,8 @@ import { useTasks } from "../state/tasks";
 import { useWait } from "../state/wait";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
-import { useMergePairs } from "../state/viewPrefs";
+import { useAskSaveCopyOptions, useMergePairs } from "../state/viewPrefs";
+import { FULL_COPY_QUALITY, SaveCopyDialog } from "../components/SaveCopyDialog";
 import { modKeyLabel, useSelectionKeys } from "../utils/selection";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
@@ -41,6 +42,9 @@ import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { LoadingState } from "../components/Spinner";
 import { ActionBarMessages } from "../components/ActionBarMessages";
+// The JPEG options of "Apply ... and save copy".
+type CopyOpts = { quality: number; maxSize: number | null };
+
 import { errorText, failureReason } from "../utils/apiError";
 
 
@@ -133,6 +137,19 @@ function LibraryPage() {
   const focalMax = searchParams.get("focal_max") ?? "";
   const setFocalRange = (min: string, max: string) =>
     setParams({ focal_min: min || null, focal_max: max || null });
+  const cameraMake = searchParams.get("make") ?? "";
+  const setCameraMake = (v: string) => setParams({ make: v || null });
+  const isoMin = searchParams.get("iso_min") ?? "";
+  const isoMax = searchParams.get("iso_max") ?? "";
+  const setIsoRange = (min: string, max: string) => setParams({ iso_min: min || null, iso_max: max || null });
+  const apertureMin = searchParams.get("aperture_min") ?? "";
+  const apertureMax = searchParams.get("aperture_max") ?? "";
+  const setApertureRange = (min: string, max: string) =>
+    setParams({ aperture_min: min || null, aperture_max: max || null });
+  const shutterMin = searchParams.get("shutter_min") ?? "";
+  const shutterMax = searchParams.get("shutter_max") ?? "";
+  const setShutterRange = (min: string, max: string) =>
+    setParams({ shutter_min: min || null, shutter_max: max || null });
   const dateFrom = searchParams.get("from");
   const setDateFrom = (v: string | null) => setParams({ from: v });
   const dateTo = searchParams.get("to");
@@ -186,7 +203,10 @@ function LibraryPage() {
 
   // Lock the nav + show the top-bar spinner while uploading to Immich, same as
   // the Settings maintenance tasks.
-  const { setBusyLabel, trackRenders } = useTasks();
+  const { setBusyLabel, trackRenders, trackCopyJob } = useTasks();
+  const askSaveCopyOptions = useAskSaveCopyOptions();
+  // The options dialog of "Apply ... and save copy", resolved by its answer.
+  const [copyPrompt, setCopyPrompt] = useState<{ resolve: (opts: CopyOpts | null) => void } | null>(null);
   useEffect(() => {
     setBusyLabel(immichBusy ? "Uploading to Immich…" : null);
   }, [immichBusy, setBusyLabel]);
@@ -203,6 +223,13 @@ function LibraryPage() {
     lens_model: lens || undefined,
     focal_min: focalMin || undefined,
     focal_max: focalMax || undefined,
+    camera_make: cameraMake || undefined,
+    iso_min: isoMin || undefined,
+    iso_max: isoMax || undefined,
+    aperture_min: apertureMin || undefined,
+    aperture_max: apertureMax || undefined,
+    shutter_min: shutterMin || undefined,
+    shutter_max: shutterMax || undefined,
     // Capture-date range from the date pickers: include the whole "from" day
     // through the end of the "to" day.
     date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
@@ -273,6 +300,7 @@ function LibraryPage() {
     ratingMin > 0 ||
     colorLabel !== "none" ||
     Boolean(albumId || canvasId || camera || lens || focalMin || focalMax || dateFrom || dateTo) ||
+    Boolean(cameraMake || isoMin || isoMax || apertureMin || apertureMax || shutterMin || shutterMax) ||
     selectedTags.length > 0;
   function clearFilters() {
     setParams({
@@ -286,6 +314,13 @@ function LibraryPage() {
       lens: null,
       focal_min: null,
       focal_max: null,
+      make: null,
+      iso_min: null,
+      iso_max: null,
+      aperture_min: null,
+      aperture_max: null,
+      shutter_min: null,
+      shutter_max: null,
       from: null,
       to: null,
     });
@@ -557,7 +592,7 @@ function LibraryPage() {
 
   // Auto-develop every selected photo (each learns its own suggestion). Photos
   // with no embedding yet, or nothing similar to learn from, are skipped.
-  async function autoDevelopSelected() {
+  async function autoDevelopSelected(copyOpts?: CopyOpts) {
     if (selected.size === 0) return;
     const editedCount = (images ?? []).filter(
       (im) => selected.has(im.id) && (im as ImageOut).edit_rev
@@ -590,6 +625,7 @@ function LibraryPage() {
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      if (copyOpts) await startCopies(results.flatMap((r) => r.applied_ids), copyOpts);
     } catch (e) {
       setBarError(errorText(e));
     } finally {
@@ -598,7 +634,7 @@ function LibraryPage() {
   }
 
   // Apply a saved editor preset (a full develop look) to the whole selection.
-  async function applyPresetToSelected(name: string) {
+  async function applyPresetToSelected(name: string, copyOpts?: CopyOpts) {
     const preset = loadPresets()[name];
     if (selected.size === 0 || !preset) return;
     const editedCount = (images ?? []).filter(
@@ -626,11 +662,38 @@ function LibraryPage() {
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      if (copyOpts) await startCopies(done, copyOpts);
     } catch (e) {
       setBarError(errorText(e));
     } finally {
       setDevelopBusy(false);
     }
+  }
+
+  // "Apply ... and save copy": the edit as above, then one JPEG copy of every
+  // photo it was applied to, written in the background (the title bar counts
+  // them down). The options - quality, size - are asked once for the whole
+  // batch when Settings says to ask, before anything is applied.
+  async function startCopies(ids: string[], opts: CopyOpts) {
+    if (ids.length === 0) return;
+    const { job_id, total } = await api.images.copyJobStart(ids, { quality: opts.quality, max_size: opts.maxSize });
+    trackCopyJob(job_id, total);
+    setDevelopMsg(`Edit applied — saving ${total} ${total === 1 ? "copy" : "copies"} in the background.`);
+  }
+
+  async function askCopyOptions(): Promise<CopyOpts | null> {
+    if (!askSaveCopyOptions) return { quality: FULL_COPY_QUALITY, maxSize: null };
+    return new Promise((resolve) => setCopyPrompt({ resolve }));
+  }
+
+  async function autoDevelopAndCopy() {
+    const opts = await askCopyOptions();
+    if (opts) await autoDevelopSelected(opts);
+  }
+
+  async function applyPresetAndCopy(name: string) {
+    const opts = await askCopyOptions();
+    if (opts) await applyPresetToSelected(name, opts);
   }
 
   async function addSelectedToImmich() {
@@ -684,6 +747,24 @@ function LibraryPage() {
   return (
     <div className="page page-timeline">
       {pairDeleteDialog}
+      <Presence open={copyPrompt !== null} ms={MOTION.modal}>
+        {copyPrompt && (
+          <SaveCopyDialog
+            physicalOnly
+            askOptions
+            count={selected.size}
+            title={`Apply and save copy of ${selected.size} ${selected.size === 1 ? "photo" : "photos"}`}
+            onClose={() => {
+              copyPrompt.resolve(null);
+              setCopyPrompt(null);
+            }}
+            onSave={async (req) => {
+              copyPrompt.resolve(req.kind === "physical" ? { quality: req.quality, maxSize: req.maxSize } : null);
+              setCopyPrompt(null);
+            }}
+          />
+        )}
+      </Presence>
       <PhotoFilters
         viewMode={viewMode}
         onViewMode={setViewMode}
@@ -710,6 +791,21 @@ function LibraryPage() {
         focalMin={focalMin}
         focalMax={focalMax}
         onFocalRange={setFocalRange}
+        makes={facets?.makes}
+        cameraMake={cameraMake}
+        onCameraMake={setCameraMake}
+        isos={facets?.isos}
+        isoMin={isoMin}
+        isoMax={isoMax}
+        onIsoRange={setIsoRange}
+        apertures={facets?.apertures}
+        apertureMin={apertureMin}
+        apertureMax={apertureMax}
+        onApertureRange={setApertureRange}
+        shutters={facets?.shutters}
+        shutterMin={shutterMin}
+        shutterMax={shutterMax}
+        onShutterRange={setShutterRange}
         dateFrom={dateFrom}
         dateTo={dateTo}
         onDateFrom={setDateFrom}
@@ -800,8 +896,10 @@ function LibraryPage() {
             )}
             <div className="control-group">
               <EditPicker
-                onAutoEdit={autoDevelopSelected}
-                onApplyPreset={applyPresetToSelected}
+                onAutoEdit={() => autoDevelopSelected()}
+                onApplyPreset={(name) => applyPresetToSelected(name)}
+                onAutoEditAndCopy={autoDevelopAndCopy}
+                onApplyPresetAndCopy={applyPresetAndCopy}
                 busy={developBusy}
               />
               <ResetMenu count={selected.size} onReset={resetSelected} />
@@ -877,6 +975,13 @@ function LibraryPage() {
             lens,
             focalMin,
             focalMax,
+            cameraMake,
+            isoMin,
+            isoMax,
+            apertureMin,
+            apertureMax,
+            shutterMin,
+            shutterMax,
             dateFrom,
             dateTo,
           ])}

@@ -13,6 +13,15 @@ import { Spinner } from "./Spinner";
 // deliberately ask it to.
 export const FULL_COPY_QUALITY = 100;
 
+// The long-edge slider's reach: from a thumbnail up past 8K. The presets in
+// the dropdown are the common stops on this range.
+const SIZE_MIN = 256;
+const SIZE_MAX = 8192;
+const SIZE_STEP = 8;
+// Where the slider lands when "Custom" is picked with no size set yet.
+const SIZE_CUSTOM_START = 2000;
+const CUSTOM_SIZE = "custom";
+
 // What Save copy can make. "physical" bakes the edits into a new JPEG on disk
 // (tagged "edit copy"); "virtual" adds a second library entry that shares the
 // original's file and only carries its own edits (tagged "virtual copy").
@@ -30,6 +39,8 @@ export function SaveCopyDialog({
   askOptions,
   count = 1,
   closing = false,
+  physicalOnly = false,
+  title,
 }: {
   onClose: () => void;
   // Runs the actual request; the caller closes the editor and navigates to
@@ -43,10 +54,21 @@ export function SaveCopyDialog({
   count?: number;
   // Set by <Presence> while the dialog animates out.
   closing?: boolean;
+  // The bulk "Apply ... and save copy": the copies are files by definition,
+  // so the physical/virtual choice stays out and only the options are asked
+  // (the caller shows the dialog once for the whole batch, before it starts).
+  physicalOnly?: boolean;
+  // A heading of the caller's own, in place of "Save copy of N photos".
+  title?: string;
 }) {
   const [kind, setKind] = useState<SaveCopyRequest["kind"]>("physical");
   const [quality, setQuality] = useState(FULL_COPY_QUALITY);
   const [maxSize, setMaxSize] = useState<number | null>(null);
+  // True once the size came from the slider or the "Custom" entry: the
+  // dropdown then says "Custom" even while the slider sits on a preset value.
+  const [customSize, setCustomSize] = useState(false);
+  // The pixel field's text while it is being typed; null = shows the value.
+  const [sizeDraft, setSizeDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(0);
   const [error, setError] = useTransientMessage();
@@ -70,14 +92,50 @@ export function SaveCopyDialog({
   const physical = kind === "physical";
   const many = count > 1;
 
+  // What the size dropdown shows: a preset, "Custom" or "Original size".
+  const sizeChoice = maxSize === null ? "" : customSize ? CUSTOM_SIZE : String(maxSize);
+  function pickSize(v: string) {
+    setSizeDraft(null);
+    if (v === "") {
+      setMaxSize(null);
+      setCustomSize(false);
+    } else if (v === CUSTOM_SIZE) {
+      setMaxSize(maxSize ?? SIZE_CUSTOM_START);
+      setCustomSize(true);
+    } else {
+      setMaxSize(Number(v));
+      setCustomSize(false);
+    }
+  }
+  function slideSize(px: number) {
+    setMaxSize(px);
+    setCustomSize(true);
+  }
+  // The typed pixel count, applied on Enter or blur and clamped to the
+  // slider's range; anything that is not a number leaves the size alone.
+  function commitSizeDraft() {
+    if (sizeDraft === null) return;
+    const typed = Number.parseInt(sizeDraft.replace(/[^0-9]/g, ""), 10);
+    setSizeDraft(null);
+    if (!Number.isFinite(typed)) return;
+    slideSize(Math.max(SIZE_MIN, Math.min(SIZE_MAX, typed)));
+  }
+
   return (
     <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={() => !busy && onClose()}>
       <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
         <div className="pair-delete-body">
-          <h3>{many ? `Save copy of ${count} photos` : "Save copy"}</h3>
+          <h3>{title ?? (many ? `Save copy of ${count} photos` : "Save copy")}</h3>
           <p className="settings-desc" style={{ margin: 0 }}>
-            {many ? "The original photos are not changed." : "The original photo is not changed."}
+            {physicalOnly
+              ? many
+                ? "A new JPEG file per photo with the edits applied, tagged “edit copy”. The original photos are not changed."
+                : "A new JPEG file with the edits applied, tagged “edit copy”. The original photo is not changed."
+              : many
+                ? "The original photos are not changed."
+                : "The original photo is not changed."}
           </p>
+          {!physicalOnly && (
           <div className="copy-kind-choice" role="radiogroup" aria-label="Kind of copy">
             <button
               type="button"
@@ -120,6 +178,7 @@ export function SaveCopyDialog({
               </span>
             </button>
           </div>
+          )}
           {physical && askOptions && (
             <>
               <label className="editor-slider">
@@ -143,16 +202,61 @@ export function SaveCopyDialog({
                   <span>Size</span>
                 </span>
                 <Dropdown
-                  value={String(maxSize ?? "")}
+                  value={sizeChoice}
                   disabled={busy}
                   ariaLabel="Copy size"
-                  onChange={(v) => setMaxSize(v === "" ? null : Number(v))}
-                  options={SIZE_OPTIONS.map((opt) => ({
-                    value: String(opt.value ?? ""),
-                    label: opt.label,
-                  }))}
+                  onChange={pickSize}
+                  options={[
+                    ...SIZE_OPTIONS.map((opt) => ({
+                      value: String(opt.value ?? ""),
+                      label: opt.label,
+                    })),
+                    { value: CUSTOM_SIZE, label: "Custom…" },
+                  ]}
                 />
               </div>
+              {/* The long edge in pixels, always in the dialog so picking a
+                  preset or "Custom" moves nothing: it follows the dropdown
+                  and dragging it (or typing a number) makes the size custom.
+                  Greyed out while the copy keeps its original size. */}
+              <label className="editor-slider">
+                <span className="editor-slider-head">
+                  <span>Long edge</span>
+                  <span className="copy-size-field">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      className="copy-size-px"
+                      aria-label="Long edge in pixels"
+                      value={sizeDraft ?? (maxSize === null ? "" : String(maxSize))}
+                      placeholder="–"
+                      disabled={busy || maxSize === null}
+                      onChange={(e) => setSizeDraft(e.target.value)}
+                      onBlur={commitSizeDraft}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitSizeDraft();
+                        } else if (e.key === "Escape") {
+                          setSizeDraft(null); // the dialog's Escape handler closes it unless busy
+                        }
+                      }}
+                    />
+                    <span className="editor-slider-val">px</span>
+                  </span>
+                </span>
+                <input
+                  type="range"
+                  min={SIZE_MIN}
+                  max={SIZE_MAX}
+                  step={SIZE_STEP}
+                  value={maxSize ?? SIZE_MAX}
+                  disabled={busy || maxSize === null}
+                  style={rangeFillStyle(maxSize ?? SIZE_MIN, SIZE_MIN, SIZE_MAX)}
+                  onChange={(e) => slideSize(Number(e.target.value))}
+                  title="Drag, or type a number in the field above."
+                />
+              </label>
             </>
           )}
           {error && <span className="status-note status-note--error">{error}</span>}
@@ -172,6 +276,8 @@ export function SaveCopyDialog({
                   <Spinner tone="inherit" inline />
                   Saving…
                 </>
+              ) : physicalOnly ? (
+                "Continue"
               ) : physical ? (
                 many ? "Save physical copies" : "Save physical copy"
               ) : many ? (

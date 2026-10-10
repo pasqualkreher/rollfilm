@@ -27,10 +27,10 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, selectinload
 
-from app.db.models import ColorLabel, Image, ImageTag, Tag
+from app.db.models import ColorLabel, Image
 from app.db.session import SessionLocal
 from app.services import exif as exif_service
-from app.services.auto_tags import is_auto_tag
+from app.services import tags as tags_service
 from app.services.filesystem import resolve_image_path, strip_virtual_marker
 from app.services.settings_store import get_sidecar_write
 
@@ -81,14 +81,7 @@ def sidecar_beside(original: Path) -> Path:
 
 
 def _user_tags(db: Session, image: Image) -> list[str]:
-    return [
-        name
-        for (name,) in db.query(Tag.name)
-        .join(ImageTag, ImageTag.tag_id == Tag.id)
-        .filter(ImageTag.image_id == image.id)
-        .order_by(Tag.name)
-        if not is_auto_tag(name)
-    ]
+    return tags_service.user_tags(db, image)
 
 
 def _args(image: Image, tags: list[str]) -> list[str]:

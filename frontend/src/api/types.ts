@@ -162,6 +162,20 @@ export interface BulkAutoDevelopResult {
   applied: number;
   // How many were skipped (no embedding yet, or nothing similar to learn from).
   skipped: number;
+  // Which ones got one - "apply auto edit and save copy" copies only those.
+  applied_ids: string[];
+}
+
+// A background copy job (the grid's bulk Save copy, "Apply ... and save copy"):
+// one photo after the other from its saved edits, polled for its count.
+export interface CopyJobProgress {
+  state: "running" | "ready" | "error" | "cancelled";
+  done: number;
+  written: number;
+  skipped: number;
+  total: number;
+  error: string | null;
+  created_ids: string[];
 }
 
 export interface AutoAdjustResult {
@@ -800,6 +814,16 @@ export interface LibraryFilters {
   // the backend parses them back. Unset side = unbounded.
   focal_min?: string;
   focal_max?: string;
+  // The camera make ("FUJIFILM"), exact like the model.
+  camera_make?: string;
+  // The exposure sliders' bounds, facet values sent back as they came:
+  // ISO ("400"), aperture ("2.8"), shutter speed in SECONDS ("0.004").
+  iso_min?: string;
+  iso_max?: string;
+  aperture_min?: string;
+  aperture_max?: string;
+  shutter_min?: string;
+  shutter_max?: string;
   // Region filter: a reverse-geocoded country name, or the "__none__" sentinel
   // for photos with no location.
   country?: string;
@@ -816,11 +840,24 @@ export interface Facet {
   count: number;
 }
 
+// One shutter-speed stop: the stored EXIF string and its exposure time in
+// seconds (what the slider sorts, formats and sends back).
+export interface ShutterFacet {
+  value: string;
+  count: number;
+  seconds: number;
+}
+
 export interface LibraryFacets {
   cameras: Facet[];
+  makes: Facet[];
   lenses: Facet[];
   // Distinct focal lengths as formatted mm numbers ("23", "8.8").
   focal_lengths: Facet[];
+  // The exposure sliders' stops, ascending: ISO ("400"), aperture ("2.8").
+  isos: Facet[];
+  apertures: Facet[];
+  shutters: ShutterFacet[];
   regions: Facet[];
   no_location_count: number;
 }

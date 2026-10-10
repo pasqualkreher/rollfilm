@@ -19,9 +19,20 @@ import { Spinner } from "./Spinner";
 // Shared with the editor's Save-copy dialog, which offers the same choices.
 export const SIZE_OPTIONS: { label: string; value: number | null }[] = [
   { label: "Original size", value: null },
+  { label: "7680 px (8K)", value: 7680 },
+  { label: "6000 px", value: 6000 },
+  { label: "5120 px (5K)", value: 5120 },
+  { label: "4096 px", value: 4096 },
   { label: "3840 px (4K)", value: 3840 },
+  { label: "3000 px", value: 3000 },
+  { label: "2560 px (QHD)", value: 2560 },
   { label: "2048 px", value: 2048 },
+  { label: "1920 px (Full HD)", value: 1920 },
+  { label: "1600 px", value: 1600 },
+  { label: "1280 px", value: 1280 },
+  { label: "1080 px (Instagram)", value: 1080 },
   { label: "1024 px", value: 1024 },
+  { label: "800 px", value: 800 },
 ];
 
 // The dialog as it opens before anything was ever exported.

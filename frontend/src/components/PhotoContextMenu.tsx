@@ -2,9 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEv
 import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { editsFromImage } from "../utils/adjustments";
 import { useTransientMessage } from "../utils/transientMessage";
 import { useAskSaveCopyOptions } from "../state/viewPrefs";
+import { useTasks } from "../state/tasks";
 import { ExportDialog } from "./ExportDialog";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import { IconExport, IconReveal, IconSaveCopy } from "./Icons";
@@ -160,6 +160,7 @@ function Menu({
 export function usePhotoContextMenu(selectedIds: Set<string> | undefined, enabled = true) {
   const queryClient = useQueryClient();
   const askSaveCopyOptions = useAskSaveCopyOptions();
+  const { trackCopyJob } = useTasks();
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   // The dialog opened from the menu keeps its target after the menu closed.
   const [dialog, setDialog] = useState<{ kind: "export" | "copy"; target: Target } | null>(null);
@@ -237,25 +238,24 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, enable
     }
   }
 
-  // Bake (or virtually copy) every targeted photo in turn, from its SAVED edits
-  // - the grid has no editor state to take instead. Mirrors the lightbox's
-  // Save copy, minus the jump to the new photo: with several copies there is
+  // Copy every targeted photo from its SAVED edits - the grid has no editor
+  // state to take instead. Physical copies are one background job (the title
+  // bar counts it down, the dialog closes at once); virtual copies are made
+  // here in turn, there is nothing to render. With several copies there is
   // no single one to land on, so they simply appear in the grid next to their
   // originals once the queries refresh.
   async function saveCopies(req: SaveCopyRequest, report: (done: number) => void) {
     const ids = dialog?.target.ids ?? [];
+    if (req.kind === "physical") {
+      const { job_id, total } = await api.images.copyJobStart(ids, { quality: req.quality, max_size: req.maxSize });
+      trackCopyJob(job_id, total);
+      setDialog(null);
+      return;
+    }
     let done = 0;
     try {
       for (const id of ids) {
-        if (req.kind === "virtual") {
-          await api.images.virtualCopy(id);
-        } else {
-          const image = await api.images.get(id);
-          await api.images.saveCopy(id, editsFromImage(image), {
-            quality: req.quality,
-            maxSize: req.maxSize,
-          });
-        }
+        await api.images.virtualCopy(id);
         done += 1;
         report(done);
       }

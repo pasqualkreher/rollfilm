@@ -1,12 +1,13 @@
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import type { AlbumOut, CanvasSummary, ColorLabel, Facet, ViewMode } from "../api/types";
+import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { AlbumOut, CanvasSummary, ColorLabel, Facet, ShutterFacet, ViewMode } from "../api/types";
+import { formatShutter } from "../utils/exposure";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { ViewPrefsControls } from "./ViewPrefsControls";
 import { TagFilter } from "./TagFilter";
 import { FilterChip } from "./FilterChip";
 import { Dropdown } from "./Dropdown";
 import { IconAlbum, IconAperture, IconCamera, IconChevronDown, IconFilter, IconImage, IconPin, IconStar, IconTag, IconX } from "./Icons";
-import { setFilterPinned, useFilterPinned } from "../state/viewPrefs";
+import { setCameraPinned, setFilterPinned, useCameraPinned, useFilterPinned } from "../state/viewPrefs";
 
 // Whether the pinned fields fit the bar in two lines. The docked fields have
 // fixed widths (index.css, .filter-menu--docked .filter-menu-row), so the
@@ -16,7 +17,13 @@ import { setFilterPinned, useFilterPinned } from "../state/viewPrefs";
 // dock is folded away, when there is nothing to measure. Deciding both ways
 // from the same numbers is what keeps the edge from flickering. A layout
 // effect, so a dock that opens on a too-narrow bar folds before it paints.
-function useDockFits(barRef: { current: HTMLElement | null }, pinned: boolean, rowKey: string) {
+function useDockFits(
+  barRef: { current: HTMLElement | null },
+  pinned: boolean,
+  rowKey: string,
+  // Which docked menu to measure: the general row or the camera row.
+  selector = ".filter-menu--docked:not(.filter-menu--camera)",
+) {
   const [fits, setFits] = useState(true);
   const widths = useRef<number[]>([]);
   useLayoutEffect(() => {
@@ -24,7 +31,7 @@ function useDockFits(barRef: { current: HTMLElement | null }, pinned: boolean, r
     const bar = barRef.current;
     if (!bar) return;
     const measure = () => {
-      const dock = bar.querySelector<HTMLElement>(".filter-menu--docked");
+      const dock = bar.querySelector<HTMLElement>(selector);
       if (dock) {
         const seen = Array.from(dock.children)
           .map((c) => (c as HTMLElement).offsetWidth)
@@ -55,25 +62,35 @@ function useDockFits(barRef: { current: HTMLElement | null }, pinned: boolean, r
     return () => ro.disconnect();
     // Re-run when the dock (re)appears so the widths are fresh, and when the
     // set of rows changes, since a remembered sum would be stale.
-  }, [barRef, pinned, rowKey, fits]);
+  }, [barRef, pinned, rowKey, fits, selector]);
   return fits;
 }
 
 // Dual-thumb slider over the focal lengths actually present in the library
 // (the facet's sorted, formatted mm values are its stops). Dragging both
 // thumbs to the outer ends means "any" and clears the filter.
-function FocalRangeSlider({
+// A dual-thumb slider over a filter's stops (the facet values, ascending):
+// focal length, ISO, aperture, shutter speed. `unit` is the short prefix of
+// the compact (docked) form, `format` the readout of one stop.
+function RangeSlider({
   options,
   min,
   max,
   onChange,
+  unit,
+  format = (v) => v,
+  label,
   compact = false,
 }: {
   options: Facet[];
   min: string;
   max: string;
   onChange: (min: string, max: string) => void;
-  // Docked in the bar: a field-sized box with a "mm" prefix in place of the
+  unit: string;
+  format?: (value: string, compact: boolean) => string;
+  // What the thumbs are, for assistive technology ("focal length").
+  label: string;
+  // Docked in the bar: a field-sized box with the unit in place of the
   // hidden caption, and a short readout ("24–70") so the slider keeps room.
   compact?: boolean;
 }) {
@@ -111,13 +128,13 @@ function FocalRangeSlider({
       return (
         <div className="focal-range focal-range--compact">
           <span className="focal-range-unit" aria-hidden>
-            mm
+            {unit}
           </span>
-          <span className="focal-range-value">{options[0].value}</span>
+          <span className="focal-range-value">{format(options[0].value, true)}</span>
         </div>
       );
     }
-    return <span className="focal-range-value">{options[0].value}mm</span>;
+    return <span className="focal-range-value">{format(options[0].value, false)}</span>;
   }
 
   const active = Boolean(min || max);
@@ -125,15 +142,11 @@ function FocalRangeSlider({
     <div className={`focal-range${compact ? " focal-range--compact" : ""}`}>
       {compact && (
         <span className="focal-range-unit" aria-hidden>
-          mm
+          {unit}
         </span>
       )}
       <span className={`focal-range-value${active ? " active" : ""}`}>
-        {active
-          ? compact
-            ? `${options[lo].value}–${options[hi].value}`
-            : `${options[lo].value}mm – ${options[hi].value}mm`
-          : "Any"}
+        {active ? `${format(options[lo].value, compact)} – ${format(options[hi].value, compact)}` : "Any"}
       </span>
       <div className="dual-range">
         <div className="dual-range-track" />
@@ -150,7 +163,7 @@ function FocalRangeSlider({
           max={last}
           step={1}
           value={lo}
-          aria-label="Minimum focal length"
+          aria-label={`Minimum ${label}`}
           onChange={(e) => {
             const v = Math.min(Number(e.target.value), hi);
             commit(v, hi);
@@ -162,7 +175,7 @@ function FocalRangeSlider({
           max={last}
           step={1}
           value={hi}
-          aria-label="Maximum focal length"
+          aria-label={`Maximum ${label}`}
           onChange={(e) => {
             const v = Math.max(Number(e.target.value), lo);
             commit(lo, v);
@@ -226,6 +239,25 @@ interface Props {
   focalMin?: string;
   focalMax?: string;
   onFocalRange?: (min: string, max: string) => void;
+  // The rest of the camera group, each shown when provided: the camera make
+  // as a list, and ISO / aperture / shutter speed as range sliders over the
+  // library's values. Bounds are facet values ("400", "2.8", shutter in
+  // seconds "0.004"); "" = unbounded on that side.
+  makes?: Facet[];
+  cameraMake?: string;
+  onCameraMake?: (make: string) => void;
+  isos?: Facet[];
+  isoMin?: string;
+  isoMax?: string;
+  onIsoRange?: (min: string, max: string) => void;
+  apertures?: Facet[];
+  apertureMin?: string;
+  apertureMax?: string;
+  onApertureRange?: (min: string, max: string) => void;
+  shutters?: ShutterFacet[];
+  shutterMin?: string;
+  shutterMax?: string;
+  onShutterRange?: (min: string, max: string) => void;
   // When provided, a "From date – To date" range is shown that filters by
   // capture date (taken_at) with month/day precision via native date pickers.
   // Both handlers must be given to enable it. Values are ISO dates ("YYYY-MM-DD").
@@ -287,6 +319,21 @@ export function PhotoFilters({
   focalMin,
   focalMax,
   onFocalRange,
+  makes,
+  cameraMake,
+  onCameraMake,
+  isos,
+  isoMin,
+  isoMax,
+  onIsoRange,
+  apertures,
+  apertureMin,
+  apertureMax,
+  onApertureRange,
+  shutters,
+  shutterMin,
+  shutterMax,
+  onShutterRange,
   dateFrom,
   dateTo,
   onDateFrom,
@@ -306,6 +353,21 @@ export function PhotoFilters({
   const showCamera = Boolean(cameras && onCamera);
   const showLens = Boolean(lenses && onLens);
   const showFocal = Boolean(focalLengths && onFocalRange);
+  const showMake = Boolean(makes && onCameraMake);
+  const showIso = Boolean(isos && onIsoRange && isos!.length > 0);
+  const showAperture = Boolean(apertures && onApertureRange && apertures!.length > 0);
+  const showShutter = Boolean(shutters && onShutterRange && shutters!.length > 0);
+  // The camera group - make, model, lens, focal length, ISO, aperture,
+  // shutter - lives behind its own "Camera" chip in the bar, docked or not:
+  // the dock carries the general filters, and every camera setting has one
+  // place.
+  const showCameraGroup = showMake || showCamera || showLens || showFocal || showIso || showAperture || showShutter;
+  // The shutter slider's stops are seconds; the stored string is only for
+  // the count. Memoised: a new array per render would re-snap the thumbs.
+  const shutterStops = useMemo<Facet[]>(
+    () => (shutters ?? []).map((s) => ({ value: String(s.seconds), count: s.count })),
+    [shutters]
+  );
 
   // Pinned is docked while the fields fit in two lines: the docked row
   // wraps its fields onto a second line when the bar is narrower than their
@@ -317,32 +379,42 @@ export function PhotoFilters({
   // back. The fields keep the same fixed widths on every screen; only the
   // number of lines changes with the window.
   const barRef = useRef<HTMLDivElement | null>(null);
+  // The general rows only: the camera group never docks.
   const rowKey = [
     Boolean(sort),
     showViewMode,
     Boolean(albums && onAlbumId),
     Boolean(allTags && onTags),
-    showCamera,
-    showLens,
-    showFocal && (focalLengths?.length ?? 0) > 0,
     showDates,
   ].join();
   const dockFits = useDockFits(barRef, pinned, rowKey);
   const docked = pinned && dockFits;
+  // The camera group has a pin of its own: docked, it is one more row of
+  // the bar under the general one, folded away by the same two-line rule.
+  const cameraPinned = useCameraPinned();
+  const cameraRowKey = [showMake, showCamera, showLens, showFocal && (focalLengths?.length ?? 0) > 0, showIso, showAperture, showShutter].join();
+  const cameraDockFits = useDockFits(barRef, cameraPinned && showCameraGroup, cameraRowKey, ".filter-menu--camera.filter-menu--docked");
+  const cameraDocked = cameraPinned && showCameraGroup && cameraDockFits;
 
-  // How many filters are engaged - shown on the closed Filter chip so the
-  // state stays visible while the menu is shut.
-  const activeCount =
+  // How many filters are engaged - shown on the closed chips so the state
+  // stays visible while the menus are shut: the general ones on Filter, the
+  // camera group's on Camera.
+  const generalCount =
     (ratingMin > 0 ? 1 : 0) +
     (colorLabel !== "none" ? 1 : 0) +
     ((albumId ?? "") !== "" || (canvasId ?? "") !== "" ? 1 : 0) +
     ((selectedTags?.length ?? 0) > 0 ? 1 : 0) +
+    (dateFrom || dateTo ? 1 : 0) +
+    (showViewMode && viewMode !== "combined" ? 1 : 0);
+  const cameraCount =
+    ((cameraMake ?? "") !== "" ? 1 : 0) +
     ((camera ?? "") !== "" ? 1 : 0) +
     ((lens ?? "") !== "" ? 1 : 0) +
     (focalMin || focalMax ? 1 : 0) +
-    (dateFrom || dateTo ? 1 : 0) +
-    (showViewMode && viewMode !== "combined" ? 1 : 0);
-  const isFiltering = activeCount > 0;
+    (isoMin || isoMax ? 1 : 0) +
+    (apertureMin || apertureMax ? 1 : 0) +
+    (shutterMin || shutterMax ? 1 : 0);
+  const isFiltering = generalCount + cameraCount > 0;
 
   function clearAll() {
     onRatingMin(0);
@@ -350,23 +422,34 @@ export function PhotoFilters({
     onAlbumId?.("");
     onCanvasId?.("");
     onTags?.([]);
+    onCameraMake?.("");
     onCamera?.("");
     onLens?.("");
     onFocalRange?.("", "");
+    onIsoRange?.("", "");
+    onApertureRange?.("", "");
+    onShutterRange?.("", "");
     onDateFrom?.(null);
     onDateTo?.(null);
     if (showViewMode) onViewMode("combined");
   }
 
+  // The count is a pill on the chip's corner, out of the flow (hidden, not
+  // unmounted, while nothing filters), so a chip keeps one width and the
+  // controls after it stay put when the first filter is set.
+  const countCell = (n: number) => (
+    <span className={`filter-chip-count${n > 0 ? "" : " filter-chip-count--idle"}`}>{n > 0 ? n : ""}</span>
+  );
   const chipLabel = (
     <>
       <IconFilter size={12} /> Filter
-      {/* The count's cell is always there (two digits wide, blank when nothing
-          filters), so the chip keeps one width and the controls after it stay
-          put when the first filter is set. */}
-      <span className={`filter-chip-count${activeCount > 0 ? "" : " filter-chip-count--idle"}`}>
-        {activeCount > 0 ? `· ${activeCount}` : ""}
-      </span>
+      {countCell(generalCount)}
+    </>
+  );
+  const cameraChipLabel = (
+    <>
+      <IconCamera size={12} /> Camera
+      {countCell(cameraCount)}
     </>
   );
 
@@ -505,6 +588,32 @@ export function PhotoFilters({
         </div>
       )}
 
+    </div>
+  );
+
+  // The camera group's rows, the Camera chip's popover.
+  const cameraRows = (
+    <>
+      {showMake && (
+        <div className="filter-menu-row filter-menu-row--make">
+          <span className="filter-menu-label">Make</span>
+          <Dropdown
+            ariaLabel="Camera make"
+            icon={<IconCamera size={13} />}
+            searchable
+            value={cameraMake ?? ""}
+            onChange={(v) => onCameraMake?.(v)}
+            options={[
+              { value: "", label: "All makes" },
+              ...makes!.map((m) => ({ value: m.value, label: `${m.value} (${m.count})` })),
+              ...(cameraMake && !makes!.some((m) => m.value === cameraMake)
+                ? [{ value: cameraMake, label: cameraMake }]
+                : []),
+            ]}
+          />
+        </div>
+      )}
+
       {showCamera && (
         <div className="filter-menu-row filter-menu-row--camera">
           <span className="filter-menu-label">Camera</span>
@@ -551,15 +660,88 @@ export function PhotoFilters({
       {showFocal && focalLengths!.length > 0 && (
         <div className="filter-menu-row filter-menu-row--focal">
           <span className="filter-menu-label">Focal length</span>
-          <FocalRangeSlider
+          <RangeSlider
             options={focalLengths!}
             min={focalMin ?? ""}
             max={focalMax ?? ""}
             onChange={(min, max) => onFocalRange?.(min, max)}
-            compact={docked}
+            unit="mm"
+            format={(v, c) => (c ? v : `${v}mm`)}
+            label="focal length"
+            compact={cameraDocked}
           />
         </div>
       )}
+
+      {showIso && (
+        <div className="filter-menu-row filter-menu-row--iso">
+          <span className="filter-menu-label">ISO</span>
+          <RangeSlider
+            options={isos!}
+            min={isoMin ?? ""}
+            max={isoMax ?? ""}
+            onChange={(min, max) => onIsoRange?.(min, max)}
+            unit="ISO"
+            format={(v, c) => (c ? v : `ISO ${v}`)}
+            label="ISO"
+            compact={cameraDocked}
+          />
+        </div>
+      )}
+
+      {showAperture && (
+        <div className="filter-menu-row filter-menu-row--aperture">
+          <span className="filter-menu-label">Aperture</span>
+          <RangeSlider
+            options={apertures!}
+            min={apertureMin ?? ""}
+            max={apertureMax ?? ""}
+            onChange={(min, max) => onApertureRange?.(min, max)}
+            unit="f/"
+            format={(v, c) => (c ? v : `f/${v}`)}
+            label="aperture"
+            compact={cameraDocked}
+          />
+        </div>
+      )}
+
+      {showShutter && (
+        <div className="filter-menu-row filter-menu-row--shutter">
+          <span className="filter-menu-label">Shutter speed</span>
+          <RangeSlider
+            options={shutterStops}
+            min={shutterMin ?? ""}
+            max={shutterMax ?? ""}
+            onChange={(min, max) => onShutterRange?.(min, max)}
+            unit="s"
+            format={(v) => formatShutter(parseFloat(v))}
+            label="shutter speed"
+            compact={cameraDocked}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  const cameraPinButton = (
+    <button
+      type="button"
+      className={`filter-pin${cameraPinned ? " active" : ""}`}
+      aria-pressed={cameraPinned}
+      title={cameraPinned ? "Unpin the camera filters" : "Keep the camera filters open"}
+      onClick={() => setCameraPinned(!cameraPinned)}
+    >
+      <IconPin size={13} filled={cameraPinned} />
+    </button>
+  );
+
+  const cameraMenu = (
+    <div className={`filter-menu filter-menu--camera${cameraDocked ? " filter-menu--docked" : ""}`}>
+      {cameraPinButton}
+      <div className="filter-menu-head">
+        <span className="filter-menu-title">Camera</span>
+      </div>
+      {cameraRows}
     </div>
   );
 
@@ -588,7 +770,7 @@ export function PhotoFilters({
         {docked ? (
           <button
             type="button"
-            className={`tag-filter-btn${isFiltering ? " active" : ""}`}
+            className={`tag-filter-btn${generalCount > 0 ? " active" : ""}`}
             title="Collapse the filters"
             aria-expanded
             onClick={() => setFilterPinned(false)}
@@ -599,10 +781,32 @@ export function PhotoFilters({
             </span>
           </button>
         ) : (
-          <FilterChip title="Filter photos" active={isFiltering} label={chipLabel}>
+          <FilterChip title="Filter photos" active={generalCount > 0} label={chipLabel}>
             {menu}
           </FilterChip>
         )}
+
+        {/* The camera group, its own popover whether the filters are docked
+            or not (the dock holds the general rows only). */}
+        {showCameraGroup &&
+          (cameraDocked ? (
+            <button
+              type="button"
+              className={`tag-filter-btn${cameraCount > 0 ? " active" : ""}`}
+              title="Collapse the camera filters"
+              aria-expanded
+              onClick={() => setCameraPinned(false)}
+            >
+              <span className="tag-filter-btn-label">{cameraChipLabel}</span>
+              <span className="tag-filter-caret tag-filter-caret--up">
+                <IconChevronDown size={11} />
+              </span>
+            </button>
+          ) : (
+            <FilterChip title="Camera filters" active={cameraCount > 0} label={cameraChipLabel}>
+              {cameraMenu}
+            </FilterChip>
+          ))}
 
         {/* Always in the row, only hidden while nothing filters: mounting it
             with the first filter shifted whatever followed it. Hidden, it is
@@ -632,6 +836,8 @@ export function PhotoFilters({
           that the dock folds away (useDockFits) until the bar is wide
           enough again. */}
       {docked && <div className="filter-dock">{menu}</div>}
+      {/* The camera group, pinned: one more full-width row under it. */}
+      {cameraDocked && <div className="filter-dock filter-dock--camera">{cameraMenu}</div>}
     </div>
   );
 }

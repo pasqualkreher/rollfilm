@@ -454,7 +454,8 @@ function BrandAbout() {
 // switch tabs) and a spinner + label shows what's happening. On narrow windows
 // the tab row collapses into a burger menu instead of wrapping onto extra rows.
 function TopBar() {
-  const { busyLabel, renders, cancelRenders, cancellingRenders } = useTasks();
+  const { busyLabel, renders, cancelRenders, cancellingRenders, copies, cancelCopyJob, cancellingCopies } =
+    useTasks();
   const locked = busyLabel !== null;
   const location = useLocation();
   const { isUploading, sessionId } = useImportSession();
@@ -657,6 +658,29 @@ function TopBar() {
             onClick={cancelRenders}
             disabled={cancellingRenders}
             title="Stop. Photos already rendered keep the edit, the rest stay as they were."
+          >
+            Cancel
+          </button>
+        </span>
+      )}
+      {/* The copies of a bulk Save copy, written one after the other in the
+          background. Cancel stops it between photos; the copies made stay. */}
+      {copies && !locked && (
+        <span className="nav-task">
+          <span
+            className="nav-task-label"
+            role="status"
+            title="The copies are being saved in the background. You can keep working."
+          >
+            <Spinner />
+            Saving copy <span className="nav-task-count">{Math.min(copies.done + 1, copies.total)}</span> of {copies.total}
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm ghost"
+            onClick={cancelCopyJob}
+            disabled={cancellingCopies}
+            title="Stop after the copy being written. The copies already made stay."
           >
             Cancel
           </button>

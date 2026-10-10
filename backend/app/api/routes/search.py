@@ -11,6 +11,7 @@ from app.auth import get_current_user
 from app.db.models import AlbumImage, ColorLabel, FileType, Image, ImageTag, Tag, User
 from app.db.session import engine, get_db
 from app.services import embeddings, geocode, sources as sources_service
+from app.services import exposure
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -32,6 +33,13 @@ def _apply_scope(
     tags: list[str] | None,
     view_mode: str,
     db: Session,
+    camera_make: str | None = None,
+    iso_min: int | None = None,
+    iso_max: int | None = None,
+    aperture_min: float | None = None,
+    aperture_max: float | None = None,
+    shutter_min: float | None = None,
+    shutter_max: float | None = None,
 ) -> Query:
     """Apply the same scope/filters the grid is currently showing, so a search
     only ever returns photos from the active view (the whole library, or one
@@ -45,6 +53,8 @@ def _apply_scope(
         query = query.filter(Image.rating >= rating_min)
     if color_label is not None:
         query = query.filter(Image.color_label == color_label)
+    if camera_make:
+        query = query.filter(Image.camera_make == camera_make)
     if camera_model:
         query = query.filter(Image.camera_model == camera_model)
     if lens_model:
@@ -55,6 +65,19 @@ def _apply_scope(
         query = query.filter(Image.focal_length >= focal_min - 0.05)
     if focal_max is not None:
         query = query.filter(Image.focal_length <= focal_max + 0.05)
+    # The exposure sliders, as in routes/images.
+    if iso_min is not None:
+        query = query.filter(Image.iso >= iso_min)
+    if iso_max is not None:
+        query = query.filter(Image.iso <= iso_max)
+    if aperture_min is not None:
+        query = query.filter(Image.aperture >= aperture_min - 0.05)
+    if aperture_max is not None:
+        query = query.filter(Image.aperture <= aperture_max + 0.05)
+    if shutter_min is not None or shutter_max is not None:
+        query = query.filter(
+            Image.shutter_speed.in_(exposure.shutter_strings_between(db, owner_id, shutter_min, shutter_max))
+        )
     if country == geocode.NO_LOCATION:
         query = query.filter(Image.gps_lat.is_(None))
     elif country:
@@ -106,6 +129,13 @@ def search_images(
     date_to: datetime | None = None,
     tags: list[str] | None = QueryParam(None),
     view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
+    camera_make: str | None = None,
+    iso_min: int | None = None,
+    iso_max: int | None = None,
+    aperture_min: float | None = None,
+    aperture_max: float | None = None,
+    shutter_min: float | None = None,
+    shutter_max: float | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -136,6 +166,13 @@ def search_images(
         tags=tags,
         view_mode=view_mode,
         db=db,
+        camera_make=camera_make,
+        iso_min=iso_min,
+        iso_max=iso_max,
+        aperture_min=aperture_min,
+        aperture_max=aperture_max,
+        shutter_min=shutter_min,
+        shutter_max=shutter_max,
     )
 
     results: list[schemas.SearchResultOut] = []

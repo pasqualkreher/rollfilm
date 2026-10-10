@@ -197,6 +197,56 @@ def new_helper() -> exiftool.ExifToolHelper:
     return exiftool.ExifToolHelper(executable=executable)
 
 
+def close_helper() -> None:
+    """End the shared helper's exiftool process, if one was started. Called
+    on backend shutdown: a -stay_open exiftool does not exit when its stdin
+    closes (the bundled one sleeps and re-reads forever), so every helper
+    still alive when the backend goes down lives on as an orphan."""
+    global _helper
+    helper, _helper = _helper, None
+    if helper is not None:
+        try:
+            helper.terminate()
+        except Exception:
+            pass
+
+
+def terminate_own_helpers() -> int:
+    """Kill every exiftool -stay_open process this backend spawned and still
+    has - the per-thread helpers of the analysis pool, a lens-profile or
+    white-balance reader, anything a route left open. The last step of the
+    shutdown hook, after the module helpers closed themselves: whatever is
+    left would otherwise outlive the backend (see reap_orphaned_helpers).
+    Matched by parent pid and pyexiftool's -stay_open fingerprint; errors
+    are swallowed, shutdown must never fail over cleanup."""
+    killed = 0
+    try:
+        me = str(os.getpid())
+        out = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,ppid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        for line in out.splitlines():
+            parts = line.strip().split(None, 2)
+            if len(parts) < 3:
+                continue
+            pid, ppid, command = parts
+            if ppid != me or "exiftool" not in command or "-stay_open" not in command:
+                continue
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+                killed += 1
+            except (OSError, ValueError):
+                pass
+        if killed:
+            logger.info("terminated %d exiftool helper(s) on shutdown", killed)
+    except Exception:
+        logger.exception("exiftool helper sweep on shutdown failed (ignored)")
+    return killed
+
+
 def reap_orphaned_helpers() -> int:
     """Kill exiftool -stay_open helpers whose backend died without closing
     them. A hard stop of the backend (dev restart, crash, OS kill) leaves
