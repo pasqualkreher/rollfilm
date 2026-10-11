@@ -34,8 +34,8 @@ non-destructively, print what you made.<br>
 
 Your photos stay on your own machine. Rollfilm copies them into a managed library, makes them searchable with natural language, and can optionally mirror your library to an existing Immich server.
 
-> **Project status: work in progress.**
-> An early but already very usable release. The core — import pipeline, library organization, semantic search, and especially the Immich integration — works well and is used daily. The built-in photo editor is experimental and should be seen as a fun extra rather than a finished feature (see [Photo editor](#photo-editor-experimental)).
+> **Project status: in active development.**
+> Import, library, search, the editor and the Immich sync are all used daily on a real library. New releases come often; the [changelog](https://github.com/pasqualkreher/Rollfilm/releases) says what changed. See [Photo editor](#photo-editor) for what the editor does.
 
 ## Why Rollfilm
 
@@ -53,7 +53,7 @@ Your photos stay on your own machine. Rollfilm copies them into a managed librar
 | Rollfilm is a good fit if you… | Look elsewhere if you… |
 | :--- | :--- |
 | shoot RAW+JPEG and want to cull straight off the card | need multiple users, a web UI or mobile access |
-| want natural-language search that never leaves your machine | want a finished, Lightroom-class editor today |
+| want natural-language search that never leaves your machine | need Lightroom's ecosystem: mobile app, cloud sync, plug-ins |
 | run Immich and want a local library feeding it | need a code-signed, commercially supported app |
 | like keeping full control over your files on disk | are looking for a cloud service |
 
@@ -66,12 +66,14 @@ More on [rollfilm.org](https://rollfilm.org/#gallery).
 | <img src="docs/screenshots/search.jpg" alt="Semantic search" width="420"><br>**Semantic search**: describe what you remember | <img src="docs/screenshots/map.jpg" alt="Map view" width="420"><br>**Map view**: every geotagged photo |
 | <img src="docs/screenshots/import-lighttable.jpg" alt="Import light table" width="420"><br>**Import review**: stage, compare, pick, with the camera settings beside the photo | <img src="docs/screenshots/import-start.jpg" alt="New import session dialog" width="420"><br>**Import start**: copy the card or leave the photos where they are |
 | <img src="docs/screenshots/import-sessions.jpg" alt="Open import sessions" width="420"><br>**Import sessions**: an import stays open until you end it, pull the card and come back later | <img src="docs/screenshots/immich-sync.jpg" alt="Immich sync modes" width="420"><br>**Immich sync**: your library, mirrored |
-| <img src="docs/screenshots/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor**: non-destructive, with masks that find the sky by themselves | <img src="docs/screenshots/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare**: split by a draggable line, or side by side |
-| <img src="docs/screenshots/edit-film.jpg" alt="Film simulation list in the editor" width="420"><br>**Film simulations**: over a hundred looks over your own photo | <img src="docs/screenshots/edit-camera-jpg.jpg" alt="A RAW edit compared with the camera JPG" width="420"><br>**Camera JPG**: your RAW edit against the JPG the camera made |
-| <img src="docs/screenshots/edit-lens.jpg" alt="Lens correction in the editor" width="420"><br>**Lens correction**: distortion and vignetting from the lens data in the RAW | <img src="docs/screenshots/edit-nr.jpg" alt="Noise reduction at 200 percent" width="420"><br>**Noise reduction**: ISO 12800 at 200%, original left, cleaned right |
-| <img src="docs/screenshots/edit-wb.jpg" alt="White balance controls" width="420"><br>**White balance**: Kelvin, tint and the usual lights one click away | <img src="docs/screenshots/edit-presets.jpg" alt="Preset list in the editor" width="420"><br>**Presets**: save a look once, apply it with one click |
-| <img src="docs/screenshots/canvas.jpg" alt="Canvas editor with photos laid out on a page" width="420"><br>**Canvas**: lay photos out on a page, print or export it | <img src="docs/screenshots/canvas-edit.jpg" alt="Canvas with the photo editor docked beside the page" width="420"><br>**Canvas edit**: edit a photo right on the page, the original stays untouched |
-| <img src="docs/screenshots/albums-wide.jpg" alt="Albums page" width="420"><br>**Albums**: countries, years and months, plus your own | <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics**: the gear you actually use |
+| <img src="docs/screenshots/context-menu.jpg" alt="Right-click menu over a selection of three photos" width="420"><br>**Right-click**: everything the selection bar does, for three photos at once | <img src="docs/screenshots/camera-filters.jpg" alt="Camera filter popover with make, lens, ISO, aperture and shutter sliders" width="420"><br>**Camera filters**: make, body, lens, focal length, ISO, aperture, shutter speed |
+| <img src="docs/screenshots/edit-masks.jpg" alt="Photo editor with a mask" width="420"><br>**Editor**: non-destructive, with masks that find the sky by themselves and add, subtract or intersect | <img src="docs/screenshots/edit-retouch.jpg" alt="Retouch section with heal and clone spots" width="420"><br>**Retouch**: heal specks and clone patches on the raw picture |
+| <img src="docs/screenshots/edit-compare.jpg" alt="Comparing an edit against the original" width="420"><br>**Compare**: split by a draggable line, or side by side | <img src="docs/screenshots/edit-film.jpg" alt="Film simulation list in the editor" width="420"><br>**Film looks**: twenty Fujifilm simulations and 112 film stocks over your own photo |
+| <img src="docs/screenshots/edit-camera-jpg.jpg" alt="A RAW edit compared with the camera JPG" width="420"><br>**Camera JPG**: your RAW edit against the JPG the camera made | <img src="docs/screenshots/edit-lens.jpg" alt="Lens correction in the editor" width="420"><br>**Lens correction**: distortion and vignetting from the lens data in the RAW |
+| <img src="docs/screenshots/edit-nr.jpg" alt="Noise reduction at 200 percent" width="420"><br>**Noise reduction**: ISO 12800 at 200%, original left, cleaned right | <img src="docs/screenshots/edit-wb.jpg" alt="White balance controls" width="420"><br>**White balance**: Kelvin, tint and the usual lights one click away |
+| <img src="docs/screenshots/edit-presets.jpg" alt="Preset list in the editor" width="420"><br>**Presets**: save a look once, apply it with one click | <img src="docs/screenshots/canvas.jpg" alt="Canvas editor with photos laid out on a page" width="420"><br>**Canvas**: lay photos out on a page, print or export it |
+| <img src="docs/screenshots/canvas-edit.jpg" alt="Canvas with the photo editor docked beside the page" width="420"><br>**Canvas edit**: edit a photo right on the page, the original stays untouched | <img src="docs/screenshots/albums-wide.jpg" alt="Albums page" width="420"><br>**Albums**: countries, years and months, plus your own |
+| <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics**: the gear you actually use | |
 
 Three quiet skins, each in light and dark, with a switch that can follow the system:
 
@@ -81,14 +83,15 @@ Three quiet skins, each in light and dark, with a switch that can follow the sys
 
 | | Highlights |
 | :--- | :--- |
-| **Import** | Staged import wizard with a light table, one start dialog (copy the card or leave the photos in place, with an optional backup folder), sessions that stay open until you end them, RAW+JPEG pairing, byte-identical duplicate detection, EXIF and lens data, reverse geocoding |
-| **Organize** | Albums, smart albums, hierarchical tags (`Travel/Italy/Rome`) with bulk tagging, star ratings, color labels, picks, per-photo notes, trash with retention, a right-click menu on every photo, chips that say which albums and canvases a photo is in |
+| **Import** | Staged import wizard with a light table, one start dialog (copy the card or leave the photos in place, the import folder kept as a backup by default) and an *Import settings…* dialog that answers it once for all, sessions that stay open until you end them, RAW+JPEG pairing, byte-identical duplicate detection, EXIF and lens data, reverse geocoding |
+| **Organize** | Albums, smart albums, hierarchical tags (`Travel/Italy/Rome`) with bulk tagging, star ratings, color labels, per-photo notes, trash with retention, marquee and shift-click selection like the Finder, a right-click menu with everything the selection bar offers, chips that say which albums and canvases a photo is in |
 | **Portable** | Stars, labels, keywords and captions from Lightroom, Bridge, darktable or digiKam come in on import, from the file or its `.xmp` sidecar; optional sidecars beside your originals carry them out again; the tag tree moves as a keyword list |
-| **Search** | Local semantic search, image-to-image similarity, gear filters that cross-filter each other, map, exact-scrolling timeline, statistics |
+| **Search** | Local semantic search, image-to-image similarity, a Camera chip with make, body, lens, focal length, ISO, aperture and shutter-speed filters that cross-filter each other, map, exact-scrolling timeline, cross-filtered statistics |
 | **Immich** | Three sync modes, background reconciliation every 60 s, album mirroring, durable deletion queue, optional RAW upload |
-| **Edit** *(experimental)* | Non-destructive, backend-rendered, lens correction from the camera's own data, twenty film simulations and 112 film stocks, masks with local AI subject selection, tone curves on the histogram, Kelvin white balance, luminance and color noise reduction, presets, auto develop learned from your own edits, virtual copies |
+| **Edit** | Non-destructive, backend-rendered, lens correction from the camera's own data, twenty film simulations and 112 film stocks, retouch with heal and clone, masks with local AI subject selection that add, subtract or intersect and carry their own curve, mixer and grading, tone curves on the histogram, Kelvin white balance, luminance and color noise reduction, presets, auto develop learned from your own edits, virtual copies, export as JPEG, 16-bit TIFF or the original with a long-edge slider up past 8K |
 | **Canvas** | Pages or one free sheet, A4/A3/Letter/square or any size in mm, drag, crop-in-frame, rotate, snap, captions, the editor docked beside the page, print view and lossless PDF export |
 | **Safety** | Originals never modified, renames survive Finder, backup and restore as one zip, external folders mounted read-only |
+| **Mac-native** | A real menu bar (Settings ⌘, Import ⇧⌘I, Find ⌘F, Focus ⇧⌘F, ⌘W hides the window), native cut/copy/paste, the window comes back where it was, Dock progress, one task dock in the title bar that lists everything running and stops what can be stopped |
 
 <details>
 <summary><b>Library &amp; import — full list</b></summary>
@@ -105,11 +108,11 @@ Three quiet skins, each in light and dark, with a switch that can follow the sys
 - **What the files already say comes along** — stars, colour labels, keywords (tree and all) and captions that Lightroom, Bridge, darktable or digiKam wrote into a photo, or into an `.xmp` sidecar beside it, are read on import; a sidecar wins over the file. Off in Settings if you'd rather start clean
 - **Duplicate detection** during import — byte-identical files only, so a burst or a bracketed set comes in complete
 - **Import a second library** — take a small drive travelling, cull the trip on it, and fold it into your main library at home *with* the stars, colour labels, edits, tags and albums you gave the photos on the road
-- Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and a pick/reject workflow
+- Albums, smart albums, tags (with bulk tagging), star ratings, color labels, and culling from the keyboard: the arrow keys walk a selected photo through the grid
 - **Tags with a tree** — `Travel/Italy/Rome` files Rome under Italy under Travel; the filter shows the tree and a tick on Travel finds everything under it; rename a parent and the branch follows. The tree exports and imports as the keyword list Lightroom, Bridge and digiKam use
 - **XMP sidecars, if you want them** — a switch in Settings keeps an `.xmp` beside each photo in the library with its stars, label, tags and note, so every other program reads them. The photo itself is never written to, and whatever another program keeps in the same sidecar stays
-- **Select without a mode** — Cmd/Ctrl-click or Shift-click the first photo and checkboxes appear on every tile; Cmd/Ctrl+A takes everything, Esc clears, E opens a single picked photo in the editor. A plain click still opens the photo
-- **Right-click any photo** — export, save a copy, or show the file in Finder / Explorer; on a selected photo the action applies to the whole selection
+- **Select without a mode** — Cmd/Ctrl-click or Shift-click the first photo and checkboxes appear on every tile; drag on empty grid ground to draw a marquee, Shift-click extends like the Finder, Cmd/Ctrl+A takes everything, Esc clears, E opens a single picked photo in the editor. A plain click still opens the photo
+- **Right-click any photo** — everything the selection bar offers: rating, label, albums, canvas, tags, apply an edit with or without a copy, reset, Immich, export, save a copy, show the file in Finder / Explorer, trash and restore; on a selected photo the action applies to the whole selection. The menus take the keyboard: arrows, Home/End, type-ahead, submenus
 - **Export the way it is needed** — JPEG, 16-bit TIFF or the original files; camera data, stars and tags written into the file (or left out, with or without the location); file names from a pattern like `{date}_{seq}`; straight into a folder or as a download; output sharpening and a text watermark; and presets that keep a whole set of choices under a name
 - **Where a photo lives** — album and canvas chips beside each photo and on the grid's hover card, each a link into that album or canvas, with an × to take the photo out
 - **Rename photos from the app** — the file on disk is renamed with them, the RAW/JPEG partner follows to the same name, and the photo keeps its stars, tags, albums, edits and cached previews
@@ -125,7 +128,7 @@ Three quiet skins, each in light and dark, with a switch that can follow the sys
 
 - **Semantic search** — describe what you're looking for in natural language ("sunset at the beach", "dog in the snow"). Powered by CLIP embeddings stored in SQLite via `sqlite-vec`, fully local, no cloud API
 - Image-to-image similarity search
-- **Gear-aware filters** — narrow the library by camera, lens or a focal-length range slider; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot), and the filter bar can be **pinned open** so it stays put while you cull
+- **Gear-aware filters** — a Camera chip narrows the library by make, body, lens, and by focal length, ISO, aperture and shutter speed on sliders over the library's own stops; the filter options cross-filter each other (pick a camera and the lens list shrinks to what that camera actually shot), and the filter bar can be **pinned open** so it stays put while you cull
 - **Smart albums** with the same filter bar as the library — JPEG/RAW, rating, colour label, tags, date range
 - **Map view** (Leaflet) of all geotagged photos
 - **A timeline that stays out of the way at any size** — the whole library is laid out up front, so the scrollbar is exact from the first frame and the date scrubber on the right lands anywhere in it instantly; only the tiles near the viewport are ever mounted
@@ -177,11 +180,11 @@ A free design surface: place photos where you want them instead of where the gri
 
 </details>
 
-<a name="photo-editor-experimental"></a>
+<a name="photo-editor"></a>
 <details>
-<summary><b>Photo editor (experimental) — full list</b></summary>
+<summary><b>Photo editor — full list</b></summary>
 
-A non-destructive editor is included, but consider it a gimmick for now — it's fun to play with, not a Lightroom replacement.
+A non-destructive RAW and JPEG editor, rendered by the app's own backend and used for every photo in the author's library.
 
 - All rendering happens **in the app's backend**, so the live preview is pixel-identical to the exported result
 - **Built to keep up** — while a slider is being dragged, only the pixels your screen can actually show are rendered (zoomed in, only the visible tile), so editing stays fluid even on 40MP RAWs
@@ -193,11 +196,13 @@ A non-destructive editor is included, but consider it a gimmick for now — it's
 - **Noise reduction** in three sliders: luminance, luminance detail and colour
 - Exposure/contrast/highlights/shadows, white balance in Kelvin with presets for daylight, cloudy, shade, tungsten and fluorescent, HSL color mixer, color grading wheels, crop/rotate/perspective, and effects like grain, vignette, clarity, film-style diffusion and a white matte frame
 - **Tone curves drawn over the photo's own histogram**, with a targeted picker: point at something in the image and drag to move the curve where that tone actually lives
-- **Masks** — radial, linear, brush, luminance and color, plus **AI subject selection** (sky, water, greenery, people, buildings, ground) run locally with SegFormer. Point at a mask in the list and it marks what it covers
-- **Compare against the original, a snapshot or the camera's JPG.** Split by a divider you drag across the photo, or the two side by side. A RAW shot together with a JPG can be held against that JPG. On a RAW the original half is shown with the library's auto-exposure, so the comparison isn't just "the edit is brighter"
+- **Masks** — radial, linear, brush, luminance and color, plus **AI subject selection** (sky, water, greenery, people, buildings, ground) run locally with SegFormer. Point at a mask in the list and it marks what it covers. Shapes add to, subtract from or intersect a selection in list order, a linear mask gets a feather, every mask carries its own curve, color mixer and color grading, and masks can be renamed, reordered and duplicated
+- **Retouch** — heal specks and clone patches on the raw picture, before any tone or colour work; heal picks its own source, `[` and `]` size the spot, H hides the circles, and spots move with the crop
+- **Compare against the original, a snapshot or the camera's JPG.** Split by a divider you drag across the photo, or the two side by side, in the editor and in the photo view. A RAW shot together with a JPG can be held against that JPG. On a RAW the original half is shown with the library's auto-exposure, so the comparison isn't just "the edit is brighter"
 - **Presets.** Save a look, apply it from a list with one click, to one photo or a whole selection, and export or import presets as a file
 - **Working resolution.** The editor preview renders at 100%, 70% or 50%, a setting for slower machines
-- **Physical and virtual copies** — *Save copy* bakes an edit into a new file in the library; a virtual copy is a second, independently editable version of the same file that costs no disk space
+- **Physical and virtual copies** — *Save copy* bakes an edit into a new file in the library, and from the grid *Apply … and save copy* runs over a whole selection as one background job you can stop between photos; a virtual copy is a second, independently editable version of the same file that costs no disk space
+- **Export** — JPEG, 16-bit TIFF or the original file, the long edge on a slider up past 8K with the common sizes as presets, camera data, stars and tags written in or left out, file names from a pattern, output sharpening, a watermark, and named export presets; the last full-resolution render is kept once, so an export right after an edit only encodes
 - **Auto develop** — an optional "Auto" button that suggests develop settings *learned from your own edits*: a local CLIP k-nearest-neighbor recommender finds the photos you've already edited that look most like the one you're working on and blends their settings. No training step, no cloud — every edit you save immediately makes the next suggestion better. Works on a single photo or a whole selection at once
 
 </details>
@@ -286,7 +291,7 @@ three-line function exists, which is how the reasoning survives between sessions
 
 What that means in practice:
 
-- **It's tested where it counts.** 550+ backend tests cover the paths that could
+- **It's tested where it counts.** 750+ backend tests cover the paths that could
   lose your photos or your edits: import, trash, pairing, library sync. Your
   originals are never modified; edits live in the database beside them.
 - **It also means one person's blind spots.** Rollfilm is used daily on one
@@ -332,7 +337,7 @@ cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 python run_server.py   # runs Alembic migrations, then starts the API on localhost
-pytest                 # 550+ tests, in-memory database
+pytest                 # 750+ tests, in-memory database
 ```
 
 ### Configuration
@@ -362,7 +367,6 @@ Notable design decisions:
 
 ## Known limitations
 
-- The photo editor is experimental (see above)
 - **Single user, no accounts** — the backend binds to localhost and only the app itself holds the per-launch key to it. There is no login, no accounts and no server mode, and none is planned
 - **Not code-signed or notarized** — hence the one-time Gatekeeper and SmartScreen steps above. A matter of certificate cost, not of anything being wrong with the build
 - The UI is only really exercised on macOS; Windows and Linux get less day-to-day use
