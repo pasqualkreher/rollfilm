@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { LibraryMergeSummary } from "../api/types";
-import { useWait } from "../state/wait";
 import { formatEta } from "../utils/duration";
 import { useTransientMessage } from "../utils/transientMessage";
 import { IconFolder, IconImport, IconX } from "./Icons";
@@ -31,7 +30,6 @@ export function ImportLibrary() {
   const [summary, setSummary] = useState<LibraryMergeSummary | null>(null);
   const [reading, setReading] = useState(false);
   const [error, setError] = useTransientMessage(12000);
-  const { withWait } = useWait();
   const queryClient = useQueryClient();
 
   const { data: progress } = useQuery({
@@ -72,17 +70,10 @@ export function ImportLibrary() {
   }
 
   async function cancel() {
-    // The backend stops between two photos, so this takes a moment - hold the
-    // screen until it has actually stopped rather than leaving a button that
-    // looks like it did nothing.
-    await withWait("Stopping the import…", async () => {
-      await api.maintenance.cancelLibraryMerge();
-      for (let i = 0; i < 60; i++) {
-        const p = await api.maintenance.mergeLibraryProgress();
-        if (!p.active) break;
-        await new Promise((r) => setTimeout(r, 500));
-      }
-    });
+    // The backend stops between two photos, so this takes a moment; the
+    // progress line above the button (and the title bar's pill) runs on
+    // until it has.
+    await api.maintenance.cancelLibraryMerge();
     queryClient.invalidateQueries({ queryKey: ["library-merge-progress"] });
     // Whatever came across before the stop is in the library now.
     queryClient.invalidateQueries({ queryKey: ["images"] });

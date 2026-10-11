@@ -523,6 +523,9 @@ export interface ImportSessionSummary {
   staging_dir: string | null;
   // That folder is a backup: it keeps every photo and stays on close.
   keep_backup: boolean;
+  // What the import folder still holds, in bytes; 0 in place and for
+  // uploads, whose size the server does not know.
+  folder_bytes: number;
   created_at: string;
   updated_at: string | null;
   file_count: number;

@@ -6,6 +6,12 @@ import { useCallback, useState } from "react";
 // the user had just set. Values are kept per key in memory - gone on quit.
 const store = new Map<string, unknown>();
 
+// Set a key from outside any component - the next page to read it starts
+// there (the Help menu's "Keyboard Shortcuts" opens Help on that chapter).
+export function setSessionState<T>(key: string, value: T): void {
+  store.set(key, value);
+}
+
 export function useSessionState<T>(key: string, initial: T): [T, (value: T) => void] {
   const read = () => (store.has(key) ? (store.get(key) as T) : initial);
   const [value, setValue] = useState<T>(read);

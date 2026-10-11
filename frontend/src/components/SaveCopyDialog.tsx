@@ -1,11 +1,9 @@
 import { useState } from "react";
-import { useTransientMessage } from "../utils/transientMessage";
-import { useEscapeToClose } from "../utils/modalKeys";
+import { useEnterToConfirm, useEscapeToClose } from "../utils/modalKeys";
 import { Dropdown } from "./Dropdown";
 import { SIZE_OPTIONS } from "./ExportDialog";
 import { IconDisk, IconDuplicate } from "./Icons";
 import { rangeFillStyle } from "../utils/rangeFill";
-import { Spinner } from "./Spinner";
 
 // The quality a copy is baked at when nobody picks one: the maximum JPEG
 // quality, which is also this dialog's starting point. A copy is a photo you
@@ -32,7 +30,8 @@ export type SaveCopyRequest =
 // Save copy always asks one question first: a real file or a virtual copy.
 // With the Settings toggle on, picking the physical copy also exposes the
 // export-style quality/size controls; otherwise it bakes at full quality. The
-// render runs while the dialog is open, so it doubles as the progress popup.
+// dialog only asks: the caller closes it and runs the copy as a task in the
+// title bar (state/tasks), where it is counted down.
 export function SaveCopyDialog({
   onClose,
   onSave,
@@ -43,10 +42,8 @@ export function SaveCopyDialog({
   title,
 }: {
   onClose: () => void;
-  // Runs the actual request; the caller closes the editor and navigates to
-  // the new photo on success, which unmounts this dialog. `report` tells the
-  // dialog how many of `count` photos are done, for the multi-photo note.
-  onSave: (req: SaveCopyRequest, report: (done: number) => void) => Promise<unknown>;
+  // The choice. The caller closes the dialog and starts the copy from here.
+  onSave: (req: SaveCopyRequest) => void;
   // Show the JPEG quality / size controls for the physical copy.
   askOptions: boolean;
   // How many photos the copy is made of - the grid's multi-select passes the
@@ -69,24 +66,13 @@ export function SaveCopyDialog({
   const [customSize, setCustomSize] = useState(false);
   // The pixel field's text while it is being typed; null = shows the value.
   const [sizeDraft, setSizeDraft] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(0);
-  const [error, setError] = useTransientMessage();
-  // Escape is the Cancel button - which is disabled while the copy renders.
-  useEscapeToClose(!closing, () => {
-    if (!busy) onClose();
-  });
+  // Escape is the Cancel button.
+  useEscapeToClose(!closing, onClose);
+  // Enter saves (the default button).
+  useEnterToConfirm(!closing, () => doSave());
 
-  async function doSave() {
-    setBusy(true);
-    setDone(0);
-    setError(null);
-    try {
-      await onSave(kind === "physical" ? { kind, quality, maxSize } : { kind }, setDone);
-    } catch (e) {
-      setBusy(false);
-      setError((e as Error).message || "Could not save the copy.", { keep: true });
-    }
+  function doSave() {
+    onSave(kind === "physical" ? { kind, quality, maxSize } : { kind });
   }
 
   const physical = kind === "physical";
@@ -122,8 +108,8 @@ export function SaveCopyDialog({
   }
 
   return (
-    <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={() => !busy && onClose()}>
-      <div className="modal pair-delete-modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-overlay${closing ? " pm-closing" : ""}`}>
+      <div className="modal pair-delete-modal" role="dialog" aria-modal="true" aria-label={title ?? "Save copy"}>
         <div className="pair-delete-body">
           <h3>{title ?? (many ? `Save copy of ${count} photos` : "Save copy")}</h3>
           <p className="settings-desc" style={{ margin: 0 }}>
@@ -142,7 +128,6 @@ export function SaveCopyDialog({
               role="radio"
               aria-checked={physical}
               className={`copy-kind${physical ? " is-selected" : ""}`}
-              disabled={busy}
               onClick={() => setKind("physical")}
             >
               <span className="copy-kind-icon" aria-hidden="true">
@@ -162,7 +147,6 @@ export function SaveCopyDialog({
               role="radio"
               aria-checked={!physical}
               className={`copy-kind${!physical ? " is-selected" : ""}`}
-              disabled={busy}
               onClick={() => setKind("virtual")}
             >
               <span className="copy-kind-icon" aria-hidden="true">
@@ -192,8 +176,7 @@ export function SaveCopyDialog({
                   max={100}
                   step={1}
                   value={quality}
-                  disabled={busy}
-                  style={rangeFillStyle(quality, 60, 100)}
+                      style={rangeFillStyle(quality, 60, 100)}
                   onChange={(e) => setQuality(Number(e.target.value))}
                 />
               </label>
@@ -203,8 +186,7 @@ export function SaveCopyDialog({
                 </span>
                 <Dropdown
                   value={sizeChoice}
-                  disabled={busy}
-                  ariaLabel="Copy size"
+                      ariaLabel="Copy size"
                   onChange={pickSize}
                   options={[
                     ...SIZE_OPTIONS.map((opt) => ({
@@ -230,7 +212,7 @@ export function SaveCopyDialog({
                       aria-label="Long edge in pixels"
                       value={sizeDraft ?? (maxSize === null ? "" : String(maxSize))}
                       placeholder="–"
-                      disabled={busy || maxSize === null}
+                      disabled={maxSize === null}
                       onChange={(e) => setSizeDraft(e.target.value)}
                       onBlur={commitSizeDraft}
                       onKeyDown={(e) => {
@@ -238,7 +220,7 @@ export function SaveCopyDialog({
                           e.preventDefault();
                           commitSizeDraft();
                         } else if (e.key === "Escape") {
-                          setSizeDraft(null); // the dialog's Escape handler closes it unless busy
+                          setSizeDraft(null); // the dialog's Escape handler closes it
                         }
                       }}
                     />
@@ -251,7 +233,7 @@ export function SaveCopyDialog({
                   max={SIZE_MAX}
                   step={SIZE_STEP}
                   value={maxSize ?? SIZE_MAX}
-                  disabled={busy || maxSize === null}
+                  disabled={maxSize === null}
                   style={rangeFillStyle(maxSize ?? SIZE_MIN, SIZE_MIN, SIZE_MAX)}
                   onChange={(e) => slideSize(Number(e.target.value))}
                   title="Drag, or type a number in the field above."
@@ -259,24 +241,12 @@ export function SaveCopyDialog({
               </label>
             </>
           )}
-          {error && <span className="status-note status-note--error">{error}</span>}
-          {busy && (
-            <span className="status-note" role="status" aria-live="polite">
-              {many
-                ? `${physical ? "Rendering" : "Copying"} photo ${Math.min(done + 1, count)} of ${count}… Please keep this window open.`
-                : physical
-                  ? "Rendering your photo… Please keep this window open."
-                  : "Creating the virtual copy…"}
-            </span>
-          )}
           <div className="pair-delete-actions">
-            <button className="btn primary" onClick={doSave} disabled={busy}>
-              {busy ? (
-                <>
-                  <Spinner tone="inherit" inline />
-                  Saving…
-                </>
-              ) : physicalOnly ? (
+            <button className="btn ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="btn primary" onClick={doSave}>
+              {physicalOnly ? (
                 "Continue"
               ) : physical ? (
                 many ? "Save physical copies" : "Save physical copy"
@@ -285,9 +255,6 @@ export function SaveCopyDialog({
               ) : (
                 "Save virtual copy"
               )}
-            </button>
-            <button className="btn ghost" onClick={onClose} disabled={busy}>
-              Cancel
             </button>
           </div>
         </div>

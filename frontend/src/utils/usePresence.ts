@@ -38,8 +38,8 @@ export function prefersReducedMotion(): boolean {
 
 // Exit durations, matched to the CSS in index.css ("Motion" section).
 export const MOTION = {
-  pop: 120, // menus and popovers
-  modal: 170, // dialogs and their backdrop
+  pop: 100, // menus and popovers (they appear at once; this is the fade-out)
+  modal: 100, // dialogs and their backdrop
   bar: 200, // the bottom action bar
   overlay: 200, // full-window overlays (slideshow, import lightbox)
 } as const;

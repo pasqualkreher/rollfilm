@@ -258,6 +258,16 @@ def write_all_sidecars(
     return _sidecar_settings_out(db)
 
 
+@router.post("/sidecar/write-all/cancel", response_model=schemas.SidecarSettingsOut)
+def write_all_sidecars_cancel(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """Stop the whole-library pass between two photos. The sidecars written
+    so far stay."""
+    sidecar_service.request_write_all_cancel()
+    return _sidecar_settings_out(db)
+
+
 def _export_settings_out(db: Session) -> schemas.ExportSettingsOut:
     stored = get_export_settings(db)
     presets = []

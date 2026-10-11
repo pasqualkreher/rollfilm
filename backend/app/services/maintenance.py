@@ -362,6 +362,16 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
             f"Library folder not found at {settings.library_root} - reconnect the drive "
             "before syncing the database to the library."
         )
+    if not _sync_active.acquire(blocking=False):
+        raise AlreadyRunning("The library is already being synced.")
+    _sync_cancel.clear()
+    try:
+        return _sync_db_with_library(db, owner_id)
+    finally:
+        _sync_active.release()
+
+
+def _sync_db_with_library(db: Session, owner_id: int) -> dict:
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
     # Virtual copies ("virtual copies") own no file: their synthetic path never
     # exists on disk, so the missing-file scan must never see them - their
@@ -385,15 +395,19 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
     # of the library; skip it so its JPG thumbnails aren't counted as untracked
     # photos. "Import" holds the collection folders of open import sessions
     # (cards copied in, not yet reviewed) - not library photos either.
-    untracked_paths = [
-        path
-        for path in settings.library_root.rglob("*")
-        if path.is_file()
-        and ".photomanager" not in path.relative_to(settings.library_root).parts
-        and path.relative_to(settings.library_root).parts[0] != "Import"
-        and classify_file_type(path) is not None
-        and str(path.resolve()) not in tracked
-    ]
+    untracked_paths = []
+    for path in settings.library_root.rglob("*"):
+        # Stopped while still reading the folder: nothing has been changed.
+        if _sync_cancel.is_set():
+            return _sync_result(cancelled=True)
+        if (
+            path.is_file()
+            and ".photomanager" not in path.relative_to(settings.library_root).parts
+            and path.relative_to(settings.library_root).parts[0] != "Import"
+            and classify_file_type(path) is not None
+            and str(path.resolve()) not in tracked
+        ):
+            untracked_paths.append(path)
 
     relocated, untracked_paths = _follow_renamed_files(missing, untracked_paths)
     if relocated:
@@ -408,6 +422,11 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
         logger.info("Library sync: followed %d renamed/moved file(s)", len(relocated))
     relocated_ids = {image.id for image in relocated}
     missing = [image for image in missing if image.id not in relocated_ids]
+
+    # The last moment to stop before anything is removed. Renamed files were
+    # followed above (their rows only gained a new path); nothing is deleted.
+    if _sync_cancel.is_set():
+        return _sync_result(cancelled=True, renamed_files_followed=len(relocated))
 
     hard_delete_images(db, missing, delete_files=False)
     db.commit()
@@ -442,19 +461,82 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
             enqueue_post_import(image.id, original)
             thumbnails_queued += 1
 
-    return {
-        "removed_missing_files": len(missing),
-        "renamed_files_followed": len(relocated),
-        "untracked_files_found": untracked,
-        "orphan_thumbnails_removed": orphan_thumbnails_removed,
-        "thumbnails_queued": thumbnails_queued,
+    return _sync_result(
+        removed_missing_files=len(missing),
+        renamed_files_followed=len(relocated),
+        untracked_files_found=untracked,
+        orphan_thumbnails_removed=orphan_thumbnails_removed,
+        thumbnails_queued=thumbnails_queued,
+    )
+
+
+def _sync_result(**fields) -> dict:
+    result = {
+        "removed_missing_files": 0,
+        "renamed_files_followed": 0,
+        "untracked_files_found": 0,
+        "orphan_thumbnails_removed": 0,
+        "thumbnails_queued": 0,
+        "cancelled": False,
     }
+    result.update(fields)
+    return result
+
+
+class AlreadyRunning(RuntimeError):
+    """The same maintenance run was started while one is still going."""
+
+
+# ---- Stopping a run ---------------------------------------------------------
+# Each long maintenance run looks at its own flag between two photos (the
+# same pattern as library_merge.request_merge_cancel): the cancel routes set
+# it, the run clears it when it starts. A sync stops before it removes
+# anything; a rebuild and a date repair keep what they have done. A restore
+# cannot be stopped - it empties the library before it writes the backup back,
+# so a stop half-way would leave nothing.
+_sync_cancel = threading.Event()
+_sync_active = threading.Lock()
+_rebuild_cancel = threading.Event()
+_repair_cancel = threading.Event()
+
+
+def request_sync_cancel() -> None:
+    _sync_cancel.set()
+
+
+def request_rebuild_cancel() -> None:
+    _rebuild_cancel.set()
+
+
+def request_repair_cancel() -> None:
+    _repair_cancel.set()
+
+
+def sync_active() -> bool:
+    if _sync_active.acquire(blocking=False):
+        _sync_active.release()
+        return False
+    return True
 
 
 # Live progress of the (single, blocking) rebuild-all run, polled by the
 # Settings page so the user sees "N of M photos" instead of a blind spinner.
 _rebuild_progress_lock = threading.Lock()
 _rebuild_progress = {"active": False, "total": 0, "done": 0}
+
+# The same for the capture-date repair.
+_repair_progress_lock = threading.Lock()
+_repair_progress = {"active": False, "total": 0, "done": 0}
+
+
+def get_repair_progress() -> dict:
+    with _repair_progress_lock:
+        return dict(_repair_progress)
+
+
+def _set_repair_progress(**fields) -> None:
+    with _repair_progress_lock:
+        _repair_progress.update(fields)
 
 # How long the editor must have been quiet before a rebuild worker picks up
 # its next photo. The rebuild is hours of patience; a person mid-drag is not.
@@ -485,7 +567,13 @@ def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
     pressure. EXIF reads reuse a pool of exiftool helpers (same pattern as
     repair_capture_dates) instead of spawning one process per photo. A photo
     whose file is damaged is logged and skipped rather than aborting the whole
-    run; DB writes and the commit stay on the calling thread."""
+    run; DB writes and the commit stay on the calling thread.
+
+    Stopped (request_rebuild_cancel) between two photos: the workers finish
+    the photo they are on, the rest keep their old thumbnails."""
+    if get_rebuild_progress()["active"]:
+        raise AlreadyRunning("The thumbnails are already being rebuilt.")
+    _rebuild_cancel.clear()
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
     tasks = [(img, resolve_image_path(img)) for img in images]
     tasks = [(img, path) for img, path in tasks if path.exists()]
@@ -498,12 +586,17 @@ def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
 
     def build(task: tuple[Image, Path]):
         img, path = task
+        # Stopped: a photo not started is left as it is.
+        if _rebuild_cancel.is_set():
+            return img, None, False
         # Yield to a live editing session (the same pattern as the embedding
         # backfill yielding to imports): every worker holds its next photo
         # back while the editor renders, so scrub frames keep their CPU and
         # the two working sets never share an 8GB machine at the same time.
-        while editor_recently_active(_REBUILD_EDITOR_IDLE_S):
+        while editor_recently_active(_REBUILD_EDITOR_IDLE_S) and not _rebuild_cancel.is_set():
             time.sleep(0.5)
+        if _rebuild_cancel.is_set():
+            return img, None, False
         try:
             regenerate_for_image(img)
         except Exception:
@@ -522,12 +615,19 @@ def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
         return img, exif, True
 
     rebuilt = 0
+    cancelled = False
     _set_rebuild_progress(active=True, total=len(tasks), done=0)
     try:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(build, t) for t in tasks]
             done = 0
             for future in as_completed(futures):
+                if _rebuild_cancel.is_set():
+                    # The photos in the workers' hands finish (the pool waits
+                    # for them on the way out); the queued ones never start.
+                    cancelled = True
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
                 img, exif, ok = future.result()
                 done += 1
                 _set_rebuild_progress(done=done)
@@ -545,7 +645,7 @@ def rebuild_all_thumbnails(db: Session, owner_id: int) -> dict:
             except Exception:
                 pass
     db.commit()
-    return {"rebuilt": rebuilt}
+    return {"rebuilt": rebuilt, "cancelled": cancelled}
 
 
 def _same_moment(a: datetime | None, b: datetime | None) -> bool:
@@ -571,7 +671,12 @@ def repair_capture_dates(db: Session, owner_id: int) -> dict:
     no readable capture date keep their current value.
 
     EXIF reads run on a small worker pool (one exiftool process each, the same
-    pattern as import staging); only the row updates happen serially."""
+    pattern as import staging); only the row updates happen serially.
+
+    Stopped (request_repair_cancel): the dates corrected so far are kept."""
+    if get_repair_progress()["active"]:
+        raise AlreadyRunning("The capture dates are already being repaired.")
+    _repair_cancel.clear()
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
     tasks = [(img, resolve_image_path(img)) for img in images]
     tasks = [(img, path) for img, path in tasks if path.exists()]
@@ -584,6 +689,9 @@ def repair_capture_dates(db: Session, owner_id: int) -> dict:
 
     def read_date(task: tuple[Image, Path]) -> tuple[Image, datetime | None]:
         img, path = task
+        # Stopped: the rest of the queue flies through without reading.
+        if _repair_cancel.is_set():
+            return img, None
         helper = helper_pool.get()
         try:
             taken_at = read_exif(path, helper=helper).taken_at
@@ -598,9 +706,17 @@ def repair_capture_dates(db: Session, owner_id: int) -> dict:
 
     fixed = 0
     with_date = 0
+    checked = 0
+    cancelled = False
+    _set_repair_progress(active=True, total=len(tasks), done=0)
     try:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             for img, taken_at in executor.map(read_date, tasks):
+                if _repair_cancel.is_set():
+                    cancelled = True
+                    break
+                checked += 1
+                _set_repair_progress(done=checked)
                 if taken_at is None:
                     continue
                 with_date += 1
@@ -608,6 +724,7 @@ def repair_capture_dates(db: Session, owner_id: int) -> dict:
                     img.taken_at = taken_at
                     fixed += 1
     finally:
+        _set_repair_progress(active=False)
         for h in helpers:
             try:
                 h.terminate()
@@ -615,10 +732,10 @@ def repair_capture_dates(db: Session, owner_id: int) -> dict:
                 pass
     db.commit()
     logger.info(
-        "repair-dates: %d photos checked, %d had a readable capture date, %d corrected",
-        len(tasks), with_date, fixed,
+        "repair-dates: %d photos checked, %d had a readable capture date, %d corrected%s",
+        checked, with_date, fixed, " (stopped early)" if cancelled else "",
     )
-    return {"checked": len(tasks), "fixed": fixed}
+    return {"checked": checked, "fixed": fixed, "cancelled": cancelled}
 
 
 def wipe_library(db: Session, owner_id: int) -> None:

@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { IconArrowUp, IconFolder, IconX } from "./Icons";
+import { IconArrowUp, IconFolder } from "./Icons";
 import { LoadingState } from "./Spinner";
-import { useEscapeToClose } from "../utils/modalKeys";
+import { useEnterToConfirm, useEscapeToClose } from "../utils/modalKeys";
 
 interface Props {
   onSelect: (path: string) => void;
@@ -18,6 +18,10 @@ export function DirectoryPicker({ onSelect, onClose, closing = false }: Props) {
   // undefined => let the backend start at its browse root (/sources).
   const [path, setPath] = useState<string | undefined>(undefined);
   useEscapeToClose(!closing, onClose);
+  // Enter takes the folder shown (the default button).
+  useEnterToConfirm(!closing, () => {
+    if (data?.exists) onSelect(data.path);
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ["browse", path ?? "__root__"],
@@ -25,15 +29,12 @@ export function DirectoryPicker({ onSelect, onClose, closing = false }: Props) {
   });
 
   return (
-    <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={onClose}>
-      <div className="modal dir-picker" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-overlay${closing ? " pm-closing" : ""}`}>
+      <div className="modal dir-picker" role="dialog" aria-modal="true" aria-label="Choose a folder">
         <div className="dir-picker-header">
           <h3 className="section-title" style={{ margin: 0 }}>
             Choose a folder
           </h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
-            <IconX size={14} />
-          </button>
         </div>
 
         <div className="dir-picker-path">{data?.path ?? "/sources"}</div>

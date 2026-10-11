@@ -9,7 +9,7 @@ import {
 } from "react";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
-import { useEscapeToClose } from "../utils/modalKeys";
+import { useEnterToConfirm, useEscapeToClose } from "../utils/modalKeys";
 
 // App-skinned replacements for window.confirm / window.alert. The native
 // dialogs render in the OS look, ignore the app's theme entirely and (in
@@ -178,6 +178,9 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   // Escape dismisses like the native dialogs do (cancel for confirm, OK for
   // alert) - and only this dialog, not the one it may be lying on top of.
   useEscapeToClose(current !== null, () => close(currentRef.current?.kind === "alert"));
+  // Enter is the default button - except where that would destroy something:
+  // a danger dialog opens with Cancel focused and Enter stays with it.
+  useEnterToConfirm(current !== null && !current.danger, () => close(true));
 
   const api = useMemo(
     () => ({ confirm, choose, alert, prompt }),
@@ -189,7 +192,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       {children}
       <Presence open={current !== null} ms={MOTION.modal}>
         {current && (
-          <div className="modal-overlay" onClick={() => close(current.kind === "alert")}>
+          <div className="modal-overlay">
             <div
               className="modal confirm-modal"
               role="alertdialog"
@@ -209,9 +212,6 @@ export function DialogProvider({ children }: { children: ReactNode }) {
                     defaultValue={current.initial ?? ""}
                     autoFocus
                     onChange={(e) => (promptRef.current = e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") close(true);
-                    }}
                     ref={(el) => {
                       if (el) promptRef.current = el.value;
                     }}

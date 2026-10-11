@@ -102,7 +102,7 @@ import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
 import { useStageBg, useAskSaveCopyOptions, useEditorWorkRes, editorWorkResFactor } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
-import { useWait } from "../state/wait";
+import { useTasks } from "../state/tasks";
 import { useLeaveGuard } from "../state/navHistory";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
@@ -827,7 +827,7 @@ function ClipToggle({ store, on, onToggle }: { store: HistStore; on: boolean; on
 export function PhotoEditor({ image, onClose, docked = false, closing = false, onPreviewFrame, onEditsSettled, maskHost = null }: Props) {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
-  const { withWait } = useWait();
+  const { runTask } = useTasks();
   const navigate = useNavigate();
   const location = useLocation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -2803,32 +2803,58 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     setPresets(loadPresets());
   }
 
+  // The final save as it runs: the leave guard below waits for it instead of
+  // starting a second one - with the editor's input locked meanwhile, nothing
+  // but a navigation can come in, and that must not double the write.
+  const saveInflightRef = useRef<Promise<void> | null>(null);
   const saveEdits = useMutation({
-    mutationFn: () =>
-      withWait("Saving edits…", async () => {
-        // An autosave can still be in the air (Back hit right after a slider
-        // came to rest) - let it land instead of racing a second write for the
-        // same photo onto the server.
-        await autosaveInflightRef.current;
-        // And none may start under this one: a timer armed by the last
-        // slider move would fire while the save below is still rendering,
-        // write the same values again with the render deferred, and have the
-        // server render this photo a second time for nothing.
-        window.clearTimeout(autosaveTimerRef.current);
-        await api.images.saveEdits(image.id, edits);
-        // What this write put on the server - the autosave below compares
-        // against it, so a save-then-close never writes twice.
-        lastWrittenKeyRef.current = editsKey;
-        deferredWriteRef.current = false;
-        unseenWriteRef.current = false;
-        // Awaited, so the popup stays up until the grid and the photo view
-        // actually hold the new row: leaving the editor must not drop you on a
-        // thumbnail that catches up a moment later.
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ["image", image.id] }),
-          queryClient.invalidateQueries({ queryKey: ["images"] }),
-        ]);
-      }),
+    mutationFn: async () => {
+      // The save shows in the title bar's task dock, without a Stop: the
+      // values are on the server already, this is the thumbnail and preview
+      // catching up, and stopping that would leave stale pictures. The nav
+      // is locked for its length, the editor itself is dimmed and ignores
+      // input (editor-overlay--saving) until it is through.
+      const run = runTask(
+        {
+          id: `editor-save:${image.id}`,
+          kind: "editor-save",
+          label: "Saving edits…",
+          cancel: null,
+          locksNav: true,
+          title: "The edit is written and the photo re-rendered. The editor closes when it is through.",
+        },
+        async () => {
+          // An autosave can still be in the air (Back hit right after a slider
+          // came to rest) - let it land instead of racing a second write for the
+          // same photo onto the server.
+          await autosaveInflightRef.current;
+          // And none may start under this one: a timer armed by the last
+          // slider move would fire while the save below is still rendering,
+          // write the same values again with the render deferred, and have the
+          // server render this photo a second time for nothing.
+          window.clearTimeout(autosaveTimerRef.current);
+          await api.images.saveEdits(image.id, edits);
+          // What this write put on the server - the autosave below compares
+          // against it, so a save-then-close never writes twice.
+          lastWrittenKeyRef.current = editsKey;
+          deferredWriteRef.current = false;
+          unseenWriteRef.current = false;
+          // Awaited, so the editor stays until the grid and the photo view
+          // actually hold the new row: leaving the editor must not drop you on a
+          // thumbnail that catches up a moment later.
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["image", image.id] }),
+            queryClient.invalidateQueries({ queryKey: ["images"] }),
+          ]);
+        }
+      );
+      saveInflightRef.current = run;
+      try {
+        await run;
+      } finally {
+        if (saveInflightRef.current === run) saveInflightRef.current = null;
+      }
+    },
     onSuccess: () => {
       if (!leavingRef.current) onClose();
     },
@@ -2954,14 +2980,24 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     };
   }, [image.id, flushQueries]);
 
-  // Always reached through the dialog, which blocks the editor and shows its
-  // own busy state. A virtual copy takes the editor's current (possibly
-  // unsaved) state, exactly like the baked one would.
+  // Reached through the dialog, which closes at once; the copy then shows in
+  // the title bar's task dock while the editor waits, locked (busy). A
+  // virtual copy takes the editor's current (possibly unsaved) state, exactly
+  // like the baked one would.
   const saveCopy = useMutation({
     mutationFn: (req: SaveCopyRequest) =>
-      req.kind === "virtual"
-        ? api.images.virtualCopy(image.id, edits)
-        : api.images.saveCopy(image.id, edits, { quality: req.quality, maxSize: req.maxSize }),
+      runTask(
+        {
+          id: `copy:${image.id}`,
+          kind: "copy",
+          label: req.kind === "virtual" ? "Creating virtual copy…" : "Saving copy…",
+          cancel: null,
+        },
+        () =>
+          req.kind === "virtual"
+            ? api.images.virtualCopy(image.id, edits)
+            : api.images.saveCopy(image.id, edits, { quality: req.quality, maxSize: req.maxSize })
+      ),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
@@ -3000,7 +3036,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     queryFn: () => api.settings.getAutoDevelop(),
   });
   const autoAdjust = useMutation({
-    mutationFn: () => withWait("Auto-developing…", () => api.images.autoAdjust(image.id)),
+    mutationFn: () => runTask({ kind: "plain", label: "Auto-developing…" }, () => api.images.autoAdjust(image.id)),
     onSuccess: (res) => {
       // The response is *partial* - only the groups enabled in Settings.
       // Spreading it over the current state leaves every unchecked group's
@@ -3040,8 +3076,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const busy = saveEdits.isPending || saveCopy.isPending;
 
   // Everything still owed to the server goes through the mutation - so the
-  // wait popup is up while it lands - instead of being left to the unmount
-  // cleanup's silent background write. `deferredWriteRef` counts as owed:
+  // editor stays, locked, while it lands - instead of being left to the
+  // unmount cleanup's silent background write. `deferredWriteRef` counts as owed:
   // an autosave writes the values only, so the thumbnail the grid is about
   // to show is still the old one. So does a write still in flight, whose
   // key has not landed in lastWrittenKeyRef yet.
@@ -3076,6 +3112,15 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   const saveEditsRef = useRef(saveEdits);
   saveEditsRef.current = saveEdits;
   const flushBeforeLeave = useCallback(async () => {
+    // A save already running (Escape, then a tab): wait for that one.
+    if (saveInflightRef.current) {
+      try {
+        await saveInflightRef.current;
+      } catch {
+        // Its own error handling reports it; the navigation goes ahead.
+      }
+      return;
+    }
     if (!owesWriteRef.current()) {
       flushQueries();
       return;
@@ -3098,9 +3143,14 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // requestClose reads are live; only this one binding has to be kept fresh.
   const requestCloseRef = useRef(requestClose);
   requestCloseRef.current = requestClose;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // Saving on the way out: the editor is locked until it is through, the
+      // keys included (the mouse is off through editor-overlay--saving).
+      if (busyRef.current) return;
       if (e.key === "Escape") {
         // Peel back the active on-canvas mode first, then close the editor.
         if (colorPickMode) setColorPickMode(false);
@@ -4761,7 +4811,8 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
     <div
       className={`editor-overlay${docked ? " editor-overlay--docked" : ""}${closing ? " editor-overlay--closing" : ""}${
         panelOpen || docked ? "" : " editor-overlay--panel-hidden"
-      }`}
+      }${busy ? " editor-overlay--saving" : ""}`}
+      aria-busy={busy || undefined}
     >
       {/* Docked, the stage stays hidden for good: the canvas frame shows the
           live edit, geometry included, and masks are drawn ON THAT FRAME -
@@ -6949,7 +7000,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           {saveCopyOpen && (
             <SaveCopyDialog
               onClose={() => setSaveCopyOpen(false)}
-              onSave={(req) => saveCopy.mutateAsync(req)}
+              onSave={(req) => {
+                setSaveCopyOpen(false);
+                saveCopy.mutate(req);
+              }}
               askOptions={askSaveCopyOptions}
             />
           )}

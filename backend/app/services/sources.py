@@ -63,10 +63,25 @@ _scan_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="source-sc
 
 _status_lock = threading.Lock()
 _scan_status: dict[str, dict] = {}
+# Sources whose running scan was asked to stop: the scan looks between two
+# files, stops reading and keeps what it has indexed so far.
+_scan_cancel: set[str] = set()
 
 
 def _blank_status() -> dict:
-    return {"running": False, "scanned": 0, "added": 0, "error": None}
+    return {"running": False, "scanned": 0, "added": 0, "error": None, "cancelled": False}
+
+
+def request_scan_cancel(source_root_id: str) -> None:
+    with _status_lock:
+        status = _scan_status.get(source_root_id)
+        if status and status.get("running"):
+            _scan_cancel.add(source_root_id)
+
+
+def _cancel_requested(source_root_id: str) -> bool:
+    with _status_lock:
+        return source_root_id in _scan_cancel
 
 
 def get_scan_status(source_root_id: str) -> dict:
@@ -94,6 +109,7 @@ def start_scan(source_root_id: str, include_excluded: bool = False) -> bool:
         if current and current.get("running"):
             return False
         _scan_status[source_root_id] = {**_blank_status(), "running": True}
+        _scan_cancel.discard(source_root_id)
     _scan_executor.submit(_run_scan, source_root_id, include_excluded)
     return True
 
@@ -295,7 +311,13 @@ def _run_scan(source_root_id: str, include_excluded: bool = False) -> None:
         renamed = 0
         revived = 0
         skipped_managed = 0
+        cancelled = False
         for path in sorted(root.rglob("*")):
+            # Stopped: what is indexed so far is paired, committed and
+            # rendered like a finished scan; the rest waits for the next one.
+            if _cancel_requested(source_root_id):
+                cancelled = True
+                break
             # Skip hidden files AND anything inside a hidden directory - most
             # importantly a library's ".photomanager" data folder (database,
             # thumbnails), whose cached JPEGs must never be indexed as photos.
@@ -399,7 +421,12 @@ def _run_scan(source_root_id: str, include_excluded: bool = False) -> None:
         # Revived photos count as "added" for the status readout - from the
         # user's point of view they (re)appeared in the library.
         _update_status(
-            source_root_id, running=False, scanned=scanned, added=added + revived, error=None
+            source_root_id,
+            running=False,
+            scanned=scanned,
+            added=added + revived,
+            error=None,
+            cancelled=cancelled,
         )
     except Exception as exc:
         logger.exception("Scan failed for source %s", source_root_id)

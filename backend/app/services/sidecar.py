@@ -235,6 +235,13 @@ def _flush() -> int:
 
 _all_lock = threading.Lock()
 _all_progress = {"active": False, "total": 0, "done": 0}
+# Set by the cancel route; the pass looks between two photos and stops. The
+# sidecars written so far stay (they are right either way).
+_all_cancel = threading.Event()
+
+
+def request_write_all_cancel() -> None:
+    _all_cancel.set()
 
 
 def write_all_progress() -> dict:
@@ -249,6 +256,7 @@ def start_write_all(owner_id: int) -> bool:
         if _all_progress["active"]:
             return False
         _all_progress.update(active=True, total=0, done=0)
+    _all_cancel.clear()
     thread = threading.Thread(target=_write_all, args=(owner_id,), name="sidecar-write-all", daemon=True)
     thread.start()
     return True
@@ -273,6 +281,8 @@ def _write_all(owner_id: int) -> None:
         written: set[Path] = set()
         helper = exif_service._get_helper()
         for i, image in enumerate(images, 1):
+            if _all_cancel.is_set():
+                break
             path = sidecar_for(image)
             if path is not None and path not in written:
                 if write_sidecar(db, image, helper=helper) is not None:

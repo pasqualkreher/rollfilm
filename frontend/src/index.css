@@ -265,25 +265,29 @@ body {
 
 /* Slim overlay-style scrollbars on the inner scroll areas (editor panel,
    detail rail, popovers) instead of the chunky native gutter. The main page
-   scrollers hide theirs entirely (see .page rules) in favour of the scrubber. */
-::-webkit-scrollbar {
+   scrollers hide theirs entirely (see .page rules) in favour of the scrubber.
+   Not on macOS: any ::-webkit-scrollbar rule switches Chromium's overlay
+   scrollbars off, and the system's own (auto-hiding, following "Show scroll
+   bars") are the native ones. main.tsx stamps data-platform on <html>;
+   :where() keeps the gate at zero specificity so nothing below changes. */
+:where(:root:not([data-platform="darwin"])) ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
-::-webkit-scrollbar-track,
-::-webkit-scrollbar-corner {
+:where(:root:not([data-platform="darwin"])) ::-webkit-scrollbar-track,
+:where(:root:not([data-platform="darwin"])) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
+:where(:root:not([data-platform="darwin"])) ::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--text) 16%, transparent);
   border-radius: var(--radius-sm);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 
-::-webkit-scrollbar-thumb:hover {
+:where(:root:not([data-platform="darwin"])) ::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--text) 30%, transparent);
   background-clip: padding-box;
 }
@@ -349,7 +353,7 @@ button {
   /* Above the full-window workspaces (900-1000), which start under the bar:
      its own popovers (the search field's suggestions, the burger menu) drop
      down over them and must not vanish behind. Below dialogs. */
-  z-index: 1100;
+  z-index: var(--z-chrome);
 }
 
 /* The bar's carrier: the element App.tsx measures for --top-bar-height. */
@@ -451,29 +455,152 @@ button {
   pointer-events: none;
 }
 
-/* Running-task indicator in the top bar. */
-.nav-task {
+/* The task dock: the one place everything running shows (App.tsx TaskDock).
+   A compact pill in the title bar's right zone, before the icons: spinner,
+   label, "N of M" and a square Stop. It only fades - the slot never changes
+   size around it, so nothing rises or slides. */
+.task-dock {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.task-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  height: var(--control-h-sm);
+  padding: 0 3px 0 9px;
+  border: 1px solid var(--bar-sep);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
   font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-muted);
   white-space: nowrap;
+  animation: pm-fade-in 0.12s ease both;
 }
 
-/* A running count inside it: figures of one width, so the label does not
-   twitch as the number goes up. */
-.nav-task-count {
+.task-pill.pm-closing {
+  animation: pm-fade-out 0.1s var(--ease-in) both;
+  pointer-events: none;
+}
+
+.task-pill--done {
+  color: var(--text);
+}
+
+.task-pill--error {
+  color: var(--danger);
+}
+
+/* Spinner, words and count as one group; a button when it opens the list. */
+.task-pill-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+
+.task-pill-label[aria-haspopup] {
+  cursor: pointer;
+}
+
+.task-pill-text {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-pill-progress {
+  font-weight: 400;
+}
+
+/* A running count: figures of one width and a reserved width, so the label
+   does not twitch as the number goes up. */
+.task-pill-count {
+  display: inline-block;
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-/* The label of a task that also carries a button (Cancel): spinner and text
-   keep their spacing as one group beside it. */
-.nav-task-label {
+.task-pill-more {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--hover);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+/* The square Stop (or the chip's ×): a quiet icon button inside the pill. */
+.task-pill-stop {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: none;
+  color: var(--text-muted);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.task-pill-stop:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.task-pill-stop:disabled {
+  opacity: 0.5;
+}
+
+.task-pill-action {
+  padding: 0 4px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* The list behind "+N": one row per task, each with its own Stop. Hangs from
+   the pill's right edge, like the icons' menus. */
+.task-menu {
+  left: auto;
+  right: 0;
+  min-width: 280px;
+  max-width: 420px;
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  padding: 5px 6px 5px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.task-row-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-row-stop {
+  flex: none;
 }
 
 /* Utility pages (Settings, Help) as quiet icon buttons on the far right -
@@ -765,9 +892,9 @@ button {
 .nav-menu,
 .import-menu-dropdown,
 .reset-menu-pop {
-  /* Entrances fill `backwards` only: a forwards fill would pin the final
-     opacity/transform and beat any later class that wants to change them. */
-  animation: pm-pop-in 0.16s var(--ease-out) backwards;
+  /* A menu appears at once, like the system's: no slide, no scale. The exit
+     below is the only motion it has. */
+  animation: none;
   transform-origin: top left;
 }
 
@@ -779,7 +906,6 @@ button {
 .filter-chip-pop--up,
 .reset-menu-pop {
   transform-origin: bottom left;
-  animation-name: pm-pop-up-in;
 }
 
 .dropdown-menu.pm-closing,
@@ -789,34 +915,29 @@ button {
 .nav-menu.pm-closing,
 .import-menu-dropdown.pm-closing,
 .reset-menu-pop.pm-closing {
-  animation: pm-pop-out 0.12s var(--ease-in) both;
+  animation: pm-fade-out 0.1s var(--ease-in) both;
   pointer-events: none;
 }
 
-.dropdown-menu--up.pm-closing,
-.filter-chip-pop--up.pm-closing,
-.reset-menu-pop.pm-closing {
-  animation-name: pm-pop-up-out;
-}
-
-/* Dialogs: the backdrop fades while the box rises into place; on the way out
-   both go together, a touch quicker. Clicks are off during the exit so a
-   second press cannot land on a dialog that is already leaving. */
+/* Dialogs: backdrop and box fade in together, quickly and without a rise or
+   a scale - a sheet-like appearance rather than a web modal. Clicks are off
+   during the exit so a second press cannot land on a dialog that is already
+   leaving. */
 .modal-overlay {
-  animation: pm-fade-in 0.2s ease-out backwards;
+  animation: pm-fade-in 0.12s ease-out backwards;
 }
 
 .modal-overlay > .modal {
-  animation: pm-modal-in 0.24s var(--ease-out) backwards;
+  animation: pm-fade-in 0.12s var(--ease-out) backwards;
 }
 
 .modal-overlay.pm-closing {
-  animation: pm-fade-out 0.17s var(--ease-in) both;
+  animation: pm-fade-out 0.1s var(--ease-in) both;
   pointer-events: none;
 }
 
 .modal-overlay.pm-closing > .modal {
-  animation: pm-modal-out 0.17s var(--ease-in) both;
+  animation: pm-fade-out 0.1s var(--ease-in) both;
 }
 
 /* Full-window overlays (slideshow, the import review's lightbox) crossfade -
@@ -838,8 +959,7 @@ button {
 .import-staging-banner,
 .filter-dock,
 .status-note,
-.action-bar-messages,
-.nav-task {
+.action-bar-messages {
   animation: pm-page-in 0.22s var(--ease-out) backwards;
 }
 
@@ -868,7 +988,7 @@ button {
   .filter-dock,
   .status-note,
   .action-bar-messages,
-  .nav-task,
+  .task-pill,
   .settings-tour-card,
   .action-bar--bottom,
   .tooltip {
@@ -879,8 +999,7 @@ button {
   .detail-page,
   .editor-panel,
   .editor-body,
-  .page-scroll,
-  .wait-overlay {
+  .page-scroll {
     transition: none;
   }
 }
@@ -2213,8 +2332,10 @@ textarea:focus-visible {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  z-index: 1200;
+  /* A light dim, as under a macOS sheet; the dark skins deepen it (see the
+     native pass 2 block at the end). */
+  background: rgba(0, 0, 0, 0.22);
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2245,72 +2366,6 @@ textarea:focus-visible {
 
 .modal-close:hover {
   color: var(--text);
-}
-
-/* Full-screen blocking wait popup (state/wait.tsx) - dims and locks the whole
-   app while a must-wait action runs (save, bulk reset, delete...). The div
-   mounts instantly so clicks are blocked from the first moment, but it only
-   fades in after a short delay - quick operations never flash a popup. Sits
-   above every modal, since waits are triggered from inside dialogs too. */
-.wait-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 3000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.45);
-  cursor: wait;
-  /* Transitions rather than a keyframe so the exit can start from wherever
-     the fade-in got to: a wait that ends inside the delay simply never shows,
-     one that ends mid-fade turns around, a shown one fades out. */
-  opacity: 0;
-  transition: opacity 0.2s ease-out 0.25s;
-}
-
-.wait-overlay.is-shown {
-  opacity: 1;
-}
-
-.wait-overlay.pm-closing {
-  opacity: 0;
-  transition: opacity 0.15s var(--ease-in);
-  pointer-events: none;
-}
-
-.wait-overlay-box {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 18px 26px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-modal);
-  font-size: var(--text-md);
-}
-
-.wait-overlay-progress {
-  margin-left: 10px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.wait-overlay-count {
-  display: inline-block;
-  text-align: right;
-}
-
-.wait-overlay-cancel {
-  margin-left: 6px;
-  /* Wide enough for "Stopping…", so pressing Cancel does not resize the box. */
-  min-width: 88px;
-  cursor: pointer;
-}
-
-.wait-overlay-cancel:disabled {
-  cursor: wait;
 }
 
 /* App-skinned confirm/alert dialogs (components/AppDialogs.tsx) - replace the
@@ -3630,6 +3685,21 @@ textarea:focus-visible {
 
 /* Leaving: the same fade in reverse. ImageDetail keeps the editor mounted
    with this class for the animation's length, then takes it down. */
+/* Saving on the way out (PhotoEditor, busy): the editor stays until the
+   write and the re-render have landed, and takes no input meanwhile - the
+   title bar's task dock says what is happening. Dimmed a little, not hidden:
+   the photo is still the thing on screen. */
+.editor-overlay--saving {
+  pointer-events: none;
+  cursor: progress;
+}
+
+.editor-overlay--saving .editor-body,
+.editor-overlay--saving .editor-panel {
+  opacity: 0.85;
+  transition: opacity 0.15s ease;
+}
+
 .editor-overlay--closing {
   animation: pm-fade-out 0.14s ease-in both;
   pointer-events: none;
@@ -4765,7 +4835,7 @@ input.editor-preset-select {
   height: 18px;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-pill);
   background: var(--bg);
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease;
@@ -4786,7 +4856,7 @@ input.editor-preset-select {
 .editor-switch--sm {
   width: 24px;
   height: 14px;
-  border-radius: 7px;
+  border-radius: var(--radius-pill);
 }
 
 .editor-switch--sm::after {
@@ -5147,7 +5217,7 @@ input.editor-preset-select {
   min-width: 200px;
   max-width: 260px;
   padding: 8px;
-  background: var(--bg);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-menu);
@@ -5241,7 +5311,7 @@ input.tag-filter-search {
    (10000) intentionally stays on top of everything. */
 .dropdown-menu {
   position: fixed;
-  z-index: 4000;
+  z-index: var(--z-menu);
   max-width: 340px;
   max-height: 280px;
   overflow-y: auto;
@@ -6071,7 +6141,7 @@ input.dropdown-search {
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--accent-contrast);
   font-size: var(--label-micro-size);
@@ -6783,7 +6853,7 @@ input.dropdown-search {
    info card, opens at the pointer, nudged back inside the window at the edges. */
 .ctx-menu {
   position: fixed;
-  z-index: 3500;
+  z-index: var(--z-ctx);
   min-width: 200px;
   padding: 4px;
   display: flex;
@@ -6832,7 +6902,7 @@ input.dropdown-search {
   position: fixed;
   left: 50%;
   bottom: 24px;
-  z-index: 3500;
+  z-index: var(--z-ctx);
   transform: translateX(-50%);
   max-width: min(520px, calc(100vw - 32px));
   padding: 8px 14px;
@@ -6845,7 +6915,7 @@ input.dropdown-search {
 
 .info-card {
   position: fixed;
-  z-index: 3500;
+  z-index: var(--z-ctx);
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -7462,6 +7532,40 @@ input.dropdown-search {
   z-index: 2;
 }
 
+/* "3 sessions · 42 GB in import folders" beside the panel title. */
+.import-panel-count {
+  margin-left: 10px;
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Title and the "Import settings…" button on one line. */
+.import-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 4px;
+}
+
+.import-panel-head > .section-title {
+  margin: 0;
+}
+
+/* Heading over the two panels that are not the import itself. */
+.import-panels-heading {
+  margin: 8px 0 -4px;
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.import-settings-modal {
+  width: min(560px, 100%);
+}
+
 /* Single import button with a small dropdown of picker choices (folder vs
    individual files) - one trigger, both capabilities. */
 .import-menu {
@@ -7480,7 +7584,7 @@ input.dropdown-search {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-menu);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -7498,7 +7602,7 @@ input.dropdown-search {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font: inherit;
+  font-family: inherit;
   cursor: pointer;
 }
 
@@ -8644,7 +8748,7 @@ kbd {
   padding: 8px 10px 10px;
   margin-bottom: 6px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .mask-shape.active {
@@ -8700,7 +8804,7 @@ kbd {
   font-size: var(--text-base);
   padding: 1px 4px;
   border: 1px solid var(--accent);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg);
   color: var(--text);
 }
@@ -12739,7 +12843,7 @@ a.info-card-chip--canvas:hover {
   top: var(--chrome-top);
 }
 
-/* Focus mode (View menu, Cmd+F, F in the editors - state/focusMode.ts): the
+/* Focus mode (View menu, Shift+Cmd+F, F in the editors - state/focusMode.ts): the
    app's top bar goes, and nothing else. <html data-focus> hides it, and with
    --chrome-top at zero every full-window workspace (the rule above) starts
    at the very top, so the editors get that height for the picture while
@@ -12831,7 +12935,7 @@ a.info-card-chip--canvas:hover {
 }
 /* Everything you click in the bar opts out of the drag region, or the click
    would move the window instead. */
-:root[data-titlebar="inset"] .top-bar :is(a, button, input, .nav-burger-wrap, .search-bar, .nav-task) {
+:root[data-titlebar="inset"] .top-bar :is(a, button, input, .nav-burger-wrap, .search-bar, .task-dock) {
   -webkit-app-region: no-drag;
 }
 /* First-run setup has no top bar: the whole screen drags, the card doesn't. */
@@ -13000,14 +13104,13 @@ input[type="radio"]:disabled {
   position: fixed;
   z-index: var(--z-tooltip);
   max-width: 280px;
-  padding: 4px 8px;
+  padding: 3px 7px;
   font-size: var(--text-xs);
   line-height: 1.35;
   color: var(--text);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-menu);
+  border-radius: var(--radius-xs);
   pointer-events: none;
   white-space: pre-line;
   animation: pm-fade-in 0.1s ease both;
@@ -13050,4 +13153,309 @@ input[type="radio"]:disabled {
 .canvas-viewport.is-panning,
 .canvas-viewport.is-panning * {
   cursor: grabbing !important;
+}
+
+/* ===========================================================================
+   Native pass 2 (2026-10-11): what still read as a web page, in behaviour
+   rather than looks. Controls get the arrow cursor (the hand is for links
+   that leave the app), nothing lifts or grows on hover, menus have the
+   system's 24px rows with the accent highlight and a tick in the gutter for
+   the chosen entry, dialogs sit under a light dim, links are quiet. Written
+   as overrides on top of the rules above - the single-class rules stay where
+   they are for the sessions working alongside; `:root body` outranks them.
+   --------------------------------------------------------------------------- */
+
+/* The arrow everywhere, as in every Mac app. Text fields keep the I-beam
+   (their UA cursor is not inherited), the stage keeps its grab and crosshair. */
+body {
+  cursor: default;
+}
+
+:root body :is(
+  button, [role="button"], [role="menuitem"], [role="menuitemcheckbox"], [role="option"],
+  [role="tab"], [role="radio"], [role="switch"], label, summary, select, a,
+  input[type="checkbox"], input[type="radio"], input[type="range"], input[type="color"], input[type="file"],
+  .thumb-card, .dir-entry, .theme-tile, .settings-tab, .help-tab, .mask-row, .film-sim-tile,
+  .smart-card, .stat-tile, .canvas-shelf-card, .canvas-list-card, .color-swatch, .mixer-band,
+  .canvas-swatch, .canvas-color, .canvas-font-option, .tag-chip, .page-card-tool,
+  .editor-accordion-header, .settings-option, .copy-kind, .filter-pin, .brand,
+  .editor-clip-toggle, .editor-switch
+) {
+  cursor: default;
+}
+
+:root body :is(button, .btn, .icon-btn, input, select):disabled {
+  cursor: default;
+}
+
+:root body input[type="range"]::-webkit-slider-thumb {
+  cursor: default;
+}
+
+/* Only a link that leaves the app is a hyperlink: the hand, the accent, a
+   quiet underline. In-app links (tabs, chips) are controls like the rest. */
+:root body :is(a[href^="http"], a[href^="mailto:"]):not(.btn):not(.icon-btn):not(.top-icon-link) {
+  cursor: pointer;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+:root body :is(a[href^="http"], a[href^="mailto:"]):not(.btn):not(.icon-btn):not(.top-icon-link):hover {
+  text-decoration-color: var(--accent);
+}
+
+::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/* Hover without motion: a Mac control never moves or grows under the
+   pointer, it tints. The transitions stay, only the transforms go. */
+.theme-tile:hover,
+.canvas-list-card:hover,
+.canvas-shelf-card:hover .canvas-shelf-paper {
+  transform: none;
+}
+
+.smart-card:hover {
+  transform: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.stat-tile:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.mixer-band:hover,
+.color-swatch:hover,
+.canvas-swatch:hover {
+  transform: none;
+  outline: 1px solid var(--text-muted);
+  outline-offset: 1px;
+}
+
+/* Pressed darkens, it does not shrink. */
+.icon-btn:active:not(:disabled) {
+  transform: none;
+  background: color-mix(in srgb, var(--text) 14%, var(--hover));
+}
+
+/* Photos and Finder draw nothing over a tile under the pointer. */
+.thumb-card:hover img {
+  filter: none;
+}
+
+.btn.primary:hover:not(:disabled) {
+  filter: none;
+  background: color-mix(in srgb, var(--accent) 86%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 86%, var(--text));
+}
+
+/* A text field does not answer a hover. */
+select:hover,
+input:hover:not(:disabled),
+.filter-bar input[type="date"]:hover {
+  border-color: var(--border);
+}
+
+/* Menus in the system's rhythm: 24px rows, 5px inset, the accent as the
+   highlight with the contrast text on it (slate reads like the Graphite
+   highlight), and the chosen entry marked by a tick in the left gutter
+   instead of a tint and bold type. */
+.ctx-menu,
+.dropdown-menu,
+.nav-menu,
+.import-menu-dropdown {
+  padding: 5px;
+  gap: 0;
+  border-radius: var(--radius-sm);
+}
+
+.ctx-menu-item,
+.dropdown-option,
+.import-menu-item,
+.nav-menu a {
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 3px 10px;
+  line-height: 18px;
+  font-weight: 400;
+  border-radius: var(--radius-xs);
+}
+
+.ctx-menu-head {
+  padding: 3px 10px 4px;
+}
+
+/* The tick gutter, where a menu has a chosen entry. */
+.dropdown-option,
+.nav-menu a {
+  position: relative;
+  padding-left: 24px;
+}
+
+.dropdown-option.selected,
+.nav-menu a.active {
+  background: none;
+  color: var(--text);
+  font-weight: 400;
+}
+
+.dropdown-option.selected::before,
+.nav-menu a.active::before {
+  content: "✓";
+  position: absolute;
+  left: 8px;
+  top: 3px;
+  line-height: 18px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ctx-menu-item:hover,
+.ctx-menu-item:focus-visible,
+.ctx-menu-item.cursor,
+.dropdown-menu .dropdown-option:hover:not(:disabled),
+.dropdown-menu .dropdown-option.cursor,
+.import-menu-item:hover,
+.nav-menu a:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.ctx-menu-item:hover .icon,
+.ctx-menu-item.cursor .icon,
+.dropdown-menu .dropdown-option:hover:not(:disabled) .icon,
+.dropdown-menu .dropdown-option.cursor .icon,
+.import-menu-item:hover .icon,
+.nav-menu a:hover .icon {
+  color: inherit;
+}
+
+/* Dialogs: the dark skins need a deeper dim for the box to stand off. */
+:root[data-theme$="-dark"] .modal-overlay {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+/* Rubber-band selection (utils/useMarquee): the rectangle drawn over a grid
+   while the mouse sweeps the grid. Inside the grid's root, which is what
+   its coordinates are measured from; above the sticky month headers (z 4). */
+.timeline,
+.thumbnail-grid {
+  position: relative;
+}
+
+.marquee {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+
+/* Native pass 2, wave 3: the right-click menu's rows (utils/useMenuKeys,
+   PhotoContextMenu), dialog button rows in one order, menu focus. */
+.ctx-menu-sep {
+  height: 1px;
+  margin: 5px 10px;
+  background: var(--border);
+}
+
+/* The key column at the right of a row, muted until the row is lit. */
+.ctx-menu-key,
+.ctx-menu-arrow {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  display: inline-flex;
+  align-items: center;
+}
+
+.ctx-menu-item:hover .ctx-menu-key,
+.ctx-menu-item.cursor .ctx-menu-key,
+.ctx-menu-item:hover .ctx-menu-arrow,
+.ctx-menu-item.cursor .ctx-menu-arrow {
+  color: inherit;
+}
+
+/* Stars and swatches on a row of their own: the label left, the controls at
+   the right, in the row's rhythm. */
+.ctx-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 24px;
+  padding: 3px 10px;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+
+.ctx-menu-row .rating-stars,
+.ctx-menu-row .color-label-picker {
+  margin-left: auto;
+}
+
+.ctx-menu-row .color-swatch {
+  width: 13px;
+  height: 13px;
+}
+
+.ctx-menu--sub {
+  min-width: 180px;
+  max-width: 280px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.ctx-menu--sub .ctx-menu-item {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Dialog buttons in one row, Cancel at the left, the default at the right,
+   like every sheet on the Mac. */
+.pair-delete-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.pair-delete-actions .btn {
+  width: auto;
+}
+
+/* The chosen swatch keeps its ring under the pointer. */
+.color-swatch.selected:hover {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+/* The burger menu's entries lit by the keyboard like by the pointer. */
+.nav-menu a:focus-visible {
+  outline: none;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* A row with a tick (Sync to Immich): the gutter the dropdowns use. */
+.ctx-menu-item--check {
+  position: relative;
+  padding-left: 24px;
+}
+
+.ctx-menu-item--check.checked::before {
+  content: "✓";
+  position: absolute;
+  left: 8px;
+  top: 3px;
+  line-height: 18px;
+  font-size: 11px;
+  font-weight: 600;
 }

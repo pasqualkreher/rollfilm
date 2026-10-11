@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { IconChevronDown } from "./Icons";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
+import { useMenuKeys } from "../utils/useMenuKeys";
 
 export interface DropdownOption {
   value: string;
@@ -75,7 +76,6 @@ export function Dropdown({
   // Searchable menus: what has been typed, and which of the matching options
   // the arrow keys have landed on (Enter picks it).
   const [query, setQuery] = useState("");
-  const [cursor, setCursor] = useState(0);
   const searchRef = useRef<HTMLInputElement | null>(null);
   // Screen position of the portalled menu; null on the measuring first frame
   // (rendered invisibly, placed by the layout effect before paint).
@@ -90,12 +90,10 @@ export function Dropdown({
     setOpen(false);
     setPos(null);
     setQuery("");
-    setCursor(0);
   }
 
   function openWith(initialQuery = "") {
     setQuery(initialQuery);
-    setCursor(0);
     setOpen(true);
   }
 
@@ -111,22 +109,27 @@ export function Dropdown({
     close();
   }
 
-  // Keys inside the search box: arrows walk the matches, Enter takes the one
-  // under the cursor (the first match by default), Escape is handled globally.
-  function onSearchKey(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const enabled = visible.filter((o) => !o.disabled);
-      if (enabled.length === 0) return;
-      const step = e.key === "ArrowDown" ? 1 : -1;
-      setCursor((c) => (c + step + enabled.length) % enabled.length);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      const enabled = visible.filter((o) => !o.disabled);
-      const target = enabled[Math.min(cursor, enabled.length - 1)];
-      if (target) pick(target);
-    }
-  }
+  // The keyboard (utils/useMenuKeys): arrows, Home/End, Enter, Escape, and
+  // typed letters where there is no search box to type into. The cursor
+  // starts on the chosen option, the way a popup button opens on its value.
+  const enabledVisible = visible.filter((o) => !o.disabled);
+  const { cursor: cursorValue, setCursor } = useMenuKeys({
+    open: open && !isEmpty,
+    ids: enabledVisible.map((o) => o.value),
+    initial: enabledVisible.some((o) => o.value === value) ? value : enabledVisible[0]?.value ?? null,
+    labelOf: searchable ? undefined : (id) => searchText(options.find((o) => o.value === id)!),
+    onPick: (id) => {
+      const o = options.find((x) => x.value === id);
+      if (o) pick(o);
+    },
+    onClose: close,
+  });
+  // Narrowing the matches moves the cursor to the first of them.
+  const firstVisible = enabledVisible[0]?.value ?? null;
+  useEffect(() => {
+    if (open && searchable) setCursor(firstVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
 
   // The options can drain away while the menu is open (the last album deleted
   // in another view) - drop the menu rather than leave an empty box behind.
@@ -141,9 +144,6 @@ export function Dropdown({
       if (wrapRef.current?.contains(t) || menuRef.current?.contains(t)) return;
       close();
     }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") close();
-    }
     // The fixed-positioned menu would detach from its trigger if anything
     // scrolls or resizes underneath - close instead (scrolling inside the
     // menu's own list is fine).
@@ -152,12 +152,10 @@ export function Dropdown({
       close();
     }
     document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", close);
     return () => {
       document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
     };
@@ -194,21 +192,8 @@ export function Dropdown({
   }, [open]);
 
   // Keep the arrow-key cursor's option in view as it walks the list.
-  useEffect(() => {
-    if (!open || !searchable) return;
-    menuRef.current
-      ?.querySelector<HTMLElement>(".dropdown-option.cursor")
-      ?.scrollIntoView({ block: "nearest" });
-  }, [open, searchable, cursor, query]);
-
   // Which option the keyboard cursor sits on, by value (only among the
   // enabled matches, so it never lands on something unpickable).
-  const enabledVisible = visible.filter((o) => !o.disabled);
-  const cursorValue =
-    searchable && enabledVisible.length > 0
-      ? enabledVisible[Math.min(cursor, enabledVisible.length - 1)].value
-      : null;
-
   return (
     <div className={`dropdown${className ? ` ${className}` : ""}`} ref={wrapRef}>
       <button
@@ -273,11 +258,7 @@ export function Dropdown({
                   placeholder="Type to find…"
                   value={query}
                   aria-label={ariaLabel ? `Find ${ariaLabel.toLowerCase()}` : "Find"}
-                  onChange={(e) => {
-                    setQuery(e.target.value);
-                    setCursor(0);
-                  }}
-                  onKeyDown={onSearchKey}
+                  onChange={(e) => setQuery(e.target.value)}
                 />
               )}
               {visible.length === 0 && <div className="dropdown-empty">No match</div>}
@@ -291,6 +272,8 @@ export function Dropdown({
                     o.value === cursorValue ? " cursor" : ""
                   }`}
                   disabled={o.disabled}
+                  data-menu-id={o.value}
+                  onMouseEnter={() => !o.disabled && setCursor(o.value)}
                   onClick={() => pick(o)}
                 >
                   {o.label}

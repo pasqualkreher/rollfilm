@@ -1134,6 +1134,13 @@ def _drop_export_job(job_id: str) -> None:
         Path(job["path"]).unlink(missing_ok=True)
 
 
+def export_jobs_running() -> int:
+    """How many exports are still rendering - for the desktop shell's quit
+    question (an export not written when the app quits is not made later)."""
+    with _export_jobs_lock:
+        return sum(1 for job in _export_jobs.values() if job.get("state") == "running")
+
+
 def _prune_export_jobs() -> None:
     now = time.monotonic()
     with _export_jobs_lock:

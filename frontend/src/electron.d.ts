@@ -4,6 +4,11 @@ export {};
 
 declare global {
   interface Window {
+    /**
+     * The labels of the tasks running in this window that quitting would cut
+     * off (state/tasks.tsx): read by the desktop shell's quit dialog.
+     */
+    __rollfilmTasks?: () => string[];
     photoManager?: {
       /** Base URL of the locally-spawned backend, e.g. http://127.0.0.1:52345. */
       apiBaseUrl: string | null;
@@ -71,6 +76,12 @@ declare global {
       setWindowButtonsVisible?: (visible: boolean) => Promise<void>;
       /** View → Focus in the menu bar; returns the unsubscribe. Absent in older builds. */
       onToggleFocus?: (callback: () => void) => () => void;
+      /** The menu bar's commands ("settings", "find", "import", "help", "shortcuts", "about"); returns the unsubscribe. Absent in older builds. */
+      onMenu?: (callback: (command: string) => void) => () => void;
+      /** The skin in force: native dialogs and the window's own paint follow it. Absent in older builds. */
+      setTheme?: (theme: { mode: "light" | "dark" | "auto"; bg: string }) => Promise<void>;
+      /** Dock / taskbar progress, 0–1; anything else clears it. Absent in older builds. */
+      setProgress?: (fraction: number) => Promise<void>;
     };
   }
 }

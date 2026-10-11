@@ -1,8 +1,8 @@
 // Focus mode: the app's top bar goes away and whatever is on screen takes
 // the height it leaves - the library grid, an album, the photo editor, the
 // canvas editor, all the same. One switch for the whole app, not a button
-// per view: the desktop shell's View menu (Focus, Cmd/Ctrl+F) and the same
-// keys in the web build toggle it, F does too where a view has no text to
+// per view: the desktop shell's View menu (Focus, Shift+Cmd/Ctrl+F) and the
+// same keys in the web build toggle it, F does too where a view has no text to
 // type into (the editors), and Esc steps out of it there.
 //
 // Only the bar goes: the editors keep their own tools, so you go on working
@@ -65,7 +65,8 @@ export function useFocusChrome(wanted: boolean) {
 
 // The app-wide switch, mounted once (App.tsx): applies the chrome, listens
 // to the desktop shell's menu item and, where there is no native menu to
-// take the keys (the web build, Windows, Linux), to Cmd/Ctrl+F itself.
+// take the keys (the web build, Windows, Linux), to Shift+Cmd/Ctrl+F itself
+// (plain Cmd/Ctrl+F is Find, as everywhere on the desktop).
 // Esc is the editors' own business: each has a ladder of things to step
 // out of (crop, selection, ...) and focus mode is one rung of it.
 export function useFocusModeSwitch() {
@@ -75,7 +76,7 @@ export function useFocusModeSwitch() {
     const offMenu = window.photoManager?.onToggleFocus?.(toggleFocusMode);
     function onKey(e: KeyboardEvent) {
       if (e.defaultPrevented) return;
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         toggleFocusMode();
       }

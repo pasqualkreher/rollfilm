@@ -19,14 +19,21 @@ from app.services.library_merge import (
 from app.services import copy_jobs
 from app.workers.queue import derivatives_pending, embeddings_running
 from app.services.maintenance import (
+    AlreadyRunning,
     build_backup_zip,
     get_rebuild_progress,
+    get_repair_progress,
     rebuild_all_thumbnails,
     repair_capture_dates,
+    request_rebuild_cancel,
+    request_repair_cancel,
+    request_sync_cancel,
     restore_from_backup,
+    sync_active,
     sync_db_with_library,
     wipe_library,
 )
+from app.api.routes.images import export_jobs_running
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
@@ -41,14 +48,34 @@ def sync_library(db: Session = Depends(get_db), current_user: User = Depends(get
     try:
         return sync_db_with_library(db, current_user.id)
     except RuntimeError as exc:
-        # Library root unreachable (external drive asleep/unplugged) - refuse
-        # with a clear message instead of wiping the catalog or a bare 500.
+        # Library root unreachable (external drive asleep/unplugged), or a
+        # sync already running - refuse with a clear message instead of
+        # wiping the catalog or a bare 500.
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/sync/cancel", status_code=204)
+def sync_cancel(current_user: User = Depends(get_current_user)):
+    """Stop a running sync. It stops before anything is removed: a sync that
+    was stopped has changed nothing (renamed files it had already followed
+    keep their new path)."""
+    request_sync_cancel()
 
 
 @router.post("/rebuild-thumbnails", response_model=schemas.RebuildThumbnailsResult)
 def rebuild_thumbnails(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return rebuild_all_thumbnails(db, current_user.id)
+    try:
+        return rebuild_all_thumbnails(db, current_user.id)
+    except AlreadyRunning as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/rebuild-thumbnails/cancel", response_model=schemas.RebuildProgressOut)
+def rebuild_thumbnails_cancel(current_user: User = Depends(get_current_user)):
+    """Stop a running rebuild. The photos in the workers' hands finish; the
+    rest keep the thumbnails they have."""
+    request_rebuild_cancel()
+    return get_rebuild_progress()
 
 
 @router.get("/rebuild-progress", response_model=schemas.RebuildProgressOut)
@@ -60,7 +87,24 @@ def rebuild_progress(current_user: User = Depends(get_current_user)):
 
 @router.post("/repair-dates", response_model=schemas.RepairDatesResult)
 def repair_dates(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return repair_capture_dates(db, current_user.id)
+    try:
+        return repair_capture_dates(db, current_user.id)
+    except AlreadyRunning as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/repair-dates/cancel", response_model=schemas.RebuildProgressOut)
+def repair_dates_cancel(current_user: User = Depends(get_current_user)):
+    """Stop a running date repair. The dates corrected so far are kept."""
+    request_repair_cancel()
+    return get_repair_progress()
+
+
+@router.get("/repair-progress", response_model=schemas.RebuildProgressOut)
+def repair_progress(current_user: User = Depends(get_current_user)):
+    """Live progress of a running capture-date repair, same shape as the
+    rebuild's."""
+    return get_repair_progress()
 
 
 @router.get("/backup")
@@ -91,6 +135,9 @@ def restore(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Cannot be stopped: the library is emptied before the backup is written
+    back, so a stop half-way would leave nothing. The task dock shows it
+    without a Stop."""
     _require_delete_confirmation(confirmation)
     return restore_from_backup(db, current_user.id, file)
 
@@ -105,6 +152,10 @@ def background_activity(current_user: User = Depends(get_current_user)):
         embeddings_running=embeddings_running(),
         merge_active=get_merge_progress()["active"],
         copy_jobs_running=copy_jobs.running_count(),
+        export_jobs_running=export_jobs_running(),
+        maintenance_active=sync_active()
+        or get_rebuild_progress()["active"]
+        or get_repair_progress()["active"],
     )
 
 

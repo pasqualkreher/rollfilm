@@ -424,6 +424,30 @@ def test_open_sessions_are_listed_with_their_sources(db, dirs, tmp_path):
     assert only.available and only.copied == 1 and only.remaining == 2
 
 
+def test_the_list_says_what_each_import_folder_still_holds(db, dirs, tmp_path):
+    def with_folder(keep_backup: bool, staging_dir: str | None = "folder") -> ImportSession:
+        session = _session(db)
+        session.staging_dir = staging_dir
+        session.keep_backup = keep_backup
+        source = _source(db, session, _card(tmp_path, f"card-{session.id}"))
+        kept = _staged(db, session, "A.JPG", source=source, relpath="100FUJI/DSCF0001.JPG", size=3)
+        _staged(db, session, "B.JPG", source=source, relpath="100FUJI/DSCF0002.JPG", size=5)
+        kept.imported = True
+        db.commit()
+        return session
+
+    work = with_folder(keep_backup=False)
+    backup = with_folder(keep_backup=True)
+    in_place = with_folder(keep_backup=False, staging_dir=None)
+
+    held = {s.id: s.folder_bytes for s in routes.list_open_sessions(db, _User())}
+
+    # A keeper was moved out of the working folder; a backup folder keeps it.
+    assert held[work.id] == 5
+    assert held[backup.id] == 8
+    assert held[in_place.id] == 0
+
+
 # --- which card is which ------------------------------------------------------
 
 

@@ -224,8 +224,9 @@ def get_import_select_default(db: Session) -> str:
 
 
 def get_import_backup_default(db: Session) -> str:
+    # Keep by default: whoever never touches the dialog loses nothing on close.
     value = get_setting(db, IMPORT_BACKUP_DEFAULT)
-    return value if value in IMPORT_BACKUP_DEFAULT_CHOICES else "delete"
+    return value if value in IMPORT_BACKUP_DEFAULT_CHOICES else "keep"
 
 
 def get_import_read_file_metadata(db: Session) -> bool:

@@ -12,7 +12,7 @@ import { AddToPicker } from "../components/AddToPicker";
 import { useAppDialogs } from "../components/AppDialogs";
 import { MiniMap } from "../components/MiniMap";
 import { setDetailPanelOpen, useAskSaveCopyOptions, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
-import { useWait } from "../state/wait";
+import { useTasks } from "../state/tasks";
 import { useNavHistory } from "../state/navHistory";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { ExportDialog } from "../components/ExportDialog";
@@ -73,7 +73,7 @@ export function ImageDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
-  const { withWait } = useWait();
+  const { runTask } = useTasks();
   const { previousPath } = useNavHistory();
   const [activeId, setActiveId] = useState(id!);
   // Passed from the Library grid so arrow keys can zap through the same
@@ -998,18 +998,24 @@ export function ImageDetail() {
           queryFn: () => api.images.get(activeId),
         })
       : image!;
-    const created =
-      req.kind === "virtual"
-        ? await api.images.virtualCopy(source.id)
-        : await api.images.saveCopy(source.id, editsFromImage(source), {
-            quality: req.quality,
-            maxSize: req.maxSize,
-          });
+    // Counted in the title bar's task dock while it renders.
+    const created = await runTask(
+      {
+        id: `copy:${source.id}`,
+        kind: "copy",
+        label: req.kind === "virtual" ? "Creating virtual copy…" : "Saving copy…",
+        cancel: null,
+      },
+      () =>
+        req.kind === "virtual"
+          ? api.images.virtualCopy(source.id)
+          : api.images.saveCopy(source.id, editsFromImage(source), {
+              quality: req.quality,
+              maxSize: req.maxSize,
+            })
+    );
     queryClient.invalidateQueries({ queryKey: ["images"] });
     queryClient.invalidateQueries({ queryKey: ["tags"] });
-    // Unlike the editor, this page stays mounted while the route moves to the
-    // new copy - the options dialog has to be dismissed explicitly.
-    setSaveCopyOpen(false);
     const at = imageIds ? imageIds.indexOf(image!.id) : -1;
     const nextIds = imageIds
       ? at === -1
@@ -1030,7 +1036,7 @@ export function ImageDetail() {
       partnerItems: paired ? [paired] : [],
     });
     if (!ids) return;
-    await withWait(`Moving ${ids.length === 1 ? "photo" : "photos"} to trash…`, () =>
+    await runTask({ kind: "plain", label: `Moving ${ids.length === 1 ? "photo" : "photos"} to trash…` }, () =>
       api.images.bulkDelete(ids)
     );
     queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -1604,7 +1610,14 @@ export function ImageDetail() {
         {saveCopyOpen && (
           <SaveCopyDialog
             onClose={() => setSaveCopyOpen(false)}
-            onSave={(req) => saveCopyRun(req)}
+            onSave={(req) => {
+              // The dialog closes at once; a failure comes back as a dialog
+              // of its own, there is no window left to write it into.
+              setSaveCopyOpen(false);
+              saveCopyRun(req).catch((e) =>
+                dialogs.alert({ title: "Could not save the copy", message: (e as Error).message || "Could not save the copy." })
+              );
+            }}
             askOptions={askSaveCopyOptions}
           />
         )}

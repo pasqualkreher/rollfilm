@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { api, saveDownload } from "../api/client";
+import { api, pickSaveTarget } from "../api/client";
 import type {
   ExportFormat,
+  ExportJobProgress,
   ExportMetadata,
   ExportOptions,
   ExportPreset,
   ExportSharpen,
 } from "../api/types";
 import { useTransientMessage } from "../utils/transientMessage";
-import { useEscapeToClose } from "../utils/modalKeys";
+import { useEnterToConfirm, useEscapeToClose } from "../utils/modalKeys";
 import { useAppDialogs } from "./AppDialogs";
+import { useTasks, type TaskFinish } from "../state/tasks";
 import { Dropdown } from "./Dropdown";
 import { IconExport } from "./Icons";
 import { rangeFillStyle } from "../utils/rangeFill";
@@ -111,11 +113,28 @@ function usable(stored: ExportOptions): ExportOptions {
   return pickFolder && options.dest_dir ? options : { ...options, destination: "download" };
 }
 
+// What a finished folder export leaves in the title bar's task dock: how many
+// went where, and a way to open the folder.
+function folderResult(p: ExportJobProgress, dir: string): TaskFinish {
+  const missing = p.total - p.written;
+  const label =
+    (p.written === 1 ? "1 photo exported" : `${p.written} photos exported`) +
+    (missing > 0 ? ` · ${missing} left out` : "");
+  return {
+    label,
+    action: revealFile ? { label: REVEAL_LABEL, run: () => void revealFile(p.reveal_path ?? dir) } : undefined,
+  };
+}
+
 // One export dialog for both entry points: the photo page passes a single id,
 // the grids' context menu the whole selection. Same options either way - a
 // download is a plain file for one photo and a zip for several, a folder
 // export writes the files side by side. Every row is always there (one that
 // doesn't apply is disabled), so nothing moves as the options change.
+//
+// The dialog only asks; the export itself runs as a task in the title bar
+// (state/tasks trackExportJob), so the dialog closes the moment the job has
+// started and the dock counts the photos down, with a Stop.
 export function ExportDialog({
   imageIds,
   singleFilename,
@@ -131,6 +150,7 @@ export function ExportDialog({
   closing?: boolean;
 }) {
   const dialogs = useAppDialogs();
+  const { trackExportJob } = useTasks();
   const [options, setOptions] = useState<ExportOptions>(DEFAULT_OPTIONS);
   const [presets, setPresets] = useState<ExportPreset[]>([]);
   // The dialog opens the way it was last exported with - unless the user was
@@ -157,34 +177,11 @@ export function ExportDialog({
   const { format, quality, metadata } = options;
   const maxSize = options.max_size;
   const toFolder = options.destination === "folder" && !!options.dest_dir;
-  // A finished folder export: what was written where (the dialog stays to
-  // say so - there is no save dialog whose closing would).
-  const [written, setWritten] = useState<{
-    dir: string;
-    count: number;
-    total: number;
-    reveal: string | null;
-  } | null>(null);
+  // While the job is being started (the name preview, the save picker, the
+  // start request): the controls hold still until the dialog closes.
   const [busy, setBusy] = useState(false);
-  // Per-photo progress of the running export job, for the bar.
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   // Why the last export or preset change failed. Stays until the next try.
   const [error, setError] = useTransientMessage();
-  const jobRef = useRef<string | null>(null);
-  const closedRef = useRef(false);
-  useEffect(() => {
-    // StrictMode's throwaway mount/unmount cycle runs the cleanup below once
-    // before the real mount - undo its mark here, or every export silently
-    // aborts itself right before the first progress poll and the dialog hangs
-    // at "Exporting…" forever.
-    closedRef.current = false;
-    return () => {
-      // Dialog unmounted mid-export (navigation): stop the server-side job
-      // too, its result has no one left to download it.
-      closedRef.current = true;
-      if (jobRef.current) void api.images.exportCancel(jobRef.current).catch(() => {});
-    };
-  }, []);
 
   const nameProblem = templateError(options.name_template);
   const single = imageIds.length === 1;
@@ -212,10 +209,9 @@ export function ExportDialog({
   }, [firstId, imageIds.length, format, template, nameProblem]);
   const matchedPreset = presets.find((p) => sameOptions(p.options, options)) ?? null;
 
-  // Start the server-side job and poll its per-photo counter for the bar;
-  // resolves with the finished job's last progress report.
-  async function runJob() {
-    const { job_id, total } = await api.images.exportStart(imageIds, {
+  // Start the server-side job; the title bar follows it from here.
+  function startJob() {
+    return api.images.exportStart(imageIds, {
       quality,
       max_size: maxSize,
       format,
@@ -228,27 +224,14 @@ export function ExportDialog({
       watermark_size: options.watermark_size,
       watermark_opacity: options.watermark_opacity,
     });
-    jobRef.current = job_id;
-    setProgress({ done: 0, total });
-    for (;;) {
-      await new Promise((r) => setTimeout(r, 400));
-      if (closedRef.current) throw new Error("cancelled");
-      const p = await api.images.exportProgress(job_id);
-      if (p.state === "cancelled") throw new Error("cancelled");
-      if (p.state === "error") throw new Error(p.error ?? "Export failed");
-      setProgress({ done: p.done, total: p.total });
-      if (p.state === "ready") {
-        jobRef.current = null;
-        return { job_id, progress: p };
-      }
-    }
   }
 
   // Job-based export (every format). Into a folder the server writes the
-  // files itself. As a download the save-location question comes FIRST
-  // (saveDownload opens the picker before running its blob callback), then
-  // the server renders/zips in a worker thread, and the finished file
-  // streams into the chosen target.
+  // files itself. As a download the save-location question comes FIRST,
+  // then the server renders/zips in a worker thread and the finished file
+  // streams into the chosen target. Either way the dialog closes as soon as
+  // the job has started; the title bar counts it down and says where the
+  // files went.
   async function doExport() {
     setBusy(true);
     setError(null);
@@ -256,13 +239,19 @@ export function ExportDialog({
     void api.settings.updateExport({ last: options }).catch(() => {});
     try {
       if (toFolder) {
-        const { job_id, progress: p } = await runJob();
-        // Nothing to download: drop the finished job instead of leaving it
-        // to the server's clean-up.
-        void api.images.exportCancel(job_id).catch(() => {});
-        setBusy(false);
-        setProgress(null);
-        setWritten({ dir: p.dest_dir ?? options.dest_dir!, count: p.written, total: p.total, reveal: p.reveal_path });
+        const dir = options.dest_dir!;
+        const { job_id, total } = await startJob();
+        trackExportJob({
+          jobId: job_id,
+          total,
+          onReady: (p) => {
+            // Nothing to download: drop the finished job instead of leaving
+            // it to the server's clean-up.
+            void api.images.exportCancel(job_id).catch(() => {});
+            return folderResult(p, p.dest_dir ?? dir);
+          },
+        });
+        onClose();
         return;
       }
       // One photo downloads under its own (templated) name - asked fresh, the
@@ -283,27 +272,27 @@ export function ExportDialog({
             : ext === ".tif"
               ? { "image/tiff": [".tif", ".tiff"] }
               : { "application/octet-stream": ext ? [ext] : [] };
-      let started = false;
-      await saveDownload(suggestedName, accept, async () => {
-        started = true;
-        const { job_id } = await runJob();
-        return api.images.exportResultBlob(job_id);
-      });
-      if (!started) {
+      const target = await pickSaveTarget(suggestedName, accept);
+      if (!target) {
         // User dismissed the location picker - back to the options, no error.
         setBusy(false);
-        setProgress(null);
         return;
       }
+      const { job_id, total } = await startJob();
+      trackExportJob({
+        jobId: job_id,
+        total,
+        onReady: async () => {
+          await target.write(await api.images.exportResultBlob(job_id));
+          return { label: `Saved ${suggestedName}` };
+        },
+      });
       onClose();
     } catch (e) {
-      if (closedRef.current) return; // dialog is gone, nothing to update
-      // Still mounted: always drop the busy state, whatever went wrong -
-      // a swallowed error must never leave the dialog stuck at "Exporting…".
+      // Always drop the busy state, whatever went wrong - a swallowed error
+      // must never leave the dialog stuck.
       setBusy(false);
-      setProgress(null);
-      jobRef.current = null;
-      if ((e as Error).message !== "cancelled") setError((e as Error).message, { keep: true });
+      setError((e as Error).message, { keep: true });
     }
   }
 
@@ -344,73 +333,21 @@ export function ExportDialog({
     }
   }
 
-  // Cancel while a job runs aborts it server-side; otherwise just close.
-  function onCancel() {
-    if (busy) {
-      if (jobRef.current) void api.images.exportCancel(jobRef.current).catch(() => {});
-      jobRef.current = null;
-      setBusy(false);
-      setProgress(null);
-    } else {
-      onClose();
-    }
-  }
-
-  // Escape closes the dialog, but never a running export: that takes the
-  // Cancel button, the way a click beside the dialog doesn't stop it either.
+  // Escape closes the dialog - not while the job is being started: a moment
+  // later it closes by itself, with the export in the title bar.
   useEscapeToClose(!closing, () => {
     if (!busy) onClose();
   });
-
-  if (written) {
-    const missing = written.total - written.count;
-    return (
-      <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={onClose}>
-        <div
-          className="modal pair-delete-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Export finished"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="pair-delete-body">
-            <h3>{written.count === 1 ? "1 photo exported" : `${written.count} photos exported`}</h3>
-            <p className="settings-desc export-dest-path" style={{ margin: 0 }} title={written.dir}>
-              {written.dir}
-            </p>
-            {missing > 0 && (
-              <span className="status-note status-note--error">
-                {missing === 1 ? "1 photo" : `${missing} photos`} could not be rendered and{" "}
-                {missing === 1 ? "was" : "were"} left out.
-              </span>
-            )}
-            <div className="pair-delete-actions">
-              {revealFile && (
-                <button
-                  className="btn primary"
-                  onClick={() => {
-                    void revealFile(written.reveal ?? written.dir);
-                    onClose();
-                  }}
-                >
-                  {REVEAL_LABEL}
-                </button>
-              )}
-              <button className={`btn ${revealFile ? "ghost" : "primary"}`} onClick={onClose}>
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Enter exports (the default button).
+  useEnterToConfirm(!closing && !busy, () => {
+    if (!nameProblem) void doExport();
+  });
 
   const rendered = format !== "original";
   const marked = rendered && !!options.watermark_text.trim();
 
   return (
-    <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={() => !busy && onClose()}>
+    <div className={`modal-overlay${closing ? " pm-closing" : ""}`}>
       <div
         className="modal export-modal"
         role="dialog"
@@ -616,35 +553,17 @@ export function ExportDialog({
             </div>
           </div>
           <div className="export-status" role="status" aria-live="polite">
-            {error ? (
-              <span className="status-note status-note--error">{error}</span>
-            ) : busy && progress ? (
-              <>
-                <div className="settings-progress">
-                  <div
-                    className="settings-progress-fill"
-                    style={{ width: `${Math.round((progress.done / Math.max(1, progress.total)) * 100)}%` }}
-                  />
-                </div>
-                <span className="status-note">
-                  {rendered ? "Rendering" : "Preparing"}{" "}
-                  {progress.total === 1
-                    ? "your photo"
-                    : `photo ${Math.min(progress.done + 1, progress.total)} of ${progress.total}`}
-                  … Please keep this window open.
-                </span>
-              </>
-            ) : null}
+            {error ? <span className="status-note status-note--error">{error}</span> : null}
           </div>
           <div className="export-actions">
-            <button className="btn ghost" onClick={onCancel}>
+            <button className="btn ghost" onClick={onClose} disabled={busy}>
               Cancel
             </button>
             <button className="btn primary" onClick={doExport} disabled={busy || !!nameProblem}>
               {busy ? (
                 <>
                   <Spinner tone="inherit" inline />
-                  Exporting…
+                  Starting…
                 </>
               ) : (
                 <>

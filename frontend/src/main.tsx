@@ -28,6 +28,10 @@ initFont();
 // reports the display mode as fullscreen. The shell's events have been seen
 // to miss (the bar kept its inset in fullscreen), and the page can tell on
 // its own.
+// Which desktop the page is on, for the stylesheet: macOS keeps the system's
+// overlay scrollbars (index.css gates its own slim ones on this).
+document.documentElement.dataset.platform = window.photoManager?.platform ?? "web";
+
 if (window.photoManager?.platform === "darwin") {
   document.documentElement.setAttribute("data-titlebar", "inset");
   let shellSaysFullscreen = false;

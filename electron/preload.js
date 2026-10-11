@@ -64,10 +64,21 @@ contextBridge.exposeInMainWorld("photoManager", {
   },
   // Hide/show the traffic lights (focus mode takes the top bar away).
   setWindowButtonsVisible: (visible) => ipcRenderer.invoke("pm:set-window-buttons", visible),
-  // View → Focus (Cmd+F) in the menu bar; the return value unsubscribes.
+  // View → Focus (Shift+Cmd+F) in the menu bar; the return value unsubscribes.
   onToggleFocus: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("pm:toggle-focus", handler);
     return () => ipcRenderer.removeListener("pm:toggle-focus", handler);
   },
+  // The other menu-bar items (Settings…, Find, Import…, Help, About): one
+  // word each, see main.js buildApplicationMenu. The return value unsubscribes.
+  onMenu: (callback) => {
+    const handler = (_event, command) => callback(String(command));
+    ipcRenderer.on("pm:menu", handler);
+    return () => ipcRenderer.removeListener("pm:menu", handler);
+  },
+  // The skin in force, so the shell's own paint and the native dialogs follow it.
+  setTheme: (theme) => ipcRenderer.invoke("pm:set-theme", theme),
+  // Dock / taskbar progress: 0-1 while a job runs, -1 clears it.
+  setProgress: (fraction) => ipcRenderer.invoke("pm:set-progress", fraction),
 });

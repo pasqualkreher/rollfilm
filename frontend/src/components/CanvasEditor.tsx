@@ -8,6 +8,7 @@ import { CANVAS_STRIP_MAX_PX, CANVAS_STRIP_MIN_PX, collapsePairs, setCanvasStrip
 import { useAppDialogs } from "./AppDialogs";
 import { PhotoEditor } from "./PhotoEditor";
 import { FilterChip } from "./FilterChip";
+import { Dropdown } from "./Dropdown";
 import {
   IconAlignBottom,
   IconAlignCenter,
@@ -3001,7 +3002,7 @@ export function PrintView({
     wake();
   }, [wake]);
 
-  // The app-wide switch (menu, Cmd+F) turning while this view is up.
+  // The app-wide switch (menu, Shift+Cmd+F) turning while this view is up.
   useEffect(() => {
     if (focusWanted && !focusedRef.current) enterFocus();
     else if (!focusWanted && focusedRef.current) leaveFocus();
@@ -3924,22 +3925,21 @@ function CanvasToolbar({
             <div className="canvas-panel">
               <div className="canvas-panel-row">
                 <span className="canvas-panel-label">Size</span>
-                <select
+                {/* The app's own menu, like every other picker - the last native
+                    <select> drew the OS's detached list over the panel. */}
+                <Dropdown
                   className="canvas-size-select"
                   value={presetKey}
-                  aria-label={doc.page_mode === "pages" ? "Page size" : "Guide size"}
-                  onChange={(event) => {
-                    const next = PAGE_PRESETS.find((p) => p.key === event.target.value);
+                  ariaLabel={doc.page_mode === "pages" ? "Page size" : "Guide size"}
+                  options={[
+                    ...(presetKey === "custom" ? [{ value: "custom", label: `Custom (${presetLabel})` }] : []),
+                    ...PAGE_PRESETS.map((p) => ({ value: p.key, label: p.label })),
+                  ]}
+                  onChange={(value) => {
+                    const next = PAGE_PRESETS.find((p) => p.key === value);
                     if (next) commit((c) => ({ ...c, page_width_mm: next.w, page_height_mm: next.h }));
                   }}
-                >
-                  {presetKey === "custom" && <option value="custom">Custom ({presetLabel})</option>}
-                  {PAGE_PRESETS.map((p) => (
-                    <option key={p.key} value={p.key}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
               {/* Typing a size IS choosing custom - no mode to switch first;
                   the select above simply reads "Custom" while the numbers

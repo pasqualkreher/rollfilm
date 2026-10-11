@@ -140,6 +140,18 @@ def scan_source(
     return schemas.ScanStatusOut(**sources_service.get_scan_status(source.id))
 
 
+@router.post("/{source_id}/scan/cancel", response_model=schemas.ScanStatusOut)
+def scan_source_cancel(
+    source_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """Stop a running scan between two files. The photos indexed so far stay."""
+    source = db.get(SourceRoot, source_id)
+    if source is None or source.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Source not found")
+    sources_service.request_scan_cancel(source.id)
+    return schemas.ScanStatusOut(**sources_service.get_scan_status(source.id))
+
+
 @router.get("/{source_id}/scan-status", response_model=schemas.ScanStatusOut)
 def scan_status(
     source_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)

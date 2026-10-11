@@ -59,11 +59,11 @@ def test_an_unknown_stored_select_default_reads_as_deselect(db):
     assert get_import_settings(db, _User()).select_default == "deselect"
 
 
-def test_the_backup_default_is_off_until_remembered(db):
-    assert get_import_settings(db, _User()).backup_default == "delete"
-    out = update_import_settings(ImportSettingsUpdate(backup_default="keep"), db, _User())
-    assert (out.mode_default, out.backup_default) == ("ask", "keep")
+def test_the_backup_default_is_on_until_remembered(db):
     assert get_import_settings(db, _User()).backup_default == "keep"
+    out = update_import_settings(ImportSettingsUpdate(backup_default="delete"), db, _User())
+    assert (out.mode_default, out.backup_default) == ("ask", "delete")
+    assert get_import_settings(db, _User()).backup_default == "delete"
 
 
 def test_mode_and_backup_are_remembered_together(db):

@@ -22,13 +22,13 @@ import { PhotoFilters } from "../components/PhotoFilters";
 import { Dropdown } from "../components/Dropdown";
 import { SORT_OPTIONS, sortImages, type SortKey } from "../utils/sortOrder";
 import { loadPresets, presetAdjustments } from "../utils/presets";
-import { useTasks } from "../state/tasks";
-import { useWait } from "../state/wait";
+import { useTasks, type BatchItem } from "../state/tasks";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { collapsePairs, useAskSaveCopyOptions } from "../state/viewPrefs";
 import { FULL_COPY_QUALITY, SaveCopyDialog } from "../components/SaveCopyDialog";
 import { modKeyLabel, useSelectionKeys } from "../utils/selection";
 import { selectionSharedMeta } from "../utils/selectionMeta";
+import type { ContextActions } from "../components/PhotoContextMenu";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
@@ -39,6 +39,9 @@ type CopyOpts = { quality: number; maxSize: number | null };
 
 import { errorText } from "../utils/apiError";
 import { isModalOpen } from "../utils/modalKeys";
+
+// The one bulk task this page runs at a time (state/tasks).
+const ALBUM_BATCH = "batch:album";
 
 export function AlbumDetail() {
   const { id } = useParams<{ id: string }>();
@@ -85,7 +88,6 @@ export function AlbumDetail() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
-  const { withBatches } = useWait();
   const navigate = useNavigate();
   // The album always collapses each RAW+JPEG pair to one card (see
   // orderedImages), so in the combined view the pair-aware bulk/remove helpers
@@ -131,16 +133,15 @@ export function AlbumDetail() {
     setBarError(null);
   }
 
-  // Lock the nav + show the top-bar spinner while uploading to Immich, same as
-  // the Settings maintenance tasks.
-  const { setBusyLabel, trackRenders, trackCopyJob } = useTasks();
+  const { runTask, trackRenders, trackCopyJob, runBatches, hasTask } = useTasks();
+  // Every bulk action of this page runs as one task in the title bar, counted
+  // down there with a Stop, and one at a time (see Library).
+  const batchBusy = hasTask(ALBUM_BATCH);
+  const batch = <R,>(label: string, items: BatchItem[], run: (ids: string[]) => Promise<R>) =>
+    runBatches({ id: ALBUM_BATCH, kind: "batch", label }, items, run);
   const askSaveCopyOptions = useAskSaveCopyOptions();
   // The options dialog of "Apply ... and save copy", resolved by its answer.
   const [copyPrompt, setCopyPrompt] = useState<{ resolve: (opts: CopyOpts | null) => void } | null>(null);
-  useEffect(() => {
-    setBusyLabel(immichBusy ? "Uploading to Immich…" : null);
-  }, [immichBusy, setBusyLabel]);
-  useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
 
   // Escape walks back to the albums, the same as it leaves the lightbox and
@@ -289,15 +290,31 @@ export function AlbumDetail() {
     onDelete: () => void deleteSelected(),
   });
 
-  async function applyBulk(patch: { rating?: number; color_label?: string }) {
-    if (selected.size === 0) return;
+  async function applyBulk(patch: { rating?: number; color_label?: string }, target: Iterable<string> = selected) {
+    const ids = Array.from(target);
+    if (ids.length === 0) return;
     // With merged pairs only the JPEG is visible, so mirror the change to each
     // hidden RAW partner too.
+    // Onto the tiles slice by slice; the refetch below then finds what it
+    // expected and changes nothing.
+    const show = (changed: string[]) => {
+      const set = new Set(changed);
+      queryClient.setQueriesData<ImageOut[]>({ queryKey: ["images"] }, (old) =>
+        Array.isArray(old) ? old.map((im) => (set.has(im.id) ? ({ ...im, ...patch } as ImageOut) : im)) : old
+      );
+    };
     try {
-      // One photo gets no wait popup: it holds every key while it is up, and
-      // a star followed by the arrow to the next photo must not lose the arrow.
-      if (selected.size === 1) await api.images.bulkUpdate(Array.from(selected), patch);
-      else await withBatches("Updating photos…", Array.from(selected), (ids) => api.images.bulkUpdate(ids, patch));
+      // One photo is one quick request and no task: a star followed by the
+      // arrow to the next photo must not wait on it.
+      if (ids.length === 1) {
+        await api.images.bulkUpdate(ids, patch);
+        show(ids);
+      } else {
+        await batch("Updating photos…", ids, async (slice) => {
+          await api.images.bulkUpdate(slice, patch);
+          show(slice);
+        });
+      }
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
     }
@@ -309,13 +326,14 @@ export function AlbumDetail() {
     setLastIndex(index);
   }
 
-  async function deleteSelected() {
-    if (selected.size === 0) return;
+  async function deleteSelected(target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     // Merged view hides the RAW behind its JPEG, so both halves of the shot go
     // together by default. The "ask what to delete" setting lets the user keep
     // the partners.
-    const baseIds = Array.from(selected);
-    const partnerIds = withPairedIds(baseIds).filter((x) => !selected.has(x));
+    const baseIds = target;
+    const baseSet = new Set(baseIds);
+    const partnerIds = withPairedIds(baseIds).filter((x) => !baseSet.has(x));
     const byId = new Map((images ?? []).map((im) => [im.id, im]));
     const toItems = (list: string[]) =>
       list.map((x) => byId.get(x)).filter((im): im is ImageOut => Boolean(im));
@@ -338,17 +356,34 @@ export function AlbumDetail() {
       else if (at > 0 && before) nextAfterDelete = { id: before.id, index: at - 1 };
     }
     try {
-      const { done, cancelled } = await withBatches(
+      const { done, cancelled } = await batch(
         "Moving photos to trash…",
         pairUnits(ids, (x) => byId.get(x)?.paired_image_id),
-        (slice) => api.images.bulkDelete(slice)
+        async (slice) => {
+          await api.images.bulkDelete(slice);
+          // Out of the grid slice by slice: a photo already in the trash
+          // cannot be picked and sent again while the rest still go.
+          const gone = new Set(slice);
+          queryClient.setQueriesData<ImageOut[]>({ queryKey: ["images"] }, (old) =>
+            Array.isArray(old) ? old.filter((im) => !gone.has(im.id)) : old
+          );
+        }
       );
-      // Cancelled: what is still in the grid stays selected.
-      if (cancelled) setSelected(new Set(baseIds.filter((x) => !done.includes(x))));
+      const gone = new Set(cancelled ? done : ids);
       // One photo deleted (culling from the keyboard): the selection moves on
       // to its neighbour instead of ending there.
-      else if (nextAfterDelete) selectOnly(nextAfterDelete.id, nextAfterDelete.index);
-      else clearSelection();
+      if (!cancelled && nextAfterDelete) selectOnly(nextAfterDelete.id, nextAfterDelete.index);
+      // Otherwise the deleted photos leave the selection as it is now, not as
+      // it was when this started. Nothing left: the bar goes too.
+      else
+        setSelected((prev) => {
+          const next = new Set(Array.from(prev).filter((x) => !gone.has(x)));
+          if (next.size === 0 && prev.size > 0) {
+            setLastIndex(null);
+            dismissMessages();
+          }
+          return next;
+        });
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["album", id] });
@@ -359,20 +394,34 @@ export function AlbumDetail() {
     }
   }
 
-  async function removeSelectedFromAlbum() {
-    if (!id || selected.size === 0) return;
+  async function removeSelectedFromAlbum(target: string[] = Array.from(selected)) {
+    if (!id || target.length === 0) return;
     // Merged view hides the RAW behind its JPEG - remove both halves.
-    const ids = withPairedIds(Array.from(selected));
+    const ids = withPairedIds(target);
     const byId = new Map((images ?? []).map((im) => [im.id, im]));
     try {
-      const { done, cancelled } = await withBatches(
+      const { done, cancelled } = await batch(
         "Removing photos from album…",
         pairUnits(ids, (x) => byId.get(x)?.paired_image_id),
-        (slice) => Promise.all(slice.map((imageId) => api.albums.removeImage(id, imageId)))
+        async (slice) => {
+          await Promise.all(slice.map((imageId) => api.albums.removeImage(id, imageId)));
+          const gone = new Set(slice);
+          queryClient.setQueriesData<ImageOut[]>({ queryKey: ["images"] }, (old) =>
+            Array.isArray(old) ? old.filter((im) => !gone.has(im.id)) : old
+          );
+        }
       );
-      // Cancelled: what is still in the album stays selected.
-      if (cancelled) setSelected(new Set(Array.from(selected).filter((x) => !done.includes(x))));
-      else clearSelection();
+      // The removed photos leave the selection as it is now; what is still in
+      // the album (after a Stop) stays selected.
+      const gone = new Set(cancelled ? done : ids);
+      setSelected((prev) => {
+        const next = new Set(Array.from(prev).filter((x) => !gone.has(x)));
+        if (next.size === 0 && prev.size > 0) {
+          setLastIndex(null);
+          dismissMessages();
+        }
+        return next;
+      });
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["album", id] });
@@ -380,11 +429,11 @@ export function AlbumDetail() {
     }
   }
 
-  async function addTagToSelected(name: string) {
-    if (selected.size === 0 || !name.trim()) return;
+  async function addTagToSelected(name: string, target: string[] = Array.from(selected)) {
+    if (target.length === 0 || !name.trim()) return;
     const tag = name.trim();
     try {
-      const { done, cancelled } = await withBatches("Tagging photos…", Array.from(selected), (ids) =>
+      const { done, cancelled } = await batch("Tagging photos…", target, (ids) =>
         api.images.bulkAddTags(ids, [tag])
       );
       setDevelopMsg(`Added tag “${tag}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
@@ -394,11 +443,11 @@ export function AlbumDetail() {
     }
   }
 
-  async function addSelectedToCanvas(canvasId: string) {
-    if (selected.size === 0) return;
+  async function addSelectedToCanvas(canvasId: string, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     // Same pair rule as albums: in merged view the RAW partner rides along,
     // so the canvas's filmstrip holds the whole shot.
-    await api.canvases.addImages(canvasId, withPairedIds(Array.from(selected)));
+    await api.canvases.addImages(canvasId, withPairedIds(target));
     queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
     queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
   }
@@ -424,22 +473,46 @@ export function AlbumDetail() {
     );
   }
 
-  async function addSelectedToAlbum(targetAlbumId: string) {
-    if (selected.size === 0) return;
+  async function addSelectedToAlbum(targetAlbumId: string, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
+    const targetSet = new Set(target);
     // In merged view the RAW partner is hidden behind the JPEG card - add it
     // too, so the target album holds the whole shot.
     const byId = new Map((images ?? []).map((im) => [im.id, im]));
-    const units = pairUnits(withPairedIds(Array.from(selected)), (x) => byId.get(x)?.paired_image_id);
+    const units = pairUnits(withPairedIds(target), (x) => byId.get(x)?.paired_image_id);
     try {
-      const { done, cancelled } = await withBatches("Adding photos to album…", units, (slice) =>
+      const { done, cancelled } = await batch("Adding photos to album…", units, (slice) =>
         api.albums.addImages(targetAlbumId, slice)
       );
-      partialAddRef.current = cancelled ? done.filter((x) => selected.has(x)).length : null;
+      partialAddRef.current = cancelled ? done.filter((x) => targetSet.has(x)).length : null;
     } finally {
       queryClient.invalidateQueries({ queryKey: ["albums"] });
       queryClient.invalidateQueries({ queryKey: ["album", targetAlbumId] });
     }
   }
+
+  // The right-click menu's hands on the photos under the pointer (or the
+  // selection they belong to): the same actions as the bulk bar, by id.
+  const contextActions: ContextActions = {
+    onRate: (ids, rating) => applyBulk({ rating }, ids),
+    onColor: (ids, label) => applyBulk({ color_label: label }, ids),
+    onAddToAlbum: (ids, albumId) => addSelectedToAlbum(albumId, ids),
+    onAddToCanvas: (ids, canvasId) => addSelectedToCanvas(canvasId, ids),
+    onAddTag: (ids, name) => addTagToSelected(name, ids),
+    onAutoEdit: (ids, copy) => (copy ? autoDevelopAndCopy(ids) : autoDevelopSelected(undefined, ids)),
+    onApplyPreset: (ids, name, copy) => (copy ? applyPresetAndCopy(name, ids) : applyPresetToSelected(name, undefined, ids)),
+    presets: () => Object.keys(loadPresets()),
+    onReset: (ids, opts) => resetSelected(opts, ids),
+    // The bar's "Add to Immich": not in full mode (everything uploads anyway)
+    // and not while an upload runs.
+    immich: (ids) =>
+      immichConfigured && immich?.sync_mode !== "full" && !immichBusy
+        ? { label: "Add to Immich", run: () => addSelectedToImmich(ids) }
+        : null,
+    onRemoveFromAlbum: (ids) => removeSelectedFromAlbum(ids),
+    onDelete: (ids) => deleteSelected(ids),
+    meta: (ids) => selectionSharedMeta(images ?? [], new Set(ids)),
+  };
 
   // Counts the selection, not the ids actually sent: merged view silently adds
   // each shot's RAW partner too, and reporting that larger number would look
@@ -455,10 +528,10 @@ export function AlbumDetail() {
     );
   }
 
-  async function resetSelected(opts: BulkResetOptions) {
-    if (selected.size === 0) return;
+  async function resetSelected(opts: BulkResetOptions, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     try {
-      const { done } = await withBatches("Resetting photos…", Array.from(selected), (ids) =>
+      const { done } = await batch("Resetting photos…", target, (ids) =>
         api.images.bulkReset(ids, opts)
       );
       trackRenders(done);
@@ -468,7 +541,7 @@ export function AlbumDetail() {
   }
 
   async function refreshAfterReset() {
-    // Awaited, like the library's - the popup stays up until the rows are back.
+    // Awaited, like the library's - reported only once the rows are back.
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["images"] }),
       queryClient.invalidateQueries({ queryKey: ["tags"] }),
@@ -477,13 +550,14 @@ export function AlbumDetail() {
     ]);
   }
 
-  async function autoDevelopSelected(copyOpts?: CopyOpts) {
-    if (selected.size === 0) return;
-    const editedCount = (images ?? []).filter((im) => selected.has(im.id) && im.edit_rev).length;
+  async function autoDevelopSelected(copyOpts?: CopyOpts, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
+    const targetSet = new Set(target);
+    const editedCount = (images ?? []).filter((im) => targetSet.has(im.id) && im.edit_rev).length;
     if (
       editedCount > 0 &&
       !(await dialogs.confirm({
-        title: `Auto-develop ${selected.size} photo(s)?`,
+        title: `Auto-develop ${target.length} photo(s)?`,
         message: `This replaces the existing edits of ${editedCount} photo(s).`,
         confirmLabel: "Auto-develop",
       }))
@@ -493,9 +567,9 @@ export function AlbumDetail() {
     setDevelopMsg(null);
     setBarError(null);
     try {
-      const { done, results, cancelled } = await withBatches(
+      const { done, results, cancelled } = await batch(
         "Auto-developing photos…",
-        Array.from(selected),
+        target,
         (ids) => api.images.bulkAutoDevelop(ids)
       );
       const applied = results.reduce((n, r) => n + r.applied, 0);
@@ -517,14 +591,15 @@ export function AlbumDetail() {
   }
 
   // Apply a saved editor preset (a full develop look) to the whole selection.
-  async function applyPresetToSelected(name: string, copyOpts?: CopyOpts) {
+  async function applyPresetToSelected(name: string, copyOpts?: CopyOpts, target: string[] = Array.from(selected)) {
     const preset = loadPresets()[name];
-    if (selected.size === 0 || !preset) return;
-    const editedCount = (images ?? []).filter((im) => selected.has(im.id) && im.edit_rev).length;
+    if (target.length === 0 || !preset) return;
+    const targetSet = new Set(target);
+    const editedCount = (images ?? []).filter((im) => targetSet.has(im.id) && im.edit_rev).length;
     if (
       editedCount > 0 &&
       !(await dialogs.confirm({
-        title: `Apply preset “${name}” to ${selected.size} photo(s)?`,
+        title: `Apply preset “${name}” to ${target.length} photo(s)?`,
         message: `This replaces the existing edits of ${editedCount} photo(s).`,
         confirmLabel: "Apply preset",
       }))
@@ -535,7 +610,7 @@ export function AlbumDetail() {
     setBarError(null);
     const look = presetAdjustments(preset) as unknown as Record<string, unknown>;
     try {
-      const { done, cancelled } = await withBatches("Applying preset…", Array.from(selected), (ids) =>
+      const { done, cancelled } = await batch("Applying preset…", target, (ids) =>
         api.images.bulkDevelop(ids, look)
       );
       setDevelopMsg(`Applied preset “${name}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
@@ -567,14 +642,14 @@ export function AlbumDetail() {
     return new Promise((resolve) => setCopyPrompt({ resolve }));
   }
 
-  async function autoDevelopAndCopy() {
+  async function autoDevelopAndCopy(target?: string[]) {
     const opts = await askCopyOptions();
-    if (opts) await autoDevelopSelected(opts);
+    if (opts) await autoDevelopSelected(opts, target);
   }
 
-  async function applyPresetAndCopy(name: string) {
+  async function applyPresetAndCopy(name: string, target?: string[]) {
     const opts = await askCopyOptions();
-    if (opts) await applyPresetToSelected(name, opts);
+    if (opts) await applyPresetToSelected(name, opts, target);
   }
 
   async function toggleAlbumImmichSync(enabled: boolean) {
@@ -583,13 +658,18 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["albums"] });
   }
 
-  async function addSelectedToImmich() {
-    if (selected.size === 0) return;
+  async function addSelectedToImmich(target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     setImmichBusy(true);
     setImmichMsg(null);
     setBarError(null);
     try {
-      const result = await api.images.pushToImmich(Array.from(selected));
+      // Shown in the title bar while the photos are handed over; the uploads
+      // themselves then show as the Immich sync task.
+      const result = await runTask(
+        { id: "immich:push", kind: "plain", label: "Adding to Immich…" },
+        () => api.images.pushToImmich(target)
+      );
       setImmichMsg(result.message);
     } catch (e) {
       setBarError(errorText(e));
@@ -681,7 +761,7 @@ export function AlbumDetail() {
               copyPrompt.resolve(null);
               setCopyPrompt(null);
             }}
-            onSave={async (req) => {
+            onSave={(req) => {
               copyPrompt.resolve(req.kind === "physical" ? { quality: req.quality, maxSize: req.maxSize } : null);
               setCopyPrompt(null);
             }}
@@ -799,7 +879,7 @@ export function AlbumDetail() {
               <div className="control-group">
                 <button
                   className="btn"
-                  onClick={addSelectedToImmich}
+                  onClick={() => void addSelectedToImmich()}
                   disabled={immichBusy}
                   title="Upload the selected photos to your Immich server. RAW files only if enabled in Settings."
                 >
@@ -816,14 +896,14 @@ export function AlbumDetail() {
                 busy={developBusy}
               />
               <ResetMenu count={selected.size} onReset={resetSelected} />
-              <button className="btn" onClick={removeSelectedFromAlbum}>
+              <button className="btn" onClick={() => void removeSelectedFromAlbum()}>
                 <span className="btn-label"><IconMinus size={13} /> Remove from this album</span>
               </button>
             </div>
             <button
               className="btn btn-sm quiet-danger"
               style={{ marginLeft: "auto" }}
-              onClick={deleteSelected}
+              onClick={() => void deleteSelected()}
               title="Delete the selected photos"
               aria-label="Delete the selected photos"
             >
@@ -849,6 +929,8 @@ export function AlbumDetail() {
           selectedIds={selected}
           onToggleSelect={toggleSelect}
           onSelectOnly={selectOnly}
+          onSetSelection={(ids) => setSelected(new Set(ids))}
+          contextActions={contextActions}
           groupByDate={!q}
           onRemove={removeFromAlbum}
           removeTitle="Remove from this album"

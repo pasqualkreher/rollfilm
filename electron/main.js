@@ -26,6 +26,7 @@ const {
   net: electronNet,
   powerMonitor,
   protocol,
+  screen,
   session,
   shell,
 } = require("electron");
@@ -221,6 +222,76 @@ function readConfig() {
 function writeConfig(cfg) {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
   fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2));
+}
+
+// Runs fn once things have been quiet for `ms` - the window's resize and move
+// events come per frame, the config file wants one write at the end.
+function debounce(fn, ms) {
+  let timer = null;
+  return () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn();
+    }, ms);
+  };
+}
+
+// --- Window placement, remembered across launches ------------------------
+// A Mac app opens where it was left. The bounds are stored on every resize
+// and move (debounced) and read back at launch, clamped into the work area
+// of the display they were last on - a monitor that is gone, or a window that
+// was half off-screen, must not leave the window unreachable.
+const WINDOW_MIN = { width: 720, height: 600 };
+
+function savedWindowBounds() {
+  const b = readConfig().window;
+  if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return null;
+  const area = screen.getDisplayMatching(b).workArea;
+  const width = Math.max(WINDOW_MIN.width, Math.min(b.width, area.width));
+  const height = Math.max(WINDOW_MIN.height, Math.min(b.height, area.height));
+  const x = Math.min(Math.max(b.x, area.x), area.x + area.width - width);
+  const y = Math.min(Math.max(b.y, area.y), area.y + area.height - height);
+  return { x, y, width, height };
+}
+
+function rememberWindowBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  // Minimised and fullscreen windows report bounds that are not a place to
+  // come back to; getNormalBounds also looks past a maximised state.
+  if (mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
+  writeConfig({ ...readConfig(), window: mainWindow.getNormalBounds() });
+}
+
+const rememberWindowBoundsSoon = debounce(rememberWindowBounds, 300);
+
+// --- The skin, as far as the shell is concerned ----------------------------
+// The renderer owns the appearance (state/theme.ts, in localStorage) and
+// reports it over pm:set-theme: the mode decides what the native dialogs,
+// menus and the text-field context menu look like (nativeTheme.themeSource),
+// the background colour is what the window paints before and between the
+// page's own frames. Both are kept in the config so the next launch starts
+// right, splash included.
+function themeSourceFor(mode) {
+  return mode === "dark" || mode === "light" ? mode : "system";
+}
+
+function savedTheme() {
+  const t = readConfig().theme;
+  if (!t || typeof t !== "object") return null;
+  const bg = typeof t.bg === "string" && /^#[0-9a-f]{6}$/i.test(t.bg) ? t.bg : null;
+  return { mode: themeSourceFor(t.mode), bg };
+}
+
+function applySavedTheme() {
+  const t = savedTheme();
+  if (t) nativeTheme.themeSource = t.mode;
+}
+
+// The default Stone skins by the OS mode, the same pair index.css paints for
+// the same instant - unless the renderer has said which skin it shows.
+function windowBackground() {
+  return savedTheme()?.bg ?? (nativeTheme.shouldUseDarkColors ? "#26292d" : "#eaebec");
 }
 
 // First-run gate: make the user pick where the photo library is stored before
@@ -566,8 +637,13 @@ function createSplash() {
     fullscreenable: false,
     center: true,
     icon: windowIconPath(),
+    // Painted in the skin's colour and shown only once its page is up: no
+    // white frame before the HTML has rendered.
+    show: false,
+    backgroundColor: windowBackground(),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
+  splashWindow.once("ready-to-show", () => splashWindow?.show());
   // The splash shows the app version next to the logo; loadFile's query is the
   // one channel available before the page has loaded.
   splashWindow.loadFile(path.join(__dirname, "splash.html"), {
@@ -891,29 +967,50 @@ function fetchBackgroundActivity() {
 // the search index catching up, a library being merged in. Quitting mid-way
 // isn't destructive - all of it resumes on the next start - but doing it
 // silently leaves a library that looks half-finished for no visible reason.
+// The window's own running tasks (state/tasks.tsx publishes them as
+// window.__rollfilmTasks): a bulk action sent in slices, the editor's final
+// save, an export or a copy being written. These live in the page - quitting
+// ends them, and none of them is resumed. Asked with a short deadline so a
+// page that is not answering never holds the quit dialog up.
+async function rendererWork() {
+  if (!mainWindow) return [];
+  const ask = mainWindow.webContents
+    .executeJavaScript("window.__rollfilmTasks ? window.__rollfilmTasks() : []", true)
+    .catch(() => []);
+  const deadline = new Promise((resolve) => setTimeout(() => resolve([]), 500));
+  const labels = await Promise.race([ask, deadline]);
+  return Array.isArray(labels) ? labels.filter((l) => typeof l === "string") : [];
+}
+
 async function outstandingWork() {
-  const [immich, background] = await Promise.all([
+  const [immich, background, renderer] = await Promise.all([
     fetchImmichActivity(),
     fetchBackgroundActivity(),
+    rendererWork(),
   ]);
   const uploads = immich ? immich.pending_uploads || 0 : 0;
   const derivatives = background ? background.derivatives_pending || 0 : 0;
   const embeddings = Boolean(background && background.embeddings_running);
   const merging = Boolean(background && background.merge_active);
   const copies = background ? background.copy_jobs_running || 0 : 0;
+  const exports = background ? background.export_jobs_running || 0 : 0;
+  const maintenance = Boolean(background && background.maintenance_active);
   const parts = [];
   if (uploads > 0) parts.push(`${uploads} photo${uploads === 1 ? "" : "s"} uploading to Immich`);
   if (merging) parts.push("a library being imported");
   if (copies > 0) parts.push(`${copies} ${copies === 1 ? "copy" : "copies"} being saved`);
+  if (exports > 0) parts.push(`${exports} export${exports === 1 ? "" : "s"} being written`);
+  if (maintenance) parts.push("a library maintenance run");
+  for (const label of renderer) parts.push(label.replace(/…$/, "").toLowerCase());
   if (derivatives > 0) parts.push(`${derivatives} thumbnail${derivatives === 1 ? "" : "s"} to render`);
   // The search index catching up is not a reason to wait: it resumes on the
   // next start, and it once held "finish in background" open for hours.
   return {
-    immich, uploads, derivatives, embeddings, merging, copies, parts,
+    immich, uploads, derivatives, embeddings, merging, copies, exports, maintenance, renderer, parts,
     busy: parts.length > 0,
     // What a poll compares against the last one to see whether anything
     // moves: a merge has no count, it is bounded by the deadline alone.
-    counts: `${uploads}/${derivatives}/${copies}`,
+    counts: `${uploads}/${derivatives}/${copies}/${exports}/${renderer.length}`,
   };
 }
 
@@ -952,6 +1049,10 @@ async function confirmCloseWithSyncCheck() {
   const lost = [];
   if (manualUploadsLost) lost.push("queued Immich uploads");
   if (work.copies > 0) lost.push("copies not saved yet");
+  if (work.exports > 0) lost.push("exports not written yet");
+  // A bulk action stopped half-way stays half done; a save cut off leaves
+  // the old thumbnail (the values themselves are on the server already).
+  if (work.renderer.length > 0) lost.push("the rest of what the window is doing");
   const { response } = await dialog.showMessageBox(mainWindow, {
     type: "info",
     title: "Rollfilm is still working",
@@ -1159,25 +1260,66 @@ function attachZoomShortcuts(contents) {
 // and one of which (a stray Cmd-R mid-import) is actively unhelpful.
 //
 // On Windows and Linux the menu bar can go entirely. On macOS it cannot: the
-// app-name menu belongs to the system, and every app has one - what an app can
-// decide is what sits NEXT to it, which here is Edit and View - Zoom In, Zoom
-// Out, Actual Size and Focus, the things the window itself has no control for.
-// Edit has to be there in the flesh: macOS takes the clipboard shortcuts from
-// the menu, and a hidden top-level menu is no menu at all - it is dropped from
-// the bar along with its key equivalents, which is why Cmd-C/V/X/A did nothing
-// in every text field in the app (search, tags, the Immich host and key).
+// app-name menu belongs to the system, and every app has one - and a Mac app
+// is expected to have the full set next to it: File, Edit, View, Window,
+// Help, with the standard keys in their standard places (Settings on Cmd-,,
+// Find on Cmd-F, Close on Cmd-W, Minimize on Cmd-M). Edit has to be there in
+// the flesh: macOS takes the clipboard shortcuts from the menu, and a hidden
+// top-level menu is no menu at all - it is dropped from the bar along with
+// its key equivalents, which is why Cmd-C/V/X/A once did nothing in every
+// text field in the app (search, tags, the Immich host and key).
+//
+// The items that mean something inside the app send one word over pm:menu;
+// the renderer (App.tsx, MenuCommands) turns it into the navigation or the
+// action. Zoom and Focus keep their own channels from before.
 function buildApplicationMenu() {
   if (process.platform !== "darwin") {
     Menu.setApplicationMenu(null);
     return;
   }
+  const command = (word) => (_item, browserWindow) =>
+    ((browserWindow || mainWindow)?.webContents ?? null)?.send("pm:menu", word);
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      { role: "appMenu" },
+      {
+        label: app.name,
+        submenu: [
+          { label: "About Rollfilm", click: command("about") },
+          { type: "separator" },
+          { label: "Settings…", accelerator: "Command+,", click: command("settings") },
+          { type: "separator" },
+          { role: "services" },
+          { type: "separator" },
+          { role: "hide" },
+          { role: "hideOthers" },
+          { role: "unhide" },
+          { type: "separator" },
+          { role: "quit" },
+        ],
+      },
+      {
+        label: "File",
+        submenu: [
+          { label: "Import…", accelerator: "Shift+Command+I", click: command("import") },
+          { type: "separator" },
+          {
+            // Cmd-W puts the window away and leaves the app running, as Photos
+            // and Music do; a click on the Dock icon brings it back (the
+            // activate handler) and Cmd-Q is what quits.
+            label: "Close Window",
+            accelerator: "Command+W",
+            click: () => {
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+            },
+          },
+        ],
+      },
       { role: "editMenu" },
       {
         label: "View",
         submenu: [
+          { label: "Find", accelerator: "Command+F", click: command("find") },
+          { type: "separator" },
           zoomMenuItem("Zoom In", "CommandOrControl+Plus", ZOOM_STEP),
           zoomMenuItem("Zoom Out", "CommandOrControl+-", -ZOOM_STEP),
           zoomMenuItem("Actual Size", "CommandOrControl+0", 0),
@@ -1186,18 +1328,63 @@ function buildApplicationMenu() {
             // Focus mode: the app's top bar put away, in every view. The
             // renderer keeps the state (state/focusMode.ts); this only flips it.
             label: "Focus",
-            accelerator: "CommandOrControl+F",
+            accelerator: "Shift+Command+F",
             click: (_item, browserWindow) =>
               ((browserWindow || mainWindow)?.webContents ?? null)?.send("pm:toggle-focus"),
           },
+          { role: "togglefullscreen" },
           hiddenZoomItem("Zoom In", "CommandOrControl+=", ZOOM_STEP),
           hiddenZoomItem("Zoom In", "CommandOrControl+numadd", ZOOM_STEP),
           hiddenZoomItem("Zoom Out", "CommandOrControl+numsub", -ZOOM_STEP),
           hiddenZoomItem("Actual Size", "CommandOrControl+num0", 0),
         ],
       },
+      { role: "windowMenu" },
+      {
+        role: "help",
+        submenu: [
+          { label: "Rollfilm Help", click: command("help") },
+          { label: "Keyboard Shortcuts", click: command("shortcuts") },
+          { type: "separator" },
+          { label: "Rollfilm Website", click: () => shell.openExternal("https://rollfilm.org") },
+          { label: "Contact…", click: () => shell.openExternal("mailto:contact@rollfilm.org") },
+        ],
+      },
     ])
   );
+}
+
+// The right-click menu of a text field: Chromium draws none of its own in
+// Electron, so until now a right-click in the search box or a tag field did
+// nothing. The system's one - spelling guesses, then the clipboard roles -
+// for editable targets only; the grids keep their own HTML menu.
+function installTextFieldContextMenu(contents) {
+  contents.on("context-menu", (_event, params) => {
+    if (!params.isEditable) return;
+    const items = [];
+    for (const word of (params.dictionarySuggestions || []).slice(0, 5)) {
+      items.push({ label: word, click: () => contents.replaceMisspelling(word) });
+    }
+    if (params.misspelledWord) {
+      if (items.length === 0) items.push({ label: "No Guesses Found", enabled: false });
+      items.push({
+        label: "Learn Spelling",
+        click: () => contents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      items.push({ type: "separator" });
+    }
+    items.push(
+      { role: "undo" },
+      { role: "redo" },
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      { type: "separator" },
+      { role: "selectAll" }
+    );
+    Menu.buildFromTemplate(items).popup({ window: BrowserWindow.fromWebContents(contents) || undefined });
+  });
 }
 
 // --- Links that leave the app --------------------------------------------
@@ -1259,8 +1446,8 @@ function routeExternalLinksToTheOS(webContents) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    // Where it was left last time (savedWindowBounds), else a first-launch size.
+    ...(savedWindowBounds() ?? { width: 1400, height: 900 }),
     title: "Rollfilm",
     show: false, // shown once the page has loaded (did-finish-load), replacing the splash
     icon: windowIconPath(),
@@ -1274,12 +1461,12 @@ function createWindow() {
     // Narrow enough for a split screen: below ~900px the tabs fold into the
     // burger menu and the search field shrinks (App.tsx measures both), the
     // editor and photo view keep their side panel down to this width.
-    minWidth: 720,
-    minHeight: 600,
-    // Paint before the renderer's theme runs (it lives in localStorage, out of
-    // reach here): the default Stone skins by the OS mode, the same pair
-    // index.css paints for the same instant. Seen only during resize lag.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? "#26292d" : "#eaebec",
+    minWidth: WINDOW_MIN.width,
+    minHeight: WINDOW_MIN.height,
+    // Paint before the renderer's theme runs: the skin it reported last time
+    // (windowBackground), so the first frame and resize lag show no other
+    // colour than the page itself.
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -1292,6 +1479,9 @@ function createWindow() {
 
   attachZoomShortcuts(mainWindow.webContents);
   routeExternalLinksToTheOS(mainWindow.webContents);
+  installTextFieldContextMenu(mainWindow.webContents);
+  mainWindow.on("resize", rememberWindowBoundsSoon);
+  mainWindow.on("move", rememberWindowBoundsSoon);
 
   if (USE_DEV_SERVER) {
     mainWindow.loadURL(DEV_SERVER_URL);
@@ -1300,15 +1490,16 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
   }
 
-  // Window is already visible (show: true). Close the splash as soon as the
-  // page loads and bring the window forward. did-finish-load is used alongside
-  // ready-to-show because ready-to-show does not fire on every setup.
+  // Show the window as soon as the page is up, then take the splash away
+  // underneath it - the other way round left a gap with nothing on screen.
+  // did-finish-load is used alongside ready-to-show because ready-to-show does
+  // not fire on every setup.
   const revealWindow = () => {
-    closeSplash();
     if (mainWindow) {
       mainWindow.show();
       mainWindow.focus();
     }
+    closeSplash();
   };
   mainWindow.once("ready-to-show", revealWindow);
   mainWindow.webContents.once("did-finish-load", revealWindow);
@@ -1318,6 +1509,7 @@ function createWindow() {
   // Ask before a close that would drop running Immich uploads (see
   // confirmCloseWithSyncCheck) - forceClose marks a decision already made.
   mainWindow.on("close", (e) => {
+    rememberWindowBounds();
     if (forceClose) return;
     e.preventDefault();
     confirmCloseWithSyncCheck();
@@ -1392,6 +1584,21 @@ ipcMain.handle("pm:set-window-buttons", (_event, visible) => {
 });
 ipcMain.handle("pm:is-full-screen", () => Boolean(mainWindow?.isFullScreen()));
 ipcMain.handle("pm:get-zoom", (event) => event.sender.getZoomFactor());
+// The renderer's skin (state/theme.ts), see savedTheme.
+ipcMain.handle("pm:set-theme", (_event, theme) => {
+  if (!theme || typeof theme !== "object") return;
+  const bg = typeof theme.bg === "string" && /^#[0-9a-f]{6}$/i.test(theme.bg) ? theme.bg : null;
+  nativeTheme.themeSource = themeSourceFor(theme.mode);
+  if (bg && mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(bg);
+  writeConfig({ ...readConfig(), theme: { mode: theme.mode, bg } });
+});
+// The Dock icon's progress bar (taskbar on Windows): 0-1 while a bulk job
+// runs, anything else takes it away.
+ipcMain.handle("pm:set-progress", (_event, fraction) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const ok = typeof fraction === "number" && Number.isFinite(fraction) && fraction >= 0;
+  mainWindow.setProgressBar(ok ? Math.min(1, fraction) : -1);
+});
 
 // Native folder picker: the app's core new capability. Returns an absolute host
 // path the native backend can read directly (no Docker mounts involved).
@@ -1673,6 +1880,8 @@ function registerActivateHandler() {
 
 app.whenReady().then(async () => {
   setDevDockIcon();
+  // Before any window: the splash and the native dialogs follow the skin.
+  applySavedTheme();
   buildApplicationMenu();
   createSplash();
 

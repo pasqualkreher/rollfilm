@@ -29,14 +29,14 @@ import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { leaveSearch } from "../components/SearchBar";
 import { loadPresets, presetAdjustments } from "../utils/presets";
-import { useTasks } from "../state/tasks";
-import { useWait } from "../state/wait";
+import { useTasks, type BatchItem } from "../state/tasks";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { useAskSaveCopyOptions, useMergePairs } from "../state/viewPrefs";
 import { FULL_COPY_QUALITY, SaveCopyDialog } from "../components/SaveCopyDialog";
-import { modKeyLabel, useSelectionKeys } from "../utils/selection";
+import { shortcutLabel, useSelectionKeys } from "../utils/selection";
 import { selectionSharedMeta } from "../utils/selectionMeta";
+import type { ContextActions } from "../components/PhotoContextMenu";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
@@ -67,6 +67,9 @@ type GridImage = LibraryIndexImage | ImageOut;
 // Opened without a filter set (the sidebar's link, a fresh visit) while one is
 // remembered from earlier in the session: go to that instead, before the page
 // below mounts - so the unfiltered grid never flashes up or gets fetched.
+// The one bulk task this page runs at a time (state/tasks).
+const LIBRARY_BATCH = "batch:library";
+
 export function Library() {
   const [searchParams] = useSearchParams();
   const remembered = rememberedLibraryFilters();
@@ -163,7 +166,6 @@ function LibraryPage() {
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
-  const { withBatches } = useWait();
   const mergePairs = useMergePairs();
   const { dialog: pairDeleteDialog, confirmDelete } = usePairDeleteConfirm();
   const q = (searchParams.get("q") ?? "").trim();
@@ -201,16 +203,18 @@ function LibraryPage() {
     setBarError(null);
   }
 
-  // Lock the nav + show the top-bar spinner while uploading to Immich, same as
-  // the Settings maintenance tasks.
-  const { setBusyLabel, trackRenders, trackCopyJob } = useTasks();
+  const { runTask, trackRenders, trackCopyJob, runBatches, hasTask } = useTasks();
+  // Every bulk action of this page runs as one task in the title bar, counted
+  // down there with a Stop, and one at a time: the develop picker is off while
+  // one runs, and a second one started regardless is refused (TaskBusyError).
+  // The grid stays usable meanwhile - selection is by id, so what the user
+  // picks while a batch runs is never confused with what the batch handles.
+  const batchBusy = hasTask(LIBRARY_BATCH);
+  const batch = <R,>(label: string, items: BatchItem[], run: (ids: string[]) => Promise<R>) =>
+    runBatches({ id: LIBRARY_BATCH, kind: "batch", label }, items, run);
   const askSaveCopyOptions = useAskSaveCopyOptions();
   // The options dialog of "Apply ... and save copy", resolved by its answer.
   const [copyPrompt, setCopyPrompt] = useState<{ resolve: (opts: CopyOpts | null) => void } | null>(null);
-  useEffect(() => {
-    setBusyLabel(immichBusy ? "Uploading to Immich…" : null);
-  }, [immichBusy, setBusyLabel]);
-  useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
   const filters: LibraryFilters = {
     view_mode: viewMode,
@@ -401,6 +405,15 @@ function LibraryPage() {
     dismissMessages();
   }
 
+  // A rubber band's result (utils/useMarquee): the whole selection at once.
+  function setSelection(ids: string[]) {
+    if (ids.length === 0) {
+      clearSelection();
+      return;
+    }
+    setSelected(new Set(ids));
+  }
+
   // Cmd/Ctrl+A picks the whole (filtered) grid, Escape drops the selection,
   // E opens a single selected photo in the editor.
   useSelectionKeys({
@@ -417,23 +430,32 @@ function LibraryPage() {
     onDelete: () => void deleteSelected(),
   });
 
-  async function applyBulk(patch: { rating?: number; color_label?: ColorLabel }) {
-    if (selected.size === 0) return;
-    const ids = new Set(selected);
+  async function applyBulk(patch: { rating?: number; color_label?: ColorLabel }, target: Iterable<string> = selected) {
+    const ids = new Set(target);
+    if (ids.size === 0) return;
     // When pairs are merged the grid only shows the JPEG, so fan the change out
     // to each hidden RAW partner too.
-    try {
-      // One photo is one quick request and gets no wait popup: the popup
-      // holds every key while it is up, and culling from the keyboard - a
-      // star, then the arrow to the next photo - must not lose the arrow.
-      if (ids.size === 1) await api.images.bulkUpdate(Array.from(ids), patch);
-      else await withBatches("Updating photos…", Array.from(ids), (slice) => api.images.bulkUpdate(slice, patch));
-      // Onto the tiles at once, without waiting for the whole index to come
-      // back (megabytes on a big library). The refetch below then finds what
-      // it expected and changes nothing.
+    // Onto the tiles slice by slice, without waiting for the whole index to
+    // come back (megabytes on a big library). The refetch below then finds
+    // what it expected and changes nothing.
+    const show = (changed: Iterable<string>) => {
+      const set = new Set(changed);
       queryClient.setQueriesData<{ images: LibraryIndexImage[] }>({ queryKey: ["images", "index"] }, (old) =>
-        old ? { ...old, images: old.images.map((im) => (ids.has(im.id) ? { ...im, ...patch } : im)) } : old
+        old ? { ...old, images: old.images.map((im) => (set.has(im.id) ? { ...im, ...patch } : im)) } : old
       );
+    };
+    try {
+      // One photo is one quick request and no task: culling from the keyboard
+      // - a star, then the arrow to the next photo - must not wait on it.
+      if (ids.size === 1) {
+        await api.images.bulkUpdate(Array.from(ids), patch);
+        show(ids);
+      } else {
+        await batch("Updating photos…", Array.from(ids), async (slice) => {
+          await api.images.bulkUpdate(slice, patch);
+          show(slice);
+        });
+      }
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
     }
@@ -445,13 +467,14 @@ function LibraryPage() {
     setLastIndex(index);
   }
 
-  async function deleteSelected() {
-    if (selected.size === 0) return;
+  async function deleteSelected(target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     // In merged view only the JPEG is shown, so a delete takes the hidden RAW
     // partner with it by default - a pair is one shot. The "ask what to delete"
     // setting lets the user keep the partners.
-    const baseIds = Array.from(selected);
-    const partnerIds = withPairedIds(baseIds).filter((x) => !selected.has(x));
+    const baseIds = target;
+    const baseSet = new Set(baseIds);
+    const partnerIds = withPairedIds(baseIds).filter((x) => !baseSet.has(x));
     const byId = new Map((images ?? []).map((im) => [im.id, im]));
     const toItems = (list: string[]) =>
       list.map((x) => byId.get(x)).filter((im): im is ImageOut => Boolean(im));
@@ -474,17 +497,35 @@ function LibraryPage() {
       else if (at > 0 && before) nextAfterDelete = { id: before.id, index: at - 1 };
     }
     try {
-      const { done, cancelled } = await withBatches(
+      const { done, cancelled } = await batch(
         "Moving photos to trash…",
         pairUnits(ids, (x) => byId.get(x)?.paired_image_id),
-        (slice) => api.images.bulkDelete(slice)
+        async (slice) => {
+          await api.images.bulkDelete(slice);
+          // Out of the grid slice by slice: a photo already in the trash
+          // cannot be picked and sent again while the rest still go.
+          const gone = new Set(slice);
+          queryClient.setQueriesData<{ images: LibraryIndexImage[] }>({ queryKey: ["images", "index"] }, (old) =>
+            old ? { ...old, images: old.images.filter((im) => !gone.has(im.id)) } : old
+          );
+        }
       );
-      // Cancelled: what is still in the grid stays selected.
-      if (cancelled) setSelected(new Set(baseIds.filter((x) => !done.includes(x))));
+      const gone = new Set(cancelled ? done : ids);
       // One photo deleted (culling from the keyboard): the selection moves on
       // to its neighbour instead of ending there.
-      else if (nextAfterDelete) selectOnly(nextAfterDelete.id, nextAfterDelete.index);
-      else clearSelection();
+      if (!cancelled && nextAfterDelete) selectOnly(nextAfterDelete.id, nextAfterDelete.index);
+      // Otherwise the deleted photos leave the selection - read as it is now,
+      // not as it was when this started: the user may have picked more
+      // meanwhile. Nothing left: the bar goes too.
+      else
+        setSelected((prev) => {
+          const next = new Set(Array.from(prev).filter((x) => !gone.has(x)));
+          if (next.size === 0 && prev.size > 0) {
+            setLastIndex(null);
+            dismissMessages();
+          }
+          return next;
+        });
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["trash"] });
@@ -493,11 +534,11 @@ function LibraryPage() {
     }
   }
 
-  async function addTagToSelected(name: string) {
-    if (selected.size === 0 || !name.trim()) return;
+  async function addTagToSelected(name: string, target: string[] = Array.from(selected)) {
+    if (target.length === 0 || !name.trim()) return;
     const tag = name.trim();
     try {
-      const { done, cancelled } = await withBatches("Tagging photos…", Array.from(selected), (ids) =>
+      const { done, cancelled } = await batch("Tagging photos…", target, (ids) =>
         api.images.bulkAddTags(ids, [tag])
       );
       setDevelopMsg(`Added tag “${tag}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
@@ -507,11 +548,11 @@ function LibraryPage() {
     }
   }
 
-  async function addSelectedToCanvas(canvasId: string) {
-    if (selected.size === 0) return;
+  async function addSelectedToCanvas(canvasId: string, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     // Same pair rule as albums: in merged view the RAW partner rides along,
     // so the canvas's filmstrip holds the whole shot.
-    await api.canvases.addImages(canvasId, withPairedIds(Array.from(selected)));
+    await api.canvases.addImages(canvasId, withPairedIds(target));
     queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
     queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
   }
@@ -537,21 +578,49 @@ function LibraryPage() {
     );
   }
 
-  async function addSelectedToAlbum(albumId: string) {
-    if (selected.size === 0) return;
+  async function addSelectedToAlbum(albumId: string, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
+    const targetSet = new Set(target);
     // In merged view the RAW partner is hidden behind the JPEG card - add it
     // too, so the album holds the whole shot and its own merge toggle works.
     const byId = new Map((images ?? []).map((im) => [im.id, im]));
-    const units = pairUnits(withPairedIds(Array.from(selected)), (x) => byId.get(x)?.paired_image_id);
+    const units = pairUnits(withPairedIds(target), (x) => byId.get(x)?.paired_image_id);
     try {
-      const { done, cancelled } = await withBatches("Adding photos to album…", units, (slice) =>
+      const { done, cancelled } = await batch("Adding photos to album…", units, (slice) =>
         api.albums.addImages(albumId, slice)
       );
-      partialAddRef.current = cancelled ? done.filter((x) => selected.has(x)).length : null;
+      partialAddRef.current = cancelled ? done.filter((x) => targetSet.has(x)).length : null;
     } finally {
       queryClient.invalidateQueries({ queryKey: ["albums"] });
     }
   }
+
+  // The right-click menu's hands on the photos under the pointer (or the
+  // selection they belong to): the same actions as the bulk bar, by id.
+  const contextActions: ContextActions = {
+    onRate: (ids, rating) => applyBulk({ rating }, ids),
+    onColor: (ids, label) => applyBulk({ color_label: label }, ids),
+    onAddToAlbum: (ids, albumId) => addSelectedToAlbum(albumId, ids),
+    onAddToCanvas: (ids, canvasId) => addSelectedToCanvas(canvasId, ids),
+    onAddTag: (ids, name) => addTagToSelected(name, ids),
+    onAutoEdit: (ids, copy) => (copy ? autoDevelopAndCopy(ids) : autoDevelopSelected(undefined, ids)),
+    onApplyPreset: (ids, name, copy) => (copy ? applyPresetAndCopy(name, ids) : applyPresetToSelected(name, undefined, ids)),
+    presets: () => Object.keys(loadPresets()),
+    onReset: (ids, opts) => resetSelected(opts, ids),
+    // The same row the bar shows: the sync tick in selective mode, "Add to
+    // Immich" in manual mode, nothing in full mode or while an upload runs.
+    immich: (ids) => {
+      if (!immichConfigured || immichBusy) return null;
+      if (immich?.sync_mode === "selective") {
+        const on = allSynced(new Set(ids));
+        return { label: "Sync to Immich", checked: on, run: () => toggleSelectedImmichSync(!on, ids) };
+      }
+      if (immich?.sync_mode === "manual") return { label: "Add to Immich", run: () => addSelectedToImmich(ids) };
+      return null;
+    },
+    onDelete: (ids) => deleteSelected(ids),
+    meta: (ids) => selectionSharedMeta(images ?? [], new Set(ids)),
+  };
 
   // Counts the selection, not the ids actually sent: merged view silently adds
   // each shot's RAW partner too, and reporting that larger number would look
@@ -567,10 +636,10 @@ function LibraryPage() {
     );
   }
 
-  async function resetSelected(opts: BulkResetOptions) {
-    if (selected.size === 0) return;
+  async function resetSelected(opts: BulkResetOptions, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     try {
-      const { done } = await withBatches("Resetting photos…", Array.from(selected), (ids) =>
+      const { done } = await batch("Resetting photos…", target, (ids) =>
         api.images.bulkReset(ids, opts)
       );
       trackRenders(done);
@@ -580,7 +649,7 @@ function LibraryPage() {
   }
 
   async function refreshAfterReset() {
-    // Awaited: the wait popup has to stay up until the grid actually holds the
+    // Awaited: the reset is only reported once the grid actually holds the
     // reset rows. The re-rendered pictures don't hold it up - the backend
     // renders those in the background and their tiles shimmer until they land.
     await Promise.all([
@@ -592,15 +661,16 @@ function LibraryPage() {
 
   // Auto-develop every selected photo (each learns its own suggestion). Photos
   // with no embedding yet, or nothing similar to learn from, are skipped.
-  async function autoDevelopSelected(copyOpts?: CopyOpts) {
-    if (selected.size === 0) return;
+  async function autoDevelopSelected(copyOpts?: CopyOpts, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
+    const targetSet = new Set(target);
     const editedCount = (images ?? []).filter(
-      (im) => selected.has(im.id) && (im as ImageOut).edit_rev
+      (im) => targetSet.has(im.id) && (im as ImageOut).edit_rev
     ).length;
     if (
       editedCount > 0 &&
       !(await dialogs.confirm({
-        title: `Auto-develop ${selected.size} photo(s)?`,
+        title: `Auto-develop ${target.length} photo(s)?`,
         message: `This replaces the existing edits of ${editedCount} photo(s).`,
         confirmLabel: "Auto-develop",
       }))
@@ -610,9 +680,9 @@ function LibraryPage() {
     setDevelopMsg(null);
     setBarError(null);
     try {
-      const { done, results, cancelled } = await withBatches(
+      const { done, results, cancelled } = await batch(
         "Auto-developing photos…",
-        Array.from(selected),
+        target,
         (ids) => api.images.bulkAutoDevelop(ids)
       );
       const applied = results.reduce((n, r) => n + r.applied, 0);
@@ -634,16 +704,17 @@ function LibraryPage() {
   }
 
   // Apply a saved editor preset (a full develop look) to the whole selection.
-  async function applyPresetToSelected(name: string, copyOpts?: CopyOpts) {
+  async function applyPresetToSelected(name: string, copyOpts?: CopyOpts, target: string[] = Array.from(selected)) {
     const preset = loadPresets()[name];
-    if (selected.size === 0 || !preset) return;
+    if (target.length === 0 || !preset) return;
+    const targetSet = new Set(target);
     const editedCount = (images ?? []).filter(
-      (im) => selected.has(im.id) && (im as ImageOut).edit_rev
+      (im) => targetSet.has(im.id) && (im as ImageOut).edit_rev
     ).length;
     if (
       editedCount > 0 &&
       !(await dialogs.confirm({
-        title: `Apply preset “${name}” to ${selected.size} photo(s)?`,
+        title: `Apply preset “${name}” to ${target.length} photo(s)?`,
         message: `This replaces the existing edits of ${editedCount} photo(s).`,
         confirmLabel: "Apply preset",
       }))
@@ -654,7 +725,7 @@ function LibraryPage() {
     setBarError(null);
     const look = presetAdjustments(preset) as unknown as Record<string, unknown>;
     try {
-      const { done, cancelled } = await withBatches("Applying preset…", Array.from(selected), (ids) =>
+      const { done, cancelled } = await batch("Applying preset…", target, (ids) =>
         api.images.bulkDevelop(ids, look)
       );
       setDevelopMsg(`Applied preset “${name}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
@@ -686,23 +757,28 @@ function LibraryPage() {
     return new Promise((resolve) => setCopyPrompt({ resolve }));
   }
 
-  async function autoDevelopAndCopy() {
+  async function autoDevelopAndCopy(target?: string[]) {
     const opts = await askCopyOptions();
-    if (opts) await autoDevelopSelected(opts);
+    if (opts) await autoDevelopSelected(opts, target);
   }
 
-  async function applyPresetAndCopy(name: string) {
+  async function applyPresetAndCopy(name: string, target?: string[]) {
     const opts = await askCopyOptions();
-    if (opts) await applyPresetToSelected(name, opts);
+    if (opts) await applyPresetToSelected(name, opts, target);
   }
 
-  async function addSelectedToImmich() {
-    if (selected.size === 0) return;
+  async function addSelectedToImmich(target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     setImmichBusy(true);
     setImmichMsg(null);
     setBarError(null);
     try {
-      const result = await api.images.pushToImmich(Array.from(selected));
+      // Shown in the title bar while the photos are handed over; the uploads
+      // themselves then show as the Immich sync task.
+      const result = await runTask(
+        { id: "immich:push", kind: "plain", label: "Adding to Immich…" },
+        () => api.images.pushToImmich(target)
+      );
       setImmichMsg(result.message);
     } catch (e) {
       setBarError(errorText(e));
@@ -714,13 +790,13 @@ function LibraryPage() {
   // Selective sync: the checkbox flags/unflags the whole selection - flagged
   // photos upload in the background and stay marked as synced; unflagging
   // stops syncing them but leaves what's already on Immich alone.
-  async function toggleSelectedImmichSync(enabled: boolean) {
-    if (selected.size === 0) return;
+  async function toggleSelectedImmichSync(enabled: boolean, target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
     setImmichBusy(true);
     setImmichMsg(null);
     setBarError(null);
     try {
-      const updated = await api.images.setImmichSync(Array.from(selected), enabled);
+      const updated = await api.images.setImmichSync(target, enabled);
       setImmichMsg(
         enabled
           ? `${updated.length} photo(s) marked for Immich sync. Uploading in the background.`
@@ -736,8 +812,10 @@ function LibraryPage() {
 
   // Checked when every selected photo is flagged - so ticking it flags the
   // rest, and unticking always unflags everything selected.
-  const allSelectedSynced =
-    selected.size > 0 && (images ?? []).filter((im) => selected.has(im.id)).every((im) => im.immich_sync);
+  function allSynced(ids: Set<string>): boolean {
+    return ids.size > 0 && (images ?? []).filter((im) => ids.has(im.id)).every((im) => im.immich_sync);
+  }
+  const allSelectedSynced = allSynced(selected);
 
   // Scans the whole library to find what the selection has in common, so it is
   // memoised on the two things it actually reads - not re-run for every
@@ -758,7 +836,7 @@ function LibraryPage() {
               copyPrompt.resolve(null);
               setCopyPrompt(null);
             }}
-            onSave={async (req) => {
+            onSave={(req) => {
               copyPrompt.resolve(req.kind === "physical" ? { quality: req.quality, maxSize: req.maxSize } : null);
               setCopyPrompt(null);
             }}
@@ -848,7 +926,7 @@ function LibraryPage() {
           <div className="filter-bar action-bar--bottom">
             <div className="control-group">
               <span>{selected.size} selected</span>
-              <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
+              <button className="btn" onClick={selectAll} title={`Select every photo shown (${shortcutLabel("A")})`}>
                 <span className="btn-label"><IconCheck size={13} /> Select all</span>
               </button>
               <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
@@ -885,7 +963,7 @@ function LibraryPage() {
                 {immich?.sync_mode === "manual" && (
                   <button
                     className="btn"
-                    onClick={addSelectedToImmich}
+                    onClick={() => void addSelectedToImmich()}
                     disabled={immichBusy}
                     title="Upload the selected photos to your Immich server. RAW files only if enabled in Settings."
                   >
@@ -900,14 +978,14 @@ function LibraryPage() {
                 onApplyPreset={(name) => applyPresetToSelected(name)}
                 onAutoEditAndCopy={autoDevelopAndCopy}
                 onApplyPresetAndCopy={applyPresetAndCopy}
-                busy={developBusy}
+                busy={developBusy || batchBusy}
               />
               <ResetMenu count={selected.size} onReset={resetSelected} />
             </div>
             <button
               className="btn btn-sm quiet-danger"
               style={{ marginLeft: "auto" }}
-              onClick={deleteSelected}
+              onClick={() => void deleteSelected()}
               title="Delete the selected photos"
               aria-label="Delete the selected photos"
             >
@@ -950,6 +1028,8 @@ function LibraryPage() {
           selectedIds={selected}
           onToggleSelect={toggleSelect}
           onSelectOnly={selectOnly}
+          onSetSelection={setSelection}
+          contextActions={contextActions}
           groupByDate={false}
         />
       ) : (
@@ -958,6 +1038,8 @@ function LibraryPage() {
           selectedIds={selected}
           onToggleSelect={toggleSelect}
           onSelectOnly={selectOnly}
+          onSetSelection={setSelection}
+          contextActions={contextActions}
           // Changing a FILTER jumps to the top of the (new) result set - the
           // old scroll position pointed into a different library and landed
           // somewhere arbitrary. view_mode is deliberately not part of the key:

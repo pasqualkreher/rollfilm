@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, bumpThumbnailCacheBust } from "../api/client";
-import type { ImmichSyncMode, ImmichTestResult, ImportSettings, TagUsage } from "../api/types";
+import type { ImmichSyncMode, ImmichTestResult, TagUsage } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
+import { Desc, OptionRow } from "../components/SettingsControls";
+import { ImportSettingsPanel } from "../components/ImportSettingsPanel";
 import { IconCheck, IconExport, IconImport, IconRename, IconX } from "../components/Icons";
 import { tagTreeRows } from "../utils/tagPaths";
 import { useAppDialogs } from "../components/AppDialogs";
@@ -72,7 +74,7 @@ const SETTINGS_TABS: { id: string; label: string; sections: string[] }[] = [
   {
     id: "library",
     label: "Library",
-    sections: ["Library folder", "Library data", "Smart albums", "Tags", "Sidecars", "Trash"],
+    sections: ["Library folder", "Import", "Library data", "Smart albums", "Tags", "Sidecars", "Trash"],
   },
   { id: "photos", label: "Photos", sections: ["RAW files", "Photo editor", "Auto develop"] },
   { id: "integrations", label: "Integrations", sections: ["Immich integration"] },
@@ -91,11 +93,6 @@ function tabOfSection(title: string): string {
 
 // ---- Shared building blocks so every section is styled the same way -------
 
-// A muted description paragraph.
-function Desc({ children }: { children: ReactNode }) {
-  return <p className="settings-desc">{children}</p>;
-}
-
 // A status/result line (muted, or red when it's an error).
 function Note({ children, error }: { children: ReactNode; error?: boolean }) {
   return <p className={`settings-note${error ? " settings-note--error" : ""}`}>{children}</p>;
@@ -103,42 +100,6 @@ function Note({ children, error }: { children: ReactNode; error?: boolean }) {
 
 // A toggle row (checkbox or radio) with a bold title and optional description —
 // the single shape used for every option in Settings.
-function OptionRow({
-  type,
-  name,
-  checked,
-  disabled,
-  busy,
-  onChange,
-  title,
-  desc,
-}: {
-  type: "checkbox" | "radio";
-  name?: string;
-  checked: boolean;
-  disabled?: boolean;
-  busy?: boolean;
-  onChange: (checked: boolean) => void;
-  title: ReactNode;
-  desc?: ReactNode;
-}) {
-  return (
-    <label className={`settings-option${busy ? " busy" : ""}`}>
-      <input
-        type={type}
-        name={name}
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="settings-option-body">
-        <strong>{title}</strong>
-        {desc != null && <span className="settings-option-desc">{desc}</span>}
-      </span>
-    </label>
-  );
-}
-
 // A labelled text/password input filling the reading column.
 function Field({
   label,
@@ -300,10 +261,9 @@ function AppearanceSetting() {
 
       <Presence open={open} ms={MOTION.modal}>
         {open && (
-          <div className="modal-overlay" onClick={() => setOpen(false)}>
+          <div className="modal-overlay">
             <div
               className="modal theme-modal"
-              onClick={(e) => e.stopPropagation()}
               role="dialog"
               aria-modal="true"
               aria-label="Choose appearance"
@@ -312,9 +272,6 @@ function AppearanceSetting() {
                 <h3 className="section-title" style={{ margin: 0 }}>
                   Appearance
                 </h3>
-                <button className="modal-close" onClick={() => setOpen(false)} aria-label="Close">
-                  <IconX size={14} />
-                </button>
               </div>
               <div className="theme-modal-body">
                 <ThemePicker />
@@ -358,10 +315,21 @@ const SMART_ALBUM_SECTIONS: { key: string; label: string; desc: string }[] = [
   { key: "edits", label: "Edited", desc: "All photos you have edited, including saved copies." },
 ];
 
+// The maintenance runs' task ids (state/tasks): one of each at a time.
+const SYNC_TASK = "maintenance:sync";
+const REBUILD_TASK = "maintenance:rebuild";
+const REPAIR_TASK = "maintenance:repair";
+const RESTORE_TASK = "maintenance:restore";
+const SIDECAR_TASK = "sidecar:write-all";
+
 export function Settings() {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
-  const { setBusyLabel } = useTasks();
+  // The long maintenance runs show in the title bar's task dock, counted
+  // down there with a Stop, and outlive this page: the buttons go by the
+  // task registry (hasTask), which survives leaving and coming back, not
+  // only by their own mutation.
+  const { runTask, trackPolledJob, hasTask, tasks } = useTasks();
   // Whether deleting a paired photo asks "only this file or the whole pair?".
   // Client-side view preference (see viewPrefs), not a server setting.
   const askDeletePartner = useAskDeletePartner();
@@ -605,9 +573,24 @@ export function Settings() {
   const photoCount = libraryCount?.count;
 
   const sync = useMutation({
-    mutationFn: () => api.maintenance.sync(),
+    mutationFn: () =>
+      runTask(
+        {
+          id: SYNC_TASK,
+          kind: "maintenance",
+          label: "Syncing library…",
+          cancel: () => api.maintenance.cancelSync(),
+          stopTitle: "Stop. A stopped sync removes nothing.",
+          title: "The database is being compared with the library folder.",
+        },
+        () => api.maintenance.sync()
+      ),
     onMutate: () => ({ startedAt: Date.now() }),
     onSuccess: (result, _vars, ctx) => {
+      if (result.cancelled) {
+        setSyncResult("Stopped. Nothing was changed.");
+        return;
+      }
       recordRate("pm.est.sync", (Date.now() - ctx.startedAt) / 1000, photoCount ?? 0);
       const parts = [
         `Removed ${result.removed_missing_files} entr${result.removed_missing_files === 1 ? "y" : "ies"} for files no longer on disk`,
@@ -640,9 +623,27 @@ export function Settings() {
   });
 
   const rebuildThumbnails = useMutation({
-    mutationFn: () => api.maintenance.rebuildThumbnails(),
+    mutationFn: () =>
+      runTask(
+        {
+          id: REBUILD_TASK,
+          kind: "maintenance",
+          label: "Rebuilding thumbnails",
+          progress: () => api.maintenance.rebuildProgress(),
+          cancel: () => api.maintenance.cancelRebuild(),
+          stopTitle: "Stop. Thumbnails already rebuilt stay; the rest keep their old ones.",
+          title: "Every thumbnail and preview is being rendered again from the originals.",
+        },
+        () => api.maintenance.rebuildThumbnails()
+      ),
     onMutate: () => ({ startedAt: Date.now() }),
     onSuccess: (result, _vars, ctx) => {
+      if (result.cancelled) {
+        setRebuildResult(`Stopped after ${result.rebuilt} photo(s). The rest keep their old thumbnails.`);
+        bumpThumbnailCacheBust();
+        queryClient.invalidateQueries({ queryKey: ["images"] });
+        return;
+      }
       recordRate(REBUILD_EST_KEY, (Date.now() - ctx.startedAt) / 1000, result.rebuilt);
       setRebuildResult(`Rebuilt thumbnails and previews for ${result.rebuilt} photo(s).`);
       // Bump the cache-bust so the freshly rebuilt (e.g. higher-res) images
@@ -652,38 +653,26 @@ export function Settings() {
     },
   });
 
-  // Live elapsed timers for the two long jobs, shown next to their buttons.
-  const syncElapsed = useElapsed(sync.isPending);
-  const rebuildElapsed = useElapsed(rebuildThumbnails.isPending);
+  // Running, whether started from this visit to the page or an earlier one.
+  const syncRunning = sync.isPending || hasTask(SYNC_TASK);
+  const rebuildTask = tasks.find((t) => t.id === REBUILD_TASK && !t.finished) ?? null;
+  const rebuildRunning = rebuildThumbnails.isPending || rebuildTask !== null;
+  // A live elapsed timer for the rebuild (its progress is in the dock; this
+  // feeds the remaining-time line under the RAW decoding switch).
+  const rebuildElapsed = useElapsed(rebuildRunning);
 
-  // Real progress of the running rebuild ("N of M photos"), polled from the
-  // server while the job runs. The remaining time comes from the measured
-  // live rate (elapsed / photos done), which beats the pre-flight estimate.
-  const { data: rebuildProg } = useQuery({
-    queryKey: ["rebuild-progress"],
-    queryFn: () => api.maintenance.rebuildProgress(),
-    refetchInterval: 1000,
-    enabled: rebuildThumbnails.isPending,
-  });
+  // Real progress of the running rebuild ("N of M photos"), from the task the
+  // dock follows. The remaining time comes from the measured live rate
+  // (elapsed / photos done), which beats the pre-flight estimate.
   function rebuildProgressLine(): string {
-    const p = rebuildProg;
-    if (rebuildThumbnails.isPending && p?.active && p.total > 0 && p.done > 0) {
-      const remainSec = ((rebuildElapsed / 1000) * (p.total - p.done)) / p.done;
+    const p = rebuildTask;
+    if (p && p.total !== undefined && p.done !== undefined && p.total > 0 && p.done > 0) {
+      const elapsed = Date.now() - p.startedAt;
+      const remainSec = ((elapsed / 1000) * (p.total - p.done)) / p.done;
       return `${p.done.toLocaleString()} of ${p.total.toLocaleString()} photos · ~${formatDuration(remainSec)} left`;
     }
     return progressText(rebuildElapsed, estimateSeconds(photoCount, REBUILD_EST_KEY));
   }
-
-  // Import: ask each time whether photos are copied into the library or left
-  // where they are, or remember one answer (the dialog's "don't ask again").
-  const { data: importSettings } = useQuery({
-    queryKey: ["import-settings"],
-    queryFn: () => api.settings.getImport(),
-  });
-  const updateImportSettings = useMutation({
-    mutationFn: (patch: Partial<ImportSettings>) => api.settings.updateImport(patch),
-    onSuccess: (result) => queryClient.setQueryData(["import-settings"], result),
-  });
 
   // RAW decoding: whether RAWs load with no brightness processing (native
   // sensor exposure) or are self-normalized to a consistent brightness.
@@ -716,10 +705,24 @@ export function Settings() {
   });
 
   const repairDates = useMutation({
-    mutationFn: () => api.maintenance.repairDates(),
+    mutationFn: () =>
+      runTask(
+        {
+          id: REPAIR_TASK,
+          kind: "maintenance",
+          label: "Repairing capture dates",
+          progress: () => api.maintenance.repairProgress(),
+          cancel: () => api.maintenance.cancelRepairDates(),
+          stopTitle: "Stop. The dates corrected so far stay.",
+          title: "Every photo's capture date is being read again from its file.",
+        },
+        () => api.maintenance.repairDates()
+      ),
     onSuccess: (result) => {
       setRepairDatesResult(
-        result.fixed > 0
+        result.cancelled
+          ? `Stopped after ${result.checked} photo(s); ${result.fixed} corrected so far.`
+          : result.fixed > 0
           ? `Corrected the capture date of ${result.fixed} photo(s) (${result.checked} checked). The timeline now sorts them correctly.`
           : `All ${result.checked} photo(s) already have the correct capture date.`
       );
@@ -728,7 +731,19 @@ export function Settings() {
   });
 
   const restore = useMutation({
-    mutationFn: () => api.maintenance.restore(restoreFile!, restoreConfirmation),
+    // No Stop: the library is emptied before the backup is written back, so
+    // a stop half-way would leave nothing.
+    mutationFn: () =>
+      runTask(
+        {
+          id: RESTORE_TASK,
+          kind: "maintenance",
+          label: "Restoring backup…",
+          cancel: null,
+          title: "The library is being replaced with the backup's contents. This cannot be stopped.",
+        },
+        () => api.maintenance.restore(restoreFile!, restoreConfirmation)
+      ),
     onSuccess: (result) => {
       setRestoreResult(`Restored ${result.images_restored} photo(s) and ${result.albums_restored} album(s).`);
       setRestoreConfirmation("");
@@ -738,6 +753,9 @@ export function Settings() {
       queryClient.invalidateQueries({ queryKey: ["albums"] });
     },
   });
+
+  const repairRunning = repairDates.isPending || hasTask(REPAIR_TASK);
+  const restoreRunning = restore.isPending || hasTask(RESTORE_TASK);
 
   // The user's own tags, deletable outright - the app's tags never appear
   // here (they come and go with the photos' state) and tags nobody carries
@@ -827,7 +845,25 @@ export function Settings() {
   });
   const writeAllSidecars = useMutation({
     mutationFn: () => api.settings.writeAllSidecars(),
-    onSuccess: (r) => queryClient.setQueryData(["sidecar-settings"], r),
+    onSuccess: (r) => {
+      queryClient.setQueryData(["sidecar-settings"], r);
+      // The pass runs on the server; the dock follows it until it says done.
+      trackPolledJob({
+        id: SIDECAR_TASK,
+        kind: "sidecar",
+        label: "Writing sidecars",
+        poll: async () => {
+          const s = await api.settings.getSidecar();
+          queryClient.setQueryData(["sidecar-settings"], s);
+          return { active: s.active, done: s.done, total: s.total };
+        },
+        cancel: async () => {
+          queryClient.setQueryData(["sidecar-settings"], await api.settings.cancelWriteAllSidecars());
+        },
+        stopTitle: "Stop. The sidecars written so far stay.",
+        title: "An .xmp sidecar is being written beside every photo.",
+      });
+    },
   });
   async function confirmDeleteTag(tag: { name: string; count: number; children: number }) {
     const photos =
@@ -854,23 +890,6 @@ export function Settings() {
     if (choice === "confirm") deleteTag.mutate({ name: tag.name, withChildren: true });
     else if (choice === "alt") deleteTag.mutate({ name: tag.name, withChildren: false });
   }
-
-  // Surface the running maintenance task to the app shell, which locks the nav
-  // (so the page can't be switched away and unmounted mid-task) and shows a
-  // spinner. Cleared when idle and on unmount.
-  const runningLabel = sync.isPending
-    ? "Syncing library…"
-    : rebuildThumbnails.isPending
-      ? "Rebuilding thumbnails…"
-      : repairDates.isPending
-        ? "Repairing capture dates…"
-        : restore.isPending
-          ? "Restoring backup…"
-          : null;
-  useEffect(() => {
-    setBusyLabel(runningLabel);
-  }, [runningLabel, setBusyLabel]);
-  useEffect(() => () => setBusyLabel(null), [setBusyLabel]);
 
   return (
     <div className="page settings-page" ref={pageRef}>
@@ -914,104 +933,12 @@ export function Settings() {
           <button className="btn" onClick={() => desktop.changeLibraryRoot()}>
             Change library folder…
           </button>
-          <div className="settings-subgroup">
-            <h4 className="settings-subhead">When importing</h4>
-            <Desc>
-              Photos you import are either copied into an import folder and then sorted into the
-              library, or added from where they are. Choose whether to ask each time.
-            </Desc>
-            {(
-              [
-                ["ask", "Ask every time", "A dialog asks before anything is read."],
-                [
-                  "copy",
-                  "Always copy to an import folder",
-                  "Copies into the library's Import folder, then sorts added photos by date.",
-                ],
-                [
-                  "reference",
-                  "Always leave photos where they are",
-                  "Nothing is copied. Added photos stay in their folder.",
-                ],
-              ] as const
-            ).map(([value, title, desc]) => (
-              <OptionRow
-                key={value}
-                type="radio"
-                name="import-mode"
-                checked={(importSettings?.mode_default ?? "ask") === value}
-                disabled={!importSettings}
-                busy={updateImportSettings.isPending}
-                onChange={() => updateImportSettings.mutate({ mode_default: value })}
-                title={title}
-                desc={desc}
-              />
-            ))}
-          </div>
-          <div className="settings-subgroup">
-            <h4 className="settings-subhead">Import folder</h4>
-            <Desc>
-              Closing a session deletes its import folder and the photos you did not add, unless
-              it is kept as a backup.
-            </Desc>
-            <OptionRow
-              type="checkbox"
-              checked={importSettings?.backup_default === "keep"}
-              disabled={!importSettings}
-              busy={updateImportSettings.isPending}
-              onChange={(keep) =>
-                updateImportSettings.mutate({ backup_default: keep ? "keep" : "delete" })
-              }
-              title="Keep the import folder as a backup"
-              desc="Photos you add are copied into the library, so they take up space twice."
-            />
-          </div>
-          <div className="settings-subgroup">
-            <h4 className="settings-subhead">New photos in an import</h4>
-            <Desc>
-              Whether new photos in the review start out selected.
-            </Desc>
-            {(
-              [
-                [
-                  "select",
-                  "Selected",
-                  "Every new photo is marked for import; you deselect the ones you don't want.",
-                ],
-                [
-                  "deselect",
-                  "Not selected",
-                  "Nothing is marked for import; you select the ones you want.",
-                ],
-              ] as const
-            ).map(([value, title, desc]) => (
-              <OptionRow
-                key={value}
-                type="radio"
-                name="import-select-default"
-                checked={(importSettings?.select_default ?? "deselect") === value}
-                disabled={!importSettings}
-                busy={updateImportSettings.isPending}
-                onChange={() => updateImportSettings.mutate({ select_default: value })}
-                title={title}
-                desc={desc}
-              />
-            ))}
-          </div>
-          <div className="settings-subgroup">
-            <h4 className="settings-subhead">What the files already say</h4>
-            <OptionRow
-              type="checkbox"
-              checked={importSettings?.read_file_metadata ?? true}
-              disabled={!importSettings}
-              busy={updateImportSettings.isPending}
-              onChange={(on) => updateImportSettings.mutate({ read_file_metadata: on })}
-              title="Take over stars, labels, keywords and captions from the files"
-              desc="Stars, labels, keywords and captions written by other programs or an .xmp sidecar come in with the photo. Keywords become tags. Stars you give in the review are kept."
-            />
-          </div>
         </Section>
       )}
+
+      <Section {...sectionProps("Import")}>
+        <ImportSettingsPanel />
+      </Section>
 
       {desktop?.getDataRoot && (
         <Section {...sectionProps("Library data")}>
@@ -1233,12 +1160,12 @@ export function Settings() {
         <OptionRow
           type="checkbox"
           checked={rawDecode?.native_decode ?? false}
-          disabled={rawDecode === undefined || setRawDecode.isPending || rebuildThumbnails.isPending}
-          busy={setRawDecode.isPending || rebuildThumbnails.isPending}
+          disabled={rawDecode === undefined || setRawDecode.isPending || rebuildRunning}
+          busy={setRawDecode.isPending || rebuildRunning}
           onChange={(c) => setRawDecode.mutate(c)}
           title="Show RAW files unprocessed"
           desc={
-            rebuildThumbnails.isPending
+            rebuildRunning
               ? `Rebuilding thumbnails so the change applies to existing photos… ${rebuildProgressLine()}`
               : "Applies to new imports and the editor at once. Existing thumbnails can be " +
                 "rebuilt on request."
@@ -1508,12 +1435,12 @@ export function Settings() {
             className="btn"
             type="button"
             onClick={() => writeAllSidecars.mutate()}
-            disabled={!sidecarSettings?.enabled || sidecarSettings.active || writeAllSidecars.isPending}
-            title="For a library that just switched this on, and after a restore"
+            disabled={
+              !sidecarSettings?.enabled || sidecarSettings.active || writeAllSidecars.isPending || hasTask(SIDECAR_TASK)
+            }
+            title="For a library that just switched this on, and after a restore. The title bar counts it down."
           >
-            {sidecarSettings?.active
-              ? `Writing… ${sidecarSettings.done} of ${sidecarSettings.total}`
-              : "Write sidecars for every photo now"}
+            Write sidecars for every photo now
           </button>
         </div>
         {setSidecar.isError && <Note error>{(setSidecar.error as Error).message}</Note>}
@@ -1572,24 +1499,11 @@ export function Settings() {
             gone, cleans up unused thumbnails and regenerates missing ones in the background.
           </Desc>
           <div className="maintenance-run">
-            <button className="btn" onClick={() => sync.mutate()} disabled={sync.isPending}>
-              {sync.isPending ? (
-                <>
-                  <Spinner tone="inherit" inline />
-                  Syncing…
-                </>
-              ) : (
-                "Sync database to library"
-              )}
+            <button className="btn" onClick={() => sync.mutate()} disabled={syncRunning}>
+              Sync database to library
             </button>
-            {sync.isPending ? (
-              <span className="maintenance-eta">
-                Syncing… {progressText(syncElapsed, estimateSeconds(photoCount, "pm.est.sync"))}
-              </span>
-            ) : (
-              estimateText(photoCount, "pm.est.sync") && (
-                <span className="maintenance-eta">{estimateText(photoCount, "pm.est.sync")}</span>
-              )
+            {estimateText(photoCount, "pm.est.sync") && (
+              <span className="maintenance-eta">{estimateText(photoCount, "pm.est.sync")}</span>
             )}
           </div>
           {syncResult && <Note>{syncResult}</Note>}
@@ -1601,26 +1515,11 @@ export function Settings() {
             Try "Sync database to library" first.
           </Desc>
           <div className="maintenance-run">
-            <button
-              className="btn"
-              onClick={() => rebuildThumbnails.mutate()}
-              disabled={rebuildThumbnails.isPending}
-            >
-              {rebuildThumbnails.isPending ? (
-                <>
-                  <Spinner tone="inherit" inline />
-                  Rebuilding…
-                </>
-              ) : (
-                "Rebuild all thumbnails"
-              )}
+            <button className="btn" onClick={() => rebuildThumbnails.mutate()} disabled={rebuildRunning}>
+              Rebuild all thumbnails
             </button>
-            {rebuildThumbnails.isPending ? (
-              <span className="maintenance-eta">Rebuilding… {rebuildProgressLine()}</span>
-            ) : (
-              estimateText(photoCount, REBUILD_EST_KEY) && (
-                <span className="maintenance-eta">{estimateText(photoCount, REBUILD_EST_KEY)}</span>
-              )
+            {estimateText(photoCount, REBUILD_EST_KEY) && (
+              <span className="maintenance-eta">{estimateText(photoCount, REBUILD_EST_KEY)}</span>
             )}
           </div>
           {rebuildResult && <Note>{rebuildResult}</Note>}
@@ -1631,15 +1530,8 @@ export function Settings() {
             Re-reads the capture date from every file and corrects photos that were sorted by
             import date. Nothing else changes.
           </Desc>
-          <button className="btn" onClick={() => repairDates.mutate()} disabled={repairDates.isPending}>
-            {repairDates.isPending ? (
-              <>
-                <Spinner tone="inherit" inline />
-                Repairing dates…
-              </>
-            ) : (
-              "Repair capture dates"
-            )}
+          <button className="btn" onClick={() => repairDates.mutate()} disabled={repairRunning}>
+            Repair capture dates
           </button>
           {repairDatesResult && <Note>{repairDatesResult}</Note>}
         </div>
@@ -1677,17 +1569,10 @@ export function Settings() {
             />
             <button
               className="btn danger"
-              disabled={!restoreFile || restoreConfirmation.trim().toLowerCase() !== "delete" || restore.isPending}
+              disabled={!restoreFile || restoreConfirmation.trim().toLowerCase() !== "delete" || restoreRunning}
               onClick={() => restore.mutate()}
             >
-              {restore.isPending ? (
-                <>
-                  <Spinner tone="inherit" inline />
-                  Restoring…
-                </>
-              ) : (
-                "Restore from backup"
-              )}
+              Restore from backup
             </button>
           </div>
           {restoreResult && <Note>{restoreResult}</Note>}

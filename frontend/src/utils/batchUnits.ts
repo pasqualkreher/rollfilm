@@ -1,6 +1,6 @@
-import type { BatchItem } from "../state/wait";
+import type { BatchItem } from "../state/tasks";
 
-// Group ids for withBatches so both halves of a RAW+JPEG pair travel in the
+// Group ids for runBatches so both halves of a RAW+JPEG pair travel in the
 // same slice: a cancel between two slices must never leave one half trashed
 // (or in the album) and the other not. `partnerOf` is the pair link; an id
 // whose partner is not in the list stays a unit of its own.

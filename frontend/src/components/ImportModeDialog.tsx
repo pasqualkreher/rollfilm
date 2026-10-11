@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ImportChoice, ImportMode } from "../api/types";
 import { IconDisk, IconFolder, IconRestore } from "./Icons";
-import { useEscapeToClose } from "../utils/modalKeys";
+import { useEnterToConfirm, useEscapeToClose } from "../utils/modalKeys";
 
 type Outcome = "backup" | "copy" | "reference";
 
@@ -57,6 +57,18 @@ export function ImportModeDialog({
 }) {
   const [mode, setMode] = useState<ImportMode>("copy");
   useEscapeToClose(!closing, onClose);
+  // Enter starts the import (the default button), from the name field too.
+  useEnterToConfirm(!closing, () =>
+    onChoose(
+      {
+        mode,
+        stagingFolder: copy ? stagingFolder : null,
+        keepBackup: copy && keepBackup,
+        name: sessionName,
+      },
+      remember
+    )
+  );
   // Where the session's import folder is created; null = <library>/Import.
   const [stagingFolder, setStagingFolder] = useState<string | null>(null);
   const [keepBackup, setKeepBackup] = useState(defaultBackup);
@@ -77,8 +89,8 @@ export function ImportModeDialog({
   const baseDir = base ? `${base.replace(/\/+$/, "")}/` : "…";
 
   return (
-    <div className={`modal-overlay${closing ? " pm-closing" : ""}`} onClick={onClose}>
-      <div className="modal pair-delete-modal import-start-modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-overlay${closing ? " pm-closing" : ""}`}>
+      <div className="modal pair-delete-modal import-start-modal" role="dialog" aria-modal="true" aria-label="Start import">
         <div className="pair-delete-body">
           <h3>New import session</h3>
           <label className="filter-field filter-field-inline" style={{ display: "flex", gap: 8, alignItems: "center" }}>

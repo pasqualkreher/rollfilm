@@ -3,7 +3,7 @@ import { api } from "../api/client";
 import type { ImportMode, ImportSessionSummary } from "../api/types";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "./AppDialogs";
-import { useWait } from "../state/wait";
+import { useTasks } from "../state/tasks";
 import { IconFolder, IconLeave, IconRename, IconResume } from "./Icons";
 
 function lastWorkedOn(s: ImportSessionSummary): string {
@@ -15,6 +15,25 @@ function lastWorkedOn(s: ImportSessionSummary): string {
 
 function plural(n: number, one: string, many: string): string {
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
+}
+
+// "42 GB", "850 MB": enough to say whether a session is worth closing.
+function formatBytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)} GB`;
+  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
+  return `${Math.max(1, Math.round(n / 1e3))} kB`;
+}
+
+// Where a session's photos are and what closing it does to them, in one
+// sentence - the same fate the start dialog announced.
+function folderSentence(s: ImportSessionSummary): string {
+  if (s.mode === "reference") return "The photos stay where they are. Closing the session touches no files.";
+  if (!s.staging_dir) {
+    return "The photos are held inside the app. What you didn't add is deleted when you close the session.";
+  }
+  return s.keep_backup
+    ? `Photos are in ${s.staging_dir}. The folder stays as a backup when you close the session.`
+    : `Photos are in ${s.staging_dir}. The folder is deleted when you close the session.`;
 }
 
 // What "Close session" does, said on the button: what was added stays in the
@@ -72,7 +91,7 @@ export async function confirmCloseSession(
 export function ImportSessions() {
   const { continueSession, isUploading } = useImportSession();
   const dialogs = useAppDialogs();
-  const { withWait } = useWait();
+  const { runTask } = useTasks();
   const queryClient = useQueryClient();
   const { data: sessions } = useQuery({
     queryKey: ["import-sessions"],
@@ -80,8 +99,6 @@ export function ImportSessions() {
     // Picks up a card being plugged in while the page is open.
     refetchInterval: 10000,
   });
-
-  if (!sessions || sessions.length === 0) return null;
 
   async function close(s: ImportSessionSummary) {
     const ok = await confirmCloseSession(dialogs, {
@@ -94,7 +111,7 @@ export function ImportSessions() {
     if (!ok) return;
     try {
       // No folder flag: the server keeps a backup folder and deletes any other.
-      await withWait("Closing this session…", () => api.import.discard(s.id));
+      await runTask({ kind: "plain", label: "Closing this session…" }, () => api.import.discard(s.id));
     } finally {
       queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
     }
@@ -109,7 +126,7 @@ export function ImportSessions() {
     const trimmed = next?.trim();
     if (!trimmed || trimmed === s.source_path) return;
     try {
-      // Renames a copy session's collection folder too.
+      // Renames a copy session's import folder too.
       await api.import.rename(s.id, trimmed);
     } catch (e) {
       await dialogs.alert({
@@ -120,106 +137,121 @@ export function ImportSessions() {
     queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
   }
 
+  const open = sessions ?? [];
+  const heldBytes = open.reduce((sum, s) => sum + (s.folder_bytes ?? 0), 0);
+
+  // The panel stays whether or not a session is open, so the page below it
+  // never jumps when the last one closes.
   return (
     <section className="import-panel">
-      <h3 className="section-title">Open import sessions</h3>
+      <h3 className="section-title">
+        Open import sessions
+        {open.length > 0 && (
+          <span className="import-panel-count">
+            {plural(open.length, "session", "sessions")}
+            {heldBytes > 0 && ` · ${formatBytes(heldBytes)} in import folders`}
+          </span>
+        )}
+      </h3>
       <p className="import-panel-desc">
-        Continue where you left off. Selection and ratings are kept; only missing copies are made.
+        {open.length === 0
+          ? "No open sessions. A session stays here until you close it."
+          : "Continue where you left off. Selection and ratings are kept; only missing copies are made."}
       </p>
-      <div className="source-list">
-        {sessions.map((s) => {
-          // A session collects from one or more folders; each is continued on
-          // its own, so each says for itself whether it is reachable and what
-          // it still holds.
-          const waiting = s.sources.filter((src) => !src.available && src.remaining !== 0);
-          const remaining = s.sources.reduce((sum, src) => sum + (src.remaining ?? 0), 0);
-          const toReview = s.file_count - s.imported_count - s.duplicate_count;
-          return (
-            // The actions stay on the right whatever the text does: the row
-            // must not wrap them under a long collection-folder path.
-            <div
-              key={s.id}
-              className={`source-row${waiting.length > 0 ? " disconnected" : ""}`}
-              style={{ flexWrap: "nowrap" }}
-            >
-              <div className="source-row-main" style={{ flex: 1, minWidth: 0 }}>
-                <span className="source-name">
-                  {s.source_path}
-                  {s.mode === "reference" && (
-                    <span className="badge-inline" title="Photos are added from where they are, nothing is copied">
-                      In place
+      {open.length > 0 && (
+        <div className="source-list">
+          {open.map((s) => {
+            // A session collects from one or more folders; each is continued on
+            // its own, so each says for itself whether it is reachable and what
+            // it still holds.
+            const waiting = s.sources.filter((src) => !src.available && src.remaining !== 0);
+            const remaining = s.sources.reduce((sum, src) => sum + (src.remaining ?? 0), 0);
+            const toReview = s.file_count - s.imported_count - s.duplicate_count;
+            return (
+              // The actions stay on the right whatever the text does: the row
+              // must not wrap them under a long import-folder path.
+              <div
+                key={s.id}
+                className={`source-row${waiting.length > 0 ? " disconnected" : ""}`}
+                style={{ flexWrap: "nowrap" }}
+              >
+                <div className="source-row-main" style={{ flex: 1, minWidth: 0 }}>
+                  <span className="source-name">
+                    {s.source_path}
+                    {s.mode === "reference" && (
+                      <span className="badge-inline" title="Photos are added from where they are, nothing is copied">
+                        In place
+                      </span>
+                    )}
+                    {waiting.length > 0 && (
+                      <span className="source-disconnected-badge">Not connected</span>
+                    )}
+                  </span>
+                  <span className="source-meta">
+                    {plural(toReview, "photo", "photos")} to review
+                    {s.imported_count > 0 && ` · ${s.imported_count.toLocaleString()} in library`}
+                    {remaining > 0 &&
+                      ` · ${remaining.toLocaleString()} not ${s.mode === "reference" ? "added" : "copied"} yet`}
+                    {` · last worked on ${lastWorkedOn(s)}`}
+                  </span>
+                  <span className="source-path" title={s.staging_dir ?? undefined}>
+                    {folderSentence(s)}
+                  </span>
+                  {s.sources.length > 0 && (
+                    // Said outright: once the session has a name of its own, a bare
+                    // folder name here read like a leftover second title.
+                    <span className="source-meta">
+                      <IconFolder size={12} /> {s.sources.length === 1 ? "Source: " : "Sources: "}
+                      {s.sources.map((src, i) => (
+                        <span key={src.id} title={src.current_root ?? src.root}>
+                          {i > 0 && " · "}
+                          {src.label}
+                          {!src.available
+                            ? " (not connected)"
+                            : src.remaining
+                              ? ` (${src.remaining.toLocaleString()} to copy)`
+                              : ""}
+                        </span>
+                      ))}
                     </span>
                   )}
-                  {waiting.length > 0 && (
-                    <span className="source-disconnected-badge">Not connected</span>
-                  )}
-                </span>
-                <span className="source-meta">
-                  {plural(toReview, "photo", "photos")} to review
-                  {s.imported_count > 0 && ` · ${s.imported_count.toLocaleString()} in library`}
-                  {remaining > 0 &&
-                    ` · ${remaining.toLocaleString()} not ${s.mode === "reference" ? "added" : "copied"} yet`}
-                  {` · last worked on ${lastWorkedOn(s)}`}
-                </span>
-                {s.staging_dir && (
-                  <span className="source-path" title="This session's collection folder">
-                    {s.staging_dir}
-                  </span>
-                )}
-                {s.sources.length > 0 && (
-                  // Said outright: once the session has a name of its own, a bare
-                  // folder name here read like a leftover second title.
-                  <span className="source-meta">
-                    <IconFolder size={12} /> {s.sources.length === 1 ? "Source: " : "Sources: "}
-                    {s.sources.map((src, i) => (
-                      <span key={src.id} title={src.current_root ?? src.root}>
-                        {i > 0 && " · "}
-                        {src.label}
-                        {!src.available
-                          ? " (not connected)"
-                          : src.remaining
-                            ? ` (${src.remaining.toLocaleString()} to copy)`
-                            : ""}
-                      </span>
-                    ))}
-                  </span>
-                )}
+                </div>
+                <div className="source-row-actions">
+                  <button
+                    className="btn primary btn-sm"
+                    onClick={() => continueSession(s)}
+                    disabled={isUploading}
+                    title={
+                      isUploading
+                        ? "Available when the running import has finished copying"
+                        : "Open this session where you left off"
+                    }
+                  >
+                    <IconResume size={14} /> Continue
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    aria-label={`Rename session "${s.source_path}"`}
+                    title="Rename this session"
+                    onClick={() => rename(s)}
+                    disabled={isUploading}
+                  >
+                    <IconRename size={14} />
+                  </button>
+                  <button
+                    className="btn btn-sm quiet-danger"
+                    title={closeSessionTitle(s.mode, s.staging_dir, s.keep_backup)}
+                    onClick={() => close(s)}
+                    disabled={isUploading}
+                  >
+                    <IconLeave size={14} /> Close session
+                  </button>
+                </div>
               </div>
-              <div className="source-row-actions">
-                <button
-                  className="btn primary btn-sm"
-                  onClick={() => continueSession(s)}
-                  disabled={isUploading}
-                  title={
-                    isUploading
-                      ? "Available when the running import has finished copying"
-                      : "Open this session where you left off"
-                  }
-                >
-                  <IconResume size={14} /> Continue
-                </button>
-                <button
-                  className="btn btn-sm"
-                  aria-label={`Rename session "${s.source_path}"`}
-                  title="Rename this session"
-                  onClick={() => rename(s)}
-                  disabled={isUploading}
-                >
-                  <IconRename size={14} />
-                </button>
-                <button
-                  className="btn btn-sm quiet-danger"
-                  title={closeSessionTitle(s.mode, s.staging_dir, s.keep_backup)}
-                  onClick={() => close(s)}
-                  disabled={isUploading}
-                >
-                  <IconLeave size={14} /> Close session
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }

@@ -737,6 +737,9 @@ class ImportSessionSummaryOut(BaseModel):
     mode: ImportMode = ImportMode.copy
     staging_dir: str | None = None
     keep_backup: bool = False
+    # What the import folder still holds, by the files' size at their source;
+    # 0 in place and for uploads, which carry no source size.
+    folder_bytes: int = 0
     created_at: datetime
     updated_at: datetime | None
     # Staged rows, and of those: committed by an earlier partial import,
@@ -1079,6 +1082,8 @@ class ScanStatusOut(BaseModel):
     scanned: int
     added: int
     error: str | None = None
+    # The last scan was stopped by the user; what it had indexed stays.
+    cancelled: bool = False
 
 
 class DirEntry(BaseModel):
@@ -1144,13 +1149,18 @@ class ImageCountOut(BaseModel):
 
 class SyncResult(BaseModel):
     removed_missing_files: int
+    renamed_files_followed: int = 0
     untracked_files_found: int
     orphan_thumbnails_removed: int
     thumbnails_queued: int
+    # Stopped by the user before anything was removed: the counts are zero.
+    cancelled: bool = False
 
 
 class RebuildThumbnailsResult(BaseModel):
     rebuilt: int
+    # Stopped by the user: `rebuilt` is how far it got.
+    cancelled: bool = False
 
 
 class RebuildProgressOut(BaseModel):
@@ -1183,6 +1193,8 @@ class RepairDatesResult(BaseModel):
 
     checked: int
     fixed: int
+    # Stopped by the user: the dates corrected so far are kept.
+    cancelled: bool = False
 
 
 class DangerZoneRequest(BaseModel):
@@ -1209,6 +1221,10 @@ class BackgroundActivityOut(BaseModel):
     # Photos still to be saved as copies by the grid's bulk copy jobs. These
     # do NOT resume: a copy not written when the app quits is not made later.
     copy_jobs_running: int = 0
+    # Exports still rendering - not resumed either.
+    export_jobs_running: int = 0
+    # A sync, thumbnail rebuild or date repair running in Settings.
+    maintenance_active: bool = False
     # Everything above resumes by itself on the next start, which is what makes
     # "quit now" a safe offer rather than a loss.
     resumes_next_run: bool = True

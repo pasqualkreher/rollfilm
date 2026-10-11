@@ -154,13 +154,27 @@ export function bumpThumbnailCacheBust(): void {
 // built. Where the picker is unavailable we fall back to a plain anchor
 // download, which prompts at the end. Returns without saving if the user
 // cancels the picker.
-// Exported for the progress-export dialog: its `fetchBlob` runs the whole
-// job (start + poll + result) so the location question still comes first.
 export async function saveDownload(
   suggestedName: string,
   accept: Record<string, string[]>,
   fetchBlob: () => Promise<Blob>
 ): Promise<void> {
+  const target = await pickSaveTarget(suggestedName, accept);
+  if (!target) return;
+  await target.write(await fetchBlob());
+}
+
+// Where a download goes, asked before the file exists: the export dialog
+// asks here, closes, and the export job writes into the target from the
+// title bar's task when it is through. null: the picker was dismissed.
+export interface SaveTarget {
+  write: (blob: Blob) => Promise<void>;
+}
+
+export async function pickSaveTarget(
+  suggestedName: string,
+  accept: Record<string, string[]>
+): Promise<SaveTarget | null> {
   const picker = (
     window as unknown as {
       showSaveFilePicker?: (opts: {
@@ -181,25 +195,32 @@ export async function saveDownload(
       handle = await picker({ suggestedName, types: [{ accept }] });
     } catch (e) {
       // User dismissed the location picker - nothing to save, not an error.
-      if (e instanceof DOMException && e.name === "AbortError") return;
+      if (e instanceof DOMException && e.name === "AbortError") return null;
       throw e;
     }
-    const blob = await fetchBlob();
-    const writable = await handle.createWritable();
-    await writable.write(blob);
-    await writable.close();
-    return;
+    return {
+      write: async (blob) => {
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      },
+    };
   }
 
-  const blob = await fetchBlob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = suggestedName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  // No picker (a browser without the File System Access API): a plain
+  // download, which prompts when the file is there.
+  return {
+    write: async (blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = suggestedName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+  };
 }
 
 // The desktop shell serves cached derivatives off disk through its own rf://
@@ -1262,15 +1283,25 @@ export const api = {
       untracked_files_found: number;
       orphan_thumbnails_removed: number;
       thumbnails_queued: number;
+      // Stopped before anything was removed: the counts are zero.
+      cancelled: boolean;
     }> {
       return request(`/maintenance/sync`, { method: "POST" });
     },
-    rebuildThumbnails(): Promise<{ rebuilt: number }> {
+    // Asks a running sync to stop; it stops before it removes anything.
+    cancelSync(): Promise<void> {
+      return request(`/maintenance/sync/cancel`, { method: "POST" });
+    },
+    rebuildThumbnails(): Promise<{ rebuilt: number; cancelled: boolean }> {
       return request(`/maintenance/rebuild-thumbnails`, { method: "POST" });
     },
-    // Live "N of M photos" progress of a running rebuild, polled by Settings.
+    // Live "N of M photos" progress of a running rebuild, for the task dock.
     rebuildProgress(): Promise<{ active: boolean; total: number; done: number }> {
       return request(`/maintenance/rebuild-progress`);
+    },
+    // Asks a running rebuild to stop between two photos.
+    cancelRebuild(): Promise<{ active: boolean; total: number; done: number }> {
+      return request(`/maintenance/rebuild-thumbnails/cancel`, { method: "POST" });
     },
     // Read-only look at another Rollfilm library (a drive taken travelling):
     // what merging it would bring in. Touches nothing.
@@ -1298,8 +1329,15 @@ export const api = {
     // Re-read every photo's EXIF capture date and fix wrongly stored ones
     // (photos imported before the reader understood CreateDate/XMP fallbacks
     // sorted by their import moment instead of their capture date).
-    repairDates(): Promise<{ checked: number; fixed: number }> {
+    repairDates(): Promise<{ checked: number; fixed: number; cancelled: boolean }> {
       return request(`/maintenance/repair-dates`, { method: "POST" });
+    },
+    repairProgress(): Promise<{ active: boolean; total: number; done: number }> {
+      return request(`/maintenance/repair-progress`);
+    },
+    // Asks a running date repair to stop; the dates corrected so far stay.
+    cancelRepairDates(): Promise<{ active: boolean; total: number; done: number }> {
+      return request(`/maintenance/repair-dates/cancel`, { method: "POST" });
     },
     backupUrl(): string {
       return assetUrl(`/maintenance/backup`);
@@ -1409,6 +1447,10 @@ export const api = {
     writeAllSidecars(): Promise<SidecarSettings> {
       return request(`/settings/sidecar/write-all`, { method: "POST" });
     },
+    // Asks the whole-library pass to stop; the sidecars written so far stay.
+    cancelWriteAllSidecars(): Promise<SidecarSettings> {
+      return request(`/settings/sidecar/write-all/cancel`, { method: "POST" });
+    },
     // The export dialog's saved presets and the options it was last used with.
     getExport(): Promise<ExportSettings> {
       return request(`/settings/export`);
@@ -1467,6 +1509,10 @@ export const api = {
     },
     scanStatus(id: string): Promise<ScanStatus> {
       return request(`/sources/${id}/scan-status`);
+    },
+    // Asks a running scan to stop between two files; what is indexed stays.
+    cancelScan(id: string): Promise<ScanStatus> {
+      return request(`/sources/${id}/scan/cancel`, { method: "POST" });
     },
     remove(id: string): Promise<void> {
       return request(`/sources/${id}`, { method: "DELETE" });

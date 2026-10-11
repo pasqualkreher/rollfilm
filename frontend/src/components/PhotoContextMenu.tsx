@@ -1,24 +1,43 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import type { BulkResetOptions, ColorLabel } from "../api/types";
 import { useTransientMessage } from "../utils/transientMessage";
 import { useAskSaveCopyOptions } from "../state/viewPrefs";
 import { useTasks } from "../state/tasks";
+import { useMenuKeys } from "../utils/useMenuKeys";
+import { autoTagMessage, isAutoTag } from "../utils/autoTags";
 import { ExportDialog } from "./ExportDialog";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
-import { IconExport, IconReveal, IconSaveCopy } from "./Icons";
+import { useAppDialogs } from "./AppDialogs";
+import { RatingStars } from "./RatingStars";
+import { ColorLabelPicker } from "./ColorLabelPicker";
+import { RESET_ASPECTS } from "./ResetMenu";
+import { IconChevronRight } from "./Icons";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
 
-// The grid's right-click menu: Export and Save copy for the photo under the
-// pointer - or for the whole selection when that photo is part of it, so a
-// multi-select right-click acts on everything ticked. Both entries open the
-// same dialogs the lightbox and the editor use, so the options, the progress
-// popup and the error notes are exactly the ones known from there.
+// The grid's right-click menu, built like the system's: it appears at the
+// pointer without a flourish, the arrow keys and typed letters walk it, and
+// it offers everything the selection's bar at the foot of the window offers -
+// open it, edit it, rate and label it, put it in an album or on a canvas, tag
+// it, apply an edit or a preset (with or without a copy), reset it, sync it
+// to Immich, export it or save a copy, show its file, take it out of the
+// album, move it to the Trash. Everything acts on the photo under the
+// pointer, or on the whole selection when that photo is part of it, so a
+// right-click on one of several ticked photos means all of them.
+//
+// The grid supplies how a photo is opened (it knows the route and the order
+// to page through); the page supplies the actions that change photos (it owns
+// the selection, the batches and the messages). What neither supplies is left
+// out of the menu, so a grid without a selection model still has Open, Export
+// and Show in Finder, and the Trash has only Restore and Delete permanently.
 
 // Room the menu keeps from the window edges when it is nudged back inside.
 const VIEWPORT_MARGIN = 8;
+// How long the pointer rests on an item with a submenu before it opens.
+const SUBMENU_HOVER_MS = 150;
 
 // "Show in Finder" is the desktop app's: the web build has no file manager
 // to hand a path to. Named after the OS's own, like every app's menu does.
@@ -30,8 +49,6 @@ const REVEAL_LABEL =
       ? "Show in Explorer"
       : "Show in file manager";
 
-type Action = "export" | "copy" | "reveal";
-
 // What a tile has to offer: enough for the export dialog's suggested filename.
 // Both the full ImageOut (ThumbnailGrid) and the slim index entry
 // (VirtualTimeline) satisfy this.
@@ -40,10 +57,50 @@ export interface ContextMenuPhoto {
   original_filename: string;
 }
 
+// The page's hands on its photos, each taking the ids the menu acts on. The
+// same functions the bulk bar calls, by id instead of "the selection".
+export interface ContextActions {
+  onRate?: (ids: string[], rating: number) => void | Promise<unknown>;
+  onColor?: (ids: string[], label: ColorLabel) => void | Promise<unknown>;
+  // What the stars and swatches show for these photos: their shared rating
+  // and label, or nothing where they differ.
+  meta?: (ids: string[]) => { rating: number; colorLabel: ColorLabel };
+  onAddToAlbum?: (ids: string[], albumId: string) => void | Promise<unknown>;
+  onAddToCanvas?: (ids: string[], canvasId: string) => void | Promise<unknown>;
+  onAddTag?: (ids: string[], name: string) => void | Promise<unknown>;
+  // Develop: the automatic edit, a saved preset; `copy` = and save a copy of
+  // every photo afterwards. The presets are read when the menu opens.
+  onAutoEdit?: (ids: string[], copy: boolean) => void | Promise<unknown>;
+  onApplyPreset?: (ids: string[], name: string, copy: boolean) => void | Promise<unknown>;
+  presets?: () => string[];
+  // Back to the just-imported state, for the ticked aspects (explicit false
+  // for the rest, as the bar's Reset menu sends it).
+  onReset?: (ids: string[], opts: BulkResetOptions) => void | Promise<unknown>;
+  // The one Immich row the page offers for these photos ("Add to Immich", or
+  // "Sync to Immich" with a tick), or null when there is none.
+  immich?: (ids: string[]) => { label: string; checked?: boolean; run: () => void | Promise<unknown> } | null;
+  onRemoveFromAlbum?: (ids: string[]) => void | Promise<unknown>;
+  onDelete?: (ids: string[]) => void | Promise<unknown>;
+  // The Trash's own two.
+  onRestore?: (ids: string[]) => void | Promise<unknown>;
+  onDeleteForever?: (ids: string[]) => void | Promise<unknown>;
+  // Export, Save copy and Show in Finder; on unless the page says otherwise
+  // (the Trash: its photos are on their way out).
+  files?: boolean;
+}
+
+export interface ContextMenuOptions {
+  enabled?: boolean;
+  // How the grid opens a photo, and opens it in the editor.
+  open?: (id: string) => void;
+  edit?: (id: string) => void;
+  actions?: ContextActions;
+}
+
 interface Target {
   ids: string[];
-  // The photo that was right-clicked - names a single-photo export, and is
-  // the one "Show in Finder" reveals (one file per file-manager window).
+  // The photo that was right-clicked - names a single-photo export, is the
+  // one Open and Edit take, and the one "Show in Finder" reveals.
   clickedId: string;
   filename: string;
 }
@@ -53,100 +110,323 @@ interface OpenMenu extends Target {
   y: number;
 }
 
-function Menu({
-  menu,
-  onPick,
-  closing = false,
-}: {
-  menu: OpenMenu;
-  onPick: (action: Action) => void;
-  // Set by <Presence> while the menu animates out.
-  closing?: boolean;
-}) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
+// The lists that hang off an item.
+type SubKind = "album" | "canvas" | "tag" | "edit" | "edit-copy" | "reset";
 
-  // Opens at the pointer, nudged back inside the window near the right or the
-  // bottom edge - measured after the first render since the height depends on
-  // the labels.
+interface SubItem {
+  id: string;
+  name: string;
+  // A rule above this row, with a small heading where the group has a name
+  // (the presets under the automatic edit).
+  sepBefore?: boolean;
+  headBefore?: string;
+}
+
+type Entry =
+  | {
+      kind: "item";
+      id: string;
+      label: string;
+      shortcut?: string;
+      checked?: boolean;
+      submenu?: SubKind;
+      // The rows of a submenu whose list is not loaded (edit, reset).
+      items?: SubItem[];
+      run: () => void;
+    }
+  | { kind: "sep" }
+  | { kind: "row"; id: string; node: ReactNode };
+
+type Item = Extract<Entry, { kind: "item" }>;
+
+// A click that lands outside the menu closes it - and does nothing else: the
+// tile under the pointer must not open, the ground must not clear the
+// selection. The press (mousedown) closed the menu; the click that follows
+// its release is eaten once.
+function swallowNextClick() {
+  const swallow = (e: Event) => {
+    e.stopPropagation();
+    e.preventDefault();
+  };
+  document.addEventListener("click", swallow, true);
+  const release = () => window.setTimeout(() => document.removeEventListener("click", swallow, true), 0);
+  window.addEventListener("mouseup", release, { once: true });
+}
+
+// Keeps a fixed-position box inside the window near the right or the bottom
+// edge; measured after the first render since the height depends on the rows.
+function usePlaced(ref: React.RefObject<HTMLElement | null>, wish: { x: number; y: number }, deps: unknown[]) {
+  const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const { width, height } = el.getBoundingClientRect();
-    const left = Math.max(
-      VIEWPORT_MARGIN,
-      Math.min(menu.x, window.innerWidth - width - VIEWPORT_MARGIN)
-    );
-    const top = Math.max(
-      VIEWPORT_MARGIN,
-      Math.min(menu.y, window.innerHeight - height - VIEWPORT_MARGIN)
-    );
+    setPlaced({
+      left: Math.max(VIEWPORT_MARGIN, Math.min(wish.x, window.innerWidth - width - VIEWPORT_MARGIN)),
+      top: Math.max(VIEWPORT_MARGIN, Math.min(wish.y, window.innerHeight - height - VIEWPORT_MARGIN)),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return placed;
+}
+
+const NEW = "__new__";
+
+// What a list submenu says at its foot and when it is empty.
+const SUB_TEXT: Record<SubKind, { newLabel?: string; empty: string }> = {
+  album: { newLabel: "New album…", empty: "No albums yet" },
+  canvas: { newLabel: "New canvas…", empty: "No canvases yet" },
+  tag: { newLabel: "New tag…", empty: "No tags yet" },
+  edit: { empty: "No presets yet" },
+  "edit-copy": { empty: "No presets yet" },
+  reset: { empty: "" },
+};
+
+// A list hanging off an item - the albums, the canvases, the tags (loaded
+// here), or rows the menu hands in (the edits, the reset aspects) - with
+// "New …" at its foot where the list can grow. Opens at the item's right
+// edge, or at its left where there is no room.
+function ListSubmenu({
+  kind,
+  anchor,
+  items,
+  onPick,
+  onNew,
+  onClose,
+}: {
+  kind: SubKind;
+  anchor: DOMRect;
+  items?: SubItem[];
+  onPick: (id: string) => void;
+  onNew: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list(), enabled: kind === "album" });
+  const { data: canvases } = useQuery({
+    queryKey: ["canvas-list"],
+    queryFn: () => api.canvases.list(),
+    enabled: kind === "canvas",
+  });
+  const { data: tags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list(), enabled: kind === "tag" });
+  const list: SubItem[] =
+    kind === "album"
+      ? albums ?? []
+      : kind === "canvas"
+        ? canvases ?? []
+        : kind === "tag"
+          ? (tags ?? []).filter((t) => !isAutoTag(t)).map((t) => ({ id: t, name: t }))
+          : items ?? [];
+  const { newLabel, empty } = SUB_TEXT[kind];
+  const ids = [...list.map((a) => a.id), ...(newLabel ? [NEW] : [])];
+  const labelOf = (id: string) => (id === NEW ? newLabel ?? "" : list.find((a) => a.id === id)?.name ?? "");
+  const { cursor, setCursor } = useMenuKeys({
+    open: true,
+    ids,
+    initial: ids[0] ?? null,
+    labelOf,
+    onPick: (id) => (id === NEW ? onNew() : onPick(id)),
+    onClose,
+    onLeft: onClose,
+  });
+  // Beside the parent item, overlapping its edge by the menus' inset so the
+  // pointer crosses over without a gap; flipped to the left near the edge.
+  const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const rightOf = anchor.right - 4;
+    const left =
+      rightOf + width > window.innerWidth - VIEWPORT_MARGIN
+        ? Math.max(VIEWPORT_MARGIN, anchor.left - width + 4)
+        : rightOf;
+    const top = Math.max(VIEWPORT_MARGIN, Math.min(anchor.top - 5, window.innerHeight - height - VIEWPORT_MARGIN));
     setPlaced({ left, top });
-  }, [menu]);
+  }, [anchor, list.length]);
 
-  const n = menu.ids.length;
-  const many = n > 1;
-
-  return createPortal(
+  return (
     <div
       ref={ref}
-      className={`ctx-menu${placed ? " is-placed" : ""}${closing ? " pm-closing" : ""}`}
+      className={`ctx-menu ctx-menu--sub${placed ? " is-placed" : ""}`}
       role="menu"
-      style={{
-        left: placed?.left ?? 0,
-        top: placed?.top ?? 0,
-        visibility: placed ? "visible" : "hidden",
-      }}
-      // A press inside the menu must not count as the outside click that
-      // closes it, and must not start a selection on the grid underneath.
+      style={{ left: placed?.left ?? 0, top: placed?.top ?? 0, visibility: placed ? "visible" : "hidden" }}
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {many && <div className="ctx-menu-head">{n} photos selected</div>}
-      <button
-        type="button"
-        role="menuitem"
-        className="ctx-menu-item"
-        onClick={() => onPick("export")}
-        title={
-          many
-            ? "Export as JPEGs with edits applied, or download the original files unchanged"
-            : "Export a JPEG with your edits applied, or download the original file unchanged"
-        }
-      >
-        <IconExport size={14} />
-        {many ? `Export ${n} photos…` : "Export…"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="ctx-menu-item"
-        onClick={() => onPick("copy")}
-        title="Create a new photo from the saved edits: a new JPEG file or a virtual copy that shares the original file"
-      >
-        <IconSaveCopy size={14} />
-        {many ? `Save copy of ${n} photos…` : "Save copy…"}
-      </button>
-      {revealFile && (
-        <button
-          type="button"
-          role="menuitem"
-          className="ctx-menu-item"
-          onClick={() => onPick("reveal")}
-          title={
-            many
-              ? `Selects the right-clicked photo's file in ${REVEAL_LABEL.replace("Show in ", "")}`
-              : `Selects the photo's file in ${REVEAL_LABEL.replace("Show in ", "")}`
-          }
-        >
-          <IconReveal size={14} />
-          {REVEAL_LABEL}
-        </button>
+      {list.length === 0 && empty && <div className="ctx-menu-head">{empty}</div>}
+      {list.map((a) => (
+        <span key={a.id}>
+          {a.sepBefore && <div className="ctx-menu-sep" role="separator" />}
+          {a.headBefore && <div className="ctx-menu-head">{a.headBefore}</div>}
+          <button
+            type="button"
+            role="menuitem"
+            data-menu-id={a.id}
+            className={`ctx-menu-item${cursor === a.id ? " cursor" : ""}`}
+            onMouseEnter={() => setCursor(a.id)}
+            onClick={() => onPick(a.id)}
+          >
+            {a.name}
+          </button>
+        </span>
+      ))}
+      {newLabel && (
+        <>
+          {list.length > 0 && <div className="ctx-menu-sep" role="separator" />}
+          <button
+            type="button"
+            role="menuitem"
+            data-menu-id={NEW}
+            className={`ctx-menu-item${cursor === NEW ? " cursor" : ""}`}
+            onMouseEnter={() => setCursor(NEW)}
+            onClick={onNew}
+          >
+            {newLabel}
+          </button>
+        </>
       )}
-    </div>,
+    </div>
+  );
+}
+
+function Menu({
+  menu,
+  entries,
+  onClose,
+  onSubPick,
+  onSubNew,
+  closing = false,
+}: {
+  menu: OpenMenu;
+  entries: Entry[];
+  onClose: () => void;
+  onSubPick: (kind: SubKind, id: string) => void;
+  onSubNew: (kind: SubKind) => void;
+  // Set by <Presence> while the menu animates out.
+  closing?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const placed = usePlaced(ref, menu, [menu]);
+  const [sub, setSub] = useState<{ item: Item; anchor: DOMRect } | null>(null);
+  const hoverTimer = useRef(0);
+  const itemEls = useRef<Map<string, HTMLElement>>(new Map());
+
+  const items = entries.filter((e): e is Item => e.kind === "item");
+  const openSub = (id: string) => {
+    const el = itemEls.current.get(id);
+    const item = items.find((i) => i.id === id);
+    if (el && item?.submenu) setSub({ item, anchor: el.getBoundingClientRect() });
+  };
+  const { cursor, setCursor } = useMenuKeys({
+    open: !closing,
+    paused: sub !== null,
+    ids: items.map((i) => i.id),
+    labelOf: (id) => items.find((i) => i.id === id)?.label ?? "",
+    onPick: (id) => {
+      const item = items.find((i) => i.id === id);
+      if (!item) return;
+      if (item.submenu) openSub(id);
+      else item.run();
+    },
+    onClose,
+    onRight: (id) => {
+      if (items.find((i) => i.id === id)?.submenu) openSub(id);
+    },
+  });
+
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
+
+  // The pointer resting on an item with a submenu opens it; moving onto
+  // another row closes it.
+  const hover = (item: Item) => {
+    setCursor(item.id);
+    window.clearTimeout(hoverTimer.current);
+    if (item.submenu) hoverTimer.current = window.setTimeout(() => openSub(item.id), SUBMENU_HOVER_MS);
+    else setSub(null);
+  };
+  // The stars and swatches are their own controls: while the pointer is on
+  // them no row is lit.
+  const hoverRow = () => {
+    window.clearTimeout(hoverTimer.current);
+    setCursor(null);
+    setSub(null);
+  };
+
+  const n = menu.ids.length;
+
+  return createPortal(
+    <>
+      <div
+        ref={ref}
+        className={`ctx-menu${placed ? " is-placed" : ""}${closing ? " pm-closing" : ""}`}
+        role="menu"
+        style={{
+          left: placed?.left ?? 0,
+          top: placed?.top ?? 0,
+          visibility: placed ? "visible" : "hidden",
+        }}
+        // A press inside the menu must not count as the outside click that
+        // closes it, and must not start a selection on the grid underneath.
+        onMouseDown={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {n > 1 && <div className="ctx-menu-head">{n} photos selected</div>}
+        {entries.map((entry, i) => {
+          if (entry.kind === "sep") return <div key={`sep-${i}`} className="ctx-menu-sep" role="separator" />;
+          if (entry.kind === "row")
+            return (
+              <div key={entry.id} className="ctx-menu-row" onMouseEnter={hoverRow}>
+                {entry.node}
+              </div>
+            );
+          const lit = cursor === entry.id || sub?.item.id === entry.id;
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              role={entry.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+              aria-checked={entry.checked}
+              data-menu-id={entry.id}
+              aria-haspopup={entry.submenu ? "menu" : undefined}
+              ref={(el) => {
+                if (el) itemEls.current.set(entry.id, el);
+                else itemEls.current.delete(entry.id);
+              }}
+              className={`ctx-menu-item${lit ? " cursor" : ""}${entry.checked === undefined ? "" : " ctx-menu-item--check"}${entry.checked ? " checked" : ""}`}
+              onMouseEnter={() => hover(entry)}
+              onClick={() => (entry.submenu ? openSub(entry.id) : entry.run())}
+            >
+              {entry.label}
+              {entry.submenu ? (
+                <span className="ctx-menu-arrow">
+                  <IconChevronRight size={11} />
+                </span>
+              ) : entry.shortcut ? (
+                <span className="ctx-menu-key">{entry.shortcut}</span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+      {sub && sub.item.submenu && !closing && (
+        <ListSubmenu
+          kind={sub.item.submenu}
+          anchor={sub.anchor}
+          items={sub.item.items}
+          onPick={(id) => onSubPick(sub.item.submenu!, id)}
+          onNew={() => onSubNew(sub.item.submenu!)}
+          onClose={() => setSub(null)}
+        />
+      )}
+    </>,
     document.body
   );
 }
+
+// The rows of "Apply edit": the automatic edit, then the saved presets.
+const AUTO = "__auto__";
+const EVERYTHING = "__everything__";
 
 /**
  * Right-click menu for a photo grid. Returns the handler to put on every tile
@@ -157,10 +437,14 @@ function Menu({
  * the whole selection, on any other photo just that one - the selection is
  * left alone either way.
  */
-export function usePhotoContextMenu(selectedIds: Set<string> | undefined, enabled = true) {
+export function usePhotoContextMenu(selectedIds: Set<string> | undefined, options: ContextMenuOptions | boolean = {}) {
+  const opts: ContextMenuOptions = typeof options === "boolean" ? { enabled: options } : options;
+  const enabled = opts.enabled ?? true;
+  const { open, edit, actions } = opts;
   const queryClient = useQueryClient();
+  const dialogs = useAppDialogs();
   const askSaveCopyOptions = useAskSaveCopyOptions();
-  const { trackCopyJob } = useTasks();
+  const { trackCopyJob, runBatches } = useTasks();
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   // The dialog opened from the menu keeps its target after the menu closed.
   const [dialog, setDialog] = useState<{ kind: "export" | "copy"; target: Target } | null>(null);
@@ -173,22 +457,22 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, enable
   // Anything that moves the grid under the menu, or takes the user elsewhere,
   // dismisses it - it is placed against coordinates measured when it opened.
   // Scroll is captured, since it happens on an inner scroller, not the window.
+  // Escape is the menu's own (useMenuKeys).
   useEffect(() => {
     if (!menu) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeMenu();
+    const onDown = () => {
+      closeMenu();
+      swallowNextClick();
     };
-    window.addEventListener("mousedown", closeMenu);
+    window.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", closeMenu, true);
     window.addEventListener("resize", closeMenu);
     window.addEventListener("blur", closeMenu);
-    window.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("mousedown", closeMenu);
+      window.removeEventListener("mousedown", onDown);
       window.removeEventListener("scroll", closeMenu, true);
       window.removeEventListener("resize", closeMenu);
       window.removeEventListener("blur", closeMenu);
-      window.removeEventListener("keydown", onKey);
     };
   }, [menu, closeMenu]);
 
@@ -214,65 +498,267 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, enable
     [enabled, selectedIds]
   );
 
-  function pick(action: Action) {
-    if (!menu) return;
-    const target: Target = { ids: menu.ids, clickedId: menu.clickedId, filename: menu.filename };
-    setMenu(null);
-    if (action === "reveal") void reveal(target);
-    else setDialog({ kind: action, target });
-  }
+  const target = (): Target | null =>
+    menu ? { ids: menu.ids, clickedId: menu.clickedId, filename: menu.filename } : null;
 
   // Ask the backend where the file lives (a virtual copy answers with its
   // source's file), then let the desktop shell select it.
-  async function reveal(target: Target) {
+  async function reveal(t: Target) {
     if (!revealFile) return;
     try {
-      const { path, exists } = await api.images.filePath(target.clickedId);
+      const { path, exists } = await api.images.filePath(t.clickedId);
       const result = await revealFile(path);
       if (!result.ok) throw new Error(result.error || "Could not open the folder.");
       if (!exists || result.missing) {
-        setNote(`${target.filename} is not on disk any more - its folder was opened instead.`);
+        setNote(`${t.filename} is not on disk any more - its folder was opened instead.`);
       }
     } catch (e) {
       setNote((e as Error).message || "Could not show the file.");
     }
   }
 
-  // Copy every targeted photo from its SAVED edits - the grid has no editor
-  // state to take instead. Physical copies are one background job (the title
-  // bar counts it down, the dialog closes at once); virtual copies are made
-  // here in turn, there is nothing to render. With several copies there is
-  // no single one to land on, so they simply appear in the grid next to their
-  // originals once the queries refresh.
-  async function saveCopies(req: SaveCopyRequest, report: (done: number) => void) {
-    const ids = dialog?.target.ids ?? [];
-    if (req.kind === "physical") {
-      const { job_id, total } = await api.images.copyJobStart(ids, { quality: req.quality, max_size: req.maxSize });
-      trackCopyJob(job_id, total);
-      setDialog(null);
+  async function newTag(t: Target) {
+    const name = await dialogs.prompt({
+      title: t.ids.length === 1 ? "New tag" : `New tag for ${t.ids.length} photos`,
+      placeholder: "Tag name",
+      confirmLabel: "Add",
+    });
+    if (!name) return;
+    if (isAutoTag(name)) {
+      await dialogs.alert({ message: autoTagMessage(name) });
       return;
     }
-    let done = 0;
-    try {
-      for (const id of ids) {
-        await api.images.virtualCopy(id);
-        done += 1;
-        report(done);
+    await actions?.onAddTag?.(t.ids, name);
+  }
+
+  async function newAlbum(t: Target) {
+    const name = await dialogs.prompt({ title: "New album", placeholder: "Album name", confirmLabel: "Create & add" });
+    if (!name) return;
+    const created = await api.albums.create(name);
+    queryClient.invalidateQueries({ queryKey: ["albums"] });
+    await actions?.onAddToAlbum?.(t.ids, created.id);
+  }
+
+  async function newCanvas(t: Target) {
+    const name = await dialogs.prompt({ title: "New canvas", placeholder: "Canvas name", confirmLabel: "Create & add" });
+    if (!name) return;
+    const created = await api.canvases.create(name);
+    queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
+    await actions?.onAddToCanvas?.(t.ids, created.id);
+  }
+
+  // One aspect (or all of them) back to the imported state, after a word of
+  // warning - the bar's Reset menu has its ticks to make the choice explicit,
+  // a single row here needs the question instead. The rest is sent as false
+  // so the server's default-on metadata flags leave everything else alone.
+  async function reset(t: Target, aspect: string) {
+    if (!actions?.onReset) return;
+    const all = aspect === EVERYTHING;
+    const label = all ? "everything" : RESET_ASPECTS.find((a) => a.key === aspect)?.label.toLowerCase() ?? aspect;
+    const n = t.ids.length;
+    const ok = await dialogs.confirm({
+      title: `Reset ${label} of ${n} photo${n === 1 ? "" : "s"}?`,
+      message: all
+        ? "Stars, colors, tags, albums, edits and geometry go back to how they were right after import."
+        : `The ${label} go back to how they were right after import.`,
+      confirmLabel: "Reset",
+      danger: true,
+    });
+    if (!ok) return;
+    const opts: BulkResetOptions = {};
+    for (const a of RESET_ASPECTS) opts[a.key] = all || a.key === aspect;
+    // The page runs the reset as a task in the title bar.
+    await actions.onReset?.(t.ids, opts);
+  }
+
+  // The rows, from what the grid and the page offer. Groups are separated
+  // like the system's menus: open · change · develop · sync · file · remove.
+  function build(m: OpenMenu): Entry[] {
+    const t: Target = { ids: m.ids, clickedId: m.clickedId, filename: m.filename };
+    const n = m.ids.length;
+    const many = n > 1;
+    const groups: Entry[][] = [];
+    const run = (fn: () => unknown) => () => {
+      setMenu(null);
+      void fn();
+    };
+
+    const openGroup: Entry[] = [];
+    if (open) openGroup.push({ kind: "item", id: "open", label: "Open", shortcut: "↩", run: run(() => open(m.clickedId)) });
+    if (edit) openGroup.push({ kind: "item", id: "edit", label: "Edit", shortcut: "E", run: run(() => edit(m.clickedId)) });
+    groups.push(openGroup);
+
+    const change: Entry[] = [];
+    const meta = actions?.meta?.(m.ids) ?? { rating: 0, colorLabel: "none" as ColorLabel };
+    if (actions?.onRate) {
+      const onRate = actions.onRate;
+      change.push({
+        kind: "row",
+        id: "rating",
+        node: (
+          <>
+            <span>Rating</span>
+            <RatingStars rating={meta.rating} onChange={(r) => run(() => onRate(m.ids, r))()} />
+          </>
+        ),
+      });
+    }
+    if (actions?.onColor) {
+      const onColor = actions.onColor;
+      change.push({
+        kind: "row",
+        id: "color",
+        node: (
+          <>
+            <span>Label</span>
+            <ColorLabelPicker value={meta.colorLabel} onChange={(c) => run(() => onColor(m.ids, c))()} />
+          </>
+        ),
+      });
+    }
+    if (actions?.onAddToAlbum) change.push({ kind: "item", id: "album", label: "Add to album", submenu: "album", run: () => {} });
+    if (actions?.onAddToCanvas) change.push({ kind: "item", id: "canvas", label: "Add to canvas", submenu: "canvas", run: () => {} });
+    if (actions?.onAddTag) change.push({ kind: "item", id: "tag", label: "Add tag", submenu: "tag", run: () => {} });
+    groups.push(change);
+
+    const develop: Entry[] = [];
+    if (actions?.onAutoEdit || actions?.onApplyPreset) {
+      // The automatic edit, then the presets as their own group.
+      const presets = actions.onApplyPreset ? actions.presets?.() ?? [] : [];
+      const editRows: SubItem[] = [
+        ...(actions.onAutoEdit ? [{ id: AUTO, name: "Auto edit" }] : []),
+        ...presets.map((name, i) => ({
+          id: name,
+          name,
+          sepBefore: i === 0 && Boolean(actions.onAutoEdit),
+          headBefore: i === 0 ? "Presets" : undefined,
+        })),
+      ];
+      develop.push({ kind: "item", id: "develop", label: "Apply edit", submenu: "edit", items: editRows, run: () => {} });
+      develop.push({ kind: "item", id: "develop-copy", label: "Apply edit and save copy", submenu: "edit-copy", items: editRows, run: () => {} });
+    }
+    if (actions?.onReset) {
+      const resetRows: SubItem[] = [
+        ...RESET_ASPECTS.map((a) => ({ id: a.key as string, name: a.label })),
+        { id: EVERYTHING, name: "Everything", sepBefore: true },
+      ];
+      develop.push({ kind: "item", id: "reset", label: "Reset", submenu: "reset", items: resetRows, run: () => {} });
+    }
+    groups.push(develop);
+
+    const immich = actions?.immich?.(m.ids);
+    if (immich) groups.push([{ kind: "item", id: "immich", label: immich.label, checked: immich.checked, run: run(immich.run) }]);
+
+    if (actions?.files !== false) {
+      groups.push([
+        { kind: "item", id: "export", label: many ? `Export ${n} photos…` : "Export…", run: run(() => setDialog({ kind: "export", target: t })) },
+        { kind: "item", id: "copy", label: many ? `Save copy of ${n} photos…` : "Save copy…", run: run(() => setDialog({ kind: "copy", target: t })) },
+      ]);
+      if (revealFile) groups.push([{ kind: "item", id: "reveal", label: REVEAL_LABEL, run: run(() => reveal(t)) }]);
+    }
+
+    const remove: Entry[] = [];
+    if (actions?.onRemoveFromAlbum) {
+      const onRemove = actions.onRemoveFromAlbum;
+      remove.push({ kind: "item", id: "remove-album", label: "Remove from album", run: run(() => onRemove(m.ids)) });
+    }
+    if (actions?.onDelete) {
+      const onDelete = actions.onDelete;
+      remove.push({ kind: "item", id: "trash", label: "Move to Trash", shortcut: "⌫", run: run(() => onDelete(m.ids)) });
+    }
+    if (actions?.onRestore) {
+      const onRestore = actions.onRestore;
+      remove.push({ kind: "item", id: "restore", label: "Restore", run: run(() => onRestore(m.ids)) });
+    }
+    if (actions?.onDeleteForever) {
+      const onDeleteForever = actions.onDeleteForever;
+      remove.push({ kind: "item", id: "delete-forever", label: "Delete permanently", shortcut: "⌫", run: run(() => onDeleteForever(m.ids)) });
+    }
+    groups.push(remove);
+
+    const entries: Entry[] = [];
+    for (const g of groups) {
+      if (g.length === 0) continue;
+      if (entries.length > 0) entries.push({ kind: "sep" });
+      entries.push(...g);
+    }
+    return entries;
+  }
+
+  // What a row of a submenu does.
+  function subPick(kind: SubKind, id: string) {
+    const t = target();
+    setMenu(null);
+    if (!t) return;
+    switch (kind) {
+      case "album":
+        void actions?.onAddToAlbum?.(t.ids, id);
+        break;
+      case "canvas":
+        void actions?.onAddToCanvas?.(t.ids, id);
+        break;
+      case "tag":
+        void actions?.onAddTag?.(t.ids, id);
+        break;
+      case "edit":
+      case "edit-copy": {
+        const copy = kind === "edit-copy";
+        if (id === AUTO) void actions?.onAutoEdit?.(t.ids, copy);
+        else void actions?.onApplyPreset?.(t.ids, id, copy);
+        break;
       }
-    } finally {
-      // Whatever was made before an error shows up too.
-      if (done > 0) {
+      case "reset":
+        void reset(t, id);
+        break;
+    }
+  }
+
+  function subNew(kind: SubKind) {
+    const t = target();
+    setMenu(null);
+    if (!t) return;
+    if (kind === "album") void newAlbum(t);
+    else if (kind === "canvas") void newCanvas(t);
+    else if (kind === "tag") void newTag(t);
+  }
+
+  // Copy every targeted photo from its SAVED edits - the grid has no editor
+  // state to take instead. The dialog closes at once either way and the title
+  // bar counts the copies down: physical copies are one background job on the
+  // server, virtual copies are made from here in slices (there is nothing to
+  // render), with a Stop between them. With several copies there is no single
+  // one to land on, so they simply appear in the grid next to their originals
+  // once the queries refresh.
+  async function saveCopies(req: SaveCopyRequest) {
+    const ids = dialog?.target.ids ?? [];
+    setDialog(null);
+    try {
+      if (req.kind === "physical") {
+        const { job_id, total } = await api.images.copyJobStart(ids, { quality: req.quality, max_size: req.maxSize });
+        trackCopyJob(job_id, total);
+        return;
+      }
+      const { done } = await runBatches(
+        { id: "batch:virtual-copies", kind: "batch", label: "Creating virtual copies…" },
+        ids,
+        (slice) => Promise.all(slice.map((id) => api.images.virtualCopy(id)))
+      );
+      if (done.length > 0) {
         queryClient.invalidateQueries({ queryKey: ["images"] });
         queryClient.invalidateQueries({ queryKey: ["tags"] });
       }
+    } catch (e) {
+      // Whatever was made before an error shows up too.
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+      setNote((e as Error).message || "Could not save the copies.");
     }
-    setDialog(null);
   }
 
   const overlay = (
     <>
       <Presence open={menu !== null} ms={MOTION.pop}>
-        {menu && <Menu menu={menu} onPick={pick} />}
+        {menu && <Menu menu={menu} entries={build(menu)} onClose={closeMenu} onSubPick={subPick} onSubNew={subNew} />}
       </Presence>
       {note &&
         createPortal(
@@ -295,7 +781,7 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, enable
           <SaveCopyDialog
             count={dialog.target.ids.length}
             onClose={() => setDialog(null)}
-            onSave={saveCopies}
+            onSave={(req) => void saveCopies(req)}
             askOptions={askSaveCopyOptions}
           />
         )}

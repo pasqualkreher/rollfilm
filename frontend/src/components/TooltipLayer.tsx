@@ -19,6 +19,11 @@ import { createPortal } from "react-dom";
 // keeps the anchor placement.
 
 const SHOW_DELAY_MS = 450;
+// Within this long after a tip was hidden, the next anchor shows its tip at
+// once - moving along a row of toolbar buttons reads each one without the
+// wait, the way the system's tooltips chain. Not for the pointer-placed
+// tips on grid tiles: a sweep across the grid should not pop a tip per tile.
+const WARM_MS = 350;
 const TIP_ID = "pm-tooltip";
 const MARGIN = 8;
 // Offsets from the hot spot that clear the cursor arrow below and to the right.
@@ -64,12 +69,15 @@ export function TooltipLayer() {
   useEffect(() => {
     // The show of a pointer tip that is still waiting for the mouse to rest.
     let pendingAtPointer: (() => void) | null = null;
+    // When the last shown tip went away (see WARM_MS).
+    let hiddenAt = -Infinity;
 
     const clear = () => {
       window.clearTimeout(timerRef.current);
       timerRef.current = 0;
       pendingAtPointer = null;
       const a = anchorRef.current;
+      if (a) hiddenAt = performance.now();
       if (a && a.getAttribute("aria-describedby") === TIP_ID) a.removeAttribute("aria-describedby");
       anchorRef.current = null;
       setTip(null);
@@ -99,9 +107,10 @@ export function TooltipLayer() {
       if (!text || draggingRef.current) return;
       if (anchorRef.current === el) return;
       clear();
-      if (immediate) place(el, text, false);
+      const atPointer = el.closest('[data-tip-at="pointer"]') !== null;
+      const warm = !atPointer && performance.now() - hiddenAt < WARM_MS;
+      if (immediate || warm) place(el, text, false);
       else {
-        const atPointer = el.closest('[data-tip-at="pointer"]') !== null;
         const show = () => {
           pendingAtPointer = null;
           place(el, text, atPointer);

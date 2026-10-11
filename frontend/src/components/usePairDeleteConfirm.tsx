@@ -107,23 +107,22 @@ export function usePairDeleteConfirm() {
   let dialog: React.ReactNode = null;
   if (pending?.kind === "confirm") {
     dialog = (
-      <div className="modal-overlay" onClick={() => finish(null)}>
+      <div className="modal-overlay">
         <div
           className="modal pair-delete-modal"
           role="alertdialog"
           aria-modal="true"
           aria-label="Delete photos"
-          onClick={(e) => e.stopPropagation()}
         >
           <div className="pair-delete-body">
             <p className="pair-delete-message">{pending.message}</p>
             {pending.warning && <p className="pair-delete-warning">{pending.warning}</p>}
             <div className="pair-delete-actions">
-              <button className="btn danger danger-filled" onClick={() => finish(pending.ids)}>
-                Delete
-              </button>
               <button className="btn ghost" autoFocus onClick={() => finish(null)}>
                 Cancel
+              </button>
+              <button className="btn danger danger-filled" onClick={() => finish(pending.ids)}>
+                Delete
               </button>
             </div>
           </div>
@@ -133,13 +132,12 @@ export function usePairDeleteConfirm() {
   } else if (pending?.kind === "choose") {
     const { baseIds, partnerIds } = pending;
     dialog = (
-      <div className="modal-overlay" onClick={() => finish(null)}>
+      <div className="modal-overlay">
         <div
           className="modal pair-delete-modal"
           role="alertdialog"
           aria-modal="true"
           aria-label="Delete photos"
-          onClick={(e) => e.stopPropagation()}
         >
           <div className="pair-delete-body">
             <h3>{baseIds.length === 1 ? "Delete photo" : `Delete ${baseIds.length} photos`}</h3>
@@ -150,6 +148,12 @@ export function usePairDeleteConfirm() {
             </p>
             {pending.warning && <p className="pair-delete-warning">{pending.warning}</p>}
             <div className="pair-delete-actions">
+              <button className="btn ghost" autoFocus onClick={() => finish(null)}>
+                Cancel
+              </button>
+              <button className="btn danger" onClick={() => finish(baseIds)}>
+                {baseIds.length === 1 ? "Delete only this file" : "Delete only the selected"}
+              </button>
               <button
                 className="btn danger danger-filled"
                 onClick={() => finish([...baseIds, ...partnerIds])}
@@ -157,12 +161,6 @@ export function usePairDeleteConfirm() {
                 {baseIds.length === 1
                   ? "Delete both (RAW + JPEG)"
                   : `Delete selected + ${partnerIds.length} matching file${partnerIds.length === 1 ? "" : "s"}`}
-              </button>
-              <button className="btn danger" onClick={() => finish(baseIds)}>
-                {baseIds.length === 1 ? "Delete only this file" : "Delete only the selected"}
-              </button>
-              <button className="btn ghost" autoFocus onClick={() => finish(null)}>
-                Cancel
               </button>
             </div>
           </div>

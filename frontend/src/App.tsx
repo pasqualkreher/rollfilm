@@ -13,18 +13,20 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
-import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconLandfill, IconMail, IconMenu, IconX } from "./components/Icons";
+import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconLandfill, IconMail, IconMenu, IconStop, IconX } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DialogProvider } from "./components/AppDialogs";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UnhandledErrors } from "./components/UnhandledErrors";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
-import { TasksProvider, useTasks } from "./state/tasks";
-import { WaitProvider } from "./state/wait";
+import { TasksProvider, useTasks, type Task } from "./state/tasks";
+import { TaskSources } from "./state/taskSources";
 import { Presence } from "./components/Presence";
 import { MOTION } from "./utils/usePresence";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NavHistoryTracker, hasLeaveGuards, runLeaveGuards, useNavHistory } from "./state/navHistory";
+import { setSessionState } from "./utils/useSessionState";
+import { moveFocusInMenu } from "./utils/useMenuKeys";
 import { isMac } from "./utils/selection";
 import { useFocusModeSwitch } from "./state/focusMode";
 import { Spinner, LoadingState } from "./components/Spinner";
@@ -372,6 +374,10 @@ function NavHistoryButtons({ locked }: { locked: boolean }) {
 // PayPal donate link and contact (the same lines as Settings > About). A modal
 // of its own, portalled to the body: inside the bar it would sit in the
 // window's drag region and under the bar's stacking context.
+// The desktop shell's "About Rollfilm" menu item lands here (MenuCommands
+// raises it, BrandAbout listens): the same window the wordmark opens.
+const ABOUT_EVENT = "pm:about";
+
 function BrandAbout() {
   const [open, setOpen] = useState(false);
   const platform = window.photoManager?.platform;
@@ -384,6 +390,12 @@ function BrandAbout() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
+
+  useEffect(() => {
+    const show = () => setOpen(true);
+    window.addEventListener(ABOUT_EVENT, show);
+    return () => window.removeEventListener(ABOUT_EVENT, show);
+  }, []);
 
   return (
     <>
@@ -402,7 +414,7 @@ function BrandAbout() {
       {createPortal(
         <Presence open={open} ms={MOTION.modal}>
           {open && (
-            <div className="modal-overlay" onClick={() => setOpen(false)}>
+            <div className="modal-overlay">
               <div
                 className="modal about-modal"
                 role="dialog"
@@ -453,12 +465,90 @@ function BrandAbout() {
 // Top bar: while a blocking Settings task runs, the nav is locked (you can't
 // switch tabs) and a spinner + label shows what's happening. On narrow windows
 // the tab row collapses into a burger menu instead of wrapping onto extra rows.
+// Cmd/Ctrl+F and View → Find: into the search field, text selected so typing
+// replaces it.
+function focusSearch() {
+  const input = document.querySelector<HTMLInputElement>(".top-bar .search-bar input");
+  if (!input) return false;
+  input.focus();
+  input.select();
+  return true;
+}
+
+// The desktop shell's menu bar (electron/main.js buildApplicationMenu) sends
+// one word per item; here each becomes the navigation or the action it names.
+// Navigation goes through the leave guards like a tab click, so an editor
+// with unsaved work saves first. Where there is no menu bar (Windows, Linux,
+// the web build) the keys that would live in it are taken here.
+function MenuCommands() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    const go = (to: string) => {
+      void runLeaveGuards().then(() => navigate(to));
+    };
+    const run = (command: string) => {
+      switch (command) {
+        case "settings":
+          go("/settings");
+          break;
+        case "import":
+          go("/import");
+          break;
+        case "help":
+          go("/help");
+          break;
+        case "shortcuts":
+          setSessionState("help:chapter", "shortcuts");
+          go("/help");
+          break;
+        case "about":
+          window.dispatchEvent(new Event(ABOUT_EVENT));
+          break;
+        case "find":
+          focusSearch();
+          break;
+      }
+    };
+    const offMenu = window.photoManager?.onMenu?.(run);
+    function onKey(e: KeyboardEvent) {
+      if (e.defaultPrevented || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key === ",") {
+        e.preventDefault();
+        run("settings");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      offMenu?.();
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [navigate]);
+  return null;
+}
+
 function TopBar() {
-  const { busyLabel, renders, cancelRenders, cancellingRenders, copies, cancelCopyJob, cancellingCopies } =
-    useTasks();
-  const locked = busyLabel !== null;
+  const { tasks } = useTasks();
+  const locked = tasks.some((t) => t.locksNav && !t.finished);
   const location = useLocation();
-  const { isUploading, sessionId } = useImportSession();
+  const { isUploading, sessionId, effectiveUploadPct } = useImportSession();
+
+  // The Dock icon carries the same progress the bar's task pill shows - the
+  // task on top, else an upload - so a job can be left to run with the window
+  // out of sight. Nothing running takes the bar away again.
+  const shown = shownTask(tasks);
+  const shownDone = shown?.done;
+  const shownTotal = shown?.total;
+  useEffect(() => {
+    const setProgress = window.photoManager?.setProgress;
+    if (!setProgress) return;
+    const fraction =
+      shownDone !== undefined && shownTotal !== undefined && shownTotal > 0
+        ? shownDone / shownTotal
+        : isUploading && effectiveUploadPct != null
+          ? effectiveUploadPct / 100
+          : -1;
+    void setProgress(fraction);
+  }, [shownDone, shownTotal, isUploading, effectiveUploadPct]);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const dockRef = useRef<HTMLDivElement | null>(null);
@@ -515,10 +605,10 @@ function TopBar() {
   useEffect(() => {
     const bar = barRef.current;
     const left = bar?.querySelector<HTMLElement>(".top-bar-side--left");
-    const icons = bar?.querySelector<HTMLElement>(".top-icon-links");
+    const right = bar?.querySelector<HTMLElement>(".top-bar-side--right");
     const tabs = left?.querySelector<HTMLElement>(".nav-links");
     const burger = left?.querySelector<HTMLElement>(".nav-burger-wrap");
-    if (!bar || !left || !icons || !tabs || !burger) return;
+    if (!bar || !left || !right || !tabs || !burger) return;
     const SEARCH_WIDTH = 320;
     const SEARCH_COMPACT = 280; // below this the long placeholder gets cut off
     const SEARCH_FOLD = 120;
@@ -535,7 +625,9 @@ function TopBar() {
           .filter((r) => r.width > 0)
           .map((r) => r.right)
       );
-      const rightEdge = icons.getBoundingClientRect().left;
+      // The right zone grows leftwards when a task pill shows (the icons
+      // stay put), so its edge is the field's limit, not the icons'.
+      const rightEdge = right.getBoundingClientRect().left;
       const from = leftEdge + gap;
       const to = rightEdge - gap;
       // Where the left zone would end with the tab row showing: the burger
@@ -552,35 +644,34 @@ function TopBar() {
       setSearchRow(width < SEARCH_MIN);
     };
     const ro = new ResizeObserver(measure);
-    // Children come and go (task spinner, sync indicator) without the zone
-    // changing size, so each one is watched too.
+    // Children come and go (the import tab's count, the task pill) without
+    // the zone changing size, so each one is watched too.
     const observeAll = () => {
       ro.disconnect();
-      for (const el of [bar, left, icons, ...left.children]) ro.observe(el);
+      for (const el of [bar, left, right, ...left.children, ...right.children]) ro.observe(el);
       measure();
     };
     observeAll();
     const mo = new MutationObserver(observeAll);
     mo.observe(left, { childList: true });
+    mo.observe(right, { childList: true, subtree: true });
     return () => {
       ro.disconnect();
       mo.disconnect();
     };
   }, []);
 
-  // The app-wide focus mode (View menu, Cmd/Ctrl+F): the bar this component
-  // draws is what it puts away.
+  // The app-wide focus mode (View menu, Shift+Cmd/Ctrl+F): the bar this
+  // component draws is what it puts away.
   useFocusModeSwitch();
 
-  // Cmd/Ctrl+Shift+F jumps into the search field (plain Cmd+F is focus mode).
+  // Cmd/Ctrl+F jumps into the search field, as Find does everywhere. On the
+  // Mac the menu bar owns the key and sends "find" (MenuCommands); this is for
+  // the web build, Windows and Linux.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || !e.shiftKey || e.key.toLowerCase() !== "f") return;
-      const input = barRef.current?.querySelector<HTMLInputElement>(".search-bar input");
-      if (!input) return;
-      e.preventDefault();
-      input.focus();
-      input.select();
+      if (e.defaultPrevented || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "f") return;
+      if (focusSearch()) e.preventDefault();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -611,6 +702,8 @@ function TopBar() {
         ref={menuRef}
         aria-disabled={locked}
         title={locked ? "Please wait until the current task finishes" : undefined}
+        // The arrows walk the open menu's entries (utils/useMenuKeys).
+        onKeyDown={(e) => menuOpen && moveFocusInMenu(e, ".nav-menu a")}
       >
         <button
           className="nav-burger"
@@ -633,62 +726,13 @@ function TopBar() {
           )}
         </Presence>
       </div>
-      {locked && (
-        <span className="nav-task" role="status" aria-live="polite">
-          <Spinner />
-          {busyLabel}
-        </span>
-      )}
-      {/* The pictures of a bulk edit, rendering in the background: counted
-          down here until the last one is through. Blocks nothing. Cancel stops
-          it where it is - the photos not rendered yet lose the edit again. */}
-      {renders && !locked && (
-        <span className="nav-task">
-          <span
-            className="nav-task-label"
-            role="status"
-            title="The edited photos are being rendered in the background. You can keep working."
-          >
-            <Spinner />
-            Rendering <span className="nav-task-count">{renders.done}</span> of {renders.total}
-          </span>
-          <button
-            type="button"
-            className="btn btn-sm ghost"
-            onClick={cancelRenders}
-            disabled={cancellingRenders}
-            title="Stop. Photos already rendered keep the edit, the rest stay as they were."
-          >
-            Cancel
-          </button>
-        </span>
-      )}
-      {/* The copies of a bulk Save copy, written one after the other in the
-          background. Cancel stops it between photos; the copies made stay. */}
-      {copies && !locked && (
-        <span className="nav-task">
-          <span
-            className="nav-task-label"
-            role="status"
-            title="The copies are being saved in the background. You can keep working."
-          >
-            <Spinner />
-            Saving copy <span className="nav-task-count">{Math.min(copies.done + 1, copies.total)}</span> of {copies.total}
-          </span>
-          <button
-            type="button"
-            className="btn btn-sm ghost"
-            onClick={cancelCopyJob}
-            disabled={cancellingCopies}
-            title="Stop after the copy being written. The copies already made stay."
-          >
-            Cancel
-          </button>
-        </span>
-      )}
-      <ImmichSyncIndicator />
       </div>
       <div className="top-bar-side top-bar-side--right">
+      {/* Everything that is running, in one pill (TaskDock below). It sits
+          here, before the icons, so the icons stay put and the pill grows
+          towards the search field, which is pinned to the window's midpoint
+          and only gives way on a narrow window. */}
+      <TaskDock />
       <nav
         className={`top-icon-links${locked ? " nav-links--locked" : ""}`}
         aria-label="Trash, statistics, settings, help and contact"
@@ -750,27 +794,170 @@ function TopBar() {
   );
 }
 
-// Quiet top-bar pill while Immich uploads run in the background, so the user
-// knows a sync is happening (and why quitting would interrupt something) even
-// though nothing blocks. Polls faster while active, lazily when idle.
-function ImmichSyncIndicator() {
-  const { data } = useQuery({
-    queryKey: ["immich-activity"],
-    queryFn: () => api.settings.immichActivity(),
-    refetchInterval: (query) => ((query.state.data?.pending_uploads ?? 0) > 0 ? 3000 : 20000),
-  });
-  const pending = data?.pending_uploads ?? 0;
-  if (pending === 0) return null;
+// The one place everything running shows: the task on top (the newest), its
+// count and its Stop. More than one running adds a "+N" that opens the list,
+// each with its own Stop. A finished task may leave a chip for a moment - an
+// export's "Show in Finder". The dock has no fixed width: it grows leftwards
+// into the room between the icons and the search field.
+function shownTask(tasks: Task[]): Task | null {
+  const visible = visibleTasks(tasks);
+  return visible.length > 0 ? visible[visible.length - 1] : null;
+}
+
+// After "Apply … and save copy" the copies and the renders run at once: the
+// copy task stands in for both, its Stop stops both.
+function visibleTasks(tasks: Task[]): Task[] {
+  const copying = tasks.some((t) => t.kind === "copies" && !t.finished);
+  return tasks.filter((t) => !(copying && t.kind === "renders"));
+}
+
+function TaskCount({ done, total }: { done: number; total: number }) {
   return (
-    <span
-      className="nav-task"
-      role="status"
-      aria-live="polite"
-      title="Photos are uploading to Immich in the background. You will be asked before quitting interrupts this."
-    >
-      <Spinner />
-      Immich sync: {pending} left
+    <span className="task-pill-progress">
+      {/* As wide as the total from the start, so the pill does not grow as
+          the count gains digits. */}
+      <span className="task-pill-count" style={{ minWidth: `${total.toLocaleString().length}ch` }}>
+        {done.toLocaleString()}
+      </span>{" "}
+      of {total.toLocaleString()}
     </span>
+  );
+}
+
+function TaskStop({ task, compact = false }: { task: Task; compact?: boolean }) {
+  const { cancelTask } = useTasks();
+  if (!task.cancel) return null;
+  const word = task.cancelLabel ?? "Stop";
+  return (
+    <button
+      type="button"
+      className={compact ? "task-pill-stop" : "btn btn-sm ghost task-row-stop"}
+      onClick={() => void cancelTask(task.id)}
+      disabled={task.cancelling}
+      title={task.stopTitle ?? word}
+      aria-label={word}
+    >
+      {compact ? <IconStop size={11} /> : task.cancelling ? "Stopping…" : word}
+    </button>
+  );
+}
+
+function TaskDock() {
+  const { tasks, dismissTask } = useTasks();
+  const visible = visibleTasks(tasks);
+  const top = visible.length > 0 ? visible[visible.length - 1] : null;
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const many = visible.length > 1;
+  useEffect(() => {
+    if (!many) setOpen(false);
+  }, [many]);
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <div className="task-dock" ref={ref} onKeyDown={(e) => open && moveFocusInMenu(e, ".task-menu button")}>
+      <Presence open={top !== null} ms={MOTION.pop}>
+        {top && (
+          <div
+            className={`task-pill${top.finished ? " task-pill--done" : ""}${top.finished?.error ? " task-pill--error" : ""}`}
+            role="status"
+            aria-live="polite"
+          >
+            {top.finished ? (
+              <>
+                <span className="task-pill-text" title={top.finished.label}>{top.finished.label}</span>
+                {top.finished.action && (
+                  <button
+                    type="button"
+                    className="task-pill-action"
+                    onClick={() => {
+                      top.finished?.action?.run();
+                      dismissTask(top.id);
+                    }}
+                  >
+                    {top.finished.action.label}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="task-pill-stop"
+                  onClick={() => dismissTask(top.id)}
+                  title="Dismiss"
+                  aria-label="Dismiss"
+                >
+                  <IconX size={11} />
+                </button>
+              </>
+            ) : (
+              <>
+                {many ? (
+                  <button
+                    type="button"
+                    className="task-pill-label"
+                    aria-haspopup="menu"
+                    aria-expanded={open}
+                    title={`${visible.length} tasks running. Click for the list.`}
+                    onClick={() => setOpen((v) => !v)}
+                  >
+                    <Spinner size="sm" />
+                    <span className="task-pill-text">{top.label}</span>
+                    {top.done !== undefined && top.total !== undefined && <TaskCount done={top.done} total={top.total} />}
+                    <span className="task-pill-more">+{visible.length - 1}</span>
+                  </button>
+                ) : (
+                  <span className="task-pill-label" title={top.title}>
+                    <Spinner size="sm" />
+                    <span className="task-pill-text">{top.label}</span>
+                    {top.done !== undefined && top.total !== undefined && <TaskCount done={top.done} total={top.total} />}
+                  </span>
+                )}
+                <TaskStop task={top} compact />
+              </>
+            )}
+          </div>
+        )}
+      </Presence>
+      <Presence open={open} ms={MOTION.pop}>
+        {open && (
+          <div className="nav-menu task-menu" role="menu" aria-label="Running tasks">
+            {[...visible].reverse().map((t) => (
+              <div key={t.id} className="task-row" role="menuitem" title={t.title}>
+                <Spinner size="sm" />
+                <span className="task-row-text">
+                  {t.finished ? t.finished.label : t.label}
+                  {!t.finished && t.done !== undefined && t.total !== undefined && (
+                    <>
+                      {" "}
+                      <TaskCount done={t.done} total={t.total} />
+                    </>
+                  )}
+                </span>
+                {t.finished ? (
+                  <button type="button" className="btn btn-sm ghost task-row-stop" onClick={() => dismissTask(t.id)}>
+                    Dismiss
+                  </button>
+                ) : (
+                  <TaskStop task={t} />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Presence>
+    </div>
   );
 }
 
@@ -790,13 +977,14 @@ export default function App() {
   usePrefetchLikelyRoutes();
   return (
     <TasksProvider>
-      <WaitProvider>
         <ImportSessionProvider>
           <DialogProvider>
           <div className="app-shell">
             <SourceScanWatcher />
+            <TaskSources />
             <NavHistoryTracker />
             <EmptyLibraryRedirect />
+            <MenuCommands />
             <TopBar />
             <TooltipLayer />
             <UnhandledErrors />
@@ -842,7 +1030,6 @@ export default function App() {
           </div>
           </DialogProvider>
         </ImportSessionProvider>
-      </WaitProvider>
     </TasksProvider>
   );
 }

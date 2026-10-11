@@ -494,6 +494,12 @@ def list_open_sessions(db: Session = Depends(get_db), current_user: User = Depen
                 _n(and_(f.imported.is_(False), duplicate)),
                 _n(f.selected.is_(True)),
                 _n(f.processed.is_(False)),
+                # Bytes the import folder holds: everything for a backup
+                # session, only what wasn't moved out for the others.
+                # source_size is NULL for uploads and picked files, so this
+                # is a floor, not an audit.
+                func.sum(f.source_size),
+                func.sum(case((f.imported.is_(False), f.source_size), else_=0)),
             )
             .filter(f.import_session_id.in_(session_ids))
             .group_by(f.import_session_id)
@@ -510,7 +516,13 @@ def list_open_sessions(db: Session = Depends(get_db), current_user: User = Depen
 
     out: list[schemas.ImportSessionSummaryOut] = []
     for s in sessions:
-        total, imported, duplicates, selected, pending = counts.get(s.id, (0,) * 5)
+        total, imported, duplicates, selected, pending, all_bytes, left_bytes = counts.get(
+            s.id, (0,) * 7
+        )
+        if not s.staging_dir:
+            folder_bytes = 0
+        else:
+            folder_bytes = all_bytes if s.keep_backup else left_bytes
         out.append(
             schemas.ImportSessionSummaryOut(
                 id=s.id,
@@ -518,6 +530,7 @@ def list_open_sessions(db: Session = Depends(get_db), current_user: User = Depen
                 mode=s.mode,
                 staging_dir=s.staging_dir,
                 keep_backup=s.keep_backup,
+                folder_bytes=folder_bytes,
                 created_at=s.created_at,
                 updated_at=s.updated_at,
                 file_count=total,

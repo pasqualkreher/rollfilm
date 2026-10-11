@@ -158,6 +158,9 @@ let current: Appearance = { mode: DEFAULT_MODE, light: DEFAULT_LIGHT, dark: DEFA
 // instant before this module runs.
 function apply(): void {
   document.documentElement.setAttribute("data-theme", current.resolved);
+  // The desktop shell paints the window before the page does and draws the
+  // native dialogs and menus: both follow the skin, not the OS.
+  void window.photoManager?.setTheme?.({ mode: current.mode, bg: skinInfo(current.resolved).bg });
 }
 
 // All useAppearance() instances subscribe here so every consumer (picker tiles,

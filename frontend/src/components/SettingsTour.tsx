@@ -16,6 +16,8 @@ const TOUR_TEXT: Record<string, string> = {
     "Choose a color theme or follow your system's light/dark mode. You can change this anytime.",
   "Library folder":
     "The folder with your photos. Pick another folder to switch libraries.",
+  Import:
+    "What a new import session does unless you say otherwise: copy or leave in place, keep the import folder as a backup, and how a review starts out.",
   "Library data":
     "Database and thumbnails live in a hidden .photomanager folder inside the library. Exclude it from cloud sync.",
   "Immich integration":

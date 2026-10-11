@@ -148,7 +148,7 @@ const CHAPTERS: Chapter[] = [
             <ol>
               <li>
                 <strong>Import.</strong> <em>Import → Import photos → Choose folder…</em> and pick
-                the card. The files are copied into a staging area first — nothing is in your
+                the card. The files are copied into an import folder first — nothing is in your
                 library yet.
               </li>
               <li>
@@ -248,8 +248,9 @@ const CHAPTERS: Chapter[] = [
         where: <>Import → Import photos ▾ → Choose folder… / Choose files…</>,
         lead: (
           <>
-            Photos are copied into a staging area first, reviewed there, and only then added to your
-            library — so a card can be culled before anything lands.
+            Photos come in through an import session: copied into an import folder first (or left
+            where they are), reviewed there, and only then added to your library — so a card can
+            be culled before anything lands.
           </>
         ),
         body: (
@@ -260,8 +261,14 @@ const CHAPTERS: Chapter[] = [
             <h4>What happens, in order</h4>
             <ol>
               <li>
-                <strong>Copying.</strong> The files are read into staging. You can switch to another
-                tab meanwhile — the Import link keeps showing the progress.
+                <strong>Starting.</strong> One dialog decides the session's fate up front: copy
+                the photos to an import folder or leave them where they are, and whether that
+                folder stays as a backup. "What happens" on the dialog spells out all three
+                steps; nothing is asked later.
+              </li>
+              <li>
+                <strong>Copying.</strong> The files are copied into the import folder. You can
+                switch to another tab meanwhile — the Import link keeps showing the progress.
               </li>
               <li>
                 <strong>Duplicate check.</strong> "Already in library" means byte-identical; those
@@ -295,18 +302,23 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Adding.</strong> "Add N photos to library" copies the selection into your
                 library folder. It does not end the session: whatever you left unticked stays for
-                another day, so a big card can be culled a hundred photos at a time.{" "}
-                <strong>Discard session</strong> throws the rest away — photos already added stay in
-                your library.
+                another day, so a big card can be culled a hundred photos at a time.
+              </li>
+              <li>
+                <strong>Closing.</strong> <strong>Close session</strong> ends it: what you added
+                stays in your library, the rest goes the way you chose at the start — the import
+                folder stays as your backup, or is deleted with the photos you didn't add. Nothing
+                is asked; only when closing would delete copies of photos never added does the app
+                ask you to confirm. Your card or source folder is never touched.
               </li>
             </ol>
             <h4>Good to know</h4>
             <ul>
               <li>
                 <strong>A long copy doesn't have to run to the end.</strong>{" "}
-                <em>Stop &amp; keep copied</em> finishes the photos already on their way and hands
-                you the review for exactly those. Nothing is thrown away — that is what "Cancel"
-                and "Discard session" are for.
+                <em>Stop &amp; keep</em> finishes the photos already on their way and hands you
+                the review for exactly those. Nothing is thrown away — that is what "Cancel" and
+                "Close session" are for.
               </li>
               <li>
                 <strong>RAW+JPEG pairs</strong> shot together are detected. In merged view they act
@@ -1773,7 +1785,7 @@ const CHAPTERS: Chapter[] = [
                 while you look and return on any movement.
               </li>
               <li>
-                <strong>Focus</strong> (<kbd>F</kbd>, or View → Focus, <kbd>⌘F</kbd>) takes the
+                <strong>Focus</strong> (<kbd>F</kbd>, or View → Focus, <kbd>⇧⌘F</kbd>) takes the
                 whole screen: only the pages on black, nothing else; <kbd>F</kbd> or <kbd>Esc</kbd>{" "}
                 ends it. Focus mode is one switch for the whole app: in every other view it puts
                 the app's top bar away and leaves the rest - in the canvas editor and the photo
@@ -2158,11 +2170,17 @@ const CHAPTERS: Chapter[] = [
                   ),
                   does: "Select a range of photos — or clear the run if it was ticked",
                 },
+                {
+                  keys: <>Drag over the grid</>,
+                  does: "From a photo or from empty ground: select the photos inside the rectangle (Shift or ⌘ held adds them to the selection); a click on empty ground clears it",
+                },
                 { keys: <kbd>⌘A</kbd>, does: "Select every photo shown" },
                 {
                   keys: <kbd>Esc</kbd>,
                   does: "Clear the selection",
                 },
+                { keys: <kbd>⌘F</kbd>, does: "Jump into the search field (also View → Find)" },
+                { keys: <kbd>⌘,</kbd>, does: "Settings" },
                 { keys: <kbd>E</kbd>, does: "One photo selected: open it with the editor already open" },
                 {
                   keys: (
@@ -2331,7 +2349,7 @@ const CHAPTERS: Chapter[] = [
                 { keys: <kbd>P</kbd>, does: "Show / hide the edit panel, so the photo gets the whole window" },
                 {
                   keys: <kbd>F</kbd>,
-                  does: "Focus mode (also View → Focus, ⌘F) — the app's top bar put away, the editing tools stay; F or Esc brings it back",
+                  does: "Focus mode (also View → Focus, ⇧⌘F) — the app's top bar put away, the editing tools stay; F or Esc brings it back",
                 },
                 {
                   keys: <kbd>Esc</kbd>,
@@ -2386,7 +2404,7 @@ const CHAPTERS: Chapter[] = [
                 { keys: <kbd>Delete</kbd>, does: "Take the selected items off the page (the photos stay in the library)" },
                 {
                   keys: <kbd>F</kbd>,
-                  does: "Focus mode (also View → Focus, ⌘F) — the app's top bar put away, the tools stay; F or Esc brings it back",
+                  does: "Focus mode (also View → Focus, ⇧⌘F) — the app's top bar put away, the tools stay; F or Esc brings it back",
                 },
                 { keys: <kbd>Esc</kbd>, does: "Step out: end crop, end typing, clear the selection, leave the canvas" },
               ]}
@@ -2404,7 +2422,7 @@ const CHAPTERS: Chapter[] = [
                 },
                 { keys: <kbd>0</kbd>, does: "Fit the page again" },
                 { keys: <kbd>E</kbd>, does: "Edit this canvas (E in the editor brings you back)" },
-                { keys: <kbd>F</kbd>, does: "Focus mode (also View → Focus, ⌘F) — full screen, only the pages on black; F or Esc ends it" },
+                { keys: <kbd>F</kbd>, does: "Focus mode (also View → Focus, ⇧⌘F) — full screen, only the pages on black; F or Esc ends it" },
                 { keys: <kbd>Esc</kbd>, does: "Back to where the canvas was opened from" },
               ]}
             />

@@ -29,6 +29,8 @@ import { clearLastViewedImage, peekLastViewedImage } from "../utils/lastViewed";
 import { readScroll, useScrollMemory } from "../utils/scrollMemory";
 import { isSelectClick } from "../utils/selection";
 import { onlySelected, revealInScroller, useGridArrowKeys } from "../utils/gridKeys";
+import { useMarquee, type MarqueeRect } from "../utils/useMarquee";
+import type { ContextActions } from "./PhotoContextMenu";
 import { onThumbNudge } from "../utils/thumbNudge";
 
 interface Props {
@@ -38,6 +40,9 @@ interface Props {
   // Make this photo the whole selection - where the arrow keys move a single
   // selected photo to (see utils/gridKeys). Without it the arrows do nothing.
   onSelectOnly?: (id: string, index: number) => void;
+  // Replace the selection: what a rubber-band drag on empty ground builds
+  // (utils/useMarquee). Without it there is no rubber band.
+  onSetSelection?: (ids: string[]) => void;
   // A plain click normally opens the photo; selecting takes Cmd/Ctrl-click or
   // Shift-click (see utils/selection). Grids with nothing to open - the Trash
   // - set this so a plain click selects instead.
@@ -52,6 +57,9 @@ interface Props {
   // Right-click menu (Export / Save copy) on every tile; on by default. The
   // Trash turns it off - its photos are on their way out, not to be copied.
   contextMenu?: boolean;
+  // The page's actions for the right-click menu (rate, label, album, tag,
+  // trash); without them the menu offers only what the grid itself can do.
+  contextActions?: ContextActions;
 }
 
 // Short badge shown on every thumbnail so the file kind is obvious at a glance.
@@ -691,11 +699,13 @@ export function ThumbnailGrid({
   selectedIds,
   onToggleSelect,
   onSelectOnly,
+  onSetSelection,
   clickSelects,
   groupByDate,
   onRemove,
   removeTitle = "Remove",
   contextMenu = true,
+  contextActions,
 }: Props) {
   const navigate = useNavigate();
   const mergePairs = useMergePairs();
@@ -707,6 +717,10 @@ export function ThumbnailGrid({
   // look-ahead is counted in.
   const rowH = thumbPx(thumbSize);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // The outermost element of either layout (the sectioned timeline or the
+  // flat grid), for the rubber band; rootRef stays the timeline's alone, so
+  // the scroll memory and the scrubber keep their one meaning.
+  const gridRootRef = useRef<HTMLDivElement | null>(null);
   const sectionEls = useRef<Map<string, HTMLElement>>(new Map());
   const cardEls = useRef<Map<string, HTMLElement>>(new Map());
   // Once a photo is picked every tile grows a checkbox, so the rest of the
@@ -718,7 +732,13 @@ export function ThumbnailGrid({
   const { infoButton, overlay: infoOverlay } = usePhotoInfoCard(!selecting);
   // Right-click: Export / Save copy for the photo, or the whole selection when
   // the photo is part of it.
-  const { onContextMenu, overlay: menuOverlay } = usePhotoContextMenu(selectedIds, contextMenu);
+  const { onContextMenu, overlay: menuOverlay } = usePhotoContextMenu(selectedIds, {
+    enabled: contextMenu,
+    // A grid whose click selects (the Trash) has nothing to open.
+    open: clickSelects ? undefined : (id) => navigate(`/image/${id}`, { state: { imageIds: images.map((im) => im.id) } }),
+    edit: clickSelects ? undefined : (id) => navigate(`/image/${id}/edit`, { state: { imageIds: images.map((im) => im.id) } }),
+    actions: contextActions,
+  });
 
   // Coming back from the detail view: scroll the photo the user was looking
   // at back into view instead of landing at the top. The marker is one-shot -
@@ -796,6 +816,46 @@ export function ThumbnailGrid({
       (rootRef.current?.closest(".page-scroll") ?? rootRef.current?.closest(".page")) as HTMLElement | null;
   });
   useScrollMemory(scrollerRef, scrollKey, { restore: false, ready: hasImages });
+
+  // Rubber band: the cards are laid out by CSS, so their rectangles are read
+  // from the DOM - once, when the drag turns real, relative to the grid's root
+  // (both move together with the scroll). content-visibility: auto does not
+  // disturb them: a skipped card keeps its size from flex-basis and
+  // aspect-ratio.
+  const cardRects = useRef<{ id: string; left: number; top: number; right: number; bottom: number }[]>([]);
+  const cacheCardRects = useCallback(() => {
+    const root = gridRootRef.current;
+    if (!root) return;
+    const r = root.getBoundingClientRect();
+    const rects: typeof cardRects.current = [];
+    cardEls.current.forEach((el, id) => {
+      const c = el.getBoundingClientRect();
+      rects.push({ id, left: c.left - r.left, top: c.top - r.top, right: c.right - r.left, bottom: c.bottom - r.top });
+    });
+    cardRects.current = rects;
+  }, []);
+  const hitTest = useCallback((box: MarqueeRect) => {
+    const right = box.left + box.width;
+    const bottom = box.top + box.height;
+    const ids: string[] = [];
+    for (const c of cardRects.current) {
+      if (c.left < right && c.right > box.left && c.top < bottom && c.bottom > box.top) ids.push(c.id);
+    }
+    return ids;
+  }, []);
+  const getScroller = useCallback(
+    () =>
+      (gridRootRef.current?.closest(".page-scroll") ?? gridRootRef.current?.closest(".page")) as HTMLElement | null,
+    []
+  );
+  const { marquee } = useMarquee({
+    rootRef: gridRootRef,
+    getScroller,
+    hitTest,
+    onDragStart: cacheCardRects,
+    selectedIds,
+    onSetSelection,
+  });
   useLayoutEffect(() => {
     if (!restoring) return;
     // Still waiting for the photos themselves; nothing to scroll to yet.
@@ -905,9 +965,10 @@ export function ThumbnailGrid({
 
   if (!groupByDate) {
     return (
-      <div className={`thumbnail-grid${fadeClass}`}>
+      <div className={`thumbnail-grid${fadeClass}`} ref={gridRootRef}>
         {images.map((image, index) => renderCard(image, index))}
         <i className="grid-filler" aria-hidden />
+        {marquee}
         {infoOverlay}
         {menuOverlay}
       </div>
@@ -918,7 +979,13 @@ export function ThumbnailGrid({
   const sections = buildSections(images, granularity);
 
   return (
-    <div className={`timeline has-scrubber${fadeClass}`} ref={rootRef}>
+    <div
+      className={`timeline has-scrubber${fadeClass}`}
+      ref={(el) => {
+        rootRef.current = el;
+        gridRootRef.current = el;
+      }}
+    >
       {sections.map((section) => (
         <section
           key={section.label}
@@ -959,6 +1026,7 @@ export function ThumbnailGrid({
             : { label: s.label }
         )}
       />
+      {marquee}
       {infoOverlay}
       {menuOverlay}
     </div>

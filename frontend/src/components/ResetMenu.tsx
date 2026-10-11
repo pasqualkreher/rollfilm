@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type { BulkResetOptions } from "../api/types";
-import { useWait } from "../state/wait";
 import { IconChevronDown, IconRestore } from "./Icons";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
@@ -13,7 +12,7 @@ interface Props {
 
 // The resettable aspects, in the order they appear in the menu. `key` matches
 // the BulkResetOptions / server flag names; `edits`-ish keys re-render photos.
-const ASPECTS: { key: keyof BulkResetOptions; label: string }[] = [
+export const RESET_ASPECTS: { key: keyof BulkResetOptions; label: string }[] = [
   { key: "rating", label: "Stars" },
   { key: "color_label", label: "Colors" },
   { key: "tags", label: "Tags" },
@@ -27,7 +26,6 @@ const ASPECTS: { key: keyof BulkResetOptions; label: string }[] = [
 // (stars/colors/tags) is pre-checked as the common case; edits/albums are opt-in
 // because they re-render or unfile photos.
 export function ResetMenu({ count, onReset }: Props) {
-  const { withWait } = useWait();
   const [open, setOpen] = useState(false);
   // Nothing is pre-checked - the user opts into exactly which aspects to reset.
   const [checked, setChecked] = useState<Set<keyof BulkResetOptions>>(
@@ -72,18 +70,14 @@ export function ResetMenu({ count, onReset }: Props) {
     // Send explicit false for every aspect so the server's "default true"
     // metadata flags don't reset anything the user unticked.
     const opts: BulkResetOptions = {};
-    for (const { key } of ASPECTS) opts[key] = checked.has(key);
+    for (const { key } of RESET_ASPECTS) opts[key] = checked.has(key);
     setBusy(true);
-    // The menu has said what it had to: it closes with the confirmation, so
-    // the wait popup comes up over the grid and not over an open menu.
+    // The menu has said what it had to: it closes with the confirmation. The
+    // page runs the reset as a task in the title bar (counted down, with a
+    // Stop); this button only waits for it.
     setOpen(false);
     try {
-      // The app-wide wait popup blocks everything while the server resets and
-      // (for develop/geometry) re-renders the selected photos.
-      await withWait(
-        `Resetting ${count} photo${count === 1 ? "" : "s"}…`,
-        () => Promise.resolve(onReset(opts))
-      );
+      await onReset(opts);
     } finally {
       setBusy(false);
     }
@@ -104,7 +98,7 @@ export function ResetMenu({ count, onReset }: Props) {
         {open && (
           <div className="reset-menu-pop">
             <div className="reset-menu-list">
-              {ASPECTS.map(({ key, label }) => (
+              {RESET_ASPECTS.map(({ key, label }) => (
                 <label key={key} className="reset-menu-item">
                   <input type="checkbox" checked={checked.has(key)} onChange={() => toggle(key)} />
                   <span>{label}</span>

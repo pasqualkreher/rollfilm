@@ -34,6 +34,8 @@ import {
   type LayoutTile,
 } from "../utils/justifiedLayout";
 import { isSelectClick } from "../utils/selection";
+import { useMarquee } from "../utils/useMarquee";
+import type { ContextActions } from "./PhotoContextMenu";
 
 // Layout, constants and the scroll-window tracking are shared with the import
 // review's grid - see utils/justifiedLayout.ts. Only what this timeline does
@@ -56,6 +58,12 @@ interface Props {
   // Make this photo the whole selection - where the arrow keys move a single
   // selected photo to (see utils/gridKeys). Without it the arrows do nothing.
   onSelectOnly?: (id: string, index: number) => void;
+  // Replace the selection: what a rubber-band drag on empty ground builds
+  // (utils/useMarquee). Without it there is no rubber band.
+  onSetSelection?: (ids: string[]) => void;
+  // The page's actions for the right-click menu (rate, label, album, tag,
+  // trash); without them the menu offers only what the grid itself can do.
+  contextActions?: ContextActions;
   // The heading a photo belongs under; a run of equal ones is a section. The
   // month it was taken in unless the page sorts by something else.
   sectionLabel?: (image: LibraryIndexImage) => string;
@@ -77,6 +85,8 @@ export function VirtualTimeline({
   selectedIds,
   onToggleSelect,
   onSelectOnly,
+  onSetSelection,
+  contextActions,
   sectionLabel,
   resetKey,
 }: Props) {
@@ -102,9 +112,12 @@ export function VirtualTimeline({
   const { infoButton, overlay: infoOverlay } = usePhotoInfoCard(!selecting);
   // Right-click: Export / Save copy for the photo, or the whole selection when
   // the photo is part of it.
-  const { onContextMenu, overlay: menuOverlay } = usePhotoContextMenu(selectedIds);
-
   const allIds = useMemo(() => images.map((im) => im.id), [images]);
+  const { onContextMenu, overlay: menuOverlay } = usePhotoContextMenu(selectedIds, {
+    open: (id) => navigate(`/image/${id}`, { state: { imageIds: allIds } }),
+    edit: (id) => navigate(`/image/${id}/edit`, { state: { imageIds: allIds } }),
+    actions: contextActions,
+  });
   const { width, window: window_, scrollerRef, lastScrollRef } = useVirtualWindow(
     rootRef,
     images.length > 0,
@@ -283,6 +296,31 @@ export function VirtualTimeline({
     [scrollerRef]
   );
   const getSectionEl = useCallback((key: string) => sectionEls.current.get(key) ?? null, []);
+
+  // The tiles under a rubber band, from the layout model rather than the DOM:
+  // in root coordinates, and it knows the tiles that are not mounted too, so
+  // a band stretched by the autoscroll keeps selecting past the window.
+  const hitTest = useCallback(
+    (box: { left: number; top: number; width: number; height: number }) => {
+      if (!layout) return [];
+      const right = box.left + box.width;
+      const bottom = box.top + box.height;
+      const ids: string[] = [];
+      for (const section of layout.sections) {
+        if (section.top > bottom || section.top + section.height < box.top) continue;
+        for (const row of section.rows) {
+          const y = section.top + row.top;
+          if (y > bottom || y + row.height < box.top) continue;
+          for (const tile of row.tiles) {
+            if (tile.left < right && tile.left + tile.width > box.left) ids.push(tile.item.id);
+          }
+        }
+      }
+      return ids;
+    },
+    [layout]
+  );
+  const { marquee } = useMarquee({ rootRef, getScroller, hitTest, selectedIds, onSetSelection });
   // Identified by `key`, not by the month's name: a photo sitting out of date
   // order splits a month into two sections that are both called "June 2024",
   // and keying either map by the name drops one of them (see LayoutSection.key).
@@ -428,6 +466,7 @@ export function VirtualTimeline({
         );
       })}
 
+      {marquee}
       <TimelineScrubber
         getScroller={getScroller}
         getSectionEl={getSectionEl}

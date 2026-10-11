@@ -16,13 +16,14 @@ import { ExternalSources } from "../components/ExternalSources";
 import { ImportLibrary } from "../components/ImportLibrary";
 import { ImportSessions, closeSessionTitle, confirmCloseSession } from "../components/ImportSessions";
 import { ImportModeDialog } from "../components/ImportModeDialog";
+import { ImportSettingsDialog } from "../components/ImportSettingsPanel";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { ImportAlbumPicker } from "../components/ImportAlbumPicker";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "../components/AppDialogs";
-import { useWait } from "../state/wait";
+import { useTasks } from "../state/tasks";
 import { useMergePairs } from "../state/viewPrefs";
 import { formatEta } from "../utils/duration";
 import { modKeyLabel, takesTyping, useSelectionKeys } from "../utils/selection";
@@ -41,12 +42,14 @@ import {
   IconChevronDown,
   IconDuplicate,
   IconFolder,
+  IconGear,
   IconImage,
   IconBookmark,
   IconImport,
   IconLeave,
   IconMinus,
   IconPlus,
+  IconRotate,
   IconStop,
   IconX,
 } from "../components/Icons";
@@ -80,8 +83,8 @@ function findIncompletePairs(files: StagedFileOut[]): StagedFileOut[] {
   return missingHalf;
 }
 
-// The import always flows Choose → Review (staging) → Library. Showing the
-// three steps up front is what makes the staging area self-explanatory:
+// The import always flows Choose → Review (import folder) → Library. Showing
+// the three steps up front is what makes the import folder self-explanatory:
 // nothing reaches the library until step 3.
 function ImportSteps({ current }: { current: 1 | 2 }) {
   const steps = ["Choose photos", "Review & select", "Added to library"];
@@ -358,9 +361,9 @@ export function ImportWizard() {
   const immichMode = immich?.sync_mode ?? "manual";
 
   const mergePairs = useMergePairs();
-  // Declared up here because both the commit and the discard below wrap
-  // themselves in it.
-  const { withWait } = useWait();
+  // Declared up here because both the commit and the discard below run as
+  // tasks in the title bar.
+  const { runTask } = useTasks();
 
   // Patches that have been painted into the grid but whose request hasn't come
   // back yet (see updateStaged). A list poll in flight at that moment still
@@ -474,12 +477,11 @@ export function ImportWizard() {
   const targetAlbum = albums?.find((a) => a.id === targetAlbumId) ?? null;
 
   const commit = useMutation({
-    // Blocking wait overlay, like saving or resetting edits and like Discard:
-    // the commit moves every selected photo into the library and there is
-    // nothing sensible to do in this screen while that happens - least of all
-    // clicking the button again.
+    // Shown in the title bar's task dock while the commit moves every
+    // selected photo into the library; the button is off meanwhile
+    // (commit.isPending), so it cannot be clicked again.
     mutationFn: () =>
-      withWait("Adding photos to your library…", () =>
+      runTask({ kind: "plain", label: "Adding photos to your library…" }, () =>
         api.import.commit(
           sessionId!,
           uploadToImmich && immichConfigured,
@@ -508,7 +510,7 @@ export function ImportWizard() {
       let albumName: string | null = null;
       if (targetAlbum && added.length > 0) {
         try {
-          await withWait(`Adding photos to “${targetAlbum.name}”…`, () =>
+          await runTask({ kind: "plain", label: `Adding photos to “${targetAlbum.name}”…` }, () =>
             api.albums.addImages(
               targetAlbum.id,
               added.map((image) => image.id)
@@ -631,7 +633,7 @@ export function ImportWizard() {
   const discard = useMutation({
     // No folder flag: the server does what the session was started with (a
     // backup folder stays, any other import folder goes).
-    mutationFn: () => withWait("Closing this session…", () => api.import.discard(sessionId!)),
+    mutationFn: () => runTask({ kind: "plain", label: "Closing this session…" }, () => api.import.discard(sessionId!)),
     // Always reset locally, even if the delete itself failed (e.g. the
     // session was already committed/discarded) - the point of Discard is to
     // get back to a clean import screen, and a stale server-side session is
@@ -1170,6 +1172,7 @@ export function ImportWizard() {
   // unless Settings remember an answer. The dialog is a promise the choose
   // screen renders; it resolves null when the user cancels, and nothing is
   // read then.
+  const [importSettingsOpen, setImportSettingsOpen] = useState(false);
   const [modeAsk, setModeAsk] = useState<{
     defaultName: string;
     resolve: (choice: ImportChoice | null) => void;
@@ -1321,8 +1324,8 @@ export function ImportWizard() {
         <h2 className="section-title">Import photos</h2>
         <ImportSteps current={1} />
         <p className="import-intro">
-          <strong>Import</strong> copies photos into your library or adds them in place; you are
-          asked which. An <strong>external source</strong> shows a folder without copying.
+          Photos come in through an <strong>import session</strong>: pick a card or folder, review
+          the photos, and add the ones you want to your library.
         </p>
         <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} />
         <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
@@ -1340,12 +1343,22 @@ export function ImportWizard() {
             />
           )}
         </Presence>
+        <Presence open={importSettingsOpen} ms={MOTION.modal}>
+          <ImportSettingsDialog onClose={() => setImportSettingsOpen(false)} />
+        </Presence>
 
         <div className="import-panels">
-          <ImportSessions />
-
           <div className="import-panel import-panel--menu">
-            <h3 className="section-title">Import into library</h3>
+            <div className="import-panel-head">
+              <h3 className="section-title">Import photos</h3>
+              <button
+                className="btn btn-sm"
+                onClick={() => setImportSettingsOpen(true)}
+                title="What a new session does unless you say otherwise"
+              >
+                <IconGear size={13} /> Import settings…
+              </button>
+            </div>
             <p className="import-panel-desc">
               Bring photos from an SD card, camera, or folder into your library.
             </p>
@@ -1470,6 +1483,10 @@ export function ImportWizard() {
               <p className="import-panel-desc" style={{ color: "var(--danger)", marginTop: 12 }}>Upload failed: {uploadError}</p>
             )}
           </div>
+
+          <ImportSessions />
+
+          <h3 className="import-panels-heading">Other ways to add photos</h3>
 
           <ImportLibrary />
 
@@ -1750,7 +1767,7 @@ export function ImportWizard() {
               style={{ color: "var(--text-muted)" }}
               title="Change this under Settings → Immich integration → Sync mode"
             >
-              🔄 Immich full sync is on. Every imported photo is uploaded automatically.
+              <IconRotate size={13} /> Immich full sync is on. Every imported photo is uploaded automatically.
             </span>
           )}
           <ImportAlbumPicker
