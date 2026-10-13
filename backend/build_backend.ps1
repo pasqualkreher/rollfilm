@@ -59,7 +59,10 @@ $bytes = [System.IO.File]::ReadAllBytes($TmpZip)
 if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x50 -or $bytes[1] -ne 0x4B) {
     Write-Error "Downloaded exiftool file is not a zip (got HTML?)"
 }
-$Got = (Get-FileHash $TmpZip -Algorithm SHA256).Hash.ToLower()
+# .NET's own SHA-256: Get-FileHash is not loaded in every PowerShell the
+# build runs under (the Windows runner's shell has failed on it).
+$Sha = [System.Security.Cryptography.SHA256]::Create()
+$Got = -join ($Sha.ComputeHash([System.IO.File]::ReadAllBytes($TmpZip)) | ForEach-Object { $_.ToString("x2") })
 if ($Got -ne $EtSha.ToLower()) {
     Write-Error "exiftool checksum mismatch: expected $EtSha, got $Got"
 }
