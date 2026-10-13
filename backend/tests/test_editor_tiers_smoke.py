@@ -394,6 +394,13 @@ def test_a_native_settle_renders_at_the_on_screen_size_and_a_crop_keeps_its_budg
     half = (0.25, 0.25, 0.5, 0.5)
 
     def long_edge(crop=None, **kw) -> int:
+        # The native base is one slot: a speculative decode left running by
+        # an earlier test can take it between the warm-up and this render
+        # (seen on the slower CI runners), and the render then answers from
+        # the tier below, as it does in the app. Put it back right before
+        # each native render so the test measures the native path.
+        if kw.get("native"):
+            _warm_native(image)
         data = thumbnails.render_editor_preview_bytes(image, 0, crop, adj, **kw)
         return max(PILImage.open(BytesIO(data)).size)
 
