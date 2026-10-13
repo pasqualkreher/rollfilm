@@ -55,6 +55,14 @@ export const SCALAR_SPEC = {
   // Details
   sharpness: { def: 0, min: -100, max: 100 },
   sharpness_threshold: { def: 15, min: 0, max: 80 },
+  // The radius as a multiple of the size-dependent default (100 = as before)
+  // and how much of the sharpening is kept to edges (0 = everywhere).
+  sharpness_radius: { def: 100, min: 50, max: 300 },
+  sharpness_masking: { def: 0, min: 0, max: 100 },
+  // Purple and green fringes at high-contrast edges pulled toward their
+  // surroundings (develop_effects.defringe); 0 leaves the pixels alone.
+  defringe_purple: { def: 0, min: 0, max: 100 },
+  defringe_green: { def: 0, min: 0, max: 100 },
   clarity: { def: 0, min: -100, max: 100 },
   dehaze: { def: 0, min: -100, max: 100 },
   structure: { def: 0, min: -100, max: 100 },
@@ -664,6 +672,8 @@ export const SECTIONS: Section[] = [
     fields: [
       { key: "sharpness", label: "Sharpness" },
       { key: "sharpness_threshold", label: "Sharpness Threshold" },
+      { key: "sharpness_radius", label: "Sharpness Radius", format: (v: number) => `${(v / 100).toFixed(2)}×` },
+      { key: "sharpness_masking", label: "Sharpness Masking" },
       { key: "clarity", label: "Clarity", groupStart: true },
       { key: "dehaze", label: "Dehaze" },
       { key: "luma_noise_reduction", label: "Luminance NR", groupStart: true },
@@ -671,6 +681,8 @@ export const SECTIONS: Section[] = [
       { key: "color_noise_reduction", label: "Color NR" },
       { key: "chromatic_aberration_red_cyan", label: "Red–Cyan CA", groupStart: true },
       { key: "chromatic_aberration_blue_yellow", label: "Blue–Yellow CA" },
+      { key: "defringe_purple", label: "Defringe Purple" },
+      { key: "defringe_green", label: "Defringe Green" },
     ],
   },
   {
@@ -993,7 +1005,9 @@ export const MASK_SUBJECTS: { value: string; label: string }[] = [
   { value: "ground", label: "Ground" },
 ];
 
-const _MASK_LABEL: Record<SubMaskType, string> = {
+// What a mask of each kind is called - its row's name when it is made, and
+// the type beside a renamed one.
+export const MASK_TYPE_LABEL: Record<SubMaskType, string> = {
   radial: "Radial",
   linear: "Linear",
   brush: "Brush",
@@ -1055,7 +1069,7 @@ export function maskLimit(mask: MaskDef): SubMask | null {
   return mask.sub_masks[1] ?? null;
 }
 export function newMask(type: SubMaskType): MaskDef {
-  return { id: _uid(), name: _MASK_LABEL[type], visible: true, opacity: 100, invert: false, sub_masks: [newSubMask(type)], adjustments: {} };
+  return { id: _uid(), name: MASK_TYPE_LABEL[type], visible: true, opacity: 100, invert: false, sub_masks: [newSubMask(type)], adjustments: {} };
 }
 
 // ---- Masks vs. the crop ------------------------------------------------------
@@ -1224,6 +1238,49 @@ export interface GeometryEditState {
   perspH: number;
   perspV: number;
   distortion: number;
+}
+
+// One editor section back to its defaults, the rest of the edit untouched -
+// the reset icon on a section's header. Geometry (Transform) lives outside the
+// adjustments and is reset by the editor itself; the frame width and lens
+// switches that sit in Transform are reset here.
+export function resetGroup(a: Adjustments, group: string): Adjustments {
+  const d = defaultAdjustments();
+  const fieldsOf = (title: string) => (SECTIONS.find((s) => s.title === title)?.fields ?? []).map((f) => f.key);
+  const next: Adjustments = { ...a };
+  const take = (keys: readonly (keyof Adjustments)[]) => {
+    for (const k of keys) (next as Record<string, unknown>)[k] = (d as Record<string, unknown>)[k];
+  };
+  switch (group) {
+    case "transform":
+      take(["frame_width", ...LENS_KEYS]);
+      break;
+    case "filmsim":
+      take(["film_sim", "lut_intensity" as keyof Adjustments].filter((k) => k in d) as (keyof Adjustments)[]);
+      break;
+    case "basic":
+      take([...fieldsOf("Basic"), "tone_mapper", "raw_base"]);
+      break;
+    case "curves":
+      take(["point_curves", "parametric_curve", "curve_mode"]);
+      break;
+    case "color":
+      take([...fieldsOf("Color"), "hsl", "hsl_range", "color_grading", "color_calibration"]);
+      break;
+    case "details":
+      take(fieldsOf("Details"));
+      break;
+    case "effects":
+      take(fieldsOf("Effects"));
+      break;
+    case "masks":
+      take(["masks"]);
+      break;
+    case "retouch":
+      take(["spots"]);
+      break;
+  }
+  return next;
 }
 
 // Keyed by the accordion group id in PhotoEditor, plus the three sub-headings

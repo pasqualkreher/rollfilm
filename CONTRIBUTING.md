@@ -14,9 +14,11 @@ obviously-correct patches need no ceremony — just send them.
 **Response times vary.** This is spare-time work. An issue may sit for a week.
 It has not been ignored.
 
-**The photo editor is experimental.** Contributions there are welcome but the
-bar is different: it is explicitly a fun extra, not a Lightroom replacement, and
-big architectural work on it is unlikely to be merged.
+**The photo editor** is a full part of the app: masks, retouch, film looks and
+process versions that keep old edits pixel-stable. Changes to its maths go
+behind a new process version (see `develop.py`'s header and
+`docs/ARCHITECTURE.md`), and a pull request that changes how a stored edit
+renders needs a test pinning the old result.
 
 ## How this codebase is written
 
@@ -61,12 +63,45 @@ Backend on its own, when you are working on the API:
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-python run_server.py     # runs migrations, then serves on localhost
+pip install -r requirements.lock         # macOS
+# Linux / Windows: the lock pins CPU-only torch, which lives on PyTorch's index
+# pip install -r requirements.lock --extra-index-url https://download.pytorch.org/whl/cpu
+pip install --no-deps -e .
+PM_API_OPEN=1 python run_server.py       # runs migrations, then serves on localhost
 ```
 
 `PM_DATA_DIR` decides where the library and database live — point it somewhere
-throwaway rather than at a real photo library.
+throwaway rather than at a real photo library. `PM_API_OPEN=1` lets a backend
+started from the source tree take requests without the desktop app's per-launch
+token (the packaged backend ignores it).
+
+### Dependencies are pinned
+
+`backend/requirements.lock` pins every Python package, for every platform and
+for Python 3.11 and up: CI installs from it, the installer builds install from
+it, and `build_backend.sh` installs from it again before freezing, so a release
+bundles exactly what the tests ran against. `pyproject.toml` keeps only the
+lower bounds. The lock is made with [uv](https://docs.astral.sh/uv/), and the
+command is in its first lines:
+
+```bash
+cd backend
+uv pip compile pyproject.toml --all-extras --universal --python-version 3.11 \
+  --torch-backend cpu --emit-index-url -o requirements.lock
+```
+
+Run as it is, that keeps every pin and only adds what a new or changed
+dependency in `pyproject.toml` needs. To move a package on, add
+`--upgrade-package <name>` (or `--upgrade` for everything), then reinstall from
+the lock and run the full test suite before committing the two files together.
+`--torch-backend cpu` is why torch is pinned to the `+cpu` builds off macOS;
+`--universal` is why one file serves every platform.
+
+The exiftool the app bundles is pinned the same way: `ETVER_PINNED` and
+`ETSHA256_PINNED` in `backend/build_backend.sh`, both taken from
+<https://exiftool.org/checksums.txt> and changed together. A download whose
+SHA-256 does not match stops the build. (`build_backend.ps1`, the Windows
+build, does not check the hash yet.)
 
 Frontend on its own:
 
@@ -78,14 +113,17 @@ npm run dev
 
 ## Before you open a pull request
 
-Run what CI would run if there were CI:
+Run what CI runs (`.github/workflows/ci.yml`):
 
 ```bash
-cd backend  && pytest                    # 220+ tests, a few seconds
+cd backend  && pytest                    # 800+ tests, well under a minute
 cd frontend && npx tsc --noEmit && npm run build
 ```
 
 Both must be clean. A red test suite is the one thing guaranteed to stall a PR.
+CI additionally runs the backend suite on macOS and freezes the backend with
+PyInstaller to start it once (`backend-smoke`); a release is only built from a
+commit on which all of that passed.
 
 **Testing the UI is the maintainer's job.** Do not feel obliged to script a
 browser or record a video — a typecheck, a build and a clear description of what
@@ -93,8 +131,19 @@ you changed is enough. Say what you did and did not verify.
 
 ## Writing tests
 
-`backend/tests/` holds them. They run against an in-memory SQLite database and a
-`tmp_path` library, so they are fast and touch nothing real.
+`backend/tests/` holds them. They run against an in-memory (or `tmp_path`)
+SQLite database and a `tmp_path` library, so they are fast and touch nothing
+real. `test_api_flows.py` shows how to drive the real app over HTTP with
+`TestClient` and an overridden `get_db`.
+
+**Schema changes go through Alembic** (`backend/app/db/migrations/versions/`),
+never `create_all`. `test_migrations.py` upgrades an empty database from the
+first revision to head and compares the result with the models (tables,
+columns, nullability), steps the newest revisions down and up again, and
+upgrades a database from about ten revisions back with a photo in it. So a
+model column without a migration, a migration the model does not mirror, a
+second head or a downgrade that does not work fails the suite. It reads the
+revisions from the folder; a new migration needs no change to the test.
 
 Test what a user would notice, and name it that way. The existing names are
 sentences — `test_a_file_renamed_in_finder_is_followed_not_deleted`,

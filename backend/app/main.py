@@ -1,9 +1,13 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     albums,
     canvases,
+    develop_presets,
+    edit_snapshots,
     images,
     import_,
     maintenance,
@@ -31,12 +35,26 @@ from app.services.idle_reaper import start_idle_reaper
 from app.services.hashing import warm_phash_in_background
 from app.services.immich_sync import start_background_immich_sync
 from app.services.maintenance import start_background_sync
+from app.services.db_snapshots import start_background_snapshot
 from app.services.membership_tags import sync_membership_tags
 from app.services.sources import scan_all_sources
 from app.services.trash import start_background_purge
 from app.workers.queue import schedule_embedding_backfill
 
-app = FastAPI(title="Rollfilm API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # The startup and shutdown work stays in the two plain functions below
+    # (tests call on_shutdown directly). They run synchronously on the event
+    # loop, exactly as the deprecated @app.on_event hooks ran them, so nothing
+    # serves a request before startup is done and shutdown still runs before
+    # uvicorn re-raises SIGTERM.
+    on_startup()
+    yield
+    on_shutdown()
+
+
+app = FastAPI(title="Rollfilm API", lifespan=lifespan)
 
 # Added before CORS so CORS stays the outer layer: it still answers preflights
 # itself and puts its headers on a 401 too.
@@ -53,6 +71,8 @@ app.add_middleware(
 )
 
 app.include_router(images.router)
+app.include_router(edit_snapshots.router)
+app.include_router(develop_presets.router)
 app.include_router(albums.router)
 app.include_router(canvases.router)
 app.include_router(smart_albums.router)
@@ -65,7 +85,6 @@ app.include_router(tags.router)
 app.include_router(stats.router)
 
 
-@app.on_event("startup")
 def on_startup() -> None:
     # Table schema lives in Alembic migrations; the sqlite-vec virtual table
     # is bootstrapped here since it isn't a normal SQLAlchemy-managed table.
@@ -99,6 +118,8 @@ def on_startup() -> None:
     # database to library") now that the folder is selected/confirmed -
     # backgrounded like the scans.
     start_background_sync()
+    # The day's copy of the catalog database (services/db_snapshots).
+    start_background_snapshot()
     # Permanently delete photos that sat in the Trash longer than the retention
     # configured in Settings (default 14 days, 0 = keep forever). Backgrounded
     # for the same reason as the scans.
@@ -152,7 +173,6 @@ def on_startup() -> None:
     start_idle_reaper()
 
 
-@app.on_event("shutdown")
 def on_shutdown() -> None:
     # The exiftool -stay_open helpers do not exit when the backend does: the
     # bundled exiftool sleeps and re-reads its closed stdin forever, so each

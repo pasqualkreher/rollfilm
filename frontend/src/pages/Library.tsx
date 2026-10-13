@@ -5,9 +5,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { CANCELLED_NOTE, pairUnits } from "../utils/batchUnits";
 import { withoutMembershipNames } from "../utils/autoTags";
+import { bulkChangeLabel } from "../utils/undoLabels";
 import { useAppDialogs } from "../components/AppDialogs";
 import type {
   BulkResetOptions,
+  Flag,
   ColorLabel,
   ImageOut,
   LibraryFilters,
@@ -18,6 +20,8 @@ import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { VirtualTimeline } from "../components/VirtualTimeline";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
+import { FlagPicker } from "../components/FlagPicker";
+import { useSelectionExport } from "../components/SelectionExport";
 import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
@@ -46,6 +50,7 @@ import { ActionBarMessages } from "../components/ActionBarMessages";
 type CopyOpts = { quality: number; maxSize: number | null };
 
 import { errorText, failureReason } from "../utils/apiError";
+import { plural } from "../utils/plural";
 
 
 // The section headings of the orders that are not by date: the name's first
@@ -157,12 +162,30 @@ function LibraryPage() {
   const setDateFrom = (v: string | null) => setParams({ from: v });
   const dateTo = searchParams.get("to");
   const setDateTo = (v: string | null) => setParams({ to: v });
+  // Only the photos whose file the sync could not find (Settings → Library →
+  // Missing files → Show in Library). Cleared from its own chip in the bar.
+  const missingOnly = searchParams.get("missing") === "1";
+  const setMissingOnly = (v: boolean) => setParams({ missing: v ? "1" : null });
+  // The culling flag filter: "pick", "reject", "unflagged" or "" for any.
+  const flagFilter = searchParams.get("flag") ?? "";
+  const setFlagFilter = (v: string) => setParams({ flag: v || null });
+  // One day of imports ("YYYY-MM-DD"): the Import page's "Show in Library".
+  const importedDay = searchParams.get("imported") ?? "";
+  const setImportedDay = (v: string) => setParams({ imported: v || null });
+  // A country (reverse-geocoded), or "__none__" for photos without a place:
+  // Statistics' "Show in library" and the map land here.
+  const country = searchParams.get("country") ?? "";
+  const setCountry = (v: string) => setParams({ country: v || null });
+  const photoState = searchParams.get("state") ?? "";
+  const setPhotoState = (v: string) => setParams({ state: v || null });
   // In the URL like the filters, so it survives the trip into a photo and back.
   const sortParam = searchParams.get("sort");
   const sort: SortKey = isSortKey(sortParam) ? sortParam : "newest";
   const setSort = (v: SortKey) => setParams({ sort: v === "newest" ? null : v });
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Export for the selection: the bar's button, the dialog, ⇧⌘E.
+  const selectionExport = useSelectionExport(Array.from(selected));
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
@@ -203,7 +226,7 @@ function LibraryPage() {
     setBarError(null);
   }
 
-  const { runTask, trackRenders, trackCopyJob, runBatches, hasTask } = useTasks();
+  const { runTask, trackRenders, trackCopyJob, runBatches, hasTask, pushUndo } = useTasks();
   // Every bulk action of this page runs as one task in the title bar, counted
   // down there with a Stop, and one at a time: the develop picker is off while
   // one runs, and a second one started regardless is refused (TaskBusyError).
@@ -238,6 +261,11 @@ function LibraryPage() {
     // through the end of the "to" day.
     date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
     date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
+    missing: missingOnly || undefined,
+    flag: flagFilter || undefined,
+    imported: importedDay || undefined,
+    country: country || undefined,
+    state: photoState || undefined,
   };
 
   // Camera/lens/focal/region dropdown options, cross-filtered against the
@@ -427,12 +455,27 @@ function LibraryPage() {
       void applyBulk({
         color_label: selectionSharedMeta(images ?? [], selected).colorLabel === label ? "none" : label,
       }),
+    // P / X set the flag, U takes it off; the key of the flag the selection
+    // already has takes it off too.
+    onFlag: (flag) =>
+      void applyBulk({ flag: flag && selectionSharedMeta(images ?? [], selected).flag === flag ? "" : flag }),
     onDelete: () => void deleteSelected(),
+    onExport: () => selectionExport.open(),
   });
 
-  async function applyBulk(patch: { rating?: number; color_label?: ColorLabel }, target: Iterable<string> = selected) {
+  async function applyBulk(
+    patch: { rating?: number; color_label?: ColorLabel; flag?: Flag | "" },
+    target: Iterable<string> = selected,
+    undoable = true
+  ) {
     const ids = new Set(target);
     if (ids.size === 0) return;
+    // What the photos had before, for the Undo chip: the inverse is one
+    // bulk update per distinct previous value.
+    const before = (images ?? []).filter((im) => ids.has(im.id)).map((im) => ({ ...im }));
+    // What the tiles get: the flag "" (taken off) is null on a tile.
+    const { flag: flagPatch, ...restPatch } = patch;
+    const tilePatch = flagPatch === undefined ? restPatch : { ...restPatch, flag: (flagPatch || null) as Flag | null };
     // When pairs are merged the grid only shows the JPEG, so fan the change out
     // to each hidden RAW partner too.
     // Onto the tiles slice by slice, without waiting for the whole index to
@@ -441,7 +484,7 @@ function LibraryPage() {
     const show = (changed: Iterable<string>) => {
       const set = new Set(changed);
       queryClient.setQueriesData<{ images: LibraryIndexImage[] }>({ queryKey: ["images", "index"] }, (old) =>
-        old ? { ...old, images: old.images.map((im) => (set.has(im.id) ? { ...im, ...patch } : im)) } : old
+        old ? { ...old, images: old.images.map((im) => (set.has(im.id) ? { ...im, ...tilePatch } : im)) } : old
       );
     };
     try {
@@ -454,6 +497,25 @@ function LibraryPage() {
         await batch("Updating photos…", Array.from(ids), async (slice) => {
           await api.images.bulkUpdate(slice, patch);
           show(slice);
+        });
+      }
+      if (undoable && before.length > 0) {
+        pushUndo({
+          label: bulkChangeLabel(patch, ids.size),
+          undo: async () => {
+            const groups = new Map<string, { ids: string[]; patch: typeof patch }>();
+            for (const im of before) {
+              const inv: typeof patch = {};
+              if (patch.rating !== undefined) inv.rating = im.rating;
+              if (patch.color_label !== undefined) inv.color_label = im.color_label;
+              if (patch.flag !== undefined) inv.flag = im.flag ?? "";
+              const key = JSON.stringify(inv);
+              const g = groups.get(key) ?? { ids: [], patch: inv };
+              g.ids.push(im.id);
+              groups.set(key, g);
+            }
+            for (const g of groups.values()) await applyBulk(g.patch, g.ids, false);
+          },
         });
       }
     } finally {
@@ -511,6 +573,17 @@ function LibraryPage() {
         }
       );
       const gone = new Set(cancelled ? done : ids);
+      if (!cancelled) {
+        pushUndo({
+          label: `${ids.length === 1 ? "1 photo" : `${ids.length} photos`} moved to Trash`,
+          undo: async () => {
+            await api.images.restoreFromTrash(ids);
+            queryClient.invalidateQueries({ queryKey: ["images"] });
+            queryClient.invalidateQueries({ queryKey: ["trash"] });
+            queryClient.invalidateQueries({ queryKey: ["tags"] });
+          },
+        });
+      }
       // One photo deleted (culling from the keyboard): the selection moves on
       // to its neighbour instead of ending there.
       if (!cancelled && nextAfterDelete) selectOnly(nextAfterDelete.id, nextAfterDelete.index);
@@ -541,7 +614,7 @@ function LibraryPage() {
       const { done, cancelled } = await batch("Tagging photos…", target, (ids) =>
         api.images.bulkAddTags(ids, [tag])
       );
-      setDevelopMsg(`Added tag “${tag}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
+      setDevelopMsg(`Added tag “${tag}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
@@ -571,7 +644,7 @@ function LibraryPage() {
     const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
     setAlbumMsg(
       ok
-        ? { text: `Added ${takeAddedCount()} photo(s) to ${what}.${cancelNote}`, error: false }
+        ? { text: `Added ${plural(takeAddedCount(), "photo")} to ${what}.${cancelNote}`, error: false }
         : { text: `Could not add to ${what}.`, error: true },
       // A failure stays until it is dismissed or the next action runs.
       { keep: !ok }
@@ -600,6 +673,7 @@ function LibraryPage() {
   const contextActions: ContextActions = {
     onRate: (ids, rating) => applyBulk({ rating }, ids),
     onColor: (ids, label) => applyBulk({ color_label: label }, ids),
+    onFlag: (ids, flag) => applyBulk({ flag }, ids),
     onAddToAlbum: (ids, albumId) => addSelectedToAlbum(albumId, ids),
     onAddToCanvas: (ids, canvasId) => addSelectedToCanvas(canvasId, ids),
     onAddTag: (ids, name) => addTagToSelected(name, ids),
@@ -621,20 +695,6 @@ function LibraryPage() {
     onDelete: (ids) => deleteSelected(ids),
     meta: (ids) => selectionSharedMeta(images ?? [], new Set(ids)),
   };
-
-  // Counts the selection, not the ids actually sent: merged view silently adds
-  // each shot's RAW partner too, and reporting that larger number would look
-  // like a bug to someone who selected 3 photos. Mirrors the tag note's phrasing.
-  function reportAlbumAdd({ name, ok }: { name: string; ok: boolean }) {
-    const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
-    setAlbumMsg(
-      ok
-        ? { text: `Added ${takeAddedCount()} photo(s) to “${name}”.${cancelNote}`, error: false }
-        : { text: `Could not add to “${name}”.`, error: true },
-      // A failure stays until it is dismissed or the next action runs.
-      { keep: !ok }
-    );
-  }
 
   async function resetSelected(opts: BulkResetOptions, target: string[] = Array.from(selected)) {
     if (target.length === 0) return;
@@ -670,8 +730,8 @@ function LibraryPage() {
     if (
       editedCount > 0 &&
       !(await dialogs.confirm({
-        title: `Auto-develop ${target.length} photo(s)?`,
-        message: `This replaces the existing edits of ${editedCount} photo(s).`,
+        title: `Auto-develop ${plural(target.length, "photo")}?`,
+        message: `This replaces the existing edits of ${plural(editedCount, "photo")}.`,
         confirmLabel: "Auto-develop",
       }))
     )
@@ -689,8 +749,8 @@ function LibraryPage() {
       const skipped = results.reduce((n, r) => n + r.skipped, 0);
       setDevelopMsg(
         (skipped > 0
-          ? `Auto-developed ${applied} photo(s). Skipped ${skipped} with no similar edits to learn from.`
-          : `Auto-developed ${applied} photo(s).`) + (cancelled ? CANCELLED_NOTE : "")
+          ? `Auto-developed ${plural(applied, "photo")}. Skipped ${skipped} with no similar edits to learn from.`
+          : `Auto-developed ${plural(applied, "photo")}.`) + (cancelled ? CANCELLED_NOTE : "")
       );
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -714,8 +774,8 @@ function LibraryPage() {
     if (
       editedCount > 0 &&
       !(await dialogs.confirm({
-        title: `Apply preset “${name}” to ${target.length} photo(s)?`,
-        message: `This replaces the existing edits of ${editedCount} photo(s).`,
+        title: `Apply preset “${name}” to ${plural(target.length, "photo")}?`,
+        message: `This replaces the existing edits of ${plural(editedCount, "photo")}.`,
         confirmLabel: "Apply preset",
       }))
     )
@@ -728,7 +788,7 @@ function LibraryPage() {
       const { done, cancelled } = await batch("Applying preset…", target, (ids) =>
         api.images.bulkDevelop(ids, look)
       );
-      setDevelopMsg(`Applied preset “${name}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
+      setDevelopMsg(`Applied preset “${name}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
       // The pictures render in the background: the title bar counts them down.
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -799,8 +859,8 @@ function LibraryPage() {
       const updated = await api.images.setImmichSync(target, enabled);
       setImmichMsg(
         enabled
-          ? `${updated.length} photo(s) marked for Immich sync. Uploading in the background.`
-          : `Stopped syncing ${updated.length} photo(s) to Immich.`
+          ? `${plural(updated.length, "photo")} marked for Immich sync. Uploading in the background.`
+          : `Stopped syncing ${plural(updated.length, "photo")} to Immich.`
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
     } catch (e) {
@@ -825,6 +885,7 @@ function LibraryPage() {
   return (
     <div className="page page-timeline">
       {pairDeleteDialog}
+      {selectionExport.dialog}
       <Presence open={copyPrompt !== null} ms={MOTION.modal}>
         {copyPrompt && (
           <SaveCopyDialog
@@ -888,6 +949,65 @@ function LibraryPage() {
         dateTo={dateTo}
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
+        flag={flagFilter}
+        onFlag={setFlagFilter}
+        photoState={photoState}
+        onPhotoState={setPhotoState}
+        extra={
+          <>
+            {missingOnly && (
+              <button
+                type="button"
+                className="tag-filter-btn active"
+                onClick={() => setMissingOnly(false)}
+                title="Showing only the photos whose file was not found. Click to show the whole library again."
+              >
+                <span className="tag-filter-btn-label">Missing files</span>
+                <span className="tag-filter-caret">
+                  <IconX size={11} />
+                </span>
+              </button>
+            )}
+            {country && (
+              <button
+                type="button"
+                className="tag-filter-btn active"
+                onClick={() => setCountry("")}
+                title="Showing only the photos from this country. Click to show the whole library again."
+              >
+                <span className="tag-filter-btn-label">{country === "__none__" ? "No location" : country}</span>
+                <span className="tag-filter-caret">
+                  <IconX size={11} />
+                </span>
+              </button>
+            )}
+            {importedDay && (
+              <button
+                type="button"
+                className="tag-filter-btn active"
+                onClick={() => setImportedDay("")}
+                title="Showing only the photos imported on this day. Click to show the whole library again."
+              >
+                <span className="tag-filter-btn-label">Imported {importedDay}</span>
+                <span className="tag-filter-caret">
+                  <IconX size={11} />
+                </span>
+              </button>
+            )}
+            {/* The rejects on screen, to the Trash in one go: what the reject
+                flag is for. The same confirmation as any delete. */}
+            {flagFilter === "reject" && orderedImages.length > 0 && !q && (
+              <button
+                type="button"
+                className="btn btn-sm quiet-danger"
+                onClick={() => void deleteSelected(orderedImages.map((im) => im.id))}
+                title="Move every rejected photo shown here to the Trash"
+              >
+                Trash {orderedImages.length} rejected
+              </button>
+            )}
+          </>
+        }
         sort={
           // Search results are ranked by how well they match, so there the
           // control says so and rests - in place, rather than disappearing.
@@ -937,8 +1057,12 @@ function LibraryPage() {
                 right of the line. */}
             <span className="bar-sep" aria-hidden />
             <div className="control-group">
+              <FlagPicker value={sharedMeta.flag} onChange={(f) => applyBulk({ flag: f })} />
               <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
               <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
+            </div>
+            <div className="control-group">
+              {selectionExport.button}
             </div>
             <div className="control-group">
               <BulkTagInput onAdd={addTagToSelected} />

@@ -1,3 +1,4 @@
+import { plural } from "../utils/plural";
 // Deleting means two different things (mirroring the backend's bulk-delete):
 // managed photos move to the in-app Trash and can be restored; photos indexed
 // in place from an external folder are removed from the library only - their
@@ -18,15 +19,15 @@ export function deleteConfirmMessage(
   const parts: string[] = [];
   if (managed > 0) {
     parts.push(
-      `${managed} photo(s) go to the Trash and can be restored.`
+      `${plural(managed, "photo")} go to the Trash and can be restored.`
     );
   }
   if (referenced > 0) {
     parts.push(
-      `${referenced} photo(s) from external sources are removed from the library only. The files stay.`
+      `${plural(referenced, "photo")} from external sources are removed from the library only. The files stay.`
     );
   }
-  return `Delete ${images.length - hiddenPaired} photo(s)${pairSuffix}?\n\n${parts.join("\n")}`;
+  return `Delete ${plural(images.length - hiddenPaired, "photo")}${pairSuffix}?\n\n${parts.join("\n")}`;
 }
 
 // The line the delete confirmations add when some of the photos sit in an

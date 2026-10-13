@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { api, bumpThumbnailCacheBust } from "../api/client";
 import type { ImmichSyncMode, ImmichTestResult, TagUsage } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
@@ -36,6 +37,7 @@ import {
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { Spinner } from "../components/Spinner";
+import { plural } from "../utils/plural";
 
 // localStorage key for the self-calibrating rebuild rate. ".v2" = the
 // parallelised rebuild; the old sequential key's rate would overestimate ~3x.
@@ -94,6 +96,18 @@ function tabOfSection(title: string): string {
 // ---- Shared building blocks so every section is styled the same way -------
 
 // A status/result line (muted, or red when it's an error).
+function formatBytes(n: number): string {
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatSnapshotDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+}
+
 function Note({ children, error }: { children: ReactNode; error?: boolean }) {
   return <p className={`settings-note${error ? " settings-note--error" : ""}`}>{children}</p>;
 }
@@ -371,6 +385,46 @@ export function Settings() {
   // Result summaries auto-dismiss after a moment (a bit longer than the plain
   // "Saved." flags - there is more to read).
   const [syncResult, setSyncResult] = useTransientMessage(8000);
+  const navigate = useNavigate();
+  // Photos whose file the sync could not find, and whether the last sync
+  // stopped because too many were missing at once.
+  const { data: missingFiles } = useQuery({
+    queryKey: ["missing-files"],
+    queryFn: () => api.maintenance.missingFiles(),
+  });
+  // Copies of the catalog database: listed, taken on request, one marked to
+  // be swapped in on the next start.
+  const { data: dbSnapshots } = useQuery({
+    queryKey: ["db-snapshots"],
+    queryFn: () => api.maintenance.dbSnapshots(),
+  });
+  const [snapshotNote, setSnapshotNote] = useTransientMessage(8000);
+  const takeSnapshot = useMutation({
+    mutationFn: () => api.maintenance.takeDbSnapshot(),
+    onSuccess: (entry) => {
+      setSnapshotNote(`Snapshot written: ${entry.name}`);
+      queryClient.invalidateQueries({ queryKey: ["db-snapshots"] });
+    },
+    onError: (e: Error) => setSnapshotNote(e.message),
+  });
+  const restoreSnapshot = useMutation({
+    mutationFn: (name: string) => api.maintenance.restoreDbSnapshot(name),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["db-snapshots"] }),
+    onError: (e: Error) => setSnapshotNote(e.message),
+  });
+  const cancelRestoreSnapshot = useMutation({
+    mutationFn: () => api.maintenance.cancelDbSnapshotRestore(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["db-snapshots"] }),
+  });
+  const removeMissing = useMutation({
+    mutationFn: () => api.maintenance.removeMissing(),
+    onSuccess: ({ removed }) => {
+      setSyncResult(`Removed ${removed} ${removed === 1 ? "entry" : "entries"} of photos whose files were not found.`);
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["missing-files"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+    },
+  });
   const [rebuildResult, setRebuildResult] = useTransientMessage(8000);
   const [repairDatesResult, setRepairDatesResult] = useTransientMessage(8000);
   const [restoreConfirmation, setRestoreConfirmation] = useState("");
@@ -592,25 +646,36 @@ export function Settings() {
         return;
       }
       recordRate("pm.est.sync", (Date.now() - ctx.startedAt) / 1000, photoCount ?? 0);
+      queryClient.invalidateQueries({ queryKey: ["missing-files"] });
+      if (result.too_many_missing > 0) {
+        setSyncResult(
+          `${result.too_many_missing} files were not found at once - more than the sync marks on its own, so nothing was changed. ` +
+            "Is the library drive mounted and the folder where it was? Then sync again."
+        );
+        return;
+      }
       const parts = [
-        `Removed ${result.removed_missing_files} entr${result.removed_missing_files === 1 ? "y" : "ies"} for files no longer on disk`,
-        `removed ${result.orphan_thumbnails_removed} unused thumbnail folder(s)`,
+        `${result.missing_files} ${result.missing_files === 1 ? "file" : "files"} not found and marked (${result.missing_total} in all)`,
+        `removed ${plural(result.orphan_thumbnails_removed, "unused thumbnail folder")}`,
       ];
+      if (result.recovered_files > 0) {
+        parts.push(`${result.recovered_files} missing ${result.recovered_files === 1 ? "file is" : "files are"} back`);
+      }
       if (result.renamed_files_followed > 0) {
         // Worth its own sentence: the photos kept their stars, tags and edits
         // instead of being dropped, which is the opposite of what the first
         // number would otherwise suggest happened to them.
         parts.push(
-          `followed ${result.renamed_files_followed} renamed or moved file(s)`
+          `followed ${plural(result.renamed_files_followed, "renamed or moved file")}`
         );
       }
       if (result.thumbnails_queued > 0) {
         parts.push(
-          `${result.thumbnails_queued} missing thumbnail(s) are being rebuilt in the background`
+          `${plural(result.thumbnails_queued, "missing thumbnail")} ${result.thumbnails_queued === 1 ? "is" : "are"} being rebuilt in the background`
         );
       }
       setSyncResult(
-        `${parts.join(", ")}. Found ${result.untracked_files_found} file(s) in the library folder that are not imported yet.`
+        `${parts.join(", ")}. Found ${plural(result.untracked_files_found, "file")} in the library folder that are not imported yet.`
       );
       // Stale browser-cached thumbnails (e.g. for re-created derivatives) must
       // reload, not be served from cache.
@@ -639,13 +704,13 @@ export function Settings() {
     onMutate: () => ({ startedAt: Date.now() }),
     onSuccess: (result, _vars, ctx) => {
       if (result.cancelled) {
-        setRebuildResult(`Stopped after ${result.rebuilt} photo(s). The rest keep their old thumbnails.`);
+        setRebuildResult(`Stopped after ${plural(result.rebuilt, "photo")}. The rest keep their old thumbnails.`);
         bumpThumbnailCacheBust();
         queryClient.invalidateQueries({ queryKey: ["images"] });
         return;
       }
       recordRate(REBUILD_EST_KEY, (Date.now() - ctx.startedAt) / 1000, result.rebuilt);
-      setRebuildResult(`Rebuilt thumbnails and previews for ${result.rebuilt} photo(s).`);
+      setRebuildResult(`Rebuilt thumbnails and previews for ${plural(result.rebuilt, "photo")}.`);
       // Bump the cache-bust so the freshly rebuilt (e.g. higher-res) images
       // actually reload instead of being served from the browser cache.
       bumpThumbnailCacheBust();
@@ -721,10 +786,10 @@ export function Settings() {
     onSuccess: (result) => {
       setRepairDatesResult(
         result.cancelled
-          ? `Stopped after ${result.checked} photo(s); ${result.fixed} corrected so far.`
+          ? `Stopped after ${plural(result.checked, "photo")}; ${result.fixed} corrected so far.`
           : result.fixed > 0
-          ? `Corrected the capture date of ${result.fixed} photo(s) (${result.checked} checked). The timeline now sorts them correctly.`
-          : `All ${result.checked} photo(s) already have the correct capture date.`
+          ? `Corrected the capture date of ${plural(result.fixed, "photo")} (${result.checked} checked). The timeline now sorts them correctly.`
+          : `All ${plural(result.checked, "photo")} already have the correct capture date.`
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
     },
@@ -745,7 +810,7 @@ export function Settings() {
         () => api.maintenance.restore(restoreFile!, restoreConfirmation)
       ),
     onSuccess: (result) => {
-      setRestoreResult(`Restored ${result.images_restored} photo(s) and ${result.albums_restored} album(s).`);
+      setRestoreResult(`Restored ${plural(result.images_restored, "photo")} and ${plural(result.albums_restored, "album")}.`);
       setRestoreConfirmation("");
       setRestoreFile(null);
       if (restoreFileInputRef.current) restoreFileInputRef.current.value = "";
@@ -1495,8 +1560,9 @@ export function Settings() {
       <Section {...sectionProps("Library maintenance")}>
         <div className="settings-block">
           <Desc>
-            Compares the database with the library folder on disk. Removes entries whose files are
-            gone, cleans up unused thumbnails and regenerates missing ones in the background.
+            Compares the database with the library folder on disk. Follows files renamed or moved
+            in Finder, marks the ones it cannot find (nothing is removed), cleans up unused
+            thumbnails and regenerates missing ones in the background.
           </Desc>
           <div className="maintenance-run">
             <button className="btn" onClick={() => sync.mutate()} disabled={syncRunning}>
@@ -1507,6 +1573,54 @@ export function Settings() {
             )}
           </div>
           {syncResult && <Note>{syncResult}</Note>}
+        </div>
+
+        <div className="settings-block">
+          <Desc>
+            Photos whose file was not found keep their stars, tags, albums and edits and show a{" "}
+            <em>Missing</em> badge. A sync that finds the file again clears it. Remove the entries
+            only when the files are gone for good.
+          </Desc>
+          <div className="maintenance-run">
+            <span className="maintenance-eta">
+              {missingFiles
+                ? missingFiles.count === 0
+                  ? "No missing files."
+                  : `${missingFiles.count} ${missingFiles.count === 1 ? "photo" : "photos"} with a missing file.`
+                : ""}
+            </span>
+            <button
+              className="btn"
+              disabled={!missingFiles || missingFiles.count === 0}
+              onClick={() => navigate("/?missing=1")}
+            >
+              Show in Library
+            </button>
+            <button
+              className="btn quiet-danger"
+              disabled={!missingFiles || missingFiles.count === 0 || removeMissing.isPending}
+              onClick={async () => {
+                if (!missingFiles) return;
+                const n = missingFiles.count;
+                const ok = await dialogs.confirm({
+                  title: "Remove the missing photos' entries?",
+                  message: `${n} ${n === 1 ? "entry" : "entries"} with stars, tags, albums and edits will be removed from the library. The files are not on disk, so nothing is deleted there. This cannot be undone.`,
+                  confirmLabel: "Remove entries",
+                  danger: true,
+                });
+                if (ok) removeMissing.mutate();
+              }}
+            >
+              Remove entries…
+            </button>
+          </div>
+          {missingFiles && missingFiles.sync_aborted_missing > 0 && (
+            <Note error>
+              The last sync stopped: {missingFiles.sync_aborted_missing} files were not found at once.
+              Check that the library drive is mounted and the folder is where it was, then sync
+              again.
+            </Note>
+          )}
         </div>
 
         <div className="settings-block">
@@ -1550,8 +1664,72 @@ export function Settings() {
 
         <div className="settings-block">
           <Desc>
+            Rollfilm keeps copies of the catalog database - stars, tags, albums, canvases and edits,
+            not the photos: one before every update that changes its layout, one a day (the last
+            seven), and one whenever you ask. Restoring swaps the copy in the next time Rollfilm
+            starts; the database it replaces is kept beside it.
+          </Desc>
+          <div className="maintenance-run">
+            <button className="btn" onClick={() => takeSnapshot.mutate()} disabled={takeSnapshot.isPending}>
+              {takeSnapshot.isPending ? "Writing…" : "Snapshot now"}
+            </button>
+            {dbSnapshots && <span className="maintenance-eta">{dbSnapshots.folder}</span>}
+          </div>
+          {snapshotNote && <Note>{snapshotNote}</Note>}
+          {dbSnapshots?.pending_restore && (
+            <Note>
+              <strong>{dbSnapshots.pending_restore}</strong> replaces the database the next time Rollfilm
+              starts.{" "}
+              <button className="btn btn-sm ghost" onClick={() => cancelRestoreSnapshot.mutate()}>
+                Keep the current database
+              </button>
+            </Note>
+          )}
+          {dbSnapshots && dbSnapshots.snapshots.length > 0 && (
+            <table className="help-shortcuts snapshot-table">
+              <tbody>
+                {dbSnapshots.snapshots.map((s) => (
+                  <tr key={s.name}>
+                    <td>{formatSnapshotDate(s.created_at)}</td>
+                    <td>
+                      {s.reason === "migration"
+                        ? `before update${s.revision ? ` (${s.revision})` : ""}`
+                        : s.reason === "daily"
+                          ? "daily"
+                          : "on request"}
+                    </td>
+                    <td>{formatBytes(s.size)}</td>
+                    <td>
+                      <button
+                        className="btn btn-sm"
+                        disabled={restoreSnapshot.isPending || dbSnapshots.pending_restore === s.name}
+                        onClick={async () => {
+                          const ok = await dialogs.confirm({
+                            title: "Restore this snapshot on the next start?",
+                            message: `The database from ${formatSnapshotDate(s.created_at)} replaces the current one when Rollfilm starts next. Stars, tags, albums and edits made since then are not in it; the replaced database is kept beside it for a while. Photos are not touched.`,
+                            confirmLabel: "Restore on next start",
+                            danger: true,
+                          });
+                          if (ok) restoreSnapshot.mutate(s.name);
+                        }}
+                      >
+                        {dbSnapshots.pending_restore === s.name ? "Marked" : "Restore…"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="settings-block">
+          <Desc>
             Restoring a backup <strong>replaces everything currently in your library</strong> with
-            the backup's contents. Files on external sources are not affected.
+            the backup's contents - photos, stars, tags, albums, canvases, edits and settings. The
+            backup is checked first; what it replaces is moved to a <em>restore-replaced</em>{" "}
+            folder beside the library, to delete once you are happy. Files on external sources are
+            not affected.
           </Desc>
           <input
             ref={restoreFileInputRef}

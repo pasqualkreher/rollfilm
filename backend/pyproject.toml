@@ -39,6 +39,12 @@ dev = [
     "pytest>=8.3",
     "httpx>=0.27",
 ]
+# Only for freezing the backend into the desktop app (build_backend.sh). An
+# extra of its own so requirements.lock pins the PyInstaller the release
+# builds use, next to everything it bundles.
+build = [
+    "pyinstaller>=6.10",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

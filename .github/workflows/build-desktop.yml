@@ -54,7 +54,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for i in $(seq 1 120); do
+          # Up to an hour: CI now also freezes the backend once (backend-smoke).
+          for i in $(seq 1 240); do
             RESULT="$(gh run list --repo "${{ github.repository }}" --workflow CI \
               --commit "${{ github.sha }}" --limit 1 \
               --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)"
@@ -66,10 +67,10 @@ jobs:
                 echo "::error::CI did not pass for ${{ github.sha }} ($RESULT). Nothing is built. Once CI is green for this commit (re-run it), re-run this workflow; if it took a fix, tag the fixed commit as a new version."
                 exit 1;;
             esac
-            echo "CI for ${{ github.sha }}: ${RESULT:-no run yet} - waiting ($i/120)"
+            echo "CI for ${{ github.sha }}: ${RESULT:-no run yet} - waiting ($i/240)"
             sleep 15
           done
-          echo "::error::No CI result for ${{ github.sha }} after 30 minutes. Is the tag on a commit that was pushed to main?"
+          echo "::error::No CI result for ${{ github.sha }} after 60 minutes. Is the tag on a commit that was pushed to main?"
           exit 1
 
       # Linux builds on the OLDEST Ubuntu runner, not ubuntu-latest: PyInstaller
@@ -165,7 +166,7 @@ jobs:
           brew install python@3.11
           echo "$(brew --prefix python@3.11)/libexec/bin" >> "$GITHUB_PATH"
 
-      - name: Create backend venv (with CPU torch + PyInstaller)
+      - name: Create backend venv (pinned from requirements.lock)
         shell: bash
         run: |
           cd backend
@@ -178,14 +179,18 @@ jobs:
           # crashes on launch (sqlite-vec is loaded on every DB connection).
           "$PY" -c "import sqlite3; sqlite3.connect(':memory:').enable_load_extension(True); print('sqlite3 extension loading: OK')"
           "$PY" -m pip install --upgrade pip
-          # CPU-only torch: much smaller than the CUDA default on Linux/Windows.
-          # On macOS the regular PyPI wheels are already CPU/MPS.
+          # Exactly the versions CI tested, PyInstaller included (its "build"
+          # extra). The lock pins CPU-only torch: the +cpu builds on
+          # Linux/Windows, which only PyTorch's index has (much smaller than
+          # the CUDA default), and the regular PyPI wheels on macOS, which
+          # are already CPU/MPS. build_backend.sh installs from the lock
+          # again on macOS/Linux; build_backend.ps1 relies on this step.
           if [ "$RUNNER_OS" = "macOS" ]; then
-            "$PY" -m pip install torch torchvision
+            "$PY" -m pip install -r requirements.lock
           else
-            "$PY" -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+            "$PY" -m pip install -r requirements.lock --extra-index-url https://download.pytorch.org/whl/cpu
           fi
-          "$PY" -m pip install -e . pyinstaller
+          "$PY" -m pip install --no-deps -e .
 
       # zsyncmake writes the .zsync that AppImage update tools download first;
       # scripts/appimage-update-info.js refuses to build a release without it.

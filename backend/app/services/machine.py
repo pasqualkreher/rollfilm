@@ -12,11 +12,43 @@ it at module load, before anything heavy exists."""
 from __future__ import annotations
 
 import os
+import sys
 
 GIB = 1024**3
 
 
+def _windows_ram_bytes() -> int | None:
+    """The installed RAM on Windows, where os.sysconf does not exist: the
+    kernel's GlobalMemoryStatusEx through ctypes. Without this every Windows
+    machine counted as roomy and an 8GB laptop got the workstation budgets."""
+    import ctypes
+
+    class MemoryStatusEx(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
+
+    try:
+        status = MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return int(status.ullTotalPhys) or None
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
 def physical_ram_bytes() -> int | None:
+    if sys.platform == "win32":
+        return _windows_ram_bytes()
     try:
         return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
     except (ValueError, OSError, AttributeError):
@@ -26,8 +58,8 @@ def physical_ram_bytes() -> int | None:
 PHYSICAL_RAM_BYTES = physical_ram_bytes()
 
 # Machines with 8GB or less. A little slack above 8GiB: some report the RAM
-# minus what the firmware keeps. Unknown RAM (no sysconf) counts as roomy -
-# that is the historic behaviour and the only Windows path today.
+# minus what the firmware keeps. Unknown RAM (neither sysconf nor the Windows
+# call answered) counts as roomy - that is the historic behaviour.
 LOW_RAM_LIMIT_BYTES = int(8.5 * GIB)
 LOW_RAM = PHYSICAL_RAM_BYTES is not None and PHYSICAL_RAM_BYTES <= LOW_RAM_LIMIT_BYTES
 

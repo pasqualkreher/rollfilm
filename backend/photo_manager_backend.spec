@@ -13,6 +13,8 @@ datas = [
     # The film simulation cubes (film_sims.py): Fujifilm's own in official/,
     # the measured ones beside it. The folder is copied with its subfolders.
     ("app/services/film_luts", "app/services/film_luts"),
+    # exiftool's definition of Rollfilm's XMP namespace (services/sidecar.py).
+    ("app/data", "app/data"),
 ]
 binaries = []
 # Things imported dynamically (not visible to static analysis).

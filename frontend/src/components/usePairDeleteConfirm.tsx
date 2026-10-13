@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { api } from "../api/client";
-import { deleteConfirmMessage, membershipWarning } from "../utils/deleteMessage";
+import { membershipWarning } from "../utils/deleteMessage";
 import { useAskDeletePartner } from "../state/viewPrefs";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
@@ -85,15 +85,12 @@ export function usePairDeleteConfirm() {
         })
       );
     }
-    // Otherwise a single confirm. With a partner (setting off) the default is
-    // still to take both halves - a pair is one shot.
+    // Otherwise no question at all: a photo goes to the Trash, which is
+    // undone from the title bar's chip or restored later - culling must not
+    // stop for a dialog on every Delete. With a partner (setting off) the
+    // default is still to take both halves - a pair is one shot.
     const takesPartner = req.partnerIds.length > 0;
-    const ids = takesPartner ? allIds : req.baseIds;
-    const message = takesPartner
-      ? deleteConfirmMessage([...req.baseItems, ...req.partnerItems], req.partnerIds.length)
-      : deleteConfirmMessage(req.baseItems);
-    const warning = await usageWarning(ids);
-    return new Promise((resolve) => setPending({ kind: "confirm", message, warning, ids, resolve }));
+    return takesPartner ? allIds : req.baseIds;
   }, []);
 
   function finish(ids: string[] | null) {

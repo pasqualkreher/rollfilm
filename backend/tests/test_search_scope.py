@@ -58,7 +58,9 @@ def ranked(monkeypatch):
     monkeypatch.setattr(
         embeddings,
         "query_similar",
-        lambda engine, vector, k: [(i, 0.1 * n) for n, i in enumerate(order)],
+        # Close distances, the way real CLIP matches sit together: the
+        # relevance window (search.SEMANTIC_WINDOW) keeps them all.
+        lambda engine, vector, k: [(i, 0.00001 * n) for n, i in enumerate(order)],
     )
     return _set
 
@@ -140,3 +142,25 @@ def test_the_exposure_filters_scope_the_search(db: Session, ranked):
     ranked("fast", "fast2", "slow")
     assert [r.image.id for r in _search(db, "sunset", shutter_min=0.004, shutter_max=0.004)] == ["fast", "fast2"]
     assert [r.image.id for r in _search(db, "sunset", iso_min=800)] == ["fast2", "slow"]
+
+
+def test_matches_far_behind_the_best_are_left_out(db: Session, monkeypatch):
+    """CLIP ranks every photo against any query; what falls further behind the
+    best match than the relevance window is noise and is not shown."""
+    from app.api.routes import search as search_route
+
+    for name in ("near", "close", "far"):
+        db.add(_image(name))
+    db.commit()
+    monkeypatch.setattr(embeddings, "encode_text", lambda q: [0.0])
+    monkeypatch.setattr(
+        embeddings,
+        "query_similar",
+        lambda engine, vector, k: [
+            ("near", 1.10),
+            ("close", 1.10 + search_route.SEMANTIC_WINDOW / 2),
+            ("far", 1.10 + search_route.SEMANTIC_WINDOW * 3),
+        ],
+    )
+    ids = [r.image.id for r in _search(db, "a dog")]
+    assert ids == ["near", "close"]

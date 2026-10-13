@@ -98,6 +98,18 @@ export function ImportSettingsPanel() {
           desc="Stars, labels, keywords and captions written by other programs or an .xmp sidecar come in with the photo. Keywords become tags. Stars you give in the review are kept."
         />
       </div>
+      <div className="settings-subgroup">
+        <h4 className="settings-subhead">Safety</h4>
+        <OptionRow
+          type="checkbox"
+          checked={importSettings?.verify_copies ?? false}
+          disabled={!ready}
+          busy={busy}
+          onChange={(on) => update.mutate({ verify_copies: on })}
+          title="Verify every copy"
+          desc="Each copied file is read back and its checksum compared with the source before the card is counted as copied. Slower, and the one proof that the card can be formatted."
+        />
+      </div>
     </>
   );
 }

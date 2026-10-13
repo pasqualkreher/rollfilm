@@ -51,6 +51,15 @@ const DEFAULT_OPTIONS: ExportOptions = {
   watermark_corner: "br",
   watermark_size: "medium",
   watermark_opacity: 60,
+  tiff_bits: 16,
+  fit: "long",
+  size: null,
+  no_upscale: true,
+  sharpen_medium: "screen",
+  watermark_image: "",
+  watermark_image_corner: "br",
+  watermark_image_size: 15,
+  watermark_image_opacity: 80,
 };
 
 // What a file name may ask for (mirrors backend services/name_template.py).
@@ -87,6 +96,11 @@ function sameOptions(a: ExportOptions, b: ExportOptions): boolean {
     (a.destination === "download" || a.dest_dir === b.dest_dir) &&
     a.sharpen === b.sharpen &&
     a.watermark_text === b.watermark_text &&
+    (a.tiff_bits ?? 16) === (b.tiff_bits ?? 16) &&
+    (a.fit ?? "long") === (b.fit ?? "long") &&
+    (a.size ?? null) === (b.size ?? null) &&
+    (a.sharpen_medium ?? "screen") === (b.sharpen_medium ?? "screen") &&
+    (a.watermark_image ?? "") === (b.watermark_image ?? "") &&
     // Where and how a watermark is drawn only matters when there is one.
     (!a.watermark_text.trim() ||
       (a.watermark_corner === b.watermark_corner &&
@@ -223,6 +237,15 @@ export function ExportDialog({
       watermark_corner: options.watermark_corner,
       watermark_size: options.watermark_size,
       watermark_opacity: options.watermark_opacity,
+      tiff_bits: options.tiff_bits ?? 16,
+      fit: options.fit ?? "long",
+      size: options.fit && options.fit !== "long" ? options.size ?? null : null,
+      no_upscale: options.no_upscale ?? true,
+      sharpen_medium: options.sharpen_medium ?? "screen",
+      watermark_image: options.watermark_image ?? "",
+      watermark_image_corner: options.watermark_image_corner ?? "br",
+      watermark_image_size: options.watermark_image_size ?? 15,
+      watermark_image_opacity: options.watermark_image_opacity ?? 80,
     });
   }
 
@@ -396,13 +419,19 @@ export function ExportDialog({
                 <span>Format</span>
               </span>
               <Dropdown
-                value={format}
+                value={format === "tiff" ? `tiff${options.tiff_bits ?? 16}` : format}
                 disabled={busy}
                 ariaLabel="Export format"
-                onChange={(v) => change({ format: v as ExportFormat })}
+                onChange={(v) =>
+                  v.startsWith("tiff")
+                    ? change({ format: "tiff", tiff_bits: v === "tiff8" ? 8 : 16 })
+                    : change({ format: v as ExportFormat })
+                }
                 options={[
                   { value: "jpeg", label: "JPEG with edits applied" },
-                  { value: "tiff", label: "TIFF, 16-bit, with edits applied" },
+                  { value: "tiff16", label: "TIFF, 16-bit, with edits applied" },
+                  { value: "tiff8", label: "TIFF, 8-bit, with edits applied" },
+                  { value: "png", label: "PNG, 8-bit, with edits applied" },
                   { value: "original", label: "Original files, unchanged" },
                 ]}
               />
@@ -411,16 +440,45 @@ export function ExportDialog({
               <span className="editor-slider-head">
                 <span>Size</span>
               </span>
-              <Dropdown
-                value={String(maxSize ?? "")}
-                disabled={busy || !rendered}
-                ariaLabel="Export size"
-                onChange={(v) => change({ max_size: v === "" ? null : Number(v) })}
-                options={SIZE_OPTIONS.map((opt) => ({
-                  value: String(opt.value ?? ""),
-                  label: opt.label,
-                }))}
-              />
+              {/* The long edge in pixels from the list (the usual case), or
+                  another measure with a number of your own. */}
+              <div className="export-size-row">
+                <Dropdown
+                  value={options.fit ?? "long"}
+                  disabled={busy || !rendered}
+                  ariaLabel="Size measured by"
+                  onChange={(v) => change({ fit: v as ExportOptions["fit"], size: null })}
+                  options={[
+                    { value: "long", label: "Long edge" },
+                    { value: "short", label: "Short edge" },
+                    { value: "megapixels", label: "Megapixels" },
+                    { value: "percent", label: "Per cent" },
+                  ]}
+                />
+                {(options.fit ?? "long") === "long" ? (
+                  <Dropdown
+                    value={String(maxSize ?? "")}
+                    disabled={busy || !rendered}
+                    ariaLabel="Export size"
+                    onChange={(v) => change({ max_size: v === "" ? null : Number(v) })}
+                    options={SIZE_OPTIONS.map((opt) => ({
+                      value: String(opt.value ?? ""),
+                      label: opt.label,
+                    }))}
+                  />
+                ) : (
+                  <input
+                    type="number"
+                    min={options.fit === "megapixels" ? 0.1 : 1}
+                    step={options.fit === "megapixels" ? 0.1 : 1}
+                    value={options.size ?? ""}
+                    disabled={busy || !rendered}
+                    placeholder={options.fit === "short" ? "px" : options.fit === "megapixels" ? "MP" : "%"}
+                    aria-label="Size"
+                    onChange={(e) => change({ size: e.target.value === "" ? null : Number(e.target.value) })}
+                  />
+                )}
+              </div>
             </div>
             <label className="editor-slider">
               <span className="editor-slider-head">
@@ -452,6 +510,17 @@ export function ExportDialog({
                   { value: "low", label: "Low" },
                   { value: "standard", label: "Standard" },
                   { value: "high", label: "High" },
+                ]}
+              />
+              <Dropdown
+                value={options.sharpen_medium ?? "screen"}
+                disabled={busy || !rendered || options.sharpen === "off"}
+                ariaLabel="Sharpen for"
+                onChange={(v) => change({ sharpen_medium: v as ExportOptions["sharpen_medium"] })}
+                options={[
+                  { value: "screen", label: "For screen" },
+                  { value: "matte", label: "For matte paper" },
+                  { value: "glossy", label: "For glossy paper" },
                 ]}
               />
             </div>
@@ -550,6 +619,56 @@ export function ExportDialog({
                   options={[30, 45, 60, 80, 100].map((n) => ({ value: String(n), label: `${n}%` }))}
                 />
               </div>
+              {/* A logo: a PNG with transparency, in its own corner. */}
+              {window.photoManager?.pickFiles && (
+                <div className="export-watermark">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={busy || !rendered}
+                    onClick={async () => {
+                      const picked = await window.photoManager?.pickFiles?.();
+                      const png = picked?.find((p) => p.path.toLowerCase().endsWith(".png"));
+                      if (png) change({ watermark_image: png.path });
+                    }}
+                  >
+                    {options.watermark_image ? shortPath(options.watermark_image) : "Logo (PNG)…"}
+                  </button>
+                  {options.watermark_image && (
+                    <>
+                      <Dropdown
+                        value={options.watermark_image_corner ?? "br"}
+                        disabled={busy || !rendered}
+                        ariaLabel="Logo corner"
+                        onChange={(v) => change({ watermark_image_corner: v as ExportOptions["watermark_image_corner"] })}
+                        options={[
+                          { value: "br", label: "Bottom right" },
+                          { value: "bl", label: "Bottom left" },
+                          { value: "tr", label: "Top right" },
+                          { value: "tl", label: "Top left" },
+                        ]}
+                      />
+                      <Dropdown
+                        value={String(options.watermark_image_size ?? 15)}
+                        disabled={busy || !rendered}
+                        ariaLabel="Logo size"
+                        onChange={(v) => change({ watermark_image_size: Number(v) })}
+                        options={[8, 12, 15, 20, 30].map((n) => ({ value: String(n), label: `${n}% of the long edge` }))}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-sm ghost"
+                        disabled={busy}
+                        onClick={() => change({ watermark_image: "" })}
+                        title="No logo"
+                        aria-label="No logo"
+                      >
+                        ×
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <div className="export-status" role="status" aria-live="polite">

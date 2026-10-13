@@ -52,8 +52,10 @@ import type {
   TagImportResult,
   TagUsage,
   TrashSettings,
+  Flag,
+  DevelopPresetOut,
 } from "./types";
-import type { ImageEdits } from "../utils/adjustments";
+import { normalizeAdjustments, type ImageEdits } from "../utils/adjustments";
 
 // Thumbnail/preview files are regenerated in place after an edit, so the URL
 // needs to change to bust the browser cache - this derives a stable version
@@ -72,6 +74,40 @@ export const DEFAULT_EDIT_VERSION = "";
 // silently ignores unknown keys, so a camelCase key wouldn't error, it would
 // just drop the edit. The `adjustments` object already uses snake_case keys
 // (see utils/adjustments.ts) and passes straight through.
+// The other way round: an edit as the API sends it (a named snapshot's)
+// back into the editor's shape, the adjustments made complete and in range.
+export function editsFromApi(e: {
+  rotation?: number;
+  crop?: ImageEdits["crop"];
+  flip_h?: boolean;
+  flip_v?: boolean;
+  straighten?: number;
+  persp_h?: number;
+  persp_v?: number;
+  distortion?: number;
+  adjustments?: unknown;
+}): ImageEdits {
+  return {
+    rotation: e.rotation ?? 0,
+    crop: e.crop ?? null,
+    flipH: !!e.flip_h,
+    flipV: !!e.flip_v,
+    straighten: e.straighten ?? 0,
+    perspH: e.persp_h ?? 0,
+    perspV: e.persp_v ?? 0,
+    distortion: e.distortion ?? 0,
+    adjustments: normalizeAdjustments((e.adjustments ?? {}) as Parameters<typeof normalizeAdjustments>[0]),
+  };
+}
+
+export interface EditSnapshot {
+  id: string;
+  image_id: string;
+  name: string;
+  created_at: string;
+  edits: Parameters<typeof editsFromApi>[0];
+}
+
 function apiEdits(edits: ImageEdits) {
   const { flipH, flipV, perspH, perspV, ...rest } = edits;
   return {
@@ -382,6 +418,8 @@ export const api = {
       patch: {
         rating?: number;
         color_label?: string;
+        // The culling flag; "" takes it off.
+        flag?: Flag | "";
         // "" clears the note; omit the field to leave it as it is.
         description?: string;
         apply_to_pair?: boolean;
@@ -402,7 +440,7 @@ export const api = {
     },
     bulkUpdate(
       image_ids: string[],
-      patch: { rating?: number; color_label?: string; apply_to_pair?: boolean }
+      patch: { rating?: number; color_label?: string; flag?: Flag | ""; apply_to_pair?: boolean }
     ): Promise<ImageOut[]> {
       return request(`/images/bulk`, {
         method: "PATCH",
@@ -518,6 +556,15 @@ export const api = {
         watermark_corner?: ExportOptions["watermark_corner"];
         watermark_size?: ExportOptions["watermark_size"];
         watermark_opacity?: number;
+        tiff_bits?: 8 | 16;
+        fit?: ExportOptions["fit"];
+        size?: number | null;
+        no_upscale?: boolean;
+        sharpen_medium?: ExportOptions["sharpen_medium"];
+        watermark_image?: string;
+        watermark_image_corner?: ExportOptions["watermark_image_corner"];
+        watermark_image_size?: number;
+        watermark_image_opacity?: number;
       }
     ): Promise<{ job_id: string; total: number }> {
       return request(`/images/export/start`, {
@@ -535,6 +582,15 @@ export const api = {
           watermark_corner: opts.watermark_corner ?? "br",
           watermark_size: opts.watermark_size ?? "medium",
           watermark_opacity: opts.watermark_opacity ?? 60,
+          tiff_bits: opts.tiff_bits ?? 16,
+          fit: opts.fit ?? "long",
+          size: opts.size ?? null,
+          no_upscale: opts.no_upscale ?? true,
+          sharpen_medium: opts.sharpen_medium ?? "screen",
+          watermark_image: opts.watermark_image ?? "",
+          watermark_image_corner: opts.watermark_image_corner ?? "br",
+          watermark_image_size: opts.watermark_image_size ?? 15,
+          watermark_image_opacity: opts.watermark_image_opacity ?? 80,
         }),
       });
     },
@@ -844,6 +900,20 @@ export const api = {
     // `deferDerivatives`: the editor's autosave while it is open - the values
     // are written, the thumbnail/preview re-render waits for the editor's
     // final save (a 40MP raw decode per slider rest was fighting the editor).
+    // Named snapshots of a photo's edit, kept in the database.
+    snapshots(id: string): Promise<EditSnapshot[]> {
+      return request(`/images/${id}/snapshots`);
+    },
+    createSnapshot(id: string, name: string, edits: ImageEdits): Promise<EditSnapshot> {
+      return request(`/images/${id}/snapshots`, { method: "POST", body: JSON.stringify({ name, edits: apiEdits(edits) }) });
+    },
+    deleteSnapshot(id: string, snapshotId: string): Promise<void> {
+      return request(`/images/${id}/snapshots/${snapshotId}`, { method: "DELETE" });
+    },
+    // An edit from an older process version brought up to the current one.
+    upgradeProcess(id: string): Promise<ImageOut> {
+      return request(`/images/${id}/edits/upgrade-process`, { method: "POST" });
+    },
     saveEdits(id: string, edits: ImageEdits, opts?: { deferDerivatives?: boolean }): Promise<ImageOut> {
       const q = opts?.deferDerivatives ? "?defer_derivatives=1" : "";
       return request(`/images/${id}/edits${q}`, { method: "PATCH", body: JSON.stringify(apiEdits(edits)) });
@@ -1274,19 +1344,77 @@ export const api = {
       return request(`/search?${params.toString()}`);
     },
   },
+  // Develop presets, kept in the library's database (and so in its backup)
+  // instead of one browser's storage. See utils/presets for the cache the
+  // editor reads synchronously.
+  developPresets: {
+    list(): Promise<DevelopPresetOut[]> {
+      return request(`/develop-presets`);
+    },
+    create(body: { name: string; group?: string | null; sections?: string[] | null; adjustments: unknown }): Promise<DevelopPresetOut> {
+      return request(`/develop-presets`, { method: "POST", body: JSON.stringify(body) });
+    },
+    update(
+      id: string,
+      body: { name?: string; group?: string | null; sections?: string[]; adjustments?: unknown }
+    ): Promise<DevelopPresetOut> {
+      return request(`/develop-presets/${id}`, { method: "PUT", body: JSON.stringify(body) });
+    },
+    remove(id: string): Promise<void> {
+      return request(`/develop-presets/${id}`, { method: "DELETE" });
+    },
+    importFile(content: unknown): Promise<{ created: number; replaced: number; presets: DevelopPresetOut[] }> {
+      return request(`/develop-presets/import`, { method: "POST", body: JSON.stringify(content) });
+    },
+  },
   maintenance: {
     sync(): Promise<{
+      // Always 0: a sync marks what it cannot find, it removes nothing.
       removed_missing_files: number;
+      // Files not found and marked by this run, all marked rows after it,
+      // and rows whose file was found again.
+      missing_files: number;
+      missing_total: number;
+      recovered_files: number;
+      // Non-zero: more files were missing at once than the sync marks on its
+      // own - it stopped and marked nothing.
+      too_many_missing: number;
       // Files renamed or moved outside the app, matched back to their photo by
       // content hash instead of being treated as gone.
       renamed_files_followed: number;
       untracked_files_found: number;
       orphan_thumbnails_removed: number;
       thumbnails_queued: number;
-      // Stopped before anything was removed: the counts are zero.
+      // Stopped before anything was marked: the counts are zero.
       cancelled: boolean;
     }> {
       return request(`/maintenance/sync`, { method: "POST" });
+    },
+    // Photos whose file the sync could not find, and whether the last sync
+    // stopped because too many were missing at once.
+    missingFiles(): Promise<{ count: number; sync_aborted_missing: number; sync_aborted_at: string | null }> {
+      return request(`/maintenance/missing`);
+    },
+    removeMissing(): Promise<{ removed: number }> {
+      return request(`/maintenance/missing/remove`, { method: "POST" });
+    },
+    // Copies of the catalog database (before migrations, daily, on request);
+    // restoring marks one for the next start.
+    dbSnapshots(): Promise<{
+      snapshots: { name: string; size: number; created_at: string; reason: string; revision: string | null }[];
+      pending_restore: string | null;
+      folder: string;
+    }> {
+      return request(`/maintenance/db-snapshots`);
+    },
+    takeDbSnapshot(): Promise<{ name: string; size: number; created_at: string; reason: string; revision: string | null }> {
+      return request(`/maintenance/db-snapshots`, { method: "POST" });
+    },
+    restoreDbSnapshot(name: string): Promise<{ pending: string }> {
+      return request(`/maintenance/db-snapshots/restore`, { method: "POST", body: JSON.stringify({ name }) });
+    },
+    cancelDbSnapshotRestore(): Promise<void> {
+      return request(`/maintenance/db-snapshots/restore`, { method: "DELETE" });
     },
     // Asks a running sync to stop; it stops before it removes anything.
     cancelSync(): Promise<void> {

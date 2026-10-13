@@ -60,6 +60,12 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     # Details
     "sharpness": (0, -100, 100, False),
     "sharpness_threshold": (15, 0, 80, False),
+    # The sharpening kernel's size relative to today's (100 = the radius every
+    # edit made before this key had, so they render as they did), and how much
+    # of it is kept off flat areas: 0 sharpens everywhere, 100 only along edges
+    # (thumbnails._sharpen_masked).
+    "sharpness_radius": (100, 50, 300, False),
+    "sharpness_masking": (0, 0, 100, False),
     "clarity": (0, -100, 100, False),
     "dehaze": (0, -100, 100, False),
     "structure": (0, -100, 100, False),
@@ -75,6 +81,11 @@ SCALAR_SPEC: dict[str, tuple[float, float, float, bool]] = {
     "color_noise_reduction": (0, 0, 100, False),
     "chromatic_aberration_red_cyan": (0, -100, 100, False),
     "chromatic_aberration_blue_yellow": (0, -100, 100, False),
+    # Defringe: the purple and green rims longitudinal CA leaves along
+    # high-contrast edges, pulled toward the colour around them
+    # (develop_effects.defringe). 0 leaves the pixels alone.
+    "defringe_purple": (0, 0, 100, False),
+    "defringe_green": (0, 0, 100, False),
     # Effects
     "glow_amount": (0, 0, 100, False),
     "halation_amount": (0, 0, 100, False),
@@ -545,3 +556,107 @@ def dumps(adj: dict[str, Any]) -> str | None:
     if is_neutral(adj):
         return None
     return json.dumps(normalize(adj), separators=(",", ":"))
+
+
+# --- Sections (what a preset may carry) --------------------------------------
+# The editor's panel groups as a preset sees them, so a preset can bring only
+# its colour, or only its grain, onto a photo and leave the rest of that
+# photo's edit alone. Grouped the way the frontend's editedGroups() marks the
+# panel (frontend/src/utils/adjustments.ts): "film" is the film-simulation
+# group, "tone" the Basic one, and Color takes its mixer, grading and
+# calibration along. Left out of every section, and so never carried by a
+# partial preset: the process version (see merge_sections), the frame and
+# the lens correction, which belong to the photo and its lens, not to a look.
+SECTION_KEYS: dict[str, tuple[str, ...]] = {
+    "film": ("film_sim", "lut_intensity"),
+    "tone": ("exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks",
+             "tone_mapper",
+             # An exposure only means something on the raw base it was set on.
+             "raw_base"),
+    "curves": ("curve_mode", "point_curves", "parametric_curve"),
+    "color": ("temperature", "tint", "wb_shift_r", "wb_shift_b", "vibrance", "saturation", "hue",
+              "chrome_effect", "chrome_blue", "hsl", "hsl_range", "color_grading", "color_calibration"),
+    "details": ("sharpness", "sharpness_threshold", "sharpness_radius", "sharpness_masking",
+                "clarity", "dehaze", "structure",
+                "luma_noise_reduction", "luma_noise_detail", "color_noise_reduction",
+                "chromatic_aberration_red_cyan", "chromatic_aberration_blue_yellow",
+                "defringe_purple", "defringe_green"),
+    "effects": ("glow_amount", "halation_amount", "flare_amount",
+                "grain_amount", "grain_size", "grain_roughness",
+                "vignette_amount", "vignette_midpoint", "vignette_roundness", "vignette_feather",
+                "mist"),
+    "masks": ("masks",),
+    "retouch": ("spots",),
+}
+SECTIONS: tuple[str, ...] = tuple(SECTION_KEYS)
+
+# Every develop key is in exactly one section or deliberately in none - a new
+# slider nobody sorted in would otherwise never travel with a partial preset.
+_UNSECTIONED = {"process", "frame_width", *LENS_KEYS}
+_sectioned = [k for keys in SECTION_KEYS.values() for k in keys]
+assert len(_sectioned) == len(set(_sectioned)), "a develop key sits in two sections"
+assert set(_sectioned) == set(defaults()) - _UNSECTIONED, (
+    f"SECTION_KEYS out of sync with the develop schema: {set(_sectioned) ^ (set(defaults()) - _UNSECTIONED)}"
+)
+
+
+def merge_sections(current: Any, preset: Any, sections: Any) -> dict[str, Any]:
+    """`current` with the keys of the chosen `sections` taken from `preset`,
+    every other key left as it was. Both sides are normalized first; unknown
+    section names are ignored.
+
+    The process version stays the photo's own while the photo has an edit of
+    its own: a newer process would change how the sliders the preset leaves
+    alone render, which is exactly what a partial preset promises not to do.
+    A photo with nothing on it yet takes the preset's process, so the part
+    that arrives looks as it did where the preset was made."""
+    cur = normalize(current)
+    pre = normalize(preset)
+    wanted = [s for s in (sections or []) if s in SECTION_KEYS]
+    out = dict(cur)
+    for section in wanted:
+        for key in SECTION_KEYS[section]:
+            out[key] = pre[key]
+    if wanted and is_neutral(cur):
+        out["process"] = pre["process"]
+    return normalize(out)
+
+
+# --- The whole stored edit ---------------------------------------------------
+
+def stored_edits(image: Any) -> dict[str, Any]:
+    """An Image row's stored edit in the shape PATCH /images/{id}/edits takes
+    (schemas.ImageEdits): geometry from its own columns plus the develop
+    object. What a snapshot keeps and what the XMP sidecar carries, so either
+    can be replayed through the normal save."""
+    crop = None
+    if getattr(image, "edit_crop_x", None) is not None:
+        crop = {"x": image.edit_crop_x, "y": image.edit_crop_y,
+                "width": image.edit_crop_width, "height": image.edit_crop_height}
+    return {
+        "rotation": int(getattr(image, "edit_rotation", 0) or 0) % 360,
+        "crop": crop,
+        "flip_h": bool(getattr(image, "edit_flip_h", False)),
+        "flip_v": bool(getattr(image, "edit_flip_v", False)),
+        "straighten": float(getattr(image, "edit_straighten", 0.0) or 0.0),
+        "persp_h": int(getattr(image, "edit_persp_h", 0) or 0),
+        "persp_v": int(getattr(image, "edit_persp_v", 0) or 0),
+        "distortion": int(getattr(image, "edit_distortion", 0) or 0),
+        "adjustments": loads(getattr(image, "edit_adjustments", None)),
+    }
+
+
+def has_stored_edit(image: Any) -> bool:
+    """Whether the row carries any edit at all, geometry or develop (the same
+    test routes/images._has_any_edit makes)."""
+    return bool(
+        (getattr(image, "edit_rotation", 0) or 0) % 360
+        or getattr(image, "edit_crop_width", None) is not None
+        or getattr(image, "edit_flip_h", False)
+        or getattr(image, "edit_flip_v", False)
+        or getattr(image, "edit_straighten", 0)
+        or getattr(image, "edit_persp_h", 0)
+        or getattr(image, "edit_persp_v", 0)
+        or getattr(image, "edit_distortion", 0)
+        or getattr(image, "edit_adjustments", None) is not None
+    )

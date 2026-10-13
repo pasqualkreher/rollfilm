@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEv
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { BulkResetOptions, ColorLabel } from "../api/types";
+import type { BulkResetOptions, ColorLabel, Flag } from "../api/types";
 import { useTransientMessage } from "../utils/transientMessage";
 import { useAskSaveCopyOptions } from "../state/viewPrefs";
 import { useTasks } from "../state/tasks";
@@ -13,6 +13,7 @@ import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import { useAppDialogs } from "./AppDialogs";
 import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
+import { FlagPicker } from "./FlagPicker";
 import { RESET_ASPECTS } from "./ResetMenu";
 import { IconChevronRight } from "./Icons";
 import { Presence } from "./Presence";
@@ -62,9 +63,11 @@ export interface ContextMenuPhoto {
 export interface ContextActions {
   onRate?: (ids: string[], rating: number) => void | Promise<unknown>;
   onColor?: (ids: string[], label: ColorLabel) => void | Promise<unknown>;
-  // What the stars and swatches show for these photos: their shared rating
-  // and label, or nothing where they differ.
-  meta?: (ids: string[]) => { rating: number; colorLabel: ColorLabel };
+  // The culling flag; "" takes it off.
+  onFlag?: (ids: string[], flag: Flag | "") => void | Promise<unknown>;
+  // What the stars, swatches and flag show for these photos: their shared
+  // values, or nothing where they differ.
+  meta?: (ids: string[]) => { rating: number; colorLabel: ColorLabel; flag?: Flag | null };
   onAddToAlbum?: (ids: string[], albumId: string) => void | Promise<unknown>;
   onAddToCanvas?: (ids: string[], canvasId: string) => void | Promise<unknown>;
   onAddTag?: (ids: string[], name: string) => void | Promise<unknown>;
@@ -589,7 +592,20 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     groups.push(openGroup);
 
     const change: Entry[] = [];
-    const meta = actions?.meta?.(m.ids) ?? { rating: 0, colorLabel: "none" as ColorLabel };
+    const meta = actions?.meta?.(m.ids) ?? { rating: 0, colorLabel: "none" as ColorLabel, flag: null };
+    if (actions?.onFlag) {
+      const onFlag = actions.onFlag;
+      change.push({
+        kind: "row",
+        id: "flag",
+        node: (
+          <>
+            <span>Flag</span>
+            <FlagPicker value={meta.flag ?? null} onChange={(f) => run(() => onFlag(m.ids, f))()} />
+          </>
+        ),
+      });
+    }
     if (actions?.onRate) {
       const onRate = actions.onRate;
       change.push({

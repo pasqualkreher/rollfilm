@@ -15,6 +15,7 @@ import {
 } from "../components/Icons";
 import { LoadingState } from "../components/Spinner";
 import { useScrollMemory } from "../utils/scrollMemory";
+import { plural } from "../utils/plural";
 
 // Statistics dashboard (top-bar chart icon): what's in the library and what
 // it was shot with. Every chart is a single accent-colored series with its
@@ -235,7 +236,7 @@ function BarCard({
               ? Math.max(0.5, 1 - i * 0.11)
               : 0.9;
           const tip =
-            `${r.name}: ${r.count.toLocaleString()} photo(s) · ${share}% of this list` +
+            `${r.name}: ${plural(r.count, "photo")} · ${share}% of this list` +
             (clickable ? (isSelected ? " · click to clear" : " · click to filter") : "");
           const inner = (
             <>
@@ -337,7 +338,7 @@ function ColumnCard({
                   aria-pressed={isSelected}
                   disabled={empty && !isSelected}
                   title={
-                    `${r.name}: ${r.count.toLocaleString()} photo(s)` +
+                    `${r.name}: ${plural(r.count, "photo")}` +
                     (empty && !isSelected ? "" : isSelected ? " · click to clear" : " · click to filter")
                   }
                   onClick={() => onSelect(r.key)}

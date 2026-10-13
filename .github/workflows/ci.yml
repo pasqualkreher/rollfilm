@@ -1,11 +1,21 @@
 # The gate before "press play": runs the tests that already exist, so a broken
-# commit is caught here instead of in a 60-minute installer build.
+# commit is caught here instead of in a 60-minute installer build. A tag build
+# (build-desktop.yml) waits for this workflow and only goes ahead when it is
+# green.
 #
-#   backend  -> pytest (337-ish tests, ~15s once the deps are installed)
-#   frontend -> tsc -b && vite build, i.e. exactly `npm run build`
+#   backend        -> pytest on ubuntu (800+ test functions, under a minute
+#                     once the deps are installed)
+#   backend-macos  -> the same suite on macOS with the Python the backend is
+#                     developed on, Homebrew's (see the job for why)
+#   backend-smoke  -> freezes the backend with build_backend.sh, starts the
+#                     bundle on an empty data folder and calls a few routes:
+#                     catches what only breaks frozen (a missing hidden
+#                     import, data file or migration) before a release does
+#   frontend       -> tsc -b && vite build, i.e. exactly `npm run build`
 #
-# Both jobs run on ubuntu only. The installers are what needs three platforms;
-# the test suite does not, and the macOS runner costs 10x the minutes.
+# Every Python job installs from backend/requirements.lock, the same pins the
+# installers are built from (CONTRIBUTING.md says how to update it). Only one
+# job runs on macOS: its runner costs 10x the minutes.
 name: CI
 
 on:
@@ -30,7 +40,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/requirements.lock
 
       # PyExifTool shells out to the real exiftool binary; the metadata tests
       # skip or fail without it.
@@ -47,13 +57,125 @@ jobs:
         run: |
           cd backend
           python -m pip install --upgrade pip
-          # CPU-only torch: the CUDA default is several GB of wheel for a test
-          # run that never touches a GPU.
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev]"
+          # The lock pins the +cpu torch builds off macOS, which only
+          # PyTorch's index has: the CUDA default is several GB of wheel for
+          # a test run that never touches a GPU.
+          pip install -r requirements.lock --extra-index-url https://download.pytorch.org/whl/cpu
+          # The project itself without resolving again: the lock has it all.
+          pip install --no-deps -e .
 
       - name: pytest
         run: cd backend && pytest -q
+
+  backend-macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Homebrew's Python, not setup-python: setup-python's macOS builds ship
+      # a sqlite3 without loadable-extension support, and every connection
+      # loads sqlite-vec (build-desktop.yml has the same note). 3.13 is what
+      # the backend's own venv runs on (backend/.venv/bin/python --version);
+      # keep the two in step.
+      - name: Install Python 3.13 and exiftool (Homebrew)
+        run: |
+          brew install python@3.13 exiftool
+          echo "$(brew --prefix python@3.13)/libexec/bin" >> "$GITHUB_PATH"
+
+      - name: Check sqlite extension loading
+        run: python -c "import sqlite3, sys; print(sys.version); sqlite3.connect(':memory:').enable_load_extension(True)"
+
+      # A venv: Homebrew's Python refuses a plain pip install (PEP 668).
+      - name: Install backend
+        run: |
+          cd backend
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          # On macOS the lock pins the plain PyPI torch wheels: no extra index.
+          .venv/bin/python -m pip install -r requirements.lock
+          .venv/bin/python -m pip install --no-deps -e .
+
+      - name: pytest
+        run: cd backend && .venv/bin/python -m pytest -q
+
+  backend-smoke:
+    # The oldest runner, like the Linux installer build, so this freezes the
+    # backend the way a release does (see build-desktop.yml).
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+
+      - name: Create backend venv
+        run: |
+          cd backend
+          python -m venv .venv
+          .venv/bin/python -c "import sqlite3; sqlite3.connect(':memory:').enable_load_extension(True)"
+          .venv/bin/python -m pip install --upgrade pip
+
+      # Installs from the lock itself, freezes with PyInstaller and fetches
+      # the pinned, checksum-verified exiftool - the release path minus
+      # electron-builder.
+      - name: Build the frozen backend
+        run: sh backend/build_backend.sh
+
+      # The bundle the desktop shell starts, started the way the shell starts
+      # it: the API token on stdin (the frozen backend ignores PM_API_OPEN, so
+      # there is no other way in), a fresh data folder so the migrations run
+      # from empty, then SIGTERM like a quit. The lifespan must finish its
+      # shutdown within the 30 seconds given.
+      - name: Start the bundle and call it
+        run: |
+          set -euo pipefail
+          DATA="$(mktemp -d)"
+          LOG="$DATA/backend.log"
+          PORT="$(python3 -c "import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1])")"
+          TOKEN="smoke-$(python3 -c "import secrets; print(secrets.token_hex(16))")"
+          printf '%s\n' "$TOKEN" | PM_DATA_DIR="$DATA" PM_PORT="$PORT" PM_API_TOKEN_STDIN=1 \
+            backend/pyi-dist/photo-manager-backend/photo-manager-backend >"$LOG" 2>&1 &
+          PID=$!
+          cleanup() {
+            kill -KILL "$PID" 2>/dev/null || true
+            echo "::group::backend log"; cat "$LOG"; echo "::endgroup::"
+          }
+          trap cleanup EXIT
+          fail() { echo "::error::$1"; exit 1; }
+          api() { curl -fsS --max-time 60 -H "X-Rollfilm-Token: $TOKEN" "http://127.0.0.1:$PORT$1"; }
+
+          # A frozen first start imports torch and friends from a cold disk:
+          # give it minutes, not seconds.
+          up=""
+          for _ in $(seq 1 300); do
+            if api /health >/dev/null 2>&1; then up=1; break; fi
+            kill -0 "$PID" 2>/dev/null || fail "the backend exited before answering /health"
+            sleep 1
+          done
+          [ -n "$up" ] || fail "no answer on /health after 300s"
+          echo "health: $(api /health)"
+
+          COUNT="$(api /images/count)" || fail "/images/count failed"
+          echo "count: $COUNT"
+          [ "$COUNT" = '{"count":0}' ] || fail "unexpected /images/count: $COUNT"
+
+          SNAPS="$(api /maintenance/db-snapshots)" || fail "/maintenance/db-snapshots failed"
+          echo "db-snapshots: $SNAPS"
+          case "$SNAPS" in *'"snapshots":'*) ;; *) fail "unexpected /maintenance/db-snapshots: $SNAPS";; esac
+
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"
+          [ "$CODE" = 401 ] || fail "/health without the token answered $CODE, not 401"
+
+          kill -TERM "$PID"
+          for _ in $(seq 1 30); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
+          if kill -0 "$PID" 2>/dev/null; then fail "still running 30s after SIGTERM"; fi
+          grep -q "Application shutdown complete" "$LOG" || fail "the lifespan shutdown did not complete"
+          echo "smoke test passed"
 
   frontend:
     runs-on: ubuntu-latest

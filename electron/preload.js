@@ -2,8 +2,7 @@
 // is exposed (contextIsolation on). client.ts reads `apiBaseUrl` at load time;
 // ExternalSources calls `pickFolder()` to add an existing photo folder.
 
-const { contextBridge, ipcRenderer } = require("electron");
-const os = require("os");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 function readApiBase() {
   const prefix = "--pm-api-base=";
@@ -18,12 +17,15 @@ contextBridge.exposeInMainWorld("photoManager", {
   // Physical RAM in GB. The renderer's navigator.deviceMemory clamps at 8, so
   // an 8GB laptop and a 64GB workstation looked the same to the preload
   // budgets (utils/preload.ts) - this is what tells them apart.
-  totalMemoryGb: Math.round(os.totalmem() / 1024 ** 3),
+  // process.getSystemMemoryInfo() works in a sandboxed preload (os does
+  // not); it reports kilobytes.
+  totalMemoryGb: Math.round((process.getSystemMemoryInfo().total * 1024) / 1024 ** 3),
   // Opens the native OS folder dialog; resolves to an absolute host path or null.
   // `opts` ({ title, defaultPath }) is optional.
   pickFolder: (opts) => ipcRenderer.invoke("pm:pick-folder", opts),
   // Native multi-file dialog; resolves to [{ path, size }] or null when dismissed.
   pickFiles: () => ipcRenderer.invoke("pm:pick-files"),
+  classifyPaths: (paths) => ipcRenderer.invoke("pm:classify-paths", paths),
   // Selects a file in Finder / Explorer / the file manager (its folder when
   // the file is gone). Resolves { ok, missing? } / { ok: false, error }.
   revealFile: (filePath) => ipcRenderer.invoke("pm:reveal-file", filePath),
@@ -81,4 +83,64 @@ contextBridge.exposeInMainWorld("photoManager", {
   setTheme: (theme) => ipcRenderer.invoke("pm:set-theme", theme),
   // Dock / taskbar progress: 0-1 while a job runs, -1 clears it.
   setProgress: (fraction) => ipcRenderer.invoke("pm:set-progress", fraction),
+  // The Go and Photo menus (and File → Export…) in the menu bar: one
+  // { action, value? } per click, see main.js appMenuItem. Separate from onMenu
+  // because these carry a value (a star count, a colour, a flag). The return
+  // value unsubscribes.
+  onAppMenu: (callback) => {
+    const handler = (_event, msg) => {
+      if (!msg || typeof msg.action !== "string") return;
+      callback(msg.value === undefined ? { action: msg.action } : { action: msg.action, value: msg.value });
+    };
+    ipcRenderer.on("app-menu", handler);
+    return () => ipcRenderer.removeListener("app-menu", handler);
+  },
+  // Drags the given originals out of the window to the Finder / Explorer /
+  // desktop as real files. Call it from a dragstart handler (after
+  // preventDefault): the OS drag has to start while the mouse is still down.
+  // main.js refuses the whole drag if any path is not an existing file.
+  startDrag: (paths) => ipcRenderer.send("start-drag", Array.isArray(paths) ? paths.map(String) : []),
+});
+
+// --- Files dropped on the window ----------------------------------------------
+// Chromium's default for a file dropped on a page is to navigate to it: one
+// stray drop of a JPEG from the Finder replaced the whole app with the photo.
+// Drops that carry files are therefore taken here and handed to the page as
+// absolute paths - the backend imports from paths, never from browser uploads
+// - through a "pm:files-dropped" event with { paths } as its detail. Drops
+// inside the app (a photo onto an album, a mask in its list) carry no files
+// and are left entirely to the page's own handlers.
+function droppedFiles(event) {
+  const files = event.dataTransfer?.files;
+  return files && files.length > 0 ? files : null;
+}
+
+document.addEventListener("dragover", (event) => {
+  // Without this the drop below never fires for a file dragged in from outside;
+  // only file drags are claimed, so in-app drag feedback stays the page's own.
+  if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+});
+
+document.addEventListener("drop", (event) => {
+  const files = droppedFiles(event);
+  // A drop zone in the page that took the files itself (and said so with
+  // preventDefault - React's handlers run before this one) keeps them: the
+  // same drop must not import twice.
+  if (!files || event.defaultPrevented) return;
+  event.preventDefault();
+  const paths = [];
+  for (const file of files) {
+    // File.path went away in Electron 32; webUtils is the replacement. The
+    // fallback only matters to a shell older than that.
+    let filePath = "";
+    try {
+      filePath = webUtils?.getPathForFile ? webUtils.getPathForFile(file) : "";
+    } catch {
+      filePath = "";
+    }
+    if (!filePath && file.path) filePath = file.path;
+    if (filePath) paths.push(filePath);
+  }
+  if (paths.length === 0) return;
+  window.dispatchEvent(new CustomEvent("pm:files-dropped", { detail: { paths } }));
 });

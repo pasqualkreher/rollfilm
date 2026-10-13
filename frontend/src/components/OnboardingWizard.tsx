@@ -17,6 +17,18 @@ import { IconX } from "./Icons";
 // Workflow. Steps are assembled at runtime from what's actually available.
 
 const DONE_KEY = "pm:onboarding-done";
+const SHOW_EVENT = "pm:show-onboarding";
+
+// Help's "Show the introduction again": the wizard opens from its first step
+// wherever the app is.
+export function showOnboardingAgain() {
+  try {
+    localStorage.removeItem(DONE_KEY);
+  } catch {
+    /* ignore */
+  }
+  window.dispatchEvent(new Event(SHOW_EVENT));
+}
 
 type LegacyDir = { path: string; sizeBytes: number };
 type StepId = "welcome" | "cleanup" | "library" | "style" | "workflow" | "settings";
@@ -41,6 +53,14 @@ export function OnboardingWizard() {
     }
   });
   const [stepIndex, setStepIndex] = useState(0);
+  useEffect(() => {
+    const show = () => {
+      setStepIndex(0);
+      setOpen(true);
+    };
+    window.addEventListener(SHOW_EVENT, show);
+    return () => window.removeEventListener(SHOW_EVENT, show);
+  }, []);
 
   // Set by the first-run library setup right before it reloads into the app. The
   // folder was just chosen (and the multi-library note shown) there, so the
@@ -249,16 +269,17 @@ export function OnboardingWizard() {
               </p>
               <ol className="onboarding-workflow">
                 <li>
-                  <strong>Import</strong>: drop in files or pick a folder. Nothing enters your library
-                  until you click <em>Add to library</em>.
+                  <strong>Import</strong>: drop a card or folder on the window, or pick one. Nothing
+                  enters your library until you click <em>Add to library</em>.
                 </li>
                 <li>
-                  <strong>Browse &amp; cull</strong>: rate, label and tag, then filter. The search
-                  understands plain language, such as <em>"dog on a beach"</em>.
+                  <strong>Browse &amp; cull</strong>: <kbd>P</kbd> picks, <kbd>X</kbd> rejects,{" "}
+                  <kbd>0</kbd>–<kbd>5</kbd> rate, <kbd>6</kbd>–<kbd>9</kbd> label, then filter. The
+                  search understands plain language, such as <em>"dog on a beach"</em>.
                 </li>
                 <li>
-                  <strong>Collect</strong>: gather photos into albums, or tick a few and export them
-                  as a zip.
+                  <strong>Collect</strong>: ⌘-click or drag across photos to select them, then put
+                  them in an album, on a canvas, or export them. Right-click offers everything.
                 </li>
                 <li>
                   <strong>Edit</strong>: adjust tone, color and film-style effects. The original file

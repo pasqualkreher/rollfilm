@@ -1,34 +1,100 @@
+import { api } from "../api/client";
 import { normalizeAdjustments, type Adjustments } from "./adjustments";
 
 // A saved editing preset: the whole develop object (tone / colour / presence /
 // details / effects, plus the nested curves / grading / masks). Geometry
 // (rotation / crop / flip / straighten / perspective / distortion) is
-// intentionally excluded - it's per photo, not a look. Stored in localStorage so
-// presets persist across sessions.
+// intentionally excluded - it's per photo, not a look.
+//
+// Presets live in the library's database (routes/develop_presets.py), so they
+// are in the backup and on every computer that opens the library. The editor
+// and the grids read them synchronously, so this module keeps a cache of
+// them, filled at start (initPresets) and kept in step by every write here;
+// listeners (subscribePresets) hear when it changes. Presets from before -
+// in this browser's storage - are moved into the database once.
 export interface EditPreset {
   adjustments: Adjustments;
 }
 
-const KEY = "pm.editorPresets";
+const LEGACY_KEY = "pm.editorPresets";
+
+let cache: Record<string, EditPreset> = {};
+const ids = new Map<string, string>();
+const listeners = new Set<() => void>();
+let started: Promise<void> | null = null;
+
+function publish() {
+  for (const l of listeners) l();
+}
+
+export function subscribePresets(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+async function refresh(): Promise<void> {
+  const rows = await api.developPresets.list();
+  const next: Record<string, EditPreset> = {};
+  ids.clear();
+  for (const row of rows) {
+    next[row.name] = { adjustments: row.adjustments as unknown as Adjustments };
+    ids.set(row.name, row.id);
+  }
+  cache = next;
+  publish();
+}
+
+// Once per app start: the old browser presets go to the database first (the
+// server's import takes the old file format as it is), then the list is read.
+export function initPresets(): Promise<void> {
+  if (started) return started;
+  started = (async () => {
+    let legacy: string | null = null;
+    try {
+      legacy = localStorage.getItem(LEGACY_KEY);
+    } catch {
+      legacy = null;
+    }
+    if (legacy && legacy !== "{}") {
+      try {
+        await api.developPresets.importFile({ format: FILE_FORMAT, version: 1, presets: JSON.parse(legacy) });
+        localStorage.removeItem(LEGACY_KEY);
+      } catch {
+        // Left in place: the next start tries again.
+      }
+    }
+    try {
+      await refresh();
+    } catch {
+      started = null; // the backend was not up yet: try again on the next call
+    }
+  })();
+  return started;
+}
 
 export function loadPresets(): Record<string, EditPreset> {
-  try {
-    return JSON.parse(localStorage.getItem(KEY) || "{}") as Record<string, EditPreset>;
-  } catch {
-    return {};
-  }
+  return { ...cache };
 }
 
 export function savePreset(name: string, preset: EditPreset): void {
-  const all = loadPresets();
-  all[name] = preset;
-  localStorage.setItem(KEY, JSON.stringify(all));
+  cache = { ...cache, [name]: preset };
+  publish();
+  const id = ids.get(name);
+  const write = id
+    ? api.developPresets.update(id, { adjustments: preset.adjustments })
+    : api.developPresets.create({ name, adjustments: preset.adjustments });
+  void write.then((row) => ids.set(row.name, row.id)).catch(() => void refresh().catch(() => {}));
 }
 
 export function deletePreset(name: string): void {
-  const all = loadPresets();
-  delete all[name];
-  localStorage.setItem(KEY, JSON.stringify(all));
+  const { [name]: _gone, ...rest } = cache;
+  cache = rest;
+  publish();
+  const id = ids.get(name);
+  ids.delete(name);
+  if (id) void api.developPresets.remove(id).catch(() => void refresh().catch(() => {}));
 }
 
 // The develop object applying a preset gives: complete and in range, whatever

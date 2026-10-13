@@ -63,6 +63,54 @@ def run_migrations_with_retry(attempts: int = 5, delay_s: float = 2.0) -> None:
             time.sleep(delay_s)
 
 
+def snapshot_before_migration() -> None:
+    """A copy of the database before Alembic changes its layout - the one
+    moment a catalog can be lost to a bug in a migration. Only when a
+    migration is actually due (a start that changes nothing takes no copy),
+    and never a reason for the start to fail."""
+    from app.config import settings
+
+    if not settings.db_path.exists():
+        return
+    try:
+        import sqlite3
+
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        cfg = Config(str(BASE_DIR / "alembic.ini"))
+        cfg.set_main_option("script_location", str(BASE_DIR / "app" / "db" / "migrations"))
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        conn = sqlite3.connect(str(settings.db_path), timeout=30)
+        try:
+            row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+        except sqlite3.OperationalError:
+            row = None
+        finally:
+            conn.close()
+        current = row[0] if row else None
+        if current == head:
+            return
+        from app.services.db_snapshots import take_snapshot
+
+        path = take_snapshot("migration", current or "fresh")
+        print(f"[startup] database snapshot before migration {current} -> {head}: {path}", flush=True)
+    except Exception as exc:  # noqa: BLE001 - a missing snapshot must not stop the app
+        print(f"[startup] database snapshot before migration skipped: {exc}", flush=True)
+
+
+def apply_database_restore() -> None:
+    """A snapshot the user marked in Settings takes the database's place
+    before anything opens it (services/db_snapshots.apply_pending_restore)."""
+    try:
+        from app.services.db_snapshots import apply_pending_restore
+
+        if apply_pending_restore():
+            print("[startup] database restored from the marked snapshot", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[startup] database restore failed, starting with the current database: {exc}", flush=True)
+
+
 def rehydrate_database() -> None:
     """A cloud-synced library folder (iCloud & co.) may have evicted the SQLite
     files to dataless placeholders. The very first read would then block inside
@@ -169,6 +217,8 @@ def main() -> None:
     use_bundled_ca_certificates()
     raise_open_files_limit()
     rehydrate_database()
+    apply_database_restore()
+    snapshot_before_migration()
     run_migrations_with_retry()
 
     # Root logging config so the app's own INFO lines (e.g. the per-batch

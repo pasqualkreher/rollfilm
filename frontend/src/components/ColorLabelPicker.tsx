@@ -22,23 +22,32 @@ interface Props {
   onChange?: (value: ColorLabel) => void;
 }
 
+// The swatches are buttons: reachable with Tab, pressed with Space, named
+// for a screen reader, and disabled where the picker only shows.
 export function ColorLabelPicker({ value, onChange }: Props) {
   return (
-    <span className="color-label-picker">
-      {COLORS.map((c) => (
-        <span
-          key={c.value}
-          className={`color-swatch${c.value === "none" ? " color-swatch-none" : ""}${
-            value === c.value ? " selected" : ""
-          }`}
-          style={c.value === "none" ? undefined : { background: c.hex }}
-          title={c.value === "none" ? "No color / any" : c.value}
-          onClick={(e) => {
-            e.stopPropagation();
-            onChange?.(c.value);
-          }}
-        />
-      ))}
+    <span className="color-label-picker" role="group" aria-label="Color label">
+      {COLORS.map((c) => {
+        const name = c.value === "none" ? "No color" : c.value[0].toUpperCase() + c.value.slice(1);
+        return (
+          <button
+            type="button"
+            key={c.value}
+            className={`color-swatch${c.value === "none" ? " color-swatch-none" : ""}${
+              value === c.value ? " selected" : ""
+            }`}
+            style={c.value === "none" ? undefined : { background: c.hex }}
+            title={c.value === "none" ? "No color / any" : name}
+            aria-label={name}
+            aria-pressed={value === c.value}
+            disabled={!onChange}
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange?.(c.value);
+            }}
+          />
+        );
+      })}
     </span>
   );
 }

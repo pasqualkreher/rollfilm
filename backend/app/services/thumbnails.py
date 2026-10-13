@@ -136,16 +136,74 @@ def derivative_dir(image_id: str) -> Path:
 # derivatives - without this, every request thread ran its own full (RAW)
 # decode of the same photo, multiplying the post-import CPU load for nothing.
 # RLock so ensure_derivatives can call generate_derivatives under its own lock.
-_gen_locks: dict[str, threading.RLock] = {}
+#
+# The table is bounded. It used to keep one lock per image id ever touched -
+# a rebuild over a 50k-photo library left 50k RLocks behind for the life of
+# the process. Past _GEN_LOCKS_MAX the least recently asked-for locks go, but
+# only ones nobody holds or waits for: _gen_locked counts its holders, so a
+# second caller for the same photo always meets the same object, which is
+# what the lock is for.
+_GEN_LOCKS_MAX = 4096
+
+
+class _GenLock:
+    __slots__ = ("lock", "holders")
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.holders = 0
+
+
+_gen_locks: OrderedDict[str, _GenLock] = OrderedDict()
 _gen_locks_guard = threading.Lock()
 
 
+def _gen_lock_entry(image_id: str) -> _GenLock:
+    """The image's entry, made if missing and moved to the recent end. Under
+    _gen_locks_guard."""
+    entry = _gen_locks.get(image_id)
+    if entry is None:
+        entry = _gen_locks[image_id] = _GenLock()
+        _prune_gen_locks()
+    else:
+        _gen_locks.move_to_end(image_id)
+    return entry
+
+
+def _prune_gen_locks() -> None:
+    """Drop the oldest unheld locks until the table fits. Under _gen_locks_guard."""
+    if len(_gen_locks) <= _GEN_LOCKS_MAX:
+        return
+    for image_id, entry in list(_gen_locks.items()):
+        if len(_gen_locks) <= _GEN_LOCKS_MAX:
+            break
+        if entry.holders == 0:
+            del _gen_locks[image_id]
+
+
 def _gen_lock(image_id: str) -> threading.RLock:
+    """The lock itself, for a caller that holds it on its own. Not counted:
+    the table may let it go while held, and the next caller for the photo
+    gets a fresh one. _gen_locked is the safe way in."""
     with _gen_locks_guard:
-        lock = _gen_locks.get(image_id)
-        if lock is None:
-            lock = _gen_locks[image_id] = threading.RLock()
-        return lock
+        return _gen_lock_entry(image_id).lock
+
+
+@contextmanager
+def _gen_locked(image_id: str, timeout: float | None):
+    """Hold the image's generation lock, giving up with RenderBusy after
+    `timeout` seconds (None waits; see _locked). The entry is pinned in the
+    table from the first wait to the release."""
+    with _gen_locks_guard:
+        entry = _gen_lock_entry(image_id)
+        entry.holders += 1
+    try:
+        with _locked(entry.lock, timeout):
+            yield
+    finally:
+        with _gen_locks_guard:
+            entry.holders -= 1
+            _prune_gen_locks()
 
 
 # --- Render admission control -------------------------------------------------
@@ -1785,11 +1843,13 @@ def _banded_local(
     return out
 
 
-def _sharpen_halo(radius: float) -> int:
+def _sharpen_halo(radius: float, masking: bool = False) -> int:
     """Rows a sharpening pass of this Gaussian sigma reads beyond its own:
     cv2 cuts a float kernel at 4 sigma, and develop_v2.sharpen looks one more
-    row out for the tones around each pixel."""
-    return int(np.ceil(4.0 * radius)) + 2
+    row out for the tones around each pixel. Masking (_sharpen_mask) reads
+    its own neighbourhood on top: the gradient's pre-blur and Sobel, and the
+    blur that softens the mask."""
+    return int(np.ceil(4.0 * radius)) + 2 + (_SHARPEN_MASK_HALO if masking else 0)
 
 
 def _to_output_depth(arr: np.ndarray, depth16: bool) -> np.ndarray:
@@ -2168,17 +2228,96 @@ def _unsharp(arr: np.ndarray, radius: float, amount: float, threshold: float = 0
     return np.clip(arr + amount * hp, 0.0, 1.0)
 
 
+# Sharpening's Masking slider: how much of the sharpening is kept off flat
+# areas. The edge strength is the luma gradient in luma per pixel at the edge
+# mask's reference size (masks._EDGE_WORK_PX), so the preview and the full
+# render mask the same places. Masking raises the edge it asks for, from
+# texture (0.01) to clear contours (0.05), over a soft ramp.
+_SHARPEN_MASK_REF_PX = 1600.0
+_SHARPEN_MASK_LO = 0.01
+_SHARPEN_MASK_RISE = 0.04
+_SHARPEN_MASK_SPAN = 0.06
+_SHARPEN_MASK_HALO = 11
+
+
+def _sharpen_mask(rows: np.ndarray, masking: float, long_edge: float) -> np.ndarray:
+    """Where sharpening applies, 0..1 per pixel: 1 everywhere at masking 0;
+    at 100 only along edges, flat areas exactly 0. In between the flat areas
+    keep the share of the sharpening the slider leaves them (1 - masking),
+    and the edges asked for get stronger - the squared edge strength keeps
+    soft texture out longer than a crisp contour."""
+    t = max(0.0, min(1.0, masking / 100.0))
+    y = np.ascontiguousarray(np.clip(rows, 0.0, 1.0) @ _LUMA, dtype=np.float32)
+    sm = cv2.GaussianBlur(y, (0, 0), 1.0)
+    gx = cv2.Sobel(sm, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(sm, cv2.CV_32F, 0, 1, ksize=3)
+    # A 3x3 Sobel sums to 8x the per-pixel difference; then into reference units.
+    mag = np.sqrt(gx * gx + gy * gy) * (float(long_edge) / _SHARPEN_MASK_REF_PX / 8.0)
+    lo = _SHARPEN_MASK_LO + t * _SHARPEN_MASK_RISE
+    edge = np.clip((mag - lo) / _SHARPEN_MASK_SPAN, 0.0, 1.0)
+    weight = (1.0 - t) + t * edge * edge
+    return cv2.GaussianBlur(weight.astype(np.float32), (0, 0), 1.0)
+
+
 def _sharpen(
-    arr: np.ndarray, v2: bool, radius: float, amount: float, threshold: float = 0.0
+    arr: np.ndarray, v2: bool, radius: float, amount: float, threshold: float = 0.0,
+    masking: float = 0.0, ref_long_edge: float | None = None,
 ) -> np.ndarray:
     """The Sharpness slider: +sharpen / -soften. Process version 2 sharpens
     luminance only (develop_v2.sharpen); softening and version 1 are the plain
     unsharp mask. Either reads only a few rows around each pixel, so a big
-    frame is sharpened band by band (_banded_local)."""
+    frame is sharpened band by band (_banded_local). `masking` (0..100, the
+    Masking slider) keeps sharpening off flat areas (_sharpen_mask); it does
+    nothing to softening, and at 0 the pass is exactly what it was before
+    the slider existed."""
     fn = develop_v2.sharpen if v2 and amount > 0 else _unsharp
-    return _banded_local(
-        lambda rows: fn(rows, radius, amount, threshold=threshold), arr, _sharpen_halo(radius)
-    )
+    if masking <= 0 or amount <= 0:
+        return _banded_local(
+            lambda rows: fn(rows, radius, amount, threshold=threshold), arr, _sharpen_halo(radius)
+        )
+    long_edge = float(ref_long_edge or max(arr.shape[:2]))
+
+    def masked(rows: np.ndarray) -> np.ndarray:
+        sharp = fn(rows, radius, amount, threshold=threshold)
+        weight = _sharpen_mask(rows, masking, long_edge)[..., None]
+        sharp -= rows
+        sharp *= weight
+        sharp += rows
+        return sharp
+
+    return _banded_local(masked, arr, _sharpen_halo(radius, masking=True))
+
+
+def _sharpen_radius(long_edge: float, adj: dict) -> float:
+    """The sharpening sigma for a frame of this long edge: a fine, tight edge
+    enhancement capped at 2px, scaled by the Radius slider (100 = as it
+    always was)."""
+    radius = min(2.0, max(0.6, long_edge / 2000.0))
+    scale = adj.get("sharpness_radius", 100)
+    return radius if scale == 100 else radius * scale / 100.0
+
+
+def _defringe(arr: np.ndarray, purple: int, green: int, long_edge: float) -> np.ndarray:
+    """develop_effects.defringe on a frame, band by band: it reads only
+    defringe_halo rows around each one. A big frame on a machine without the
+    band pool still goes in bands, one after the other - the pass holds an
+    Oklab copy and a handful of planes per pixel, which a 40MP frame cannot
+    afford whole on 8GB."""
+    halo = develop_effects.defringe_halo(long_edge)
+
+    def fn(rows: np.ndarray) -> np.ndarray:
+        return develop_effects.defringe(rows, purple, green, long_edge)
+
+    h, w = arr.shape[:2]
+    if h * w < _TONE_BAND_MIN_PX or arr.dtype != np.float32:
+        return fn(arr)
+    if _band_pool() is not None:
+        return _banded_local(fn, arr, halo)
+    out = np.empty_like(arr)
+    for y0, y1 in _row_bands(h):
+        e0, e1 = max(0, y0 - halo), min(h, y1 + halo)
+        out[y0:y1] = fn(arr[e0:e1])[y0 - e0 : y1 - e0]
+    return out
 
 
 def _guided_filter(plane: np.ndarray, radius: int, eps: float) -> np.ndarray:
@@ -2336,8 +2475,9 @@ def _apply_local_adjustments(
     sp = full.get("sharpness", 0)
     if sp:
         arr = _sharpen(
-            arr, v2, min(2.0, max(0.6, long_edge / 2000.0)), sp / 100.0 * 1.2,
+            arr, v2, _sharpen_radius(long_edge, full), sp / 100.0 * 1.2,
             full.get("sharpness_threshold", 0),
+            masking=full.get("sharpness_masking", 0), ref_long_edge=long_edge,
         )
     dh = full.get("dehaze", 0)
     if dh:
@@ -2364,7 +2504,9 @@ def _mask_reach(madj: dict, process: str, long_edge: float) -> int | None:
     if full.get("structure", 0):
         reach = max(reach, 4.0 * max(2.0, long_edge / 120.0))
     if full.get("sharpness", 0):
-        reach = max(reach, float(_sharpen_halo(min(2.0, max(0.6, long_edge / 2000.0)))))
+        reach = max(reach, float(_sharpen_halo(
+            _sharpen_radius(long_edge, full), masking=bool(full.get("sharpness_masking", 0))
+        )))
     full["process"] = process
     if develop_v2.local_tone_active(full):
         # The surroundings map: three box blurs of _LOCAL_RADIUS at the
@@ -2496,6 +2638,7 @@ _POST_DENOISE_KEYS = frozenset({
     # Detail (spatial)
     "clarity", "structure", "sharpness", "sharpness_threshold", "dehaze",
     "chromatic_aberration_red_cyan", "chromatic_aberration_blue_yellow",
+    "sharpness_radius", "sharpness_masking", "defringe_purple", "defringe_green",
     # Display colour block
     "film_sim", "lut_intensity", "curve_mode", "point_curves", "parametric_curve",
     "color_calibration", "hsl", "hsl_range", "hue", "chrome_effect", "chrome_blue",
@@ -2617,6 +2760,7 @@ def _tone_stage_put(key: str | None, arr: np.ndarray) -> None:
 _POST_DETAIL_KEYS = frozenset(_POST_DENOISE_KEYS - {
     "clarity", "structure", "sharpness", "sharpness_threshold", "dehaze",
     "chromatic_aberration_red_cyan", "chromatic_aberration_blue_yellow",
+    "sharpness_radius", "sharpness_masking", "defringe_purple", "defringe_green",
 })
 
 _detail_stage: "OrderedDict[str, np.ndarray]" = OrderedDict()
@@ -2649,6 +2793,7 @@ def _detail_block_active(adj: dict) -> bool:
         or adj.get("chromatic_aberration_red_cyan", 0)
         or adj.get("chromatic_aberration_blue_yellow", 0)
         or adj.get("dehaze", 0)
+        or adj.get("defringe_purple", 0) or adj.get("defringe_green", 0)
     )
 
 
@@ -3008,10 +3153,19 @@ def apply_adjustments_linear(
             # Process version 2 sharpens luminance only and holds the result
             # near the tones around each pixel (develop_v2.sharpen).
             arr = _sharpen(
-                arr, develop_v2.is_v2(adj), min(2.0, max(0.6, long_edge / 2000.0)),
+                arr, develop_v2.is_v2(adj), _sharpen_radius(long_edge, adj),
                 sp / 100.0 * 1.2, adj.get("sharpness_threshold", 0),
+                masking=adj.get("sharpness_masking", 0), ref_long_edge=long_edge,
             )
             owned = True
+        # Defringe after sharpening: a sharpened seam is the more saturated
+        # one, and sharpening after it would put back some of what it took.
+        fp, fg = adj.get("defringe_purple", 0), adj.get("defringe_green", 0)
+        if fp or fg:
+            defringed = _defringe(arr, fp, fg, long_edge)
+            # A frame with no seam in it comes back as it went in.
+            owned = owned or defringed is not arr
+            arr = defringed
         ca_rc = adj.get("chromatic_aberration_red_cyan", 0)
         ca_by = adj.get("chromatic_aberration_blue_yellow", 0)
         if ca_rc or ca_by:
@@ -3167,7 +3321,7 @@ def generate_derivatives(
     color rendering - see extract_full_preview()), then the user's manual
     rotation/crop (if any) is layered on top before resizing.
     """
-    with _locked(_gen_lock(image_id), slot_timeout), _render_admission(slot_timeout):
+    with _gen_locked(image_id, slot_timeout), _render_admission(slot_timeout):
         out_dir = derivative_dir(image_id)
         # Both outputs are capped (PREVIEW_RENDER_MAX_PX / THUMBNAIL_MAX_PX), yet
         # a 26MP camera JPEG used to be decoded and pushed through the whole
@@ -3245,8 +3399,7 @@ def _write_grid_tiers(
 
     # The full-resolution derivative (for 100% zoom) is now stale - drop it so it
     # is regenerated on next request with the new edits.
-    (out_dir / "full.jpg").unlink(missing_ok=True)
-    (out_dir / "half.jpg").unlink(missing_ok=True)
+    _unlink_full_cache(out_dir)
 
 
 def generate_untouched_derivatives(
@@ -3262,7 +3415,7 @@ def generate_untouched_derivatives(
     No render slot: there is no float frame here, only the reduced 8-bit
     decode, so these run on every worker instead of queueing for the two or
     three slots the gigabyte renders are rationed to."""
-    with _locked(_gen_lock(image_id), slot_timeout):
+    with _gen_locked(image_id, slot_timeout):
         out_dir = derivative_dir(image_id)
         with PILImage.open(source_path) as im:
             original = max(raw_service._oriented_size(im))
@@ -3305,7 +3458,7 @@ def ensure_derivatives(image: "Image", slot_timeout: float | None = None) -> Non
     `slot_timeout` is passed straight through to generate_derivatives, so a
     request handler can bound its wait and get RenderBusy rather than occupying
     a server thread through someone else's render."""
-    with _locked(_gen_lock(image.id), slot_timeout):
+    with _gen_locked(image.id, slot_timeout):
         if has_derivatives(image.id):
             return
         regenerate_for_image(image, slot_timeout=slot_timeout)
@@ -3323,7 +3476,7 @@ def ensure_small(image: "Image", slot_timeout: float | None = None) -> Path:
     dest = derivative_path(image.id) / "small.jpg"
     if dest.exists():
         return dest
-    with _locked(_gen_lock(image.id), slot_timeout):
+    with _gen_locked(image.id, slot_timeout):
         if dest.exists():
             return dest
         thumb_path = derivative_path(image.id) / "thumbnail.jpg"
@@ -5049,6 +5202,170 @@ def render_full_from_stored_edits(
     return rendered
 
 
+# --- The full-resolution disk cache's budget -----------------------------------
+# full.jpg (the 100%-zoom render, which an export encodes from too) and
+# half.jpg (the lightbox's 3900px tier) are written per photo when a raw is
+# zoomed to 100% or the warmer runs after an edit, and were only ever removed
+# when the edit changed or the photo went - so the folder grew toward the
+# library's own size, 10-20 MB per raw. A budget (settings_store
+# FULL_CACHE_BUDGET_MB, 0 = unlimited) and a collector that drops the least
+# recently used files until the cache fits. "Used" is the later of atime and
+# mtime: the backend serves these two files itself (the desktop shell's rf://
+# scheme reads only the grid tiers off disk), so a read moves atime where the
+# volume keeps one, the hits that pass through this module touch the file
+# outright (note_full_cache_hit), and the write is the floor. A running total
+# in memory makes the check after each write free; the walk that counts the
+# folder runs in the background, the first time a file lands and with every
+# collection - never on the thread that rendered. Files that go without
+# passing through here (the Trash, a source removed) leave the total too
+# high until the next walk, which only makes the collector look sooner.
+_FULL_CACHE_FILES = ("full.jpg", "half.jpg")
+_full_cache_lock = threading.Lock()
+# None until the first walk: the first write then starts one.
+_full_cache_bytes: int | None = None
+# The budget as last read from the settings (None = unlimited); the default
+# until the collector's first run reads the stored one.
+_full_cache_budget_bytes: int | None = 4096 * 1024 * 1024
+_full_cache_gc_thread: "threading.Thread | None" = None
+
+
+def _walk_full_cache(root: Path) -> list[tuple[float, int, str, str]]:
+    """(last use, size, path, image id) of every cached full/half file under
+    `root` - one folder per image id, the two names inside."""
+    found: list[tuple[float, int, str, str]] = []
+    try:
+        entries = os.scandir(root)
+    except OSError:
+        return found
+    with entries:
+        for entry in entries:
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
+                continue
+            for name in _FULL_CACHE_FILES:
+                path = os.path.join(entry.path, name)
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                found.append((max(st.st_atime, st.st_mtime), st.st_size, path, entry.name))
+    return found
+
+
+def gc_full_cache(budget_mb: int, exclude_image_id: str | None = None, root: Path | None = None) -> int:
+    """Drop the least recently used full.jpg/half.jpg under `root` (the
+    thumbnail cache) until they fit `budget_mb`; 0 deletes nothing and only
+    recounts. The files of `exclude_image_id` - the photo whose render just
+    landed, which the lightbox is about to read - stay whatever their age.
+    Returns the bytes freed."""
+    global _full_cache_bytes
+    root = root or settings.thumbnail_cache_root
+    files = _walk_full_cache(root)
+    total = sum(size for _, size, _, _ in files)
+    freed = 0
+    budget = int(budget_mb) * 1024 * 1024
+    if budget > 0 and total > budget:
+        for _, size, path, image_id in sorted(files):
+            if total - freed <= budget:
+                break
+            if image_id == exclude_image_id:
+                continue
+            try:
+                os.unlink(path)
+            except OSError:
+                # Gone already, or open on Windows: someone else's problem.
+                continue
+            freed += size
+    with _full_cache_lock:
+        _full_cache_bytes = total - freed
+    return freed
+
+
+def note_full_cache_hit(path: Path) -> None:
+    """A cached file was read: mark it used, so the collector takes others
+    first. One syscall; a failure means nothing."""
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
+def set_full_cache_budget_mb(budget_mb: int) -> None:
+    """The live budget, for a settings change: takes effect with the next
+    write (the stored value is read again when the collector runs)."""
+    global _full_cache_budget_bytes
+    with _full_cache_lock:
+        _full_cache_budget_bytes = budget_mb * 1024 * 1024 if budget_mb > 0 else None
+
+
+def _unlink_full_cache(out_dir: Path) -> None:
+    """Drop a photo's cached full/half files (its edit changed), keeping the
+    running total right."""
+    global _full_cache_bytes
+    for name in _FULL_CACHE_FILES:
+        path = out_dir / name
+        try:
+            size = path.stat().st_size
+            path.unlink()
+        except OSError:
+            continue
+        with _full_cache_lock:
+            if _full_cache_bytes is not None:
+                _full_cache_bytes = max(0, _full_cache_bytes - size)
+
+
+def _note_full_cache_write(path: Path, image_id: str) -> None:
+    """A full/half file landed: add it to the total, and when the total is
+    not known yet or over budget, collect in the background. One collector at
+    a time; a write during its walk is picked up by the next one."""
+    global _full_cache_bytes, _full_cache_gc_thread
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    with _full_cache_lock:
+        if _full_cache_bytes is not None:
+            _full_cache_bytes += size
+        over = _full_cache_bytes is None or (
+            _full_cache_budget_bytes is not None and _full_cache_bytes > _full_cache_budget_bytes
+        )
+        if not over or (_full_cache_gc_thread is not None and _full_cache_gc_thread.is_alive()):
+            return
+        _full_cache_gc_thread = threading.Thread(
+            target=_full_cache_gc_run, args=(image_id,), name="full-cache-gc", daemon=True
+        )
+        _full_cache_gc_thread.start()
+
+
+def _read_full_cache_budget_mb() -> int:
+    from app.db.session import SessionLocal
+    from app.services.settings_store import get_full_cache_budget_mb
+
+    db = SessionLocal()
+    try:
+        return get_full_cache_budget_mb(db)
+    finally:
+        db.close()
+
+
+def _full_cache_gc_run(exclude_image_id: str) -> None:
+    try:
+        budget_mb = _read_full_cache_budget_mb()
+    except Exception:
+        logger.exception("Could not read the full cache budget; keeping the last one")
+        with _full_cache_lock:
+            budget_mb = (_full_cache_budget_bytes or 0) // (1024 * 1024)
+    set_full_cache_budget_mb(budget_mb)
+    try:
+        freed = gc_full_cache(budget_mb, exclude_image_id)
+        if freed:
+            logger.info("Full-resolution cache trimmed by %.0f MB to fit %d MB", freed / 1024 / 1024, budget_mb)
+    except Exception:
+        logger.exception("Full-resolution cache collection failed")
+
+
 # Background warmer for the full.jpg cache: after an edit save, pre-render the
 # 100%-zoom/export JPEG so the user's next export (or 100% zoom) of that photo
 # is near-instant instead of paying the ~14s full RAW render. One daemon
@@ -5213,15 +5530,40 @@ def _finished(im: PILImage.Image, finish: "export_finish.Finish | None") -> PILI
     return PILImage.fromarray(export_finish.apply(np.asarray(im), finish))
 
 
+# The quality full.jpg is written at (the 100%-zoom cache an export encodes
+# from). An export asking for more must not be made from it: re-encoding a
+# q90 4:2:0 file at q100 only spends bytes on its artefacts.
+_FULL_CACHE_QUALITY = 90
+
+
+def _jpeg_bytes(im: PILImage.Image, quality: int) -> bytes:
+    """`im` as export JPEG bytes. At the top of the quality range without
+    chroma subsampling (4:4:4), like save_copy._encode: quality alone still
+    halves the colour resolution, which shows on saturated edges."""
+    buf = io.BytesIO()
+    im.save(
+        buf, "JPEG", quality=quality, subsampling=0 if quality >= 95 else -1,
+        icc_profile=raw_service.srgb_icc_bytes(),
+    )
+    return buf.getvalue()
+
+
 def _encode_jpeg_file(
-    path: Path, quality: int, max_size: int | None, finish: "export_finish.Finish | None" = None
+    path: Path, quality: int, max_size: int | None, finish: "export_finish.Finish | None" = None,
+    size: "export_finish.Size | None" = None,
 ) -> bytes:
     """Decode an already-finished JPEG/PNG and re-encode it at the export
     quality/size - the cheap tail shared by every export fast path. draft()
     must run before any pixel access (it picks the DCT decode scale), and its
     target is orientation-agnostic (long edge), so calling it on the
-    pre-transpose size is fine."""
+    pre-transpose size is fine. `size` (an export_finish.Size) replaces
+    `max_size` when given, and may also enlarge."""
     im = PILImage.open(path)
+    upscale_to = None
+    if size is not None:
+        target = size.target_long(*im.size)
+        max_size = target if target and target < max(im.size) else None
+        upscale_to = target if target and target > max(im.size) else None
     if max_size:
         w, h = im.size
         long_edge = max(w, h)
@@ -5233,9 +5575,9 @@ def _encode_jpeg_file(
     im = raw_service.to_srgb(ImageOps.exif_transpose(im)).convert("RGB")
     if max_size and max(im.size) > max_size:
         im.thumbnail((max_size, max_size), PILImage.LANCZOS)
-    buf = io.BytesIO()
-    _finished(im, finish).save(buf, "JPEG", quality=quality, icc_profile=raw_service.srgb_icc_bytes())
-    return buf.getvalue()
+    if upscale_to:
+        im = export_finish.resize_image(im, export_finish.Size("long", upscale_to, no_upscale=False))
+    return _jpeg_bytes(_finished(im, finish), quality)
 
 
 def is_untouched(image: "Image") -> bool:
@@ -5265,6 +5607,7 @@ def export_jpeg_bytes(
     quality: int,
     max_size: int | None = None,
     finish: "export_finish.Finish | None" = None,
+    size: "export_finish.Size | None" = None,
 ) -> bytes:
     """Export-optimised JPEG bytes of a photo with its saved edits baked in.
 
@@ -5279,54 +5622,110 @@ def export_jpeg_bytes(
     100% zoom) of that photo is fast.
 
     `finish` (output sharpening, a watermark) goes onto the exported pixels
-    only - the cache keeps the picture as the library shows it."""
+    only - the cache keeps the picture as the library shows it.
+
+    A quality above the cache's own (_FULL_CACHE_QUALITY) skips full.jpg and
+    encodes from the render - the last full render kept in memory
+    (_last_full_render) when it is this one, a fresh one otherwise.
+
+    `size` (export_finish.Size) replaces `max_size` when given: the long or
+    short edge, megapixels or a percentage, enlarging when it may."""
     from app.services.filesystem import resolve_image_path
 
+    cap = size.cap() if size is not None else max_size
+    from_cache = quality <= _FULL_CACHE_QUALITY
     full_path = derivative_dir(image.id) / "full.jpg"
-    if full_path.exists():
-        return _encode_jpeg_file(full_path, quality, max_size, finish)
+    if from_cache and full_path.exists():
+        note_full_cache_hit(full_path)
+        return _encode_jpeg_file(full_path, quality, max_size, finish, size)
 
     source_path = resolve_image_path(image)
     if not raw_service.is_raw(source_path) and _is_untouched(image):
-        return _encode_jpeg_file(source_path, quality, max_size, finish)
+        return _encode_jpeg_file(source_path, quality, max_size, finish, size)
 
     with _full_render_lock:
         # A concurrent native render (the post-save warmer, the lightbox /full
         # endpoint, a sibling export) may have landed full.jpg while this
         # thread waited on the lock. Without the recheck the "edit, export
         # right away" flow rendered the same 14s frame twice back to back.
-        if full_path.exists():
-            return _encode_jpeg_file(full_path, quality, max_size, finish)
-        rendered = render_full_from_stored_edits(image, max_size=max_size)
-        buf = io.BytesIO()
-        _finished(rendered, finish).save(
-            buf, "JPEG", quality=quality, icc_profile=raw_service.srgb_icc_bytes()
-        )
-        data = buf.getvalue()
+        if from_cache and full_path.exists():
+            return _encode_jpeg_file(full_path, quality, max_size, finish, size)
+        rendered = render_full_from_stored_edits(image, max_size=cap)
+        data = _jpeg_bytes(_finished(export_finish.resize_image(rendered, size), finish), quality)
         # Only a full-resolution render is a valid 100%-zoom cache; a sized
         # export was decoded economically (possibly the half-size demosaic).
-        if not max_size:
+        if not cap and not full_path.exists():
             try:
-                _save_atomic(rendered, full_path, quality=90)
+                _save_atomic(rendered, full_path, quality=_FULL_CACHE_QUALITY)
+                _note_full_cache_write(full_path, image.id)
             except Exception:
                 logger.exception("Could not fill the full.jpg cache for %s", image.id)
         return data
 
 
+# TIFF compression by name, as libtiff numbers it. LZW is what cv2 writes
+# when asked nothing, so the default export stays the file it always was;
+# deflate is the Adobe code, the one other programs read.
+_TIFF_COMPRESSION = {"none": 1, "lzw": 5, "deflate": 8}
+
+
 def export_tiff_bytes(
-    image: "Image", max_size: int | None = None, finish: "export_finish.Finish | None" = None
+    image: "Image", max_size: int | None = None, finish: "export_finish.Finish | None" = None,
+    size: "export_finish.Size | None" = None, bits: int = 16, compression: str = "lzw",
 ) -> bytes:
     """A 16-bit sRGB TIFF of a photo with its saved edits baked in - for work
     that continues elsewhere (print, retouching), where an 8-bit JPEG's 256
     levels band as soon as a sky is pushed again. Always the true render: the
-    cached full.jpg is 8-bit, so there is no fast path to take."""
-    rendered = export_finish.apply(
-        render_full_from_stored_edits(image, max_size=max_size, depth16=True), finish
-    )
-    ok, buf = cv2.imencode(".tiff", np.ascontiguousarray(rendered[..., ::-1]))
+    cached full.jpg is 8-bit, so there is no fast path to take. `bits` 8
+    writes the 8-bit render instead (smaller, for a print shop that takes
+    nothing else); `compression` none, lzw or deflate."""
+    cap = size.cap() if size is not None else max_size
+    if bits == 8:
+        frame = np.asarray(render_full_from_stored_edits(image, max_size=cap))
+    else:
+        frame = render_full_from_stored_edits(image, max_size=cap, depth16=True)
+    rendered = export_finish.apply(export_finish.resize_array(frame, size), finish)
+    params: list[int] = []
+    if compression != "lzw":
+        params = [cv2.IMWRITE_TIFF_COMPRESSION, _TIFF_COMPRESSION.get(compression, 5)]
+    ok, buf = cv2.imencode(".tiff", np.ascontiguousarray(rendered[..., ::-1]), params)
     if not ok:
         raise RuntimeError("TIFF encoding failed")
     return buf.tobytes()
+
+
+def export_png_bytes(
+    image: "Image", max_size: int | None = None, finish: "export_finish.Finish | None" = None,
+    size: "export_finish.Size | None" = None,
+) -> bytes:
+    """An 8-bit sRGB PNG of a photo with its saved edits baked in: lossless
+    where a JPEG is not, at a fraction of a TIFF's size. The true render, like
+    the TIFF - full.jpg has already lost what a PNG is for."""
+    cap = size.cap() if size is not None else max_size
+    rendered = export_finish.resize_image(render_full_from_stored_edits(image, max_size=cap), size)
+    buf = io.BytesIO()
+    _finished(rendered, finish).save(buf, "PNG", icc_profile=raw_service.srgb_icc_bytes())
+    return buf.getvalue()
+
+
+def export_bytes(
+    image: "Image", fmt: str, quality: int = 90, max_size: int | None = None,
+    finish: "export_finish.Finish | None" = None, size: "export_finish.Size | None" = None,
+    tiff_bits: int = 16, tiff_compression: str = "lzw",
+) -> bytes:
+    """The export of one photo in `fmt` (jpeg | tiff | png). Options at their
+    defaults are not passed on, so an encoder that predates them is called
+    exactly as it always was."""
+    extra: dict = {"size": size} if size is not None else {}
+    if fmt == "tiff":
+        if tiff_bits != 16:
+            extra["bits"] = tiff_bits
+        if tiff_compression != "lzw":
+            extra["compression"] = tiff_compression
+        return export_tiff_bytes(image, max_size, finish=finish, **extra)
+    if fmt == "png":
+        return export_png_bytes(image, max_size, finish=finish, **extra)
+    return export_jpeg_bytes(image, quality, max_size, finish=finish, **extra)
 
 
 def render_untouched_full(image: "Image") -> PILImage.Image:
@@ -5391,6 +5790,7 @@ def generate_half(image: "Image") -> Path:
     whenever the edit changes (generate_derivatives)."""
     out = derivative_dir(image.id) / "half.jpg"
     if out.exists():
+        note_full_cache_hit(out)
         return out
     with _half_render_lock:
         if out.exists():
@@ -5401,6 +5801,7 @@ def generate_half(image: "Image") -> Path:
         t1 = time.perf_counter()
         _save_atomic(rendered, out, quality=90)
         _mark(timing, "encode", t1)
+        _note_full_cache_write(out, image.id)
         ms = (time.perf_counter() - t0) * 1000.0
         if ms >= _SLOW_FULL_MS:
             logger.info(
@@ -5523,6 +5924,7 @@ def generate_full(
             t1 = time.perf_counter()
             _save_atomic(rendered, out, quality=90)
             t2 = time.perf_counter()
+            _note_full_cache_write(out, image.id)
             total_ms = (t2 - t0) * 1000.0
             if total_ms >= _SLOW_FULL_MS:
                 logger.info(

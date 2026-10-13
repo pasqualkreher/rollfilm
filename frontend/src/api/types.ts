@@ -12,6 +12,22 @@ export type ColorLabel =
 
 export type ViewMode = "combined" | "jpeg_only" | "raw_only";
 
+// The culling flag; null = none. "" in an update takes it off.
+export type Flag = "pick" | "reject";
+
+// A develop preset as the library's database keeps it.
+export interface DevelopPresetOut {
+  id: string;
+  name: string;
+  group: string | null;
+  // Which parts of an edit it carries: film, tone, curves, color, details,
+  // effects, masks, retouch.
+  sections: string[];
+  adjustments: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ImageOut {
   id: string;
   original_filename: string;
@@ -23,6 +39,10 @@ export interface ImageOut {
   imported_at: string;
   // Set while the photo sits in the in-app Trash (managed photos only).
   deleted_at: string | null;
+  // Set while the library sync cannot find the photo's file; the photo
+  // stays, badged "Missing", until the file is back or the entry is removed
+  // in Settings.
+  missing_since?: string | null;
   camera_make: string | null;
   camera_model: string | null;
   lens_model: string | null;
@@ -35,6 +55,7 @@ export interface ImageOut {
   gps_country: string | null;
   rating: number;
   color_label: ColorLabel;
+  flag?: Flag | null;
   // Free-text note typed in the detail view; null when there is none.
   description: string | null;
   immich_sync: boolean;
@@ -122,6 +143,9 @@ export interface ImportSettings {
   // Whether stars, colour labels, keywords and captions another program wrote
   // into the files (or .xmp sidecars beside them) come in with the photos.
   read_file_metadata: boolean;
+  // Whether every copy the import writes is read back and its checksum
+  // compared with the source - slower, and the only proof a card can go.
+  verify_copies: boolean;
 }
 
 export interface SidecarSettings {
@@ -382,7 +406,7 @@ export interface CanvasGalleryOut {
 // /smart-albums/{id}/images resolves.
 export interface SmartAlbumOut {
   id: string;
-  kind: "cluster" | "tag" | "year" | "month" | "day" | "place" | "country" | "country_year" | "edits";
+  kind: "cluster" | "tag" | "year" | "month" | "day" | "place" | "country" | "country_year" | "edits" | "imported";
   name: string;
   image_count: number;
   cover_image_id: string | null;
@@ -399,6 +423,8 @@ export interface SmartAlbumsOut {
   // "building" = very first cluster pass; "refreshing" = served clusters are
   // stale and a rebuild runs (e.g. embeddings backfilling after an import).
   clusters_status: "building" | "refreshing" | "ready";
+  // The last days photos were imported on, newest first ("Recent imports").
+  imports: SmartAlbumOut[];
   clusters: SmartAlbumOut[];
   // One album per tag ("albums by tag") - the "tags" section.
   tags: SmartAlbumOut[];
@@ -432,7 +458,7 @@ export interface ExportJobProgress {
   reveal_path: string | null;
 }
 
-export type ExportFormat = "jpeg" | "tiff" | "original";
+export type ExportFormat = "jpeg" | "tiff" | "png" | "original";
 export type ExportSharpen = "off" | "low" | "standard" | "high";
 // What a rendered file says about itself: everything (camera data plus the
 // library's stars, colour label and tags), the same without where it was
@@ -457,6 +483,20 @@ export interface ExportOptions {
   watermark_corner: "tl" | "tr" | "bl" | "br";
   watermark_size: "small" | "medium" | "large";
   watermark_opacity: number;
+  // TIFF depth; how the size is measured (long or short edge in px,
+  // megapixels, per cent of the original) and its value, null = original
+  // size; never enlarged unless no_upscale is off.
+  tiff_bits?: 8 | 16;
+  fit?: "long" | "short" | "megapixels" | "percent";
+  size?: number | null;
+  no_upscale?: boolean;
+  // What the output sharpening is tuned for.
+  sharpen_medium?: "screen" | "matte" | "glossy";
+  // A PNG logo in a corner, beside or instead of the text line.
+  watermark_image?: string;
+  watermark_image_corner?: "tl" | "tr" | "bl" | "br";
+  watermark_image_size?: number;
+  watermark_image_opacity?: number;
 }
 
 export interface ExportPreset {
@@ -792,6 +832,9 @@ export interface LibraryIndexImage {
   thumb_version: string;
   // Set when this row is a virtual copy of another photo (no file of its own).
   virtual_of_image_id: string | null;
+  // The library sync could not find the file: the tile says "Missing".
+  missing: boolean;
+  flag: Flag | null;
 }
 
 // One geotagged photo on the map, slim like the library index.
@@ -832,6 +875,14 @@ export interface LibraryFilters {
   country?: string;
   date_from?: string;
   date_to?: string;
+  // Only the photos whose file the sync could not find.
+  missing?: boolean;
+  // "pick", "reject" or "unflagged".
+  flag?: string;
+  // One day of imports, "YYYY-MM-DD" (UTC).
+  imported?: string;
+  // edited | unedited | unrated | located | unlocated
+  state?: string;
   tags?: string[];
   limit?: number;
 }

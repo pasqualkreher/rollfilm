@@ -1,4 +1,4 @@
-import { memo, type CSSProperties } from "react";
+import { memo, useEffect, useRef, type CSSProperties } from "react";
 import type { SpotDef } from "../utils/adjustments";
 
 // The retouch spots drawn over the canvas the way MaskOverlay draws a mask's
@@ -18,18 +18,65 @@ function SpotOverlayImpl({
   aspect = 1,
   style,
   hidden = false,
+  cursor = null,
+  cursorSink,
 }: {
   spots: SpotDef[];
   selectedId: string | null;
   aspect?: number;
   style?: CSSProperties;
   hidden?: boolean;
+  // The size ring at the pointer while the tool is armed: where it first
+  // appeared and how big; its moves arrive through `cursorSink` and land in
+  // the DOM without a render, the way the brush ring's do (MaskOverlay).
+  cursor?: { x: number; y: number; r: number } | null;
+  cursorSink?: Set<(x: number, y: number) => void>;
 }) {
-  if (hidden || !spots.length) return null;
+  const ringRef = useRef<SVGEllipseElement | null>(null);
+  const ringPosRef = useRef<{ x: number; y: number } | null>(null);
+  const ringShown = cursor !== null;
+  useEffect(() => {
+    if (!ringShown) ringPosRef.current = null;
+  }, [ringShown]);
+  useEffect(() => {
+    if (!cursorSink) return;
+    const move = (x: number, y: number) => {
+      ringPosRef.current = { x, y };
+      const el = ringRef.current;
+      if (el) {
+        el.setAttribute("cx", String(x * 100));
+        el.setAttribute("cy", String(y * 100));
+      }
+    };
+    cursorSink.add(move);
+    return () => {
+      cursorSink.delete(move);
+    };
+  }, [cursorSink]);
+  if (hidden) return null;
   const rx = (r: number) => (aspect >= 1 ? r : r / aspect) * 100;
   const ry = (r: number) => (aspect >= 1 ? r * aspect : r) * 100;
   return (
     <svg className="spot-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" style={style} aria-hidden>
+      <defs>
+        {/* The arrowhead at the spot's end of the source->spot line: the
+            direction the pixels travel. Sized by the stroke, so it keeps
+            its size under zoom like the strokes do. */}
+        <marker id="spot-arrow" markerUnits="strokeWidth" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto">
+          <path d="M0 0.5 L6 3.5 L0 6.5" className="spot-arrowhead" />
+        </marker>
+      </defs>
+      {cursor && (
+        <ellipse
+          ref={ringRef}
+          cx={(ringPosRef.current ?? cursor).x * 100}
+          cy={(ringPosRef.current ?? cursor).y * 100}
+          rx={rx(cursor.r)}
+          ry={ry(cursor.r)}
+          className="spot-ring"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
       {spots.map((s) => {
         const selected = s.id === selectedId;
         return (
@@ -37,11 +84,12 @@ function SpotOverlayImpl({
             {selected && (
               <>
                 <line
-                  x1={s.x * 100}
-                  y1={s.y * 100}
-                  x2={s.src_x * 100}
-                  y2={s.src_y * 100}
+                  x1={s.src_x * 100}
+                  y1={s.src_y * 100}
+                  x2={s.x * 100}
+                  y2={s.y * 100}
                   className="spot-link"
+                  markerEnd="url(#spot-arrow)"
                   vectorEffect="non-scaling-stroke"
                 />
                 <ellipse
@@ -83,5 +131,15 @@ export const SpotOverlay = memo(
     a.selectedId === b.selectedId &&
     a.aspect === b.aspect &&
     a.hidden === b.hidden &&
+    a.cursorSink === b.cursorSink &&
+    sameCursor(a.cursor, b.cursor) &&
     sameStyle(a.style, b.style)
 );
+
+function sameCursor(
+  a: { x: number; y: number; r: number } | null | undefined,
+  b: { x: number; y: number; r: number } | null | undefined
+): boolean {
+  if (!a || !b) return (a ?? null) === (b ?? null);
+  return a.x === b.x && a.y === b.y && a.r === b.r;
+}

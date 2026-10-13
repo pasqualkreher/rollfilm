@@ -11,6 +11,7 @@ import {
   fileTypeBadge,
   fileTypeBadgeClass,
   tileAspectRatio,
+  MISSING_TITLE,
 } from "./ThumbnailGrid";
 import { usePhotoInfoCard } from "./PhotoInfoCard";
 import { usePhotoContextMenu } from "./PhotoContextMenu";
@@ -48,7 +49,7 @@ function monthLabel(iso: string | null): string {
   if (!iso) return "Unknown date";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "Unknown date";
-  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  return d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
 
 interface Props {
@@ -376,17 +377,18 @@ export function VirtualTimeline({
           rowHeight={rowH}
         />
         <span
-          className={fileTypeBadgeClass(image.file_type, merged)}
-          title={image.virtual_of_image_id ? VIRTUAL_COPY_TITLE : undefined}
+          className={fileTypeBadgeClass(image.file_type, merged, "badge", image.missing)}
+          title={image.missing ? MISSING_TITLE : image.virtual_of_image_id ? VIRTUAL_COPY_TITLE : undefined}
         >
           {image.virtual_of_image_id && <VirtualCopyMark />}
-          {fileTypeBadge(image.file_type, merged)}
+          {image.missing ? "Missing" : fileTypeBadge(image.file_type, merged)}
         </span>
         {infoButton(image.id)}
         {selecting && onToggleSelect && (
           <input
             className="select-checkbox"
             type="checkbox"
+            aria-label={`Select ${image.original_filename}`}
             checked={selectedIds?.has(image.id) ?? false}
             onClick={(e) => {
               e.stopPropagation();
@@ -395,9 +397,16 @@ export function VirtualTimeline({
             onChange={() => {}}
           />
         )}
-        {(image.rating > 0 || image.color_label !== "none") && (
+        {(image.rating > 0 || image.color_label !== "none" || image.flag) && (
           <div className="overlay-info">
-            <span className="overlay-stars">{image.rating > 0 ? "★".repeat(image.rating) : ""}</span>
+            <span className="overlay-stars">
+              {image.flag && (
+                <span className={`overlay-flag overlay-flag--${image.flag}`} title={image.flag === "pick" ? "Pick" : "Reject"}>
+                  {image.flag === "pick" ? "✓" : "✕"}
+                </span>
+              )}
+              {image.rating > 0 ? "★".repeat(image.rating) : ""}
+            </span>
             {image.color_label !== "none" && (
               <span
                 className="overlay-color-dot"

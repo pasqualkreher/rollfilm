@@ -7,7 +7,10 @@
 let remembered = "";
 
 // The search query is not a filter to come back to: it is typed for one look.
-const TRANSIENT_KEYS = ["q"];
+// Filters that are a one-off look, set from elsewhere (Settings' missing
+// files, the Import page's "Show in Library", Statistics' country): not
+// brought back the next time the Library tab is opened.
+const TRANSIENT_KEYS = ["q", "missing", "imported", "country"];
 
 export function rememberLibraryFilters(params: URLSearchParams): void {
   const kept = new URLSearchParams(params);

@@ -918,6 +918,42 @@ def get_time_albums(db: Session, owner_id: int) -> dict[str, list[GroupAlbum]]:
 # Place albums
 
 
+def get_import_albums(db: Session, owner_id: int, limit: int = 10) -> list[GroupAlbum]:
+    """The last imports, one album per day photos came in (imported_at, UTC):
+    the place to find what was just added when an old card's photos landed in
+    their capture months all over the timeline. Newest day first."""
+    unavailable = sources_service.unavailable_source_ids(db, owner_id)
+    query = db.query(Image.id, Image.imported_at, Image.file_type).filter(
+        Image.owner_id == owner_id,
+        Image.deleted_at.is_(None),
+        Image.imported_at.isnot(None),
+        Image.virtual_of_image_id.is_(None),
+    )
+    query = sources_service.exclude_unavailable(query, unavailable)
+    groups: dict = {}
+    for image_id, imported_at, file_type in query.all():
+        wall = imported_at.replace(tzinfo=None)
+        key = (wall.year, wall.month, wall.day)
+        entry = groups.get(key)
+        if entry is None:
+            entry = groups[key] = [0, [], []]
+        entry[0] += 1
+        _push_cover(entry[1] if file_type == FileType.jpeg else entry[2], wall, image_id)
+    albums: list[GroupAlbum] = []
+    for (y, m, d), (count, jpegs, others) in sorted(groups.items(), reverse=True)[:limit]:
+        covers = _cover_ids(jpegs, others)
+        albums.append(
+            GroupAlbum(
+                id=f"imported:{y:04d}-{m:02d}-{d:02d}",
+                name=f"{calendar.month_name[m]} {d}, {y}",
+                image_count=count,
+                cover_image_id=covers[0],
+                cover_image_ids=covers,
+            )
+        )
+    return albums
+
+
 def get_place_albums(db: Session, owner_id: int, radius_km: float) -> list[GroupAlbum]:
     """Spatial clusters of the geotagged photos, named via the offline
     reverse-geocoding cities database. Greedy leader clustering on distance

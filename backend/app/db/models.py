@@ -26,6 +26,15 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Flag(str, enum.Enum):
+    """The culling flag: picked or rejected. Stored as plain text with NULL
+    for "no flag", so the column needs no enum type of its own and an older
+    build reads it as nothing."""
+
+    pick = "pick"
+    reject = "reject"
+
+
 class ColorLabel(str, enum.Enum):
     none = "none"
     red = "red"
@@ -130,6 +139,15 @@ class Image(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # Set = the library sync could not find this managed photo's file (a
+    # drive not mounted, a folder moved in Finder). The row stays - with its
+    # stars, tags, albums and edits - and the grid badges it; a later sync that
+    # finds the file again (by path, or by content under a new name) clears
+    # it, and only the user removes the entries (maintenance.remove_missing_
+    # images). Null = the file was there the last time anyone looked.
+    missing_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     camera_make: Mapped[str | None] = mapped_column(String, nullable=True)
     camera_model: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -146,6 +164,9 @@ class Image(Base):
 
     rating: Mapped[int] = mapped_column(Integer, default=0)
     color_label: Mapped[ColorLabel] = mapped_column(Enum(ColorLabel), default=ColorLabel.none)
+    # "pick" / "reject" / NULL - the culling flag (see Flag). Mirrored onto the
+    # RAW+JPEG partner like the stars; not written to sidecars.
+    flag: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     # Free-text note typed in the detail view. Database-only, like every other
     # edit here - the original file is never rewritten. Null or "" = no note.
     description: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -442,7 +463,9 @@ class ImportSessionSource(Base):
     # Importable files found here at the last scan - against the rows staged
     # from this source, that is "N photos still on the card".
     file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Nullable, as the migration that made the column wrote it; every row
+    # gets a value from the default all the same.
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=_utcnow)
 
     import_session: Mapped["ImportSession"] = relationship(back_populates="sources")
 
@@ -550,7 +573,9 @@ class ImmichPendingDeletion(Base):
     sha1_checksum: Mapped[str | None] = mapped_column(String, nullable=True)
     # Only for logging/history - the photo row is gone by the time this runs.
     filename: Mapped[str] = mapped_column(String)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Nullable, as the migration that made the column wrote it; every row
+    # gets a value from the default all the same.
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=_utcnow)
 
 
 class Canvas(Base):
@@ -645,7 +670,9 @@ class CanvasLayout(Base):
     # point at each other, and a dangling id here only means "fall back to the
     # newest version", never a broken page.
     active_version_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Nullable, as the migration that made the column wrote it; every row
+    # gets a value from the default all the same.
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=_utcnow)
 
     canvas: Mapped["Canvas"] = relationship(back_populates="layout")
     items: Mapped[list["LayoutItem"]] = relationship(
@@ -728,3 +755,46 @@ class LayoutVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     layout: Mapped["CanvasLayout"] = relationship(back_populates="versions")
+
+
+class EditSnapshot(Base):
+    """A named moment of one photo's edit - "before the grade", "warm
+    version" - that the editor can go back to. The edit keeps saving over
+    itself; a snapshot is what the user asked to keep.
+
+    `edits` holds the whole edit as one JSON blob in the exact shape
+    PATCH /images/{id}/edits accepts (schemas.ImageEdits: geometry plus the
+    develop object), so restoring is replaying it through that same save and
+    a develop key added later needs no migration here. The rows go with their
+    photo (ON DELETE CASCADE, and trash.hard_delete_images deletes them
+    outright for a connection without foreign keys switched on)."""
+
+    __tablename__ = "edit_snapshots"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    image_id: Mapped[str] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String, default="")
+    edits: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class DevelopPreset(Base):
+    """An editor preset: a look, kept in the library rather than in one
+    browser's storage, so it survives a reinstall and travels with a backup.
+
+    `adjustments` is the develop object (JSON, as develop.normalize() shapes
+    it); `sections` the JSON list of develop.SECTION_KEYS groups the preset
+    carries - applying it touches only those. `group_name` is the folder the
+    preset is listed under (null = none)."""
+
+    __tablename__ = "develop_presets"
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
+    name: Mapped[str] = mapped_column(String)
+    group_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    sections: Mapped[str] = mapped_column(String)
+    adjustments: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

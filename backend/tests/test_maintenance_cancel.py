@@ -121,8 +121,10 @@ def test_a_sync_that_runs_through_reports_not_cancelled(db, library):
     result = maintenance.sync_db_with_library(db, 1)
 
     assert result["cancelled"] is False
-    assert result["removed_missing_files"] == 1
-    assert db.query(Image).count() == 0
+    # The file that is gone is marked, not removed (test_library_sync).
+    assert result["missing_files"] == 1
+    assert db.query(Image).count() == 1
+    assert db.get(Image, "gone.jpg").missing_since is not None
 
 
 def test_a_second_sync_is_refused_while_one_runs(db, library):

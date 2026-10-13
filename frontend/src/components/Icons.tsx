@@ -941,6 +941,27 @@ export function IconHeal(props: IconProps) {
   );
 }
 
+// An eyedropper - the white balance picker on the stage bar.
+export function IconPipette(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 13.5l.9-2.9 6.1-6.1 2 2-6.1 6.1-2.9.9z" />
+      <path d="M8.75 5.25 11.5 2.5l2 2-2.75 2.75" />
+    </svg>
+  );
+}
+
+// A clock face with a back-turning arrow - the editor's history list.
+export function IconHistory(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.75 8a5.25 5.25 0 1 0 1.6-3.8" />
+      <path d="M2.5 2.5v2.25h2.25" />
+      <path d="M8 5v3.25l2 1.25" />
+    </svg>
+  );
+}
+
 export function IconMask(props: IconProps) {
   return (
     <svg {...svgProps(props)}>

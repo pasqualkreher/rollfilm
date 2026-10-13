@@ -23,6 +23,8 @@ declare global {
       pickFolder: (opts?: { title?: string; defaultPath?: string }) => Promise<string | null>;
       /** Native multi-file dialog; resolves to picked files (absolute path + size) or null. */
       pickFiles?: () => Promise<{ path: string; size: number }[] | null>;
+      // Dropped paths sorted into folders and files (with sizes).
+      classifyPaths?: (paths: string[]) => Promise<{ folders: string[]; files: { path: string; size: number }[] }>;
       /**
        * Selects a file in Finder / Explorer / the file manager; opens its
        * folder instead when the file is gone (`missing`). Absent in older builds.
@@ -82,6 +84,33 @@ declare global {
       setTheme?: (theme: { mode: "light" | "dark" | "auto"; bg: string }) => Promise<void>;
       /** Dock / taskbar progress, 0–1; anything else clears it. Absent in older builds. */
       setProgress?: (fraction: number) => Promise<void>;
+      /**
+       * The Go and Photo menus and File → Export… in the macOS menu bar.
+       * Actions: go:library, go:albums, go:canvas, go:map, go:import,
+       * go:trash, go:stats, photo:rate (value 0–5), photo:color (value
+       * "none" | "red" | "yellow" | "green" | "blue"), photo:flag (value
+       * "pick" | "reject" | "" to unflag), photo:edit, photo:export,
+       * photo:trash. The single-key shortcuts shown in the labels (0–5, P, X,
+       * U, E, ⌫) are not registered by the menu - the renderer keeps handling
+       * those keys. Returns the unsubscribe. Absent in older builds.
+       */
+      onAppMenu?: (callback: (msg: { action: string; value?: string | number }) => void) => () => void;
+      /**
+       * Drags these originals out to the Finder / Explorer as real files. Call
+       * it from dragstart (after preventDefault). The shell drops the whole
+       * drag if any path is not an existing file. Absent in older builds.
+       */
+      startDrag?: (paths: string[]) => void;
     };
+  }
+
+  /**
+   * Files or folders dropped on the desktop window from outside, as absolute
+   * paths. The preload dispatches it on `window` only for drops that carry
+   * files and that no handler in the page already took (preventDefault);
+   * drags within the app never fire it. Never fired in the browser build.
+   */
+  interface WindowEventMap {
+    "pm:files-dropped": CustomEvent<{ paths: string[] }>;
   }
 }

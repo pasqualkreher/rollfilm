@@ -27,6 +27,7 @@ from app.services.settings_store import (
     IMPORT_MODE_DEFAULT,
     IMPORT_READ_FILE_METADATA,
     IMPORT_SELECT_DEFAULT,
+    IMPORT_VERIFY_COPIES,
     SIDECAR_WRITE,
     RAW_NATIVE_DECODE,
     SMART_ALBUM_PLACE_RADIUS_KM,
@@ -45,6 +46,7 @@ from app.services.settings_store import (
     get_import_mode_default,
     get_import_read_file_metadata,
     get_import_select_default,
+    get_import_verify_copies,
     get_sidecar_write,
     get_raw_native_decode,
     get_setting,
@@ -184,6 +186,7 @@ def _import_settings_out(db: Session) -> schemas.ImportSettingsOut:
         select_default=get_import_select_default(db),
         backup_default=get_import_backup_default(db),
         read_file_metadata=get_import_read_file_metadata(db),
+        verify_copies=get_import_verify_copies(db),
     )
 
 
@@ -215,6 +218,8 @@ def update_import_settings(
         set_setting(db, IMPORT_BACKUP_DEFAULT, payload.backup_default)
     if payload.read_file_metadata is not None:
         set_setting(db, IMPORT_READ_FILE_METADATA, "1" if payload.read_file_metadata else "0")
+    if payload.verify_copies is not None:
+        set_setting(db, IMPORT_VERIFY_COPIES, "1" if payload.verify_copies else "0")
     db.commit()
     return _import_settings_out(db)
 

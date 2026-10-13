@@ -234,16 +234,18 @@ def test_a_file_moved_to_another_folder_is_followed_too(db, library):
     assert db.get(Image, "a").file_path == str(Path("2025") / "keepers" / "DSCF0001.JPG")
 
 
-def test_a_deleted_file_is_still_removed(db, library):
+def test_a_deleted_file_is_marked_missing_not_removed(db, library):
     _add(db, library, "DSCF0001.JPG", b"alpha", id="a")
     (library / "2026" / "2026-07-01" / "DSCF0001.JPG").unlink()
 
     result = sync_db_with_library(db, owner_id=1)
 
-    # Nothing with those bytes is left in the library, so this really is gone.
+    # Nothing with those bytes is left in the library, so it is not a rename;
+    # the row stays all the same, marked, until the user removes it.
     assert result["renamed_files_followed"] == 0
-    assert result["removed_missing_files"] == 1
-    assert db.get(Image, "a") is None
+    assert result["missing_files"] == 1
+    assert result["removed_missing_files"] == 0
+    assert db.get(Image, "a").missing_since is not None
 
 
 def test_a_genuinely_new_file_is_not_mistaken_for_a_rename(db, library):

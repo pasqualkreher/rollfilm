@@ -33,6 +33,7 @@ from app.db.models import (
     CanvasLayout,
     ColorLabel,
     FileType,
+    Flag,
     Image,
     ImageTag,
     LayoutItem,
@@ -40,6 +41,7 @@ from app.db.models import (
     User,
 )
 from app.db.session import SessionLocal, engine, get_db
+from app.services import smart_albums as smart_albums_service
 from app.services import machine
 from app.services import (
     auto_develop,
@@ -171,12 +173,20 @@ def _pair_partner(db: Session, owner_id: int, image: Image) -> Image | None:
     return partner
 
 
+def _flag_value(flag: Flag | str | None) -> str | None:
+    """The column value for a flag update: "" (take it off) becomes NULL."""
+    if flag is None or flag == "":
+        return None
+    return flag.value if isinstance(flag, Flag) else str(flag)
+
+
 def _apply_to_pair(
     db: Session,
     owner_id: int,
     image: Image,
     rating: int | None,
     color_label: ColorLabel | None,
+    flag: Flag | str | None = None,
 ) -> None:
     """Mirror a rating/color change onto this image's RAW+JPEG partner: a pair
     is one shot, so its stars, colour, tags and notes are always the same on both
@@ -193,6 +203,8 @@ def _apply_to_pair(
         partner.rating = rating
     if color_label is not None:
         partner.color_label = color_label
+    if flag is not None:
+        partner.flag = _flag_value(flag)
 
 
 def _get_or_create_tag(db: Session, owner_id: int, name: str) -> Tag:
@@ -310,6 +322,10 @@ def _filtered_images_query(
     aperture_max: float | None = None,
     shutter_min: float | None = None,
     shutter_max: float | None = None,
+    missing: bool | None = None,
+    flag: str | None = None,
+    imported: str | None = None,
+    state: str | None = None,
 ):
     """The library listing's filter set, shared by the list endpoint and the
     count endpoint so the total the scrollbar is sized from can never drift
@@ -319,6 +335,25 @@ def _filtered_images_query(
     query = db.query(Image).filter(
         Image.owner_id == current_user.id, Image.deleted_at.is_(None)
     )
+    # Only the photos whose file the sync could not find (Settings → Library
+    # → Missing files → Show in Library).
+    if missing:
+        query = query.filter(Image.missing_since.isnot(None))
+    # The culling flag: picks, rejects, or the photos not yet decided on.
+    if flag == "pick" or flag == "reject":
+        query = query.filter(Image.flag == flag)
+    elif flag == "unflagged":
+        query = query.filter(Image.flag.is_(None))
+    # One day of imports ("YYYY-MM-DD", UTC): the Import page's "Show in
+    # Library" and the Recent imports albums land here.
+    if imported:
+        try:
+            y, m, d = (int(p) for p in imported.split("-"))
+            start = datetime(y, m, d)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="imported must be YYYY-MM-DD")
+        end = datetime.fromordinal(start.toordinal() + 1)
+        query = query.filter(Image.imported_at >= start, Image.imported_at < end)
 
     if album_id:
         # Manually added photos, plus - when the album carries a tag rule -
@@ -387,6 +422,19 @@ def _filtered_images_query(
         query = query.filter(Image.gps_lat.is_(None))
     elif country:
         query = query.filter(Image.gps_country == country)
+    # The filter menu's "Show": what has been done to a photo, or what it
+    # carries - edited or not (the Edited smart album's rule), never rated,
+    # with or without a GPS fix.
+    if state == "edited":
+        query = query.filter(smart_albums_service.edited_filter())
+    elif state == "unedited":
+        query = query.filter(~smart_albums_service.edited_filter())
+    elif state == "unrated":
+        query = query.filter(Image.rating == 0)
+    elif state == "located":
+        query = query.filter(Image.gps_lat.isnot(None))
+    elif state == "unlocated":
+        query = query.filter(Image.gps_lat.is_(None))
     if date_from:
         query = query.filter(Image.taken_at >= date_from)
     if date_to:
@@ -445,6 +493,10 @@ def list_images(
     aperture_max: float | None = None,
     shutter_min: float | None = None,
     shutter_max: float | None = None,
+    missing: bool | None = None,
+    flag: str | None = None,
+    imported: str | None = None,
+    state: str | None = None,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -455,7 +507,7 @@ def list_images(
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
         camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
         aperture_min=aperture_min, aperture_max=aperture_max,
-        shutter_min=shutter_min, shutter_max=shutter_max,
+        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, state=state,
     )
     # Newest capture first. The extra keys make the order total: burst shots
     # share the same capture second and photos without any capture date all
@@ -508,6 +560,10 @@ def library_index(
     aperture_max: float | None = None,
     shutter_min: float | None = None,
     shutter_max: float | None = None,
+    missing: bool | None = None,
+    flag: str | None = None,
+    imported: str | None = None,
+    state: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -526,7 +582,7 @@ def library_index(
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
         camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
         aperture_min=aperture_min, aperture_max=aperture_max,
-        shutter_min=shutter_min, shutter_max=shutter_max,
+        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, state=state,
     )
     # file_type, color_label and taken_at are asked for as plain strings rather
     # than as their mapped types. The database already holds exactly what this
@@ -561,6 +617,7 @@ def library_index(
             Image.rating, type_coerce(Image.color_label, String),
             Image.immich_sync, Image.paired_image_id, Image.source_root_id,
             Image.edit_rev, partner_deleted, Image.virtual_of_image_id,
+            type_coerce(Image.missing_since, String), Image.flag,
         )
         .order_by(Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc())
         .all()
@@ -590,11 +647,14 @@ def library_index(
             # The grid badges virtual copies ("virtual copy") - rows that share
             # their file with another photo - so they read as non-physical.
             "virtual_of_image_id": virtual_of_image_id,
+            # The sync could not find the file: the tile says so.
+            "missing": missing_since is not None,
+            "flag": flag,
         }
         for (
             id_, filename, file_type, width, height, taken_at, rating, color_label,
             immich_sync, paired_image_id, source_root_id, edit_rev, partner_deleted_at,
-            virtual_of_image_id,
+            virtual_of_image_id, missing_since, flag,
         ) in rows
     ]
     return Response(
@@ -660,6 +720,10 @@ def count_images(
     aperture_max: float | None = None,
     shutter_min: float | None = None,
     shutter_max: float | None = None,
+    missing: bool | None = None,
+    flag: str | None = None,
+    imported: str | None = None,
+    state: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -671,7 +735,7 @@ def count_images(
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
         camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
         aperture_min=aperture_min, aperture_max=aperture_max,
-        shutter_min=shutter_min, shutter_max=shutter_max,
+        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, state=state,
     )
     return schemas.ImageCountOut(count=query.count())
 
@@ -946,7 +1010,9 @@ def bulk_update_images(
             image.rating = update.rating
         if update.color_label is not None:
             image.color_label = update.color_label
-        _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
+        if update.flag is not None:
+            image.flag = _flag_value(update.flag)
+        _apply_to_pair(db, current_user.id, image, update.rating, update.color_label, update.flag)
     db.commit()
     sidecar_service.touch(db, images)
     for image in images:
@@ -1210,6 +1276,17 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
             corner=payload.watermark_corner,
             size=payload.watermark_size,
             opacity=payload.watermark_opacity,
+            medium=payload.sharpen_medium,
+            logo=payload.watermark_image,
+            logo_corner=payload.watermark_image_corner,
+            logo_size=payload.watermark_image_size,
+            logo_opacity=payload.watermark_image_opacity,
+        )
+        # A size in the new terms (edge, megapixels, percent); without one the
+        # long-edge cap `max_size` stands as it always did.
+        size = (
+            export_finish.Size(payload.fit, payload.size, payload.no_upscale)
+            if payload.size else None
         )
 
         def export_name(image: Image, seq: int) -> str:
@@ -1218,10 +1295,10 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
         def write_rendered(image: Image, target: Path) -> None:
             """The photo with its edits baked in, at `target`, saying about
             itself what the export was asked to keep."""
-            if tiff:
-                data = thumbnails.export_tiff_bytes(image, payload.max_size, finish=finish)
-            else:
-                data = thumbnails.export_jpeg_bytes(image, quality, payload.max_size, finish=finish)
+            data = thumbnails.export_bytes(
+                image, payload.format, quality, payload.max_size, finish=finish, size=size,
+                tiff_bits=payload.tiff_bits, tiff_compression=payload.tiff_compression,
+            )
             target.write_bytes(data)
             keep = payload.metadata != "none"
             try:
@@ -1281,7 +1358,7 @@ def _run_export_job(job_id: str, owner_id: int, payload: schemas.ExportStartRequ
                 media = "image/jpeg" if image.file_type == FileType.jpeg else "application/octet-stream"
             else:
                 write_rendered(image, Path(tmp_path))
-                media = "image/tiff" if tiff else "image/jpeg"
+                media = {"tiff": "image/tiff", "png": "image/png"}.get(payload.format, "image/jpeg")
             job["done"] = 1
             job["written"] = 1
         else:
@@ -1335,7 +1412,7 @@ def _export_filename(payload: schemas.ExportStartRequest, image: Image, seq: int
     stem = name_template.render_stem(payload.name_template, image, seq, total)
     if payload.format == "original":
         return f"{stem}{Path(image.original_filename).suffix}"
-    return f"{stem}{'.tif' if payload.format == 'tiff' else '.jpg'}"
+    return f"{stem}{ {'tiff': '.tif', 'png': '.png'}.get(payload.format, '.jpg') }"
 
 
 @router.post("/export/name-preview", response_model=schemas.ExportNamePreview)
@@ -1377,6 +1454,8 @@ def export_start(
             raise HTTPException(status_code=400, detail="That folder doesn't exist any more. Choose another one.")
         if not os.access(folder, os.W_OK):
             raise HTTPException(status_code=400, detail="Nothing can be written into that folder. Choose another one.")
+    if payload.watermark_image and export_finish.load_logo(payload.watermark_image) is None:
+        raise HTTPException(status_code=400, detail="The watermark image can't be read. Choose another one.")
     _prune_export_jobs()
     # Validate ownership up front so the worker can assume clean input.
     for image_id in payload.image_ids:
@@ -1786,6 +1865,15 @@ def bulk_develop(
     before = {image.id: _edit_state(image) for image in images}
     changed: list[Image] = []
     for image in images:
+        if payload.sections is not None:
+            # A partial preset: only its sections replace the photo's, and the
+            # spots it may carry come along only when "retouch" is one of them.
+            partial = dict(payload.adjustments)
+            if partial.get("raw_base") not in ("standard", "native"):
+                partial["raw_base"] = "standard"
+            blob = develop.dumps(develop.merge_sections(
+                develop.loads(image.edit_adjustments), partial, payload.sections
+            ))
         if image.edit_adjustments != blob:
             changed.append(image)
         image.edit_adjustments = blob
@@ -1794,6 +1882,7 @@ def bulk_develop(
     db.commit()
     for image in images:
         db.refresh(image)
+    sidecar_service.touch(db, changed)
     _rerender_later(changed, before)
     return images
 
@@ -1869,6 +1958,8 @@ def update_image(
         image.rating = update.rating
     if update.color_label is not None:
         image.color_label = update.color_label
+    if update.flag is not None:
+        image.flag = _flag_value(update.flag)
     if update.description is not None:
         # "" means "cleared" - stored as NULL so an empty note and no note are
         # the same thing everywhere downstream.
@@ -1877,7 +1968,7 @@ def update_image(
         partner = _pair_partner(db, current_user.id, image)
         if partner is not None:
             partner.description = image.description
-    _apply_to_pair(db, current_user.id, image, update.rating, update.color_label)
+    _apply_to_pair(db, current_user.id, image, update.rating, update.color_label, update.flag)
     db.commit()
     sidecar_service.touch(db, [image])
     db.refresh(image)
@@ -2239,6 +2330,9 @@ def save_edits(
         _remove_tag_from_image(db, current_user.id, image, "edit")
     db.commit()
     db.refresh(image)
+    # The sidecar carries the edit too (sidecar._develop_args); a no-op while
+    # sidecar writing is off.
+    sidecar_service.touch(db, [image])
     if defer_derivatives:
         thumbnails.defer_derivatives(image.id)
     else:

@@ -121,15 +121,18 @@ collection's scans of the stocks that are analog looks.
 
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
 import math
 import threading
-from collections import OrderedDict
-from functools import lru_cache
+import time
+from collections import OrderedDict, namedtuple
 from pathlib import Path
 
 import numpy as np
 
+from app.services import machine
 from app.services.develop import ENUM_SPEC
 from app.services.develop_color import _pchip_lut
 
@@ -525,7 +528,126 @@ def has_measured(sim: str) -> bool:
     return _sim_cube(sim, True) is not _sim_cube(sim, False)
 
 
-@lru_cache(maxsize=None)
+# --- The looks' cache ---------------------------------------------------------
+# Every cube and table the functions below load or build used to sit in its own
+# unbounded lru_cache: a 65-point scene cube is 3.3 MB of float32, a user
+# clicking through the picker left one behind per look (plus a display cube
+# and a factors table for some), and nothing short of quitting let them go.
+# One byte-bounded LRU for all of them instead, keyed by function and
+# arguments, with the per-function cache_clear() and cache_info() the
+# lru_caches had (and, where one had an entry cap, that cap on top - the
+# scan cubes keep to their last few), half the budget on a low-RAM machine
+# like the editor's caches, and released by the idle reaper once the looks
+# have gone unused for a while (release_if_idle).
+_LUT_CACHE_MAX_BYTES = machine.scaled_budget(96 * 1024 * 1024)
+_lut_cache: OrderedDict[tuple, tuple[object, int]] = OrderedDict()
+_lut_cache_bytes = 0
+_lut_cache_lock = threading.Lock()
+# When a look was last asked for (monotonic), for the idle release.
+_lut_cache_used_at = 0.0
+_MISSING = object()
+_CacheInfo = namedtuple("CacheInfo", ["hits", "misses", "maxsize", "currsize"])
+
+
+def _lut_entry_bytes(value: object) -> int:
+    return int(value.nbytes) if isinstance(value, np.ndarray) else 0
+
+
+def _lut_cached(func=None, *, max_entries: int | None = None):
+    """lru_cache's stand-in for the look functions: the same call gives the
+    same object back on a hit (has_measured compares by identity, and the
+    lookup atlas is keyed by it), None results are kept like any other, and
+    the function runs outside the lock so it may call another cached one.
+    Explicit and defaulted arguments share one entry. `max_entries` caps how
+    many of this function's results stay, oldest out first, inside the byte
+    budget shared by all of them."""
+    if func is None:
+        return lambda f: _lut_cached(f, max_entries=max_entries)
+    sig = inspect.signature(func)
+    name = func.__name__
+    stats = [0, 0]  # hits, misses - for cache_info, under the lock
+
+    def _own_keys() -> list[tuple]:
+        return [k for k in _lut_cache if k[0] == name]
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        global _lut_cache_bytes, _lut_cache_used_at
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        key = (name, tuple(bound.arguments.values()))
+        with _lut_cache_lock:
+            _lut_cache_used_at = time.monotonic()
+            hit = _lut_cache.get(key, _MISSING)
+            if hit is not _MISSING:
+                stats[0] += 1
+                _lut_cache.move_to_end(key)
+                return hit[0]
+            stats[1] += 1
+        value = func(*args, **kwargs)
+        size = _lut_entry_bytes(value)
+        with _lut_cache_lock:
+            # Two threads may have built the same entry: the first one in
+            # stays, since other callers already hold its object.
+            hit = _lut_cache.get(key, _MISSING)
+            if hit is not _MISSING:
+                _lut_cache.move_to_end(key)
+                return hit[0]
+            _lut_cache[key] = (value, size)
+            _lut_cache_bytes += size
+            if max_entries is not None:
+                own = _own_keys()
+                for old in own[: max(0, len(own) - max_entries)]:
+                    _lut_cache_bytes -= _lut_cache.pop(old)[1]
+            # The newest entry always stays, however large.
+            while _lut_cache_bytes > _LUT_CACHE_MAX_BYTES and len(_lut_cache) > 1:
+                _, (_, dropped) = _lut_cache.popitem(last=False)
+                _lut_cache_bytes -= dropped
+        return value
+
+    def cache_clear() -> None:
+        global _lut_cache_bytes
+        with _lut_cache_lock:
+            for key in _own_keys():
+                _lut_cache_bytes -= _lut_cache.pop(key)[1]
+            stats[0] = stats[1] = 0
+
+    def cache_info() -> _CacheInfo:
+        with _lut_cache_lock:
+            return _CacheInfo(stats[0], stats[1], max_entries, len(_own_keys()))
+
+    wrapper.cache_clear = cache_clear
+    wrapper.cache_info = cache_info
+    return wrapper
+
+
+def lut_cache_bytes() -> int:
+    with _lut_cache_lock:
+        return _lut_cache_bytes
+
+
+def release() -> None:
+    """Let go of every cached look, and of the lookup atlases that pin their
+    cubes. Everything reloads on the next render that asks."""
+    global _lut_cache_bytes
+    with _lut_cache_lock:
+        _lut_cache.clear()
+        _lut_cache_bytes = 0
+    with _atlases_lock:
+        _atlases.clear()
+
+
+def release_if_idle(idle_s: float) -> bool:
+    """release() once no look has been asked for in `idle_s` seconds. Returns
+    whether anything was released."""
+    with _lut_cache_lock:
+        if not _lut_cache or time.monotonic() - _lut_cache_used_at < idle_s:
+            return False
+    release()
+    return True
+
+
+@_lut_cached
 def _sim_cube(sim: str, measured: bool = False) -> np.ndarray | None:
     """The look's NxNxNx3 float32 cube, indexed [r][g][b], or None: the
     measured one where asked for and there is one, else the baked recipe."""
@@ -555,7 +677,7 @@ def _load_scene_cube(path: Path) -> np.ndarray | None:
     return np.clip(cube, 0.0, 1.0)
 
 
-@lru_cache(maxsize=None)
+@_lut_cached
 def official_cube(sim: str) -> np.ndarray | None:
     """Fujifilm's cube for the look (F-Log2 code values in, display out),
     indexed [r][g][b], or None where Fujifilm publishes none or the file is
@@ -566,7 +688,7 @@ def official_cube(sim: str) -> np.ndarray | None:
     return _load_scene_cube(path)
 
 
-@lru_cache(maxsize=None)
+@_lut_cached
 def derived_cube(sim: str) -> np.ndarray | None:
     """The cube built on Fujifilm's for a look Fujifilm publishes none for
     (same form as official_cube), or None if there is none."""
@@ -576,7 +698,7 @@ def derived_cube(sim: str) -> np.ndarray | None:
     return _load_scene_cube(path)
 
 
-@lru_cache(maxsize=None)
+@_lut_cached
 def analog_cube(sim: str) -> np.ndarray | None:
     """The scene cube of an analog film look (same form as official_cube), or
     None if `sim` is not one or its file is missing or unusable."""
@@ -586,7 +708,7 @@ def analog_cube(sim: str) -> np.ndarray | None:
     return _load_scene_cube(path)
 
 
-@lru_cache(maxsize=None)
+@_lut_cached
 def clut_cube(sim: str) -> np.ndarray | None:
     """The display cube of a film scan look (the recipes' cube format, display
     sRGB in and out), or None if `sim` is not one or its file is missing or
@@ -597,7 +719,7 @@ def clut_cube(sim: str) -> np.ndarray | None:
     return _load_scene_cube(path)
 
 
-@lru_cache(maxsize=_CLUT_SCENE_CACHE)
+@_lut_cached(max_entries=_CLUT_SCENE_CACHE)
 def _clut_scene_cube(sim: str) -> np.ndarray | None:
     """The scene cube of a film scan look (same form as official_cube), or
     None without the two it is made of: what Fujifilm's Provia cube shows,
@@ -691,7 +813,7 @@ def _stills_factors(white: float, top: float | None = None) -> tuple[np.ndarray,
     return y, _STILLS_ANCHOR * 2.0 ** stops
 
 
-@lru_cache(maxsize=None)
+@_lut_cached
 def _analog_top(sim: str) -> float:
     """How many stops an analog film look is short of its white where the
     sensor clips: its cube's grey ramp, from the anchored clipping point
@@ -705,7 +827,7 @@ def _analog_top(sim: str) -> float:
     return float(ev[np.argmax(shown >= _ANALOG_WHITE * shown.max())])
 
 
-@lru_cache(maxsize=None)
+@_lut_cached
 def _film_display_cube(sim: str) -> np.ndarray | None:
     """A film look for a picture that is already a display picture (a JPEG; an
     edit on process version 1 or 2), in the recipes' cube format, or None
@@ -739,7 +861,7 @@ def _display_linear(code: np.ndarray) -> np.ndarray:
     return np.where(code <= 0.04045, code / 12.92, ((code + 0.055) / 1.055) ** 2.4)
 
 
-@lru_cache(maxsize=None)
+@_lut_cached
 def _agx_factors(sim: str) -> np.ndarray:
     """What a scene luminance is multiplied by in front of the cube for the
     look's grey ramp to follow AgX, as a table over _AGX_TABLE_EV (evenly
@@ -780,7 +902,7 @@ def _ramp_factors(shown: np.ndarray, wanted: np.ndarray) -> np.ndarray:
     return 2.0 ** (at - ev)
 
 
-@lru_cache(maxsize=32)
+@_lut_cached(max_entries=32)
 def _film_factors(sim: str, white: float) -> np.ndarray:
     """What a scene luminance is multiplied by in front of a film look's cube
     for a still, as a table over _AGX_TABLE_EV like AgX's.

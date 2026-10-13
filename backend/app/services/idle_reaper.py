@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 
-from app.services import embeddings, machine, masks, segmentation, thumbnails
+from app.services import embeddings, film_sims, machine, masks, segmentation, thumbnails
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,13 @@ def sweep_once() -> None:
             logger.info("Editor caches released after %.0fs idle", EDITOR_CACHE_IDLE_S)
     except Exception:
         logger.exception("Editor cache release failed")
+    # The film looks' cubes go on the same clock: the grid's renders and the
+    # editor both read them, and a picker session leaves tens of MB behind.
+    try:
+        if film_sims.release_if_idle(EDITOR_CACHE_IDLE_S):
+            logger.info("Film look caches released after %.0fs idle", EDITOR_CACHE_IDLE_S)
+    except Exception:
+        logger.exception("Film look cache release failed")
     try:
         segmentation.unload_if_idle(MODEL_IDLE_S)
     except Exception:

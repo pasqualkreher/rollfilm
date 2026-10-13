@@ -42,8 +42,11 @@ def _cluster_out(
             i for i in cluster.image_ids if i != cluster.cover_image_id
         ]
         covers = covers[: smart_service.COVER_COUNT]
+    # Named, not numbered: a rebuild after an import reorders the moments, and
+    # an index in a link (or a page left open) then pointed at another moment
+    # or at nothing. The name survives a rebuild as long as the moment does.
     return schemas.SmartAlbumOut(
-        id=f"cluster:{index}",
+        id=f"cluster:{cluster.name}",
         kind="cluster",
         name=cluster.name,
         image_count=len(cluster.image_ids),
@@ -109,6 +112,8 @@ def list_smart_albums(
 
     return schemas.SmartAlbumsOut(
         clusters_status=status,
+        # Always on: the way back to what was just imported.
+        imports=[_time_out("imported", a) for a in smart_service.get_import_albums(db, current_user.id)],
         clusters=[_cluster_out(db, i, c) for i, c in enumerate(clusters)],
         tags=[_time_out("tag", a) for a in tag_albums],
         places=[_time_out("place", a) for a in places],
@@ -155,10 +160,11 @@ def smart_album_images(
 
     if kind == "cluster":
         _, clusters = smart_service.get_clusters(db)
-        try:
+        cluster = next((c for c in clusters if c.name == key), None)
+        if cluster is None and key.isdigit() and int(key) < len(clusters):
+            # A link from before moments were named by name.
             cluster = clusters[int(key)]
-        except (ValueError, IndexError):
-            # Rebuilds shuffle cluster indices; a stale link just comes up empty.
+        if cluster is None:
             raise HTTPException(status_code=404, detail="Smart album no longer exists")
         query = query.filter(Image.id.in_(cluster.image_ids))
     elif kind == "cluster-group":
@@ -204,6 +210,13 @@ def smart_album_images(
         )
     elif kind == "edits":
         query = query.filter(smart_service.edited_filter())
+    elif kind == "imported":
+        # One day of imports (imported_at, UTC) - see get_import_albums.
+        try:
+            start, end = _time_bounds("day", key)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Unknown smart album")
+        query = query.filter(Image.imported_at >= start, Image.imported_at < end)
     elif kind in ("year", "month", "day"):
         try:
             start, end = _time_bounds(kind, key)

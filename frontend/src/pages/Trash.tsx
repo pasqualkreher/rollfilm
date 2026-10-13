@@ -16,6 +16,7 @@ import { useMergePairs } from "../state/viewPrefs";
 import { useTransientMessage } from "../utils/transientMessage";
 import { useTasks, type BatchItem } from "../state/tasks";
 import { LoadingState } from "../components/Spinner";
+import { plural } from "../utils/plural";
 
 // The in-app Trash: managed (imported) photos land here when deleted and can
 // be restored; only deleting them from here removes the original files from
@@ -150,7 +151,7 @@ export function Trash() {
       .catch(() => null);
     if (
       !(await dialogs.confirm({
-        title: `Permanently delete ${ids.length} photo(s)?`,
+        title: `Permanently delete ${plural(ids.length, "photo")}?`,
         message: `The original files are deleted from your library. This cannot be undone.${warning ? `\n\n${warning}` : ""}`,
         confirmLabel: "Delete forever",
         danger: true,
@@ -186,7 +187,7 @@ export function Trash() {
     if (
       !(await dialogs.confirm({
         title: "Empty the Trash?",
-        message: `All ${trashed.length} photo(s) in the Trash are deleted permanently. The original files are deleted from your library. This cannot be undone.`,
+        message: `All ${plural(trashed.length, "photo")} in the Trash are deleted permanently. The original files are deleted from your library. This cannot be undone.`,
         confirmLabel: "Empty Trash",
         danger: true,
       }))

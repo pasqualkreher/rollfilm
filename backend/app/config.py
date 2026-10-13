@@ -8,9 +8,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def _default_data_dir() -> Path:
     """Where app data lives when nothing else is configured (native desktop run).
 
-    The Electron shell overrides this via PM_DATA_DIR (its userData dir); the
-    Docker setup instead sets the individual *_ROOT / DB_PATH env vars, so this
-    default is never hit there.
+    The Electron shell overrides this via PM_DATA_DIR (its userData dir), and
+    so do the tests (tests/conftest.py); this default is only hit by a backend
+    started by hand without it.
     """
     return Path.home() / "Library" / "Application Support" / "PhotoManager"
 
@@ -20,7 +20,10 @@ class Settings(BaseSettings):
 
     # Base directory for all app data. Each concrete path below defaults to a
     # sub-directory of this, but can still be overridden individually on its own
-    # env var (LIBRARY_ROOT, DB_PATH, ...) - which is exactly what Docker does.
+    # env var (LIBRARY_ROOT, DB_PATH, ...) - which is what the Electron shell
+    # does for the library, its database, thumbnails and import staging, so
+    # they live inside the library folder the user picked (electron/main.js,
+    # resolveBackendCommand) while only the model cache stays under PM_DATA_DIR.
     pm_data_dir: Path = Field(default_factory=_default_data_dir)
 
     library_root: Path = None  # type: ignore[assignment]  # filled from pm_data_dir below

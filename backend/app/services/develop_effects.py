@@ -282,3 +282,120 @@ def agx_tonemap(arr: np.ndarray) -> np.ndarray:
     x = np.clip(x, 0.0, 1.0) @ _AGX_OUTSET.T  # outset (inverse channel mix)
     x = np.power(np.clip(x, 0.0, 1.0), 2.2)  # 2.2 EOTF -> back to linear light
     return np.clip(x, 0.0, 1.0).astype(np.float32)
+
+
+# ---------------------------------------------------------------- defringe
+# Longitudinal chromatic aberration: a lens focuses violet and green a little
+# in front of and behind the rest, so a high-contrast edge (branches against a
+# bright sky, a backlit rim) comes out with a purple or a green seam that the
+# lens profile's lateral CA correction cannot remove - it is not a shift of
+# one channel against another but a colour of its own. The pass finds the
+# seams the way a retoucher would: strong luminance edges, grown a few
+# pixels, and within them colours of the fringe hues that are more saturated
+# than what surrounds them. Those lose the chroma they carry beyond the local
+# chroma; lightness and hue stay. Everything off an edge, or of another hue,
+# keeps its exact value.
+#
+# Edges are measured in luma per pixel at a reference size, like the edge
+# mask (masks._EDGE_WORK_PX): a frame k times larger spreads the same edge
+# over k times more pixels, so its gradient is scaled back up by k and the
+# preview and the full render select the same seams.
+_DEFRINGE_REF_PX = 1600.0
+# A crisp branch against sky reads ~0.1 here, texture under 0.02.
+_DEFRINGE_EDGE = 0.04
+_DEFRINGE_EDGE_SOFT = 0.03
+# Oklab chroma below this is grey enough to leave alone (ramps in over the
+# same width again).
+_DEFRINGE_CHROMA_FLOOR = 0.02
+# The two fringe hues, named the HSV way (purple 280-330, green 90-150) and
+# turned into Oklab hue angles, with a feathered edge so a hue just outside
+# a window is pulled a little rather than not at all.
+_DEFRINGE_HUE_FEATHER = 15.0
+
+
+def _hue_window(hsv_lo: float, hsv_hi: float) -> tuple[float, float]:
+    from app.services import develop_v2
+
+    lo, hi = develop_v2._oklch_hue(hsv_lo), develop_v2._oklch_hue(hsv_hi)
+    width = (hi - lo) % 360.0
+    return (lo + 0.5 * width) % 360.0, 0.5 * width  # centre, half-width
+
+
+_DEFRINGE_PURPLE = _hue_window(280.0, 330.0)
+_DEFRINGE_GREEN = _hue_window(90.0, 150.0)
+
+
+def defringe_radii(long_edge: float) -> tuple[int, int]:
+    """(how far an edge is grown, the radius the surrounding chroma is
+    averaged over), in this frame's pixels: a fringe is a few pixels wide at
+    the reference size and proportionally wider on a bigger frame."""
+    grow = int(min(10, max(2, round(2.5 * float(long_edge) / _DEFRINGE_REF_PX))))
+    return grow, 2 * grow + 1
+
+
+def defringe_halo(long_edge: float) -> int:
+    """Rows the pass reads beyond the ones it writes: the gradient's pre-blur
+    and Sobel, the growth and its soft shoulder, and the chroma average."""
+    grow, box = defringe_radii(long_edge)
+    return 5 + grow + int(np.ceil(4.0 * max(1.0, 0.5 * grow))) + box + 2
+
+
+def _window_weight(hue: np.ndarray, window: tuple[float, float]) -> np.ndarray:
+    centre, half = window
+    dist = np.abs((hue - centre + 180.0) % 360.0 - 180.0)
+    return np.clip(1.0 - (dist - half) / _DEFRINGE_HUE_FEATHER, 0.0, 1.0)
+
+
+def defringe(arr: np.ndarray, purple: int, green: int, long_edge: float | None = None) -> np.ndarray:
+    """Pull purple (`purple`, 0..100) and green (`green`) fringes along
+    high-contrast edges toward the chroma around them. `arr` is the
+    display-encoded 0..1 frame (or a band of it with defringe_halo rows of
+    context); returns `arr` itself where nothing qualifies."""
+    import cv2
+
+    from app.services import develop_v2
+
+    ps, gs = max(0.0, min(1.0, purple / 100.0)), max(0.0, min(1.0, green / 100.0))
+    if ps <= 0.0 and gs <= 0.0:
+        return arr
+    h, w = arr.shape[:2]
+    long_edge = float(long_edge or max(h, w))
+    grow, box = defringe_radii(long_edge)
+    clipped = np.clip(arr, 0.0, 1.0).astype(np.float32)
+    y = np.ascontiguousarray(clipped @ _LUMA, dtype=np.float32)
+    sm = cv2.GaussianBlur(y, (0, 0), 1.0)
+    gx = cv2.Sobel(sm, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(sm, cv2.CV_32F, 0, 1, ksize=3)
+    # A 3x3 Sobel sums to 8x the per-pixel difference; then into reference units.
+    mag = np.sqrt(gx * gx + gy * gy) * (long_edge / _DEFRINGE_REF_PX / 8.0)
+    edge = np.clip((mag - _DEFRINGE_EDGE) / _DEFRINGE_EDGE_SOFT, 0.0, 1.0).astype(np.float32)
+    if not edge.any():
+        return arr
+    k = 2 * grow + 1
+    edge = cv2.dilate(edge, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    edge = cv2.GaussianBlur(edge, (0, 0), max(1.0, 0.5 * grow))
+
+    lab = develop_v2.linear_to_oklab(develop_v2._through_table(clipped, develop_v2._DECODE_TABLE))
+    chroma = np.hypot(lab[..., 1], lab[..., 2])
+    hue = np.degrees(np.arctan2(lab[..., 2], lab[..., 1])) % 360.0
+    in_purple = _window_weight(hue, _DEFRINGE_PURPLE)
+    in_green = _window_weight(hue, _DEFRINGE_GREEN)
+    coloured = np.clip((chroma - _DEFRINGE_CHROMA_FLOOR) / _DEFRINGE_CHROMA_FLOOR, 0.0, 1.0)
+    # What counts as fringe, whatever the sliders say: kept out of the
+    # surrounding average, or a wide seam would average to its own colour.
+    seam = edge * coloured * np.maximum(in_purple, in_green)
+    strength = edge * coloured * np.maximum(ps * in_purple, gs * in_green)
+    strength = strength.astype(np.float32)
+    touched = strength > 1e-4
+    if not touched.any():
+        return arr
+    keep = (1.0 - seam).astype(np.float32)
+    ksize = (2 * box + 1, 2 * box + 1)
+    around = cv2.boxFilter(chroma * keep, -1, ksize) / np.maximum(cv2.boxFilter(keep, -1, ksize), 1e-4)
+    target = np.minimum(chroma, around)
+    new_chroma = chroma - strength * (chroma - target)
+    scale = new_chroma / np.maximum(chroma, 1e-6)
+    lab[..., 1] *= scale
+    lab[..., 2] *= scale
+    out = develop_v2._through_table(develop_v2.oklab_to_linear(lab), develop_v2._ENCODE_TABLE)
+    return np.where(touched[..., None], out, arr).astype(arr.dtype, copy=False)

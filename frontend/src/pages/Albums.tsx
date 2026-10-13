@@ -18,6 +18,7 @@ import {
 } from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
 import type { AlbumOut, SmartAlbumOut } from "../api/types";
+import { plural } from "../utils/plural";
 
 // Cover thumbnail that fades in once decoded (see .smart-card img in CSS)
 // instead of popping into the card. A cover seen earlier this session starts
@@ -267,7 +268,7 @@ export function Albums() {
     if (
       !(await dialogs.confirm({
         title: `Delete album “${albumName}”?`,
-        message: `Its ${count} photo(s) stay in your library.`,
+        message: `Its ${plural(count, "photo")} stay in your library.`,
         confirmLabel: "Delete album",
         danger: true,
       }))
@@ -296,29 +297,11 @@ export function Albums() {
     <div className="page albums-page" ref={pageRef}>
       <h2 className="section-title">Albums</h2>
 
-      {smartLoading && (
-        <>
-          <SmartRowSkeleton />
-          <SmartRowSkeleton />
-        </>
-      )}
-
-      {hasSmart && (
-        <>
-          {clustersPending && (
-            <SmartRowSkeleton title="Moments" hint="Analyzing your photos…" />
-          )}
-          <MomentsRow items={smart.clusters} />
-          <SmartRow title="Tags" items={smart.tags} />
-          <SmartRow title="Places" items={smart.places} />
-          <SmartRow title="Countries" items={smart.countries} />
-          <SmartRow title="Countries by year" items={smart.country_years} />
-          <SmartRow title="Big days" items={smart.days} />
-          <SmartRow title="Edited" items={smart.edits} />
-          <SmartRow title="Years" items={smart.years} />
-          <SmartRow title="Months" items={smart.months} />
-        </>
-      )}
+      {/* What was just imported first, then the albums the user made, then
+          everything the app worked out by itself - their own work is what
+          they come here for, and nine automatic rows used to push it to the
+          bottom of the page. */}
+      {hasSmart && <SmartRow title="Recent imports" items={smart.imports ?? []} />}
 
       <h3 className="smart-row-title">My albums</h3>
       <form
@@ -454,6 +437,30 @@ export function Albums() {
             a lone album card keeps its normal size instead of stretching huge. */}
         <i className="grid-filler" aria-hidden />
       </div>
+
+      {smartLoading && (
+        <>
+          <SmartRowSkeleton />
+          <SmartRowSkeleton />
+        </>
+      )}
+
+      {hasSmart && (
+        <>
+          {clustersPending && (
+            <SmartRowSkeleton title="Moments" hint="Analyzing your photos…" />
+          )}
+          <MomentsRow items={smart.clusters} />
+          <SmartRow title="Tags" items={smart.tags} />
+          <SmartRow title="Places" items={smart.places} />
+          <SmartRow title="Countries" items={smart.countries} />
+          <SmartRow title="Countries by year" items={smart.country_years} />
+          <SmartRow title="Big days" items={smart.days} />
+          <SmartRow title="Edited" items={smart.edits} />
+          <SmartRow title="Years" items={smart.years} />
+          <SmartRow title="Months" items={smart.months} />
+        </>
+      )}
     </div>
   );
 }

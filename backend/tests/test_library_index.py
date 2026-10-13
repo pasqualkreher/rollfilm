@@ -91,6 +91,8 @@ def test_a_photo_serialises_every_field_the_grid_needs(db):
         "source_root_id": None,
         "thumb_version": "",
         "virtual_of_image_id": None,
+        "missing": False,
+        "flag": None,
     }
 
 

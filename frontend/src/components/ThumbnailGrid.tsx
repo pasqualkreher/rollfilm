@@ -72,10 +72,16 @@ export function fileTypeBadge(fileType: string, merged: boolean): string {
 
 // Badge class so RAW (and merged pairs) get a distinct color from JPG — the
 // text alone is too small to tell the kinds apart when scanning a grid.
-export function fileTypeBadgeClass(fileType: string, merged: boolean, base = "badge"): string {
+export function fileTypeBadgeClass(fileType: string, merged: boolean, base = "badge", missing = false): string {
+  if (missing) return `${base} badge-missing`;
   if (merged) return `${base} badge-pair`;
   return fileType === "raw" ? `${base} badge-raw` : base;
 }
+
+// The library sync could not find the file: the badge says so instead of the
+// kind, and the tile's thumbnail (the last render there is) goes quiet.
+export const MISSING_TITLE =
+  "File not found - the drive may be unplugged or the folder moved. Settings → Library → Missing files";
 
 // A virtual copy ("virtual copy") has no file of its own - it borrows the
 // original's bytes and only carries its own develop state. The grid marks such
@@ -685,8 +691,8 @@ function buildSections(
     const label = !d
       ? "Unknown date"
       : granularity === "day"
-        ? d.toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric", year: "numeric" })
-        : d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+        ? d.toLocaleDateString("en-US", { weekday: "short", month: "long", day: "numeric", year: "numeric" })
+        : d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
     const last = sections[sections.length - 1];
     if (last && last.label === label) last.items.push({ image, index });
     else sections.push({ label, date: d, items: [{ image, index }] });
@@ -915,11 +921,16 @@ export function ThumbnailGrid({
           rowHeight={rowH}
         />
         <span
-          className={fileTypeBadgeClass(image.file_type, mergePairs && Boolean(image.paired_image_id))}
-          title={image.virtual_of_image_id ? VIRTUAL_COPY_TITLE : undefined}
+          className={fileTypeBadgeClass(
+            image.file_type,
+            mergePairs && Boolean(image.paired_image_id),
+            "badge",
+            Boolean(image.missing_since)
+          )}
+          title={image.missing_since ? MISSING_TITLE : image.virtual_of_image_id ? VIRTUAL_COPY_TITLE : undefined}
         >
           {image.virtual_of_image_id && <VirtualCopyMark />}
-          {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
+          {image.missing_since ? "Missing" : fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
         </span>
         {infoButton(image.id)}
         {!selecting && onRemove && (
@@ -939,6 +950,7 @@ export function ThumbnailGrid({
           <input
             className="select-checkbox"
             type="checkbox"
+            aria-label={`Select ${image.original_filename}`}
             checked={selectedIds?.has(image.id) ?? false}
             onClick={(e) => {
               e.stopPropagation();
@@ -947,9 +959,16 @@ export function ThumbnailGrid({
             onChange={() => {}}
           />
         )}
-        {(image.rating > 0 || image.color_label !== "none") && (
+        {(image.rating > 0 || image.color_label !== "none" || image.flag) && (
           <div className="overlay-info">
-            <span className="overlay-stars">{image.rating > 0 ? "★".repeat(image.rating) : ""}</span>
+            <span className="overlay-stars">
+              {image.flag && (
+                <span className={`overlay-flag overlay-flag--${image.flag}`} title={image.flag === "pick" ? "Pick" : "Reject"}>
+                  {image.flag === "pick" ? "✓" : "✕"}
+                </span>
+              )}
+              {image.rating > 0 ? "★".repeat(image.rating) : ""}
+            </span>
             {image.color_label !== "none" && (
               <span
                 className="overlay-color-dot"
@@ -1020,7 +1039,7 @@ export function ThumbnailGrid({
             ? {
                 label: s.label,
                 tickGroup: `${s.date.getFullYear()}-${s.date.getMonth()}`,
-                tickPrimary: s.date.toLocaleDateString(undefined, { month: "short", year: "numeric" }),
+                tickPrimary: s.date.toLocaleDateString("en-US", { month: "short", year: "numeric" }),
                 tickSecondary: String(s.date.getDate()),
               }
             : { label: s.label }

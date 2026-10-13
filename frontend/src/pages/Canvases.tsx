@@ -121,7 +121,8 @@ export function Canvases() {
       <h2 className="section-title">Canvas</h2>
       <p className="page-subtitle" style={{ color: "var(--text-muted)", marginTop: -8 }}>
         Place photos by hand on pages or an endless sheet, then print or export. Click a canvas to
-        preview it, the pencil edits it. Add photos from the library&rsquo;s Select mode.
+        preview it, the pencil edits it. To add photos, select them in the Library or an album and
+        choose <em>Add to… → canvas</em>.
       </p>
 
       <div className="album-create-row" style={{ display: "flex", gap: 8, margin: "16px 0" }}>

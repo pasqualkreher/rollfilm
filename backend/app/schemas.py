@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from app.db.models import ColorLabel, FileType, ImportMode, ImportSessionStatus
+from app.db.models import ColorLabel, FileType, Flag, ImportMode, ImportSessionStatus
 
 
 class ImageOut(BaseModel):
@@ -19,6 +19,9 @@ class ImageOut(BaseModel):
     imported_at: datetime
     # Set while the photo sits in the in-app Trash (managed photos only).
     deleted_at: datetime | None
+    # Set while the library sync cannot find the photo's file (see
+    # maintenance.sync_db_with_library); the photo stays, badged.
+    missing_since: datetime | None = None
     camera_make: str | None
     camera_model: str | None
     lens_model: str | None = None
@@ -31,6 +34,8 @@ class ImageOut(BaseModel):
     gps_country: str | None = None
     rating: int
     color_label: ColorLabel
+    # The culling flag: "pick", "reject" or null.
+    flag: Flag | None = None
     # Free-text note typed in the detail view; null when there's none.
     description: str | None = None
     # Flagged for selective Immich sync (see settings_store sync modes).
@@ -79,6 +84,8 @@ class ImageOut(BaseModel):
 class ImageUpdate(BaseModel):
     rating: int | None = None
     color_label: ColorLabel | None = None
+    # The culling flag. Omitted = unchanged; "" takes the flag off.
+    flag: Flag | Literal[""] | None = None
     # Free-text note. "" clears it; omitted (null) leaves it alone.
     description: str | None = None
     # Ignored: a rating/color always goes onto the RAW+JPEG partner as well.
@@ -185,6 +192,10 @@ class BulkDevelopRequest(BaseModel):
 
     image_ids: list[str]
     adjustments: dict[str, Any] = Field(default_factory=dict)
+    # Only these develop.SECTION_KEYS groups are taken from `adjustments`,
+    # the rest of each photo's edit stays (develop.merge_sections). None:
+    # the whole develop object replaces the photo's, as it always did.
+    sections: list[str] | None = None
 
 
 class BulkAutoDevelopRequest(BaseModel):
@@ -279,6 +290,8 @@ class BulkImageUpdate(BaseModel):
     image_ids: list[str]
     rating: int | None = None
     color_label: ColorLabel | None = None
+    # The culling flag. Omitted = unchanged; "" takes the flag off.
+    flag: Flag | Literal[""] | None = None
     # Ignored, see ImageUpdate.apply_to_pair.
     apply_to_pair: bool = False
 
@@ -310,9 +323,20 @@ class ExportRequest(BaseModel):
 
 class ExportStartRequest(ExportRequest):
     # "jpeg" renders the saved edits into fresh JPEGs; "tiff" into 16-bit sRGB
-    # TIFFs (for print or further retouching); "original" hands out the
-    # library files byte-for-byte (RAW stays RAW, metadata untouched).
-    format: Literal["jpeg", "tiff", "original"] = "jpeg"
+    # TIFFs (for print or further retouching); "png" into 8-bit PNGs;
+    # "original" hands out the library files byte-for-byte (RAW stays RAW,
+    # metadata untouched).
+    format: Literal["jpeg", "tiff", "png", "original"] = "jpeg"
+    # The TIFF's bit depth and compression (LZW is what it always had).
+    tiff_bits: Literal[8, 16] = 16
+    tiff_compression: Literal["none", "lzw", "deflate"] = "lzw"
+    # The size in other terms than `max_size`: `size` read by `fit` as the
+    # long or short edge in pixels, megapixels, or a percentage of the
+    # photo's own size; `no_upscale` keeps a smaller photo at its size.
+    # `size` unset: `max_size` (the long edge) as before.
+    fit: Literal["long", "short", "megapixels", "percent"] = "long"
+    size: float | None = None
+    no_upscale: bool = True
     # What a rendered file says about itself: "all" carries the camera's data
     # (camera, lens, exposure, date, GPS) plus the library's stars, colour
     # label and tags; "no_location" the same without where it was taken;
@@ -334,6 +358,16 @@ class ExportStartRequest(ExportRequest):
     watermark_corner: Literal["tl", "tr", "bl", "br"] = "br"
     watermark_size: Literal["small", "medium", "large"] = "medium"
     watermark_opacity: int = 60
+    # What the sharpening is for: a screen (as it always was), or a print on
+    # glossy or matte paper (wider and stronger, growing with the size).
+    sharpen_medium: Literal["screen", "matte", "glossy"] = "screen"
+    # An image watermark (a PNG; its transparency is kept) beside the text
+    # one: an absolute path, its corner, its long side in percent of the
+    # picture's long edge, and its opacity in percent. Empty = none.
+    watermark_image: str = ""
+    watermark_image_corner: Literal["tl", "tr", "bl", "br"] = "br"
+    watermark_image_size: float = 15.0
+    watermark_image_opacity: int = 80
 
 
 class ExportStartResponse(BaseModel):
@@ -390,9 +424,14 @@ class ExportJobProgress(BaseModel):
 class ExportOptions(BaseModel):
     """The choices of the export dialog, as a preset stores them."""
 
-    format: Literal["jpeg", "tiff", "original"] = "jpeg"
+    format: Literal["jpeg", "tiff", "png", "original"] = "jpeg"
     quality: int = 90
     max_size: int | None = None
+    tiff_bits: Literal[8, 16] = 16
+    tiff_compression: Literal["none", "lzw", "deflate"] = "lzw"
+    fit: Literal["long", "short", "megapixels", "percent"] = "long"
+    size: float | None = None
+    no_upscale: bool = True
     metadata: Literal["all", "no_location", "none"] = "all"
     name_template: str = ""
     # "download" asks where to save each time; "folder" writes into dest_dir.
@@ -403,6 +442,11 @@ class ExportOptions(BaseModel):
     watermark_corner: Literal["tl", "tr", "bl", "br"] = "br"
     watermark_size: Literal["small", "medium", "large"] = "medium"
     watermark_opacity: int = 60
+    sharpen_medium: Literal["screen", "matte", "glossy"] = "screen"
+    watermark_image: str = ""
+    watermark_image_corner: Literal["tl", "tr", "bl", "br"] = "br"
+    watermark_image_size: float = 15.0
+    watermark_image_opacity: int = 80
 
 
 class ExportPreset(BaseModel):
@@ -645,7 +689,7 @@ class SmartAlbumOut(BaseModel):
     # "place:48.1374,11.5755" / "country:Italy" / "country-year:Italy:2024" -
     # virtual, so the id encodes what the album *is* instead of naming a row.
     id: str
-    kind: Literal["cluster", "tag", "year", "month", "day", "place", "country", "country_year", "edits"]
+    kind: Literal["cluster", "tag", "year", "month", "day", "place", "country", "country_year", "edits", "imported"]
     name: str
     image_count: int
     cover_image_id: str | None = None
@@ -662,6 +706,8 @@ class SmartAlbumsOut(BaseModel):
     # served clusters are stale and a rebuild runs (e.g. embeddings still
     # backfilling after an import); the frontend polls until "ready".
     clusters_status: Literal["building", "refreshing", "ready"]
+    # The last days photos were imported on, newest first ("Recent imports").
+    imports: list[SmartAlbumOut] = []
     clusters: list[SmartAlbumOut]
     # One album per tag ("albums by tag") - the "tags" section.
     tags: list[SmartAlbumOut] = []
@@ -988,6 +1034,9 @@ class ImportSettingsOut(BaseModel):
     # Whether stars, colour labels, keywords and captions another program
     # wrote into the files (or .xmp sidecars beside them) come in with them.
     read_file_metadata: bool
+    # Whether every copy the import writes is read back and its hash compared
+    # with the source's before the import goes on (settings_store).
+    verify_copies: bool = False
 
 
 class ImportSettingsUpdate(BaseModel):
@@ -997,6 +1046,7 @@ class ImportSettingsUpdate(BaseModel):
     select_default: Literal["select", "deselect"] | None = None
     backup_default: Literal["keep", "delete"] | None = None
     read_file_metadata: bool | None = None
+    verify_copies: bool | None = None
 
 
 class SidecarSettingsOut(BaseModel):
@@ -1148,13 +1198,58 @@ class ImageCountOut(BaseModel):
 
 
 class SyncResult(BaseModel):
-    removed_missing_files: int
+    # Always 0 now: a sync marks files it cannot find, it removes nothing.
+    removed_missing_files: int = 0
+    # Files not found and marked by this run; all marked rows after it; rows
+    # whose file was found again and unmarked.
+    missing_files: int = 0
+    missing_total: int = 0
+    recovered_files: int = 0
+    # Non-zero: more files were missing at once than the sync marks on its
+    # own (maintenance.MISSING_ABORT_*) - it stopped and marked nothing.
+    too_many_missing: int = 0
     renamed_files_followed: int = 0
     untracked_files_found: int
     orphan_thumbnails_removed: int
     thumbnails_queued: int
-    # Stopped by the user before anything was removed: the counts are zero.
+    # Stopped by the user before anything was marked: the counts are zero.
     cancelled: bool = False
+
+
+class MissingFilesOut(BaseModel):
+    # Photos whose file the last sync could not find (still in the library).
+    count: int
+    # The last sync stopped because this many files were missing at once.
+    sync_aborted_missing: int = 0
+    sync_aborted_at: str | None = None
+
+
+class RemovedMissingOut(BaseModel):
+    removed: int
+
+
+class DbSnapshotOut(BaseModel):
+    name: str
+    size: int
+    created_at: str
+    # "daily", "migration" (with the revision it left) or "manual".
+    reason: str
+    revision: str | None = None
+
+
+class DbSnapshotsOut(BaseModel):
+    snapshots: list[DbSnapshotOut]
+    # A snapshot marked to replace the database on the next start.
+    pending_restore: str | None = None
+    folder: str
+
+
+class DbSnapshotRestoreRequest(BaseModel):
+    name: str
+
+
+class DbSnapshotRestoreOut(BaseModel):
+    pending: str
 
 
 class RebuildThumbnailsResult(BaseModel):
@@ -1204,6 +1299,11 @@ class DangerZoneRequest(BaseModel):
 class RestoreResult(BaseModel):
     images_restored: int
     albums_restored: int
+    canvases_restored: int = 0
+    # Where the files the library held before the restore were moved to (under
+    # the app's data folder), or None when there were none. The user deletes
+    # that folder once the restored library is known to be the right one.
+    replaced_folder: str | None = None
 
 
 class BackgroundActivityOut(BaseModel):
@@ -1320,3 +1420,60 @@ class LibraryStats(BaseModel):
     last_taken_at: datetime | None = None
 
 
+
+
+# ---- Edit snapshots ----------------------------------------------------------
+
+
+class EditSnapshotCreate(BaseModel):
+    """Keep the photo's edit under a name. `edits` omitted: the edit as it is
+    stored right now; given: that edit (the editor's unsaved state)."""
+
+    name: str = ""
+    edits: ImageEdits | None = None
+
+
+class EditSnapshotOut(BaseModel):
+    id: str
+    image_id: str
+    name: str
+    created_at: datetime
+    edits: ImageEdits
+
+
+# ---- Develop presets ---------------------------------------------------------
+
+
+class DevelopPresetIn(BaseModel):
+    name: str
+    # The folder the preset is listed under; empty/None = none.
+    group: str | None = None
+    # Which develop.SECTION_KEYS groups the preset carries; None = all of them.
+    sections: list[str] | None = None
+    adjustments: dict[str, Any] = Field(default_factory=dict)
+
+
+class DevelopPresetUpdate(BaseModel):
+    # Partial: only the fields sent change. `group: null` takes it out of
+    # its folder.
+    name: str | None = None
+    group: str | None = None
+    sections: list[str] | None = None
+    adjustments: dict[str, Any] | None = None
+
+
+class DevelopPresetOut(BaseModel):
+    id: str
+    name: str
+    group: str | None = None
+    sections: list[str]
+    adjustments: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevelopPresetImportResult(BaseModel):
+    created: int
+    # Presets whose name was taken: the file's version replaced the library's.
+    replaced: int
+    presets: list[DevelopPresetOut]

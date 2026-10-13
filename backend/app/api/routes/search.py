@@ -110,6 +110,9 @@ def _apply_scope(
 # geotagged library sorted by distance - beyond this radius a photo has
 # nothing to do with the place, and the slots are better spent on similarity.
 _CITY_RADIUS_KM = 75.0
+# How far (L2 distance between unit vectors) a semantic match may fall behind
+# the best one and still be shown. See search_images.
+SEMANTIC_WINDOW = 0.05
 
 
 @router.get("", response_model=list[schemas.SearchResultOut])
@@ -300,11 +303,25 @@ def search_images(
                     unavailable,
                 ).all()
             )
+        # A relevance window instead of "fill up to the limit": CLIP ranks
+        # every photo against any query, so filling to a thousand always
+        # succeeded - the count in the banner was the limit, "no match" never
+        # appeared, and the tail was noise. Photos further than the window
+        # from the best in-scope match are left out. The vectors are unit
+        # length and sqlite-vec returns L2 distance, sqrt(2 - 2 cos); near the
+        # cosines CLIP gives a real match (0.25-0.35) a step of 0.05 in
+        # distance is about 0.06 in cosine - the gap between "shows the thing"
+        # and "shares the colours".
+        best: float | None = None
         for image_id, distance in matches:
             if len(results) >= limit:
                 break
             if image_id in seen_ids or image_id not in allowed_ids:
                 continue
+            if best is None:
+                best = distance
+            elif distance > best + SEMANTIC_WINDOW:
+                break
             image = db.get(Image, image_id)
             if image:
                 add(image, distance)

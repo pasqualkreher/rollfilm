@@ -1,3 +1,4 @@
+import enum
 import json
 import logging
 import os
@@ -9,22 +10,34 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Protocol
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.sqltypes import DateTime as SADateTime
+from sqlalchemy.sql.sqltypes import Enum as SAEnum
 
 from app.config import settings
 from app.db.models import (
     Album,
     AlbumImage,
+    AppSetting,
+    Canvas,
+    CanvasImage,
+    CanvasLayout,
     ColorLabel,
+    DevelopPreset,
+    EditSnapshot,
     FileType,
     Image,
     ImageTag,
     ImportSession,
     ImportSessionSource,
     ImportStagedFile,
+    LayoutItem,
+    LayoutVersion,
+    SourceRoot,
     Tag,
 )
 from app.services.exif import capture_date_from_filename, new_helper, read_exif
@@ -32,6 +45,7 @@ from app.services.filesystem import VIRTUAL_PATH_MARKER, resolve_image_path
 from app.services.hashing import sha256_file
 from app.services.membership_tags import sync_membership_tags
 from app.services.raw import classify_file_type, raw_dimensions
+from app.services.settings_store import IMMICH_API_KEY, set_setting
 from app.services import lens_profile
 from app.services.thumbnails import (
     adjustments_from_image,
@@ -423,15 +437,56 @@ def _sync_db_with_library(db: Session, owner_id: int) -> dict:
     relocated_ids = {image.id for image in relocated}
     missing = [image for image in missing if image.id not in relocated_ids]
 
-    # The last moment to stop before anything is removed. Renamed files were
+    # The last moment to stop before anything is marked. Renamed files were
     # followed above (their rows only gained a new path); nothing is deleted.
     if _sync_cancel.is_set():
         return _sync_result(cancelled=True, renamed_files_followed=len(relocated))
 
-    hard_delete_images(db, missing, delete_files=False)
+    # A file that is back - the drive mounted again, the folder put back - is
+    # simply back: the row never left, so nothing has to be restored.
+    now = datetime.now(timezone.utc)
+    recovered = 0
+    for image in images:
+        if image.missing_since is not None and image.id not in {m.id for m in missing}:
+            image.missing_since = None
+            recovered += 1
+    for image in relocated:
+        image.missing_since = None
+
+    # Files not found are MARKED, never removed: the row keeps the photo's
+    # stars, tags, albums and edits, the grid badges it, and Settings offers
+    # to remove the entries once the user has decided the files are gone for
+    # good. Too many at once is the one case where nothing is marked either:
+    # a library that lost a twentieth of itself since the last look has not
+    # lost it - its drive is asleep, its folder moved, its permissions wrong -
+    # and marking a thousand photos would only be noise over the real cause.
+    newly_missing = [image for image in missing if image.missing_since is None]
+    managed_count = sum(
+        1 for image in images if image.source_root_id is None and image.virtual_of_image_id is None
+    )
+    limit = max(MISSING_ABORT_MIN, int(managed_count * MISSING_ABORT_FRAC))
+    if len(newly_missing) > limit:
+        db.commit()
+        _last_sync_abort["missing"] = len(newly_missing)
+        _last_sync_abort["at"] = now.isoformat()
+        logger.warning(
+            "Library sync: %d of %d managed files not found - more than the %d the sync will mark on "
+            "its own; nothing marked. Is the library drive mounted?",
+            len(newly_missing), managed_count, limit,
+        )
+        return _sync_result(
+            too_many_missing=len(newly_missing),
+            renamed_files_followed=len(relocated),
+            recovered_files=recovered,
+            untracked_files_found=len(untracked_paths),
+            missing_total=sum(1 for image in images if image.missing_since is not None),
+        )
+    _last_sync_abort["missing"] = 0
+    for image in newly_missing:
+        image.missing_since = now
     db.commit()
 
-    kept = db.query(Image).filter(Image.owner_id == owner_id).all()
+    kept = [image for image in db.query(Image).filter(Image.owner_id == owner_id).all() if image.missing_since is None]
     untracked = len(untracked_paths)
 
     # Thumbnail cache holds one folder per image id - drop any that no image
@@ -462,7 +517,9 @@ def _sync_db_with_library(db: Session, owner_id: int) -> dict:
             thumbnails_queued += 1
 
     return _sync_result(
-        removed_missing_files=len(missing),
+        missing_files=len(newly_missing),
+        missing_total=len(missing),
+        recovered_files=recovered,
         renamed_files_followed=len(relocated),
         untracked_files_found=untracked,
         orphan_thumbnails_removed=orphan_thumbnails_removed,
@@ -472,7 +529,12 @@ def _sync_db_with_library(db: Session, owner_id: int) -> dict:
 
 def _sync_result(**fields) -> dict:
     result = {
+        # Kept at 0 for older clients: a sync removes nothing any more.
         "removed_missing_files": 0,
+        "missing_files": 0,
+        "missing_total": 0,
+        "recovered_files": 0,
+        "too_many_missing": 0,
         "renamed_files_followed": 0,
         "untracked_files_found": 0,
         "orphan_thumbnails_removed": 0,
@@ -481,6 +543,44 @@ def _sync_result(**fields) -> dict:
     }
     result.update(fields)
     return result
+
+
+# More files vanished at once than the sync will mark by itself: above the
+# larger of these two it stops and reports instead (see _sync_db_with_library).
+MISSING_ABORT_MIN = 20
+MISSING_ABORT_FRAC = 0.05
+# What the last sync that stopped this way found, for the title bar's hint
+# (routes/maintenance.missing_files). Reset by the next sync that goes through.
+_last_sync_abort: dict = {"missing": 0, "at": None}
+
+
+def missing_files_status(db: Session, owner_id: int) -> dict:
+    count = (
+        db.query(Image)
+        .filter(Image.owner_id == owner_id, Image.missing_since.isnot(None), Image.deleted_at.is_(None))
+        .count()
+    )
+    return {
+        "count": count,
+        "sync_aborted_missing": int(_last_sync_abort["missing"]),
+        "sync_aborted_at": _last_sync_abort["at"],
+    }
+
+
+def remove_missing_images(db: Session, owner_id: int) -> int:
+    """Remove the rows the sync has marked as missing - the user's call, once
+    the files are known to be gone for good. The files are not on disk, so
+    nothing is unlinked; Immich is not told either (hard_delete_images with
+    delete_files=False), the same as the old sync's removal."""
+    rows = (
+        db.query(Image)
+        .filter(Image.owner_id == owner_id, Image.missing_since.isnot(None))
+        .all()
+    )
+    if rows:
+        hard_delete_images(db, rows, delete_files=False)
+        db.commit()
+    return len(rows)
 
 
 class AlreadyRunning(RuntimeError):
@@ -738,7 +838,13 @@ def repair_capture_dates(db: Session, owner_id: int) -> dict:
     return {"checked": checked, "fixed": fixed, "cancelled": cancelled}
 
 
-def wipe_library(db: Session, owner_id: int) -> None:
+def _wipe_catalog_rows(db: Session, owner_id: int) -> None:
+    """Delete everything the catalog holds for this user, in an order the
+    foreign keys allow, without committing: wipe_library() commits it on its
+    own, the restore runs it inside the one transaction that also writes the
+    backup's rows back, so a restore that fails half-way rolls back to the
+    library as it was. Settings stay - the Immich key, the trash retention,
+    the editor preferences are the machine's, not the library's."""
     session_ids = [s.id for s in db.query(ImportSession).filter(ImportSession.owner_id == owner_id).all()]
     if session_ids:
         db.query(ImportStagedFile).filter(
@@ -763,7 +869,63 @@ def wipe_library(db: Session, owner_id: int) -> None:
         db.query(ImageTag).filter(ImageTag.tag_id.in_(tag_ids)).delete(synchronize_session=False)
         db.query(Tag).filter(Tag.owner_id == owner_id).delete(synchronize_session=False)
 
+    # Canvases: frames and versions hang off a layout, a layout and the
+    # membership off a canvas; frames and memberships also point at images,
+    # so all of it goes before the images do.
+    canvas_ids = [c.id for c in db.query(Canvas).filter(Canvas.owner_id == owner_id).all()]
+    if canvas_ids:
+        layout_ids = [
+            l.id for l in db.query(CanvasLayout).filter(CanvasLayout.canvas_id.in_(canvas_ids)).all()
+        ]
+        if layout_ids:
+            db.query(LayoutItem).filter(LayoutItem.layout_id.in_(layout_ids)).delete(synchronize_session=False)
+            db.query(LayoutVersion).filter(LayoutVersion.layout_id.in_(layout_ids)).delete(
+                synchronize_session=False
+            )
+            db.query(CanvasLayout).filter(CanvasLayout.id.in_(layout_ids)).delete(synchronize_session=False)
+        db.query(CanvasImage).filter(CanvasImage.canvas_id.in_(canvas_ids)).delete(synchronize_session=False)
+        db.query(Canvas).filter(Canvas.owner_id == owner_id).delete(synchronize_session=False)
+
+    # A photo's named snapshots go with it (bulk deletes skip the ORM cascade),
+    # and the presets are the library's too: a restore brings its own back.
+    image_ids = [row[0] for row in db.query(Image.id).filter(Image.owner_id == owner_id).all()]
+    for start in range(0, len(image_ids), 500):
+        db.query(EditSnapshot).filter(EditSnapshot.image_id.in_(image_ids[start : start + 500])).delete(
+            synchronize_session=False
+        )
+    db.query(DevelopPreset).filter(DevelopPreset.owner_id == owner_id).delete(synchronize_session=False)
     db.query(Image).filter(Image.owner_id == owner_id).delete(synchronize_session=False)
+    # The folders indexed in place go with their photos: a wiped library has no
+    # photos to list under them, and a restore brings its own roots back.
+    db.query(SourceRoot).filter(SourceRoot.owner_id == owner_id).delete(synchronize_session=False)
+
+
+def _is_data_dir(child: Path) -> bool:
+    """Whether a child of the library folder is the app's own data folder:
+    ".photomanager" in the desktop app, or wherever pm_data_dir points when it
+    was put inside the library by hand."""
+    if child.name == ".photomanager":
+        return True
+    try:
+        return child.resolve() == settings.pm_data_dir.resolve()
+    except OSError:
+        return False
+
+
+def _clear_derived_folders() -> None:
+    """Thumbnails and import staging: all of it is rebuilt from the originals
+    (the post-import jobs a wipe or restore queues), so it goes wholesale."""
+    for root in (
+        settings.thumbnail_cache_root,
+        settings.import_staging_root,
+        settings.staged_thumbs_root,
+    ):
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True, exist_ok=True)
+
+
+def wipe_library(db: Session, owner_id: int) -> None:
+    _wipe_catalog_rows(db, owner_id)
     db.commit()
 
     # The library's data folder (".photomanager": database, thumbnails,
@@ -775,7 +937,7 @@ def wipe_library(db: Session, owner_id: int) -> None:
     # cleared explicitly via their own configured roots.
     if settings.library_root.is_dir():
         for child in settings.library_root.iterdir():
-            if child.name == ".photomanager":
+            if _is_data_dir(child):
                 continue
             if child.is_dir():
                 shutil.rmtree(child, ignore_errors=True)
@@ -785,14 +947,7 @@ def wipe_library(db: Session, owner_id: int) -> None:
                 except OSError:
                     pass
     settings.library_root.mkdir(parents=True, exist_ok=True)
-
-    for root in (
-        settings.thumbnail_cache_root,
-        settings.import_staging_root,
-        settings.staged_thumbs_root,
-    ):
-        shutil.rmtree(root, ignore_errors=True)
-        root.mkdir(parents=True, exist_ok=True)
+    _clear_derived_folders()
 
 
 def image_to_dict(image: Image, tags: list[str]) -> dict:
@@ -844,6 +999,9 @@ def image_to_dict(image: Image, tags: list[str]) -> dict:
         "immich_sync": image.immich_sync,
         "immich_asset_id": image.immich_asset_id,
         "virtual_of_image_id": image.virtual_of_image_id,
+        # Set for a photo indexed in place from a source root: its file_path is
+        # then the absolute path on that storage and the backup carries no file.
+        "source_root_id": image.source_root_id,
         "tags": tags,
     }
 
@@ -904,144 +1062,452 @@ def image_row_from_dict(data: dict, owner_id: int, *, keep_id: bool = True) -> I
         immich_sync=data.get("immich_sync", False),
         immich_asset_id=data.get("immich_asset_id"),
         virtual_of_image_id=data.get("virtual_of_image_id"),
+        source_root_id=data.get("source_root_id"),
     )
     if keep_id:
         fields["id"] = data["id"]
     return Image(**fields)
 
 
+# --- Backup and restore -------------------------------------------------------
+# A backup is a zip: the managed originals under "library/<file_path>" and one
+# manifest.json with everything the catalog knows. Not a copy of the SQLite
+# file - swapping that out from under a live connection pool on restore would
+# be fragile; re-inserting rows is safer, and a JSON manifest stays readable by
+# whatever comes after this version of the app.
+
+# Bumped whenever the manifest gains a section. A restore reads every version
+# up to this one (a section an older backup lacks is simply skipped) and
+# refuses anything newer, which it could only half understand.
+BACKUP_MANIFEST_VERSION = 3
+# Settings that never leave the machine in a backup: the manifest is plain
+# text in a zip the user may hand around or put on a shared drive, and the
+# Immich key in it would open the Immich server to whoever holds the file.
+BACKUP_SECRET_SETTINGS = (IMMICH_API_KEY,)
+
+
+class RestoreError(RuntimeError):
+    """The backup could not be restored. Raised before anything of the live
+    library was touched, and the message says so - it is written for the user."""
+
+
+def _row_to_dict(row) -> dict:
+    """Every mapped column of a row as JSON-ready values: datetimes as ISO
+    strings, enums as their value. The generic shape the canvas tables, the
+    albums and the source roots travel in - a column added later is in the
+    next backup without anyone remembering this file."""
+    out = {}
+    for attr in sa_inspect(type(row)).column_attrs:
+        value = getattr(row, attr.key)
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        elif isinstance(value, enum.Enum):
+            value = value.value
+        out[attr.key] = value
+    return out
+
+
+def _row_from_dict(model, data: dict, **overrides):
+    """The reverse of _row_to_dict. Keys the manifest lacks are left to the
+    column defaults and keys the model no longer has are dropped, so a backup
+    from an older version still restores; `overrides` pin what a restore must
+    decide itself (the owner)."""
+    fields = {}
+    for attr in sa_inspect(model).column_attrs:
+        if attr.key not in data:
+            continue
+        value = data[attr.key]
+        column_type = attr.columns[0].type
+        if value is not None:
+            if isinstance(column_type, SADateTime):
+                value = datetime.fromisoformat(value)
+            elif isinstance(column_type, SAEnum) and column_type.enum_class is not None:
+                value = column_type.enum_class(value)
+        fields[attr.key] = value
+    fields.update(overrides)
+    return model(**fields)
+
+
+def _has_backup_file(image: Image) -> bool:
+    """Whether a photo's bytes belong in the zip: a managed original does, a
+    photo indexed in place (its file lives on the NAS, re-indexed by adding
+    the source root again) and a virtual copy (it owns no file) do not."""
+    return image.source_root_id is None and VIRTUAL_PATH_MARKER not in image.file_path
+
+
+def _safe_library_path(file_path) -> str | None:
+    """A manifest path a restore may write under the library folder: a plain
+    relative path with no '..', no empty part and no other separator. Anything
+    else is refused - a manifest is data from a file somebody else may have
+    written, and "../../.ssh/authorized_keys" in it must not become a write
+    outside the library. Returns the path as given, or None."""
+    if not isinstance(file_path, str) or not file_path or "\0" in file_path or "\\" in file_path:
+        return None
+    pure = PurePosixPath(file_path)
+    if pure.is_absolute() or file_path.startswith("/"):
+        return None
+    parts = pure.parts
+    if not parts or any(part in ("..", ".", "") for part in parts):
+        return None
+    try:
+        root = settings.library_root.resolve()
+        if not (root / file_path).resolve().is_relative_to(root):
+            return None
+    except OSError:
+        return None
+    return file_path
+
+
 def build_backup_zip(db: Session, owner_id: int) -> Path:
-    """A portable backup: the actual library files plus a JSON manifest of
-    all metadata (ratings, albums, edits, ...). Deliberately not a raw copy
-    of the sqlite file - swapping that out from under a live connection pool
-    on restore would be fragile; restoring by re-inserting rows is safer."""
-    # Backups cover the managed library only. External source-root photos live
-    # on their own storage (a NAS etc.) and can be re-indexed by re-adding the
-    # source, so their originals aren't bundled into the backup zip.
-    images = (
-        db.query(Image)
-        .filter(Image.owner_id == owner_id, Image.source_root_id.is_(None))
-        .all()
-    )
+    """Write the backup zip into a temporary file and return its path (the
+    route streams it out and deletes it). Photos are stored, not deflated:
+    JPEGs and RAWs are already compressed and deflating them only burns CPU
+    for nothing; the manifest, plain JSON, is deflated. Files are streamed in
+    one by one, nothing of a photo is held in memory."""
+    images = db.query(Image).filter(Image.owner_id == owner_id).all()
     albums = db.query(Album).filter(Album.owner_id == owner_id).all()
-    # Exclude album memberships that point at external photos (which aren't in
-    # the backup) so a restore never tries to re-link a missing image.
     album_images = (
-        db.query(AlbumImage)
-        .join(Album)
-        .join(Image, Image.id == AlbumImage.image_id)
-        .filter(Album.owner_id == owner_id, Image.source_root_id.is_(None))
-        .all()
+        db.query(AlbumImage).join(Album).filter(Album.owner_id == owner_id).all()
     )
-    # One query for all tag links instead of lazy-loading per image.
-    tags_by_image: dict[str, list[str]] = {}
-    tag_rows = (
-        db.query(ImageTag.image_id, Tag.name)
+    tags = db.query(Tag).filter(Tag.owner_id == owner_id).all()
+    tag_links = (
+        db.query(ImageTag.image_id, ImageTag.tag_id, Tag.name)
         .join(Tag, Tag.id == ImageTag.tag_id)
-        .join(Image, Image.id == ImageTag.image_id)
-        .filter(Image.owner_id == owner_id, Image.source_root_id.is_(None))
+        .filter(Tag.owner_id == owner_id)
         .all()
     )
-    for image_id, tag_name in tag_rows:
+    # Tag names per photo stay in each image record as well: the library merge
+    # reads them from image_to_dict(), and a restore of this manifest by an
+    # older app that only knows the names still gets the tags back.
+    tags_by_image: dict[str, list[str]] = {}
+    for image_id, _tag_id, tag_name in tag_links:
         tags_by_image.setdefault(image_id, []).append(tag_name)
-    backed_up = {image.id for image in images}
+    canvases = db.query(Canvas).filter(Canvas.owner_id == owner_id).all()
+    canvas_ids = [c.id for c in canvases]
+    canvas_images = (
+        db.query(CanvasImage).filter(CanvasImage.canvas_id.in_(canvas_ids)).all() if canvas_ids else []
+    )
+    layouts = (
+        db.query(CanvasLayout).filter(CanvasLayout.canvas_id.in_(canvas_ids)).all() if canvas_ids else []
+    )
+    layout_ids = [l.id for l in layouts]
+    layout_items = db.query(LayoutItem).filter(LayoutItem.layout_id.in_(layout_ids)).all() if layout_ids else []
+    layout_versions = (
+        db.query(LayoutVersion).filter(LayoutVersion.layout_id.in_(layout_ids)).all() if layout_ids else []
+    )
+    source_roots = db.query(SourceRoot).filter(SourceRoot.owner_id == owner_id).all()
+    # The named snapshots of the photos' edits, and the develop presets.
+    image_ids = [i.id for i in images]
+    snapshots = []
+    for start in range(0, len(image_ids), 500):
+        snapshots.extend(
+            db.query(EditSnapshot).filter(EditSnapshot.image_id.in_(image_ids[start : start + 500])).all()
+        )
+    presets = db.query(DevelopPreset).filter(DevelopPreset.owner_id == owner_id).all()
+    app_settings = {
+        row.key: row.value for row in db.query(AppSetting).all() if row.key not in BACKUP_SECRET_SETTINGS
+    }
 
     manifest = {
-        "version": 2,
+        "version": BACKUP_MANIFEST_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        # What the sections mean, for whoever opens the zip by hand.
+        "notes": {
+            "files": "Managed originals sit under library/<file_path>. A photo with a "
+            "source_root_id is indexed in place on its own storage and travels without its file.",
+            "settings_excluded": "Secrets never leave the machine: "
+            + ", ".join(BACKUP_SECRET_SETTINGS)
+            + ". Open import sessions are not in a backup either - their photos live in "
+            "their import folders, outside the library.",
+        },
         "images": [image_to_dict(i, sorted(tags_by_image.get(i.id, []))) for i in images],
-        "albums": [
-            {
-                "id": a.id,
-                "name": a.name,
-                "description": a.description,
-                "created_at": a.created_at.isoformat(),
-                "immich_sync": a.immich_sync,
-            }
-            for a in albums
-        ],
+        "tags": [_row_to_dict(t) for t in tags],
+        "image_tags": [{"image_id": image_id, "tag_id": tag_id} for image_id, tag_id, _name in tag_links],
+        "albums": [_row_to_dict(a) for a in albums],
         "album_images": [
             {"album_id": ai.album_id, "image_id": ai.image_id, "position": ai.position} for ai in album_images
         ],
+        "source_roots": [_row_to_dict(r) for r in source_roots],
+        "canvases": [_row_to_dict(c) for c in canvases],
+        "canvas_images": [_row_to_dict(ci) for ci in canvas_images],
+        "canvas_layouts": [_row_to_dict(l) for l in layouts],
+        "layout_items": [_row_to_dict(i) for i in layout_items],
+        "layout_versions": [_row_to_dict(v) for v in layout_versions],
+        "edit_snapshots": [_row_to_dict(s) for s in snapshots],
+        "develop_presets": [_row_to_dict(p) for p in presets],
+        "settings": app_settings,
+        "settings_excluded": list(BACKUP_SECRET_SETTINGS),
     }
 
     fd, tmp_path_str = tempfile.mkstemp(suffix=".zip")
     os.close(fd)
     tmp_path = Path(tmp_path_str)
-    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2), compress_type=zipfile.ZIP_DEFLATED)
         for image in images:
+            if not _has_backup_file(image):
+                continue
             full_path = settings.library_root / image.file_path
-            if full_path.exists():
-                zf.write(full_path, arcname=f"library/{image.file_path}")
+            if full_path.is_file():
+                zf.write(full_path, arcname=f"library/{image.file_path}", compress_type=zipfile.ZIP_STORED)
     return tmp_path
 
 
-def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dict:
-    """Replaces everything currently in the library/DB with the contents of
-    a previously exported backup - a destructive operation, gated the same
-    way as wipe_library() (see the /maintenance/restore route)."""
-    with tempfile.TemporaryDirectory() as tmp_dir_str:
-        tmp_dir = Path(tmp_dir_str)
-        tmp_zip = tmp_dir / "backup.zip"
-        with tmp_zip.open("wb") as out:
-            shutil.copyfileobj(upload.file, out)
+def _unused_folder(base: Path, name: str) -> Path:
+    """`base/name`, or `base/name-2` and so on when that exists already."""
+    candidate = base / name
+    counter = 2
+    while candidate.exists():
+        candidate = base / f"{name}-{counter}"
+        counter += 1
+    return candidate
 
-        with zipfile.ZipFile(tmp_zip) as zf:
+
+def _stage_backup(upload: UploadedFile, staging: Path) -> tuple[dict, Path]:
+    """Read the zip and unpack its photos into `staging/library`, checking
+    everything that could go wrong on the way: not a zip, no manifest, a
+    manifest from a newer app, a path that would land outside the library.
+    Nothing of the live library is read or written here."""
+    stream = upload.file
+    # zipfile needs to seek; an upload that can't is spooled to a file first.
+    if not (hasattr(stream, "seekable") and stream.seekable()):
+        spooled = staging / "backup.zip"
+        with spooled.open("wb") as out:
+            shutil.copyfileobj(upload.file, out, 8 * 1024 * 1024)
+        stream = spooled.open("rb")
+    untouched = " The library was not changed."
+    try:
+        zf = zipfile.ZipFile(stream)
+    except zipfile.BadZipFile:
+        raise RestoreError("That file is not a Rollfilm backup (not a zip archive)." + untouched)
+    with zf:
+        try:
             manifest = json.loads(zf.read("manifest.json"))
-            zf.extractall(tmp_dir)
-
-        wipe_library(db, owner_id)
-
-        for image_data in manifest["images"]:
-            src = tmp_dir / "library" / image_data["file_path"]
-            dest = settings.library_root / image_data["file_path"]
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if src.exists():
-                shutil.copy2(src, dest)
-
-        for image_data in manifest["images"]:
-            db.add(image_row_from_dict(image_data, owner_id))
-        db.flush()
-
-        tag_by_name: dict[str, Tag] = {}
-        for image_data in manifest["images"]:
-            for tag_name in image_data.get("tags", []):
-                tag = tag_by_name.get(tag_name)
-                if tag is None:
-                    tag = Tag(owner_id=owner_id, name=tag_name)
-                    db.add(tag)
-                    db.flush()  # assigns the UUID id the link below needs
-                    tag_by_name[tag_name] = tag
-                db.add(ImageTag(image_id=image_data["id"], tag_id=tag.id))
-        db.flush()
-        for image_data in manifest["images"]:
-            if image_data["paired_image_id"]:
-                db.get(Image, image_data["id"]).paired_image_id = image_data["paired_image_id"]
-
-        for album_data in manifest["albums"]:
-            db.add(
-                Album(
-                    id=album_data["id"],
-                    owner_id=owner_id,
-                    name=album_data["name"],
-                    description=album_data["description"],
-                    created_at=datetime.fromisoformat(album_data["created_at"]),
-                    immich_sync=album_data.get("immich_sync", False),
-                )
+        except KeyError:
+            raise RestoreError("That zip holds no manifest.json - it is not a Rollfilm backup." + untouched)
+        except ValueError:
+            raise RestoreError("The backup's manifest.json is not readable." + untouched)
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("images"), list):
+            raise RestoreError("The backup's manifest lists no photos section." + untouched)
+        # Backups before the version field are version 1.
+        version = manifest.get("version", 1)
+        if not isinstance(version, int) or version > BACKUP_MANIFEST_VERSION:
+            raise RestoreError(
+                f"This backup was written by a newer Rollfilm (manifest version {version}; this one "
+                f"reads up to {BACKUP_MANIFEST_VERSION}). Update the app, then restore it." + untouched
             )
+        for data in manifest["images"]:
+            if not isinstance(data, dict):
+                raise RestoreError("The backup's manifest has a malformed photo record." + untouched)
+            if data.get("source_root_id") or VIRTUAL_PATH_MARKER in str(data.get("file_path", "")):
+                continue  # travels without a file; nothing is written at its path
+            if _safe_library_path(data.get("file_path")) is None:
+                raise RestoreError(
+                    f"The backup lists a photo at “{data.get('file_path')}”, which is not a path "
+                    "inside a library folder. The backup was refused." + untouched
+                )
+
+        extracted = staging / "library"
+        extracted.mkdir(parents=True, exist_ok=True)
+        for info in zf.infolist():
+            name = info.filename
+            if info.is_dir() or not name.startswith("library/"):
+                continue  # the manifest itself, or something no backup of ours writes
+            relative = name[len("library/"):]
+            if _safe_library_path(relative) is None:
+                raise RestoreError(
+                    f"The backup holds a file at “{name}”, which would land outside the library "
+                    "folder. The backup was refused." + untouched
+                )
+            target = extracted / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Member by member through a buffer: a RAW is never in memory whole.
+            with zf.open(info) as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst, 8 * 1024 * 1024)
+    if stream is not upload.file:
+        stream.close()
+        (staging / "backup.zip").unlink(missing_ok=True)
+    return manifest, extracted
+
+
+def _restore_rows(db: Session, owner_id: int, manifest: dict) -> dict:
+    """Write the manifest into the catalog in one transaction: the old rows go
+    and the backup's come in, and the commit at the end is the only one. A
+    failure anywhere rolls the whole thing back to the catalog as it was."""
+    images = manifest["images"]
+    try:
+        _wipe_catalog_rows(db, owner_id)
         db.flush()
-        for ai in manifest["album_images"]:
-            db.add(AlbumImage(album_id=ai["album_id"], image_id=ai["image_id"], position=ai["position"]))
+        # The bulk deletes above don't tell the session's identity map; rows it
+        # still holds from before would otherwise collide with the backup's
+        # rows of the same ids as they are flushed.
+        db.expunge_all()
+
+        # Source roots first: photos indexed in place point at them.
+        for data in manifest.get("source_roots", []):
+            db.add(_row_from_dict(SourceRoot, data, owner_id=owner_id))
+        db.flush()
+
+        # A photo's links to another photo (its RAW/JPEG partner, the original
+        # of a virtual copy) are set once every photo is in - with the foreign
+        # keys enforced, a link to a row that comes later would fail.
+        links: list[tuple[str, str | None, str | None]] = []
+        for data in images:
+            row = image_row_from_dict(data, owner_id)
+            links.append((row.id, row.paired_image_id, row.virtual_of_image_id))
+            row.paired_image_id = None
+            row.virtual_of_image_id = None
+            db.add(row)
+        db.flush()
+        for image_id, paired_id, virtual_id in links:
+            if paired_id or virtual_id:
+                row = db.get(Image, image_id)
+                row.paired_image_id = paired_id
+                row.virtual_of_image_id = virtual_id
+        db.flush()
+
+        if isinstance(manifest.get("tags"), list) and isinstance(manifest.get("image_tags"), list):
+            # Version 3: the tag rows themselves (ids, "kept" vocabulary tags
+            # without photos) and the links by id.
+            for data in manifest["tags"]:
+                db.add(_row_from_dict(Tag, data, owner_id=owner_id))
+            db.flush()
+            for link in manifest["image_tags"]:
+                db.add(ImageTag(image_id=link["image_id"], tag_id=link["tag_id"]))
+        else:
+            # Older manifests: only the tag names per photo.
+            tag_by_name: dict[str, Tag] = {}
+            for data in images:
+                for tag_name in data.get("tags", []):
+                    tag = tag_by_name.get(tag_name)
+                    if tag is None:
+                        tag = Tag(owner_id=owner_id, name=tag_name)
+                        db.add(tag)
+                        db.flush()  # assigns the UUID id the link below needs
+                        tag_by_name[tag_name] = tag
+                    db.add(ImageTag(image_id=data["id"], tag_id=tag.id))
+        db.flush()
+
+        # Albums in two passes like the photos: a nested album's parent must exist.
+        parents: list[tuple[str, str]] = []
+        for data in manifest.get("albums", []):
+            row = _row_from_dict(Album, data, owner_id=owner_id)
+            if row.parent_album_id:
+                parents.append((row.id, row.parent_album_id))
+                row.parent_album_id = None
+            db.add(row)
+        db.flush()
+        for album_id, parent_id in parents:
+            db.get(Album, album_id).parent_album_id = parent_id
+        for data in manifest.get("album_images", []):
+            db.add(AlbumImage(album_id=data["album_id"], image_id=data["image_id"], position=data["position"]))
+        db.flush()
+
+        for data in manifest.get("canvases", []):
+            db.add(_row_from_dict(Canvas, data, owner_id=owner_id))
+        db.flush()
+        for data in manifest.get("canvas_images", []):
+            db.add(_row_from_dict(CanvasImage, data))
+        for data in manifest.get("canvas_layouts", []):
+            db.add(_row_from_dict(CanvasLayout, data, owner_id=owner_id))
+        db.flush()
+        for data in manifest.get("layout_items", []):
+            db.add(_row_from_dict(LayoutItem, data))
+        for data in manifest.get("layout_versions", []):
+            db.add(_row_from_dict(LayoutVersion, data))
+        db.flush()
+        # Snapshots and presets (manifests from before they existed have none).
+        for data in manifest.get("edit_snapshots", []):
+            db.add(_row_from_dict(EditSnapshot, data))
+        for data in manifest.get("develop_presets", []):
+            db.add(_row_from_dict(DevelopPreset, data, owner_id=owner_id))
+        db.flush()
+
+        # The backup's settings replace this machine's, except the secrets a
+        # backup never carries (and a manifest edited to carry one is not
+        # believed either): the key already here stays.
+        settings_section = manifest.get("settings")
+        if isinstance(settings_section, dict):
+            for key, value in settings_section.items():
+                if key in BACKUP_SECRET_SETTINGS or not isinstance(key, str) or not isinstance(value, str):
+                    continue
+                set_setting(db, key, value)
 
         # Restored album members get their "album" / "album: …" tags back.
         sync_membership_tags(db, owner_id)
         db.commit()
+    except RestoreError:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise RestoreError(
+            f"The backup's catalog could not be written ({exc}). The library was not changed."
+        ) from exc
+    return {
+        "images_restored": len(images),
+        "albums_restored": len(manifest.get("albums", [])),
+        "canvases_restored": len(manifest.get("canvases", [])),
+    }
 
-        restored_images = db.query(Image).filter(Image.owner_id == owner_id).all()
-        for image in restored_images:
-            full_path = settings.library_root / image.file_path
-            if full_path.exists():
-                enqueue_post_import(image.id, full_path)
 
-        return {"images_restored": len(manifest["images"]), "albums_restored": len(manifest["albums"])}
+def _swap_library_files(extracted: Path, replaced: Path) -> bool:
+    """Put the unpacked photos in place of the library's current files. The
+    current files are moved aside into `replaced` (under the app's data
+    folder), never deleted: a restore of the wrong backup, or of last month's,
+    must not cost the photos of today, and on the same disk the move is a
+    rename that takes no space - the user deletes the folder once the restored
+    library is seen to be the right one. Returns whether anything was moved
+    aside."""
+    moved_any = False
+    if settings.library_root.is_dir():
+        for child in settings.library_root.iterdir():
+            if _is_data_dir(child):
+                continue
+            replaced.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(child), str(replaced / child.name))
+            moved_any = True
+    settings.library_root.mkdir(parents=True, exist_ok=True)
+    if extracted.is_dir():
+        for child in extracted.iterdir():
+            shutil.move(str(child), str(settings.library_root / child.name))
+    return moved_any
+
+
+def restore_from_backup(db: Session, owner_id: int, upload: UploadedFile) -> dict:
+    """Replace everything in the library and the catalog with a backup. In
+    this order, so that a restore that fails leaves the library exactly as it
+    was: (1) the zip is unpacked and checked in a staging folder under the
+    app's data folder, (2) the catalog is rewritten in one transaction, (3)
+    only then the current files are moved aside and the unpacked ones put in
+    their place. Up to the end of (2) nothing of the live library has been
+    touched, and the error raised says so. Destructive all the same once it
+    goes through - gated like wipe_library() (the /maintenance/restore route)."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    staging = _unused_folder(settings.pm_data_dir / "restore-staging", stamp)
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        manifest, extracted = _stage_backup(upload, staging)
+        counts = _restore_rows(db, owner_id, manifest)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    replaced = _unused_folder(settings.pm_data_dir, f"restore-replaced-{stamp}")
+    moved_aside = _swap_library_files(extracted, replaced)
+    shutil.rmtree(staging, ignore_errors=True)
+    # Thumbnails and staging belonged to the old library; the post-import
+    # jobs below rebuild them for the restored one.
+    _clear_derived_folders()
+    if moved_aside:
+        logger.info("restore: the previous library files were moved to %s", replaced)
+
+    restored_images = db.query(Image).filter(Image.owner_id == owner_id).all()
+    for image in restored_images:
+        if not _has_backup_file(image):
+            continue
+        full_path = settings.library_root / image.file_path
+        if full_path.is_file():
+            enqueue_post_import(image.id, full_path)
+
+    return {**counts, "replaced_folder": str(replaced) if moved_aside else None}

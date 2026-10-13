@@ -2,10 +2,10 @@
 # bundle with PyInstaller and stages it (plus the standalone Windows exiftool)
 # under electron\resources\, ready for electron-builder.
 #
-# Prereq: the backend venv exists with deps + pyinstaller installed:
+# Prereq: the backend venv exists with the pinned deps installed:
 #   python -m venv .venv
-#   .venv\Scripts\pip install -e . pyinstaller
-#   (+ CPU torch/torchvision from the pytorch index)
+#   .venv\Scripts\pip install -r requirements.lock --extra-index-url https://download.pytorch.org/whl/cpu
+#   .venv\Scripts\pip install --no-deps -e .
 #
 # Run from anywhere:  powershell -ExecutionPolicy Bypass -File build_backend.ps1
 $ErrorActionPreference = "Stop"
@@ -34,9 +34,14 @@ Write-Host "==> Bundling standalone Windows exiftool"
 # "exiftool(-k).exe" (+ an exiftool_files dir in recent versions). The (-k)
 # variant pauses for a keypress when double-clicked - renaming it to
 # exiftool.exe restores normal CLI behaviour.
-$EtVer = if ($env:EXIFTOOL_VERSION) { $env:EXIFTOOL_VERSION } else {
-    (Invoke-WebRequest -UseBasicParsing "https://exiftool.org/ver.txt").Content.Trim()
+# Pinned, like build_backend.sh: a build takes exactly this exiftool, checked
+# against the SHA-256 exiftool.org publishes in checksums.txt. Overriding the
+# version means giving its checksum too, or the build stops.
+$EtVer = if ($env:EXIFTOOL_VERSION) { $env:EXIFTOOL_VERSION } else { "13.59" }
+$EtSha = if ($env:EXIFTOOL_VERSION) { $env:EXIFTOOL_SHA256 } else {
+    "44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec"
 }
+if (-not $EtSha) { Write-Error "EXIFTOOL_VERSION set without EXIFTOOL_SHA256" }
 $Zip = "exiftool-${EtVer}_64.zip"
 $EtDir = Join-Path $Here "..\electron\resources\exiftool"
 if (Test-Path $EtDir) { Remove-Item -Recurse -Force $EtDir }
@@ -53,6 +58,10 @@ if ($LASTEXITCODE -ne 0) { Write-Error "exiftool download failed" }
 $bytes = [System.IO.File]::ReadAllBytes($TmpZip)
 if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x50 -or $bytes[1] -ne 0x4B) {
     Write-Error "Downloaded exiftool file is not a zip (got HTML?)"
+}
+$Got = (Get-FileHash $TmpZip -Algorithm SHA256).Hash.ToLower()
+if ($Got -ne $EtSha.ToLower()) {
+    Write-Error "exiftool checksum mismatch: expected $EtSha, got $Got"
 }
 $TmpDir = Join-Path $env:TEMP "exiftool-extract"
 if (Test-Path $TmpDir) { Remove-Item -Recurse -Force $TmpDir }

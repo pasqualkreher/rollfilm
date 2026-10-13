@@ -22,6 +22,7 @@ const {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeImage,
   nativeTheme,
   net: electronNet,
   powerMonitor,
@@ -38,6 +39,8 @@ const net = require("net");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
+const util = require("util");
 
 // PM_DEV=1 loads the renderer from the Vite dev server instead of the built
 // files (used by `npm run dev`). Backend source is always chosen by app.isPackaged.
@@ -78,6 +81,9 @@ let backendProc = null;
 // keeps dying is reported with the log path instead of restarted forever.
 const BACKEND_RELAUNCH_LIMIT = 2;
 let backendRelaunches = 0;
+// Up this long without dying, the backend gets its relaunch budget back (see
+// startBackend).
+const BACKEND_STABLE_MS = 10 * 60 * 1000;
 let backendEverHealthy = false;
 
 let apiPort = 0;
@@ -153,6 +159,87 @@ function migrateRenamedUserData() {
   }
 }
 migrateRenamedUserData();
+
+// --- Log files ----------------------------------------------------------------
+// Both the backend's output and the main process's own end up in userData/logs.
+// The previous launch's file is kept as <name>.previous.log, and within a
+// session a file that passes LOG_ROTATE_BYTES becomes <name>.log.1 (replacing an
+// older .1) while writing goes on in a fresh one: a long import logs per file,
+// and a log that only rotated at launch could fill the disk in a single session.
+const LOG_ROTATE_BYTES = 20 * 1024 * 1024;
+
+function logsDir() {
+  return path.join(app.getPath("userData"), "logs");
+}
+
+// An append-only log with that rotation. Writing never throws: a full disk or a
+// log folder someone deleted must not take the app down with it.
+function openRotatingLog(file) {
+  const rolled = `${file}.1`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (fs.existsSync(file)) fs.renameSync(file, file.replace(/\.log$/, ".previous.log"));
+  } catch {
+    /* keeping the previous launch's log is best-effort */
+  }
+  let stream = null;
+  let written = 0;
+  const open = () => {
+    stream = fs.createWriteStream(file, { flags: "a" });
+    stream.on("error", () => {});
+  };
+  open();
+  return {
+    write(chunk) {
+      try {
+        if (written >= LOG_ROTATE_BYTES) {
+          stream.end();
+          // Renamed while the old stream may still be flushing: its descriptor
+          // follows the file, so the tail lands in .1 where it belongs. Where a
+          // rename fails, writing simply carries on in the same file.
+          try {
+            fs.rmSync(rolled, { force: true });
+            fs.renameSync(file, rolled);
+          } catch {
+            /* see above */
+          }
+          open();
+          written = 0;
+        }
+        written += Buffer.byteLength(chunk);
+        stream.write(chunk);
+      } catch {
+        /* a log write is never worth an exception */
+      }
+    },
+    end() {
+      try {
+        stream.end();
+      } catch {
+        /* already closed */
+      }
+    },
+  };
+}
+
+// A packaged app has no terminal, so the main process's own console output -
+// the library moves, the rf:// fallbacks, a backend relaunch and its reason -
+// went nowhere. It goes to main.log beside backend.log; dev keeps the terminal
+// alone. Only the instance holding the single-instance lock writes it: a second
+// launch quits at once and must not rotate the running one's log away.
+function installMainLog() {
+  if (!app.isPackaged || console.__rollfilmMainLog) return;
+  const log = openRotatingLog(path.join(logsDir(), "main.log"));
+  for (const level of ["log", "warn", "error"]) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+      original(...args);
+      log.write(`${new Date().toISOString()} ${level.padEnd(5)} ${util.format(...args)}\n`);
+    };
+  }
+  console.__rollfilmMainLog = true;
+}
+if (app.hasSingleInstanceLock()) installMainLog();
 
 // --- Leftover files from the Photo Manager -> Rollfilm rename ----------------
 // The rename migration (above) brings the *config* across but, when the new
@@ -764,27 +851,23 @@ function resolveBackendCommand() {
 
 // Backend output goes to a log file in userData (a packaged app has no
 // terminal, so without this a backend crash leaves nothing to diagnose).
-// The previous launch's log is kept as backend.previous.log.
+// The previous launch's log is kept as backend.previous.log, and a log that
+// passes 20 MB within a session moves to backend.log.1 (openRotatingLog).
 function backendLogPath() {
-  return path.join(app.getPath("userData"), "logs", "backend.log");
+  return path.join(logsDir(), "backend.log");
 }
 
 function openBackendLogStream() {
-  const logFile = backendLogPath();
-  fs.mkdirSync(path.dirname(logFile), { recursive: true });
-  try {
-    if (fs.existsSync(logFile)) {
-      fs.renameSync(logFile, path.join(path.dirname(logFile), "backend.previous.log"));
-    }
-  } catch {
-    /* rotating is best-effort */
-  }
-  return fs.createWriteStream(logFile, { flags: "a" });
+  return openRotatingLog(backendLogPath());
 }
 
-function startBackend() {
+// `reason` says why this launch happens when it is a relaunch, so the fresh
+// log opens with what became of the one before it.
+function startBackend(reason = "") {
   const { cmd, args, cwd, env } = resolveBackendCommand();
   const log = openBackendLogStream();
+  const startedAt = Date.now();
+  if (reason) log.write(`[main] ${new Date().toISOString()} ${reason}\n`);
   log.write(`[main] ${new Date().toISOString()} launching: ${cmd} ${args.join(" ")}\n`);
   // Its own process group (detached) so stopBackend can signal the backend
   // and every helper it spawned (exiftool -stay_open) in one go. The pipes
@@ -795,6 +878,15 @@ function startBackend() {
   // failed to launch has no stdin to write to - its "error" handler reports that.
   proc.stdin.on("error", () => {});
   proc.stdin.end(`${apiToken}\n`);
+
+  // A backend that has stayed up this long counts as recovered: the relaunch
+  // budget is whole again, so two deaths early in a long session don't leave
+  // the third, hours later, unrestarted.
+  const stableTimer = setTimeout(() => {
+    if (backendProc !== proc || backendRelaunches === 0) return;
+    console.log(`[main] backend up for ${BACKEND_STABLE_MS / 60000} minutes, relaunch budget reset`);
+    backendRelaunches = 0;
+  }, BACKEND_STABLE_MS);
 
   proc.stdout.on("data", (d) => {
     process.stdout.write(`[backend] ${d}`);
@@ -812,6 +904,7 @@ function startBackend() {
     );
   });
   proc.on("exit", (code, signal) => {
+    clearTimeout(stableTimer);
     process.stderr.write(`[backend] exited (code=${code}, signal=${signal})\n`);
     log.write(`[main] backend exited (code=${code}, signal=${signal})\n`);
     log.end();
@@ -820,18 +913,25 @@ function startBackend() {
     const unexpected = backendProc === proc;
     if (backendProc === proc) backendProc = null;
     if (!unexpected || !backendEverHealthy) return;
+    // A kill signal with no exit code is usually the system's out-of-memory
+    // killer; an exit code is the backend giving up by itself. The log says
+    // which, and after how long, so a pattern shows across relaunches.
+    const upSeconds = Math.round((Date.now() - startedAt) / 1000);
+    const why = `${signal ? `killed by ${signal}` : `exit code ${code}`} after ${upSeconds}s`;
     if (backendRelaunches < BACKEND_RELAUNCH_LIMIT) {
       backendRelaunches++;
+      const attempt = `relaunch ${backendRelaunches} of ${BACKEND_RELAUNCH_LIMIT}`;
       const delay = 2000 * backendRelaunches;
-      process.stderr.write(`[main] relaunching backend in ${delay}ms (attempt ${backendRelaunches})\n`);
+      console.warn(`[main] backend died (${why}), ${attempt} in ${delay}ms`);
       setTimeout(() => {
         if (backendProc) return; // something else already started one
-        startBackend();
+        startBackend(`${attempt}: the previous backend died (${why})`);
         // The renderer notices the backend is back through its own health
         // polling; nothing to signal here.
       }, delay);
       return;
     }
+    console.error(`[main] backend died (${why}) with no relaunches left, giving up`);
     dialog.showErrorBox(
       "Backend stopped",
       `The Rollfilm backend stopped unexpectedly and could not be restarted.\n\n` +
@@ -1272,6 +1372,27 @@ function attachZoomShortcuts(contents) {
 // The items that mean something inside the app send one word over pm:menu;
 // the renderer (App.tsx, MenuCommands) turns it into the navigation or the
 // action. Zoom and Focus keep their own channels from before.
+//
+// The Go and Photo menus and File → Export… send { action, value? } over
+// "app-menu" instead (go:library, photo:rate with 0-5, photo:color with a
+// colour name, photo:flag with pick, reject or ""): the renderer decides what
+// each means where the user is - the grid's selection, the photo in the viewer.
+// Their single-key shortcuts (0-5, P, X, U, E, Delete) are written into the
+// labels only, never registered: a menu key equivalent fires even while a text
+// field has the focus, so "5" would rate the photo instead of typing a 5 into
+// the search box. The renderer keeps handling those keys itself.
+function appMenuItem(label, action, value, accelerator) {
+  return {
+    label,
+    ...(accelerator ? { accelerator } : {}),
+    click: (_item, browserWindow) =>
+      ((browserWindow || mainWindow)?.webContents ?? null)?.send(
+        "app-menu",
+        value === undefined ? { action } : { action, value }
+      ),
+  };
+}
+
 function buildApplicationMenu() {
   if (process.platform !== "darwin") {
     Menu.setApplicationMenu(null);
@@ -1301,6 +1422,9 @@ function buildApplicationMenu() {
         label: "File",
         submenu: [
           { label: "Import…", accelerator: "Shift+Command+I", click: command("import") },
+          // The key lives here, where a Mac user looks for Export; the Photo
+          // menu's entry sends the same action without registering it twice.
+          appMenuItem("Export…", "photo:export", undefined, "Shift+Command+E"),
           { type: "separator" },
           {
             // Cmd-W puts the window away and leaves the app running, as Photos
@@ -1337,6 +1461,61 @@ function buildApplicationMenu() {
           hiddenZoomItem("Zoom In", "CommandOrControl+numadd", ZOOM_STEP),
           hiddenZoomItem("Zoom Out", "CommandOrControl+numsub", -ZOOM_STEP),
           hiddenZoomItem("Actual Size", "CommandOrControl+num0", 0),
+        ],
+      },
+      {
+        // Settings is not repeated here: it has its standard place under the
+        // app menu (Command-,).
+        label: "Go",
+        submenu: [
+          appMenuItem("Library", "go:library", undefined, "Command+1"),
+          appMenuItem("Albums", "go:albums", undefined, "Command+2"),
+          appMenuItem("Canvas", "go:canvas", undefined, "Command+3"),
+          appMenuItem("Map", "go:map", undefined, "Command+4"),
+          appMenuItem("Import", "go:import", undefined, "Command+5"),
+          { type: "separator" },
+          appMenuItem("Trash", "go:trash"),
+          appMenuItem("Statistics", "go:stats"),
+        ],
+      },
+      {
+        label: "Photo",
+        submenu: [
+          {
+            label: "Rating",
+            submenu: [
+              appMenuItem("No Rating (0)", "photo:rate", 0),
+              appMenuItem("1 Star (1)", "photo:rate", 1),
+              appMenuItem("2 Stars (2)", "photo:rate", 2),
+              appMenuItem("3 Stars (3)", "photo:rate", 3),
+              appMenuItem("4 Stars (4)", "photo:rate", 4),
+              appMenuItem("5 Stars (5)", "photo:rate", 5),
+            ],
+          },
+          {
+            label: "Color Label",
+            submenu: [
+              appMenuItem("None", "photo:color", "none"),
+              { type: "separator" },
+              appMenuItem("Red", "photo:color", "red"),
+              appMenuItem("Yellow", "photo:color", "yellow"),
+              appMenuItem("Green", "photo:color", "green"),
+              appMenuItem("Blue", "photo:color", "blue"),
+            ],
+          },
+          {
+            label: "Flag",
+            submenu: [
+              appMenuItem("Pick (P)", "photo:flag", "pick"),
+              appMenuItem("Reject (X)", "photo:flag", "reject"),
+              appMenuItem("Unflag (U)", "photo:flag", ""),
+            ],
+          },
+          { type: "separator" },
+          appMenuItem("Edit (E)", "photo:edit"),
+          appMenuItem("Export…", "photo:export"),
+          { type: "separator" },
+          appMenuItem("Move to Trash (⌫)", "photo:trash"),
         ],
       },
       { role: "windowMenu" },
@@ -1434,6 +1613,62 @@ function installApiTokenHeader() {
   });
 }
 
+// --- Content-Security-Policy -------------------------------------------------
+// What the main window's page may load, so a string that ever slips into the
+// DOM as markup (a tag name, an Immich album title, a file name) cannot run
+// script or call out: scripts only from the bundle, data only from the bundle,
+// the backend and rf://, pictures from those plus data:/blob: (canvas and
+// render previews) and the OpenStreetMap tiles of the map, inline styles for
+// Leaflet and the React style props. Nothing else.
+//
+// Sent as a response header rather than a <meta> tag in index.html: the
+// backend's port is picked per launch (getFreePort), which a static file
+// cannot name, and the same index.html serves the plain browser build and the
+// Vite dev server, which need other origins (and Vite's inline scripts and
+// HMR websocket). Electron applies a header to file:// pages too (checked on
+// Electron 33: an inline script is blocked, the bundle's own script runs).
+// Only the renderer's index.html gets it - the splash and the PDF export
+// window load other files of their own - and only in builds that load the
+// bundle; dev keeps Vite working untouched.
+function contentSecurityPolicy() {
+  const api = apiBaseUrl;
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    `img-src 'self' data: blob: rf: ${api} https://*.tile.openstreetmap.org`,
+    `media-src 'self' blob: rf: ${api}`,
+    `connect-src 'self' rf: ${api}`,
+    "font-src 'self' data:",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+function installContentSecurityPolicy() {
+  if (USE_DEV_SERVER) return;
+  // Compared decoded: a dev checkout under a folder with a space in its name
+  // must not depend on both sides escaping it alike.
+  const decoded = (url) => {
+    try {
+      return decodeURIComponent(url.split(/[?#]/)[0]);
+    } catch {
+      return url;
+    }
+  };
+  const pageUrl = decoded(pathToFileURL(path.join(__dirname, "renderer", "index.html")).href);
+  const policy = contentSecurityPolicy();
+  // Session-wide there can be one onHeadersReceived listener only; this is it.
+  session.defaultSession.webRequest.onHeadersReceived({ urls: ["file://*/*"] }, (details, callback) => {
+    const url = decoded(details.url);
+    if (details.resourceType !== "mainFrame" || url !== pageUrl) return callback({});
+    callback({ responseHeaders: { ...details.responseHeaders, "Content-Security-Policy": [policy] } });
+  });
+}
+
 function routeExternalLinksToTheOS(webContents) {
   webContents.setWindowOpenHandler(({ url }) => {
     openExternally(url);
@@ -1471,7 +1706,10 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false, // so preload can read additionalArguments from process.argv
+      // Sandboxed: the preload only uses contextBridge, ipcRenderer, webUtils,
+      // process.argv (additionalArguments are there in a sandboxed preload
+      // too) and process.getSystemMemoryInfo - no Node module of its own.
+      sandbox: true,
       // Hand the renderer the backend URL synchronously (client.ts reads it at load).
       additionalArguments: [`--pm-api-base=${apiBaseUrl}`],
     },
@@ -1576,6 +1814,64 @@ ipcMain.handle("pm:reveal-file", async (_event, filePath) => {
   }
 });
 
+// --- Dragging photos out of the window -----------------------------------------
+// The renderer starts a drag of the originals (preload startDrag) and the OS
+// carries real files to the Finder, the desktop or another app. macOS refuses a
+// drag without a picture under the pointer, so there always is one: the app
+// icon where the build has it, else a small grey square written once to the
+// temp folder.
+let dragIcon = null;
+
+function dragIconImage() {
+  if (dragIcon) return dragIcon;
+  const candidates = [
+    app.isPackaged ? path.join(process.resourcesPath, "icon.png") : null,
+    path.join(__dirname, "build", "icon.png"),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    const image = nativeImage.createFromPath(candidate);
+    if (image.isEmpty()) continue;
+    // The 1024px app icon would cover half the screen under the pointer.
+    dragIcon = image.resize({ width: 64, height: 64 });
+    return dragIcon;
+  }
+  const fallback = path.join(os.tmpdir(), "rollfilm-drag-icon.png");
+  try {
+    if (!fs.existsSync(fallback)) {
+      const size = 32;
+      // BGRA, a mid grey that reads on light and dark desktops alike.
+      const pixels = Buffer.alloc(size * size * 4);
+      for (let i = 0; i < pixels.length; i += 4) pixels.set([0x88, 0x88, 0x88, 0xff], i);
+      fs.writeFileSync(fallback, nativeImage.createFromBitmap(pixels, { width: size, height: size }).toPNG());
+    }
+    dragIcon = nativeImage.createFromPath(fallback);
+  } catch {
+    dragIcon = nativeImage.createFromBitmap(Buffer.alloc(4, 0x88), { width: 1, height: 1 });
+  }
+  return dragIcon;
+}
+
+// Every path must be an absolute path to a file that exists, or nothing is
+// dragged: half a drag would drop fewer photos than the user picked up without
+// a word, and a folder or a path the page made up has no business leaving here.
+ipcMain.on("start-drag", (event, paths) => {
+  if (!Array.isArray(paths) || paths.length === 0) return;
+  for (const filePath of paths) {
+    if (typeof filePath !== "string" || !path.isAbsolute(filePath)) return;
+    try {
+      if (!fs.statSync(filePath).isFile()) return;
+    } catch {
+      return;
+    }
+  }
+  try {
+    event.sender.startDrag({ file: paths[0], files: paths, icon: dragIconImage() });
+  } catch (err) {
+    console.warn(`[main] drag out failed: ${err.message}`);
+  }
+});
+
 // Focus mode (F) hides the app's top bar; the traffic lights would float over
 // the picture, so they go with it. macOS only - a no-op elsewhere.
 ipcMain.handle("pm:set-window-buttons", (_event, visible) => {
@@ -1647,6 +1943,26 @@ ipcMain.handle("pm:pick-files", async () => {
     }
     return { path: p, size };
   });
+});
+
+// Paths dropped on the window (preload's pm:files-dropped): which are folders
+// and which are files, with the files' sizes - the import then starts a
+// folder import or a file import exactly as its pickers would. Paths that
+// cannot be read are left out.
+ipcMain.handle("pm:classify-paths", async (_event, paths) => {
+  const folders = [];
+  const files = [];
+  for (const p of Array.isArray(paths) ? paths : []) {
+    if (typeof p !== "string" || !path.isAbsolute(p)) continue;
+    try {
+      const st = fs.statSync(p);
+      if (st.isDirectory()) folders.push(p);
+      else if (st.isFile()) files.push({ path: p, size: st.size });
+    } catch {
+      // Gone or unreadable: nothing to import from it.
+    }
+  }
+  return { folders, files };
 });
 
 // Settings page: current library location, read-only.
@@ -1899,6 +2215,7 @@ app.whenReady().then(async () => {
   // first run it is still empty here and gets set by the onboarding wizard.
   protocol.handle("rf", serveDerivative);
   installApiTokenHeader();
+  installContentSecurityPolicy();
   registerActivateHandler();
 
   // Update checks run detached from startup (first one after a delay, see

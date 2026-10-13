@@ -41,6 +41,12 @@ DEFAULT_IMMICH_SYNC_MODE = IMMICH_MODE_MANUAL
 TRASH_RETENTION_DAYS = "trash_retention_days"
 DEFAULT_TRASH_RETENTION_DAYS = 14
 
+# How much disk the cached full-resolution renders (full.jpg and half.jpg per
+# photo, see thumbnails.gc_full_cache) may take before the least recently
+# used ones go. 0 = unlimited.
+FULL_CACHE_BUDGET_MB = "full_cache_budget_mb"
+DEFAULT_FULL_CACHE_BUDGET_MB = 4096
+
 # "1" to load RAWs with no brightness processing - the native (no auto-bright)
 # demosaic exactly as the sensor recorded it, instead of self-normalizing each
 # RAW to a consistent brightness. For users who want to do all tone work from
@@ -70,6 +76,12 @@ IMPORT_SELECT_DEFAULT_CHOICES = ("select", "deselect")
 # the answer when the dialog is skipped.
 IMPORT_BACKUP_DEFAULT = "import_backup_default"
 IMPORT_BACKUP_DEFAULT_CHOICES = ("keep", "delete")
+# "1" makes the import read every copy it wrote back and compare its hash with
+# the source's (staging copies, the commit's copies into the library, a backup
+# session's copies). Off by default: it reads each photo a second time, which
+# on a spinning disk costs as much as the copy itself - for a flaky card
+# reader or a drive one doesn't quite trust, it is the price of knowing.
+IMPORT_VERIFY_COPIES = "import_verify_copies"
 
 # Whether an import takes over what another program wrote into a photo's XMP /
 # IPTC blocks or an .xmp sidecar beside it: stars, colour label, keywords,
@@ -204,6 +216,16 @@ def get_trash_retention_days(db: Session) -> int:
     return max(0, days)
 
 
+def get_full_cache_budget_mb(db: Session) -> int:
+    """The full-resolution cache's disk budget in MB; 0 means unlimited."""
+    raw = get_setting(db, FULL_CACHE_BUDGET_MB)
+    try:
+        budget = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_FULL_CACHE_BUDGET_MB
+    return max(0, budget)
+
+
 def get_raw_native_decode(db: Session) -> bool:
     return get_setting(db, RAW_NATIVE_DECODE) == "1"
 
@@ -231,6 +253,10 @@ def get_import_backup_default(db: Session) -> str:
 
 def get_import_read_file_metadata(db: Session) -> bool:
     return get_setting(db, IMPORT_READ_FILE_METADATA) != "0"
+
+
+def get_import_verify_copies(db: Session) -> bool:
+    return get_setting(db, IMPORT_VERIFY_COPIES) == "1"
 
 
 def get_sidecar_write(db: Session) -> bool:

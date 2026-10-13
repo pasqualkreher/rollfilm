@@ -48,6 +48,10 @@
       {
         "from": "resources",
         "to": "."
+      },
+      {
+        "from": "../THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
       }
     ],
     "directories": {

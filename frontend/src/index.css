@@ -3207,6 +3207,25 @@ textarea:focus-visible {
   gap: 3px;
 }
 
+/* The database snapshots in Settings: a quiet table, the restore button at
+   the end of each row. */
+.snapshot-table {
+  margin-top: 8px;
+}
+
+.snapshot-table td:last-child {
+  text-align: right;
+}
+
+/* The file was not found: the badge says so in the danger colour, in the
+   place of the kind, so a tile with a stale thumbnail cannot pass for a
+   photo that is there. */
+.thumb-card .badge.badge-missing,
+.badge-inline.badge-missing {
+  background: var(--danger);
+  color: #fff;
+}
+
 .badge-virtual {
   display: inline-flex;
   align-items: center;
@@ -3416,9 +3435,37 @@ textarea:focus-visible {
 }
 
 .overlay-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: #f2b134;
   letter-spacing: 1px;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* The culling flag on a tile, in front of the stars: a green tick for a
+   pick, a red cross for a reject. */
+.overlay-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-shadow: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.overlay-flag--pick {
+  background: #3ea76a;
+}
+
+.overlay-flag--reject {
+  background: var(--danger);
 }
 
 .overlay-color-dot {
@@ -3882,6 +3929,9 @@ textarea:focus-visible {
 .editor-canvas {
   max-width: 100%;
   max-height: calc(100vh - 48px);
+  /* The stage's gestures are pointer events with capture: nothing of the
+     browser's own touch handling may compete with them. */
+  touch-action: none;
   /* Framing matches the lightbox: flush on a light background, and on black it
      floats with a soft shadow + slight rounding (see .editor-stage-dark below,
      mirroring .detail-image img.framed). */
@@ -5396,6 +5446,24 @@ input.dropdown-search {
   cursor: default;
 }
 
+/* Action menus (MenuButton): a rule between groups, a heading over one, a
+   row that removes something. */
+.dropdown-sep {
+  flex-shrink: 0;
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+}
+
+.dropdown-menu .dropdown-group-label {
+  flex-shrink: 0;
+  padding: 6px 10px 2px;
+}
+
+.dropdown-option--danger {
+  color: var(--danger);
+}
+
 .filter-menu-row .dropdown,
 .filter-menu-row .dropdown-btn {
   width: 100%;
@@ -5857,6 +5925,39 @@ input.dropdown-search {
   gap: 2px;
 }
 
+/* The flag picker beside the stars: pick (tick) and reject (cross), the lit
+   one in its colour. */
+.flag-picker {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.flag-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-muted);
+}
+
+.flag-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.flag-btn--pick.active {
+  color: #3ea76a;
+}
+
+.flag-btn--reject.active {
+  color: var(--danger);
+}
+
 .rating-stars button {
   display: inline-flex;
   align-items: center;
@@ -5882,12 +5983,20 @@ input.dropdown-search {
 }
 
 .color-swatch {
+  flex: none;
   width: 15px;
   height: 15px;
+  padding: 0;
   border-radius: 50%;
   border: 1px solid var(--border);
+  background-color: transparent;
+  appearance: none;
   cursor: pointer;
   transition: transform 0.08s ease;
+}
+
+.color-swatch:disabled {
+  cursor: default;
 }
 
 .color-swatch:hover {
@@ -7095,6 +7204,7 @@ input.dropdown-search {
   align-items: center;
   gap: 8px;
 }
+
 
 /* The switch between looking and editing - Edit on the view, View on the
    editor - on the photo stages and the canvas pages alike. */
@@ -8671,6 +8781,55 @@ kbd {
   filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55));
 }
 
+/* The numbered pins over the photo (MaskPins): above the overlays, taking
+   the pointer only on the dots themselves. During a drag they step aside. */
+.mask-pins {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 3;
+  transform-origin: center center;
+  overflow: visible;
+}
+
+.mask-pins.is-busy {
+  visibility: hidden;
+}
+
+.mask-pin {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.mask-pin-dot {
+  fill: rgba(255, 255, 255, 0.92);
+  stroke: rgba(0, 0, 0, 0.45);
+  stroke-width: 1;
+}
+
+.mask-pin.is-selected .mask-pin-dot {
+  fill: var(--accent);
+  stroke: #fff;
+}
+
+.mask-pin.is-off .mask-pin-dot {
+  fill: rgba(255, 255, 255, 0.55);
+}
+
+.mask-pin-num {
+  fill: #1a1a1a;
+  font-weight: 700;
+  font-family: var(--font-ui, system-ui, sans-serif);
+  pointer-events: none;
+  user-select: none;
+}
+
+.mask-pin.is-selected .mask-pin-num {
+  fill: #fff;
+}
+
 /* Outlines belong to the marking, so they carry its pink; the draggable
    handles below stay on the accent, because those are controls. No `fill` here:
    the shapes that have one point at the zebra pattern through a `fill`
@@ -8739,9 +8898,29 @@ kbd {
   stroke-width: 1.5;
 }
 
-/* A shape added to a mask's selection (the Shapes list in the mask editor):
-   its mode buttons and tools, boxed so several shapes read as a list. */
-.mask-shape {
+/* The mask editor's head: the mask's name, the overlay switch. */
+.mask-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: var(--control-h-sm);
+}
+
+.mask-editor-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+/* One component of a mask (the Components list in the mask editor): its
+   number and kind, how it joins the selection, Edit / Outside / Remove, and
+   its controls while it is the one being edited. Boxed so several read as a
+   list; the one the canvas is on carries the accent. */
+.mask-component {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -8751,27 +8930,62 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
-.mask-shape.active {
+.mask-component.active {
   border-color: var(--accent);
 }
 
-/* The head line: the shape's type on the left, Remove on the right - so the
-   label never shares a wrapping row with the mode buttons, and the quiet
-   Remove isn't a loose word under them. */
-.mask-shape-head {
+/* The head line: number and kind on the left, the mode chips (or "Base")
+   on the right, so the label never shares a wrapping row with the chips. */
+.mask-component-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
   min-height: 24px;
 }
 
-.mask-shape-type {
+.mask-component-idx {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: var(--label-micro-size);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.mask-component-type {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--label-micro-size);
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.mask-component-modes {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--control-h-sm);
+}
+
+/* The base has no mode: the word stands where the chips would. */
+.mask-component-base {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  padding: 0 6px;
 }
 
 /* A mask's own curve / mixer / grading, folded away under a summary line. */
@@ -8857,11 +9071,34 @@ kbd {
   stroke-dasharray: 4 3;
 }
 
+/* Source -> spot, with the arrowhead at the spot: where the pixels go. */
 .spot-link {
   stroke: var(--accent);
+  stroke-width: 1.25;
+  opacity: 0.9;
+}
+
+.spot-arrowhead {
+  fill: none;
+  stroke: var(--accent);
   stroke-width: 1;
-  stroke-dasharray: 2 3;
-  opacity: 0.8;
+}
+
+/* The size ring at the pointer while the Retouch tool is armed. */
+.spot-ring {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.25;
+  stroke-dasharray: 2 2;
+  opacity: 0.9;
+}
+
+/* The selected spot's block in the Retouch panel: in place whether or not a
+   spot is selected, so selecting one moves nothing. */
+.retouch-selected {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 /* Brush-size ring that tracks the pointer while brush mode is active. */
@@ -8871,6 +9108,13 @@ kbd {
   stroke-width: 1.5;
   stroke-dasharray: 2 2;
   opacity: 0.95;
+}
+
+/* The brush is erasing (the Erase toggle, or Alt held): the ring says so
+   before the stroke - a state colour on a control, not a mask colour. */
+.mask-brush-ring.is-erasing {
+  stroke: var(--danger);
+  stroke-dasharray: 4 3;
 }
 
 /* One-line helper under a mask's type controls (e.g. linear gradient width). */
@@ -8885,6 +9129,33 @@ kbd {
 .mask-hint-error {
   margin: 2px 0 6px;
   color: var(--danger);
+}
+
+/* The list's head: a note on the left (nothing yet / a subject being found),
+   the one "+ New mask" menu on the right. */
+.mask-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.mask-head-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* The error line under the head keeps its height while empty, so a failed
+   subject search never pushes the list. */
+.mask-hint-slot {
+  min-height: 16px;
+  margin: 2px 0 0;
+  line-height: 16px;
 }
 
 /* Mask list rows */
@@ -8936,6 +9207,65 @@ kbd {
   color: var(--accent);
 }
 
+/* A mask turned off: its row stays, its name goes quiet. */
+.mask-row.is-off .mask-row-name {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* The mask's number - the same one its pin on the photo carries. */
+.mask-row-idx {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: var(--label-micro-size);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.mask-row.active .mask-row-idx {
+  background: var(--bg);
+  color: var(--accent);
+}
+
+/* The row's menu (rename, duplicate, move, delete): a slot on every row so
+   nothing shifts, shown on the row under the pointer or selected. */
+.mask-row-more {
+  flex-shrink: 0;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  visibility: hidden;
+}
+
+.mask-row:hover .mask-row-more,
+.mask-row.active .mask-row-more,
+.mask-row-more[aria-expanded="true"] {
+  visibility: visible;
+}
+
+.mask-row-more:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .mask-row-name {
   flex: 1;
   min-width: 0;
@@ -8970,44 +9300,6 @@ kbd {
 
 .mask-del:hover {
   color: var(--danger);
-}
-
-/* Add-mask control */
-.mask-add-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-
-.mask-add-label {
-  font-size: var(--label-micro-size);
-  font-weight: 600;
-  letter-spacing: var(--label-micro-tracking);
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-/* Two columns of quiet, left-aligned rows: a list to pick from, not a cloud of
-   bordered buttons. Fits the 320px panel without doubling its height. */
-.mask-add-btns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-}
-
-.mask-add-item {
-  justify-content: flex-start;
-  text-align: left;
-  padding: 5px 8px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--text);
-}
-
-.mask-add-item:hover:not(:disabled) {
-  background: var(--hover);
-  border-color: transparent;
 }
 
 /* Mask editor block */
@@ -13458,4 +13750,81 @@ input:hover:not(:disabled),
   line-height: 18px;
   font-size: 11px;
   font-weight: 600;
+}
+
+
+/* Reduced motion, once for the whole app: the page fades, the pops, the
+   shimmer of a loading tile and every other transition collapse to an
+   instant change. The per-component rules above stay for what they tune;
+   this is the floor. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The reset icon on an editor section's header: quiet until pointed at. */
+.editor-section-reset {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  margin-right: 6px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-muted);
+}
+
+.editor-section-reset:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* The RGB readout under the pointer, in the histogram's lower left corner:
+   out of the flow, so it never moves anything when it appears. */
+.editor-histogram-slot {
+  position: relative;
+}
+
+.editor-rgb-readout {
+  position: absolute;
+  left: 6px;
+  bottom: 4px;
+  font-size: var(--label-micro-size);
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  white-space: pre;
+}
+
+/* The "made with an older process" line at the top of Tone. */
+.editor-process-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* The export size: what it is measured by, then the size. */
+.export-size-row {
+  display: flex;
+  gap: 6px;
+}
+
+.export-size-row > input {
+  width: 90px;
 }

@@ -11,6 +11,7 @@ import {
 } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
+import { initPresets } from "./utils/presets";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
 import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconLandfill, IconMail, IconMenu, IconStop, IconX } from "./components/Icons";
@@ -19,7 +20,7 @@ import { DialogProvider } from "./components/AppDialogs";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UnhandledErrors } from "./components/UnhandledErrors";
 import { ImportSessionProvider, useImportSession } from "./state/importSession";
-import { TasksProvider, useTasks, type Task } from "./state/tasks";
+import { TasksProvider, useTasks, type Task, useExternalTask } from "./state/tasks";
 import { TaskSources } from "./state/taskSources";
 import { Presence } from "./components/Presence";
 import { MOTION } from "./utils/usePresence";
@@ -28,7 +29,7 @@ import { NavHistoryTracker, hasLeaveGuards, runLeaveGuards, useNavHistory } from
 import { setSessionState } from "./utils/useSessionState";
 import { moveFocusInMenu } from "./utils/useMenuKeys";
 import { isMac } from "./utils/selection";
-import { useFocusModeSwitch } from "./state/focusMode";
+import { isFocusMode, setFocusMode, useFocusModeSwitch } from "./state/focusMode";
 import { Spinner, LoadingState } from "./components/Spinner";
 
 // Every screen except the Library is code-split. The app used to ship as one
@@ -120,6 +121,88 @@ function usePrefetchLikelyRoutes() {
 // scan completes or a source's photo count changes - without it, the Library
 // only updated on react-query's refetch-on-window-focus, i.e. after switching
 // windows and back.
+// A library sync that stopped because too many files were missing at once
+// (the startup sync most of all - it runs with no screen to report to):
+// a pill in the title bar until it is dismissed or a sync goes through.
+function MissingFilesWatcher() {
+  const { data } = useQuery({
+    queryKey: ["missing-files"],
+    queryFn: () => api.maintenance.missingFiles(),
+    refetchInterval: 60_000,
+  });
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  const aborted = data && data.sync_aborted_missing > 0 && data.sync_aborted_at !== dismissedAt;
+  useExternalTask(
+    aborted
+      ? {
+          id: "missing-files",
+          kind: "maintenance",
+          label: `Library sync stopped: ${data.sync_aborted_missing} files not found`,
+          cancel: () => setDismissedAt(data.sync_aborted_at),
+          cancelLabel: "Dismiss",
+          stopTitle: "Hide this note",
+          title:
+            "More files were missing at once than the sync marks on its own, so nothing was changed. Is the library drive mounted and the folder where it was? Then sync again under Settings → Library.",
+        }
+      : null
+  );
+  return null;
+}
+
+// Files or folders dropped on the window go to the Import page: it starts a
+// folder import (or a file import) the way its own pickers would, with the
+// same start dialog. The paths ride along in a session key, so the page picks
+// them up whether it was open already or opens because of the drop.
+export const DROPPED_PATHS_KEY = "pm:dropped-paths";
+function DropToImport() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    function onDrop(e: WindowEventMap["pm:files-dropped"]) {
+      const paths = e.detail?.paths ?? [];
+      if (paths.length === 0) return;
+      try {
+        sessionStorage.setItem(DROPPED_PATHS_KEY, JSON.stringify(paths));
+      } catch {
+        return;
+      }
+      window.dispatchEvent(new Event("pm:dropped-paths"));
+      void runLeaveGuards().then(() => navigate("/import"));
+    }
+    window.addEventListener("pm:files-dropped", onDrop);
+    return () => window.removeEventListener("pm:files-dropped", onDrop);
+  }, [navigate]);
+  return null;
+}
+
+// Esc steps out of focus mode wherever nothing else wanted the key - the
+// editors and the canvas keep their own Esc ladders, a dialog its own close,
+// a grid its selection. Decided after the whole dispatch (a timer), so any
+// view that claimed the key with preventDefault wins.
+function FocusEscape() {
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape" || !isFocusMode()) return;
+      window.setTimeout(() => {
+        if (e.defaultPrevented) return;
+        if (document.querySelector(".editor-overlay, .canvas-workspace, .modal-overlay")) return;
+        setFocusMode(false);
+      }, 0);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+  return null;
+}
+
+// The develop presets live in the database; the grids and the editor read a
+// cache of them (utils/presets), filled here once the app is up.
+function PresetsLoader() {
+  useEffect(() => {
+    void initPresets();
+  }, []);
+  return null;
+}
+
 function SourceScanWatcher() {
   const queryClient = useQueryClient();
   const { data: sources } = useQuery({
@@ -254,6 +337,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
     <>
       <ModuleLinks onNavigate={onNavigate} />
       <NavLink to="/trash" onClick={onNavigate}>Trash</NavLink>
+      <NavLink to="/stats" onClick={onNavigate}>Statistics</NavLink>
       <NavLink to="/settings" onClick={onNavigate}>Settings</NavLink>
       <NavLink to="/help" onClick={onNavigate}>Help</NavLink>
     </>
@@ -269,6 +353,7 @@ const PAGE_TITLES: Array<[string, string]> = [
   ["/map", "Map"],
   ["/import", "Import"],
   ["/trash", "Trash"],
+  ["/stats", "Statistics"],
   ["/settings", "Settings"],
   ["/help", "Help"],
   ["/image", "Photo"],
@@ -323,10 +408,17 @@ function NavHistoryButtons({ locked }: { locked: boolean }) {
       const back = isMac ? e.key === "[" : e.key === "ArrowLeft";
       const forward = isMac ? e.key === "]" : e.key === "ArrowRight";
       if (!back && !forward) return;
-      e.preventDefault();
-      const { canBack, canForward, step } = latest.current;
-      if (back && canBack) void step(-1);
-      if (forward && canForward) void step(1);
+      // A view that uses the same chord for itself (the canvas editor
+      // restacks frames with ⌘[ / ⌘]) claims it with preventDefault. This
+      // listener was registered first, so it decides only once the whole
+      // dispatch is through - a timer, not a microtask, which would run
+      // before the next listener.
+      window.setTimeout(() => {
+        if (e.defaultPrevented) return;
+        const { canBack, canForward, step } = latest.current;
+        if (back && canBack) void step(-1);
+        if (forward && canForward) void step(1);
+      }, 0);
     }
     // The extra mouse buttons: 3 is back, 4 is forward on every platform.
     function onMouseUp(e: MouseEvent) {
@@ -510,6 +602,23 @@ function MenuCommands() {
       }
     };
     const offMenu = window.photoManager?.onMenu?.(run);
+    // The Go and Photo menus (electron/main.js appMenuItem): Go navigates,
+    // the Photo items go to whatever view is open as pm:app-menu - the grids
+    // apply them to the selection (utils/selection), the photo view and the
+    // editor to their photo.
+    const GO: Record<string, string> = {
+      "go:library": "/",
+      "go:albums": "/albums",
+      "go:canvas": "/canvas",
+      "go:map": "/map",
+      "go:import": "/import",
+      "go:trash": "/trash",
+      "go:stats": "/stats",
+    };
+    const offAppMenu = window.photoManager?.onAppMenu?.((msg) => {
+      if (GO[msg.action]) go(GO[msg.action]);
+      else window.dispatchEvent(new CustomEvent("pm:app-menu", { detail: msg }));
+    });
     function onKey(e: KeyboardEvent) {
       if (e.defaultPrevented || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
       if (e.key === ",") {
@@ -520,6 +629,7 @@ function MenuCommands() {
     window.addEventListener("keydown", onKey);
     return () => {
       offMenu?.();
+      offAppMenu?.();
       window.removeEventListener("keydown", onKey);
     };
   }, [navigate]);
@@ -981,6 +1091,10 @@ export default function App() {
           <DialogProvider>
           <div className="app-shell">
             <SourceScanWatcher />
+      <MissingFilesWatcher />
+      <FocusEscape />
+      <DropToImport />
+      <PresetsLoader />
             <TaskSources />
             <NavHistoryTracker />
             <EmptyLibraryRedirect />

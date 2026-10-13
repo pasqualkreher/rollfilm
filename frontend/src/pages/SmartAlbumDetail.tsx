@@ -1,18 +1,24 @@
 import { useEffect, useState } from "react";
 import { useSessionState } from "../utils/useSessionState";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { withoutMembershipNames } from "../utils/autoTags";
-import type { ColorLabel, ImageOut, SmartAlbumOut, ViewMode } from "../api/types";
+import type { ColorLabel, Flag, ImageOut, SmartAlbumOut, ViewMode } from "../api/types";
+import { useSelectionKeys } from "../utils/selection";
+import { selectionSharedMeta } from "../utils/selectionMeta";
+import { useTasks } from "../state/tasks";
+import { bulkChangeLabel } from "../utils/undoLabels";
+import type { ContextActions } from "../components/PhotoContextMenu";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { collapsePairs } from "../state/viewPrefs";
 import { isModalOpen } from "../utils/modalKeys";
 
-// Read-only view of one smart album's photos. Smart albums are virtual (no
-// Album row, nothing to rename or edit), so unlike AlbumDetail this page is
-// just a title and the grid - selection, tagging etc. happen in the library.
+// One smart album's photos. Smart albums are virtual (no Album row, nothing
+// to rename), but the photos in one are as much the user's as anywhere: they
+// are selected, culled with the keys (stars, labels, flags, Delete) and
+// right-clicked the same way as in the Library, with the same Undo chip.
 export function SmartAlbumDetail() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
@@ -26,12 +32,19 @@ export function SmartAlbumDetail() {
   const [dateFrom, setDateFrom] = useSessionState<string | null>(`smart-album:${id}:dateFrom`, null);
   const [dateTo, setDateTo] = useSessionState<string | null>(`smart-album:${id}:dateTo`, null);
 
+  const queryClient = useQueryClient();
+  const { pushUndo } = useTasks();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [lastIndex, setLastIndex] = useState<number | null>(null);
+  const hasSelection = selected.size > 0;
+
   // Escape walks back to the albums, the same as it leaves a manual album,
   // the lightbox and the editor - one key out of any view. A dialog on top
-  // captures Escape before this sees it.
+  // captures Escape before this sees it; a selection takes it first (the
+  // selection keys claim it with preventDefault).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || e.defaultPrevented) return;
       // (...unless a menu inside that dialog took the press for itself.)
       if (isModalOpen()) return;
       const target = e.target as HTMLElement | null;
@@ -55,6 +68,7 @@ export function SmartAlbumDetail() {
     fromState ??
     (smart
       ? [
+          ...(smart.imports ?? []),
           ...smart.clusters,
           ...smart.tags,
           ...smart.places,
@@ -103,6 +117,110 @@ export function SmartAlbumDetail() {
   // to its JPEG - one card per shot, showing the file everyone actually looks
   // at - while the JPEG/RAW buttons give a flat, type-filtered list instead.
   const orderedImages = viewMode === "combined" ? collapsePairs(filtered) : filtered;
+
+  function toggleSelect(imageId: string, index: number, shiftKey: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastIndex !== null) {
+        const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
+        for (let i = start; i <= end; i++) next.add(orderedImages[i].id);
+      } else if (next.has(imageId)) next.delete(imageId);
+      else next.add(imageId);
+      return next;
+    });
+    setLastIndex(index);
+  }
+
+  // In the merged view a card stands for its RAW+JPEG shot: a change reaches
+  // the hidden partner as well (the server mirrors stars, labels and flags;
+  // the Trash takes both, as everywhere).
+  function withPartners(ids: Iterable<string>): string[] {
+    const byId = new Map((images ?? []).map((im) => [im.id, im]));
+    const out = new Set<string>();
+    for (const x of ids) {
+      out.add(x);
+      const partner = byId.get(x)?.paired_image_id;
+      if (viewMode === "combined" && partner) out.add(partner);
+    }
+    return Array.from(out);
+  }
+
+  async function applyBulk(
+    patch: { rating?: number; color_label?: ColorLabel; flag?: Flag | "" },
+    target: Iterable<string> = selected,
+    undoable = true
+  ) {
+    const ids = Array.from(target);
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const before = (images ?? []).filter((im) => idSet.has(im.id)).map((im) => ({ ...im }));
+    await api.images.bulkUpdate(ids, patch);
+    queryClient.invalidateQueries({ queryKey: ["smart-album-images", id] });
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+    if (undoable && before.length > 0) {
+      pushUndo({
+        label: bulkChangeLabel(patch, ids.length),
+        undo: async () => {
+          for (const im of before) {
+            const inv: typeof patch = {};
+            if (patch.rating !== undefined) inv.rating = im.rating;
+            if (patch.color_label !== undefined) inv.color_label = im.color_label;
+            if (patch.flag !== undefined) inv.flag = im.flag ?? "";
+            await api.images.bulkUpdate([im.id], inv);
+          }
+          queryClient.invalidateQueries({ queryKey: ["smart-album-images", id] });
+          queryClient.invalidateQueries({ queryKey: ["images"] });
+        },
+      });
+    }
+  }
+
+  async function trash(target: Iterable<string> = selected) {
+    const ids = withPartners(target);
+    if (ids.length === 0) return;
+    await api.images.bulkDelete(ids);
+    setSelected(new Set());
+    const refresh = () => {
+      queryClient.invalidateQueries({ queryKey: ["smart-album-images", id] });
+      queryClient.invalidateQueries({ queryKey: ["smart-albums"] });
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["trash"] });
+    };
+    refresh();
+    pushUndo({
+      label: `${ids.length === 1 ? "1 photo" : `${ids.length} photos`} moved to Trash`,
+      undo: async () => {
+        await api.images.restoreFromTrash(ids);
+        refresh();
+      },
+    });
+  }
+
+  useSelectionKeys({
+    onSelectAll: () => setSelected(new Set(orderedImages.map((im) => im.id))),
+    onClear: () => {
+      setSelected(new Set());
+      setLastIndex(null);
+    },
+    hasSelection,
+    edit: { selected, order: orderedImages.map((im) => im.id) },
+    onRate: (rating) => void applyBulk({ rating }),
+    onColor: (label) =>
+      void applyBulk({
+        color_label: selectionSharedMeta(images ?? [], selected).colorLabel === label ? "none" : label,
+      }),
+    onFlag: (flag) =>
+      void applyBulk({ flag: flag && selectionSharedMeta(images ?? [], selected).flag === flag ? "" : flag }),
+    onDelete: () => void trash(),
+  });
+
+  const contextActions: ContextActions = {
+    onRate: (ids, rating) => applyBulk({ rating }, ids),
+    onColor: (ids, label) => applyBulk({ color_label: label }, ids),
+    onFlag: (ids, flag) => applyBulk({ flag }, ids),
+    meta: (ids) => selectionSharedMeta(images ?? [], new Set(ids)),
+    onDelete: (ids) => trash(ids),
+  };
   // Date sections + the right-edge scrubber, like an opened manual album. The
   // grid picks the granularity itself: a single-month album (a month card, a
   // one-trip moment) gets day sections, anything wider months - so a "July
@@ -138,7 +256,8 @@ export function SmartAlbumDetail() {
       <div className="page-scroll">
         {isError && (
           <div className="empty-state">
-            This smart album is gone - it was recomputed after new imports. Go back and pick a fresh one.
+            This moment is no longer there - the moments were worked out again after an import. Pick
+            it again under Albums.
           </div>
         )}
         {isLoading && (
@@ -152,7 +271,20 @@ export function SmartAlbumDetail() {
         {images && images.length > 0 && orderedImages.length === 0 && (
           <div className="empty-state">No photos match the filters.</div>
         )}
-        {orderedImages.length > 0 && <ThumbnailGrid images={orderedImages} groupByDate />}
+        {orderedImages.length > 0 && (
+          <ThumbnailGrid
+            images={orderedImages}
+            groupByDate
+            selectedIds={selected}
+            onToggleSelect={toggleSelect}
+            onSelectOnly={(imageId, index) => {
+              setSelected(new Set([imageId]));
+              setLastIndex(index);
+            }}
+            onSetSelection={(ids) => setSelected(new Set(ids))}
+            contextActions={contextActions}
+          />
+        )}
       </div>
 
     </div>

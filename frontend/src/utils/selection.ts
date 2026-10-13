@@ -46,6 +46,9 @@ export function takesTyping(el: HTMLElement): boolean {
 // 9 blue. The other labels are set from the swatches.
 export const COLOR_KEYS = { "6": "red", "7": "yellow", "8": "green", "9": "blue" } as const;
 export type KeyedColor = (typeof COLOR_KEYS)[keyof typeof COLOR_KEYS];
+// The culling flag's keys, Lightroom's: P picks, X rejects, U takes it off.
+export const FLAG_KEYS = { p: "pick", x: "reject", u: "" } as const;
+export type KeyedFlag = (typeof FLAG_KEYS)[keyof typeof FLAG_KEYS];
 
 // Cmd/Ctrl+A selects everything in the grid and Escape clears the selection -
 // the two keys every file browser answers to. Text boxes keep both keys for
@@ -61,8 +64,12 @@ export function useSelectionKeys(opts: {
   // Culling keys, on whatever is selected: 0-5 set the stars, 6-9 a colour
   // label (COLOR_KEYS), Delete / Backspace deletes.
   onRate?: (rating: number) => void;
-  onColor?: (label: KeyedColor) => void;
+  onColor?: (label: KeyedColor | "none") => void;
+  // P / X / U: pick, reject, take the flag off (FLAG_KEYS).
+  onFlag?: (flag: KeyedFlag) => void;
   onDelete?: () => void;
+  // The menu bar's File → Export… (⇧⌘E) and Photo → Export….
+  onExport?: () => void;
 }) {
   const navigate = useNavigate();
   // The pages pass fresh closures every render; reading them through a ref
@@ -75,7 +82,7 @@ export function useSelectionKeys(opts: {
       if (target && takesTyping(target)) return;
       // A dialog over the grid owns the keyboard.
       if (isModalOpen()) return;
-      const { onSelectAll, onClear, hasSelection, edit, onRate, onColor, onDelete } = latest.current;
+      const { onSelectAll, onClear, hasSelection, edit, onRate, onColor, onFlag, onDelete } = latest.current;
       // A key a focused control has already used (a dropdown opening on a
       // typed letter) is not also a culling key.
       const plain = !e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.altKey;
@@ -84,13 +91,23 @@ export function useSelectionKeys(opts: {
         e.preventDefault();
         onSelectAll();
       } else if (e.key === "Escape" && onClear && hasSelection) {
+        // Claimed, so a second listener (focus mode's Esc) leaves it alone.
+        e.preventDefault();
         onClear();
+      } else if (plain && !e.shiftKey && e.key === "Enter" && edit?.selected.size === 1) {
+        // Return opens the one selected photo, as the right-click menu says.
+        const [id] = edit.selected;
+        e.preventDefault();
+        navigate(`/image/${id}`, { state: { imageIds: edit.order } });
       } else if (plain && hasSelection && onRate && e.key.length === 1 && e.key >= "0" && e.key <= "5") {
         e.preventDefault();
         onRate(Number(e.key));
       } else if (plain && hasSelection && onColor && e.key in COLOR_KEYS) {
         e.preventDefault();
         onColor(COLOR_KEYS[e.key as keyof typeof COLOR_KEYS]);
+      } else if (plain && !e.shiftKey && hasSelection && onFlag && e.key.toLowerCase() in FLAG_KEYS) {
+        e.preventDefault();
+        onFlag(FLAG_KEYS[e.key.toLowerCase() as keyof typeof FLAG_KEYS]);
       } else if (plain && hasSelection && onDelete && (e.key === "Delete" || e.key === "Backspace")) {
         e.preventDefault();
         onDelete();
@@ -104,7 +121,31 @@ export function useSelectionKeys(opts: {
         navigate(`/image/${id}/edit`, { state: { imageIds: edit.order } });
       }
     }
+    // The desktop menu bar's Photo menu (App's MenuCommands passes it on as
+    // pm:app-menu): the same actions as the keys, on the selection.
+    function onAppMenu(e: Event) {
+      const { action, value } = (e as CustomEvent<{ action: string; value?: string | number }>).detail;
+      const { hasSelection, edit, onRate, onColor, onFlag, onDelete, onExport } = latest.current;
+      if (isModalOpen()) return;
+      if (action === "photo:export") {
+        if (hasSelection) onExport?.();
+        return;
+      }
+      if (!hasSelection) return;
+      if (action === "photo:rate" && onRate) onRate(Number(value));
+      else if (action === "photo:color" && onColor) onColor(String(value) as KeyedColor | "none");
+      else if (action === "photo:flag" && onFlag) onFlag(String(value ?? "") as KeyedFlag);
+      else if (action === "photo:trash" && onDelete) onDelete();
+      else if (action === "photo:edit" && edit?.selected.size === 1) {
+        const [id] = edit.selected;
+        navigate(`/image/${id}/edit`, { state: { imageIds: edit.order } });
+      }
+    }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("pm:app-menu", onAppMenu);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pm:app-menu", onAppMenu);
+    };
   }, [navigate]);
 }

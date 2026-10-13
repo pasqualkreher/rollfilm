@@ -130,6 +130,10 @@ interface TasksState {
   cancelRenders: () => Promise<void>;
   trackCopyJob: (jobId: string, total: number) => void;
   trackExportJob: (opts: ExportJobOpts) => void;
+  // A chip in the dock for a moment after a change that used to ask first -
+  // stars, labels, flags, the Trash, an album removal: "12 photos rejected ·
+  // Undo". One at a time; the next change replaces it.
+  pushUndo: (opts: { label: string; title?: string; undo: () => void | Promise<unknown>; ms?: number }) => void;
 }
 
 const RENDER_POLL_MS = 600;
@@ -210,10 +214,14 @@ export function TasksProvider({ children }: { children: ReactNode }) {
             return;
           }
           patchTask(id, { finished: result, cancel: null, cancelling: false, done: undefined, total: undefined });
-          finishTimers.current.set(
-            id,
-            window.setTimeout(() => removeTask(id), FINISH_MS)
-          );
+          // A failure stays until it is dismissed: an export error that
+          // vanished after ten seconds, or under a newer task, was never read.
+          if (!result.error) {
+            finishTimers.current.set(
+              id,
+              window.setTimeout(() => removeTask(id), FINISH_MS)
+            );
+          }
         },
       };
     },
@@ -383,6 +391,28 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   );
 
   const hasTask = useCallback((id: string) => tasks.some((t) => t.id === id && !t.finished), [tasks]);
+
+  const undoSeq = useRef(0);
+  const pushUndo = useCallback(
+    (opts: { label: string; title?: string; undo: () => void | Promise<unknown>; ms?: number }) => {
+      for (const t of tasksRef.current) if (t.id.startsWith("undo:")) removeTask(t.id);
+      const id = `undo:${++undoSeq.current}`;
+      upsertTask({
+        id,
+        kind: "plain",
+        label: opts.label,
+        title: opts.title ?? "Done. Undo takes it back; otherwise it stands.",
+        cancelLabel: "Undo",
+        stopTitle: "Undo this",
+        cancel: async () => {
+          removeTask(id);
+          await opts.undo();
+        },
+      });
+      finishTimers.current.set(id, window.setTimeout(() => removeTask(id), opts.ms ?? 8000));
+    },
+    [removeTask, upsertTask]
+  );
 
   // --- the pictures of a bulk edit -----------------------------------------
   // The edit itself returns as soon as the rows are written and the backend
@@ -620,7 +650,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     <TasksContext.Provider
       value={{
         tasks, hasTask, startTask, runTask, runBatches, trackPolledJob, cancelTask, dismissTask,
-        upsertTask, removeTask, trackRenders, cancelRenders, trackCopyJob, trackExportJob,
+        upsertTask, removeTask, trackRenders, cancelRenders, trackCopyJob, trackExportJob, pushUndo,
       }}
     >
       {children}

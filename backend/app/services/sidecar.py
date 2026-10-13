@@ -18,17 +18,27 @@ copies (they own no file).
 
 Writes are collected for a couple of seconds and done in one background pass:
 a bulk rating of 300 photos must not spawn 300 exiftool runs mid-request.
+
+The edit travels too: the whole stored edit (the PATCH /images/{id}/edits
+payload, develop.stored_edits) as JSON in a namespace of Rollfilm's own,
+XMP-rollfilm:Develop, defined for exiftool in app/data/exiftool_rollfilm.config.
+Nobody else reads it; another Rollfilm library taking the photo in does
+(file_metadata.apply_sidecar_develop). A pair's sidecar carries the RAW's
+edit, and says which file it belongs to.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 from pathlib import Path
 
 from sqlalchemy.orm import Session, selectinload
 
-from app.db.models import ColorLabel, Image
+from app.db.models import ColorLabel, FileType, Image
 from app.db.session import SessionLocal
+from app.services import develop
 from app.services import exif as exif_service
 from app.services import tags as tags_service
 from app.services.filesystem import resolve_image_path, strip_virtual_marker
@@ -110,6 +120,81 @@ def _args(image: Image, tags: list[str]) -> list[str]:
     return args
 
 
+# ---- The edit, in Rollfilm's own namespace ------------------------------------
+
+DEVELOP_NAMESPACE = "https://rollfilm.app/ns/1.0/"
+_DEVELOP_CONFIG = Path(__file__).resolve().parent.parent / "data" / "exiftool_rollfilm.config"
+_DEVELOP_MARK = "rollfilm:Develop"
+# exiftool reads a config file only as its very first argument, so a helper
+# that knows the namespace is a process of its own; one, shared under a lock
+# by the debounced pass and the write-all pass.
+_develop_helper = None
+_develop_lock = threading.Lock()
+
+
+def _develop_tool():
+    """The exiftool helper that knows XMP-rollfilm, or None when it can't be
+    had (no config file, exiftool won't start): the sidecar is then written
+    without the edit, as it was before."""
+    global _develop_helper
+    if _develop_helper is None:
+        if not _DEVELOP_CONFIG.is_file():
+            return None
+        try:
+            import exiftool
+
+            _develop_helper = exiftool.ExifToolHelper(
+                executable=os.environ.get("EXIFTOOL_PATH") or "exiftool",
+                config_file=str(_DEVELOP_CONFIG),
+            )
+        except Exception:
+            logger.exception("Could not start exiftool with the Rollfilm namespace")
+            return None
+    return _develop_helper
+
+
+def close_develop_helper() -> None:
+    global _develop_helper
+    with _develop_lock:
+        helper, _develop_helper = _develop_helper, None
+    if helper is not None:
+        try:
+            helper.terminate()
+        except Exception:
+            pass
+
+
+def develop_payload(image: Image) -> str | None:
+    """The edit a sidecar carries for this photo, as JSON, or None when there
+    is none. A pair shares one sidecar, and the RAW's edit is the one kept in
+    it (as the RAW's word wins everywhere else, see file_metadata); `file`
+    names the kind of file it belongs to, so the JPEG half reading it back
+    leaves it alone."""
+    source = image
+    partner = getattr(image, "paired_image", None)
+    if image.file_type != FileType.raw and partner is not None and partner.file_type == FileType.raw:
+        source = partner
+    if not develop.has_stored_edit(source):
+        return None
+    edits = develop.stored_edits(source)
+    edits["file"] = source.original_filename
+    return json.dumps(edits, separators=(",", ":"))
+
+
+def _develop_args(image: Image, path: Path) -> list[str]:
+    """The assignment that puts the edit into the sidecar - or takes an old
+    one out once the photo has none. [] when there is nothing either way, so
+    an unedited photo's sidecar is written as it always was."""
+    payload = develop_payload(image)
+    if payload is not None:
+        return [f"-XMP-rollfilm:Develop={payload}"]
+    try:
+        held = _DEVELOP_MARK in path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        held = False
+    return ["-XMP-rollfilm:Develop="] if held else []
+
+
 def write_sidecar(db: Session, image: Image, helper=None) -> Path | None:
     """Write (or rewrite) this photo's sidecar from what the library knows.
     Returns the path written, or None when the photo gets no sidecar or its
@@ -121,7 +206,14 @@ def write_sidecar(db: Session, image: Image, helper=None) -> Path | None:
     try:
         if not path.exists():
             path.write_text(_EMPTY_PACKET, encoding="utf-8")
-        (helper or exif_service._get_helper()).execute(*_args(image, _user_tags(db, image)), str(path))
+        args = _args(image, _user_tags(db, image))
+        extra = _develop_args(image, path)
+        with _develop_lock:
+            tool = _develop_tool() if extra else None
+            if tool is not None:
+                tool.execute(*args, *extra, str(path))
+                return path
+        (helper or exif_service._get_helper()).execute(*args, str(path))
     except Exception:
         logger.exception("Could not write sidecar %s", path)
         return None

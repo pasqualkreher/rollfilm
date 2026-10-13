@@ -23,6 +23,17 @@ export interface EditHistory {
   canRedo: boolean;
   undo: () => void;
   redo: () => void;
+  // A pointer gesture on the stage - a handle dragged, a spot placed, a
+  // brush stroke - is one step however long it takes and however fast the
+  // next one follows: nothing is committed while it is held, and its end
+  // commits it. The timer stays for the sliders.
+  beginGesture: () => void;
+  endGesture: () => void;
+  // The steps as they stand, oldest first, and where the edit is among them
+  // (the history list); jumpTo puts step i back, like undoing to it.
+  steps: unknown[];
+  at: number;
+  jumpTo: (i: number) => void;
 }
 
 /**
@@ -50,6 +61,8 @@ export function useEditHistory<T>(
   const applyRef = useRef(apply);
   applyRef.current = apply;
   const [, bump] = useState(0);
+  // A stage gesture in progress: the recording effect stays quiet meanwhile.
+  const held = useRef(false);
 
   // Commit whatever is on screen right now, dropping any redo branch. Called on
   // the coalesce timer, and again before an undo so the change you just made is
@@ -75,9 +88,25 @@ export function useEditHistory<T>(
       return;
     }
     if (stack.current[index.current]?.key === key) return;
+    if (held.current) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(commit, COALESCE_MS);
   }, [key, commit]);
+
+  // Whatever a slider left within its coalescing window is closed off first,
+  // so the gesture never merges into it.
+  const beginGesture = useCallback(() => {
+    if (timer.current) commit();
+    held.current = true;
+  }, [commit]);
+  // The gesture's last patch may still be on its way through React when the
+  // pointer comes up: commit on the next turn of the loop, once the render
+  // that carries it has run and `latest` holds the final state.
+  const endGesture = useCallback(() => {
+    if (!held.current) return;
+    held.current = false;
+    setTimeout(commit, 0);
+  }, [commit]);
 
   // Another photo: the old stack describes edits that are not on screen any
   // more, so applying one of them would paste them onto this photo.
@@ -116,6 +145,18 @@ export function useEditHistory<T>(
 
   const undo = useCallback(() => step(-1), [step]);
   const redo = useCallback(() => step(1), [step]);
+  const jumpTo = useCallback(
+    (i: number) => {
+      commit();
+      if (i < 0 || i >= stack.current.length || i === index.current) return;
+      index.current = i;
+      const entry = stack.current[i];
+      restored.current = entry.key;
+      applyRef.current(entry.value);
+      bump((n) => n + 1);
+    },
+    [commit]
+  );
 
   return {
     // An uncommitted change (still inside the coalescing window) is undoable
@@ -124,5 +165,10 @@ export function useEditHistory<T>(
     canRedo: index.current < stack.current.length - 1,
     undo,
     redo,
+    beginGesture,
+    endGesture,
+    steps: stack.current.map((e) => e.value),
+    at: index.current,
+    jumpTo,
   };
 }

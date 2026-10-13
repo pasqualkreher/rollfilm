@@ -6,6 +6,7 @@ import { IconFolder, IconPlus, IconRotate, IconTrash } from "./Icons";
 import { useAppDialogs } from "./AppDialogs";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
+import { plural } from "../utils/plural";
 
 function formatScanned(iso: string | null): string {
   if (!iso) return "never scanned";
@@ -184,7 +185,7 @@ export function ExternalSources() {
                       await dialogs.confirm({
                         title: `Remove "${s.name}"?`,
                         message:
-                          `This removes its ${s.image_count} photo(s) from the library. ` +
+                          `This removes its ${plural(s.image_count, "photo")} from the library. ` +
                           `The original files are not deleted.`,
                         confirmLabel: "Remove",
                         danger: true,

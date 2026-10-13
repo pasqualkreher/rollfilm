@@ -6,17 +6,21 @@ import { api } from "../api/client";
 import { CANCELLED_NOTE, pairUnits } from "../utils/batchUnits";
 import { withoutMembershipNames } from "../utils/autoTags";
 import { useAppDialogs } from "../components/AppDialogs";
-import type { BulkResetOptions, ColorLabel, ImageOut, LibraryFilters, ViewMode } from "../api/types";
+import type { BulkResetOptions, ColorLabel, ImageOut, LibraryFilters, ViewMode, Flag } from "../api/types";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
+import { FlagPicker } from "../components/FlagPicker";
+import { useSelectionExport } from "../components/SelectionExport";
+import { bulkChangeLabel } from "../utils/undoLabels";
 import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { AlbumNameField } from "../components/AlbumNameField";
+import { TagFilter } from "../components/TagFilter";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { EditPicker } from "../components/EditPicker";
-import { IconCheck, IconCloudUp, IconMinus, IconRename, IconSort, IconTrash, IconX } from "../components/Icons";
+import { IconCheck, IconCloudUp, IconMinus, IconRename, IconSort, IconTrash, IconX, IconTag } from "../components/Icons";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { Dropdown } from "../components/Dropdown";
@@ -39,6 +43,7 @@ type CopyOpts = { quality: number; maxSize: number | null };
 
 import { errorText } from "../utils/apiError";
 import { isModalOpen } from "../utils/modalKeys";
+import { plural } from "../utils/plural";
 
 // The one bulk task this page runs at a time (state/tasks).
 const ALBUM_BATCH = "batch:album";
@@ -85,6 +90,8 @@ export function AlbumDetail() {
   };
   const [sort, setSort] = useSessionState<SortKey>(`album:${id}:sort`, "newest");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Export for the selection: the bar's button, the dialog, ⇧⌘E.
+  const selectionExport = useSelectionExport(Array.from(selected));
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
@@ -133,7 +140,7 @@ export function AlbumDetail() {
     setBarError(null);
   }
 
-  const { runTask, trackRenders, trackCopyJob, runBatches, hasTask } = useTasks();
+  const { runTask, trackRenders, trackCopyJob, runBatches, hasTask, pushUndo } = useTasks();
   // Every bulk action of this page runs as one task in the title bar, counted
   // down there with a Stop, and one at a time (see Library).
   const batchBusy = hasTask(ALBUM_BATCH);
@@ -235,13 +242,25 @@ export function AlbumDetail() {
 
   async function removeFromAlbum(imageId: string) {
     if (!id) return;
+    const albumId = id;
     // In merged view the card stands for the whole RAW+JPEG shot - remove the
     // hidden partner too, or it would linger in the album as an orphan.
-    await Promise.all(withPairedIds([imageId]).map((x) => api.albums.removeImage(id, x)));
-    // Refresh both the album's photo list and its header count.
-    queryClient.invalidateQueries({ queryKey: ["images"] });
-    queryClient.invalidateQueries({ queryKey: ["album", id] });
-    queryClient.invalidateQueries({ queryKey: ["albums"] });
+    const removed = withPairedIds([imageId]);
+    await Promise.all(removed.map((x) => api.albums.removeImage(albumId, x)));
+    const refresh = () => {
+      // Refresh both the album's photo list and its header count.
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["album", albumId] });
+      queryClient.invalidateQueries({ queryKey: ["albums"] });
+    };
+    refresh();
+    pushUndo({
+      label: "Removed from the album",
+      undo: async () => {
+        await api.albums.addImages(albumId, removed);
+        refresh();
+      },
+    });
   }
 
   // Click = toggle; shift-click = select the whole range since the last click,
@@ -287,12 +306,23 @@ export function AlbumDetail() {
       void applyBulk({
         color_label: selectionSharedMeta(images ?? [], selected).colorLabel === label ? "none" : label,
       }),
+    onFlag: (flag) =>
+      void applyBulk({ flag: flag && selectionSharedMeta(images ?? [], selected).flag === flag ? "" : flag }),
     onDelete: () => void deleteSelected(),
+    onExport: () => selectionExport.open(),
   });
 
-  async function applyBulk(patch: { rating?: number; color_label?: string }, target: Iterable<string> = selected) {
+  async function applyBulk(
+    patch: { rating?: number; color_label?: string; flag?: Flag | "" },
+    target: Iterable<string> = selected,
+    undoable = true
+  ) {
     const ids = Array.from(target);
     if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const before = (images ?? []).filter((im) => idSet.has(im.id)).map((im) => ({ ...im }));
+    const { flag: flagPatch, ...restPatch } = patch;
+    const tilePatch = flagPatch === undefined ? restPatch : { ...restPatch, flag: (flagPatch || null) as Flag | null };
     // With merged pairs only the JPEG is visible, so mirror the change to each
     // hidden RAW partner too.
     // Onto the tiles slice by slice; the refetch below then finds what it
@@ -300,7 +330,7 @@ export function AlbumDetail() {
     const show = (changed: string[]) => {
       const set = new Set(changed);
       queryClient.setQueriesData<ImageOut[]>({ queryKey: ["images"] }, (old) =>
-        Array.isArray(old) ? old.map((im) => (set.has(im.id) ? ({ ...im, ...patch } as ImageOut) : im)) : old
+        Array.isArray(old) ? old.map((im) => (set.has(im.id) ? ({ ...im, ...tilePatch } as ImageOut) : im)) : old
       );
     };
     try {
@@ -313,6 +343,25 @@ export function AlbumDetail() {
         await batch("Updating photos…", ids, async (slice) => {
           await api.images.bulkUpdate(slice, patch);
           show(slice);
+        });
+      }
+      if (undoable && before.length > 0) {
+        pushUndo({
+          label: bulkChangeLabel(patch, ids.length),
+          undo: async () => {
+            const groups = new Map<string, { ids: string[]; patch: typeof patch }>();
+            for (const im of before) {
+              const inv: typeof patch = {};
+              if (patch.rating !== undefined) inv.rating = im.rating;
+              if (patch.color_label !== undefined) inv.color_label = im.color_label;
+              if (patch.flag !== undefined) inv.flag = im.flag ?? "";
+              const key = JSON.stringify(inv);
+              const g = groups.get(key) ?? { ids: [], patch: inv };
+              g.ids.push(im.id);
+              groups.set(key, g);
+            }
+            for (const g of groups.values()) await applyBulk(g.patch, g.ids, false);
+          },
         });
       }
     } finally {
@@ -370,6 +419,17 @@ export function AlbumDetail() {
         }
       );
       const gone = new Set(cancelled ? done : ids);
+      if (!cancelled) {
+        pushUndo({
+          label: `${ids.length === 1 ? "1 photo" : `${ids.length} photos`} moved to Trash`,
+          undo: async () => {
+            await api.images.restoreFromTrash(ids);
+            queryClient.invalidateQueries({ queryKey: ["images"] });
+            queryClient.invalidateQueries({ queryKey: ["trash"] });
+            queryClient.invalidateQueries({ queryKey: ["tags"] });
+          },
+        });
+      }
       // One photo deleted (culling from the keyboard): the selection moves on
       // to its neighbour instead of ending there.
       if (!cancelled && nextAfterDelete) selectOnly(nextAfterDelete.id, nextAfterDelete.index);
@@ -436,7 +496,7 @@ export function AlbumDetail() {
       const { done, cancelled } = await batch("Tagging photos…", target, (ids) =>
         api.images.bulkAddTags(ids, [tag])
       );
-      setDevelopMsg(`Added tag “${tag}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
+      setDevelopMsg(`Added tag “${tag}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
@@ -466,7 +526,7 @@ export function AlbumDetail() {
     const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
     setAlbumMsg(
       ok
-        ? { text: `Added ${takeAddedCount()} photo(s) to ${what}.${cancelNote}`, error: false }
+        ? { text: `Added ${plural(takeAddedCount(), "photo")} to ${what}.${cancelNote}`, error: false }
         : { text: `Could not add to ${what}.`, error: true },
       // A failure stays until it is dismissed or the next action runs.
       { keep: !ok }
@@ -496,6 +556,7 @@ export function AlbumDetail() {
   const contextActions: ContextActions = {
     onRate: (ids, rating) => applyBulk({ rating }, ids),
     onColor: (ids, label) => applyBulk({ color_label: label }, ids),
+    onFlag: (ids, flag) => applyBulk({ flag }, ids),
     onAddToAlbum: (ids, albumId) => addSelectedToAlbum(albumId, ids),
     onAddToCanvas: (ids, canvasId) => addSelectedToCanvas(canvasId, ids),
     onAddTag: (ids, name) => addTagToSelected(name, ids),
@@ -513,20 +574,6 @@ export function AlbumDetail() {
     onDelete: (ids) => deleteSelected(ids),
     meta: (ids) => selectionSharedMeta(images ?? [], new Set(ids)),
   };
-
-  // Counts the selection, not the ids actually sent: merged view silently adds
-  // each shot's RAW partner too, and reporting that larger number would look
-  // like a bug to someone who selected 3 photos. Mirrors the tag note's phrasing.
-  function reportAlbumAdd({ name, ok }: { name: string; ok: boolean }) {
-    const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
-    setAlbumMsg(
-      ok
-        ? { text: `Added ${takeAddedCount()} photo(s) to “${name}”.${cancelNote}`, error: false }
-        : { text: `Could not add to “${name}”.`, error: true },
-      // A failure stays until it is dismissed or the next action runs.
-      { keep: !ok }
-    );
-  }
 
   async function resetSelected(opts: BulkResetOptions, target: string[] = Array.from(selected)) {
     if (target.length === 0) return;
@@ -557,8 +604,8 @@ export function AlbumDetail() {
     if (
       editedCount > 0 &&
       !(await dialogs.confirm({
-        title: `Auto-develop ${target.length} photo(s)?`,
-        message: `This replaces the existing edits of ${editedCount} photo(s).`,
+        title: `Auto-develop ${plural(target.length, "photo")}?`,
+        message: `This replaces the existing edits of ${plural(editedCount, "photo")}.`,
         confirmLabel: "Auto-develop",
       }))
     )
@@ -576,8 +623,8 @@ export function AlbumDetail() {
       const skipped = results.reduce((n, r) => n + r.skipped, 0);
       setDevelopMsg(
         (skipped > 0
-          ? `Auto-developed ${applied} photo(s). Skipped ${skipped} with no similar edits to learn from.`
-          : `Auto-developed ${applied} photo(s).`) + (cancelled ? CANCELLED_NOTE : "")
+          ? `Auto-developed ${plural(applied, "photo")}. Skipped ${skipped} with no similar edits to learn from.`
+          : `Auto-developed ${plural(applied, "photo")}.`) + (cancelled ? CANCELLED_NOTE : "")
       );
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -599,8 +646,8 @@ export function AlbumDetail() {
     if (
       editedCount > 0 &&
       !(await dialogs.confirm({
-        title: `Apply preset “${name}” to ${target.length} photo(s)?`,
-        message: `This replaces the existing edits of ${editedCount} photo(s).`,
+        title: `Apply preset “${name}” to ${plural(target.length, "photo")}?`,
+        message: `This replaces the existing edits of ${plural(editedCount, "photo")}.`,
         confirmLabel: "Apply preset",
       }))
     )
@@ -613,7 +660,7 @@ export function AlbumDetail() {
       const { done, cancelled } = await batch("Applying preset…", target, (ids) =>
         api.images.bulkDevelop(ids, look)
       );
-      setDevelopMsg(`Applied preset “${name}” to ${done.length} photo(s).${cancelled ? CANCELLED_NOTE : ""}`);
+      setDevelopMsg(`Applied preset “${name}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
       // The pictures render in the background: the title bar counts them down.
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -707,8 +754,26 @@ export function AlbumDetail() {
     "Album"
   );
 
+  // The album's tag rule, set at creation and now changeable here: every
+  // photo carrying one of these tags belongs to the album too.
+  async function setTagRule(tags: string[]) {
+    if (!album) return;
+    await api.albums.update(album.id, { tag_filter: tags });
+    queryClient.invalidateQueries({ queryKey: ["album", album.id] });
+    queryClient.invalidateQueries({ queryKey: ["albums"] });
+    queryClient.invalidateQueries({ queryKey: ["images"] });
+  }
+
   const albumActions = album && (
     <>
+      <TagFilter
+        icon={<IconTag size={13} />}
+        options={allTags ?? []}
+        value={album.tag_filter ?? []}
+        onChange={(tags) => void setTagRule(tags)}
+        emptyLabel="No tag rule"
+        title="Photos with any of these tags belong to this album as well"
+      />
       {immichConfigured && immich?.sync_mode === "selective" && (
         <ImmichSyncToggle
           small
@@ -731,7 +796,7 @@ export function AlbumDetail() {
         if (
           !(await dialogs.confirm({
             title: `Delete album “${album.name}”?`,
-            message: `Its ${album.image_count} photo(s) stay in your library.`,
+            message: `Its ${plural(album.image_count, "photo")} stay in your library.`,
             confirmLabel: "Delete album",
             danger: true,
           }))
@@ -750,6 +815,7 @@ export function AlbumDetail() {
   return (
     <div className="page page-timeline">
       {pairDeleteDialog}
+      {selectionExport.dialog}
       <Presence open={copyPrompt !== null} ms={MOTION.modal}>
         {copyPrompt && (
           <SaveCopyDialog
@@ -861,8 +927,12 @@ export function AlbumDetail() {
                 right of the line. */}
             <span className="bar-sep" aria-hidden />
             <div className="control-group">
+              <FlagPicker value={sharedMeta.flag} onChange={(f) => applyBulk({ flag: f })} />
               <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
               <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
+            </div>
+            <div className="control-group">
+              {selectionExport.button}
             </div>
             <div className="control-group">
               <BulkTagInput onAdd={addTagToSelected} />
@@ -931,7 +1001,7 @@ export function AlbumDetail() {
           onSelectOnly={selectOnly}
           onSetSelection={(ids) => setSelected(new Set(ids))}
           contextActions={contextActions}
-          groupByDate={!q}
+          groupByDate={!q && (sort === "newest" || sort === "oldest")}
           onRemove={removeFromAlbum}
           removeTitle="Remove from this album"
         />

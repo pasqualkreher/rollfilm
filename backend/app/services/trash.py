@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import settings
 from app.db.models import (
     CanvasImage,
+    EditSnapshot,
     FileType,
     Image,
     ImmichPendingDeletion,
@@ -172,6 +173,11 @@ def hard_delete_images(db: Session, images: list[Image], *, delete_files: bool) 
         )
         # Canvas membership has nothing to fall back to - the row goes.
         db.query(CanvasImage).filter(CanvasImage.image_id.in_(image_ids)).delete(
+            synchronize_session=False
+        )
+        # So do the photo's edit snapshots. The table cascades on its own, but
+        # only where the connection has foreign keys switched on.
+        db.query(EditSnapshot).filter(EditSnapshot.image_id.in_(image_ids)).delete(
             synchronize_session=False
         )
         # Album memberships and tag links are cascade="all, delete-orphan", so

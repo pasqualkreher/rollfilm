@@ -74,7 +74,7 @@ function brushFadeStops(feather: number): [number, number][] {
 type MaskOverlayProps = Parameters<typeof MaskOverlayImpl>[0];
 function sameCursor(a: MaskOverlayProps["cursor"], b: MaskOverlayProps["cursor"]): boolean {
   if (!a || !b) return a === b;
-  return a.x === b.x && a.y === b.y && a.size === b.size;
+  return a.x === b.x && a.y === b.y && a.size === b.size && a.erasing === b.erasing;
 }
 function sameStyle(a: CSSProperties | undefined, b: CSSProperties | undefined): boolean {
   if (!a || !b) return a === b;
@@ -87,6 +87,7 @@ export const MaskOverlay = memo(
     a.aspect === b.aspect &&
     a.handles === b.handles &&
     a.mark === b.mark &&
+    a.invert === b.invert &&
     a.dashed === b.dashed &&
     a.cursorSink === b.cursorSink &&
     a.brushSink === b.brushSink &&
@@ -103,12 +104,13 @@ function MaskOverlayImpl({
   brushSink,
   handles = false,
   mark = true,
+  invert = false,
   dashed = false,
 }: {
   sub: SubMask;
   style?: CSSProperties;
   aspect?: number;
-  cursor?: { x: number; y: number; size: number } | null;
+  cursor?: { x: number; y: number; size: number; erasing?: boolean } | null;
   // Where the brush ring's moves arrive from while it is shown: the editor
   // calls every registered mover per pointer move and the ring follows in the
   // DOM, with no render in between. `cursor` still says whether the ring is
@@ -129,6 +131,9 @@ function MaskOverlayImpl({
   // the marking answers "what does this cover?" and is asked for by pointing at
   // the mask in the list, while the outline and handles are the editing tools.
   mark?: boolean;
+  // Mark what the mask does NOT cover: the mask's Invert. The outline and the
+  // handles stay where the shape is; only the zebra changes sides.
+  invert?: boolean;
   // Draw the outline dashed - what a "limit to area" shape is drawn as, so a
   // boundary the mask is confined to never reads as the selection itself.
   dashed?: boolean;
@@ -210,7 +215,7 @@ function MaskOverlayImpl({
     if (!brushMark) return;
     if (!st.zebra) st.zebra = makeZebra(cv.width, cv.height);
     ctx.drawImage(st.zebra, 0, 0);
-    ctx.globalCompositeOperation = "destination-in";
+    ctx.globalCompositeOperation = invert ? "destination-out" : "destination-in";
     ctx.drawImage(st.coverage, 0, 0);
     ctx.globalCompositeOperation = "source-over";
   };
@@ -244,7 +249,7 @@ function MaskOverlayImpl({
     }
     compositeBrush();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brushStrokes, brushFeather, brushMark, BRUSH_W, BRUSH_H]);
+  }, [brushStrokes, brushFeather, brushMark, invert, BRUSH_W, BRUSH_H]);
   useEffect(() => {
     if (!brushSink || !isBrush) return;
     const paint = (subId: string, pts: number[][]) => {
@@ -262,7 +267,7 @@ function MaskOverlayImpl({
       brushSink.delete(paint);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brushSink, isBrush, brushFeather, brushMark, BRUSH_W, BRUSH_H]);
+  }, [brushSink, isBrush, brushFeather, brushMark, invert, BRUSH_W, BRUSH_H]);
   const handle = (x: number, y: number, key: string) => (
     <ellipse key={key} cx={x} cy={y} rx={HANDLE_R} ry={HANDLE_R * aspect} className="mask-handle" vectorEffect="non-scaling-stroke" />
   );
@@ -282,18 +287,57 @@ function MaskOverlayImpl({
     const R = (ox: number, oy: number): [number, number] => [cx + ox * cos - oy * sin, cy + ox * sin + oy * cos];
     const nPt = R(0, -ry);
     const rotPt = R(0, -(ry + ROT_OFF_VB));
+    const xf = rot ? `rotate(${rot} ${cx} ${cy})` : undefined;
+    // The zebra fades the way the field does (masks._radial_field): solid out
+    // to (1 - feather) of the radius, then the same smoothstep the brush dab
+    // uses, so the stripes thin exactly where the effect does. A gradient in
+    // the ellipse's own bounding box follows its rotation and both radii.
+    // Inverted, the same gradient turned round over a white frame marks the
+    // outside instead; the outline and the handles do not move.
+    const feather = Math.min(1, Math.max(0.001, num("feather", 50) / 100));
+    const fadeId = `mask-radial-fade-${sub.id}`;
+    const maskId = `mask-radial-${sub.id}`;
+    const grey = (a: number) => {
+      const v = Math.round((invert ? 1 - a : a) * 255);
+      return `rgb(${v},${v},${v})`;
+    };
     shapes = (
       <>
+        <defs>
+          <radialGradient id={fadeId} cx="50%" cy="50%" r="50%">
+            {brushFadeStops(feather).map(([offset, alpha], i) => (
+              <stop key={i} offset={`${Math.min(1, offset) * 100}%`} stopColor={grey(alpha)} />
+            ))}
+          </radialGradient>
+          <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+            {invert && <rect x="0" y="0" width="100" height="100" fill="#fff" />}
+            <ellipse cx={cx} cy={cy} rx={rx} ry={ry} transform={xf} fill={`url(#${fadeId})`} />
+          </mask>
+        </defs>
+        {mark && <rect x="0" y="0" width="100" height="100" fill={`url(#${ZEBRA_ID})`} mask={`url(#${maskId})`} />}
         <ellipse
           cx={cx}
           cy={cy}
           rx={rx}
           ry={ry}
-          transform={rot ? `rotate(${rot} ${cx} ${cy})` : undefined}
+          transform={xf}
           className="mask-overlay-shape"
-          fill={mark ? `url(#${ZEBRA_ID})` : "none"}
+          fill="none"
           vectorEffect="non-scaling-stroke"
         />
+        {/* Where the fade begins: the feather, seen. */}
+        {feather < 0.995 && (
+          <ellipse
+            cx={cx}
+            cy={cy}
+            rx={rx * (1 - feather)}
+            ry={ry * (1 - feather)}
+            transform={xf}
+            className="mask-overlay-shape mask-overlay-hint"
+            fill="none"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
         {handles && (
           <>
             {/* rotation stalk from the top of the ellipse to the rotation handle */}
@@ -381,8 +425,8 @@ function MaskOverlayImpl({
             x2={gmx + (gvx * f) / 2}
             y2={gmy + (gvy * f) / 2}
           >
-            <stop offset="0%" stopColor="#000" />
-            <stop offset="100%" stopColor="#fff" />
+            <stop offset="0%" stopColor={invert ? "#fff" : "#000"} />
+            <stop offset="100%" stopColor={invert ? "#000" : "#fff"} />
           </linearGradient>
           <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
             <rect x="0" y="0" width="100" height="100" fill={`url(#${gradId})`} />
@@ -428,7 +472,7 @@ function MaskOverlayImpl({
             cy={(ringPosRef.current ?? cursor).y * 100}
             rx={rx(cursor.size)}
             ry={ry(cursor.size)}
-            className="mask-brush-ring"
+            className={`mask-brush-ring${cursor.erasing ? " is-erasing" : ""}`}
             vectorEffect="non-scaling-stroke"
           />
         )}
@@ -443,11 +487,25 @@ function MaskOverlayImpl({
     const png = typeof p.mask === "string" ? p.mask : "";
     if (!png || !mark) return null; // a found region IS its marking - no outline to keep
     const id = `mask-region-${sub.id}`;
+    const flipId = `mask-region-flip-${sub.id}`;
     shapes = (
       <>
         <defs>
+          {invert && (
+            <filter id={flipId}>
+              <feColorMatrix type="matrix" values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0" />
+            </filter>
+          )}
           <mask id={id} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
-            <image href={`data:image/png;base64,${png}`} x="0" y="0" width="100" height="100" preserveAspectRatio="none" />
+            <image
+              href={`data:image/png;base64,${png}`}
+              x="0"
+              y="0"
+              width="100"
+              height="100"
+              preserveAspectRatio="none"
+              filter={invert ? `url(#${flipId})` : undefined}
+            />
           </mask>
         </defs>
         <rect x="0" y="0" width="100" height="100" fill={`url(#${ZEBRA_ID})`} mask={`url(#${id})`} />

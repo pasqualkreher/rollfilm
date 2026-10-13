@@ -5,6 +5,8 @@ import { api, editVersion } from "../api/client";
 import { cachedImageRow } from "../utils/cachedImageRow";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
+import { FlagPicker } from "../components/FlagPicker";
+import { bulkChangeLabel } from "../utils/undoLabels";
 import { PhotoEditor } from "../components/PhotoEditor";
 import { TagEditor } from "../components/TagEditor";
 import { MembershipChips } from "../components/MembershipChips";
@@ -48,7 +50,7 @@ import { useTransientMessage } from "../utils/transientMessage";
 import { isModalOpen } from "../utils/modalKeys";
 import { COLOR_KEYS } from "../utils/selection";
 import { errorText } from "../utils/apiError";
-import type { ColorLabel, ImageOut } from "../api/types";
+import type { ColorLabel, ImageOut, Flag } from "../api/types";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { isTextEntry } from "../utils/keyboardFocus";
@@ -73,7 +75,7 @@ export function ImageDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
-  const { runTask } = useTasks();
+  const { runTask, pushUndo } = useTasks();
   const { previousPath } = useNavHistory();
   const [activeId, setActiveId] = useState(id!);
   // Passed from the Library grid so arrow keys can zap through the same
@@ -525,10 +527,20 @@ export function ImageDetail() {
         return;
       }
 
-      // P hides/shows the side panel - the one key you want while looking at a
-      // photo full width, without going for the mouse. I stays wired up as
-      // well: it was the original key, and fingers that learned it keep working.
-      if (e.key === "p" || e.key === "P" || e.key === "i" || e.key === "I") {
+      // P picks, X rejects, U takes the flag off - the culling keys, the same
+      // in the grid. The key of the flag the photo already has takes it off.
+      if (!inControl && image && !imageStale && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        const k = e.key.toLowerCase();
+        if (k === "p" || k === "x" || k === "u") {
+          const want = k === "p" ? "pick" : k === "x" ? "reject" : "";
+          void setFlag(want && image.flag === want ? "" : want);
+          return;
+        }
+      }
+
+      // I hides/shows the side panel (Info) - the one key you want while
+      // looking at a photo full width, without going for the mouse.
+      if (e.key === "i" || e.key === "I") {
         setDetailPanelOpen(!panelOpen);
         return;
       }
@@ -816,14 +828,48 @@ export function ImageDetail() {
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
-  async function setRating(rating: number) {
-    await api.images.update(image!.id, { rating });
+  // Stars, label and flag: one request, and an Undo chip in the title bar
+  // with the value the photo had.
+  async function setRating(rating: number, undoable = true) {
+    const was = image!.rating;
+    const id = image!.id;
+    await api.images.update(id, { rating });
     invalidateActiveAndPair();
+    if (undoable) pushUndo({ label: bulkChangeLabel({ rating }, 1), undo: () => api.images.update(id, { rating: was }).then(invalidateActiveAndPair) });
   }
 
-  async function setColor(color_label: ColorLabel) {
-    await api.images.update(image!.id, { color_label });
+  async function setColor(color_label: ColorLabel, undoable = true) {
+    const was = image!.color_label;
+    const id = image!.id;
+    await api.images.update(id, { color_label });
     invalidateActiveAndPair();
+    if (undoable) pushUndo({ label: bulkChangeLabel({ color_label }, 1), undo: () => api.images.update(id, { color_label: was }).then(invalidateActiveAndPair) });
+  }
+
+  // The desktop menu bar's Photo menu, on the photo being looked at (the
+  // editor, while it is open over this view, takes them itself).
+  const menuRef = useRef<(msg: { action: string; value?: string | number }) => void>(() => {});
+  menuRef.current = (msg) => {
+    if (!image || adjustOpen) return;
+    if (msg.action === "photo:rate") void setRating(Number(msg.value));
+    else if (msg.action === "photo:color") void setColor(String(msg.value) as ColorLabel);
+    else if (msg.action === "photo:flag") void setFlag(String(msg.value ?? "") as Flag | "");
+    else if (msg.action === "photo:trash") void deletePhoto();
+    else if (msg.action === "photo:edit") openAdjust();
+    else if (msg.action === "photo:export") setExportOpen(true);
+  };
+  useEffect(() => {
+    const on = (e: Event) => menuRef.current((e as CustomEvent<{ action: string; value?: string | number }>).detail);
+    window.addEventListener("pm:app-menu", on);
+    return () => window.removeEventListener("pm:app-menu", on);
+  }, []);
+
+  async function setFlag(flag: Flag | "", undoable = true) {
+    const was = image!.flag ?? "";
+    const id = image!.id;
+    await api.images.update(id, { flag });
+    invalidateActiveAndPair();
+    if (undoable) pushUndo({ label: bulkChangeLabel({ flag }, 1), undo: () => api.images.update(id, { flag: was }).then(invalidateActiveAndPair) });
   }
 
   function startRename() {
@@ -1039,10 +1085,20 @@ export function ImageDetail() {
     await runTask({ kind: "plain", label: `Moving ${ids.length === 1 ? "photo" : "photos"} to trash…` }, () =>
       api.images.bulkDelete(ids)
     );
-    queryClient.invalidateQueries({ queryKey: ["images"] });
-    queryClient.invalidateQueries({ queryKey: ["trash"] });
-    // Trashing or restoring photos changes which tags live photos carry.
-    queryClient.invalidateQueries({ queryKey: ["tags"] });
+    const refreshAfterTrash = () => {
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["trash"] });
+      // Trashing or restoring photos changes which tags live photos carry.
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+    };
+    refreshAfterTrash();
+    pushUndo({
+      label: `${ids.length === 1 ? "1 photo" : `${ids.length} photos`} moved to Trash`,
+      undo: async () => {
+        await api.images.restoreFromTrash(ids);
+        refreshAfterTrash();
+      },
+    });
 
     // Move to the next remaining photo in the set you were browsing; if none is
     // left (or we arrived here without a set), fall back to where we came from.
@@ -1456,6 +1512,10 @@ export function ImageDetail() {
             </div>
           )}
 
+          <div className="detail-section">
+            <div className="detail-section-label">Flag</div>
+            <FlagPicker value={image.flag ?? null} onChange={setFlag} />
+          </div>
           <div className="detail-section">
             <div className="detail-section-label">Rating</div>
             <RatingStars rating={image.rating} onChange={setRating} />

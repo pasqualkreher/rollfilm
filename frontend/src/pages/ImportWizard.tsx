@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { useNavigate } from "react-router-dom";
 import type {
   ColorLabel,
   Facet,
@@ -56,6 +57,7 @@ import {
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { Spinner } from "../components/Spinner";
+import { plural } from "../utils/plural";
 
 // What a single-file edit in the review grid can change.
 type StagedPatch = {
@@ -86,7 +88,7 @@ function findIncompletePairs(files: StagedFileOut[]): StagedFileOut[] {
 // The import always flows Choose → Review (import folder) → Library. Showing
 // the three steps up front is what makes the import folder self-explanatory:
 // nothing reaches the library until step 3.
-function ImportSteps({ current }: { current: 1 | 2 }) {
+function ImportSteps({ current }: { current: 1 | 2 | 3 }) {
   const steps = ["Choose photos", "Review & select", "Added to library"];
   return (
     <ol className="import-steps" aria-label="Import steps">
@@ -227,6 +229,10 @@ export function ImportWizard() {
   const [pickError, setPickError] = useTransientMessage(8000);
   // "N photos added" after a partial import that leaves the session open.
   const [commitNote, setCommitNote] = useTransientMessage(12000);
+  // The day (UTC, as imported_at is stored) the last commit landed on: the
+  // note's "Show in Library" opens the Library on exactly that import.
+  const [commitDay, setCommitDay] = useState<string | null>(null);
+  const navigate = useNavigate();
   // The open preview follows the FILE, not its position in the list. An import
   // re-sorts under the user for as long as it runs - every file whose EXIF is
   // read joins its capture day and shifts everything after it - so an
@@ -523,7 +529,7 @@ export function ImportWizard() {
           const message = err instanceof Error ? err.message : String(err);
           await dialogs.alert({
             title: "Could not add the photos to the album",
-            message: `${added.length.toLocaleString()} photo(s) were added to your library but not to “${targetAlbum.name}”: ${message}\n\nAdd them from the Library with “Add to…”.`,
+            message: `${plural(added.length, "photo")} were added to your library but not to “${targetAlbum.name}”: ${message}\n\nAdd them from the Library with “Add to…”.`,
           });
         }
       }
@@ -532,8 +538,9 @@ export function ImportWizard() {
       // added - and what of its card isn't copied yet - stays for another
       // day, and another card can join it. Nothing is asked here; Close
       // session ends it, the way the session was set up at its start.
+      setCommitDay(new Date().toISOString().slice(0, 10));
       setCommitNote(
-        `${added.length.toLocaleString()} photo(s) added to your library${inAlbum}. This session stays open until you close it.`
+        `${added.length.toLocaleString()} ${added.length === 1 ? "photo" : "photos"} added to your library${inAlbum}. This session stays open until you close it.`
       );
     },
     // A failed commit used to be completely invisible (no state change, no
@@ -1055,19 +1062,29 @@ export function ImportWizard() {
   // for its own photo while it is open, a dialog keeps them for its buttons,
   // and a text box for typing. Read through a ref so the window listeners
   // aren't torn down on every render (as in useSelectionKeys).
-  const markedKeys = useRef({ active: false, rate: (_rating: number) => {}, toggleImport: () => {} });
+  const markedKeys = useRef({
+    active: false,
+    rate: (_rating: number) => {},
+    toggleImport: () => {},
+    setImport: (_on: boolean) => {},
+  });
   markedKeys.current = {
     active: markedFiles.length > 0 && lightboxIndex === null,
     rate: (rating) => void applyToMarked({ rating }),
     toggleImport: toggleMarkedImport,
+    // P picks (imported), X rejects (left out): the culling keys, as in the
+    // library, on the marked cards.
+    setImport: (on) => void applyToMarked({ selected: on }),
   };
   useEffect(() => {
-    function claims(e: KeyboardEvent): "rate" | "import" | null {
+    function claims(e: KeyboardEvent): "rate" | "import" | "pick" | "reject" | null {
       if (!markedKeys.current.active || document.querySelector(".modal-overlay")) return null;
       const target = e.target as HTMLElement | null;
       if (target && takesTyping(target)) return null;
       if (e.metaKey || e.ctrlKey || e.altKey) return null;
       if (e.key === " " || e.code === "Space") return "import";
+      if (e.key === "p" || e.key === "P") return "pick";
+      if (e.key === "x" || e.key === "X") return "reject";
       return e.key >= "0" && e.key <= "5" && e.key.length === 1 ? "rate" : null;
     }
     function onKeyDown(e: KeyboardEvent) {
@@ -1076,6 +1093,8 @@ export function ImportWizard() {
       e.preventDefault();
       if (e.repeat) return;
       if (what === "rate") markedKeys.current.rate(Number(e.key));
+      else if (what === "pick") markedKeys.current.setImport(true);
+      else if (what === "reject") markedKeys.current.setImport(false);
       else markedKeys.current.toggleImport();
     }
     // A checkbox or button that still has the focus from the last click (a
@@ -1255,6 +1274,40 @@ export function ImportWizard() {
     const choice = await askImportMode(folder.split("/").filter(Boolean).pop() || folder);
     if (choice) startFolderImport(folder, choice);
   }
+
+  // Paths dropped on the window (App's DropToImport): one folder starts a
+  // folder import, files a file import - the same start dialog as the
+  // pickers. Several folders: the first one, and the note says so.
+  const dropRef = useRef<() => void>(() => {});
+  dropRef.current = () => {
+    let paths: string[] = [];
+    try {
+      paths = JSON.parse(sessionStorage.getItem("pm:dropped-paths") ?? "[]");
+      sessionStorage.removeItem("pm:dropped-paths");
+    } catch {
+      return;
+    }
+    if (paths.length === 0 || !window.photoManager?.classifyPaths) return;
+    void window.photoManager.classifyPaths(paths).then(async ({ folders, files }) => {
+      if (folders.length > 0) {
+        if (folders.length > 1) setPickError(`${folders.length} folders were dropped - importing the first. Drop the others one at a time.`);
+        await importFolder(folders[0]);
+        return;
+      }
+      if (files.length > 0) {
+        setPickError(null);
+        const label = files.length === 1 ? files[0].path.split("/").filter(Boolean).pop() || files[0].path : `${files.length} dropped files`;
+        const choice = await askImportMode(label);
+        if (choice) startFilesImport(files, label, choice);
+      }
+    });
+  };
+  useEffect(() => {
+    dropRef.current();
+    const on = () => dropRef.current();
+    window.addEventListener("pm:dropped-paths", on);
+    return () => window.removeEventListener("pm:dropped-paths", on);
+  }, []);
 
   // File inputs use plain native listeners, not React's onChange: React's
   // synthetic event system has known quirks around file inputs where its
@@ -1503,7 +1556,7 @@ export function ImportWizard() {
   return (
     <div className="page page-timeline">
       <div className="import-review-head">
-        <ImportSteps current={2} />
+        <ImportSteps current={commitNote ? 3 : 2} />
         {/* Title and explanation run on in one line; the header stays three
             lines tall on a wide window instead of five. */}
         <div className="import-review-intro">
@@ -1511,7 +1564,7 @@ export function ImportWizard() {
           <p className="import-review-sub">
             From <strong>{sourceLabel}</strong>.{" "}
             {importedCount > 0
-              ? `${importedCount.toLocaleString()} photo(s) already in your library.`
+              ? `${plural(importedCount, "photo")} already in your library.`
               : "Nothing is in your library yet."}{" "}
             {inPlace && "Added photos stay where they are. "}
             Select what to keep, then click "Add to library".
@@ -1574,8 +1627,8 @@ export function ImportWizard() {
             the card. */}
         {stoppedEarly && (
           <p className="import-staging-banner" role="status">
-            {inPlace ? "Reading" : "Copying"} stopped. The {(files?.length ?? 0).toLocaleString()}{" "}
-            photo(s) {inPlace ? "read" : "copied"} so far are shown below.{" "}
+            {inPlace ? "Reading" : "Copying"} stopped. The {plural(files?.length ?? 0, "photo")}{" "}
+            {inPlace ? "read" : "copied"} so far {(files?.length ?? 0) === 1 ? "is" : "are"} shown below.{" "}
             {sessionResumable
               ? `Continue this session later to ${inPlace ? "add" : "copy"} the rest.`
               : "To get the rest, import the same source again later."}
@@ -1588,7 +1641,12 @@ export function ImportWizard() {
         )}
         {commitNote && (
           <p className="import-staging-banner" role="status">
-            {commitNote}
+            {commitNote}{" "}
+            {commitDay && (
+              <button className="btn btn-sm" onClick={() => navigate(`/?imported=${commitDay}`)}>
+                Show in Library
+              </button>
+            )}
           </p>
         )}
         {/* Copying done, background analysis (thumbnails/EXIF/duplicates)
@@ -1804,7 +1862,7 @@ export function ImportWizard() {
               `Analyzing… ${analysisProcessed}/${analysisTotal}`
             ) : (
               <>
-                <IconPlus size={13} /> {`Add ${selectedCount} photo(s) to library`}
+                <IconPlus size={13} /> {`Add ${plural(selectedCount, "photo")} to library`}
               </>
             )}
           </button>

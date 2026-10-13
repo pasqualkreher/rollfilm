@@ -78,6 +78,7 @@ export function SearchBar({ compact = false }: { compact?: boolean }) {
       <input
         type="text"
         placeholder={compact ? "Search" : "Search photos, e.g. 'dog on a beach'"}
+        aria-label="Search photos"
         value={value}
         onChange={(e) => setValue(e.target.value)}
       />

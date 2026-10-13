@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import json
 import logging
@@ -62,6 +63,7 @@ from app.services.settings_store import (
     get_immich_config,
     get_import_read_file_metadata,
     get_import_select_default,
+    get_import_verify_copies,
 )
 from app.services.thumbnails import RENDER_SLOTS, THUMBNAIL_MAX_PX, THUMBNAIL_SCALE, derivative_dir
 from app.workers.queue import (
@@ -441,18 +443,111 @@ class _Analyzed:
     exif_json: str
 
 
-def _copy_into_library(src: str, dest: str) -> None:
-    """A backup session's commit: the chosen photo is copied, the session's
-    folder keeps its own. Written under a temporary name first, so a copy that
-    dies half-way never leaves a truncated file under a library name."""
+# --- Durable copies -----------------------------------------------------------
+# Every copy the import makes - a card's photo into the staging folder, a staged
+# file into the library at commit, a backup session's copy - goes the same way:
+# written under a temporary ".part" name beside its destination, flushed to the
+# disk, renamed onto the final name, and the folder flushed so the name itself
+# survives a power cut. A reader (the review grid, the library sync, the user
+# in the Finder) therefore never sees a half-written photo under a real name:
+# the file is either complete or not there. ".part" files are nothing the app
+# recognises as a photo (classify_file_type), so a stale one is skipped by the
+# sync rather than imported.
+
+
+class CopyVerificationError(RuntimeError):
+    """A copy the import wrote does not read back as its source. The message is
+    written for the user; the bad copy is already gone when this is raised."""
+
+
+def _part_path(dest: Path) -> Path:
+    """The temporary name a copy is written under. Unique per writer: two
+    batches may stage a photo of the same name into one folder at once."""
+    return dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.part")
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Flush a folder so a rename or a new name in it reaches the disk. Some
+    filesystems refuse to open a folder for that or refuse the fsync itself
+    (exFAT through FSKit, network mounts) - then the file's own fsync, which
+    already went through, is all there is, and the import goes on."""
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _settle_copy(part: Path, dest: Path) -> None:
+    """Make a finished ".part" file the final one: flush it, rename it onto its
+    name, flush the folder. Raises with the part file still in place; the
+    caller removes it."""
+    with part.open("rb") as handle:
+        os.fsync(handle.fileno())
+    os.replace(part, dest)
+    _fsync_dir(dest.parent)
+
+
+def _verify_copy(dest: Path, expected_sha256: str | None, label: str) -> None:
+    """Read a finished copy back and compare it with the source's hash
+    (Settings -> Library -> verify copies). A copy that reads differently is
+    deleted on the spot, so no row can ever point at it, and the import stops
+    with a message naming the photo."""
+    if expected_sha256 is None:
+        return
+    actual = sha256_file(dest)
+    if actual == expected_sha256:
+        return
+    dest.unlink(missing_ok=True)
+    raise CopyVerificationError(
+        f"{label}: the copy does not match the original (it reads back as "
+        f"{actual[:12]}…, the original is {expected_sha256[:12]}…). The copy was "
+        "removed. Check the card, the reader and the disk, then import the photo again."
+    )
+
+
+def _copy_into_library(
+    src: str, dest: str, expected_sha256: str | None = None, label: str | None = None
+) -> None:
+    """A backup session's commit, and the cross-device half of a move: the
+    photo is copied, the source keeps its own. Written under a temporary name
+    first (see above), so a copy that dies half-way never leaves a truncated
+    file under a library name; read back when `expected_sha256` is given."""
     dest_path = Path(dest)
-    part = dest_path.with_name(f".{dest_path.name}.{uuid.uuid4().hex}.part")
+    part = _part_path(dest_path)
     try:
         shutil.copy2(src, part)
-        os.replace(part, dest_path)
+        _settle_copy(part, dest_path)
     except BaseException:
         part.unlink(missing_ok=True)
         raise
+    _verify_copy(dest_path, expected_sha256, label or dest_path.name)
+
+
+def _move_into_library(
+    src: str, dest: str, expected_sha256: str | None = None, label: str | None = None
+) -> None:
+    """The commit's move of a staged file into the library. On one filesystem
+    it is a rename: the bytes never move, so there is nothing to flush but the
+    folder and nothing to read back (the staged copy was verified when it was
+    made). Across filesystems - staging on the internal disk, the library on an
+    external one - it is a durable copy, and the source goes only once the copy
+    has settled (and, if asked, read back right)."""
+    src_path, dest_path = Path(src), Path(dest)
+    try:
+        os.rename(src_path, dest_path)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        _copy_into_library(src, dest, expected_sha256, label)
+        src_path.unlink(missing_ok=True)
+        return
+    _fsync_dir(dest_path.parent)
 
 
 @dataclass
@@ -575,7 +670,22 @@ def _hash_and_copy(src: BinaryIO, dest: Path) -> tuple[str, int]:
     both stay busy the whole time, where a single alternating loop idled each
     side on every chunk - that alone halved cross-device throughput. On the
     same physical disk the queue changes nothing (the head has to alternate
-    anyway). 8MB chunks keep spinning disks in long sequential runs."""
+    anyway). 8MB chunks keep spinning disks in long sequential runs.
+
+    The bytes land under a ".part" name and take `dest` only once they are
+    flushed (see "Durable copies" above): a copy that dies half-way - cable
+    pulled, backend killed - leaves no file under the photo's name."""
+    part = _part_path(dest)
+    try:
+        digest, size = _stream_to_file(src, part)
+        _settle_copy(part, dest)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    return digest, size
+
+
+def _stream_to_file(src: BinaryIO, dest: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     size = 0
     q: "queue.Queue[bytes | None]" = queue.Queue(maxsize=4)
@@ -587,8 +697,12 @@ def _hash_and_copy(src: BinaryIO, dest: Path) -> tuple[str, int]:
                 while True:
                     chunk = q.get()
                     if chunk is None:
-                        return
+                        break
                     out.write(chunk)
+                # Flushed while the handle is still open: the rename that
+                # follows must publish bytes that are on the disk.
+                out.flush()
+                os.fsync(out.fileno())
         except BaseException as e:
             write_error.append(e)
             # Keep draining so the (bounded) queue never blocks the reader.
@@ -1274,6 +1388,9 @@ def _stage_uploads_into(
     # Whether new rows start selected (Settings -> Library). Set at insert so
     # the review's own picks, made while this batch is still copying, stand.
     select_new = get_import_select_default(db) == "select"
+    # Whether each copy is read back and compared with the hash taken from the
+    # source stream (Settings -> Library). Read once, like the selection default.
+    verify = get_import_verify_copies(db)
     thumb_dir = staged_thumb_dir(session_id)
     thumb_dir.mkdir(parents=True, exist_ok=True)
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -1323,6 +1440,7 @@ def _stage_uploads_into(
                     counter += 1
 
                 sha256, size = _hash_and_copy(upload.file, staged_path)
+                _verify_copy(staged_path, sha256 if verify else None, original_filename)
                 # Carry the source file's modification time onto the staged
                 # copy. Without this the staged mtime is "just now", and the
                 # commit-time fallback for photos lacking an EXIF capture date
@@ -1697,10 +1815,25 @@ def _commit_import_session(
     # copies instead, so its folder keeps every photo.
     to_move = [e for e in plan if not e.already_moved]
     if to_move:
-        place = _copy_into_library if backup else shutil.move
+        place = _copy_into_library if backup else _move_into_library
+        # With verification on, every copy is read back against the hash the
+        # staging took from the source; a same-disk rename moves no bytes and
+        # is not read again (see _move_into_library).
+        verify = get_import_verify_copies(db)
+        # Plain values, taken here on the request thread: the workers must not
+        # touch ORM rows (the Session isn't thread-safe).
+        jobs = [
+            (
+                str(e.staged_full_path),
+                str(e.dest_path),
+                e.staged.sha256 if verify else None,
+                e.staged.original_filename,
+            )
+            for e in to_move
+        ]
         move_workers = min(_STAGE_WORKERS, len(to_move))
         with ThreadPoolExecutor(max_workers=move_workers) as pool:
-            list(pool.map(lambda e: place(str(e.staged_full_path), str(e.dest_path)), to_move))
+            list(pool.map(lambda job: place(*job), jobs))
 
     # Release the write lock periodically: one mega-transaction over the whole
     # loop held it for minutes on a big import, starving every other writer

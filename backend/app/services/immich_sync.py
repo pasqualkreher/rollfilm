@@ -262,6 +262,9 @@ def _upload_missing(db: Session, config: ImmichConfig) -> None:
     duplicates."""
     query = db.query(Image).filter(
         Image.deleted_at.is_(None),
+        # A file the sync could not find has nothing to upload (and would
+        # only earn itself a backoff).
+        Image.missing_since.is_(None),
         Image.file_type.in_(config.file_types),
         Image.immich_asset_id.is_(None),
         # Virtual copies ("virtual copy") never sync: their bytes are the

@@ -6,7 +6,7 @@ import { ViewPrefsControls } from "./ViewPrefsControls";
 import { TagFilter } from "./TagFilter";
 import { FilterChip } from "./FilterChip";
 import { Dropdown } from "./Dropdown";
-import { IconAlbum, IconAperture, IconCamera, IconChevronDown, IconFilter, IconImage, IconPin, IconStar, IconTag, IconX } from "./Icons";
+import { IconAlbum, IconAperture, IconCamera, IconCheck, IconChevronDown, IconFilter, IconImage, IconPin, IconStar, IconTag, IconX } from "./Icons";
 import { setCameraPinned, setFilterPinned, useCameraPinned, useFilterPinned } from "../state/viewPrefs";
 
 // Whether the pinned fields fit the bar in two lines. The docked fields have
@@ -278,6 +278,15 @@ interface Props {
   // rest of what shapes the grid, and the bar stays one calm row. It is not a
   // filter, so it neither counts on the chip nor resets with "Clear".
   sort?: ReactNode;
+  // The culling flag filter: "" (any), "pick", "reject", "unflagged".
+  flag?: string;
+  onFlag?: (flag: string) => void;
+  // "Show": edited, unedited, unrated, located, unlocated, or "" for all.
+  photoState?: string;
+  onPhotoState?: (state: string) => void;
+  // A page's own chip in the bar after the Camera chip (the Library's
+  // "Missing files" chip): in the row only while it has something to say.
+  extra?: ReactNode;
   // Extra actions (e.g. import's Select / Select all buttons) render after the
   // shared filters, right of the divider, so every screen keeps an identical
   // filter core.
@@ -341,6 +350,11 @@ export function PhotoFilters({
   showMerge = true,
   viewExtras,
   sort,
+  extra,
+  flag,
+  onFlag,
+  photoState,
+  onPhotoState,
   children,
   trailing,
 }: Props) {
@@ -400,6 +414,8 @@ export function PhotoFilters({
   // stays visible while the menus are shut: the general ones on Filter, the
   // camera group's on Camera.
   const generalCount =
+    ((flag ?? "") !== "" ? 1 : 0) +
+    ((photoState ?? "") !== "" ? 1 : 0) +
     (ratingMin > 0 ? 1 : 0) +
     (colorLabel !== "none" ? 1 : 0) +
     ((albumId ?? "") !== "" || (canvasId ?? "") !== "" ? 1 : 0) +
@@ -417,6 +433,8 @@ export function PhotoFilters({
   const isFiltering = generalCount + cameraCount > 0;
 
   function clearAll() {
+    onFlag?.("");
+    onPhotoState?.("");
     onRatingMin(0);
     onColorLabel("none");
     onAlbumId?.("");
@@ -555,6 +573,44 @@ export function PhotoFilters({
                     ...canvases.map((c) => ({ value: `canvas:${c.id}`, label: c.name })),
                   ]
                 : []),
+            ]}
+          />
+        </div>
+      )}
+
+      {onFlag && (
+        <div className="filter-menu-row filter-menu-row--flag">
+          <span className="filter-menu-label">Flag</span>
+          <Dropdown
+            ariaLabel="Flag"
+            icon={<IconCheck size={13} />}
+            value={flag ?? ""}
+            onChange={(v) => onFlag(v)}
+            options={[
+              { value: "", label: "Any" },
+              { value: "pick", label: "Picks" },
+              { value: "reject", label: "Rejects" },
+              { value: "unflagged", label: "Unflagged" },
+            ]}
+          />
+        </div>
+      )}
+
+      {onPhotoState && (
+        <div className="filter-menu-row filter-menu-row--state">
+          <span className="filter-menu-label">Show</span>
+          <Dropdown
+            ariaLabel="Show"
+            icon={<IconImage size={13} />}
+            value={photoState ?? ""}
+            onChange={(v) => onPhotoState(v)}
+            options={[
+              { value: "", label: "All photos", short: "All" },
+              { value: "edited", label: "Edited" },
+              { value: "unedited", label: "Not edited" },
+              { value: "unrated", label: "Unrated" },
+              { value: "located", label: "With location" },
+              { value: "unlocated", label: "Without location" },
             ]}
           />
         </div>
@@ -807,6 +863,7 @@ export function PhotoFilters({
               {cameraMenu}
             </FilterChip>
           ))}
+        {extra}
 
         {/* Always in the row, only hidden while nothing filters: mounting it
             with the first filter shifted whatever followed it. Hidden, it is

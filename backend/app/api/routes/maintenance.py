@@ -20,10 +20,13 @@ from app.services import copy_jobs
 from app.workers.queue import derivatives_pending, embeddings_running
 from app.services.maintenance import (
     AlreadyRunning,
+    RestoreError,
     build_backup_zip,
     get_rebuild_progress,
     get_repair_progress,
+    missing_files_status,
     rebuild_all_thumbnails,
+    remove_missing_images,
     repair_capture_dates,
     request_rebuild_cancel,
     request_repair_cancel,
@@ -34,6 +37,7 @@ from app.services.maintenance import (
     wipe_library,
 )
 from app.api.routes.images import export_jobs_running
+from app.services import db_snapshots
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
@@ -52,6 +56,56 @@ def sync_library(db: Session = Depends(get_db), current_user: User = Depends(get
         # sync already running - refuse with a clear message instead of
         # wiping the catalog or a bare 500.
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/missing", response_model=schemas.MissingFilesOut)
+def missing_files(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Photos whose file the sync could not find, and whether the last sync
+    stopped because too many were missing at once (the title bar's hint)."""
+    return missing_files_status(db, current_user.id)
+
+
+@router.post("/missing/remove", response_model=schemas.RemovedMissingOut)
+def remove_missing(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Remove the entries of the photos marked missing - their stars, tags,
+    albums and edits with them. The user's step, never the sync's."""
+    return {"removed": remove_missing_images(db, current_user.id)}
+
+
+@router.get("/db-snapshots", response_model=schemas.DbSnapshotsOut)
+def db_snapshots_list(current_user: User = Depends(get_current_user)):
+    return {
+        "snapshots": db_snapshots.list_snapshots(),
+        "pending_restore": db_snapshots.pending_restore(),
+        "folder": str(db_snapshots.snapshot_dir()),
+    }
+
+
+@router.post("/db-snapshots", response_model=schemas.DbSnapshotOut)
+def db_snapshot_now(current_user: User = Depends(get_current_user)):
+    path = db_snapshots.take_snapshot("manual")
+    if path is None:
+        raise HTTPException(status_code=500, detail="The snapshot could not be written")
+    entry = next((e for e in db_snapshots.list_snapshots() if e["name"] == path.name), None)
+    if entry is None:
+        raise HTTPException(status_code=500, detail="The snapshot could not be listed")
+    return entry
+
+
+@router.post("/db-snapshots/restore", response_model=schemas.DbSnapshotRestoreOut)
+def db_snapshot_restore(payload: schemas.DbSnapshotRestoreRequest, current_user: User = Depends(get_current_user)):
+    """Mark a snapshot: the next start swaps it in before the database is
+    opened (nothing happens to the running app)."""
+    try:
+        db_snapshots.schedule_restore(payload.name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No such snapshot")
+    return {"pending": payload.name}
+
+
+@router.delete("/db-snapshots/restore", status_code=204)
+def db_snapshot_restore_cancel(current_user: User = Depends(get_current_user)):
+    db_snapshots.cancel_restore()
 
 
 @router.post("/sync/cancel", status_code=204)
@@ -135,11 +189,16 @@ def restore(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Cannot be stopped: the library is emptied before the backup is written
-    back, so a stop half-way would leave nothing. The task dock shows it
-    without a Stop."""
+    """Cannot be stopped: the backup is staged and checked first, then the
+    catalog is replaced in one transaction and the files swapped in - a stop
+    half-way through the swap would leave two half libraries. The task dock
+    shows it without a Stop. A refused backup (bad zip, a path that escapes
+    the library, a newer version) leaves the library as it was and says so."""
     _require_delete_confirmation(confirmation)
-    return restore_from_backup(db, current_user.id, file)
+    try:
+        return restore_from_backup(db, current_user.id, file)
+    except RestoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/background-activity", response_model=schemas.BackgroundActivityOut)

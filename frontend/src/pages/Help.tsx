@@ -18,6 +18,7 @@ import { useRef } from "react";
 import { useSessionState } from "../utils/useSessionState";
 import { useScrollMemory } from "../utils/scrollMemory";
 import type { ReactNode } from "react";
+import { showOnboardingAgain } from "../components/OnboardingWizard";
 
 // ---- Building blocks so every topic reads the same way --------------------
 
@@ -133,8 +134,10 @@ const CHAPTERS: Chapter[] = [
             </ul>
             <Tip title="The disk is the truth.">
               If photos disappear from the library folder (deleted outside the app, drive
-              unplugged), run <em>Settings → Maintenance → Sync database to library</em>. It
-              reconciles the app with what is actually there.
+              unplugged), run <em>Settings → Library → Sync database to library</em>. It
+              reconciles the app with what is actually there - and never removes a photo by
+              itself: a file it cannot find is marked <em>Missing</em> until it is back or you
+              remove the entry.
             </Tip>
           </>
         ),
@@ -245,7 +248,7 @@ const CHAPTERS: Chapter[] = [
       {
         id: "import-photos",
         title: "From a card or a folder",
-        where: <>Import → Import photos ▾ → Choose folder… / Choose files…</>,
+        where: <>Import → Import photos ▾ → Choose folder… / Choose files… · or drop a card, a folder or photos on the window</>,
         lead: (
           <>
             Photos come in through an import session: copied into an import folder first (or left
@@ -279,8 +282,9 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Culling.</strong> Rate and color-label staged photos right away — on the
                 cards, or in the preview (<kbd>←</kbd> / <kbd>→</kbd> to flip through,{" "}
-                <kbd>0</kbd>–<kbd>5</kbd> for stars, <kbd>Space</kbd> to include or exclude,{" "}
-                <kbd>P</kbd> to show or hide the camera settings).
+                <kbd>0</kbd>–<kbd>5</kbd> for stars, <kbd>P</kbd> to include and <kbd>X</kbd> to
+                leave out (<kbd>Space</kbd> toggles), <kbd>I</kbd> to show or hide the camera
+                settings).
               </li>
               <li>
                 <strong>Selecting.</strong> Every card carries an import checkbox beside its stars;
@@ -491,7 +495,8 @@ const CHAPTERS: Chapter[] = [
             <h4>Narrowing what you see</h4>
             <ul>
               <li>
-                <strong>Filters:</strong> an album or a canvas, minimum star rating, color label,
+                <strong>Filters:</strong> an album or a canvas, the flag, <em>Show</em> (edited,
+                not edited, unrated, with or without a location), minimum star rating, color label,
                 tags (a photo must carry <em>all</em> the tags you pick), camera, lens, a
                 focal-length range and a capture-date range. "Clear" resets everything.
               </li>
@@ -601,11 +606,23 @@ const CHAPTERS: Chapter[] = [
       },
       {
         id: "labels",
-        title: "Stars, colors and tags",
-        lead: <>Three marks you give photos yourself. They are independent, and none of them mean anything until you decide what they mean.</>,
+        title: "Flags, stars, colors and tags",
+        lead: <>Four marks you give photos yourself. They are independent, and none of them mean anything until you decide what they mean.</>,
         body: (
           <>
             <ul>
+              <li>
+                <strong>Pick and reject</strong> — the culling flag. <kbd>P</kbd> picks,{" "}
+                <kbd>X</kbd> rejects, <kbd>U</kbd> takes the flag off, in the grid, the photo view
+                and the editor; the tick and cross beside the stars do the same. The filter's{" "}
+                <em>Flag</em> row shows picks, rejects or what is still undecided, and with{" "}
+                <em>Rejects</em> on, <em>Trash N rejected</em> clears them out in one go.
+              </li>
+              <li>
+                <strong>Undo</strong> — every star, label, flag and trip to the Trash leaves an{" "}
+                <em>Undo</em> chip in the title bar for a few seconds. That is why Delete no longer
+                asks first.
+              </li>
               <li>
                 <strong>Stars (0–5)</strong> — click the stars on a card, in the photo view or in
                 the bulk bar, or press <kbd>0</kbd>–<kbd>5</kbd>. Clicking the same star again
@@ -694,7 +711,7 @@ const CHAPTERS: Chapter[] = [
       {
         id: "smart-albums",
         title: "Smart albums",
-        where: <>Albums, in the rows above your own · Settings → Library → Smart albums</>,
+        where: <>Albums, below your own · Settings → Library → Smart albums</>,
         lead: (
           <>
             Rows the app builds and keeps up to date by itself, straight from the photos. You never
@@ -704,6 +721,15 @@ const CHAPTERS: Chapter[] = [
         body: (
           <>
             <ul>
+              <li>
+                <strong>Recent imports</strong> — one album per day photos came in, at the top of the
+                Albums page. After <em>Add to library</em> the Import page offers{" "}
+                <em>Show in Library</em> for the same thing.
+              </li>
+              <li>
+                <strong>They work like any grid</strong> — select, rate, label, flag, right-click
+                and delete as in the Library.
+              </li>
               <li>
                 <strong>Moments</strong> — groups of visually similar photos, found and named
                 automatically with broad subjects (Nature, City, People, Sports…). Several moments
@@ -852,9 +878,10 @@ const CHAPTERS: Chapter[] = [
             <h4>Without the mouse</h4>
             <ul>
               <li>
-                <kbd>E</kbd> opens the editor, <kbd>P</kbd> hides the panel so the photo gets the
-                whole window, <kbd>0</kbd>–<kbd>5</kbd> rate, <kbd>6</kbd>–<kbd>9</kbd> set a color
-                label (red, yellow, green, blue), <kbd>Delete</kbd> deletes.
+                <kbd>E</kbd> opens the editor, <kbd>I</kbd> hides the panel so the photo gets the
+                whole window, <kbd>P</kbd> picks, <kbd>X</kbd> rejects, <kbd>U</kbd> takes the flag
+                off, <kbd>0</kbd>–<kbd>5</kbd> rate, <kbd>6</kbd>–<kbd>9</kbd> set a color label
+                (red, yellow, green, blue), <kbd>Delete</kbd> deletes.
               </li>
               <li>
                 <kbd>←</kbd> / <kbd>→</kbd> walk the same filtered set you came from; <kbd>↑</kbd> /{" "}
@@ -888,6 +915,12 @@ const CHAPTERS: Chapter[] = [
                 their own.
               </li>
               <li>
+                <strong>One tool at a time on the photo</strong> — the crop box, a mask's shape,
+                the retouch brush, a picker. Opening Transform, Masks or Retouch arms its tool;{" "}
+                <kbd>Esc</kbd> puts it away. <kbd>R</kbd>, <kbd>K</kbd>, <kbd>Q</kbd> and{" "}
+                <kbd>W</kbd> open crop, masks, retouch and the white balance picker from the keyboard.
+              </li>
+              <li>
                 <strong>The histogram stays visible</strong> above them all, whichever section is
                 open. It shows a spinner while the first frame is on its way, and a small{" "}
                 <em>Rendering…</em> badge sits in the corner of the photo meanwhile — an empty
@@ -904,6 +937,18 @@ const CHAPTERS: Chapter[] = [
                 <strong>Background:</strong> three surrounds behind the photo — Paper, a neutral
                 25% Gray (the one to judge a photo on) and Black. Some pictures only tell you the
                 truth on one of them.
+              </li>
+              <li>
+                <strong>Each section's header</strong> carries a reset arrow while the section holds
+                edits: it puts that section alone back to its defaults.
+              </li>
+              <li>
+                <strong>Undo, redo and the history</strong> sit at the foot of the panel; the clock
+                lists every step of this session ("Exposure +0.40", "Mask added") and jumps to any of
+                them. <kbd>{"\\"}</kbd> shows the original until pressed again.
+              </li>
+              <li>
+                <strong>Export…</strong> at the foot exports the photo with the edit as it stands.
               </li>
             </ul>
             <h4>Handy while you work</h4>
@@ -942,8 +987,9 @@ const CHAPTERS: Chapter[] = [
                 <kbd>→</kbd> change the focused one.
               </li>
               <li>
-                <kbd>P</kbd> hides the panel, <kbd>F</kbd> puts the app's top bar away too — the
-                tools stay.
+                <kbd>I</kbd> hides the panel, <kbd>F</kbd> puts the app's top bar away too — the
+                tools stay. <kbd>P</kbd>, <kbd>X</kbd> and <kbd>U</kbd> pick, reject and unflag the
+                photo without leaving the editor.
               </li>
             </ul>
             <h4>Finishing</h4>
@@ -1153,13 +1199,26 @@ const CHAPTERS: Chapter[] = [
               Editing part of the photo instead of all of it. Big enough for its own topic — the
               next one.
             </p>
-            <h4>9 · Presets</h4>
+            <h4>9 · Retouch</h4>
+            <p>
+              Heal specks and clone patches on the picture before any tone or colour work. Its own
+              topic further down.
+            </p>
+            <h4>0 · Presets</h4>
             <p>
               Save the current look under a name and reapply it to other photos (crop and rotation
               are not part of a preset — they belong to one picture). A saved preset can also be
               applied to a whole selection at once from the Library's bulk bar. <strong>Export…</strong>{" "}
               writes all your presets into one file, to keep or to take to another computer;{" "}
-              <strong>Import…</strong> adds the presets from such a file to the ones here.
+              <strong>Import…</strong> adds the presets from such a file to the ones here. Presets
+              are kept in the library itself, so they are in its backup and on every computer that
+              opens it.
+            </p>
+            <h4>Snapshots</h4>
+            <p>
+              The bookmark at the foot of the panel saves the edit as it stands under a name, kept
+              with the photo. Pick one later to go back to it - an undoable step like any other - or
+              delete it from the same menu. Snapshots are in the library's backup too.
             </p>
           </>
         ),
@@ -1171,7 +1230,8 @@ const CHAPTERS: Chapter[] = [
         lead: (
           <>
             A mask says <em>where</em> an adjustment applies. Each one has its own set of sliders,
-            and you can have as many as you like.
+            and you can have as many as you like. <strong>+ New mask</strong> above the list adds
+            one; <kbd>K</kbd> opens the section from anywhere in the editor.
           </>
         ),
         body: (
@@ -1192,20 +1252,30 @@ const CHAPTERS: Chapter[] = [
                 knows how dark they are).
               </li>
               <li>
-                <strong>Select subject</strong> finds a region for you — sky, water, greenery,
-                people, buildings or ground — and drops it in as a mask you then refine like any
-                other. The first subject on a photo takes a few seconds (the detection model
+                <strong>Subject</strong> (in the + New mask menu) finds a region for you — sky,
+                water, greenery, people, buildings or ground — and drops it in as a mask you then
+                refine like any other. The first subject on a photo takes a few seconds (the detection model
                 downloads itself once, on first use); any further one on the same photo is
                 instant.
               </li>
             </ul>
-            <h4>Shapes: adding to, taking from and confining a mask</h4>
+            <h4>The mask's editor, top to bottom</h4>
             <ul>
               <li>
-                <strong>Add a shape to a mask</strong> — a radial, linear or brush — and say what it
-                does: <em>Add</em> joins it to the selection, <em>Subtract</em> takes it out,{" "}
-                <em>Intersect</em> keeps the selection only inside it. <em>Outside</em> flips the
-                shape. Add as many as you need; they apply in the order listed.
+                <strong>Amount and the adjustments first</strong> — how strongly the mask acts, its
+                sliders, and its own curve, mixer and grading folded under them.
+              </li>
+              <li>
+                <strong>Components</strong> — what the mask covers. The first row is the base: the
+                shape you drew, the range, or the subject. <strong>Add component</strong> adds a
+                radial, linear or brush under it and says what it does: <em>Add</em> joins it to
+                the selection, <em>Subtract</em> takes it out, <em>Intersect</em> keeps the
+                selection only inside it; <em>Outside</em> flips that one component. They apply in
+                the order listed. <em>Edit</em> on a row puts the canvas on that component and shows
+                its controls.
+              </li>
+              <li>
+                <strong>Options</strong> — <em>Invert</em> turns the whole mask inside out.
               </li>
               <li>
                 <strong>That is what makes the shapeless masks usable</strong> — an edge mask finds
@@ -1218,8 +1288,8 @@ const CHAPTERS: Chapter[] = [
                 the whole band as before, a hard edge at its middle, or wider than the band.
               </li>
               <li>
-                <strong>Changed the crop or straighten afterwards?</strong> A subject mask says so,
-                with a button to find the subject again in the new frame.
+                <strong>Changed the crop or straighten afterwards?</strong> <strong>Recompute</strong>{" "}
+                under a subject mask finds the subject again in the new frame.
               </li>
             </ul>
             <h4>What a mask can change</h4>
@@ -1237,27 +1307,29 @@ const CHAPTERS: Chapter[] = [
             <h4>Managing masks</h4>
             <ul>
               <li>
-                <strong>Double-click a mask's name</strong> to rename it. On the selected mask's row,
-                the arrows move it up or down the list — the order the masks are applied in, so a
-                later luminance or colour mask selects on the picture the earlier ones made — and the
-                copy button duplicates it, shapes, sliders and all.
+                <strong>The ⋯ on a row</strong> (or a right-click on it) renames, duplicates, moves
+                or deletes the mask; double-clicking the name renames it too. The eye turns the
+                mask's effect off and on. The list's order is the order the masks are applied in,
+                so a later luminance or colour mask selects on the picture the earlier ones made.
               </li>
             </ul>
             <h4>Seeing what a mask covers</h4>
             <ul>
               <li>
-                <strong>Point at a mask</strong> in the list and what it covers is marked in pink;
-                the marking steps out of the way as soon as you point elsewhere.
+                <strong>The overlay</strong> marks what the mask covers in pink stripes. It is on
+                while you work on a mask — drawing, placing or setting it — and steps
+                aside by itself while you move one of the mask's adjustment sliders, coming back a
+                moment after you stop: there for the decision, gone for the judgement.{" "}
+                <strong>Overlay</strong> in the mask's editor, or <kbd>O</kbd>, switches it
+                yourself; <kbd>Esc</kbd> puts the tool and the overlay away together.
               </li>
               <li>
-                <strong>Show mask</strong> keeps that marking up while you work. That is how a
-                luminance, color or edge mask is set — the marking is the only way to see what they
-                select as you drag their sliders.
+                <strong>Point at a mask</strong> in the list and that one is marked instead, for as
+                long as you point at it.
               </li>
               <li>
-                <strong>It also happens by itself:</strong> move a slider that decides what a mask
-                selects — a threshold, a feather, a tolerance — and the mask is marked while you
-                work, clearing again a moment after you stop.
+                A radial mask's inner dashed ring is where its feather begins; the stripes thin
+                towards the edge the way the effect does.
               </li>
             </ul>
           </>
@@ -1372,9 +1444,12 @@ const CHAPTERS: Chapter[] = [
             <h4>Placing spots</h4>
             <ul>
               <li>
-                <strong>Edit on image, then click the speck.</strong> A spot lands at the size the
-                Size slider shows; drag instead of clicking to size it as you go. <kbd>[</kbd> and{" "}
-                <kbd>]</kbd> step the size too.
+                <strong>Open Retouch and click the speck.</strong> The tool is armed the moment the
+                section opens (<kbd>Q</kbd> opens it from anywhere in the editor), and a ring at the
+                pointer shows the size the next spot gets - the{" "}
+                <em>Size of new spots</em> slider. Drag instead of clicking to size it as you go.{" "}
+                <kbd>[</kbd> and <kbd>]</kbd> step the size: the selected spot's while one is
+                selected, otherwise the next spot's.
               </li>
               <li>
                 <strong>Heal or Clone</strong> decides what the next spot does. A <em>heal</em> keeps
@@ -1386,14 +1461,18 @@ const CHAPTERS: Chapter[] = [
                 area the two look the same; the difference shows across gradients and differing shades.
               </li>
               <li>
-                <strong>Move things:</strong> drag a spot to move it (its source comes along); drag the
-                dashed source circle of the selected spot to read from somewhere else.{" "}
-                <em>Re-pick source</em> lets the editor choose again.
+                <strong>The source:</strong> the selected spot shows an arrow from where it reads to
+                where it lands. <kbd>Alt</kbd>-click (or <kbd>⌘</kbd>-click) anywhere on the photo
+                to set the source there; drag the dashed circle to move it; drag the spot itself and
+                its source comes along. <em>Re-pick source</em> lets the editor choose again.
               </li>
               <li>
-                <strong>Feather</strong> softens the spot's edge, <strong>Opacity</strong> lets some of
-                the original show through. <kbd>H</kbd> hides the circles to judge the result;{" "}
-                <kbd>Delete</kbd> removes the selected spot.
+                <strong>The selected spot's block</strong> under the list has its own Size, Feather
+                (a softer edge), Opacity (some of the original showing through) and its own Heal /
+                Clone. <kbd>Esc</kbd> or a click on the spot deselects it; <kbd>Delete</kbd> removes
+                it. <kbd>H</kbd> hides the circles to judge the result and rests the tool
+                meanwhile. Zoomed in, hold <kbd>Space</kbd> and drag to move the picture under the
+                tool.
               </li>
             </ul>
             <h4>Good to know</h4>
@@ -2029,9 +2108,10 @@ const CHAPTERS: Chapter[] = [
           <>
             <ul>
               <li>
-                <strong>Photos you imported</strong> move to the <strong>Trash</strong>. The file
-                stays in your library folder and the photo keeps its stars, tags, albums and edits,
-                so <strong>Restore</strong> brings it back exactly as it was.
+                <strong>Photos you imported</strong> move to the <strong>Trash</strong>, without a
+                question first: the <em>Undo</em> chip in the title bar brings them straight back.
+                The file stays in your library folder and the photo keeps its stars, tags, albums and
+                edits, so <strong>Restore</strong> brings it back exactly as it was later on too.
               </li>
               <li>
                 <strong>Photos from an external source</strong> are removed from the catalog
@@ -2105,14 +2185,30 @@ const CHAPTERS: Chapter[] = [
                 <strong>Restore from backup</strong> — replaces <em>everything</em> in the current
                 library with the zip's contents. You have to type "delete" to confirm.
               </li>
+              <li>
+                <strong>Database snapshots</strong> — Rollfilm keeps copies of the catalog database
+                (stars, tags, albums, canvases and edits; not the photos) in a{" "}
+                <em>snapshots</em> folder beside it: one before every update that changes its
+                layout, one a day for the last seven days, and one whenever you press{" "}
+                <em>Snapshot now</em>. <em>Restore…</em> marks a copy; it is swapped in the next
+                time Rollfilm starts, and the database it replaces is kept beside it for a while.
+              </li>
             </ul>
             <h4>Repair</h4>
             <ul>
               <li>
-                <strong>Sync database to library</strong> — the one-stop repair. Removes entries
-                whose files vanished from disk, deletes thumbnails belonging to no photo,
-                regenerates missing thumbnails in the background, and reports files sitting in the
-                library folder that were never imported.
+                <strong>Sync database to library</strong> — the one-stop repair. Follows photos
+                renamed or moved in Finder, marks the ones whose file it cannot find (they keep
+                their stars, tags, albums and edits and wear a <em>Missing</em> badge; nothing is
+                removed), deletes thumbnails belonging to no photo, regenerates missing thumbnails
+                in the background, and reports files sitting in the library folder that were never
+                imported. When very many files are missing at once it stops instead and says so —
+                that is a drive not mounted, not a library gone.
+              </li>
+              <li>
+                <strong>Missing files</strong> — how many photos the sync could not find, a way to
+                show just those in the Library, and <em>Remove entries…</em> for when the files
+                really are gone for good.
               </li>
               <li>
                 <strong>Rebuild all thumbnails</strong> — the emergency reset: regenerates every
@@ -2197,6 +2293,14 @@ const CHAPTERS: Chapter[] = [
                     </>
                   ),
                   does: "Set the star rating of the selected photos (0 clears it)",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>P</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
+                    </>
+                  ),
+                  does: "Flag the selected photos: pick, reject, no flag. The same key again takes the flag off",
                 },
                 {
                   keys: (
@@ -2286,7 +2390,15 @@ const CHAPTERS: Chapter[] = [
                   does: "Delete this photo (asks first), then on to the next one",
                 },
                 { keys: <kbd>E</kbd>, does: "Open the editor on this photo (E in the editor brings you back)" },
-                { keys: <kbd>P</kbd>, does: "Show / hide the side panel, so the photo gets the whole window" },
+                { keys: <kbd>I</kbd>, does: "Show / hide the side panel, so the photo gets the whole window" },
+                {
+                  keys: (
+                    <>
+                      <kbd>P</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
+                    </>
+                  ),
+                  does: "Flag this photo: pick, reject, no flag",
+                },
                 {
                   keys: <kbd>S</kbd>,
                   does: "Start a fullscreen slideshow of the set you're browsing (Space pauses, Esc ends it)",
@@ -2300,7 +2412,7 @@ const CHAPTERS: Chapter[] = [
                 {
                   keys: (
                     <>
-                      <kbd>1</kbd>–<kbd>9</kbd>
+                      <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd>
                     </>
                   ),
                   does: "Open a section: 1 Transform, 2 Film Simulation, 3 Tone, 4 Curves, 5 Color, 6 Details, 7 Effects, 8 Masks, 9 Retouch, 0 Presets",
@@ -2308,10 +2420,26 @@ const CHAPTERS: Chapter[] = [
                 {
                   keys: (
                     <>
+                      <kbd>R</kbd> <kbd>K</kbd> <kbd>Q</kbd> <kbd>W</kbd>
+                    </>
+                  ),
+                  does: "Crop, Masks, Retouch, white balance picker: open the section and arm the tool. The same key again puts the tool away",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>O</kbd>, <kbd>⌘</kbd>-drag, <kbd>Alt</kbd>, <kbd>Space</kbd>-drag
+                    </>
+                  ),
+                  does: "With a mask: the overlay on or off, draw the shape anew, erase with the brush while held; with any tool, zoomed in: pan",
+                },
+                {
+                  keys: (
+                    <>
                       <kbd>[</kbd> / <kbd>]</kbd>, <kbd>H</kbd>, <kbd>Delete</kbd>
                     </>
                   ),
-                  does: "With Retouch open: a smaller / larger spot, hide the circles, remove the selected spot",
+                  does: "With Retouch open: a smaller / larger spot (the selected one, else the next), hide the circles and rest the tool, remove the selected spot",
                 },
                 {
                   keys: (
@@ -2346,14 +2474,22 @@ const CHAPTERS: Chapter[] = [
                   does: "On a focused slider: type its value, Enter sets it",
                 },
                 { keys: <kbd>J</kbd>, does: "Show / hide the clipping warning" },
-                { keys: <kbd>P</kbd>, does: "Show / hide the edit panel, so the photo gets the whole window" },
+                { keys: <kbd>I</kbd>, does: "Show / hide the edit panel, so the photo gets the whole window" },
+                {
+                  keys: (
+                    <>
+                      <kbd>P</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
+                    </>
+                  ),
+                  does: "Flag the photo being edited: pick, reject, no flag",
+                },
                 {
                   keys: <kbd>F</kbd>,
                   does: "Focus mode (also View → Focus, ⇧⌘F) — the app's top bar put away, the editing tools stay; F or Esc brings it back",
                 },
                 {
                   keys: <kbd>Esc</kbd>,
-                  does: "Step out: leave focus mode, close the Transform section and its crop box, or back to the photo view (the View button)",
+                  does: "Step out: put the tool away, leave focus mode, close the Transform section and its crop box, or back to the photo view (the View button)",
                 },
               ]}
             />
@@ -2543,7 +2679,10 @@ export function Help() {
           the reading column below is width-limited (.help-inner). */}
       <h2 className="section-title">Help</h2>
       <p className="help-sub">
-        Everything Rollfilm can do, in the order you'll meet it. Eight chapters — pick one.
+        Everything Rollfilm can do, in the order you'll meet it. Eight chapters — pick one.{" "}
+        <button className="btn btn-sm ghost" onClick={showOnboardingAgain}>
+          Show the introduction again
+        </button>
       </p>
 
       <nav className="help-tabs" role="tablist" aria-label="Help chapters">

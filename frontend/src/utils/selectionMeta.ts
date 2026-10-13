@@ -1,4 +1,4 @@
-import type { ColorLabel } from "../api/types";
+import type { ColorLabel, Flag } from "../api/types";
 
 // The bulk bar's stars/swatches mirror the current selection: when every
 // selected photo agrees on a value the bar shows it (so clicking the filled
@@ -6,16 +6,18 @@ import type { ColorLabel } from "../api/types";
 // a mixed selection falls back to empty stars / the "none" swatch. Typed
 // structurally (not ImageOut) so the library's slim index entries qualify too.
 export function selectionSharedMeta(
-  images: { id: string; rating: number; color_label: ColorLabel }[],
+  images: { id: string; rating: number; color_label: ColorLabel; flag?: Flag | null }[],
   selected: Set<string>
-): { rating: number; colorLabel: ColorLabel } {
+): { rating: number; colorLabel: ColorLabel; flag: Flag | null } {
   const sel = images.filter((im) => selected.has(im.id));
   const first = sel[0];
-  if (!first) return { rating: 0, colorLabel: "none" };
+  if (!first) return { rating: 0, colorLabel: "none", flag: null };
+  const firstFlag = first.flag ?? null;
   return {
     rating: sel.every((im) => im.rating === first.rating) ? first.rating : 0,
     colorLabel: sel.every((im) => im.color_label === first.color_label)
       ? first.color_label
       : "none",
+    flag: sel.every((im) => (im.flag ?? null) === firstFlag) ? firstFlag : null,
   };
 }
