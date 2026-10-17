@@ -1695,6 +1695,59 @@ function routeExternalLinksToTheOS(webContents) {
   });
 }
 
+// Physical RAM in whole GB for the renderer's preload budgets. Measured here,
+// where os is available; the sandboxed preload only gets the number.
+function totalMemoryGb() {
+  return Math.max(1, Math.round(os.totalmem() / 1024 ** 3));
+}
+
+// What goes wrong inside the window used to go nowhere: a preload that threw
+// left the page without its bridge (issue #4, Linux 0.1.94-0.1.96) and no
+// line in any log. These land in main.log beside the backend's.
+function installBridgeCheck(contents) {
+  const finish = (code, text) => {
+    console[code ? "error" : "log"](`[bridge-check] ${text}`);
+    app.exit(code);
+  };
+  const timer = setTimeout(() => finish(1, "the page did not finish loading within 60s"), 60_000);
+  contents.once("did-finish-load", async () => {
+    clearTimeout(timer);
+    try {
+      const facts = await contents.executeJavaScript(
+        "({ api: window.photoManager?.apiBaseUrl ?? null, memoryGb: window.photoManager?.totalMemoryGb ?? null, picker: typeof window.photoManager?.pickFolder })"
+      );
+      const ok =
+        typeof facts.api === "string" &&
+        facts.api.startsWith("http://127.0.0.1:") &&
+        typeof facts.memoryGb === "number" &&
+        facts.memoryGb > 0 &&
+        facts.picker === "function";
+      finish(ok ? 0 : 1, `${ok ? "bridge present" : "bridge missing"}: ${JSON.stringify(facts)}`);
+    } catch (e) {
+      finish(1, `could not ask the page: ${e?.message || e}`);
+    }
+  });
+}
+
+function reportRendererFailures(contents) {
+  contents.on("preload-error", (_event, preloadPath, error) => {
+    console.error(`[main] preload failed: ${preloadPath}: ${error?.stack || error}`);
+  });
+  contents.on("render-process-gone", (_event, details) => {
+    console.error(`[main] renderer gone: ${details?.reason} (exit code ${details?.exitCode})`);
+  });
+  contents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return; // -3: aborted by a newer navigation
+    console.error(`[main] page failed to load: ${description} (${code}) ${url}`);
+  });
+  contents.on("console-message", (_event, level, message, line, sourceId) => {
+    // 2 = warning, 3 = error (Electron's console-message levels).
+    if (level < 2) return;
+    const where = sourceId ? ` (${path.basename(String(sourceId))}:${line})` : "";
+    console[level === 3 ? "error" : "warn"](`[renderer] ${message}${where}`);
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     // Where it was left last time (savedWindowBounds), else a first-launch size.
@@ -1722,14 +1775,20 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // Sandboxed: the preload only uses contextBridge, ipcRenderer, webUtils,
-      // process.argv (additionalArguments are there in a sandboxed preload
-      // too) and process.getSystemMemoryInfo - no Node module of its own.
+      // Sandboxed: the preload only uses contextBridge, ipcRenderer, webUtils
+      // and process.argv (additionalArguments are there in a sandboxed preload
+      // too) - no Node module and no OS query of its own (see preload.js).
       sandbox: true,
-      // Hand the renderer the backend URL synchronously (client.ts reads it at load).
-      additionalArguments: [`--pm-api-base=${apiBaseUrl}`],
+      // Hand the renderer the backend URL synchronously (client.ts reads it at
+      // load) and the machine's RAM (utils/preload.ts sizes its caches by it).
+      additionalArguments: [`--pm-api-base=${apiBaseUrl}`, `--pm-total-memory-gb=${totalMemoryGb()}`],
     },
   });
+  reportRendererFailures(mainWindow.webContents);
+  // CI (ci.yml, frontend job) starts the app this way under xvfb on a fresh
+  // HOME and asks the page whether the preload's bridge arrived. Issue #4 -
+  // Linux, a preload that threw under the sandbox - would have failed here.
+  if (process.env.PM_BRIDGE_CHECK === "1") installBridgeCheck(mainWindow.webContents);
 
   attachZoomShortcuts(mainWindow.webContents);
   routeExternalLinksToTheOS(mainWindow.webContents);

@@ -193,3 +193,28 @@ jobs:
 
       # `npm run build` is `tsc -b && vite build`, so this is the typecheck too.
       - run: cd frontend && npm run build
+
+      # The desktop shell around that build, started like a first run on a
+      # fresh HOME (no library, so no backend), with the renderer sandboxed
+      # the way the installed app sandboxes it. main.js asks the page whether
+      # the preload's bridge (window.photoManager) arrived and exits 0 or 1.
+      # 0.1.94-0.1.96 shipped a preload that threw under the Linux sandbox and
+      # left every Linux window without its bridge (issue #4); this is the
+      # check that would have caught it. Chromium's sandbox needs the SUID
+      # helper on a runner where unprivileged user namespaces are off, and
+      # --no-sandbox would take away exactly what is being tested.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - run: cd electron && npm ci && npm run copy:renderer
+      - name: Start the shell and check the preload bridge
+        run: |
+          set -euo pipefail
+          cd electron
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb >/dev/null
+          HOME="$(mktemp -d)" PM_BRIDGE_CHECK=1 timeout 180 xvfb-run -a npx electron . 2>&1 | tee bridge-check.log || status=$?
+          grep -q "\[bridge-check\] bridge present" bridge-check.log || { echo "::error::the preload bridge did not arrive in the window"; exit 1; }

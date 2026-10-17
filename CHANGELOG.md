@@ -4,6 +4,12 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.1.97 — 2026-10-17
+
+### Fixed
+- Linux: since 0.1.94 the window could not reach the app's background service - every view said it "did not answer" and imports failed with a network error. The window's bridge to the app failed to load under the Linux sandbox; it loads again. (#4)
+- When the window's bridge is missing, the app now says so instead of "did not answer", and main.log records why (preload errors, renderer crashes, page errors).
+
 ## 0.1.96 — 2026-10-17
 
 ### New

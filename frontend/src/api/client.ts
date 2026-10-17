@@ -141,6 +141,18 @@ const BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
   "http://localhost:8000";
 
+// The desktop app loads the page from disk (file:) and the preload hands it
+// the backend's address. When that bridge is missing the page is not a web
+// build that should try localhost:8000 - it is a broken shell (issue #4: a
+// preload that threw on Linux), and every request would fail with a bare
+// "did not answer". Say what is actually wrong, once in the log and in each
+// request's error.
+const DESKTOP_BRIDGE_MISSING =
+  typeof window !== "undefined" && window.location.protocol === "file:" && !window.photoManager?.apiBaseUrl;
+const BRIDGE_MISSING_MESSAGE =
+  "the app's window lost contact with its desktop shell (the preload did not load). Help › Show logs has main.log; please attach it to a report.";
+if (DESKTOP_BRIDGE_MISSING) console.error(`[client] ${BRIDGE_MISSING_MESSAGE}`);
+
 // A request that gets no answer must fail, not hang: a reader waiting on
 // "Loading…" forever is the worst outcome. Reads get half a minute, writes
 // a minute (a bulk change of a few hundred photos). Uploads, renders and
@@ -152,6 +164,7 @@ const WRITE_TIMEOUT_MS = 60_000;
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   const method = init?.method ?? "GET";
+  if (DESKTOP_BRIDGE_MISSING) throw new Error(`${method} ${path} failed: ${BRIDGE_MISSING_MESSAGE}`);
   const signal = init?.signal ?? AbortSignal.timeout(method === "GET" ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS);
   try {
     res = await fetch(`${BASE_URL}${path}`, {

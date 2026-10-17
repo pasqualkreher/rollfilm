@@ -4,22 +4,33 @@
 
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
-function readApiBase() {
-  const prefix = "--pm-api-base=";
+// main.js hands the renderer its few facts through additionalArguments
+// (--pm-api-base=…, --pm-total-memory-gb=…): process.argv is all a sandboxed
+// preload reliably has. Anything it would have to ask the OS for stays in
+// main: the Linux renderer sandbox has no /proc, and one throwing call here
+// (0.1.94-0.1.96 read the RAM through process.getSystemMemoryInfo()) took the
+// whole bridge away - the page then talked to localhost:8000 and every
+// request "did not answer" (issue #4).
+function readArg(name) {
+  const prefix = `--${name}=`;
   const arg = process.argv.find((a) => a.startsWith(prefix));
   return arg ? arg.slice(prefix.length) : null;
 }
 
+function readTotalMemoryGb() {
+  const n = Number(readArg("pm-total-memory-gb"));
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 contextBridge.exposeInMainWorld("photoManager", {
-  apiBaseUrl: readApiBase(),
+  apiBaseUrl: readArg("pm-api-base"),
   // "darwin" | "win32" | "linux": the context menu names Finder or Explorer by it.
   platform: process.platform,
-  // Physical RAM in GB. The renderer's navigator.deviceMemory clamps at 8, so
-  // an 8GB laptop and a 64GB workstation looked the same to the preload
-  // budgets (utils/preload.ts) - this is what tells them apart.
-  // process.getSystemMemoryInfo() works in a sandboxed preload (os does
-  // not); it reports kilobytes.
-  totalMemoryGb: Math.round((process.getSystemMemoryInfo().total * 1024) / 1024 ** 3),
+  // Physical RAM in GB, measured by main (os.totalmem). The renderer's
+  // navigator.deviceMemory clamps at 8, so an 8GB laptop and a 64GB
+  // workstation looked the same to the preload budgets (utils/preload.ts) -
+  // this is what tells them apart. undefined when main sent nothing.
+  totalMemoryGb: readTotalMemoryGb(),
   // Opens the native OS folder dialog; resolves to an absolute host path or null.
   // `opts` ({ title, defaultPath }) is optional.
   pickFolder: (opts) => ipcRenderer.invoke("pm:pick-folder", opts),
