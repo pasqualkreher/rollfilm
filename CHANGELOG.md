@@ -4,7 +4,7 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
-## 0.1.96
+## 0.1.96 — 2026-10-17
 
 ### New
 - Updates ask first and say what they bring. After an update, a "What's new" window shows the changes once.
