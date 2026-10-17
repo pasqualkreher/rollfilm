@@ -146,6 +146,9 @@ export interface ImportSettings {
   // Whether every copy the import writes is read back and its checksum
   // compared with the source - slower, and the only proof a card can go.
   verify_copies: boolean;
+  // The folder a copying import uses without asking; null = every copying
+  // session asks. Sent as "" to go back to asking.
+  staging_folder: string | null;
 }
 
 export interface SidecarSettings {
@@ -174,6 +177,7 @@ export interface AutoDevelopSettings {
 export interface BulkResetOptions {
   rating?: boolean; // stars
   color_label?: boolean; // colour label
+  flag?: boolean; // pick / reject
   tags?: boolean;
   develop?: boolean; // the develop sliders (edit_adjustments)
   geometry?: boolean; // crop / rotation / straighten / flip / perspective
@@ -664,6 +668,23 @@ export interface StagedFileUpdatePatch {
 export interface SearchResultOut {
   image: ImageOut;
   distance: number;
+}
+
+// The canvas's Auto-arrange: one list of photo ids per page, pages and photos
+// in time order; `missing` are photos the library has not analysed yet.
+export interface ImageGroupResult {
+  groups: string[][];
+  missing: string[];
+}
+
+// Auto pick: photos that go with the reference(s), narrowed by tags (all of
+// them) and a place; `exclude_ids` are left out.
+export interface AutoPickRequest {
+  reference_ids: string[];
+  count: number;
+  exclude_ids?: string[];
+  tags?: string[] | null;
+  country?: string | null;
 }
 
 export type ImmichSyncMode = "manual" | "selective" | "full";

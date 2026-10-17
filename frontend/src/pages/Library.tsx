@@ -5,7 +5,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { CANCELLED_NOTE, pairUnits } from "../utils/batchUnits";
 import { withoutMembershipNames } from "../utils/autoTags";
-import { bulkChangeLabel } from "../utils/undoLabels";
 import { useAppDialogs } from "../components/AppDialogs";
 import type {
   BulkResetOptions,
@@ -28,7 +27,10 @@ import { ResetMenu } from "../components/ResetMenu";
 import { Dropdown } from "../components/Dropdown";
 import { SORT_OPTIONS, isSortKey, sortImages, type SortKey } from "../utils/sortOrder";
 import { EditPicker } from "../components/EditPicker";
-import { IconCheck, IconCloudUp, IconSort, IconTrash, IconX } from "../components/Icons";
+import { IconCheck, IconCloudUp, IconImport, IconSort, IconSparkle, IconTrash, IconX } from "../components/Icons";
+import { AutoPickDialog } from "../components/AutoPickDialog";
+import { ExportDialog } from "../components/ExportDialog";
+import { ReportProblem } from "../components/ReportProblem";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { leaveSearch } from "../components/SearchBar";
@@ -233,8 +235,9 @@ function LibraryPage() {
   // The grid stays usable meanwhile - selection is by id, so what the user
   // picks while a batch runs is never confused with what the batch handles.
   const batchBusy = hasTask(LIBRARY_BATCH);
-  const batch = <R,>(label: string, items: BatchItem[], run: (ids: string[]) => Promise<R>) =>
-    runBatches({ id: LIBRARY_BATCH, kind: "batch", label }, items, run);
+  // quiet: stars, flags and tags - out of the dock unless they take a while.
+  const batch = <R,>(label: string, items: BatchItem[], run: (ids: string[]) => Promise<R>, quiet = false) =>
+    runBatches({ id: LIBRARY_BATCH, kind: "batch", label, quiet }, items, run);
   const askSaveCopyOptions = useAskSaveCopyOptions();
   // The options dialog of "Apply ... and save copy", resolved by its answer.
   const [copyPrompt, setCopyPrompt] = useState<{ resolve: (opts: CopyOpts | null) => void } | null>(null);
@@ -465,14 +468,10 @@ function LibraryPage() {
 
   async function applyBulk(
     patch: { rating?: number; color_label?: ColorLabel; flag?: Flag | "" },
-    target: Iterable<string> = selected,
-    undoable = true
+    target: Iterable<string> = selected
   ) {
     const ids = new Set(target);
     if (ids.size === 0) return;
-    // What the photos had before, for the Undo chip: the inverse is one
-    // bulk update per distinct previous value.
-    const before = (images ?? []).filter((im) => ids.has(im.id)).map((im) => ({ ...im }));
     // What the tiles get: the flag "" (taken off) is null on a tile.
     const { flag: flagPatch, ...restPatch } = patch;
     const tilePatch = flagPatch === undefined ? restPatch : { ...restPatch, flag: (flagPatch || null) as Flag | null };
@@ -497,26 +496,7 @@ function LibraryPage() {
         await batch("Updating photos…", Array.from(ids), async (slice) => {
           await api.images.bulkUpdate(slice, patch);
           show(slice);
-        });
-      }
-      if (undoable && before.length > 0) {
-        pushUndo({
-          label: bulkChangeLabel(patch, ids.size),
-          undo: async () => {
-            const groups = new Map<string, { ids: string[]; patch: typeof patch }>();
-            for (const im of before) {
-              const inv: typeof patch = {};
-              if (patch.rating !== undefined) inv.rating = im.rating;
-              if (patch.color_label !== undefined) inv.color_label = im.color_label;
-              if (patch.flag !== undefined) inv.flag = im.flag ?? "";
-              const key = JSON.stringify(inv);
-              const g = groups.get(key) ?? { ids: [], patch: inv };
-              g.ids.push(im.id);
-              groups.set(key, g);
-            }
-            for (const g of groups.values()) await applyBulk(g.patch, g.ids, false);
-          },
-        });
+        }, true);
       }
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -611,8 +591,11 @@ function LibraryPage() {
     if (target.length === 0 || !name.trim()) return;
     const tag = name.trim();
     try {
-      const { done, cancelled } = await batch("Tagging photos…", target, (ids) =>
-        api.images.bulkAddTags(ids, [tag])
+      const { done, cancelled } = await batch(
+        "Tagging photos…",
+        target,
+        (ids) => api.images.bulkAddTags(ids, [tag]),
+        true
       );
       setDevelopMsg(`Added tag “${tag}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
     } finally {
@@ -670,7 +653,12 @@ function LibraryPage() {
 
   // The right-click menu's hands on the photos under the pointer (or the
   // selection they belong to): the same actions as the bulk bar, by id.
+  // Auto pick: the dialog's reference set (ids of this page's photos), and the
+  // export it may end in.
+  const [autoPick, setAutoPick] = useState<string[] | null>(null);
+  const [pickExport, setPickExport] = useState<string[] | null>(null);
   const contextActions: ContextActions = {
+    onAutoPick: (ids) => setAutoPick(ids),
     onRate: (ids, rating) => applyBulk({ rating }, ids),
     onColor: (ids, label) => applyBulk({ color_label: label }, ids),
     onFlag: (ids, flag) => applyBulk({ flag }, ids),
@@ -886,6 +874,51 @@ function LibraryPage() {
     <div className="page page-timeline">
       {pairDeleteDialog}
       {selectionExport.dialog}
+      <Presence open={autoPick !== null} ms={MOTION.modal}>
+        {autoPick && (
+          <AutoPickDialog
+            references={autoPick
+              .map((id) => (images ?? []).find((im) => im.id === id))
+              .filter((im): im is LibraryIndexImage => !!im)}
+            initialReference={autoPick[0] ?? null}
+            onClose={() => setAutoPick(null)}
+            renderActions={(chosen, close) => (
+              <>
+                <button
+                  className="btn"
+                  disabled={chosen.length === 0}
+                  onClick={() => {
+                    close();
+                    setPickExport(chosen);
+                  }}
+                >
+                  Export…
+                </button>
+                <AddToPicker
+                  disabled={chosen.length === 0}
+                  onAddToAlbum={(albumId) => addSelectedToAlbum(albumId, chosen)}
+                  onAddToCanvas={(canvasId) => addSelectedToCanvas(canvasId, chosen)}
+                  onResult={reportAddTo}
+                />
+                <button
+                  className="btn primary"
+                  disabled={chosen.length === 0}
+                  onClick={() => {
+                    setSelected(new Set(chosen));
+                    close();
+                  }}
+                  title="Select these photos in the library; every action of the bar then works on them"
+                >
+                  Select {chosen.length > 0 ? chosen.length : ""} in library
+                </button>
+              </>
+            )}
+          />
+        )}
+      </Presence>
+      <Presence open={pickExport !== null} ms={MOTION.modal}>
+        {pickExport && <ExportDialog imageIds={pickExport} onClose={() => setPickExport(null)} />}
+      </Presence>
       <Presence open={copyPrompt !== null} ms={MOTION.modal}>
         {copyPrompt && (
           <SaveCopyDialog
@@ -1063,6 +1096,15 @@ function LibraryPage() {
             </div>
             <div className="control-group">
               {selectionExport.button}
+              <button
+                className="btn"
+                onClick={() => setAutoPick(Array.from(selected))}
+                title="Find photos in your library that go with the selected one - by look, narrowed by tags or place"
+              >
+                <span className="btn-label">
+                  <IconSparkle size={13} /> Find similar…
+                </span>
+              </button>
             </div>
             <div className="control-group">
               <BulkTagInput onAdd={addTagToSelected} />
@@ -1136,6 +1178,20 @@ function LibraryPage() {
           <button className="btn empty-state-action" onClick={() => void activeQuery.refetch()}>
             Try again
           </button>
+          {/* Still failing: say so where it can be read, with the log at hand. */}
+          <div className="empty-state-report">
+            <ReportProblem title="Photos could not be loaded" compact />
+          </div>
+        </div>
+      ) : orderedImages.length === 0 && !q && !isFiltering ? (
+        /* A library with nothing in it: the next step, not a shrug. */
+        <div className="empty-state empty-state--welcome">
+          <IconImport size={28} />
+          <div className="empty-state-title">Your library is empty</div>
+          <button className="btn primary" onClick={() => navigate("/import")}>
+            <IconImport size={13} /> Import photos
+          </button>
+          <div className="empty-state-detail">…or drop a card or folder anywhere on this window.</div>
         </div>
       ) : orderedImages.length === 0 && (q || isFiltering) ? (
         <div className="empty-state">

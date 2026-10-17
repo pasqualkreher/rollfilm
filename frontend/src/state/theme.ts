@@ -10,8 +10,8 @@
 import { useSyncExternalStore } from "react";
 
 export type Mode = "light" | "dark" | "auto";
-export type LightSkin = "stone" | "pebble" | "paper";
-export type DarkSkin = "stone-dark" | "pebble-dark" | "paper-dark";
+export type LightSkin = "stone" | "pebble" | "paper" | "cyanotype" | "negative";
+export type DarkSkin = "stone-dark" | "pebble-dark" | "paper-dark" | "cyanotype-dark" | "negative-dark";
 export type Skin = LightSkin | DarkSkin;
 
 // Metadata the Settings picker renders. `bg`/`elevated`/`text`/`accent` mirror
@@ -28,20 +28,25 @@ export interface SkinInfo {
   accent: string;
 }
 
-// Three pairs, all colourless, because a photo is the only thing on screen
+// Five pairs. Three colourless, because a photo is the only thing on screen
 // that should carry colour: Stone, Stone a step lighter, and Stone moved
-// towards warm paper. Same order in both lists so a pair sits in the same
-// column.
+// towards warm paper. Two with one restrained colour, asked for by name:
+// Cyanotype (deep blue) and Negative (the orange of colour negative film).
+// Same order in both lists so a pair sits in the same column.
 export const LIGHT_SKINS: SkinInfo[] = [
   { value: "stone", label: "Stone", hint: "Muted grey, the default", bg: "#eaebec", elevated: "#f6f7f7", text: "#26282a", accent: "#5a6067" },
   { value: "pebble", label: "Pebble", hint: "Stone, a step lighter", bg: "#f1f2f3", elevated: "#fbfbfc", text: "#26282a", accent: "#5a6067" },
   { value: "paper", label: "Paper", hint: "Warm off-white, like print paper", bg: "#f3f0e9", elevated: "#fbf9f4", text: "#2b2824", accent: "#5e5850" },
+  { value: "cyanotype", label: "Cyanotype", hint: "Blue-grey with a deep blue", bg: "#e6ebf2", elevated: "#f4f7fb", text: "#1d2738", accent: "#1f4f96" },
+  { value: "negative", label: "Negative", hint: "The orange of negative film", bg: "#f4e7d8", elevated: "#fbf4eb", text: "#2e2219", accent: "#c0601d" },
 ];
 
 export const DARK_SKINS: SkinInfo[] = [
   { value: "stone-dark", label: "Stone Dark", hint: "Soft muted grey", bg: "#26292d", elevated: "#2e3237", text: "#e5e7ea", accent: "#aab1b8" },
   { value: "pebble-dark", label: "Pebble Dark", hint: "Lighter charcoal, not too dark", bg: "#313438", elevated: "#3a3d42", text: "#eceef0", accent: "#b8bec5" },
   { value: "paper-dark", label: "Paper Dark", hint: "Soft warm charcoal", bg: "#302e2a", elevated: "#393632", text: "#eeeae2", accent: "#c8c1b5" },
+  { value: "cyanotype-dark", label: "Cyanotype Dark", hint: "Deep blue, not navy-black", bg: "#1f2a3c", elevated: "#27344a", text: "#e6ebf3", accent: "#82a8e2" },
+  { value: "negative-dark", label: "Negative Dark", hint: "Warm brown, orange accent", bg: "#33271e", elevated: "#3d2f24", text: "#f3e8dc", accent: "#e8955a" },
 ];
 
 export const SKINS: SkinInfo[] = [...LIGHT_SKINS, ...DARK_SKINS];

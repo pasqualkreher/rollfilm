@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 import pkg from "./package.json";
 
@@ -17,5 +18,10 @@ export default defineConfig({
     // so a drifted port would leave the desktop start hanging on wait-on forever.
     // `predev` (scripts/dev-clean.js) frees 5173 first, so this should always bind.
     strictPort: true,
+    // The "What's new" sheet reads the repo's CHANGELOG.md (utils/changelog.ts):
+    // that one file from outside frontend/, nothing else of the repo.
+    fs: {
+      allow: [searchForWorkspaceRoot(process.cwd()), fileURLToPath(new URL("../CHANGELOG.md", import.meta.url))],
+    },
   },
 });

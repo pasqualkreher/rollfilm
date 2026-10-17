@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+import numpy as np
 from PIL import Image as PILImage
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
@@ -44,6 +45,7 @@ from app.db.session import SessionLocal, engine, get_db
 from app.services import smart_albums as smart_albums_service
 from app.services import machine
 from app.services import (
+    arrange as arrange_service,
     auto_develop,
     develop,
     embeddings,
@@ -1729,13 +1731,13 @@ def bulk_reset_metadata(
 ):
     """Reset the selected aspects of each photo back to its just-imported state.
     Which aspects are cleared is chosen per-flag (see BulkResetRequest): rating,
-    colour label, tags, develop sliders, geometry (crop/rotation/...), and album
+    colour label, pick/reject flag, tags, develop sliders, geometry (crop/rotation/...), and album
     membership. Photos whose look actually changed are re-rendered in the
     background (see _rerender_later) - the request itself only writes rows."""
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     image_ids = [image.id for image in images]
     before = {image.id: _edit_state(image) for image in images}
-    # Stars, colour and tags are shared by a RAW+JPEG pair (see _apply_to_pair),
+    # Stars, colour, flag and tags are shared by a RAW+JPEG pair (see _apply_to_pair),
     # so resetting them on one half resets the other. Edits and album
     # membership stay per file.
     partners = [
@@ -1769,6 +1771,8 @@ def bulk_reset_metadata(
             image.rating = 0
         if payload.color_label:
             image.color_label = ColorLabel.none
+        if payload.flag:
+            image.flag = None
         if payload.develop:
             image.edit_adjustments = None
         if payload.geometry:
@@ -1787,6 +1791,8 @@ def bulk_reset_metadata(
             partner.rating = 0
         if payload.color_label:
             partner.color_label = ColorLabel.none
+        if payload.flag:
+            partner.flag = None
         if payload.tags:
             _sync_edit_state(db, current_user.id, partner, prune=False)
     if payload.develop or payload.geometry or payload.tags:
@@ -3408,6 +3414,74 @@ def auto_adjust(
     )
 
 
+def _vectors_for(db: Session, owner_id: int, image_ids: list[str]):
+    """The owner's live photos among ``image_ids`` with their vectors, in the
+    order given, plus the ids that have no vector yet. A pair's RAW half
+    borrows the JPEG's vector and the other way round (_embedding_for_image);
+    only the first ON_DEMAND_EMBED_LIMIT missing ones are encoded on the spot
+    - the backfill worker gets the rest, and the caller says so."""
+    images = [db.get(Image, i) for i in image_ids]
+    images = [im for im in images if im and im.owner_id == owner_id and im.deleted_at is None]
+    stored = embeddings.get_embeddings(engine, [im.id for im in images])
+    found: list[Image] = []
+    vectors = []
+    missing: list[str] = []
+    encoded = 0
+    for im in images:
+        vector = stored.get(im.id)
+        if vector is None and encoded < ON_DEMAND_EMBED_LIMIT:
+            encoded += 1
+            vector = _embedding_for_image(im)
+        if vector is None:
+            missing.append(im.id)
+            continue
+        found.append(im)
+        vectors.append(vector)
+    return found, vectors, missing
+
+
+ON_DEMAND_EMBED_LIMIT = 20
+
+
+@router.post("/group", response_model=schemas.ImageGroupResult)
+def group_images(
+    payload: schemas.ImageGroupRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Pages for the canvas's Auto-arrange: the photos split into groups of
+    min_size..max_size that look alike, each group one page."""
+    if len(payload.image_ids) > 2000:
+        raise HTTPException(status_code=400, detail="Too many photos to arrange at once (2000 at most).")
+    found, vectors, missing = _vectors_for(db, current_user.id, payload.image_ids)
+    if not found:
+        return schemas.ImageGroupResult(groups=[], missing=missing)
+    groups = arrange_service.group_for_pages(
+        [im.id for im in found],
+        np.stack(vectors),
+        [im.taken_at for im in found],
+        min_size=max(1, payload.min_size),
+        max_size=max(1, payload.max_size),
+    )
+    return schemas.ImageGroupResult(groups=groups, missing=missing)
+
+
+@router.post("/pick-core", response_model=list[schemas.SearchResultOut])
+def pick_core_images(
+    payload: schemas.PickCoreRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The canvas's Auto pick with no reference: the photos nearest the
+    centre of the set, nearest first."""
+    found, vectors, _missing = _vectors_for(db, current_user.id, payload.image_ids)
+    if not found:
+        raise HTTPException(status_code=404, detail="Embedding not ready yet")
+    by_id = {im.id: im for im in found}
+    picked = arrange_service.pick_core([im.id for im in found], np.stack(vectors), max(1, payload.count))
+    return [schemas.SearchResultOut(image=by_id[i], distance=d) for i, d in picked]
+
+
 @router.get("/{image_id}/similar", response_model=list[schemas.SearchResultOut])
 def get_similar_images(
     image_id: str,
@@ -3421,11 +3495,18 @@ def get_similar_images(
         raise HTTPException(status_code=404, detail="Embedding not ready yet")
 
     matches = embeddings.query_similar(engine, vector, k=limit, exclude_id=image.id)
-    results = []
     # Never suggest the photo itself or its RAW/JPEG partner.
     seen: set[str] = {image.id}
     if image.paired_image_id:
         seen.add(image.paired_image_id)
+    return _viewable_matches(db, current_user, matches, seen)
+
+
+def _viewable_matches(db: Session, current_user: User, matches, seen: set[str]) -> list[schemas.SearchResultOut]:
+    """Nearest-neighbour hits as the user can look at them: the owner's live
+    photos only, a RAW half shown as its JPEG partner, nothing twice, and
+    nothing in ``seen`` (which grows as hits are taken)."""
+    results: list[schemas.SearchResultOut] = []
     for match_id, distance in matches:
         match_image = db.get(Image, match_id)
         if not (match_image and match_image.owner_id == current_user.id and match_image.deleted_at is None):
@@ -3447,3 +3528,44 @@ def get_similar_images(
         seen.add(match_image.id)
         results.append(schemas.SearchResultOut(image=match_image, distance=distance))
     return results
+
+
+@router.post("/auto-pick", response_model=list[schemas.SearchResultOut])
+def auto_pick_images(
+    payload: schemas.AutoPickRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Auto pick: the photos that go with the reference(s), nearest first.
+    Without tags or a place the vector table answers directly; with them,
+    the library's own filter picks the candidates and the nearest of those
+    are taken."""
+    refs, ref_vectors, _missing = _vectors_for(db, current_user.id, payload.reference_ids)
+    if not refs:
+        raise HTTPException(status_code=404, detail="Embedding not ready yet")
+    count = max(1, min(payload.count, 200))
+    seen: set[str] = set(payload.exclude_ids)
+    for im in refs:
+        seen.add(im.id)
+        if im.paired_image_id:
+            seen.add(im.paired_image_id)
+    if payload.tags or payload.country:
+        query = _filtered_images_query(
+            db, current_user, "combined", None, None, None, None,
+            None, None, None, None, payload.country, None, None, payload.tags or None,
+        )
+        candidate_ids = [row[0] for row in query.with_entities(Image.id).limit(5000).all()]
+        candidate_ids = [i for i in candidate_ids if i not in seen]
+        vectors = embeddings.get_embeddings(engine, candidate_ids)
+        ids = [i for i in candidate_ids if i in vectors]
+        matches = (
+            arrange_service.pick_by_reference(
+                np.stack(ref_vectors), ids, np.stack([vectors[i] for i in ids]), count + 50
+            )
+            if ids
+            else []
+        )
+    else:
+        reference = arrange_service.reference_vector(np.stack(ref_vectors))
+        matches = embeddings.query_similar(engine, reference, k=min(4096, count + len(seen) + 50))
+    return _viewable_matches(db, current_user, matches, seen)[:count]

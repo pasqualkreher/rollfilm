@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { IconChevronDown } from "./Icons";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
@@ -21,6 +22,10 @@ interface Props {
 
 // Multi-select tag filter: a compact button that opens a checkbox popover.
 // Selecting several tags narrows the grid to photos carrying all of them.
+//
+// Like Dropdown, the popover renders through a portal with fixed positioning:
+// inside a dialog's scrolling body it would be clipped and scroll the dialog
+// instead of its own list. Its list is capped to the room on screen.
 export function TagFilter({
   options,
   value,
@@ -33,28 +38,67 @@ export function TagFilter({
   const [query, setQuery] = useState("");
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+  // Screen position of the portalled popover; null on the measuring frame.
+  const [pos, setPos] = useState<CSSProperties | null>(null);
 
   // Opening starts with an empty search: what was typed last time narrowed
   // last time's pick, not this one.
   useEffect(() => {
     if (open) setQuery("");
+    else setPos(null);
   }, [open]);
 
   // Close on outside click / Escape, like a native dropdown.
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (wrapRef.current?.contains(t) || popRef.current?.contains(t)) return;
+      setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
+    // The fixed popover would detach from its button if anything scrolls or
+    // resizes underneath - close instead (its own list may scroll).
+    function onScroll(e: Event) {
+      if (popRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    function onResize() {
+      setOpen(false);
+    }
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
     };
+  }, [open]);
+
+  // Place it before paint: under the button, or above when there is more
+  // room there; the list gets the height that is left on screen.
+  useLayoutEffect(() => {
+    if (!open || !popRef.current || !wrapRef.current) return;
+    const pop = popRef.current;
+    const anchor = wrapRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - anchor.bottom - 14;
+    const spaceAbove = anchor.top - 14;
+    const up = pop.offsetHeight > spaceBelow && spaceAbove > spaceBelow;
+    const room = up ? spaceAbove : spaceBelow;
+    const list = pop.querySelector<HTMLElement>(".tag-filter-list");
+    const rest = list ? pop.offsetHeight - list.offsetHeight : 0;
+    const left = Math.max(8, Math.min(anchor.left, window.innerWidth - pop.offsetWidth - 8));
+    setPos({
+      left,
+      ...(up ? { bottom: window.innerHeight - anchor.top + 6 } : { top: anchor.bottom + 6 }),
+      ["--tag-list-max" as string]: `${Math.max(96, Math.min(260, room - rest))}px`,
+    });
   }, [open]);
 
   // Picking a tag spends the search: the box empties and takes the focus
@@ -91,9 +135,14 @@ export function TagFilter({
         <span className="tag-filter-caret"><IconChevronDown size={11} /></span>
       </button>
 
+      {createPortal(
       <Presence open={open && options.length > 0} ms={MOTION.pop}>
         {open && options.length > 0 && (
-          <div className="tag-filter-pop">
+          <div
+            className="tag-filter-pop"
+            style={pos ?? { visibility: "hidden", left: 0, top: 0 }}
+            ref={popRef}
+          >
             {/* Always typeable, however short the list - the fingers land on
                 the keyboard before the eye finds the row. */}
             <input
@@ -140,7 +189,9 @@ export function TagFilter({
             )}
           </div>
         )}
-      </Presence>
+      </Presence>,
+      document.body,
+      )}
     </div>
   );
 }

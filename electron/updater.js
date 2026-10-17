@@ -2,8 +2,9 @@
 // build workflow publishes (electron/package.json "publish" points at the
 // repo; electron-builder bakes that into the bundle as app-update.yml).
 //
-// On all three platforms the new version downloads in the background and a
-// small "restart now?" prompt applies it - and the download is only what
+// On all three platforms a new version is announced first, with what it
+// brings, and downloads only once the user says "Update"; a small "restart
+// now?" prompt then applies it - and the download is only what
 // changed: electron-updater compares the block map of the release with the
 // one of the version it has and fetches the blocks that differ (some tens of
 // MB of an installer of several hundred).
@@ -123,7 +124,34 @@ const log = (() => {
 
 function runUpdater(updater, hooks) {
   updater.logger = log;
-  updater.autoDownload = true;
+  // Nothing downloads until the user says so: a new version is announced with
+  // what it brings, and "Update" starts the download.
+  updater.autoDownload = false;
+
+  // Asked once per version and run; "Not now" asks again on the next start.
+  let askedVersion = null;
+  updater.on("update-available", async (info) => {
+    if (askedVersion === info.version) return;
+    askedVersion = info.version;
+    const win = hooks.getMainWindow();
+    const { response } = await dialog.showMessageBox(win ?? null, {
+      type: "info",
+      title: "Update available",
+      message: `Rollfilm ${info.version} is available (you have ${app.getVersion()}).`,
+      detail: withNotes(
+        releaseNotesOf(info),
+        "Update downloads it in the background; you are asked before the app restarts."
+      ),
+      buttons: ["Update", "Not now"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response !== 0) return;
+    updater.downloadUpdate().catch((err) => {
+      log.warn("update download failed:", err == null ? "unknown" : err.message);
+    });
+  });
 
   updater.on("error", (err) => {
     // Expected offline noise, not a user-facing problem.
@@ -138,8 +166,7 @@ function runUpdater(updater, hooks) {
       type: "info",
       title: "Update ready",
       message: `Rollfilm ${info.version} has been downloaded.`,
-      detail:
-        "Restart now to update, or keep working - the update installs by itself the next time you quit.",
+      detail: "Restart now to update, or keep working - the update installs by itself the next time you quit.",
       buttons: ["Restart now", "Later"],
       defaultId: 0,
       cancelId: 1,
@@ -368,14 +395,69 @@ async function checkMacNotifyOnly(hooks) {
     type: "info",
     title: "Update available",
     message: `Rollfilm ${latestVersion} is available (you have ${app.getVersion()}).`,
-    detail:
-      "Download the new version from the releases page, then drag it into Applications to update.",
+    detail: withNotes(
+      latest.body,
+      "Download the new version from the releases page, then drag it into Applications to update."
+    ),
     buttons: ["Open download page", "Later"],
     defaultId: 0,
     cancelId: 1,
     noLink: true,
   });
   if (response === 0) shell.openExternal(latest.html_url || RELEASES_URL);
+}
+
+// --- What's new, in the prompt ---------------------------------------------------
+
+// The prompt says what the update brings: the first few points of the
+// release page's changelog (scripts/release-notes.js writes it), as plain
+// text - a native dialog shows no markup. The app's own "What's new" sheet has
+// the whole list after the restart.
+const NOTES_MAX_POINTS = 6;
+
+// electron-updater hands the release body over as HTML (GitHub's rendering);
+// with fullChangelog it is a list of { version, note }.
+function releaseNotesOf(info) {
+  const notes = info.releaseNotes;
+  if (Array.isArray(notes)) return notes.find((n) => n.version === info.version)?.note ?? notes[0]?.note ?? "";
+  return typeof notes === "string" ? notes : "";
+}
+
+// HTML or markdown in, "• point" lines out - only the changelog part, which
+// ends where the downloads begin.
+function notesSummary(raw) {
+  if (!raw) return [];
+  let text = String(raw);
+  const cut = text.search(/<h\d[^>]*>\s*Download|^#+\s*Download|<details|^#+\s*Changes/im);
+  if (cut !== -1) text = text.slice(0, cut);
+  // HTML wraps a point's text over lines as it likes: one line per element.
+  if (/<li[\s>]/i.test(text)) text = text.replace(/\s+/g, " ");
+  text = text
+    .replace(/<li[^>]*>/gi, "\n- ")
+    .replace(/<\/(p|li|h\d|ul)>|<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&#x27;/g, "'")
+    .replace(/\*\*|`/g, "");
+  // A markdown point can run over several lines: join the continuations.
+  const points = [];
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (/^[-*]\s+/.test(t)) points.push(t.replace(/^[-*]\s+/, ""));
+    else if (t && !/^#/.test(t) && points.length > 0 && /^\s/.test(line)) points[points.length - 1] += ` ${t}`;
+  }
+  return points;
+}
+
+function withNotes(raw, closing) {
+  const points = notesSummary(raw);
+  if (points.length === 0) return closing;
+  const shown = points.slice(0, NOTES_MAX_POINTS).map((p) => `• ${p}`);
+  if (points.length > NOTES_MAX_POINTS) shown.push(`…and ${points.length - NOTES_MAX_POINTS} more`);
+  return `What's new:\n${shown.join("\n")}\n\n${closing}`;
 }
 
 // "0.1.13" > "0.1.12" - plain numeric per part, missing parts count as 0.

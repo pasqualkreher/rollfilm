@@ -32,7 +32,7 @@ export function FlagPicker({ value, onChange, title }: Props) {
   );
   return (
     <span className="flag-picker" title={title}>
-      {one("pick", "Pick", "P", <IconCheck size={13} />)}
+      {one("pick", "Pick", "A", <IconCheck size={13} />)}
       {one("reject", "Reject", "X", <IconX size={13} />)}
     </span>
   );

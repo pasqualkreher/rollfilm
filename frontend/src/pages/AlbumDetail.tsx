@@ -13,14 +13,15 @@ import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { FlagPicker } from "../components/FlagPicker";
 import { useSelectionExport } from "../components/SelectionExport";
-import { bulkChangeLabel } from "../utils/undoLabels";
 import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { AlbumNameField } from "../components/AlbumNameField";
 import { TagFilter } from "../components/TagFilter";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { EditPicker } from "../components/EditPicker";
-import { IconCheck, IconCloudUp, IconMinus, IconRename, IconSort, IconTrash, IconX, IconTag } from "../components/Icons";
+import { IconCheck, IconCloudUp, IconMinus, IconRename, IconSort, IconSparkle, IconTrash, IconX, IconTag } from "../components/Icons";
+import { AutoPickDialog } from "../components/AutoPickDialog";
+import { ExportDialog } from "../components/ExportDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { Dropdown } from "../components/Dropdown";
@@ -144,8 +145,9 @@ export function AlbumDetail() {
   // Every bulk action of this page runs as one task in the title bar, counted
   // down there with a Stop, and one at a time (see Library).
   const batchBusy = hasTask(ALBUM_BATCH);
-  const batch = <R,>(label: string, items: BatchItem[], run: (ids: string[]) => Promise<R>) =>
-    runBatches({ id: ALBUM_BATCH, kind: "batch", label }, items, run);
+  // quiet: stars, flags and tags - out of the dock unless they take a while.
+  const batch = <R,>(label: string, items: BatchItem[], run: (ids: string[]) => Promise<R>, quiet = false) =>
+    runBatches({ id: ALBUM_BATCH, kind: "batch", label, quiet }, items, run);
   const askSaveCopyOptions = useAskSaveCopyOptions();
   // The options dialog of "Apply ... and save copy", resolved by its answer.
   const [copyPrompt, setCopyPrompt] = useState<{ resolve: (opts: CopyOpts | null) => void } | null>(null);
@@ -314,13 +316,10 @@ export function AlbumDetail() {
 
   async function applyBulk(
     patch: { rating?: number; color_label?: string; flag?: Flag | "" },
-    target: Iterable<string> = selected,
-    undoable = true
+    target: Iterable<string> = selected
   ) {
     const ids = Array.from(target);
     if (ids.length === 0) return;
-    const idSet = new Set(ids);
-    const before = (images ?? []).filter((im) => idSet.has(im.id)).map((im) => ({ ...im }));
     const { flag: flagPatch, ...restPatch } = patch;
     const tilePatch = flagPatch === undefined ? restPatch : { ...restPatch, flag: (flagPatch || null) as Flag | null };
     // With merged pairs only the JPEG is visible, so mirror the change to each
@@ -343,26 +342,7 @@ export function AlbumDetail() {
         await batch("Updating photos…", ids, async (slice) => {
           await api.images.bulkUpdate(slice, patch);
           show(slice);
-        });
-      }
-      if (undoable && before.length > 0) {
-        pushUndo({
-          label: bulkChangeLabel(patch, ids.length),
-          undo: async () => {
-            const groups = new Map<string, { ids: string[]; patch: typeof patch }>();
-            for (const im of before) {
-              const inv: typeof patch = {};
-              if (patch.rating !== undefined) inv.rating = im.rating;
-              if (patch.color_label !== undefined) inv.color_label = im.color_label;
-              if (patch.flag !== undefined) inv.flag = im.flag ?? "";
-              const key = JSON.stringify(inv);
-              const g = groups.get(key) ?? { ids: [], patch: inv };
-              g.ids.push(im.id);
-              groups.set(key, g);
-            }
-            for (const g of groups.values()) await applyBulk(g.patch, g.ids, false);
-          },
-        });
+        }, true);
       }
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -493,8 +473,11 @@ export function AlbumDetail() {
     if (target.length === 0 || !name.trim()) return;
     const tag = name.trim();
     try {
-      const { done, cancelled } = await batch("Tagging photos…", target, (ids) =>
-        api.images.bulkAddTags(ids, [tag])
+      const { done, cancelled } = await batch(
+        "Tagging photos…",
+        target,
+        (ids) => api.images.bulkAddTags(ids, [tag]),
+        true
       );
       setDevelopMsg(`Added tag “${tag}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
     } finally {
@@ -553,7 +536,10 @@ export function AlbumDetail() {
 
   // The right-click menu's hands on the photos under the pointer (or the
   // selection they belong to): the same actions as the bulk bar, by id.
+  const [autoPick, setAutoPick] = useState<string[] | null>(null);
+  const [pickExport, setPickExport] = useState<string[] | null>(null);
   const contextActions: ContextActions = {
+    onAutoPick: (ids) => setAutoPick(ids),
     onRate: (ids, rating) => applyBulk({ rating }, ids),
     onColor: (ids, label) => applyBulk({ color_label: label }, ids),
     onFlag: (ids, flag) => applyBulk({ flag }, ids),
@@ -754,8 +740,9 @@ export function AlbumDetail() {
     "Album"
   );
 
-  // The album's tag rule, set at creation and now changeable here: every
-  // photo carrying one of these tags belongs to the album too.
+  // An older album's tag rule: every photo carrying one of these tags belongs
+  // to the album too. New albums don't get one (the filter has tags), so the
+  // control only shows where a rule exists - to change it or take it off.
   async function setTagRule(tags: string[]) {
     if (!album) return;
     await api.albums.update(album.id, { tag_filter: tags });
@@ -764,17 +751,21 @@ export function AlbumDetail() {
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
-  const albumActions = album && (
+  const hasTagRule = (album?.tag_filter?.length ?? 0) > 0;
+  const showImmichToggle = immichConfigured && immich?.sync_mode === "selective";
+  const albumActions = album && (hasTagRule || showImmichToggle) && (
     <>
-      <TagFilter
-        icon={<IconTag size={13} />}
-        options={allTags ?? []}
-        value={album.tag_filter ?? []}
-        onChange={(tags) => void setTagRule(tags)}
-        emptyLabel="No tag rule"
-        title="Photos with any of these tags belong to this album as well"
-      />
-      {immichConfigured && immich?.sync_mode === "selective" && (
+      {hasTagRule && (
+        <TagFilter
+          icon={<IconTag size={13} />}
+          options={allTags ?? []}
+          value={album.tag_filter ?? []}
+          onChange={(tags) => void setTagRule(tags)}
+          emptyLabel="No tag rule"
+          title="Photos with any of these tags belong to this album as well"
+        />
+      )}
+      {showImmichToggle && (
         <ImmichSyncToggle
           small
           on={album.immich_sync}
@@ -816,6 +807,48 @@ export function AlbumDetail() {
     <div className="page page-timeline">
       {pairDeleteDialog}
       {selectionExport.dialog}
+      <Presence open={autoPick !== null} ms={MOTION.modal}>
+        {autoPick && (
+          <AutoPickDialog
+            references={autoPick.map((id) => (images ?? []).find((im) => im.id === id)).filter((im): im is ImageOut => !!im)}
+            initialReference={autoPick[0] ?? null}
+            onClose={() => setAutoPick(null)}
+            renderActions={(chosen, close) => (
+              <>
+                <button
+                  className="btn"
+                  disabled={chosen.length === 0}
+                  onClick={() => {
+                    close();
+                    setPickExport(chosen);
+                  }}
+                >
+                  Export…
+                </button>
+                <AddToPicker
+                  disabled={chosen.length === 0}
+                  onAddToAlbum={(albumId) => addSelectedToAlbum(albumId, chosen)}
+                  onAddToCanvas={(canvasId) => addSelectedToCanvas(canvasId, chosen)}
+                  onResult={reportAddTo}
+                />
+                <button
+                  className="btn primary"
+                  disabled={chosen.length === 0}
+                  onClick={() => {
+                    if (id) void addSelectedToAlbum(id, chosen);
+                    close();
+                  }}
+                >
+                  Add {chosen.length > 0 ? chosen.length : ""} to this album
+                </button>
+              </>
+            )}
+          />
+        )}
+      </Presence>
+      <Presence open={pickExport !== null} ms={MOTION.modal}>
+        {pickExport && <ExportDialog imageIds={pickExport} onClose={() => setPickExport(null)} />}
+      </Presence>
       <Presence open={copyPrompt !== null} ms={MOTION.modal}>
         {copyPrompt && (
           <SaveCopyDialog
@@ -933,6 +966,15 @@ export function AlbumDetail() {
             </div>
             <div className="control-group">
               {selectionExport.button}
+              <button
+                className="btn"
+                onClick={() => setAutoPick(Array.from(selected))}
+                title="Find photos in your library that go with the selected one - by look, narrowed by tags or place"
+              >
+                <span className="btn-label">
+                  <IconSparkle size={13} /> Find similar…
+                </span>
+              </button>
             </div>
             <div className="control-group">
               <BulkTagInput onAdd={addTagToSelected} />

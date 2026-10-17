@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld("photoManager", {
   // Prints a finished HTML document (the album canvas) to a PDF the user
   // picks a place for. Resolves { ok, path } / { ok: false, canceled | error }.
   exportPdf: (payload) => ipcRenderer.invoke("pm:export-pdf", payload),
+  // Settings › Download backup: asks where, then resolves once the zip is
+  // written - { ok, path } / { ok: false, canceled | error }.
+  downloadBackup: (url) => ipcRenderer.invoke("pm:download-backup", url),
+  // Report a problem › Show logs: the folder the backend and updater logs are in.
+  getLogsDir: () => ipcRenderer.invoke("pm:get-logs-dir"),
   // Window chrome (macOS: the traffic lights live in the app's top bar).
   // Whether the window is fullscreen right now, and a subscription to changes;
   // the callback gets true/false, the return value unsubscribes.

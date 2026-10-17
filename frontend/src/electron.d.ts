@@ -66,6 +66,13 @@ declare global {
         widthMm: number;
         heightMm: number;
       }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+      /**
+       * Settings › Download backup: a save dialog, then the backup zip written
+       * there. Resolves once it is on disk. Absent in older builds.
+       */
+      downloadBackup?: (url: string) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+      /** The logs folder (backend.log, main.log, updater.log). Absent in older builds. */
+      getLogsDir?: () => Promise<string>;
       /** Whether the window is fullscreen. Absent in older builds. */
       isFullScreen?: () => Promise<boolean>;
       /** Fullscreen changes; returns the unsubscribe. Absent in older builds. */

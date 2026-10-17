@@ -132,8 +132,10 @@
 
 
 /* ---- Skins ---------------------------------------------------------------
-   Three pairs, each a light and a dark cut of the same idea, all of them
-   colourless so only the photo carries colour:
+   Five pairs, each a light and a dark cut of the same idea. The first three
+   are colourless so only the photo carries colour; Cyanotype and Negative
+   (after a cyanotype print and the orange base of colour negative film)
+   carry one restrained colour, added on request:
 
    Stone    - muted greys: surfaces off-white rather than white, type dark grey
               rather than black, the accent a slate grey. The default pair.
@@ -230,6 +232,77 @@
   --danger: #e27466;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.48);
+  color-scheme: dark;
+}
+
+/* Cyanotype - the one blue skin, after the Prussian blue of a cyanotype
+   print: blue-grey surfaces and a deep blue accent by day. Added on request
+   (2026-10-15) next to the colourless pairs; the surfaces stay pale so the
+   photo still carries the strongest colour. */
+:root[data-theme="cyanotype"] {
+  --bg: #e6ebf2;
+  --bg-elevated: #f4f7fb;
+  --hover: #dbe2ec;
+  --border: #cbd4e1;
+  --text: #1d2738;
+  --text-muted: #5f6b80;
+  --accent: #1f4f96;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(31, 79, 150, 0.12);
+  --danger: #b34a3e;
+  color-scheme: light;
+}
+
+/* Cyanotype Dark - deep blue at night, lifted well clear of navy-black, with
+   a soft sky-blue accent. */
+:root[data-theme="cyanotype-dark"] {
+  --bg: #1f2a3c;
+  --bg-elevated: #27344a;
+  --hover: #2f3d55;
+  --border: #3b4b66;
+  --text: #e6ebf3;
+  --text-muted: #95a3b9;
+  --accent: #82a8e2;
+  --accent-contrast: #15213a;
+  --accent-soft: rgba(130, 168, 226, 0.18);
+  --danger: #e27466;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.52);
+  color-scheme: dark;
+}
+
+/* Negative - the orange base of colour negative film: pale apricot surfaces
+   and a burnt orange accent. Danger is a crimson, so a warning never reads as
+   just another accent. */
+:root[data-theme="negative"] {
+  --bg: #f4e7d8;
+  --bg-elevated: #fbf4eb;
+  --hover: #ecdbc8;
+  --border: #e0cab2;
+  --text: #2e2219;
+  --text-muted: #7a6250;
+  --accent: #c0601d;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(192, 96, 29, 0.13);
+  --danger: #a8303c;
+  color-scheme: light;
+}
+
+/* Negative Dark - a warm brown charcoal, the film base held to the light,
+   with the mask's orange as the accent. */
+:root[data-theme="negative-dark"] {
+  --bg: #33271e;
+  --bg-elevated: #3d2f24;
+  --hover: #47372b;
+  --border: #584435;
+  --text: #f3e8dc;
+  --text-muted: #b39d88;
+  --accent: #e8955a;
+  --accent-contrast: #2a1d14;
+  --accent-soft: rgba(232, 149, 90, 0.18);
+  --danger: #f07a86;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
 }
 
@@ -418,6 +491,105 @@ button {
 .about-modal-version {
   font-size: var(--text-sm);
   color: var(--text-muted);
+}
+
+.about-modal-whats-new {
+  border: none;
+  background: none;
+  padding: 0;
+  margin-top: 4px;
+  font: inherit;
+  font-size: var(--text-base);
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* "What's new" after an update (components/WhatsNew.tsx): the CHANGELOG
+   sections not seen yet, grouped as written, one button to go on. */
+.modal.whats-new-modal {
+  width: min(480px, 100%);
+}
+
+.whats-new-head {
+  padding: 20px 22px 4px;
+}
+
+.whats-new-head h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.whats-new-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 22px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.whats-new-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+summary.whats-new-version-title {
+  cursor: default;
+}
+
+.whats-new-version-title {
+  margin: 6px 0 2px;
+  font-size: var(--text-base);
+  font-weight: 700;
+}
+
+.whats-new-date {
+  margin-left: 8px;
+  font-weight: 400;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.whats-new-group {
+  margin-top: 8px;
+}
+
+.whats-new-group-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.whats-new-group ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.whats-new-group code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95em;
+}
+
+.whats-new-empty {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.whats-new-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 22px 18px;
 }
 
 .about-modal-site {
@@ -2186,6 +2358,35 @@ textarea:focus-visible {
   white-space: nowrap;
   font-size: var(--text-xs);
   line-height: 14px;
+}
+
+/* The pinned Camera row: make, camera and lens give up width so the four
+   sliders can show their whole readout ("1/4000–1/30", "200–12800") instead
+   of an ellipsis. The dropdowns ellipsize long names; the full name is in
+   the list. */
+.filter-menu--camera.filter-menu--docked .filter-menu-row--make,
+.filter-menu--camera.filter-menu--docked .filter-menu-row--camera,
+.filter-menu--camera.filter-menu--docked .filter-menu-row--lens {
+  max-width: 130px;
+}
+
+.filter-menu--camera.filter-menu--docked .filter-menu-row--focal,
+.filter-menu--camera.filter-menu--docked .filter-menu-row--iso,
+.filter-menu--camera.filter-menu--docked .filter-menu-row--aperture,
+.filter-menu--camera.filter-menu--docked .filter-menu-row--shutter {
+  width: 230px;
+}
+
+/* Within the same field the line gets the room: a readout cell just wide
+   enough for "1/4000–1/30", tighter gaps and insets. */
+.filter-menu--camera.filter-menu--docked .focal-range {
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.filter-menu--camera.filter-menu--docked .focal-range > .focal-range-value {
+  flex-basis: 6.2em;
+  width: 6.2em;
 }
 
 /* Docked, the pin joins the row as its last item, after the last filter - as
@@ -4966,7 +5167,7 @@ input.editor-preset-select {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 14px 20px 20px;
+  padding: 20px 20px 14px;
   background: var(--bg-elevated);
   border-top: 1px solid var(--border);
 }
@@ -4988,14 +5189,21 @@ input.editor-preset-select {
 
 .editor-footer-primary {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
-/* Save copy fills its half of the row so it reads as the main action. */
+/* Export… and Save copy: the panel's small button size, one line each, as
+   wide as their word; the autosave note takes the rest of the row. */
+.editor-footer-primary {
+  align-items: center;
+}
+
 .editor-footer-primary .btn {
-  flex: 1;
-  padding: 9px 12px;
-  font-weight: 600;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
 }
 
 .editor-footer-error {
@@ -5008,10 +5216,14 @@ input.editor-preset-select {
    the edit keeps itself. */
 .editor-autosave-note {
   flex: 1;
-  text-align: center;
+  min-width: 0;
+  text-align: right;
   color: var(--text-muted);
-  font-size: var(--text-sm);
-  padding: 9px 0;
+  font-size: var(--text-xs);
+  /* One line, whichever note stands. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* A write that didn't land. Nothing is lost - closing the editor saves through
@@ -5242,16 +5454,6 @@ input.editor-preset-select {
 /* The album form's tag picker keeps one width whatever it says ("Tags
    (optional)", "2 tags", a long tag name), so the name field beside it never
    resizes. Wide enough for "Tags (optional)" next to its icon. */
-.album-create-form .tag-filter-btn {
-  width: 148px;
-  max-width: none;
-}
-
-.album-create-form .tag-filter-btn-label {
-  flex: 1;
-  text-align: left;
-}
-
 .tag-filter-caret,
 .reset-menu-caret {
   display: inline-flex;
@@ -5260,10 +5462,8 @@ input.editor-preset-select {
 }
 
 .tag-filter-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 30;
+  position: fixed;
+  z-index: var(--z-menu);
   min-width: 200px;
   max-width: 260px;
   padding: 8px;
@@ -5286,7 +5486,7 @@ input.tag-filter-search {
 .tag-filter-list {
   display: flex;
   flex-direction: column;
-  max-height: 260px;
+  max-height: var(--tag-list-max, 260px);
   overflow-y: auto;
 }
 
@@ -5950,11 +6150,15 @@ input.dropdown-search {
   background: var(--hover);
 }
 
-.flag-btn--pick.active {
+/* The lit colour holds under the pointer too: the hover rule above outranks
+   a plain .active, so a click showed white until the pointer moved away. */
+.flag-btn--pick.active,
+.flag-btn--pick.active:hover:not(:disabled) {
   color: #3ea76a;
 }
 
-.flag-btn--reject.active {
+.flag-btn--reject.active,
+.flag-btn--reject.active:hover:not(:disabled) {
   color: var(--danger);
 }
 
@@ -6362,6 +6566,112 @@ input.dropdown-search {
 
 /* The reason under a failed load, and the one button that leads out of an
    empty view ("Try again", "Clear filters"). */
+.empty-state--welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 64px;
+  color: var(--text-muted);
+}
+
+.empty-state-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Files dragged over the window (App.tsx DropToImport): a dim with a dashed
+   inset and one card that says what a drop does. No pointer events, so the
+   drop still lands on the document. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-tooltip);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  pointer-events: none;
+}
+
+.drop-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 22px 32px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-modal);
+  color: var(--accent);
+}
+
+.drop-overlay-card strong {
+  font-size: var(--text-lg);
+  color: var(--text);
+}
+
+.drop-overlay-card span {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* The Import page's visible drop target (the drop itself is the window's). */
+.import-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin-top: 14px;
+  padding: 22px 16px;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.import-dropzone:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.import-dropzone strong {
+  color: var(--text);
+}
+
+.import-dropzone span {
+  font-size: var(--text-sm);
+}
+
+.empty-state-report {
+  margin-top: 14px;
+}
+
+.report-problem {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.report-problem a.btn {
+  text-decoration: none;
+}
+
 .empty-state-detail {
   margin-top: 6px;
   font-size: var(--text-sm);
@@ -7676,6 +7986,39 @@ input.dropdown-search {
   width: min(560px, 100%);
 }
 
+/* Taller than the window allows: the title and Done stay put and the
+   settings scroll between them. Without this the modal clipped its content
+   and the autofocused Done scrolled the title out of the top. */
+.import-settings-modal .pair-delete-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  gap: 0;
+}
+
+.import-settings-head {
+  padding: 20px 22px 4px;
+}
+
+.import-settings-head h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.import-settings-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 22px 8px;
+}
+
+.import-settings-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 22px 18px;
+  border-top: 1px solid var(--border);
+}
+
 /* Single import button with a small dropdown of picker choices (folder vs
    individual files) - one trigger, both capabilities. */
 .import-menu {
@@ -8907,6 +9250,12 @@ kbd {
   min-height: var(--control-h-sm);
 }
 
+.mask-editor-head-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
 .mask-editor-name {
   min-width: 0;
   overflow: hidden;
@@ -9467,7 +9816,8 @@ kbd {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
   gap: 12px;
-  max-width: 620px;
+  /* Five tiles in a row. */
+  max-width: 700px;
   margin-top: 14px;
 }
 
@@ -9919,12 +10269,21 @@ kbd {
   margin-right: 2px;
 }
 .settings-tag-row .icon-btn {
-  /* Always in the row, so nothing shifts; only the colour comes and goes. */
-  color: transparent;
-}
-.settings-tag-row:hover .icon-btn,
-.settings-tag-row .icon-btn:focus-visible {
+  /* Rename and delete, always shown: plain glyphs without a box, a light
+     background under the pointer, delete red. */
+  width: 24px;
+  height: 24px;
+  border-color: transparent;
+  background: transparent;
   color: var(--text-muted);
+}
+.settings-tag-row .icon-btn:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--hover);
+  color: var(--text);
+}
+.settings-tag-row .icon-btn:last-child:hover:not(:disabled) {
+  color: var(--danger);
 }
 
 /* A toggle row: checkbox/radio + a title and optional description. Used for
@@ -9985,6 +10344,52 @@ kbd {
 }
 .settings-option.busy {
   cursor: wait;
+}
+
+/* Settings › Import: the fixed import folder - label, path (cut at the
+   start: the end is what tells folders apart) and its two buttons. */
+.import-folder-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 6px;
+  font-size: var(--text-sm);
+}
+
+.import-folder-setting-label {
+  flex: none;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.import-folder-setting-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.import-folder-setting .btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.import-folder-setting-error {
+  margin: 0 0 6px;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+/* A row that doesn't apply right now (the import's copy options while photos
+   stay in place): dimmed as a whole, not just its box. */
+.settings-option:has(> input:disabled) {
+  opacity: 0.5;
+  cursor: default;
 }
 .settings-option > input {
   margin-top: 3px;
@@ -10087,6 +10492,12 @@ kbd {
    scrollable rows of cover cards, one row per kind (Moments / Big days /
    Years / Months). */
 .smart-section {
+  margin-bottom: 18px;
+}
+
+/* "My albums" ends where the automatic rows begin, with the same gap as
+   between those rows - not flush against the next title. */
+.albums-page > .thumbnail-grid {
   margin-bottom: 18px;
 }
 
@@ -12485,6 +12896,184 @@ button.stats-col:disabled {
   align-items: baseline;
   gap: 4px 10px;
   padding-right: 8px;
+}
+
+.canvas-filmstrip-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Auto pick (components/AutoPickDialog.tsx): reference row, count, a grid
+   of ticked tiles, one button. */
+.modal.auto-pick-modal {
+  width: min(640px, 100%);
+}
+
+.modal.auto-arrange-modal {
+  width: min(460px, 100%);
+}
+
+.auto-pick-head {
+  padding: 20px 22px 6px;
+}
+
+.auto-pick-head h3 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-lg);
+}
+
+.auto-pick-hint,
+.auto-pick-muted {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.auto-pick-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 22px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auto-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.auto-pick-label {
+  flex: none;
+  width: 72px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+/* The reference chips scroll sideways; the chosen one is outlined. */
+.auto-pick-refs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px;
+}
+
+.auto-pick-ref {
+  flex: none;
+  width: 56px;
+  height: 42px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.auto-pick-ref img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.auto-pick-ref--all {
+  width: auto;
+  padding: 0 10px;
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.auto-pick-ref.is-active {
+  border-color: var(--accent);
+}
+
+.auto-pick-row--filters {
+  flex-wrap: wrap;
+}
+
+.auto-pick-results {
+  min-height: 120px;
+}
+
+.detail-section-label--row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.auto-pick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.auto-pick-tile {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  overflow: hidden;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.auto-pick-tile.is-on {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+.auto-pick-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.auto-pick-tick {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 18px;
+  height: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.auto-pick-tile.is-on .auto-pick-tick {
+  display: inline-flex;
+}
+
+.auto-pick-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 22px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.auto-pick-foot-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .canvas-filmstrip-toggle {

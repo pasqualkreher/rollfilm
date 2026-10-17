@@ -273,13 +273,14 @@ export function OnboardingWizard() {
                   enters your library until you click <em>Add to library</em>.
                 </li>
                 <li>
-                  <strong>Browse &amp; cull</strong>: <kbd>P</kbd> picks, <kbd>X</kbd> rejects,{" "}
+                  <strong>Browse &amp; cull</strong>: <kbd>A</kbd> picks, <kbd>X</kbd> rejects,{" "}
                   <kbd>0</kbd>–<kbd>5</kbd> rate, <kbd>6</kbd>–<kbd>9</kbd> label, then filter. The
                   search understands plain language, such as <em>"dog on a beach"</em>.
                 </li>
                 <li>
                   <strong>Collect</strong>: ⌘-click or drag across photos to select them, then put
-                  them in an album, on a canvas, or export them. Right-click offers everything.
+                  them in an album, on a canvas, or export them. Right-click offers everything.{" "}
+                  <em>Find similar…</em> finds photos that go with one you chose.
                 </li>
                 <li>
                   <strong>Edit</strong>: adjust tone, color and film-style effects. The original file

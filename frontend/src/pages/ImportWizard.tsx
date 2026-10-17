@@ -1072,7 +1072,7 @@ export function ImportWizard() {
     active: markedFiles.length > 0 && lightboxIndex === null,
     rate: (rating) => void applyToMarked({ rating }),
     toggleImport: toggleMarkedImport,
-    // P picks (imported), X rejects (left out): the culling keys, as in the
+    // A picks (imported), X rejects (left out): the culling keys, as in the
     // library, on the marked cards.
     setImport: (on) => void applyToMarked({ selected: on }),
   };
@@ -1083,7 +1083,7 @@ export function ImportWizard() {
       if (target && takesTyping(target)) return null;
       if (e.metaKey || e.ctrlKey || e.altKey) return null;
       if (e.key === " " || e.code === "Space") return "import";
-      if (e.key === "p" || e.key === "P") return "pick";
+      if (e.key === "a" || e.key === "A") return "pick";
       if (e.key === "x" || e.key === "X") return "reject";
       return e.key >= "0" && e.key <= "5" && e.key.length === 1 ? "rate" : null;
     }
@@ -1194,6 +1194,9 @@ export function ImportWizard() {
   const [importSettingsOpen, setImportSettingsOpen] = useState(false);
   const [modeAsk, setModeAsk] = useState<{
     defaultName: string;
+    // Settings say "always copy": the dialog asks only where (and the name),
+    // not whether.
+    copyOnly?: boolean;
     resolve: (choice: ImportChoice | null) => void;
   } | null>(null);
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
@@ -1203,17 +1206,22 @@ export function ImportWizard() {
 
   function askImportMode(defaultName: string): Promise<ImportChoice | null> {
     const remembered = importSettings?.mode_default;
-    // A remembered copy collects in the library's Import folder; choosing
-    // another place per session (and naming it) is what the dialog is for.
-    if (remembered === "copy" || remembered === "reference") {
+    // Leaving photos in place needs no folder: a remembered answer starts
+    // straight away. A copy always asks where its import folder goes - every
+    // session, also when copying itself is remembered.
+    if (remembered === "reference") {
+      return Promise.resolve({ mode: "reference", stagingFolder: null, keepBackup: false, name: defaultName });
+    }
+    // ...unless Settings fix the folder too: then nothing is asked.
+    if (remembered === "copy" && importSettings?.staging_folder) {
       return Promise.resolve({
-        mode: remembered,
-        stagingFolder: null,
-        keepBackup: remembered === "copy" && importSettings?.backup_default === "keep",
+        mode: "copy",
+        stagingFolder: importSettings.staging_folder,
+        keepBackup: importSettings.backup_default === "keep",
         name: defaultName,
       });
     }
-    return new Promise((resolve) => setModeAsk({ defaultName, resolve }));
+    return new Promise((resolve) => setModeAsk({ defaultName, copyOnly: remembered === "copy", resolve }));
   }
 
   function chooseImportMode(choice: ImportChoice, remember: boolean) {
@@ -1371,6 +1379,34 @@ export function ImportWizard() {
     };
   }, [importMenuOpen]);
 
+  // The start dialog and the settings dialog, in both views: a folder dropped
+  // on the window while a review is open asks the same questions as one
+  // dropped on the empty page (it used to ask into the void - the dialog was
+  // only on the choose screen, and the drop waited for an answer forever).
+  const startDialogs = (
+    <>
+      <Presence open={modeAsk !== null} ms={MOTION.modal}>
+        {modeAsk && (
+          <ImportModeDialog
+            libraryRoot={libraryRoot}
+            defaultName={modeAsk.defaultName}
+            defaultBackup={importSettings?.backup_default === "keep"}
+            copyOnly={modeAsk.copyOnly}
+            defaultFolder={importSettings?.staging_folder ?? null}
+            onChoose={chooseImportMode}
+            onClose={() => {
+              modeAsk.resolve(null);
+              setModeAsk(null);
+            }}
+          />
+        )}
+      </Presence>
+      <Presence open={importSettingsOpen} ms={MOTION.modal}>
+        <ImportSettingsDialog onClose={() => setImportSettingsOpen(false)} />
+      </Presence>
+    </>
+  );
+
   if (!sessionId) {
     return (
       <div className="page">
@@ -1382,23 +1418,7 @@ export function ImportWizard() {
         </p>
         <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} />
         <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
-        <Presence open={modeAsk !== null} ms={MOTION.modal}>
-          {modeAsk && (
-            <ImportModeDialog
-              libraryRoot={libraryRoot}
-              defaultName={modeAsk.defaultName}
-              defaultBackup={importSettings?.backup_default === "keep"}
-              onChoose={chooseImportMode}
-              onClose={() => {
-                modeAsk.resolve(null);
-                setModeAsk(null);
-              }}
-            />
-          )}
-        </Presence>
-        <Presence open={importSettingsOpen} ms={MOTION.modal}>
-          <ImportSettingsDialog onClose={() => setImportSettingsOpen(false)} />
-        </Presence>
+        {startDialogs}
 
         <div className="import-panels">
           <div className="import-panel import-panel--menu">
@@ -1522,6 +1542,18 @@ export function ImportWizard() {
                 )}
               </Presence>
             </div>
+            {/* The same thing the window-wide drop does, made visible: a target
+                that says dropping works. Clicking it opens the picker menu. */}
+            <button
+              type="button"
+              className="import-dropzone"
+              onClick={() => setImportMenuOpen(true)}
+              disabled={isUploading}
+            >
+              <IconImport size={22} />
+              <strong>Drop a card, folder or photos here</strong>
+              <span>…or anywhere on this window. Click to choose instead.</span>
+            </button>
             {isUploading && (
               <p className="import-panel-desc" style={{ color: "var(--text-muted)", marginTop: 12 }}>
                 {folderImportActive
@@ -1555,6 +1587,7 @@ export function ImportWizard() {
 
   return (
     <div className="page page-timeline">
+      {startDialogs}
       <div className="import-review-head">
         <ImportSteps current={commitNote ? 3 : 2} />
         {/* Title and explanation run on in one line; the header stays three

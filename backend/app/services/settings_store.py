@@ -83,6 +83,11 @@ IMPORT_BACKUP_DEFAULT_CHOICES = ("keep", "delete")
 # reader or a drive one doesn't quite trust, it is the price of knowing.
 IMPORT_VERIFY_COPIES = "import_verify_copies"
 
+# Where a copying import puts its session folder without asking: an absolute
+# folder the user chose in Settings. Unset or "" = every copying session asks
+# (the start dialog, pre-filled with the library's Import folder).
+IMPORT_STAGING_FOLDER = "import_staging_folder"
+
 # Whether an import takes over what another program wrote into a photo's XMP /
 # IPTC blocks or an .xmp sidecar beside it: stars, colour label, keywords,
 # caption. On unless switched off ("0") - a library that comes from Lightroom
@@ -112,7 +117,7 @@ AUTO_DEVELOP_GROUP_NAMES = ("tone", "white_balance", "color", "details", "curves
 SMART_ALBUM_SECTIONS = "smart_album_sections"
 SMART_ALBUM_SECTION_NAMES = (
     "moments",       # CLIP similarity clusters
-    "tags",          # one album per tag the user gave their photos
+    "tags",          # one album per tag - no longer offered (the filter has tags)
     "places",        # GPS clusters within the radius below
     "countries",     # one album per country
     "country_years", # one album per country and year ("Italy 2024")
@@ -122,7 +127,7 @@ SMART_ALBUM_SECTION_NAMES = (
     "edits",         # everything edited in place plus saved edit copies
 )
 DEFAULT_SMART_ALBUM_SECTIONS = (
-    "moments", "tags", "places", "countries", "days", "years", "months", "edits"
+    "moments", "places", "countries", "days", "years", "months", "edits"
 )
 # How far (km) a photo may sit from a place's center and still belong to it.
 SMART_ALBUM_PLACE_RADIUS_KM = "smart_album_place_radius_km"
@@ -257,6 +262,10 @@ def get_import_read_file_metadata(db: Session) -> bool:
 
 def get_import_verify_copies(db: Session) -> bool:
     return get_setting(db, IMPORT_VERIFY_COPIES) == "1"
+
+
+def get_import_staging_folder(db: Session) -> str | None:
+    return get_setting(db, IMPORT_STAGING_FOLDER) or None
 
 
 def get_sidecar_write(db: Session) -> bool:

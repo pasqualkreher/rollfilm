@@ -47,7 +47,7 @@ export function takesTyping(el: HTMLElement): boolean {
 export const COLOR_KEYS = { "6": "red", "7": "yellow", "8": "green", "9": "blue" } as const;
 export type KeyedColor = (typeof COLOR_KEYS)[keyof typeof COLOR_KEYS];
 // The culling flag's keys, Lightroom's: P picks, X rejects, U takes it off.
-export const FLAG_KEYS = { p: "pick", x: "reject", u: "" } as const;
+export const FLAG_KEYS = { a: "pick", x: "reject", u: "" } as const;
 export type KeyedFlag = (typeof FLAG_KEYS)[keyof typeof FLAG_KEYS];
 
 // Cmd/Ctrl+A selects everything in the grid and Escape clears the selection -
@@ -65,7 +65,7 @@ export function useSelectionKeys(opts: {
   // label (COLOR_KEYS), Delete / Backspace deletes.
   onRate?: (rating: number) => void;
   onColor?: (label: KeyedColor | "none") => void;
-  // P / X / U: pick, reject, take the flag off (FLAG_KEYS).
+  // A / X / U: pick (accept), reject, take the flag off (FLAG_KEYS).
   onFlag?: (flag: KeyedFlag) => void;
   onDelete?: () => void;
   // The menu bar's File → Export… (⇧⌘E) and Photo → Export….

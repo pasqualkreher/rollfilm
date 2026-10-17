@@ -15,6 +15,7 @@ interface Props {
 export const RESET_ASPECTS: { key: keyof BulkResetOptions; label: string }[] = [
   { key: "rating", label: "Stars" },
   { key: "color_label", label: "Colors" },
+  { key: "flag", label: "Flags" },
   { key: "tags", label: "Tags" },
   { key: "albums", label: "Albums" },
   { key: "develop", label: "Edits" },

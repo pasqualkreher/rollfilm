@@ -146,14 +146,14 @@ export function ImportLightbox({
         // are already in the library and can't be re-imported).
         e.preventDefault();
         if (!duplicate) onUpdate(file!.id, { selected: !file!.selected });
-      } else if (!inControl && (e.key === "p" || e.key === "P") && !e.metaKey && !e.ctrlKey) {
-        // P picks: the photo is imported (the culling key, as in the library).
+      } else if (!inControl && (e.key === "a" || e.key === "A") && !e.metaKey && !e.ctrlKey) {
+        // A picks: the photo is imported (the culling key, as in the library).
         if (!duplicate) onUpdate(file!.id, { selected: true });
       } else if (!inControl && (e.key === "x" || e.key === "X") && !e.metaKey && !e.ctrlKey) {
         // X rejects: left out of the import.
         if (!duplicate) onUpdate(file!.id, { selected: false });
-      } else if (!inControl && (e.key === "i" || e.key === "I") && !e.metaKey && !e.ctrlKey) {
-        // I, as in the library photo view: the camera settings.
+      } else if (!inControl && ["p", "i"].includes(e.key.toLowerCase()) && !e.metaKey && !e.ctrlKey) {
+        // P (or I), as in the library photo view: the camera settings.
         setImportInfoPanelOpen(!infoOpen);
       }
     }

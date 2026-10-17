@@ -66,14 +66,20 @@ export interface Task {
   locksNav?: boolean;
   // Hover text on the label.
   title?: string;
+  // Not work in progress - the Undo chip after a star or a flag - or work
+  // that is over in a blink: the dock shows it without a spinner.
+  quiet?: boolean;
+  // Out of the dock for now: a quick bulk change (stars, flags, tags) only
+  // shows if it is still running after QUIET_SHOW_MS.
+  hidden?: boolean;
   finished?: TaskFinish;
   startedAt: number;
 }
 
 export type TaskSpec = Pick<Task, "kind" | "label"> &
-  Partial<Pick<Task, "id" | "done" | "total" | "cancel" | "cancelLabel" | "stopTitle" | "locksNav" | "title">>;
+  Partial<Pick<Task, "id" | "done" | "total" | "cancel" | "cancelLabel" | "stopTitle" | "locksNav" | "title" | "quiet" | "hidden">>;
 
-type TaskPatch = Partial<Pick<Task, "label" | "done" | "total" | "cancel" | "cancelLabel" | "stopTitle" | "title" | "cancelling">>;
+type TaskPatch = Partial<Pick<Task, "label" | "done" | "total" | "cancel" | "cancelLabel" | "stopTitle" | "title" | "cancelling" | "quiet" | "hidden">>;
 
 export interface TaskHandle {
   id: string;
@@ -141,6 +147,10 @@ const EXPORT_POLL_MS = 400;
 const POLL_MS = 1000;
 // How long a finished task's chip stays.
 const FINISH_MS = 10000;
+// A quiet batch (stars, flags, tags on a selection) stays out of the dock
+// unless it takes longer than this: a spinner that flashes for a few
+// milliseconds after every keystroke is noise.
+const QUIET_SHOW_MS = 1000;
 
 // A slice should take about this long: short enough that the count moves and
 // Stop answers promptly, long enough that a big selection is not thousands of
@@ -274,6 +284,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
       const counted = units.length > BATCH_FIRST;
       const handle = startTask({
         ...spec,
+        hidden: spec.quiet,
         done: counted ? 0 : undefined,
         total: counted ? units.length : undefined,
         cancel: counted
@@ -284,6 +295,11 @@ export function TasksProvider({ children }: { children: ReactNode }) {
         stopTitle: spec.stopTitle ?? "Stop here. Everything done so far is kept.",
       });
       if (!handle) throw new TaskBusyError(find(spec.id!)?.label ?? spec.label);
+      // Long enough to be worth seeing: in the dock with its count and Stop,
+      // the spinner back as for any other running task.
+      const showTimer = spec.quiet
+        ? window.setTimeout(() => handle.update({ hidden: false, quiet: false }), QUIET_SHOW_MS)
+        : null;
       const done: string[] = [];
       const results: R[] = [];
       try {
@@ -302,6 +318,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
         }
         return { done, results, cancelled: cancelled && at < units.length };
       } finally {
+        if (showTimer !== null) window.clearTimeout(showTimer);
         handle.finish();
       }
     },
@@ -372,7 +389,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
         publish();
         return;
       }
-      const visible: (keyof Task)[] = ["label", "done", "total", "cancelLabel", "stopTitle", "title", "locksNav", "cancelling"];
+      const visible: (keyof Task)[] = ["label", "done", "total", "cancelLabel", "stopTitle", "title", "locksNav", "quiet", "cancelling"];
       const hadCancel = t.cancel !== null;
       t.cancel = task.cancel;
       let changed = hadCancel !== (task.cancel !== null);
@@ -401,6 +418,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
         id,
         kind: "plain",
         label: opts.label,
+        quiet: true,
         title: opts.title ?? "Done. Undo takes it back; otherwise it stands.",
         cancelLabel: "Undo",
         stopTitle: "Undo this",

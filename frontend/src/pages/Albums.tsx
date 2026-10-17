@@ -2,9 +2,7 @@ import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DEFAULT_EDIT_VERSION } from "../api/client";
-import { withoutMembershipNames } from "../utils/autoTags";
 import { useAppDialogs } from "../components/AppDialogs";
-import { TagFilter } from "../components/TagFilter";
 import { errorText } from "../utils/apiError";
 import { useScrollMemory } from "../utils/scrollMemory";
 import { forgetThumbLoaded, isThumbLoaded, markThumbLoaded } from "../utils/preload";
@@ -13,7 +11,6 @@ import {
   IconChevronDown,
   IconPlus,
   IconRename,
-  IconTag,
   IconTrash,
 } from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
@@ -215,7 +212,6 @@ function albumCount(album: AlbumOut): string {
 
 export function Albums() {
   const [name, setName] = useState("");
-  const [newTags, setNewTags] = useState<string[]>([]);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
 
@@ -223,11 +219,6 @@ export function Albums() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
 
   const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list() });
-  const { data: allTags } = useQuery({
-    queryKey: ["tags"],
-    queryFn: () => api.tags.list(),
-    select: withoutMembershipNames,
-  });
 
   // Auto-computed albums (similarity clusters + years/months/big days). The
   // cluster pass runs in the background on the server - keep polling while
@@ -250,10 +241,9 @@ export function Albums() {
   useScrollMemory(pageRef, "albums", { ready: !!albums && !!smart });
 
   const createAlbum = useMutation({
-    mutationFn: () => api.albums.create(name, undefined, newTags),
+    mutationFn: () => api.albums.create(name),
     onSuccess: () => {
       setName("");
-      setNewTags([]);
       queryClient.invalidateQueries({ queryKey: ["albums"] });
     },
     // Album names are unique - a taken name comes back as an error the user
@@ -284,7 +274,6 @@ export function Albums() {
   const hasSmart =
     !!smart &&
     (smart.clusters.length > 0 ||
-      smart.tags.length > 0 ||
       smart.places.length > 0 ||
       smart.countries.length > 0 ||
       smart.country_years.length > 0 ||
@@ -323,29 +312,10 @@ export function Albums() {
             onChange={(e) => setName(e.target.value)}
           />
         </label>
-        {/* Optional tag rule: photos carrying any checked tag belong to the
-            album automatically (and keep joining it as they get tagged).
-            Rendered even with no tags in the library (disabled "No tags"),
-            so the feature stays discoverable. */}
-        <TagFilter
-          options={allTags ?? []}
-          value={newTags}
-          onChange={setNewTags}
-          emptyLabel="Tags (optional)"
-          title="Optional: photos with any of the selected tags are added to the album automatically"
-          icon={<IconTag size={14} />}
-        />
         <button className="btn primary" type="submit">
           <IconPlus size={14} /> Create album
         </button>
       </form>
-      {/* Under the row, not in it, and always there: picking tags changes the
-          words, never the size of the field or where the albums start. */}
-      <p style={{ color: "var(--text-muted)", fontSize: "var(--text-base)", margin: "-8px 0 16px" }}>
-        {newTags.length > 0
-          ? `Auto-includes photos tagged ${newTags.join(", ")}`
-          : "Pick tags to add matching photos to the album automatically."}
-      </p>
 
       {albums && albums.length === 0 && <div className="empty-state">No albums yet. Create one above.</div>}
 
@@ -451,7 +421,6 @@ export function Albums() {
             <SmartRowSkeleton title="Moments" hint="Analyzing your photos…" />
           )}
           <MomentsRow items={smart.clusters} />
-          <SmartRow title="Tags" items={smart.tags} />
           <SmartRow title="Places" items={smart.places} />
           <SmartRow title="Countries" items={smart.countries} />
           <SmartRow title="Countries by year" items={smart.country_years} />

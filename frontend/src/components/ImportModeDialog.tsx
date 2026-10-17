@@ -33,15 +33,24 @@ const OUTCOMES = Object.keys(WHAT_HAPPENS) as Outcome[];
 // (inside the library's Import folder, or wherever the user says) or leave
 // them where they are, and for a copy whether that folder is kept as a backup
 // or goes when the session closes. "Don't ask again" stores the answers as
-// the default; Settings bring the question back.
+// the default; Settings bring the question back. With "always copy" it still
+// comes, without the copy-or-leave choice: the folder is asked every session.
 export function ImportModeDialog({
   libraryRoot,
   defaultName,
   defaultBackup,
   onClose,
   onChoose,
+  copyOnly = false,
+  defaultFolder = null,
   closing = false,
 }: {
+  // The import folder fixed in Settings, as the starting choice; null = the
+  // library's Import folder.
+  defaultFolder?: string | null;
+  // Settings say "always copy": only where and under what name is asked, the
+  // copy-or-leave choice and "always import like this" are not shown.
+  copyOnly?: boolean;
   // What the session is called unless the user types a name: the picked
   // folder's name, or "N selected files".
   defaultName: string;
@@ -70,7 +79,7 @@ export function ImportModeDialog({
     )
   );
   // Where the session's import folder is created; null = <library>/Import.
-  const [stagingFolder, setStagingFolder] = useState<string | null>(null);
+  const [stagingFolder, setStagingFolder] = useState<string | null>(defaultFolder);
   const [keepBackup, setKeepBackup] = useState(defaultBackup);
   const [remember, setRemember] = useState(false);
   const [name, setName] = useState(defaultName);
@@ -104,6 +113,7 @@ export function ImportModeDialog({
               autoFocus
             />
           </label>
+          {!copyOnly && (
           <div className="copy-kind-choice" role="radiogroup" aria-label="Where the photos go">
             <button
               type="button"
@@ -134,6 +144,7 @@ export function ImportModeDialog({
               </span>
             </button>
           </div>
+          )}
           {/* Only a copy has an import folder - but its controls stay in
               place, switched off, so the dialog doesn't jump between modes. */}
           <div className={`import-start-folder${copy ? "" : " is-off"}`}>
@@ -189,10 +200,12 @@ export function ImportModeDialog({
               ))}
             </div>
           </div>
-          <label className="filter-field filter-field-inline">
-            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />{" "}
-            Always import like this (change in Settings)
-          </label>
+          {!copyOnly && (
+            <label className="filter-field filter-field-inline">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />{" "}
+              Always import like this (change in Settings)
+            </label>
+          )}
           <div className="import-start-actions">
             <button className="btn" onClick={onClose}>
               Cancel

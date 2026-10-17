@@ -190,6 +190,25 @@ def test_resetting_stars_and_tags_on_one_half_resets_the_pair(pair):
     assert pair.get(Image, "raw").rating == 0 and _tag_names(pair, "raw") == set()
 
 
+def test_resetting_flags_clears_both_halves_and_only_when_asked(pair):
+    from app.api.routes.images import bulk_reset_metadata, update_image
+
+    update_image("jpg", schemas.ImageUpdate(flag="pick"), db=pair, current_user=_User())
+    assert pair.get(Image, "raw").flag == "pick"
+    # The default reset (stars, colour, tags) leaves the flag alone.
+    bulk_reset_metadata(schemas.BulkResetRequest(image_ids=["jpg"]), db=pair, current_user=_User())
+    assert pair.get(Image, "jpg").flag == "pick"
+    bulk_reset_metadata(
+        schemas.BulkResetRequest(
+            image_ids=["raw"], flag=True, rating=False, color_label=False, tags=False
+        ),
+        db=pair,
+        current_user=_User(),
+    )
+    pair.expire_all()
+    assert pair.get(Image, "raw").flag is None and pair.get(Image, "jpg").flag is None
+
+
 def test_the_migration_brings_pairs_that_disagree_in_line(pair):
     import importlib.util
     from pathlib import Path

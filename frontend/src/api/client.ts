@@ -43,6 +43,8 @@ import type {
   RawDecodeSettings,
   ScanStatus,
   SearchResultOut,
+  ImageGroupResult,
+  AutoPickRequest,
   SegmentResult,
   SmartAlbumSettings,
   SmartAlbumsOut,
@@ -139,14 +141,28 @@ const BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
   "http://localhost:8000";
 
+// A request that gets no answer must fail, not hang: a reader waiting on
+// "Loading…" forever is the worst outcome. Reads get half a minute, writes
+// a minute (a bulk change of a few hundred photos). Uploads, renders and
+// exports don't come through here - they carry their own progress and
+// signals.
+const READ_TIMEOUT_MS = 30_000;
+const WRITE_TIMEOUT_MS = 60_000;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
+  const method = init?.method ?? "GET";
+  const signal = init?.signal ?? AbortSignal.timeout(method === "GET" ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS);
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       headers: { "Content-Type": "application/json" },
       ...init,
+      signal,
     });
   } catch (e) {
+    if ((e as Error)?.name === "TimeoutError") {
+      throw new Error(`${method} ${path} failed: the app's background service took too long to answer. It may be busy or stuck; the log says more.`);
+    }
     // A request someone aborted on purpose stays what it is.
     if ((e as Error)?.name === "AbortError") throw e;
     // No answer at all (the backend is restarting, or gone). Reported in the
@@ -706,6 +722,18 @@ export const api = {
     },
     similar(id: string, limit = 50): Promise<SearchResultOut[]> {
       return request(`/images/${id}/similar?limit=${limit}`);
+    },
+    // The canvas's Auto-arrange: which of these photos share a page.
+    group(imageIds: string[], opts: { min_size?: number; max_size?: number } = {}): Promise<ImageGroupResult> {
+      return request(`/images/group`, { method: "POST", body: JSON.stringify({ image_ids: imageIds, ...opts }) });
+    },
+    // The photos nearest the centre of a set, nearest first (Auto pick with
+    // no reference: the canvas as a whole).
+    autoPick(body: AutoPickRequest): Promise<SearchResultOut[]> {
+      return request(`/images/auto-pick`, { method: "POST", body: JSON.stringify(body) });
+    },
+    pickCore(imageIds: string[], count = 10): Promise<SearchResultOut[]> {
+      return request(`/images/pick-core`, { method: "POST", body: JSON.stringify({ image_ids: imageIds, count }) });
     },
     rotate(id: string, degrees: 90 | -90): Promise<ImageOut> {
       return request(`/images/${id}/rotate`, { method: "PATCH", body: JSON.stringify({ degrees }) });

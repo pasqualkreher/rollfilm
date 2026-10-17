@@ -6,6 +6,9 @@ import type { ImmichSyncMode, ImmichTestResult, TagUsage } from "../api/types";
 import { ThemePicker } from "../components/ThemePicker";
 import { Desc, OptionRow } from "../components/SettingsControls";
 import { ImportSettingsPanel } from "../components/ImportSettingsPanel";
+import { ChangelogList } from "../components/WhatsNew";
+import { ReportProblem } from "../components/ReportProblem";
+import { changesUpTo } from "../utils/changelog";
 import { IconCheck, IconExport, IconImport, IconRename, IconX } from "../components/Icons";
 import { tagTreeRows } from "../utils/tagPaths";
 import { useAppDialogs } from "../components/AppDialogs";
@@ -83,7 +86,7 @@ const SETTINGS_TABS: { id: string; label: string; sections: string[] }[] = [
   {
     id: "maintenance",
     label: "Maintenance",
-    sections: ["Library maintenance", "Backup & restore", "About"],
+    sections: ["Library maintenance", "Backup & restore", "About", "Release notes"],
   },
 ];
 
@@ -319,7 +322,6 @@ const AUTO_DEVELOP_GROUPS: { key: string; label: string; desc: string }[] = [
 // SMART_ALBUM_SECTION_NAMES (services/settings_store.py).
 const SMART_ALBUM_SECTIONS: { key: string; label: string; desc: string }[] = [
   { key: "moments", label: "Moments", desc: "Photos that look alike, grouped and named automatically (beaches, portraits, food, …)." },
-  { key: "tags", label: "Tags", desc: "One album for each tag you have added to your photos." },
   { key: "places", label: "Places", desc: "Photos taken near each other, named after the nearest town. Uses the radius below." },
   { key: "countries", label: "Countries", desc: "One album per country, based on the photos' GPS location." },
   { key: "country_years", label: "Countries by year", desc: "Country albums split by year, for example “Italy 2024”." },
@@ -334,6 +336,7 @@ const SYNC_TASK = "maintenance:sync";
 const REBUILD_TASK = "maintenance:rebuild";
 const REPAIR_TASK = "maintenance:repair";
 const RESTORE_TASK = "maintenance:restore";
+const BACKUP_TASK = "maintenance:backup";
 const SIDECAR_TASK = "sidecar:write-all";
 
 export function Settings() {
@@ -343,7 +346,7 @@ export function Settings() {
   // down there with a Stop, and outlive this page: the buttons go by the
   // task registry (hasTask), which survives leaving and coming back, not
   // only by their own mutation.
-  const { runTask, trackPolledJob, hasTask, tasks } = useTasks();
+  const { runTask, trackPolledJob, hasTask, startTask, tasks } = useTasks();
   // Whether deleting a paired photo asks "only this file or the whole pair?".
   // Client-side view preference (see viewPrefs), not a server setting.
   const askDeletePartner = useAskDeletePartner();
@@ -434,6 +437,42 @@ export function Settings() {
 
   // Library folder: only available in the desktop app (Electron bridge).
   const desktop = window.photoManager;
+
+  // Download backup (desktop): asks where first, then the dock shows it until
+  // the zip is on disk - the backend writes it whole before the first byte
+  // comes, minutes for a big library - and leaves a "Show in Finder" behind.
+  const backupRunning = hasTask(BACKUP_TASK);
+  async function downloadBackup() {
+    if (!desktop?.downloadBackup || backupRunning) return;
+    const handle = startTask({
+      id: BACKUP_TASK,
+      kind: "maintenance",
+      label: "Writing backup…",
+      title: "The backup zip is being written. You can keep working.",
+    });
+    if (!handle) return;
+    try {
+      const result = await desktop.downloadBackup(api.maintenance.backupUrl());
+      if (result.ok && result.path) {
+        const path = result.path;
+        handle.finish({
+          label: "Backup saved",
+          action: desktop.revealFile
+            ? {
+                label: desktop.platform === "darwin" ? "Show in Finder" : desktop.platform === "win32" ? "Show in Explorer" : "Show in folder",
+                run: () => void desktop.revealFile?.(path),
+              }
+            : undefined,
+        });
+      } else if (result.canceled) {
+        handle.finish();
+      } else {
+        handle.finish({ label: result.error ?? "The backup could not be written.", error: true });
+      }
+    } catch (e) {
+      handle.finish({ label: (e as Error).message || "The backup could not be written.", error: true });
+    }
+  }
   // The tour's script: every section THIS build renders, in tab order. Two of
   // them exist only in the desktop app, so the web build's tour simply skips
   // them - it used to get that for free by reading the DOM, which the tabs
@@ -442,8 +481,9 @@ export function Settings() {
     const absent = new Set<string>();
     if (!desktop?.changeLibraryRoot) absent.add("Library folder");
     if (!desktop?.getDataRoot) absent.add("Library data");
-    // "About" has nothing to show around.
+    // "About" and the release notes have nothing to show around.
     absent.add("About");
+    absent.add("Release notes");
     return SETTINGS_TABS.flatMap((tab) => tab.sections.filter((title) => !absent.has(title)));
   }, [desktop]);
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
@@ -1657,9 +1697,15 @@ export function Settings() {
             Downloads every imported photo plus ratings, labels, albums and edits. External sources
             and tags are not included.
           </Desc>
-          <a className="btn primary" href={api.maintenance.backupUrl()} style={{ display: "inline-block" }}>
-            Download backup
-          </a>
+          {desktop?.downloadBackup ? (
+            <button className="btn primary" onClick={() => void downloadBackup()} disabled={backupRunning}>
+              {backupRunning ? "Writing backup…" : "Download backup"}
+            </button>
+          ) : (
+            <a className="btn primary" href={api.maintenance.backupUrl()} style={{ display: "inline-block" }}>
+              Download backup
+            </a>
+          )}
         </div>
 
         <div className="settings-block">
@@ -1771,6 +1817,9 @@ export function Settings() {
             contact@rollfilm.org
           </a>
         </Desc>
+        <div className="settings-block">
+          <ReportProblem />
+        </div>
         {/* An https link leaves the app for the system browser (the desktop
             shell routes every external URL to the OS). */}
         <Desc>
@@ -1779,6 +1828,12 @@ export function Settings() {
             Donate via PayPal
           </a>
         </Desc>
+      </Section>
+
+      {/* The same CHANGELOG the "What's new" sheet shows after an update:
+          this version open, the ones before folded away. */}
+      <Section {...sectionProps("Release notes")}>
+        <ChangelogList entries={changesUpTo(__APP_VERSION__)} foldOlder />
       </Section>
 
       <SettingsTour

@@ -14,8 +14,9 @@ import { api } from "./api/client";
 import { initPresets } from "./utils/presets";
 import { Library } from "./pages/Library";
 import { SearchBar } from "./components/SearchBar";
-import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconLandfill, IconMail, IconMenu, IconStop, IconX } from "./components/Icons";
+import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconImport, IconLandfill, IconMail, IconMenu, IconStop, IconX } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
+import { WhatsNew, openWhatsNew } from "./components/WhatsNew";
 import { DialogProvider } from "./components/AppDialogs";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UnhandledErrors } from "./components/UnhandledErrors";
@@ -156,6 +157,38 @@ function MissingFilesWatcher() {
 export const DROPPED_PATHS_KEY = "pm:dropped-paths";
 function DropToImport() {
   const navigate = useNavigate();
+  const { sessionId } = useImportSession();
+  // Files being dragged over the window: a counter of enters minus leaves,
+  // since every element under the pointer fires its own pair.
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+    const onEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth += 1;
+      setDragging(true);
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    };
+    const onEnd = () => {
+      depth = 0;
+      setDragging(false);
+    };
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", onEnd);
+    window.addEventListener("blur", onEnd);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", onEnd);
+      window.removeEventListener("blur", onEnd);
+    };
+  }, []);
   useEffect(() => {
     function onDrop(e: WindowEventMap["pm:files-dropped"]) {
       const paths = e.detail?.paths ?? [];
@@ -171,7 +204,22 @@ function DropToImport() {
     window.addEventListener("pm:files-dropped", onDrop);
     return () => window.removeEventListener("pm:files-dropped", onDrop);
   }, [navigate]);
-  return null;
+  // The overlay takes no pointer events, so the drop still lands on the
+  // document (preload.js) as it always did.
+  return createPortal(
+    <Presence open={dragging} ms={MOTION.pop}>
+      {dragging && (
+        <div className="drop-overlay" aria-hidden>
+          <div className="drop-overlay-card">
+            <IconImport size={28} />
+            <strong>{sessionId ? "Drop to add to this import" : "Drop to import"}</strong>
+            <span>Folders, cards and photos</span>
+          </div>
+        </div>
+      )}
+    </Presence>,
+    document.body
+  );
 }
 
 // Esc steps out of focus mode wherever nothing else wanted the key - the
@@ -528,6 +576,16 @@ function BrandAbout() {
                 <a className="about-modal-site" href="https://rollfilm.org" target="_blank" rel="noreferrer">
                   rollfilm.org
                 </a>
+                <button
+                  type="button"
+                  className="about-modal-whats-new"
+                  onClick={() => {
+                    setOpen(false);
+                    openWhatsNew();
+                  }}
+                >
+                  Release notes
+                </button>
                 <p className="about-modal-text">Rollfilm is free. If it is useful to you, a small donation keeps it going.</p>
                 <a
                   className="btn primary about-modal-donate"
@@ -918,7 +976,7 @@ function shownTask(tasks: Task[]): Task | null {
 // copy task stands in for both, its Stop stops both.
 function visibleTasks(tasks: Task[]): Task[] {
   const copying = tasks.some((t) => t.kind === "copies" && !t.finished);
-  return tasks.filter((t) => !(copying && t.kind === "renders"));
+  return tasks.filter((t) => !t.hidden && !(copying && t.kind === "renders"));
 }
 
 function TaskCount({ done, total }: { done: number; total: number }) {
@@ -1022,14 +1080,14 @@ function TaskDock() {
                     title={`${visible.length} tasks running. Click for the list.`}
                     onClick={() => setOpen((v) => !v)}
                   >
-                    <Spinner size="sm" />
+                    {!top.quiet && <Spinner size="sm" />}
                     <span className="task-pill-text">{top.label}</span>
                     {top.done !== undefined && top.total !== undefined && <TaskCount done={top.done} total={top.total} />}
                     <span className="task-pill-more">+{visible.length - 1}</span>
                   </button>
                 ) : (
                   <span className="task-pill-label" title={top.title}>
-                    <Spinner size="sm" />
+                    {!top.quiet && <Spinner size="sm" />}
                     <span className="task-pill-text">{top.label}</span>
                     {top.done !== undefined && top.total !== undefined && <TaskCount done={top.done} total={top.total} />}
                   </span>
@@ -1045,7 +1103,7 @@ function TaskDock() {
           <div className="nav-menu task-menu" role="menu" aria-label="Running tasks">
             {[...visible].reverse().map((t) => (
               <div key={t.id} className="task-row" role="menuitem" title={t.title}>
-                <Spinner size="sm" />
+                {!t.quiet && <Spinner size="sm" />}
                 <span className="task-row-text">
                   {t.finished ? t.finished.label : t.label}
                   {!t.finished && t.done !== undefined && t.total !== undefined && (
@@ -1141,6 +1199,7 @@ export default function App() {
             </PageBoundary>
 
             <OnboardingWizard />
+            <WhatsNew />
           </div>
           </DialogProvider>
         </ImportSessionProvider>

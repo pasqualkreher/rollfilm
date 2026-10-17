@@ -87,6 +87,9 @@ export interface ContextActions {
   // The Trash's own two.
   onRestore?: (ids: string[]) => void | Promise<unknown>;
   onDeleteForever?: (ids: string[]) => void | Promise<unknown>;
+  // Auto pick: photos of the library that go with these (a dialog the page
+  // owns).
+  onAutoPick?: (ids: string[]) => void;
   // Export, Save copy and Show in Finder; on unless the page says otherwise
   // (the Trash: its photos are on their way out).
   files?: boolean;
@@ -562,7 +565,7 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     const ok = await dialogs.confirm({
       title: `Reset ${label} of ${n} photo${n === 1 ? "" : "s"}?`,
       message: all
-        ? "Stars, colors, tags, albums, edits and geometry go back to how they were right after import."
+        ? "Stars, colors, flags, tags, albums, edits and geometry go back to how they were right after import."
         : `The ${label} go back to how they were right after import.`,
       confirmLabel: "Reset",
       danger: true,
@@ -665,6 +668,10 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     const immich = actions?.immich?.(m.ids);
     if (immich) groups.push([{ kind: "item", id: "immich", label: immich.label, checked: immich.checked, run: run(immich.run) }]);
 
+    if (actions?.onAutoPick) {
+      const pick = actions.onAutoPick;
+      groups.push([{ kind: "item", id: "pick", label: "Find similar…", run: run(() => pick(t.ids)) }]);
+    }
     if (actions?.files !== false) {
       groups.push([
         { kind: "item", id: "export", label: many ? `Export ${n} photos…` : "Export…", run: run(() => setDialog({ kind: "export", target: t })) },

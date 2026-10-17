@@ -6,7 +6,6 @@ import { cachedImageRow } from "../utils/cachedImageRow";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { FlagPicker } from "../components/FlagPicker";
-import { bulkChangeLabel } from "../utils/undoLabels";
 import { PhotoEditor } from "../components/PhotoEditor";
 import { TagEditor } from "../components/TagEditor";
 import { MembershipChips } from "../components/MembershipChips";
@@ -27,7 +26,8 @@ import {
   fileTypeBadgeClass,
 } from "../components/ThumbnailGrid";
 import { adjustmentsAreNeutral, editsFromImage } from "../utils/adjustments";
-import { IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconTrash, IconX } from "../components/Icons";
+import { IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconSparkle, IconTrash, IconX } from "../components/Icons";
+import { AutoPickDialog } from "../components/AutoPickDialog";
 import { Slideshow } from "../components/Slideshow";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow, preloadImage } from "../utils/preload";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
@@ -126,6 +126,9 @@ export function ImageDetail() {
     else navigate(`/image/${id}`, { replace: true, state: { imageIds } });
   }, [navigate, id, imageIds, previousPath]);
   const [exportOpen, setExportOpen] = useState(false);
+  // Auto pick from this photo, and the export it may end in.
+  const [autoPickOpen, setAutoPickOpen] = useState(false);
+  const [pickExport, setPickExport] = useState<string[] | null>(null);
   // Fullscreen slideshow over the browsed set (falls back to just this photo
   // when the view was opened without one).
   const [slideshowOpen, setSlideshowOpen] = useState(false);
@@ -527,22 +530,24 @@ export function ImageDetail() {
         return;
       }
 
-      // P picks, X rejects, U takes the flag off - the culling keys, the same
-      // in the grid. The key of the flag the photo already has takes it off.
+      // P hides/shows the side panel - the one key you want while looking at
+      // a photo full width, without going for the mouse. I does the same (it
+      // was the panel's key in 0.1.95).
+      if (!inControl && !e.metaKey && !e.ctrlKey && !e.altKey && ["p", "i"].includes(e.key.toLowerCase())) {
+        setDetailPanelOpen(!panelOpen);
+        return;
+      }
+
+      // A picks (accept), X rejects, U takes the flag off - the culling keys,
+      // the same in the grid. The key of the flag the photo already has takes
+      // it off.
       if (!inControl && image && !imageStale && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         const k = e.key.toLowerCase();
-        if (k === "p" || k === "x" || k === "u") {
-          const want = k === "p" ? "pick" : k === "x" ? "reject" : "";
+        if (k === "a" || k === "x" || k === "u") {
+          const want = k === "a" ? "pick" : k === "x" ? "reject" : "";
           void setFlag(want && image.flag === want ? "" : want);
           return;
         }
-      }
-
-      // I hides/shows the side panel (Info) - the one key you want while
-      // looking at a photo full width, without going for the mouse.
-      if (e.key === "i" || e.key === "I") {
-        setDetailPanelOpen(!panelOpen);
-        return;
       }
 
       if (e.key === "ArrowLeft") goToOffset(-1);
@@ -828,22 +833,16 @@ export function ImageDetail() {
     queryClient.invalidateQueries({ queryKey: ["images"] });
   }
 
-  // Stars, label and flag: one request, and an Undo chip in the title bar
-  // with the value the photo had.
-  async function setRating(rating: number, undoable = true) {
-    const was = image!.rating;
-    const id = image!.id;
-    await api.images.update(id, { rating });
+  // Stars, label and flag: one request. No Undo chip - the change is as
+  // quick to set back as it was to make.
+  async function setRating(rating: number) {
+    await api.images.update(image!.id, { rating });
     invalidateActiveAndPair();
-    if (undoable) pushUndo({ label: bulkChangeLabel({ rating }, 1), undo: () => api.images.update(id, { rating: was }).then(invalidateActiveAndPair) });
   }
 
-  async function setColor(color_label: ColorLabel, undoable = true) {
-    const was = image!.color_label;
-    const id = image!.id;
-    await api.images.update(id, { color_label });
+  async function setColor(color_label: ColorLabel) {
+    await api.images.update(image!.id, { color_label });
     invalidateActiveAndPair();
-    if (undoable) pushUndo({ label: bulkChangeLabel({ color_label }, 1), undo: () => api.images.update(id, { color_label: was }).then(invalidateActiveAndPair) });
   }
 
   // The desktop menu bar's Photo menu, on the photo being looked at (the
@@ -864,12 +863,9 @@ export function ImageDetail() {
     return () => window.removeEventListener("pm:app-menu", on);
   }, []);
 
-  async function setFlag(flag: Flag | "", undoable = true) {
-    const was = image!.flag ?? "";
-    const id = image!.id;
-    await api.images.update(id, { flag });
+  async function setFlag(flag: Flag | "") {
+    await api.images.update(image!.id, { flag });
     invalidateActiveAndPair();
-    if (undoable) pushUndo({ label: bulkChangeLabel({ flag }, 1), undo: () => api.images.update(id, { flag: was }).then(invalidateActiveAndPair) });
   }
 
   function startRename() {
@@ -1604,7 +1600,12 @@ export function ImageDetail() {
 
           {shownSimilar.length > 0 && (
             <div className="detail-section">
-              <div className="detail-section-label">Similar photos</div>
+              <div className="detail-section-label detail-section-label--row">
+                Similar photos
+                <button className="btn btn-sm ghost" onClick={() => setAutoPickOpen(true)} title="More photos like this one, narrowed by tags or place, for an album, a canvas or an export">
+                  <IconSparkle size={12} /> Find similar…
+                </button>
+              </div>
               <div className="thumbnail-grid similar-grid">
                 {shownSimilar.map((r) => (
                   <div
@@ -1681,6 +1682,30 @@ export function ImageDetail() {
             askOptions={askSaveCopyOptions}
           />
         )}
+      </Presence>
+      <Presence open={autoPickOpen} ms={MOTION.modal}>
+        {autoPickOpen && image && (
+          <AutoPickDialog
+            references={[image]}
+            initialReference={image.id}
+            onClose={() => setAutoPickOpen(false)}
+            renderActions={(chosen, close) => (
+              <>
+                <button className="btn" disabled={chosen.length === 0} onClick={() => { close(); setPickExport(chosen); }}>
+                  Export…
+                </button>
+                <AddToPicker
+                  disabled={chosen.length === 0}
+                  onAddToAlbum={async (albumId) => { await api.albums.addImages(albumId, chosen); queryClient.invalidateQueries({ queryKey: ["albums"] }); }}
+                  onAddToCanvas={async (canvasId) => { await api.canvases.addImages(canvasId, chosen); invalidateCanvas(canvasId); }}
+                />
+              </>
+            )}
+          />
+        )}
+      </Presence>
+      <Presence open={pickExport !== null} ms={MOTION.modal}>
+        {pickExport && <ExportDialog imageIds={pickExport} onClose={() => setPickExport(null)} />}
       </Presence>
       <Presence open={exportOpen} ms={MOTION.modal}>
         {exportOpen && (

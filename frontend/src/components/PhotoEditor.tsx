@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, editsFromApi, saveDownload, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconBookmark, IconBulb, IconCamera, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconCurve, IconDetail, IconDuplicate, IconEye, IconEyeOff, IconFilmRoll, IconFlipH, IconFlipV, IconHeal, IconImage, IconMask, IconPalette, IconPlus, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSparkle, IconSplit, IconSun, IconTarget, IconTone, IconTrash, IconTube, IconUndo, IconX, IconRestore, IconHistory } from "./Icons";
+import { IconBookmark, IconBulb, IconCamera, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconCurve, IconDetail, IconDuplicate, IconEye, IconEyeOff, IconExport, IconFilmRoll, IconFlipH, IconFlipV, IconHeal, IconImage, IconMask, IconPalette, IconPlus, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSparkle, IconSplit, IconSun, IconTarget, IconTone, IconTrash, IconTube, IconUndo, IconX, IconRestore, IconHistory } from "./Icons";
 import { SpotOverlay } from "./SpotOverlay";
 import { MenuButton, type MenuButtonHandle, type MenuEntry } from "./MenuButton";
 import { MaskPins } from "./MaskPins";
@@ -3512,20 +3512,20 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         return;
       }
 
-      // I hides/shows the panel, as in the photo view.
-      if (!docked && (e.key === "i" || e.key === "I")) {
+      // P (or I) hides/shows the panel, as in the photo view.
+      if (!docked && !e.metaKey && !e.ctrlKey && !e.altKey && ["p", "i"].includes(e.key.toLowerCase())) {
         setPanelOpen((open) => !open);
         return;
       }
 
-      // P picks, X rejects, U takes the flag off - culling without leaving
+      // A picks, X rejects, U takes the flag off - culling without leaving
       // the editor. The grid and the photo view pick the change up on their
       // next look.
       if (!docked && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         const k = e.key.toLowerCase();
-        if (k === "p" || k === "x" || k === "u") {
+        if (k === "a" || k === "x" || k === "u") {
           void api.images
-            .update(image.id, { flag: k === "p" ? "pick" : k === "x" ? "reject" : "" })
+            .update(image.id, { flag: k === "a" ? "pick" : k === "x" ? "reject" : "" })
             .then(() => {
               queryClient.invalidateQueries({ queryKey: ["image", image.id] });
               queryClient.invalidateQueries({ queryKey: ["images"] });
@@ -6176,7 +6176,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             <button
               className="btn btn-sm detail-panel-toggle"
               onClick={() => setPanelOpen((open) => !open)}
-              title={panelOpen ? "Hide the edit panel (I)" : "Show the edit panel (I)"}
+              title={panelOpen ? "Hide the edit panel (P)" : "Show the edit panel (P)"}
               aria-label={panelOpen ? "Hide the edit panel" : "Show the edit panel"}
               aria-expanded={panelOpen}
               aria-controls="editor-side-panel"
@@ -7053,22 +7053,52 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
 
           {selectedMask && selSub && (
             <div className="mask-editor">
-              {/* Top to bottom the way a mask is thought about: which mask,
-                  how strongly and what it does (the reason it exists), then
-                  what it covers (its components), then the options. */}
+              {/* Top to bottom: which mask, what it covers (its components,
+                  where a mask is shaped), then how strongly and what it does.
+                  Invert and Overlay sit by the name: they are about the whole
+                  mask. */}
               <div className="mask-editor-head">
                 <span className="mask-editor-name" title={selectedMask.name}>
                   {selectedMask.name}
                 </span>
-                <button
-                  className={`btn btn-sm${overlayOn ? " primary" : ""}`}
-                  aria-pressed={overlayOn}
-                  onClick={() => setOverlayOn((v) => !v)}
-                  title="Show the area this mask covers on the photo (O)"
-                >
-                  Overlay
-                </button>
+                <div className="mask-editor-head-actions">
+                  <button
+                    className={`btn btn-sm${selectedMask.invert ? " primary" : ""}`}
+                    aria-pressed={selectedMask.invert}
+                    onClick={() => updateMask(selectedMask.id, { invert: !selectedMask.invert })}
+                    title="Use everything the mask does not cover instead"
+                  >
+                    Invert
+                  </button>
+                  <button
+                    className={`btn btn-sm${overlayOn ? " primary" : ""}`}
+                    aria-pressed={overlayOn}
+                    onClick={() => setOverlayOn((v) => !v)}
+                    title="Show the area this mask covers on the photo (O)"
+                  >
+                    Overlay
+                  </button>
+                </div>
               </div>
+              {/* What the mask covers: its components, in the order they are
+                  combined (masks.generate_mask_field) - the first is the base,
+                  each later one joins it, is taken out of it or confines it.
+                  "This selection, but only here" and "this area, but not
+                  there" are both made this way. */}
+              <div className="mask-subhead">Components</div>
+              {selectedMask.sub_masks.map((sub, idx) => componentRow(selectedMask, sub, idx))}
+              <div className="mask-btn-row">
+                <MenuButton
+                  className="btn btn-sm"
+                  entries={MASK_LIMIT_TYPES.map((t) => ({ id: t.value, label: t.label }))}
+                  onPick={(id) => addShape(id as SubMaskType)}
+                  title="Add a shape that joins, is taken out of or confines this mask"
+                  ariaLabel="Add component"
+                >
+                  <IconPlus size={13} /> Add component <IconChevronDown size={11} />
+                </MenuButton>
+              </div>
+
               <Slider
                 label="Amount"
                 value={selectedMask.opacity}
@@ -7168,38 +7198,6 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   </>
                 );
               })()}
-
-
-              {/* What the mask covers: its components, in the order they are
-                  combined (masks.generate_mask_field) - the first is the base,
-                  each later one joins it, is taken out of it or confines it.
-                  "This selection, but only here" and "this area, but not
-                  there" are both made this way. */}
-              <div className="mask-subhead">Components</div>
-              {selectedMask.sub_masks.map((sub, idx) => componentRow(selectedMask, sub, idx))}
-              <div className="mask-btn-row">
-                <MenuButton
-                  className="btn btn-sm"
-                  entries={MASK_LIMIT_TYPES.map((t) => ({ id: t.value, label: t.label }))}
-                  onPick={(id) => addShape(id as SubMaskType)}
-                  title="Add a shape that joins, is taken out of or confines this mask"
-                  ariaLabel="Add component"
-                >
-                  <IconPlus size={13} /> Add component <IconChevronDown size={11} />
-                </MenuButton>
-              </div>
-
-              <div className="mask-subhead">Options</div>
-              <div className="mask-btn-row">
-                <button
-                  className={`btn btn-sm${selectedMask.invert ? " primary" : ""}`}
-                  aria-pressed={selectedMask.invert}
-                  onClick={() => updateMask(selectedMask.id, { invert: !selectedMask.invert })}
-                  title="Use everything the mask does not cover instead"
-                >
-                  Invert
-                </button>
-              </div>
             </div>
           )}
             </div>
@@ -7594,21 +7592,23 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           <div className="editor-footer-primary">
             {!docked && (
               <button
-                className="btn"
+                className="btn btn-sm"
                 disabled={busy || exportPreparing}
                 onClick={() => void openExport()}
                 title="Export this photo with the edit as it stands"
               >
+                <IconExport size={13} />
                 {exportPreparing ? "Saving…" : "Export…"}
               </button>
             )}
             <button
-              className="btn"
+              className="btn btn-sm"
               onClick={() => setSaveCopyOpen(true)}
               disabled={busy}
               title="Create a new photo from these edits: a new JPEG file or a virtual copy that shares the original file"
             >
-              <IconSaveCopy size={13} /> {saveCopy.isPending ? "Saving…" : "Save copy"}
+              <IconSaveCopy size={13} />
+              {saveCopy.isPending ? "Saving…" : "Save copy"}
             </button>
             <span
               className={`editor-autosave-note${autosaveState === "failed" ? " failed" : ""}`}

@@ -1506,7 +1506,7 @@ function buildApplicationMenu() {
           {
             label: "Flag",
             submenu: [
-              appMenuItem("Pick (P)", "photo:flag", "pick"),
+              appMenuItem("Pick (A)", "photo:flag", "pick"),
               appMenuItem("Reject (X)", "photo:flag", "reject"),
               appMenuItem("Unflag (U)", "photo:flag", ""),
             ],
@@ -1527,6 +1527,22 @@ function buildApplicationMenu() {
           { type: "separator" },
           { label: "Rollfilm Website", click: () => shell.openExternal("https://rollfilm.org") },
           { label: "Contact…", click: () => shell.openExternal("mailto:contact@rollfilm.org") },
+          { type: "separator" },
+          {
+            label: "Report a Problem…",
+            click: () => {
+              const os = process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : "Linux (AppImage)";
+              const params = new URLSearchParams({ template: "bug_report.yml", version: app.getVersion(), os });
+              shell.openExternal(`https://github.com/pasqualkreher/rollfilm/issues/new?${params}`);
+            },
+          },
+          {
+            label: "Show Logs Folder",
+            click: () => {
+              fs.mkdirSync(logsDir(), { recursive: true });
+              shell.showItemInFolder(backendLogPath());
+            },
+          },
         ],
       },
     ])
@@ -2026,6 +2042,42 @@ ipcMain.handle("pm:export-pdf", async (_event, payload) => {
   }
 });
 
+// --- Backup download ----------------------------------------------------------
+// Settings › Backup & restore. A plain link left the user with nothing to look
+// at while the backend wrote the zip (minutes for a big library) and then a
+// download in no visible place. Here the save dialog comes first, and the
+// promise stands until the file is on disk, so the renderer can show the
+// task in its dock the whole time. The API token rides along like on every
+// request to the backend (installApiTokenHeader).
+ipcMain.handle("pm:download-backup", async (_event, url) => {
+  if (typeof url !== "string" || !url.startsWith(`${apiBaseUrl}/`) || !mainWindow) {
+    return { ok: false, error: "No backup address" };
+  }
+  const day = new Date().toISOString().slice(0, 10);
+  const picked = await dialog.showSaveDialog(mainWindow, {
+    title: "Save backup",
+    defaultPath: path.join(app.getPath("downloads"), `rollfilm-backup-${day}.zip`),
+    filters: [{ name: "Zip", extensions: ["zip"] }],
+  });
+  if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
+
+  const ses = mainWindow.webContents.session;
+  return new Promise((resolve) => {
+    const onWillDownload = (_e, item) => {
+      if (item.getURL() !== url) return;
+      ses.removeListener("will-download", onWillDownload);
+      item.setSavePath(picked.filePath);
+      item.once("done", (_e2, state) => {
+        if (state === "completed") resolve({ ok: true, path: picked.filePath });
+        else if (state === "cancelled") resolve({ ok: false, canceled: true });
+        else resolve({ ok: false, error: "The backup could not be written." });
+      });
+    };
+    ses.on("will-download", onWillDownload);
+    mainWindow.webContents.downloadURL(url);
+  });
+});
+
 // Settings page: pick a new library folder. The backend only reads
 // LIBRARY_ROOT at launch, so after saving the new path the app relaunches
 // itself (the user confirms this first).
@@ -2066,6 +2118,13 @@ ipcMain.handle("pm:change-library-root", async () => {
 // They always sit inside the current library folder, so there is nothing to
 // change independently — switching the library folder moves all of it.
 ipcMain.handle("pm:get-data-root", () => (libraryRoot ? libraryDataDir(libraryRoot) : ""));
+
+// "Show logs" (Report a problem): the folder backend.log, main.log and
+// updater.log live in.
+ipcMain.handle("pm:get-logs-dir", () => {
+  fs.mkdirSync(logsDir(), { recursive: true });
+  return logsDir();
+});
 
 // First-start wizard: was this launch a genuine first run (no library folder
 // configured yet)? Drives whether the onboarding wizard appears.

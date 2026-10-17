@@ -10,8 +10,9 @@ hammer the same storage with parallel full-file reads.
 import json
 import logging
 import threading
+import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,15 +33,51 @@ from app.workers.queue import enqueue_post_import
 logger = logging.getLogger(__name__)
 
 
-def is_path_available(path: str) -> bool:
-    """True when a source root's folder is currently reachable. For an external
-    drive or NAS this is False while it's unplugged/unmounted - the signal we
-    use to hide its photos from the library instead of showing dead thumbnails."""
+# A stat on a network mount that has gone away can block for minutes on
+# Linux (autofs, CIFS, NFS) - and the probe runs for every library request.
+# So it is time-boxed, and its answer is kept for a moment: a thousand grid
+# requests must not mean a thousand stats of the same NAS.
+PROBE_TIMEOUT_S = 2.0
+AVAILABILITY_TTL_S = 10.0
+_probe_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="source-probe")
+_availability: dict[str, tuple[float, bool]] = {}
+_availability_lock = threading.Lock()
+
+
+def clear_availability_cache() -> None:
+    with _availability_lock:
+        _availability.clear()
+
+
+def _probe(path: str) -> bool:
     try:
         return Path(path).is_dir()
     except OSError:
         # A hung or broken network mount can raise rather than return False.
         return False
+
+
+def is_path_available(path: str) -> bool:
+    """True when a source root's folder is currently reachable. For an external
+    drive or NAS this is False while it's unplugged/unmounted - the signal we
+    use to hide its photos from the library instead of showing dead thumbnails.
+    A probe that takes longer than PROBE_TIMEOUT_S counts as unreachable (it
+    keeps running in its thread and its answer is not waited for)."""
+    now = time.monotonic()
+    with _availability_lock:
+        cached = _availability.get(path)
+        if cached and now - cached[0] < AVAILABILITY_TTL_S:
+            return cached[1]
+    try:
+        available = _probe_executor.submit(_probe, path).result(timeout=PROBE_TIMEOUT_S)
+    except FuturesTimeoutError:
+        logger.warning("source root %s did not answer within %.1fs; treating it as unavailable", path, PROBE_TIMEOUT_S)
+        available = False
+    except Exception:
+        available = False
+    with _availability_lock:
+        _availability[path] = (time.monotonic(), available)
+    return available
 
 
 def unavailable_source_ids(db: Session, owner_id: int) -> list[str]:

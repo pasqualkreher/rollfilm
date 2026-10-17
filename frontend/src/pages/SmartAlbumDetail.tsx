@@ -8,7 +8,6 @@ import type { ColorLabel, Flag, ImageOut, SmartAlbumOut, ViewMode } from "../api
 import { useSelectionKeys } from "../utils/selection";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTasks } from "../state/tasks";
-import { bulkChangeLabel } from "../utils/undoLabels";
 import type { ContextActions } from "../components/PhotoContextMenu";
 import { ThumbnailGrid } from "../components/ThumbnailGrid";
 import { PhotoFilters } from "../components/PhotoFilters";
@@ -147,32 +146,13 @@ export function SmartAlbumDetail() {
 
   async function applyBulk(
     patch: { rating?: number; color_label?: ColorLabel; flag?: Flag | "" },
-    target: Iterable<string> = selected,
-    undoable = true
+    target: Iterable<string> = selected
   ) {
     const ids = Array.from(target);
     if (ids.length === 0) return;
-    const idSet = new Set(ids);
-    const before = (images ?? []).filter((im) => idSet.has(im.id)).map((im) => ({ ...im }));
     await api.images.bulkUpdate(ids, patch);
     queryClient.invalidateQueries({ queryKey: ["smart-album-images", id] });
     queryClient.invalidateQueries({ queryKey: ["images"] });
-    if (undoable && before.length > 0) {
-      pushUndo({
-        label: bulkChangeLabel(patch, ids.length),
-        undo: async () => {
-          for (const im of before) {
-            const inv: typeof patch = {};
-            if (patch.rating !== undefined) inv.rating = im.rating;
-            if (patch.color_label !== undefined) inv.color_label = im.color_label;
-            if (patch.flag !== undefined) inv.flag = im.flag ?? "";
-            await api.images.bulkUpdate([im.id], inv);
-          }
-          queryClient.invalidateQueries({ queryKey: ["smart-album-images", id] });
-          queryClient.invalidateQueries({ queryKey: ["images"] });
-        },
-      });
-    }
   }
 
   async function trash(target: Iterable<string> = selected) {

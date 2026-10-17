@@ -276,3 +276,26 @@ def test_db_snapshots_list_take_and_refuse_unknown_restore(env):
     assert [entry["name"] for entry in listed] == [taken["name"]]
 
     _assert_error(client.post("/maintenance/db-snapshots/restore", json={"name": "nope.db"}), 404)
+
+
+# ---- import settings: the fixed import folder --------------------------------
+
+
+def test_import_folder_is_asked_until_one_is_fixed(env, tmp_path):
+    client, _ = env
+    assert client.get("/settings/import").json()["staging_folder"] is None
+
+    target = tmp_path / "Imports"
+    target.mkdir()
+    res = client.put("/settings/import", json={"staging_folder": str(target)})
+    assert res.status_code == 200, res.text
+    assert res.json()["staging_folder"] == str(target)
+    # Other fields sent later leave it alone.
+    assert client.put("/settings/import", json={"verify_copies": True}).json()["staging_folder"] == str(target)
+
+    _assert_error(client.put("/settings/import", json={"staging_folder": str(tmp_path / "gone")}), 400)
+    _assert_error(client.put("/settings/import", json={"staging_folder": "relative/path"}), 400)
+    assert client.get("/settings/import").json()["staging_folder"] == str(target)
+
+    # "" goes back to asking every session.
+    assert client.put("/settings/import", json={"staging_folder": ""}).json()["staging_folder"] is None

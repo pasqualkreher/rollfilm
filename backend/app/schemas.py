@@ -161,6 +161,7 @@ class BulkResetRequest(BaseModel):
     image_ids: list[str]
     rating: bool = True  # stars back to 0
     color_label: bool = True  # colour label back to none
+    flag: bool = False  # pick / reject taken off
     tags: bool = True  # remove every user tag
     develop: bool = False  # clear the develop sliders (edit_adjustments)
     geometry: bool = False  # clear crop / rotation / straighten / flip / perspective
@@ -1037,6 +1038,9 @@ class ImportSettingsOut(BaseModel):
     # Whether every copy the import writes is read back and its hash compared
     # with the source's before the import goes on (settings_store).
     verify_copies: bool = False
+    # The folder a copying import uses without asking; None = asked for every
+    # session.
+    staging_folder: str | None = None
 
 
 class ImportSettingsUpdate(BaseModel):
@@ -1047,6 +1051,8 @@ class ImportSettingsUpdate(BaseModel):
     backup_default: Literal["keep", "delete"] | None = None
     read_file_metadata: bool | None = None
     verify_copies: bool | None = None
+    # A folder to use from now on, or "" to go back to asking every session.
+    staging_folder: str | None = None
 
 
 class SidecarSettingsOut(BaseModel):
@@ -1151,6 +1157,42 @@ class DirListing(BaseModel):
 class SearchResultOut(BaseModel):
     image: ImageOut
     distance: float
+
+
+class ImageGroupRequest(BaseModel):
+    """The canvas's Auto-arrange: which of these photos go on a page
+    together (services/arrange.group_for_pages)."""
+
+    image_ids: list[str]
+    min_size: int = 2
+    max_size: int = 6
+
+
+class ImageGroupResult(BaseModel):
+    # One list per page, pages and photos in time order.
+    groups: list[list[str]]
+    # Photos the library has not analysed yet: no vector, so no page.
+    missing: list[str]
+
+
+class AutoPickRequest(BaseModel):
+    """Auto pick: the photos of the library that go with the reference(s),
+    narrowed by tags (all of them) and a place if given; ``exclude_ids`` are
+    left out (what a canvas already holds)."""
+
+    reference_ids: list[str]
+    count: int = 10
+    exclude_ids: list[str] = []
+    tags: list[str] | None = None
+    country: str | None = None
+
+
+class PickCoreRequest(BaseModel):
+    """The canvas's Auto pick without a reference photo: the ``count``
+    photos nearest the centre of these (services/arrange.pick_core)."""
+
+    image_ids: list[str]
+    count: int = 10
 
 
 class Facet(BaseModel):

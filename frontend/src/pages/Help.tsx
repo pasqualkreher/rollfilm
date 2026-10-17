@@ -261,6 +261,11 @@ const CHAPTERS: Chapter[] = [
             <p>
               Supported: JPEG, PNG and RAW (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2, PEF, SRW).
             </p>
+            <p>
+              <strong>Dropping</strong> works anywhere: drag a card, a folder or photos onto the
+              window and an overlay says so; let go and the start dialog opens. With a review
+              open, the drop adds to that session after asking.
+            </p>
             <h4>What happens, in order</h4>
             <ol>
               <li>
@@ -282,8 +287,8 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Culling.</strong> Rate and color-label staged photos right away — on the
                 cards, or in the preview (<kbd>←</kbd> / <kbd>→</kbd> to flip through,{" "}
-                <kbd>0</kbd>–<kbd>5</kbd> for stars, <kbd>P</kbd> to include and <kbd>X</kbd> to
-                leave out (<kbd>Space</kbd> toggles), <kbd>I</kbd> to show or hide the camera
+                <kbd>0</kbd>–<kbd>5</kbd> for stars, <kbd>A</kbd> to include and <kbd>X</kbd> to
+                leave out (<kbd>Space</kbd> toggles), <kbd>P</kbd> to show or hide the camera
                 settings).
               </li>
               <li>
@@ -566,7 +571,7 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>Reset…</strong> takes chosen aspects back to the just-imported state — any
-                of stars, colors, tags, albums, edits, crop &amp; geometry.
+                of stars, colors, flags, tags, albums, edits, crop &amp; geometry.
               </li>
               <li>
                 <strong>Right-click a ticked photo</strong> for Export, Save copy and Show in
@@ -612,7 +617,7 @@ const CHAPTERS: Chapter[] = [
           <>
             <ul>
               <li>
-                <strong>Pick and reject</strong> — the culling flag. <kbd>P</kbd> picks,{" "}
+                <strong>Pick and reject</strong> — the culling flag. <kbd>A</kbd> picks,{" "}
                 <kbd>X</kbd> rejects, <kbd>U</kbd> takes the flag off, in the grid, the photo view
                 and the editor; the tick and cross beside the stars do the same. The filter's{" "}
                 <em>Flag</em> row shows picks, rejects or what is still undecided, and with{" "}
@@ -855,8 +860,16 @@ const CHAPTERS: Chapter[] = [
                 <strong>Details:</strong> capture date, camera, lens, ISO, aperture, shutter, focal
                 length; the photo's tags; a chip for every album and canvas it is in (click one to
                 go there, its × takes the photo out); a <strong>Similar photos</strong> strip found
-                by visual similarity; and <strong>Export…</strong>. The trash can next to the file
-                name deletes the photo.
+                by visual similarity, with <strong>Find similar…</strong> for more; and{" "}
+                <strong>Export…</strong>. The trash can next to the file name deletes the photo.
+              </li>
+              <li>
+                <strong>Find similar:</strong> starting from a photo, Rollfilm finds the ones in your
+                library that go with it by look - narrowed by tags or a place if you like ("the
+                holiday, and of that what looks like this"). It is in the selection bar
+                and the right-click menu (<em>Find similar…</em>) and
+                here under Similar photos. Tick what you want, then select it in the library, add
+                it to an album or canvas, or export it.
               </li>
               <li>
                 <strong>Notes:</strong> a free-text box, saved when you click out of it. It
@@ -878,8 +891,8 @@ const CHAPTERS: Chapter[] = [
             <h4>Without the mouse</h4>
             <ul>
               <li>
-                <kbd>E</kbd> opens the editor, <kbd>I</kbd> hides the panel so the photo gets the
-                whole window, <kbd>P</kbd> picks, <kbd>X</kbd> rejects, <kbd>U</kbd> takes the flag
+                <kbd>E</kbd> opens the editor, <kbd>P</kbd> hides the panel so the photo gets the
+                whole window, <kbd>A</kbd> picks, <kbd>X</kbd> rejects, <kbd>U</kbd> takes the flag
                 off, <kbd>0</kbd>–<kbd>5</kbd> rate, <kbd>6</kbd>–<kbd>9</kbd> set a color label
                 (red, yellow, green, blue), <kbd>Delete</kbd> deletes.
               </li>
@@ -987,8 +1000,8 @@ const CHAPTERS: Chapter[] = [
                 <kbd>→</kbd> change the focused one.
               </li>
               <li>
-                <kbd>I</kbd> hides the panel, <kbd>F</kbd> puts the app's top bar away too — the
-                tools stay. <kbd>P</kbd>, <kbd>X</kbd> and <kbd>U</kbd> pick, reject and unflag the
+                <kbd>P</kbd> hides the panel, <kbd>F</kbd> puts the app's top bar away too — the
+                tools stay. <kbd>A</kbd>, <kbd>X</kbd> and <kbd>U</kbd> pick, reject and unflag the
                 photo without leaving the editor.
               </li>
             </ul>
@@ -1638,6 +1651,17 @@ const CHAPTERS: Chapter[] = [
                 <strong>Place N photos</strong> flows everything not yet on the paper into a
                 three-column grid after what you already have — on a new page in Pages mode.
                 Nothing you placed by hand moves; it asks first if there is a layout to disturb.
+              </li>
+              <li>
+                <strong>Auto-arrange</strong> rebuilds the pages: it asks how many photos a page
+                gets (or 2–6 as they fit), whether photos go together by look, by time or in the
+                filmstrip's order, and how much air between them; each page is laid out for its
+                photos - a big one with two small, a pair, a row of three. Undo takes it back.
+              </li>
+              <li>
+                <strong>Find similar…</strong> in the filmstrip finds photos in your library that go
+                with a photo you select, or with the canvas as a whole, and adds the ones you tick -
+                arranged straight away if you like.
               </li>
               <li>
                 <strong>Add text</strong> drops a caption box and starts you typing. Double-click
@@ -2297,7 +2321,7 @@ const CHAPTERS: Chapter[] = [
                 {
                   keys: (
                     <>
-                      <kbd>P</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
+                      <kbd>A</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
                     </>
                   ),
                   does: "Flag the selected photos: pick, reject, no flag. The same key again takes the flag off",
@@ -2390,11 +2414,11 @@ const CHAPTERS: Chapter[] = [
                   does: "Delete this photo (asks first), then on to the next one",
                 },
                 { keys: <kbd>E</kbd>, does: "Open the editor on this photo (E in the editor brings you back)" },
-                { keys: <kbd>I</kbd>, does: "Show / hide the side panel, so the photo gets the whole window" },
+                { keys: <kbd>P</kbd>, does: "Show / hide the side panel, so the photo gets the whole window" },
                 {
                   keys: (
                     <>
-                      <kbd>P</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
+                      <kbd>A</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
                     </>
                   ),
                   does: "Flag this photo: pick, reject, no flag",
@@ -2474,11 +2498,11 @@ const CHAPTERS: Chapter[] = [
                   does: "On a focused slider: type its value, Enter sets it",
                 },
                 { keys: <kbd>J</kbd>, does: "Show / hide the clipping warning" },
-                { keys: <kbd>I</kbd>, does: "Show / hide the edit panel, so the photo gets the whole window" },
+                { keys: <kbd>P</kbd>, does: "Show / hide the edit panel, so the photo gets the whole window" },
                 {
                   keys: (
                     <>
-                      <kbd>P</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
+                      <kbd>A</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
                     </>
                   ),
                   does: "Flag the photo being edited: pick, reject, no flag",

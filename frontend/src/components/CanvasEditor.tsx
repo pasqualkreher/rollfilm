@@ -19,6 +19,7 @@ import {
   IconAlignTop,
   IconArrowLeft,
   IconCheck,
+  IconSparkle,
   IconBringFront,
   IconChevronDown,
   IconChevronLeft,
@@ -69,6 +70,11 @@ import {
 import { ExportChip } from "./CanvasExportChip";
 import { useFocusMode, setFocusMode, toggleFocusMode, useFocusChrome } from "../state/focusMode";
 import { Presence } from "./Presence";
+import { AutoPickDialog } from "./AutoPickDialog";
+import { AutoArrangeDialog, loadArrangeOptions, type ArrangeOptions } from "./AutoArrangeDialog";
+import { arrangePage } from "../utils/pageTemplates";
+import { useTasks } from "../state/tasks";
+import { errorText } from "../utils/apiError";
 import { rangeFillStyle } from "../utils/rangeFill";
 import { shortcutLabel } from "../utils/selection";
 
@@ -1521,6 +1527,121 @@ export function CanvasEditor({
     if (box) revealRect(box);
   }, [commit, dialogs, doc, imageAspect, items, revealRect, topZ, unplaced]);
 
+  // Auto-arrange: the photos that look alike share a page, each page set in
+  // justified rows or columns (utils/pageTemplates). Pages are rebuilt from
+  // scratch - Undo takes it back. Photos the library has not analysed yet
+  // go into a plain grid at the end, and the user is told.
+  const { runTask } = useTasks();
+  const [arrangeOpen, setArrangeOpen] = useState(false);
+  const autoArrange = useCallback(
+    async (options: ArrangeOptions) => {
+      if (!doc || images.length < 2) return;
+      const { perPage, groupBy, gapMm } = options;
+      let result: { groups: string[][]; missing: string[] };
+      if (groupBy === "look") {
+        try {
+          result = await runTask({ kind: "plain", label: "Arranging…" }, () =>
+            api.images.group(
+              images.map((image) => image.id),
+              { min_size: perPage === "auto" ? 2 : perPage, max_size: perPage === "auto" ? 6 : perPage }
+            )
+          );
+        } catch (e) {
+          await dialogs.alert({ title: "Auto-arrange didn't work", message: errorText(e) });
+          return;
+        }
+      } else {
+        // By time or as listed: plain chunks, no analysis needed.
+        const ordered = groupBy === "time" ? [...images].sort((a, b) => (a.taken_at ?? "").localeCompare(b.taken_at ?? "")) : images;
+        const size = perPage === "auto" ? 4 : perPage;
+        const groups: string[][] = [];
+        for (let at = 0; at < ordered.length; at += size) groups.push(ordered.slice(at, at + size).map((image) => image.id));
+        result = { groups, missing: [] };
+      }
+      const margin = marginOf(doc);
+      const paged = doc.page_mode === "pages";
+      let z = topZ + 1;
+      const added: LayoutItem[] = [];
+      result.groups.forEach((ids, index) => {
+        const frames = arrangePage(
+          ids.map((id) => ({ id, aspect: imageAspect(id) ?? 1.5 })),
+          doc,
+          {
+            margin,
+            gapMm,
+            startZ: z,
+            page: paged ? index : 0,
+            // A free canvas has one page: the groups stack down it as blocks.
+            offsetYmm: paged ? 0 : index * (doc.page_height_mm + PAGE_GAP_MM),
+          }
+        );
+        z += frames.length;
+        added.push(...frames.map((frame) => ({ ...frame, id: uuid() })));
+      });
+      let pages = Math.max(1, result.groups.length);
+      if (result.missing.length > 0) {
+        const { items: flowed, pages: extra } = autoFlow(
+          result.missing.map((id) => ({ id, aspect: imageAspect(id) ?? 1.5 })),
+          doc,
+          { columns: 3, margin, gapMm, startZ: z }
+        );
+        added.push(
+          ...flowed.map((item) => ({
+            ...item,
+            id: uuid(),
+            page: paged ? item.page + pages : 0,
+            y_mm: paged ? item.y_mm : item.y_mm + pages * (doc.page_height_mm + PAGE_GAP_MM),
+          }))
+        );
+        pages += extra;
+      }
+      commit((current) => ({
+        ...current,
+        page_count: current.page_mode === "pages" ? pages : current.page_count,
+        items: added,
+      }));
+      setSelected(new Set());
+      const first = added[0];
+      if (first) revealRect(worldRect(first, doc));
+      if (result.missing.length > 0) {
+        await dialogs.alert({
+          title: "Some photos were not arranged",
+          message: `${result.missing.length} photo${result.missing.length === 1 ? " is" : "s are"} still being analysed and went into a grid at the end. Run Auto-arrange again in a moment.`,
+        });
+      }
+    },
+    [commit, dialogs, doc, imageAspect, images, revealRect, runTask, topZ]
+  );
+
+  // Auto pick: photos from the library that go with a reference, added to
+  // the canvas - and, if asked, arranged once they have arrived (the pool
+  // comes back through the files query, so the arrange waits for them).
+  const [autoPickOpen, setAutoPickOpen] = useState(false);
+  const [arrangeAfterPick, setArrangeAfterPick] = useState(true);
+  const arrangeOnce = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const waiting = arrangeOnce.current;
+    if (!waiting) return;
+    if (![...waiting].every((id) => byId.has(id))) return;
+    arrangeOnce.current = null;
+    void autoArrange(loadArrangeOptions());
+  }, [byId, autoArrange]);
+  const addPicked = useCallback(
+    async (ids: string[], arrange: boolean) => {
+      setAutoPickOpen(false);
+      try {
+        await api.canvases.addImages(canvasId, ids);
+      } catch (e) {
+        await dialogs.alert({ title: "Couldn't add the photos", message: errorText(e) });
+        return;
+      }
+      if (arrange) arrangeOnce.current = new Set(ids);
+      await queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
+      queryClient.invalidateQueries({ queryKey: ["canvas", canvasId] });
+    },
+    [canvasId, dialogs, queryClient]
+  );
+
   // The way back out of a layout that went wrong. The canvas's photos are
   // untouched - only the placing is thrown away.
   const clearCanvas = useCallback(async () => {
@@ -2361,6 +2482,8 @@ export function CanvasEditor({
         onRedo={redo}
         onAddText={addText}
         onFill={fillFromAlbum}
+        onArrange={() => setArrangeOpen(true)}
+        canArrange={images.length >= 2}
         unplaced={unplaced.length}
         memberCount={images.length}
         title={title}
@@ -2810,6 +2933,7 @@ export function CanvasEditor({
         images={stripImages}
         loading={imagesLoading}
         placed={placedShots}
+        onAutoPick={() => setAutoPickOpen(true)}
         backButton={
           onExit && (
             <button
@@ -2832,6 +2956,41 @@ export function CanvasEditor({
         </div>
         {/* Editing docks as the row's right column, top to bottom of the
             window: it pushes everything left, the filmstrip included. */}
+        <Presence open={arrangeOpen} ms={140}>
+          {arrangeOpen && (
+            <AutoArrangeDialog
+              count={images.length}
+              replaces={items.length > 0}
+              onClose={() => setArrangeOpen(false)}
+              onArrange={(options) => {
+                setArrangeOpen(false);
+                void autoArrange(options);
+              }}
+            />
+          )}
+        </Presence>
+        <Presence open={autoPickOpen} ms={140}>
+          {autoPickOpen && (
+            <AutoPickDialog
+              references={images}
+              coreOf={images}
+              excludeIds={images.map((image) => image.id)}
+              initialReference={single && single.kind === "photo" ? single.image_id : null}
+              onClose={() => setAutoPickOpen(false)}
+              renderActions={(chosen) => (
+                <>
+                  <label className="filter-field filter-field-inline">
+                    <input type="checkbox" checked={arrangeAfterPick} onChange={(e) => setArrangeAfterPick(e.target.checked)} />{" "}
+                    Arrange the pages afterwards
+                  </label>
+                  <button className="btn primary" disabled={chosen.length === 0} onClick={() => void addPicked(chosen, arrangeAfterPick)}>
+                    Add {chosen.length > 0 ? chosen.length : ""} to canvas
+                  </button>
+                </>
+              )}
+            />
+          )}
+        </Presence>
         <Presence open={editingImage !== null} ms={140}>
           {editingImage && (
             <PhotoEditor
@@ -3835,6 +3994,8 @@ function CanvasToolbar({
   onRedo,
   onAddText,
   onFill,
+  onArrange,
+  canArrange,
   unplaced,
   memberCount,
   title,
@@ -3856,6 +4017,9 @@ function CanvasToolbar({
   onRedo: () => void;
   onAddText: () => void;
   onFill: () => void;
+  // Auto-arrange: pages rebuilt so photos that look alike share one.
+  onArrange: () => void;
+  canArrange: boolean;
   unplaced: number;
   memberCount: number;
   // Take everything off every page. Nothing is deleted: the photos stay.
@@ -4084,6 +4248,20 @@ function CanvasToolbar({
           {/* The count also rides on the icon's shoulder, for when the bar
               is too narrow for the words. */}
           {unplaced > 0 && <span className="canvas-tool-badge">{unplaced}</span>}
+        </button>
+        <button
+          className="btn btn-sm canvas-tool"
+          onClick={onArrange}
+          disabled={!canArrange}
+          aria-label="Auto-arrange"
+          title={
+            canArrange
+              ? "Auto-arrange: photos that go together share a page, each page laid out for its photos. Undo takes it back."
+              : "Auto-arrange needs at least two photos on the canvas"
+          }
+        >
+          <IconSparkle size={15} />
+          <span className="canvas-tool-label">Auto-arrange</span>
         </button>
         <button
           className="btn btn-sm canvas-tool"
@@ -4725,9 +4903,12 @@ function Filmstrip({
   onToggle,
   onRemove,
   onDragStart,
+  onAutoPick,
   backButton,
 }: {
   images: ImageOut[];
+  // Auto pick: photos from the library that go with one of these.
+  onAutoPick: () => void;
   loading: boolean;
   placed: Set<string>;
   open: boolean;
@@ -4855,6 +5036,13 @@ function Filmstrip({
             <IconChevronDown size={13} />
           </span>
           The canvas&rsquo;s photos ({images.length})
+        </button>
+        <button
+          className="btn btn-sm ghost canvas-filmstrip-pick"
+          onClick={onAutoPick}
+          title="Find photos in your library that go with this canvas, or with a selected photo"
+        >
+          <IconSparkle size={13} /> Find similar…
         </button>
         {open && images.length > 0 && (
           <span className="canvas-filmstrip-note">
