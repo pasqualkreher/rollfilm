@@ -251,6 +251,10 @@ def render_review_derivatives(
         need_thumb, need_preview = _todo()
         if not need_thumb and not need_preview:
             return
+        # The session may have closed while this waited for a slot: its
+        # folder is gone, and decoding a RAW for it would be wasted.
+        if not thumb_dir.is_dir():
+            return
         rendered = extract_full_preview(read_path)
         if need_preview:
             lightbox = rendered.copy() if need_thumb else rendered
@@ -399,6 +403,11 @@ def _enqueue_review_derivatives(
             if not read_path.exists():
                 return
             render_review_derivatives(read_path, staged_id, thumb_dir, is_raw)
+        except FileNotFoundError:
+            # Closing the session removes its folder; a render that was
+            # mid-way then has nowhere to write, and that is not an error.
+            if thumb_dir.is_dir():
+                logger.exception("Review derivatives failed for %s", staged_id)
         except Exception:
             # The routes still render on demand, so a failure here costs speed,
             # never correctness.
@@ -1868,6 +1877,10 @@ def _commit_import_session(
             # scan-exclusion row, and a managed photo may sit in the Trash;
             # importing the same bytes is the explicit way to bring either back.
             promoted.deleted_at = None
+            # The photo joins this roll unless it already has one: a re-import
+            # of the same bytes does not move it out of its first roll.
+            if promoted.import_session_id is None:
+                promoted.import_session_id = session.id
             if staged.rating:
                 promoted.rating = staged.rating
             if staged.color_label != ColorLabel.none:
@@ -1896,6 +1909,7 @@ def _commit_import_session(
                 height=to_int(exif_dict.get("height")),
                 file_size=dest_path.stat().st_size,
                 taken_at=taken_at,
+                import_session_id=session.id,
                 camera_make=exif_dict.get("camera_make"),
                 camera_model=exif_dict.get("camera_model"),
                 lens_model=exif_dict.get("lens_model"),
@@ -2082,8 +2096,14 @@ def discard_import_session(db: Session, session: ImportSession, keep_folder: boo
     asked for it when closing; the review itself goes either way."""
     # Flip the status first: in-flight background analysis jobs re-check it
     # before touching the row, so they turn into no-ops instead of racing the
-    # rmtree below.
-    session.status = ImportSessionStatus.discarded
+    # rmtree below. A session that imported anything is a roll from now on
+    # and closes as committed; only a session nothing came out of is discarded.
+    imported_any = (
+        db.query(ImportStagedFile.id)
+        .filter(ImportStagedFile.import_session_id == session.id, ImportStagedFile.imported.is_(True))
+        .first()
+    )
+    session.status = ImportSessionStatus.committed if imported_any else ImportSessionStatus.discarded
     db.commit()
     _remove_session_folders(session, keep_collection=keep_folder)
     _drop_session_state(session.id)

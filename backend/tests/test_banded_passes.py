@@ -82,7 +82,7 @@ def test_grain_in_bands_is_the_whole_frame_grain(whole, monkeypatch):
     # One field for both renders - a fresh one each time is the grain's own
     # randomness, not the banding's.
     field = np.random.default_rng(3).standard_normal((h, w)).astype(np.float32)
-    monkeypatch.setattr(thumbnails, "_cached_grain_field", lambda *a: field)
+    monkeypatch.setattr(thumbnails, "_cached_grain_field", lambda *a, **k: field)
     banded = thumbnails._apply_grain(arr, 40, 25, 50)
     assert np.array_equal(banded, whole(lambda: thumbnails._apply_grain(arr, 40, 25, 50)))
     target = arr.copy()
@@ -184,7 +184,7 @@ def test_the_pipeline_never_writes_into_the_base_it_was_given(monkeypatch):
     before = lin.copy()
     h, w = lin.shape[:2]
     field = np.random.default_rng(3).standard_normal((h, w)).astype(np.float32)
-    monkeypatch.setattr(thumbnails, "_cached_grain_field", lambda *a: field)
+    monkeypatch.setattr(thumbnails, "_cached_grain_field", lambda *a, **k: field)
     adj = develop.defaults() | {"clarity": 30, "sharpness": 40, "grain_amount": 30}
     thumbnails.invalidate_tone_stage()
     first = np.asarray(thumbnails.apply_adjustments_linear(lin, 1.0, adj, tone_cache_key="banded"))

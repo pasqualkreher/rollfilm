@@ -1536,14 +1536,14 @@ export function CanvasEditor({
   const autoArrange = useCallback(
     async (options: ArrangeOptions) => {
       if (!doc || images.length < 2) return;
-      const { perPage, groupBy, gapMm } = options;
+      const { minPerPage, maxPerPage, groupBy, layout, style, sizes, gapMm } = options;
       let result: { groups: string[][]; missing: string[] };
       if (groupBy === "look") {
         try {
           result = await runTask({ kind: "plain", label: "Arranging…" }, () =>
             api.images.group(
               images.map((image) => image.id),
-              { min_size: perPage === "auto" ? 2 : perPage, max_size: perPage === "auto" ? 6 : perPage }
+              { min_size: minPerPage, max_size: maxPerPage }
             )
           );
         } catch (e) {
@@ -1551,11 +1551,39 @@ export function CanvasEditor({
           return;
         }
       } else {
-        // By time or as listed: plain chunks, no analysis needed.
+        // By time or as listed: pages in that order, no analysis needed. By
+        // time a page may end early where the shooting paused, once it holds
+        // its minimum; a last page under the minimum borrows from the one
+        // before, or joins it.
         const ordered = groupBy === "time" ? [...images].sort((a, b) => (a.taken_at ?? "").localeCompare(b.taken_at ?? "")) : images;
-        const size = perPage === "auto" ? 4 : perPage;
+        const PAUSE_MS = 60 * 60 * 1000;
+        const pauseAfter = (index: number) => {
+          if (groupBy !== "time") return false;
+          const a = ordered[index]?.taken_at;
+          const b = ordered[index + 1]?.taken_at;
+          if (!a || !b) return false;
+          return Date.parse(b) - Date.parse(a) > PAUSE_MS;
+        };
         const groups: string[][] = [];
-        for (let at = 0; at < ordered.length; at += size) groups.push(ordered.slice(at, at + size).map((image) => image.id));
+        let page: string[] = [];
+        ordered.forEach((image, index) => {
+          page.push(image.id);
+          if (page.length >= maxPerPage || (page.length >= minPerPage && pauseAfter(index))) {
+            groups.push(page);
+            page = [];
+          }
+        });
+        if (page.length > 0) groups.push(page);
+        const last = groups[groups.length - 1];
+        const before = groups[groups.length - 2];
+        if (last && before && last.length < minPerPage) {
+          if (before.length + last.length <= maxPerPage) {
+            before.push(...last);
+            groups.pop();
+          } else {
+            while (last.length < minPerPage && before.length > minPerPage) last.unshift(before.pop() as string);
+          }
+        }
         result = { groups, missing: [] };
       }
       const margin = marginOf(doc);
@@ -1573,6 +1601,9 @@ export function CanvasEditor({
             page: paged ? index : 0,
             // A free canvas has one page: the groups stack down it as blocks.
             offsetYmm: paged ? 0 : index * (doc.page_height_mm + PAGE_GAP_MM),
+            pageLayout: layout,
+            sizes,
+            style,
           }
         );
         z += frames.length;

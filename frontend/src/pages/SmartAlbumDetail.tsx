@@ -5,7 +5,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { withoutMembershipNames } from "../utils/autoTags";
 import type { ColorLabel, Flag, ImageOut, SmartAlbumOut, ViewMode } from "../api/types";
-import { useSelectionKeys } from "../utils/selection";
+import { surveyState, useSelectionKeys } from "../utils/selection";
+import { rollSubtitle } from "../utils/rollSummary";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTasks } from "../state/tasks";
 import type { ContextActions } from "../components/PhotoContextMenu";
@@ -36,6 +37,13 @@ export function SmartAlbumDetail() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [lastIndex, setLastIndex] = useState<number | null>(null);
   const hasSelection = selected.size > 0;
+  // Back from the survey: its photos are the selection again.
+  useEffect(() => {
+    const reselect = (location.state as { reselect?: string[] } | null)?.reselect;
+    if (!reselect) return;
+    setSelected(new Set(reselect));
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [location.state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Escape walks back to the albums, the same as it leaves a manual album,
   // the lightbox and the editor - one key out of any view. A dialog on top
@@ -67,6 +75,7 @@ export function SmartAlbumDetail() {
     fromState ??
     (smart
       ? [
+          ...(smart.rolls ?? []),
           ...(smart.imports ?? []),
           ...smart.clusters,
           ...smart.tags,
@@ -184,6 +193,7 @@ export function SmartAlbumDetail() {
     },
     hasSelection,
     edit: { selected, order: orderedImages.map((im) => im.id) },
+    survey: { selected, order: orderedImages.map((im) => im.id), returnTo: location.pathname + location.search },
     onRate: (rating) => void applyBulk({ rating }),
     onColor: (label) =>
       void applyBulk({
@@ -200,6 +210,10 @@ export function SmartAlbumDetail() {
     onFlag: (ids, flag) => applyBulk({ flag }, ids),
     meta: (ids) => selectionSharedMeta(images ?? [], new Set(ids)),
     onDelete: (ids) => trash(ids),
+    onSurvey: (ids) =>
+      navigate("/survey", {
+        state: surveyState(ids, orderedImages.map((im) => im.id), location.pathname + location.search),
+      }),
   };
   // Date sections + the right-edge scrubber, like an opened manual album. The
   // grid picks the granularity itself: a single-month album (a month card, a
@@ -215,7 +229,12 @@ export function SmartAlbumDetail() {
         title={
           <>
             <span className="bar-title-name">{meta?.name ?? "Smart album"}</span>
-            {meta && <span className="count-pill">{meta.image_count} photos</span>}
+            {meta && (
+              <span className="count-pill">
+                {meta.image_count} photos
+                {meta.kind === "roll" && rollSubtitle(meta.roll) ? ` · ${rollSubtitle(meta.roll)}` : ""}
+              </span>
+            )}
           </>
         }
         viewMode={viewMode}

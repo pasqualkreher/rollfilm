@@ -10,10 +10,11 @@ were all final. So the app keeps copies of it, made with SQLite's own
 - one before every migration that changes the schema (run_server, before
   Alembic runs), named after the revision it left;
 - one a day, the first start of the day (main.py, in the background);
-- one whenever the user asks (Settings -> Backup & restore -> Snapshot now).
+- one whenever asked (POST /maintenance/db-snapshots; Settings no longer shows
+  them - the app looks after its database itself).
 
-Restoring is never done on the live database: Settings marks a snapshot, and
-the next start swaps it in before anything opens the database
+Restoring is never done on the live database: the restore route marks a
+snapshot, and the next start swaps it in before anything opens the database
 (apply_pending_restore), keeping the replaced file beside it for a while.
 """
 

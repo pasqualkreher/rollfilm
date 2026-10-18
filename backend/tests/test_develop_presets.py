@@ -166,6 +166,34 @@ def test_a_photo_without_an_edit_takes_the_presets_process():
     assert develop.merge_sections({}, preset, [])["process"] == "1"
 
 
+def test_a_look_alone_puts_an_unedited_photo_on_the_standard_base():
+    # The look strip applies only the "film" section. A photo with no edit is
+    # on the legacy raw base; left there, a RAW would render at its dark
+    # native exposure once it stops being neutral.
+    preset = develop.normalize({"film_sim": "kodak_portra_400", "raw_base": "standard", "process": "7"})
+    out = develop.merge_sections({}, preset, ["film"])
+    assert out["film_sim"] == "kodak_portra_400"
+    assert out["raw_base"] == "standard" and out["process"] == "7"
+    # An existing edit keeps its own base (its exposure was set on it).
+    current = develop.normalize({"exposure": 0.5, "raw_base": "legacy", "process": "7"})
+    assert develop.merge_sections(current, preset, ["film"])["raw_base"] == "legacy"
+
+
+def test_choosing_a_look_moves_the_process_like_the_editor():
+    # The three cases of adjustments.ts processForCurrentLooks / withFilmSim.
+    look = develop.normalize({"film_sim": "velvia", "process": "7"})
+    on_five_neutral_calibration = develop.normalize({"exposure": 0.3, "process": "5"})
+    assert develop.merge_sections(on_five_neutral_calibration, look, ["film"])["process"] == "7"
+    on_five_with_calibration = develop.normalize({
+        "exposure": 0.3, "process": "5", "color_calibration": {"red_hue": 10},
+    })
+    assert develop.merge_sections(on_five_with_calibration, look, ["film"])["process"] == "5"
+    on_one = develop.normalize({"exposure": 0.3, "process": "1"})
+    assert develop.merge_sections(on_one, look, ["film"])["process"] == "1"
+    # Other sections never move the process of an edited photo.
+    assert develop.merge_sections(on_five_neutral_calibration, look, ["tone"])["process"] == "5"
+
+
 def test_bulk_apply_with_sections_keeps_the_rest(db, monkeypatch):
     monkeypatch.setattr(images_routes, "enqueue_rerender", lambda image_id, undo=None: None)
     a = db.get(Image, "a")

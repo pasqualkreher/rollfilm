@@ -93,6 +93,7 @@ def test_a_photo_serialises_every_field_the_grid_needs(db):
         "virtual_of_image_id": None,
         "missing": False,
         "flag": None,
+        "roll": None,
     }
 
 

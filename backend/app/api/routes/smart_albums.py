@@ -64,6 +64,8 @@ def _time_out(kind: str, album: smart_service.GroupAlbum) -> schemas.SmartAlbumO
         image_count=album.image_count,
         cover_image_id=album.cover_image_id,
         cover_image_ids=album.cover_image_ids,
+        group=album.group,
+        roll=schemas.RollSummaryOut(**album.roll) if album.roll else None,
     )
 
 
@@ -113,6 +115,7 @@ def list_smart_albums(
     return schemas.SmartAlbumsOut(
         clusters_status=status,
         # Always on: the way back to what was just imported.
+        rolls=[_time_out("roll", a) for a in smart_service.get_roll_albums(db, current_user.id)],
         imports=[_time_out("imported", a) for a in smart_service.get_import_albums(db, current_user.id)],
         clusters=[_cluster_out(db, i, c) for i, c in enumerate(clusters)],
         tags=[_time_out("tag", a) for a in tag_albums],
@@ -210,6 +213,9 @@ def smart_album_images(
         )
     elif kind == "edits":
         query = query.filter(smart_service.edited_filter())
+    elif kind == "roll":
+        # Every photo that came in through this import session.
+        query = query.filter(Image.import_session_id == key)
     elif kind == "imported":
         # One day of imports (imported_at, UTC) - see get_import_albums.
         try:

@@ -99,18 +99,6 @@ function tabOfSection(title: string): string {
 // ---- Shared building blocks so every section is styled the same way -------
 
 // A status/result line (muted, or red when it's an error).
-function formatBytes(n: number): string {
-  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatSnapshotDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
-}
-
 function Note({ children, error }: { children: ReactNode; error?: boolean }) {
   return <p className={`settings-note${error ? " settings-note--error" : ""}`}>{children}</p>;
 }
@@ -394,30 +382,6 @@ export function Settings() {
   const { data: missingFiles } = useQuery({
     queryKey: ["missing-files"],
     queryFn: () => api.maintenance.missingFiles(),
-  });
-  // Copies of the catalog database: listed, taken on request, one marked to
-  // be swapped in on the next start.
-  const { data: dbSnapshots } = useQuery({
-    queryKey: ["db-snapshots"],
-    queryFn: () => api.maintenance.dbSnapshots(),
-  });
-  const [snapshotNote, setSnapshotNote] = useTransientMessage(8000);
-  const takeSnapshot = useMutation({
-    mutationFn: () => api.maintenance.takeDbSnapshot(),
-    onSuccess: (entry) => {
-      setSnapshotNote(`Snapshot written: ${entry.name}`);
-      queryClient.invalidateQueries({ queryKey: ["db-snapshots"] });
-    },
-    onError: (e: Error) => setSnapshotNote(e.message),
-  });
-  const restoreSnapshot = useMutation({
-    mutationFn: (name: string) => api.maintenance.restoreDbSnapshot(name),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["db-snapshots"] }),
-    onError: (e: Error) => setSnapshotNote(e.message),
-  });
-  const cancelRestoreSnapshot = useMutation({
-    mutationFn: () => api.maintenance.cancelDbSnapshotRestore(),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["db-snapshots"] }),
   });
   const removeMissing = useMutation({
     mutationFn: () => api.maintenance.removeMissing(),
@@ -1710,67 +1674,6 @@ export function Settings() {
 
         <div className="settings-block">
           <Desc>
-            Rollfilm keeps copies of the catalog database - stars, tags, albums, canvases and edits,
-            not the photos: one before every update that changes its layout, one a day (the last
-            seven), and one whenever you ask. Restoring swaps the copy in the next time Rollfilm
-            starts; the database it replaces is kept beside it.
-          </Desc>
-          <div className="maintenance-run">
-            <button className="btn" onClick={() => takeSnapshot.mutate()} disabled={takeSnapshot.isPending}>
-              {takeSnapshot.isPending ? "Writing…" : "Snapshot now"}
-            </button>
-            {dbSnapshots && <span className="maintenance-eta">{dbSnapshots.folder}</span>}
-          </div>
-          {snapshotNote && <Note>{snapshotNote}</Note>}
-          {dbSnapshots?.pending_restore && (
-            <Note>
-              <strong>{dbSnapshots.pending_restore}</strong> replaces the database the next time Rollfilm
-              starts.{" "}
-              <button className="btn btn-sm ghost" onClick={() => cancelRestoreSnapshot.mutate()}>
-                Keep the current database
-              </button>
-            </Note>
-          )}
-          {dbSnapshots && dbSnapshots.snapshots.length > 0 && (
-            <table className="help-shortcuts snapshot-table">
-              <tbody>
-                {dbSnapshots.snapshots.map((s) => (
-                  <tr key={s.name}>
-                    <td>{formatSnapshotDate(s.created_at)}</td>
-                    <td>
-                      {s.reason === "migration"
-                        ? `before update${s.revision ? ` (${s.revision})` : ""}`
-                        : s.reason === "daily"
-                          ? "daily"
-                          : "on request"}
-                    </td>
-                    <td>{formatBytes(s.size)}</td>
-                    <td>
-                      <button
-                        className="btn btn-sm"
-                        disabled={restoreSnapshot.isPending || dbSnapshots.pending_restore === s.name}
-                        onClick={async () => {
-                          const ok = await dialogs.confirm({
-                            title: "Restore this snapshot on the next start?",
-                            message: `The database from ${formatSnapshotDate(s.created_at)} replaces the current one when Rollfilm starts next. Stars, tags, albums and edits made since then are not in it; the replaced database is kept beside it for a while. Photos are not touched.`,
-                            confirmLabel: "Restore on next start",
-                            danger: true,
-                          });
-                          if (ok) restoreSnapshot.mutate(s.name);
-                        }}
-                      >
-                        {dbSnapshots.pending_restore === s.name ? "Marked" : "Restore…"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div className="settings-block">
-          <Desc>
             Restoring a backup <strong>replaces everything currently in your library</strong> with
             the backup's contents - photos, stars, tags, albums, canvases, edits and settings. The
             backup is checked first; what it replaces is moved to a <em>restore-replaced</em>{" "}
@@ -1787,7 +1690,7 @@ export function Settings() {
           <div className="import-toolbar">
             <input
               type="text"
-              placeholder="Type delete to confirm"
+              placeholder="Type “delete” to confirm"
               value={restoreConfirmation}
               onChange={(e) => setRestoreConfirmation(e.target.value)}
             />

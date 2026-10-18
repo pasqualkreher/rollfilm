@@ -7,6 +7,7 @@ the photo, a vignette re-centred on the viewport, or a detail pass running out
 of image at the tile's edge (which is what REGION_PAD_PX exists for).
 """
 
+import cv2
 import numpy as np
 import pytest
 from PIL import Image as PILImage
@@ -113,7 +114,7 @@ def test_a_tile_gets_the_grain_of_the_whole_photo(monkeypatch):
     size the whole frame does - not the fine grain its own size would give."""
     asked = []
 
-    def field(h, w, particle_px, coarse, shape):
+    def field(h, w, particle_px, coarse, shape, origin=(0, 0)):
         asked.append(particle_px)
         return np.zeros((h, w), dtype=np.float32)
 
@@ -127,3 +128,21 @@ def test_a_tile_gets_the_grain_of_the_whole_photo(monkeypatch):
     assert asked[0] > 1.0
     assert asked[1] == asked[0]
     assert asked[2] < asked[0]
+
+
+def test_grain_stays_put_across_tiles_and_zoom():
+    """The grain is pinned to the photo: a tile shows the whole frame's grains
+    at its place, a second render repeats them, and a render at twice the size
+    is the same pattern, only larger. (A strip: the long edge has to be big
+    enough for the photo lattice, see _GRAIN_LATTICE_MIN_CELL_PX.)"""
+    whole = np.full((300, 3000, 3), 0.5, dtype=np.float32)
+    a = thumbnails._apply_grain(whole, 60, 50, 50)
+    b = thumbnails._apply_grain(whole, 60, 50, 50)
+    assert np.array_equal(a, b)
+    tile = whole[100:220, 1300:1500]
+    t = thumbnails._apply_grain(tile, 60, 50, 50, ref_long_edge=3000, origin=(1300, 100))
+    assert np.abs(t - a[100:220, 1300:1500]).max() < 1e-3
+    big = np.full((600, 6000, 3), 0.5, dtype=np.float32)
+    z = thumbnails._apply_grain(big, 60, 50, 50)
+    down = cv2.resize(z, (3000, 300), interpolation=cv2.INTER_AREA)
+    assert np.corrcoef(down[..., 0].ravel(), a[..., 0].ravel())[0, 1] > 0.95

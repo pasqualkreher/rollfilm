@@ -210,6 +210,8 @@ from app.db.models import (  # noqa: E402
     Canvas,
     CanvasImage,
     CanvasLayout,
+    ImportSession,
+    ImportSessionStatus,
     LayoutItem,
     LayoutVersion,
     SourceRoot,
@@ -516,3 +518,45 @@ def test_snapshots_and_presets_travel_with_a_backup(db: Session, monkeypatch):
     assert snap is not None and snap.name == "Warm" and snap.image_id == "img-edited"
     preset = db.get(DevelopPreset, "pre-1")
     assert preset is not None and preset.adjustments == '{"film_sim": "provia"}'
+
+
+def test_v4_round_trip_keeps_the_rolls(db: Session, roots):
+    """A roll (a closed import session that imported something) travels with
+    its name and dates; its photos keep pointing at it. Open and discarded
+    sessions stay behind, and a photo of one restores without a roll."""
+    roll = ImportSession(
+        id="roll", owner_id=1, source_path="Norway", status=ImportSessionStatus.committed,
+        staging_dir="/Volumes/Imports/Norway",
+    )
+    open_session = ImportSession(id="open", owner_id=1, source_path="DCIM")
+    db.add_all([roll, open_session])
+    db.flush()
+    _photo(db, "p1", "2026/2026-07-01/a.jpg")
+    db.get(Image, "p1").import_session_id = "roll"
+    _photo(db, "p2", "2026/2026-07-01/b.jpg")
+    db.get(Image, "p2").import_session_id = "open"
+    db.commit()
+
+    zip_path = maintenance.build_backup_zip(db, owner_id=1)
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            manifest = json.loads(zf.read("manifest.json"))
+        assert manifest["version"] == 4
+        [session] = manifest["import_sessions"]
+        assert (session["id"], session["source_path"], session["status"]) == ("roll", "Norway", "committed")
+        # The collection folder is this machine's, not the roll's.
+        assert session["staging_dir"] is None
+        by_id = {i["id"]: i for i in manifest["images"]}
+        assert by_id["p1"]["import_session_id"] == "roll"
+        assert by_id["p2"]["import_session_id"] == "open"
+
+        maintenance.restore_from_backup(db, owner_id=1, upload=_Upload(zip_path))
+    finally:
+        zip_path.unlink(missing_ok=True)
+
+    restored = db.get(ImportSession, "roll")
+    assert restored.source_path == "Norway" and restored.status == ImportSessionStatus.committed
+    assert db.get(Image, "p1").import_session_id == "roll"
+    # Its session was not in the backup: the photo is back, without a roll.
+    assert db.get(ImportSession, "open") is None
+    assert db.get(Image, "p2").import_session_id is None

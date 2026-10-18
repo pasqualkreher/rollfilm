@@ -37,6 +37,8 @@ export interface ImageOut {
   height: number | null;
   taken_at: string | null;
   imported_at: string;
+  // The roll (import session) the photo came in through, or null.
+  import_session_id?: string | null;
   // Set while the photo sits in the in-app Trash (managed photos only).
   deleted_at: string | null;
   // Set while the library sync cannot find the photo's file; the photo
@@ -408,9 +410,18 @@ export interface CanvasGalleryOut {
 // The id is self-describing ("cluster:2", "year:2024", "month:2024-07",
 // "day:2024-07-12", "place:48.1374,11.5755") and is what
 // /smart-albums/{id}/images resolves.
+// What a roll's card and header say beside its name.
+export interface RollSummary {
+  session_id: string;
+  imported_at: string;
+  taken_from: string | null;
+  taken_to: string | null;
+  cameras: string[];
+}
+
 export interface SmartAlbumOut {
   id: string;
-  kind: "cluster" | "tag" | "year" | "month" | "day" | "place" | "country" | "country_year" | "edits" | "imported";
+  kind: "cluster" | "tag" | "year" | "month" | "day" | "place" | "country" | "country_year" | "edits" | "imported" | "roll";
   name: string;
   image_count: number;
   cover_image_id: string | null;
@@ -420,6 +431,8 @@ export interface SmartAlbumOut {
   // "Mountains · Alpine" / "Mountains · Mediterranean") - the Moments row
   // stacks a group under one expandable card.
   group?: string | null;
+  // Rolls only: capture span and cameras.
+  roll?: RollSummary | null;
 }
 
 export interface SmartAlbumsOut {
@@ -427,7 +440,9 @@ export interface SmartAlbumsOut {
   // "building" = very first cluster pass; "refreshing" = served clusters are
   // stale and a rebuild runs (e.g. embeddings backfilling after an import).
   clusters_status: "building" | "refreshing" | "ready";
-  // The last days photos were imported on, newest first ("Recent imports").
+  // The rolls: one per import session that imported something, newest first.
+  rolls: SmartAlbumOut[];
+  // Import days of the photos that belong to no roll, newest first.
   imports: SmartAlbumOut[];
   clusters: SmartAlbumOut[];
   // One album per tag ("albums by tag") - the "tags" section.
@@ -685,6 +700,8 @@ export interface AutoPickRequest {
   exclude_ids?: string[];
   tags?: string[] | null;
   country?: string | null;
+  // Cosine floor 0..1; fewer than `count` may come back.
+  min_similarity?: number | null;
 }
 
 export type ImmichSyncMode = "manual" | "selective" | "full";
@@ -856,6 +873,8 @@ export interface LibraryIndexImage {
   // The library sync could not find the file: the tile says "Missing".
   missing: boolean;
   flag: Flag | null;
+  // The roll (import session) the photo came in through, or null.
+  roll: string | null;
 }
 
 // One geotagged photo on the map, slim like the library index.
@@ -902,6 +921,8 @@ export interface LibraryFilters {
   flag?: string;
   // One day of imports, "YYYY-MM-DD" (UTC).
   imported?: string;
+  // One roll (import session id).
+  roll?: string;
   // edited | unedited | unrated | located | unlocated
   state?: string;
   tags?: string[];

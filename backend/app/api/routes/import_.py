@@ -7,6 +7,7 @@ import shutil
 import threading
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -464,15 +465,21 @@ def stage_local_paths(
 
 
 @router.get("/sessions", response_model=list[schemas.ImportSessionSummaryOut])
-def list_open_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def list_open_sessions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    status: Literal["staging", "committed"] = "staging",
+):
     """Every import session still open, most recently worked on first - the
-    Import page lists them to continue. Counted in SQL: a long-lived session
-    holds thousands of rows, and this must not load them all per session."""
+    Import page lists them to continue. `status=committed` lists the closed
+    sessions that imported something instead: the rolls, by name. Counted in
+    SQL: a long-lived session holds thousands of rows, and this must not load
+    them all per session."""
     sessions = (
         db.query(ImportSession)
         .filter(
             ImportSession.owner_id == current_user.id,
-            ImportSession.status == ImportSessionStatus.staging,
+            ImportSession.status == ImportSessionStatus(status),
         )
         .all()
     )
@@ -658,6 +665,8 @@ def rename_import_session(
     the source folder's name it was opened with. A copy session's collection
     folder is renamed with it."""
     session = get_owned_import_session(db, current_user.id, session_id)
+    if session.status == ImportSessionStatus.discarded:
+        raise HTTPException(status_code=400, detail="Session already discarded")
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="A session needs a name")

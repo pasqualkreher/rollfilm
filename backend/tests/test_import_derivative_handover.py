@@ -71,3 +71,17 @@ def test_a_half_rendered_photo_is_left_to_the_worker(staged):
 
 def test_nothing_staged_is_not_an_error(staged):
     assert adopt_staged_derivatives("session-1", "unknown", "image-4") is False
+
+
+def test_a_closed_session_is_not_rendered_for(staged, tmp_path):
+    """Closing a session removes its folder while a review render may still
+    be queued; the render then does nothing, instead of failing on the way to
+    a file it cannot write."""
+    from app.services.import_pipeline import render_review_derivatives
+
+    source = tmp_path / "card.jpg"
+    _jpeg(source)
+    gone = staged.parent / "closed-session" / ".thumbnails"
+    assert not gone.exists()
+    render_review_derivatives(source, "file-9", gone, False)
+    assert not gone.exists()

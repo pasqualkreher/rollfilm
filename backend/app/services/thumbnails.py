@@ -10,6 +10,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
+import functools
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -2036,9 +2037,17 @@ def _adjust_array(
     return _display_color_block(toned, adj)
 
 
-def _grain_field(h: int, w: int, particle_px: float, coarse: float, shape: float) -> np.ndarray:
+def _grain_field(
+    h: int, w: int, particle_px: float, coarse: float, shape: float,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
     """A monochrome silver-grain field of unit RMS (float32), built as a
     band-pass noise stack rather than upscaled blocks.
+
+    This is the field of a render whose particles are too small for the photo
+    lattice (_lattice_grain_rows): a thumbnail, or the fit view of very fine
+    grain. `rng` defaults to one seeded with _GRAIN_SEED, so the same size
+    always gets the same pattern.
 
     Real grain has a *band-pass* Wiener spectrum: no energy at the pixel grid
     (that reads as digital sensor noise) and none at low frequencies either
@@ -2071,7 +2080,9 @@ def _grain_field(h: int, w: int, particle_px: float, coarse: float, shape: float
     # the degenerate case of an image smaller than the 4px floor above.
     ps = min(3.5, p / max(h / nh, 1e-6))
 
-    n = np.random.standard_normal((nh, nw)).astype(np.float32)
+    if rng is None:
+        rng = np.random.default_rng(_GRAIN_SEED)
+    n = rng.standard_normal((nh, nw), dtype=np.float32)
     g_a = cv2.GaussianBlur(n, (0, 0), max(0.42, ps * 0.30))
     g_b = cv2.GaussianBlur(n, (0, 0), max(0.95, ps * 0.75))
     g_c = cv2.GaussianBlur(n, (0, 0), max(2.40, ps * 1.95))
@@ -2096,14 +2107,165 @@ def _grain_field(h: int, w: int, particle_px: float, coarse: float, shape: float
     return field
 
 
-# Preview-size grain fields, cached by size: synthesising a full-frame noise
-# field costs a good chunk of every accurate/settle render with grain active.
-# The field depends only on (h, w, particle size, band mix, shaping), so the
-# editor's repeated renders of the same image reuse it - which also stops the
-# grain pattern re-rolling on every slider tick. Native/full-resolution renders
-# (saves, exports) stay above the pixel cap and keep their fresh stochastic
-# field per render.
-_GRAIN_CACHE: "OrderedDict[tuple[int, int, float, float, float], np.ndarray]" = OrderedDict()
+# The grain is pinned to the photo, not to the render. Its noise lives on one
+# lattice laid over the whole frame, ~3 cells per particle; since the particle
+# size is a fixed fraction of the long edge, a cell is a fixed fraction of the
+# photo too, whatever size the render is. Every cell's noise comes from the
+# seed and the cell's own position, so the fit view, each zoomed tile and the
+# full-resolution save all sample the same grains - zooming and panning no
+# longer re-roll the pattern, and the save is what the editor showed.
+_GRAIN_SEED = 0x6A41
+_GRAIN_BLOCK = 128  # lattice cells per side of one seeded noise block
+_GRAIN_BLOCK_OFF = 1 << 20  # keeps block indices left/above the frame positive
+# Band-pass sigmas on the lattice (3 cells per particle, see _grain_field).
+_GRAIN_SIG_A, _GRAIN_SIG_B, _GRAIN_SIG_C = 0.9, 2.25, 5.85
+# Lattice cells beyond the rows/columns asked for: cv2's float Gaussian reads
+# 4 sigma out, so with this margin a band's field is exactly the whole frame's.
+_GRAIN_MARGIN = 25
+# Below this many render pixels per cell the lattice would hold more than four
+# cells per pixel (a thumbnail, the fit view of very fine grain); such renders
+# keep the per-size field of _grain_field.
+_GRAIN_LATTICE_MIN_CELL_PX = 0.5
+
+
+def _lattice_noise(cy0: int, cx0: int, nh: int, nw: int) -> np.ndarray:
+    """White Gaussian noise of the lattice cells [cy0, cy0+nh) x [cx0, cx0+nw),
+    the same numbers for a cell whichever region asks. Built from seeded
+    blocks, so a region costs only the blocks it touches."""
+    b = _GRAIN_BLOCK
+    out = np.empty((nh, nw), dtype=np.float32)
+    for by in range(cy0 // b, (cy0 + nh - 1) // b + 1):
+        ys, ye = max(cy0, by * b), min(cy0 + nh, (by + 1) * b)
+        for bx in range(cx0 // b, (cx0 + nw - 1) // b + 1):
+            xs, xe = max(cx0, bx * b), min(cx0 + nw, (bx + 1) * b)
+            rng = np.random.default_rng(
+                (_GRAIN_SEED, by + _GRAIN_BLOCK_OFF, bx + _GRAIN_BLOCK_OFF)
+            )
+            block = rng.standard_normal((b, b), dtype=np.float32)
+            out[ys - cy0 : ye - cy0, xs - cx0 : xe - cx0] = block[
+                ys - by * b : ye - by * b, xs - bx * b : xe - bx * b
+            ]
+    return out
+
+
+def _shape_lattice(
+    n: np.ndarray, coarse: float, shape: float, aa: float, stats: tuple | None
+) -> tuple[np.ndarray, tuple]:
+    """The steps of _grain_field on lattice noise `n`. A region of the lattice
+    is not the whole field, so its normalising spreads cannot come from the
+    region itself (every tile would come out a little different): they are
+    measured once on a reference (stats=None, see _lattice_stats) and passed
+    in. `aa` (cells) is the anti-alias blur for renders with cells under one
+    pixel, renormalised so fine grain keeps its strength in the fit view."""
+    measured: list[float] = []
+    m = _GRAIN_MARGIN + 8
+
+    def norm(a: np.ndarray, i: int) -> float:
+        if stats is not None:
+            return stats[i]
+        v = float(a[m:-m, m:-m].std()) + 1e-6
+        measured.append(v)
+        return v
+
+    g_b = cv2.GaussianBlur(n, (0, 0), _GRAIN_SIG_B)
+    fine = cv2.GaussianBlur(n, (0, 0), _GRAIN_SIG_A)
+    fine -= g_b
+    g_b -= cv2.GaussianBlur(n, (0, 0), _GRAIN_SIG_C)
+    fine *= (1.0 - coarse) / norm(fine, 0)
+    g_b *= coarse / norm(g_b, 1)
+    field = fine
+    field += g_b
+    del g_b
+    if shape > 1.0:
+        sign = np.sign(field)
+        np.power(np.abs(field, out=field), shape, out=field)
+        field *= sign
+    field *= 1.0 / norm(field, 2)
+    sq = field * field
+    if stats is None:
+        inner = sq[m:-m, m:-m]
+        measured += [float(inner.std()) + 1e-6, float(inner.mean())]
+    sq_std, sq_mean = (stats[3], stats[4]) if stats is not None else measured[3:5]
+    sq -= sq_mean
+    sq *= 0.05 / sq_std
+    field -= sq
+    del sq
+    field *= 1.0 / norm(field, 5)
+    if aa > 0.0:
+        field = cv2.GaussianBlur(field, (0, 0), aa)
+        field *= 1.0 / norm(field, 6)
+    elif stats is None:
+        measured.append(1.0)
+    return field, tuple(measured)
+
+
+@functools.lru_cache(maxsize=64)
+def _lattice_stats(coarse: float, shape: float, aa: float) -> tuple:
+    """The normalising spreads for _shape_lattice, from one fixed reference
+    patch of the lattice."""
+    side = 640
+    n = _lattice_noise(0, 0, side, side)
+    return _shape_lattice(n, coarse, shape, aa, None)[1]
+
+
+def _lattice_grain_rows(
+    y0: int, y1: int, w: int, cell_px: float, coarse: float, shape: float,
+    ox: int, oy: int,
+) -> np.ndarray:
+    """Rows [y0, y1) of the grain field of a render whose lattice cells are
+    `cell_px` render pixels and whose top-left pixel sits at (ox, oy) in the
+    frame (a tile's offset; 0, 0 for a whole frame). Unit RMS, float32."""
+    inv = 1.0 / cell_px
+    # Lattice coordinate of a pixel centre, cell centres at whole numbers.
+    ux = (np.arange(ox, ox + w, dtype=np.float64) + 0.5) * inv - 0.5
+    uy = (np.arange(oy + y0, oy + y1, dtype=np.float64) + 0.5) * inv - 0.5
+    aa = round(0.5 * math.sqrt(max(0.0, inv * inv - 1.0)), 2)
+    pad = _GRAIN_MARGIN + int(math.ceil(4.0 * aa)) + 3
+    cx0, cy0 = int(math.floor(ux[0])) - pad, int(math.floor(uy[0])) - pad
+    cx1, cy1 = int(math.ceil(ux[-1])) + pad + 1, int(math.ceil(uy[-1])) + pad + 1
+    stats = _lattice_stats(round(coarse, 3), round(shape, 3), aa)
+    n = _lattice_noise(cy0, cx0, cy1 - cy0, cx1 - cx0)
+    field, _ = _shape_lattice(n, coarse, shape, aa, stats)
+    del n
+    mx = (ux - cx0).astype(np.float32)
+    my = (uy - cy0).astype(np.float32)
+    rows = y1 - y0
+    return cv2.remap(
+        field,
+        np.ascontiguousarray(np.broadcast_to(mx, (rows, w))),
+        np.ascontiguousarray(np.broadcast_to(my[:, None], (rows, w))),
+        cv2.INTER_CUBIC,
+    )
+
+
+def _lattice_grain_field(
+    h: int, w: int, cell_px: float, coarse: float, shape: float, ox: int, oy: int
+) -> np.ndarray:
+    field = np.empty((h, w), dtype=np.float32)
+
+    def run(y0: int, y1: int) -> None:
+        field[y0:y1] = _lattice_grain_rows(y0, y1, w, cell_px, coarse, shape, ox, oy)
+
+    _band_map(run, h, w)
+    return field
+
+
+def _make_grain_field(
+    h: int, w: int, particle_px: float, coarse: float, shape: float, origin: tuple[int, int]
+) -> np.ndarray:
+    cell_px = particle_px / 3.0
+    if cell_px >= _GRAIN_LATTICE_MIN_CELL_PX:
+        return _lattice_grain_field(h, w, cell_px, coarse, shape, *origin)
+    return _grain_field(h, w, particle_px, coarse, shape)
+
+
+# Grain fields, cached by render: synthesising a full-frame noise field costs a
+# good chunk of every accurate/settle render with grain active. The field
+# depends only on (size, origin, particle size, band mix, shaping), so the
+# editor's repeated renders of the same view reuse it. Native/full-resolution
+# renders (saves, exports) stay above the pixel cap and build theirs per
+# render - the same pattern, it is seeded.
+_GRAIN_CACHE: "OrderedDict[tuple, np.ndarray]" = OrderedDict()
 _GRAIN_CACHE_MAX = 8
 _GRAIN_CACHE_MAX_PX = 8_000_000
 # Byte-bounded like the other stage caches: eight 8MP float32 fields were a
@@ -2118,17 +2280,18 @@ def _grain_cache_clear() -> None:
 
 
 def _cached_grain_field(
-    h: int, w: int, particle_px: float, coarse: float, shape: float
+    h: int, w: int, particle_px: float, coarse: float, shape: float,
+    origin: tuple[int, int] = (0, 0),
 ) -> np.ndarray:
     if h * w > _GRAIN_CACHE_MAX_PX:
-        return _grain_field(h, w, particle_px, coarse, shape)
-    key = (h, w, round(particle_px, 4), round(coarse, 3), round(shape, 3))
+        return _make_grain_field(h, w, particle_px, coarse, shape, origin)
+    key = (h, w, origin, round(particle_px, 4), round(coarse, 3), round(shape, 3))
     with _grain_cache_lock:
         hit = _GRAIN_CACHE.get(key)
         if hit is not None:
             _GRAIN_CACHE.move_to_end(key)
             return hit
-    f = _grain_field(h, w, particle_px, coarse, shape)
+    f = _make_grain_field(h, w, particle_px, coarse, shape, origin)
     f.flags.writeable = False  # shared across renders
     with _grain_cache_lock:
         _GRAIN_CACHE[key] = f
@@ -2144,6 +2307,7 @@ def _cached_grain_field(
 def _apply_grain(
     arr: np.ndarray, amount: int, size: int = 0, roughness: int = 50,
     out: np.ndarray | None = None, ref_long_edge: float | None = None,
+    origin: tuple[int, int] = (0, 0),
 ) -> np.ndarray:
     """Fujifilm-style analog film grain.
 
@@ -2164,15 +2328,17 @@ def _apply_grain(
     paper-white. A flat weighting (what this used before) lifts the blacks with
     an even veil, which is the single clearest giveaway of digital fake grain.
 
-    Stochastic - the preview shows a different pattern than the saved render.
+    Seeded and pinned to the photo (see _GRAIN_SEED): the fit view, a zoomed
+    tile and the saved render show the same grains in the same places.
 
     `out` may be `arr` itself: a caller that owns the frame gets the grain
     written into it instead of a second frame beside it.
 
     `ref_long_edge` is the long edge of the whole photo when `arr` is a tile
     of it (the editor's zoomed render): the particles are sized for the photo,
-    so the tile shows grain as coarse as the frame it stands in for. The
-    pattern is the tile's own - a different draw, like every render's."""
+    so the tile shows grain as coarse as the frame it stands in for. `origin`
+    is the tile's top-left pixel in that frame, so it samples the frame's own
+    grains at its place."""
     h, w = arr.shape[:2]
     size_f = min(100, max(0, size)) / 100.0
     rough = min(100, max(0, roughness)) / 100.0
@@ -2190,7 +2356,7 @@ def _apply_grain(
     # Roughness is the particle *character*, not just a second volume knob:
     # low = fine, even, almost Gaussian texture; high = sparse, hard-edged
     # specks with clean gaps, plus a little more amplitude to match.
-    field = _cached_grain_field(h, w, p, coarse, 1.0 + 0.55 * rough)
+    field = _cached_grain_field(h, w, p, coarse, 1.0 + 0.55 * rough, origin=origin)
     strength = (amount / 100.0) * 0.040 * (0.72 + 0.56 * rough)
     if out is None:
         out = np.empty_like(arr)
@@ -3216,6 +3382,7 @@ def apply_adjustments_linear(
         arr = _apply_grain(
             arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50),
             out=arr if owned else None, ref_long_edge=long_edge,
+            origin=(view.x0, view.y0) if view is not None else (0, 0),
         )
     # Last of all, so the marking is the flat pink it was meant to be rather than
     # something the vignette darkened and the grain crawled over.

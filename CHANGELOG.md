@@ -4,6 +4,25 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.1.98 — 2026-10-18
+
+### New
+- **Rolls**: every import is kept as a roll. After an import the Import page shows the roll as a contact sheet with "Open in Library"; Albums lists Rolls instead of Recent imports; the Library sorts by roll.
+- **Survey**: select 2 to 6 photos and press N (or right-click → Survey) to see them side by side. Stars, picks, rejects and colours go to the framed photo, X takes it out, Esc returns to the grid with the selection kept.
+
+### Improved
+- Backups carry the rolls (manifest v4); older backups restore as before.
+- The selection bar drops Select all and Clear selection: ⌘A, Esc and a click on empty ground do the same.
+- Auto-arrange on the canvas takes a range of photos per page (1 to 9, "at least" and "at most"), sets the pages in rows, columns or whichever fits best, keeps sizes even or fills the paper, has a style (Balanced, Fitted lets photos swap places, Edge to edge fills the page to the margin and trims photos a little), and by time starts a new page where the shooting paused.
+- Find similar… says what it did: "Added 10 photos to “Holiday”." in the dialog's footer after Add to….
+- Settings › Backup & restore no longer lists database snapshots. Rollfilm still copies its database before every update and once a day, on its own.
+
+### Fixed
+- A preset that brings only its film look onto a photo that was never edited no longer renders it dark; the photo takes the same base a new edit gets, and moves to the current process the way the editor does.
+- Albums hid the Recent imports row when no other automatic album existed.
+- The selection bar wraps cleanly in a narrow window: rows keep their spacing, the divider goes, Delete stays beside Edit and Reset, and the grid's last row is never hidden under it. The tag field now sits beside the stars.
+- Closing an import session while its previews were still rendering no longer logs an error.
+
 ## 0.1.97 — 2026-10-17
 
 ### Fixed

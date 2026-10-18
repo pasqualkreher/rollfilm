@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useSessionState } from "../utils/useSessionState";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { CANCELLED_NOTE, pairUnits } from "../utils/batchUnits";
@@ -19,7 +19,7 @@ import { TagFilter } from "../components/TagFilter";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { EditPicker } from "../components/EditPicker";
-import { IconCheck, IconCloudUp, IconMinus, IconRename, IconSort, IconSparkle, IconTrash, IconX, IconTag } from "../components/Icons";
+import { IconCheck, IconCloudUp, IconExport, IconMinus, IconRename, IconSort, IconSparkle, IconTrash, IconX, IconTag } from "../components/Icons";
 import { AutoPickDialog } from "../components/AutoPickDialog";
 import { ExportDialog } from "../components/ExportDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
@@ -32,6 +32,7 @@ import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { collapsePairs, useAskSaveCopyOptions } from "../state/viewPrefs";
 import { FULL_COPY_QUALITY, SaveCopyDialog } from "../components/SaveCopyDialog";
 import { modKeyLabel, useSelectionKeys } from "../utils/selection";
+import { useBarHeight } from "../utils/useBarHeight";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import type { ContextActions } from "../components/PhotoContextMenu";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
@@ -91,6 +92,8 @@ export function AlbumDetail() {
   };
   const [sort, setSort] = useSessionState<SortKey>(`album:${id}:sort`, "newest");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const location = useLocation();
+  const barRef = useBarHeight();
   // Export for the selection: the bar's button, the dialog, ⇧⌘E.
   const selectionExport = useSelectionExport(Array.from(selected));
   const [lastIndex, setLastIndex] = useState<number | null>(null);
@@ -297,11 +300,20 @@ export function AlbumDetail() {
 
   // Cmd/Ctrl+A picks the whole album, Escape drops the selection, E opens a
   // single selected photo in the editor.
+  // Back from the survey: its photos are the selection again.
+  useEffect(() => {
+    const reselect = (location.state as { reselect?: string[] } | null)?.reselect;
+    if (!reselect) return;
+    setSelected(new Set(reselect));
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [location.state]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useSelectionKeys({
     onSelectAll: selectAll,
     onClear: clearSelection,
     hasSelection,
     edit: { selected, order: orderedImages.map((img) => img.id) },
+    survey: { selected, order: orderedImages.map((img) => img.id), returnTo: location.pathname + location.search },
     onRate: (rating) => void applyBulk({ rating }),
     // The key of the colour the selection already has takes it off again.
     onColor: (label) =>
@@ -502,6 +514,14 @@ export function AlbumDetail() {
     const n = partialAddRef.current ?? selected.size;
     partialAddRef.current = null;
     return n;
+  }
+
+  // The same words for the Find similar dialog, which reports in its own
+  // footer (the bar's message row sits behind the modal).
+  function addToNote({ kind, name, ok }: AddToResult, count: number): [string, boolean] {
+    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+    partialAddRef.current = null;
+    return ok ? [`Added ${plural(count, "photo")} to ${what}.`, false] : [`Could not add to ${what}.`, true];
   }
 
   function reportAddTo({ kind, name, ok }: AddToResult) {
@@ -813,7 +833,7 @@ export function AlbumDetail() {
             references={autoPick.map((id) => (images ?? []).find((im) => im.id === id)).filter((im): im is ImageOut => !!im)}
             initialReference={autoPick[0] ?? null}
             onClose={() => setAutoPick(null)}
-            renderActions={(chosen, close) => (
+            renderActions={(chosen, close, note) => (
               <>
                 <button
                   className="btn"
@@ -823,13 +843,13 @@ export function AlbumDetail() {
                     setPickExport(chosen);
                   }}
                 >
-                  Export…
+                  <IconExport size={13} /> Export…
                 </button>
                 <AddToPicker
                   disabled={chosen.length === 0}
                   onAddToAlbum={(albumId) => addSelectedToAlbum(albumId, chosen)}
                   onAddToCanvas={(canvasId) => addSelectedToCanvas(canvasId, chosen)}
-                  onResult={reportAddTo}
+                  onResult={(result) => note(...addToNote(result, chosen.length))}
                 />
                 <button
                   className="btn primary"
@@ -946,15 +966,9 @@ export function AlbumDetail() {
         {selected.size > 0 && (
           // Same grouped layout as the Library bar: groups wrap as units and
           // Delete right-aligns on whatever line it ends up on.
-          <div className="filter-bar action-bar--bottom">
+          <div className="filter-bar action-bar--bottom" ref={barRef}>
             <div className="control-group">
               <span>{selected.size} selected</span>
-              <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
-                <span className="btn-label"><IconCheck size={13} /> Select all</span>
-              </button>
-              <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
-                <span className="btn-label"><IconX size={13} /> Clear selection</span>
-              </button>
             </div>
             {/* The selection itself on the left, what is done to it on the
                 right of the line. */}
@@ -963,6 +977,7 @@ export function AlbumDetail() {
               <FlagPicker value={sharedMeta.flag} onChange={(f) => applyBulk({ flag: f })} />
               <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
               <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
+              <BulkTagInput onAdd={addTagToSelected} />
             </div>
             <div className="control-group">
               {selectionExport.button}
@@ -977,7 +992,6 @@ export function AlbumDetail() {
               </button>
             </div>
             <div className="control-group">
-              <BulkTagInput onAdd={addTagToSelected} />
               <AddToPicker
                 onAddToAlbum={addSelectedToAlbum}
                 onAddToCanvas={addSelectedToCanvas}

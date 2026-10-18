@@ -50,6 +50,21 @@ export type KeyedColor = (typeof COLOR_KEYS)[keyof typeof COLOR_KEYS];
 export const FLAG_KEYS = { a: "pick", x: "reject", u: "" } as const;
 export type KeyedFlag = (typeof FLAG_KEYS)[keyof typeof FLAG_KEYS];
 
+// The survey (pages/Survey) takes two to six photos side by side.
+export const SURVEY_MIN = 2;
+export const SURVEY_MAX = 6;
+export function canSurvey(count: number): boolean {
+  return count >= SURVEY_MIN && count <= SURVEY_MAX;
+}
+// Its route state: the chosen photos in the grid's order, the order itself
+// (for paging when one is opened) and where Esc goes back to.
+export function surveyState(ids: Iterable<string>, order: string[], returnTo: string) {
+  const chosen = new Set(ids);
+  const inOrder = order.filter((id) => chosen.has(id));
+  const imageIds = inOrder.length === chosen.size ? inOrder : Array.from(chosen);
+  return { imageIds, order, returnTo };
+}
+
 // Cmd/Ctrl+A selects everything in the grid and Escape clears the selection -
 // the two keys every file browser answers to. Text boxes keep both keys for
 // themselves (select the text, back out of the field). Escape is only claimed
@@ -70,6 +85,8 @@ export function useSelectionKeys(opts: {
   onDelete?: () => void;
   // The menu bar's File → Export… (⇧⌘E) and Photo → Export….
   onExport?: () => void;
+  // N with two to six photos selected opens them side by side (pages/Survey).
+  survey?: { selected: Set<string>; order: string[]; returnTo: string };
 }) {
   const navigate = useNavigate();
   // The pages pass fresh closures every render; reading them through a ref
@@ -82,7 +99,7 @@ export function useSelectionKeys(opts: {
       if (target && takesTyping(target)) return;
       // A dialog over the grid owns the keyboard.
       if (isModalOpen()) return;
-      const { onSelectAll, onClear, hasSelection, edit, onRate, onColor, onFlag, onDelete } = latest.current;
+      const { onSelectAll, onClear, hasSelection, edit, onRate, onColor, onFlag, onDelete, survey } = latest.current;
       // A key a focused control has already used (a dropdown opening on a
       // typed letter) is not also a culling key.
       const plain = !e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.altKey;
@@ -119,13 +136,16 @@ export function useSelectionKeys(opts: {
         const [id] = edit.selected;
         e.preventDefault();
         navigate(`/image/${id}/edit`, { state: { imageIds: edit.order } });
+      } else if (plain && !e.shiftKey && (e.key === "n" || e.key === "N") && survey && canSurvey(survey.selected.size)) {
+        e.preventDefault();
+        navigate("/survey", { state: surveyState(survey.selected, survey.order, survey.returnTo) });
       }
     }
     // The desktop menu bar's Photo menu (App's MenuCommands passes it on as
     // pm:app-menu): the same actions as the keys, on the selection.
     function onAppMenu(e: Event) {
       const { action, value } = (e as CustomEvent<{ action: string; value?: string | number }>).detail;
-      const { hasSelection, edit, onRate, onColor, onFlag, onDelete, onExport } = latest.current;
+      const { hasSelection, edit, onRate, onColor, onFlag, onDelete, onExport, survey } = latest.current;
       if (isModalOpen()) return;
       if (action === "photo:export") {
         if (hasSelection) onExport?.();
@@ -139,6 +159,8 @@ export function useSelectionKeys(opts: {
       else if (action === "photo:edit" && edit?.selected.size === 1) {
         const [id] = edit.selected;
         navigate(`/image/${id}/edit`, { state: { imageIds: edit.order } });
+      } else if (action === "photo:survey" && survey && canSurvey(survey.selected.size)) {
+        navigate("/survey", { state: surveyState(survey.selected, survey.order, survey.returnTo) });
       }
     }
     window.addEventListener("keydown", onKeyDown);

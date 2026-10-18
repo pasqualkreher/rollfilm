@@ -41,7 +41,7 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import FileType, Image, ImageTag, Tag
+from app.db.models import FileType, Image, ImageTag, ImportSession, ImportSessionStatus, Tag
 from app.db.session import SessionLocal, engine
 from app.services import embeddings, geocode
 from app.services import sources as sources_service
@@ -821,6 +821,10 @@ class GroupAlbum:
     cover_image_id: str
     # Up to COVER_COUNT member ids (newest first) for the card's mini mosaic.
     cover_image_ids: list[str] = field(default_factory=list)
+    # Clusters: the base label shared by siblings. Rolls: the import year.
+    group: str | None = None
+    # Rolls only: the RollSummaryOut fields (session_id, imported_at, span, cameras).
+    roll: dict | None = None
 
 
 # How many covers each album card carries for its mosaic preview.
@@ -928,6 +932,8 @@ def get_import_albums(db: Session, owner_id: int, limit: int = 10) -> list[Group
         Image.deleted_at.is_(None),
         Image.imported_at.isnot(None),
         Image.virtual_of_image_id.is_(None),
+        # Photos with a roll are listed under it (get_roll_albums).
+        Image.import_session_id.is_(None),
     )
     query = sources_service.exclude_unavailable(query, unavailable)
     groups: dict = {}
@@ -951,6 +957,74 @@ def get_import_albums(db: Session, owner_id: int, limit: int = 10) -> list[Group
                 cover_image_ids=covers,
             )
         )
+    return albums
+
+
+def get_roll_albums(db: Session, owner_id: int, limit: int = 24) -> list[GroupAlbum]:
+    """One album per roll - an import session that imported something - with
+    the session's name, newest session first. Besides the covers each carries
+    the capture-date span and the cameras of its photos, for the card and the
+    header of its page."""
+    unavailable = sources_service.unavailable_source_ids(db, owner_id)
+    sessions = (
+        db.query(ImportSession)
+        .filter(
+            ImportSession.owner_id == owner_id,
+            ImportSession.status == ImportSessionStatus.committed,
+        )
+        .order_by(ImportSession.created_at.desc(), ImportSession.id.desc())
+        .all()
+    )
+    if not sessions:
+        return []
+    by_id = {s.id: s for s in sessions}
+    query = db.query(
+        Image.id, Image.import_session_id, Image.taken_at, Image.file_type, Image.camera_model
+    ).filter(
+        Image.owner_id == owner_id,
+        Image.deleted_at.is_(None),
+        Image.virtual_of_image_id.is_(None),
+        Image.import_session_id.in_(list(by_id)),
+    )
+    query = sources_service.exclude_unavailable(query, unavailable)
+    groups: dict = {}
+    for image_id, session_id, taken_at, file_type, camera in query.all():
+        entry = groups.get(session_id)
+        if entry is None:
+            entry = groups[session_id] = {"count": 0, "jpegs": [], "others": [], "from": None, "to": None, "cameras": Counter()}
+        entry["count"] += 1
+        wall = taken_at.replace(tzinfo=None) if taken_at else None
+        _push_cover(entry["jpegs"] if file_type == FileType.jpeg else entry["others"], wall, image_id)
+        if wall is not None:
+            entry["from"] = wall if entry["from"] is None or wall < entry["from"] else entry["from"]
+            entry["to"] = wall if entry["to"] is None or wall > entry["to"] else entry["to"]
+        if camera:
+            entry["cameras"][camera] += 1
+    albums: list[GroupAlbum] = []
+    for session in sessions:
+        entry = groups.get(session.id)
+        if entry is None:
+            continue
+        covers = _cover_ids(entry["jpegs"], entry["others"])
+        albums.append(
+            GroupAlbum(
+                id=f"roll:{session.id}",
+                name=session.source_path,
+                image_count=entry["count"],
+                cover_image_id=covers[0],
+                cover_image_ids=covers,
+                group=str(session.created_at.year),
+                roll={
+                    "session_id": session.id,
+                    "imported_at": session.created_at,
+                    "taken_from": entry["from"],
+                    "taken_to": entry["to"],
+                    "cameras": [name for name, _ in entry["cameras"].most_common(3)],
+                },
+            )
+        )
+        if len(albums) >= limit:
+            break
     return albums
 
 

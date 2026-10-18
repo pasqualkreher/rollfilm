@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { rememberLibraryFilters, rememberedLibraryFilters } from "../utils/libraryFilterMemory";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -25,9 +25,9 @@ import { AddToPicker, type AddToResult } from "../components/AddToPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { Dropdown } from "../components/Dropdown";
-import { SORT_OPTIONS, isSortKey, sortImages, type SortKey } from "../utils/sortOrder";
+import { SORT_OPTIONS, isSortKey, rollOf, sortImages, type SortKey } from "../utils/sortOrder";
 import { EditPicker } from "../components/EditPicker";
-import { IconCheck, IconCloudUp, IconImport, IconSort, IconSparkle, IconTrash, IconX } from "../components/Icons";
+import { IconCheck, IconCloudUp, IconExport, IconImport, IconSort, IconSparkle, IconTrash, IconX } from "../components/Icons";
 import { AutoPickDialog } from "../components/AutoPickDialog";
 import { ExportDialog } from "../components/ExportDialog";
 import { ReportProblem } from "../components/ReportProblem";
@@ -40,7 +40,8 @@ import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { useAskSaveCopyOptions, useMergePairs } from "../state/viewPrefs";
 import { FULL_COPY_QUALITY, SaveCopyDialog } from "../components/SaveCopyDialog";
-import { shortcutLabel, useSelectionKeys } from "../utils/selection";
+import { shortcutLabel, surveyState, useSelectionKeys } from "../utils/selection";
+import { useBarHeight } from "../utils/useBarHeight";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import type { ContextActions } from "../components/PhotoContextMenu";
 import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
@@ -174,6 +175,9 @@ function LibraryPage() {
   // One day of imports ("YYYY-MM-DD"): the Import page's "Show in Library".
   const importedDay = searchParams.get("imported") ?? "";
   const setImportedDay = (v: string) => setParams({ imported: v || null });
+  // One roll (import session): the contact sheet's "Open in Library".
+  const rollId = searchParams.get("roll") ?? "";
+  const setRollId = (v: string) => setParams({ roll: v || null });
   // A country (reverse-geocoded), or "__none__" for photos without a place:
   // Statistics' "Show in library" and the map land here.
   const country = searchParams.get("country") ?? "";
@@ -186,6 +190,15 @@ function LibraryPage() {
   const setSort = (v: SortKey) => setParams({ sort: v === "newest" ? null : v });
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const barRef = useBarHeight();
+  // Back from the survey: its photos are the selection again.
+  const location = useLocation();
+  useEffect(() => {
+    const reselect = (location.state as { reselect?: string[] } | null)?.reselect;
+    if (!reselect) return;
+    setSelected(new Set(reselect));
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [location.state]); // eslint-disable-line react-hooks/exhaustive-deps
   // Export for the selection: the bar's button, the dialog, ⇧⌘E.
   const selectionExport = useSelectionExport(Array.from(selected));
   const [lastIndex, setLastIndex] = useState<number | null>(null);
@@ -267,9 +280,26 @@ function LibraryPage() {
     missing: missingOnly || undefined,
     flag: flagFilter || undefined,
     imported: importedDay || undefined,
+    roll: rollId || undefined,
     country: country || undefined,
     state: photoState || undefined,
   };
+
+  // The rolls' names, for the "By roll" sections and the roll chip.
+  const { data: rolls } = useQuery({
+    queryKey: ["import-sessions", "committed"],
+    queryFn: () => api.import.sessions("committed"),
+    enabled: sort === "roll" || !!rollId,
+  });
+  const rollNames = useMemo(() => new Map((rolls ?? []).map((s) => [s.id, s.source_path])), [rolls]);
+  // Memoised like nameSection: the timeline's layout is keyed on its identity.
+  const rollSection = useMemo(
+    () => (image: LibraryIndexImage) => {
+      const roll = rollOf(image);
+      return roll ? rollNames.get(roll) ?? "Roll" : "No roll";
+    },
+    [rollNames]
+  );
 
   // Camera/lens/focal/region dropdown options, cross-filtered against the
   // active filter set (each facet reflects what the other filters leave over)
@@ -452,13 +482,14 @@ function LibraryPage() {
     onClear: clearSelection,
     hasSelection: selected.size > 0,
     edit: { selected, order: orderedImages.map((img) => img.id) },
+    survey: { selected, order: orderedImages.map((img) => img.id), returnTo: location.pathname + location.search },
     onRate: (rating) => void applyBulk({ rating }),
     // The key of the colour the selection already has takes it off again.
     onColor: (label) =>
       void applyBulk({
         color_label: selectionSharedMeta(images ?? [], selected).colorLabel === label ? "none" : label,
       }),
-    // P / X set the flag, U takes it off; the key of the flag the selection
+    // A / X set the flag, U takes it off; the key of the flag the selection
     // already has takes it off too.
     onFlag: (flag) =>
       void applyBulk({ flag: flag && selectionSharedMeta(images ?? [], selected).flag === flag ? "" : flag }),
@@ -622,6 +653,14 @@ function LibraryPage() {
     return n;
   }
 
+  // The same words for the Find similar dialog, which reports in its own
+  // footer (the bar's message row sits behind the modal).
+  function addToNote({ kind, name, ok }: AddToResult, count: number): [string, boolean] {
+    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+    partialAddRef.current = null;
+    return ok ? [`Added ${plural(count, "photo")} to ${what}.`, false] : [`Could not add to ${what}.`, true];
+  }
+
   function reportAddTo({ kind, name, ok }: AddToResult) {
     const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
     const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
@@ -659,6 +698,10 @@ function LibraryPage() {
   const [pickExport, setPickExport] = useState<string[] | null>(null);
   const contextActions: ContextActions = {
     onAutoPick: (ids) => setAutoPick(ids),
+    onSurvey: (ids) =>
+      navigate("/survey", {
+        state: surveyState(ids, orderedImages.map((img) => img.id), location.pathname + location.search),
+      }),
     onRate: (ids, rating) => applyBulk({ rating }, ids),
     onColor: (ids, label) => applyBulk({ color_label: label }, ids),
     onFlag: (ids, flag) => applyBulk({ flag }, ids),
@@ -882,7 +925,7 @@ function LibraryPage() {
               .filter((im): im is LibraryIndexImage => !!im)}
             initialReference={autoPick[0] ?? null}
             onClose={() => setAutoPick(null)}
-            renderActions={(chosen, close) => (
+            renderActions={(chosen, close, note) => (
               <>
                 <button
                   className="btn"
@@ -892,13 +935,13 @@ function LibraryPage() {
                     setPickExport(chosen);
                   }}
                 >
-                  Export…
+                  <IconExport size={13} /> Export…
                 </button>
                 <AddToPicker
                   disabled={chosen.length === 0}
                   onAddToAlbum={(albumId) => addSelectedToAlbum(albumId, chosen)}
                   onAddToCanvas={(canvasId) => addSelectedToCanvas(canvasId, chosen)}
-                  onResult={reportAddTo}
+                  onResult={(result) => note(...addToNote(result, chosen.length))}
                 />
                 <button
                   className="btn primary"
@@ -1027,6 +1070,19 @@ function LibraryPage() {
                 </span>
               </button>
             )}
+            {rollId && (
+              <button
+                type="button"
+                className="tag-filter-btn active"
+                onClick={() => setRollId("")}
+                title="Showing only the photos of this roll. Click to show the whole library again."
+              >
+                <span className="tag-filter-btn-label">Roll: {rollNames.get(rollId) ?? "…"}</span>
+                <span className="tag-filter-caret">
+                  <IconX size={11} />
+                </span>
+              </button>
+            )}
             {/* The rejects on screen, to the Trash in one go: what the reject
                 flag is for. The same confirmation as any delete. */}
             {flagFilter === "reject" && orderedImages.length > 0 && !q && (
@@ -1074,17 +1130,11 @@ function LibraryPage() {
       <Presence open={selected.size > 0} ms={MOTION.bar}>
         {selected.size > 0 && (
           // Related controls are grouped so a narrow window wraps whole groups
-          // to the next line instead of splitting them mid-cluster; Delete
-          // right-aligns on whatever line it ends up on (margin-left auto).
-          <div className="filter-bar action-bar--bottom">
+          // to the next line instead of splitting them mid-cluster. The bar's
+          // height feeds the grid's foot room (useBarHeight).
+          <div className="filter-bar action-bar--bottom" ref={barRef}>
             <div className="control-group">
               <span>{selected.size} selected</span>
-              <button className="btn" onClick={selectAll} title={`Select every photo shown (${shortcutLabel("A")})`}>
-                <span className="btn-label"><IconCheck size={13} /> Select all</span>
-              </button>
-              <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
-                <span className="btn-label"><IconX size={13} /> Clear selection</span>
-              </button>
             </div>
             {/* The selection itself on the left, what is done to it on the
                 right of the line. */}
@@ -1093,6 +1143,7 @@ function LibraryPage() {
               <FlagPicker value={sharedMeta.flag} onChange={(f) => applyBulk({ flag: f })} />
               <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
               <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
+              <BulkTagInput onAdd={addTagToSelected} />
             </div>
             <div className="control-group">
               {selectionExport.button}
@@ -1107,7 +1158,6 @@ function LibraryPage() {
               </button>
             </div>
             <div className="control-group">
-              <BulkTagInput onAdd={addTagToSelected} />
               <AddToPicker
                 onAddToAlbum={addSelectedToAlbum}
                 onAddToCanvas={addSelectedToCanvas}
@@ -1225,7 +1275,9 @@ function LibraryPage() {
           // somewhere arbitrary. view_mode is deliberately not part of the key:
           // switching combined/RAW/JPEG shows the same photos and keeps its
           // position via the timeline's re-anchoring.
-          sectionLabel={sort === "name" ? nameSection : sort === "rating" ? ratingSection : undefined}
+          sectionLabel={
+            sort === "name" ? nameSection : sort === "rating" ? ratingSection : sort === "roll" ? rollSection : undefined
+          }
           resetKey={JSON.stringify([
             sort,
             ratingMin,

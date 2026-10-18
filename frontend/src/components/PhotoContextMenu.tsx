@@ -7,6 +7,7 @@ import { useTransientMessage } from "../utils/transientMessage";
 import { useAskSaveCopyOptions } from "../state/viewPrefs";
 import { useTasks } from "../state/tasks";
 import { useMenuKeys } from "../utils/useMenuKeys";
+import { canSurvey } from "../utils/selection";
 import { autoTagMessage, isAutoTag } from "../utils/autoTags";
 import { ExportDialog } from "./ExportDialog";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
@@ -90,6 +91,8 @@ export interface ContextActions {
   // Auto pick: photos of the library that go with these (a dialog the page
   // owns).
   onAutoPick?: (ids: string[]) => void;
+  // Survey: two to six photos side by side (pages/Survey).
+  onSurvey?: (ids: string[]) => void;
   // Export, Save copy and Show in Finder; on unless the page says otherwise
   // (the Trash: its photos are on their way out).
   files?: boolean;
@@ -592,6 +595,10 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     const openGroup: Entry[] = [];
     if (open) openGroup.push({ kind: "item", id: "open", label: "Open", shortcut: "↩", run: run(() => open(m.clickedId)) });
     if (edit) openGroup.push({ kind: "item", id: "edit", label: "Edit", shortcut: "E", run: run(() => edit(m.clickedId)) });
+    const onSurvey = actions?.onSurvey;
+    if (onSurvey && canSurvey(n)) {
+      openGroup.push({ kind: "item", id: "survey", label: "Survey", shortcut: "N", run: run(() => onSurvey(m.ids)) });
+    }
     groups.push(openGroup);
 
     const change: Entry[] = [];

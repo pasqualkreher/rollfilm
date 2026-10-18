@@ -327,6 +327,7 @@ def _filtered_images_query(
     missing: bool | None = None,
     flag: str | None = None,
     imported: str | None = None,
+    roll: str | None = None,
     state: str | None = None,
 ):
     """The library listing's filter set, shared by the list endpoint and the
@@ -356,6 +357,10 @@ def _filtered_images_query(
             raise HTTPException(status_code=400, detail="imported must be YYYY-MM-DD")
         end = datetime.fromordinal(start.toordinal() + 1)
         query = query.filter(Image.imported_at >= start, Image.imported_at < end)
+    # One roll: the photos of one import session (the contact sheet's "Open
+    # in Library" and the Rolls albums).
+    if roll:
+        query = query.filter(Image.import_session_id == roll)
 
     if album_id:
         # Manually added photos, plus - when the album carries a tag rule -
@@ -498,6 +503,7 @@ def list_images(
     missing: bool | None = None,
     flag: str | None = None,
     imported: str | None = None,
+    roll: str | None = None,
     state: str | None = None,
     limit: int = 100,
     offset: int = 0,
@@ -509,7 +515,7 @@ def list_images(
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
         camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
         aperture_min=aperture_min, aperture_max=aperture_max,
-        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, state=state,
+        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, roll=roll, state=state,
     )
     # Newest capture first. The extra keys make the order total: burst shots
     # share the same capture second and photos without any capture date all
@@ -565,6 +571,7 @@ def library_index(
     missing: bool | None = None,
     flag: str | None = None,
     imported: str | None = None,
+    roll: str | None = None,
     state: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -584,7 +591,7 @@ def library_index(
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
         camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
         aperture_min=aperture_min, aperture_max=aperture_max,
-        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, state=state,
+        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, roll=roll, state=state,
     )
     # file_type, color_label and taken_at are asked for as plain strings rather
     # than as their mapped types. The database already holds exactly what this
@@ -619,7 +626,7 @@ def library_index(
             Image.rating, type_coerce(Image.color_label, String),
             Image.immich_sync, Image.paired_image_id, Image.source_root_id,
             Image.edit_rev, partner_deleted, Image.virtual_of_image_id,
-            type_coerce(Image.missing_since, String), Image.flag,
+            type_coerce(Image.missing_since, String), Image.flag, Image.import_session_id,
         )
         .order_by(Image.taken_at.desc(), Image.original_filename.desc(), Image.id.desc())
         .all()
@@ -652,11 +659,13 @@ def library_index(
             # The sync could not find the file: the tile says so.
             "missing": missing_since is not None,
             "flag": flag,
+            # The roll (import session) the photo came in through.
+            "roll": roll_id,
         }
         for (
             id_, filename, file_type, width, height, taken_at, rating, color_label,
             immich_sync, paired_image_id, source_root_id, edit_rev, partner_deleted_at,
-            virtual_of_image_id, missing_since, flag,
+            virtual_of_image_id, missing_since, flag, roll_id,
         ) in rows
     ]
     return Response(
@@ -725,6 +734,7 @@ def count_images(
     missing: bool | None = None,
     flag: str | None = None,
     imported: str | None = None,
+    roll: str | None = None,
     state: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -737,7 +747,7 @@ def count_images(
         camera_model, lens_model, focal_min, focal_max, country, date_from, date_to, tags,
         camera_make=camera_make, iso_min=iso_min, iso_max=iso_max,
         aperture_min=aperture_min, aperture_max=aperture_max,
-        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, state=state,
+        shutter_min=shutter_min, shutter_max=shutter_max, missing=missing, flag=flag, imported=imported, roll=roll, state=state,
     )
     return schemas.ImageCountOut(count=query.count())
 
@@ -3568,4 +3578,9 @@ def auto_pick_images(
     else:
         reference = arrange_service.reference_vector(np.stack(ref_vectors))
         matches = embeddings.query_similar(engine, reference, k=min(4096, count + len(seen) + 50))
+    if payload.min_similarity is not None:
+        # Distances are L2 on unit vectors: cosine = 1 - d^2 / 2.
+        floor = min(1.0, max(-1.0, payload.min_similarity))
+        max_distance = (2.0 * (1.0 - floor)) ** 0.5
+        matches = [(i, d) for i, d in matches if d <= max_distance]
     return _viewable_matches(db, current_user, matches, seen)[:count]

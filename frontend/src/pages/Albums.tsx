@@ -15,6 +15,7 @@ import {
 } from "../components/Icons";
 import { AlbumNameField } from "../components/AlbumNameField";
 import type { AlbumOut, SmartAlbumOut } from "../api/types";
+import { rollSubtitle } from "../utils/rollSummary";
 import { plural } from "../utils/plural";
 
 // Cover thumbnail that fades in once decoded (see .smart-card img in CSS)
@@ -95,7 +96,10 @@ function SmartCard({ album, displayName }: { album: SmartAlbumOut; displayName?:
       )}
       <div className="smart-card-caption">
         <div className="smart-card-name">{displayName ?? album.name}</div>
-        <div className="smart-card-count">{album.image_count} photos</div>
+        <div className="smart-card-count">
+          {album.image_count} photos
+          {album.kind === "roll" && rollSubtitle(album.roll) ? ` · ${rollSubtitle(album.roll)}` : ""}
+        </div>
       </div>
     </Link>
   );
@@ -273,7 +277,9 @@ export function Albums() {
     : false;
   const hasSmart =
     !!smart &&
-    (smart.clusters.length > 0 ||
+    ((smart.rolls?.length ?? 0) > 0 ||
+      (smart.imports?.length ?? 0) > 0 ||
+      smart.clusters.length > 0 ||
       smart.places.length > 0 ||
       smart.countries.length > 0 ||
       smart.country_years.length > 0 ||
@@ -290,7 +296,10 @@ export function Albums() {
           everything the app worked out by itself - their own work is what
           they come here for, and nine automatic rows used to push it to the
           bottom of the page. */}
-      {hasSmart && <SmartRow title="Recent imports" items={smart.imports ?? []} />}
+      {/* The rolls: one per import. Photos from before rolls existed that
+          no import session remembers keep their import days. */}
+      {hasSmart && <SmartRow title="Rolls" items={smart.rolls ?? []} />}
+      {hasSmart && <SmartRow title="Other imports" items={smart.imports ?? []} />}
 
       <h3 className="smart-row-title">My albums</h3>
       <form

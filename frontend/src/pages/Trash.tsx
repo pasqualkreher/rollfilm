@@ -256,12 +256,6 @@ export function Trash() {
           <div className="filter-bar action-bar--bottom">
             <div className="control-group">
               <span>{selected.size} selected</span>
-              <button className="btn" onClick={selectAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
-                <span className="btn-label"><IconCheck size={13} /> Select all</span>
-              </button>
-              <button className="btn" onClick={clearSelection} title="Clear the selection (Esc)">
-                <span className="btn-label"><IconX size={13} /> Clear selection</span>
-              </button>
             </div>
             <span className="bar-sep" aria-hidden />
             <div className="control-group">

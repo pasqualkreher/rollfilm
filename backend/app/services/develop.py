@@ -619,7 +619,40 @@ def merge_sections(current: Any, preset: Any, sections: Any) -> dict[str, Any]:
             out[key] = pre[key]
     if wanted and is_neutral(cur):
         out["process"] = pre["process"]
+        # A photo with no edit of its own is still on the "legacy" raw base.
+        # A look alone (the "film" section) would leave it there, and a RAW
+        # that is no longer neutral renders at its dark native exposure
+        # (thumbnails._browsing_gain) - so it takes the base a new edit gets.
+        if "tone" not in wanted:
+            out["raw_base"] = pre["raw_base"] if pre["raw_base"] in ("standard", "native") else "standard"
+    elif "film" in wanted and out["film_sim"] != "none" and cur["process"] != "1":
+        # Choosing a look takes it in its current form, as the editor does
+        # (adjustments.withFilmSim): the process moves to the one the looks
+        # render on today, unless a Calibration edit pins the older one.
+        out["process"] = process_for_current_looks(cur)
     return normalize(out)
+
+
+# The process rule the editor applies when a look is chosen (the twin of
+# frontend/src/utils/adjustments.ts processForCurrentLooks): the last process
+# on which Calibration renders the old way, and the last one on which the
+# looks render from the unmixed scene.
+LAST_BELL_CALIBRATION = "5"
+LAST_UNMIXED_LOOK = "6"
+
+
+def calibration_is_neutral(adj: dict[str, Any]) -> bool:
+    return all(not v for v in (adj.get("color_calibration") or {}).values())
+
+
+def process_for_current_looks(adj: dict[str, Any]) -> str:
+    """The process an edit moves to when a look is chosen on it: the current
+    one, unless the edit is on process 5 with a Calibration move, which keeps
+    its Calibration as it renders there."""
+    process = str(adj.get("process") or CURRENT_PROCESS)
+    if process in (LAST_UNMIXED_LOOK, CURRENT_PROCESS) or calibration_is_neutral(adj):
+        return CURRENT_PROCESS
+    return LAST_BELL_CALIBRATION
 
 
 # --- The whole stored edit ---------------------------------------------------

@@ -58,6 +58,7 @@ const canvasDetail = () => import("./pages/CanvasDetail");
 const canvasView = () => import("./pages/CanvasView");
 const albumDetail = () => import("./pages/AlbumDetail");
 const smartAlbumDetail = () => import("./pages/SmartAlbumDetail");
+const survey = () => import("./pages/Survey");
 const settings = () => import("./pages/Settings");
 const stats = () => import("./pages/Stats");
 const trash = () => import("./pages/Trash");
@@ -72,6 +73,7 @@ const CanvasDetail = page(canvasDetail, "CanvasDetail");
 const CanvasView = page(canvasView, "CanvasView");
 const AlbumDetail = page(albumDetail, "AlbumDetail");
 const SmartAlbumDetail = page(smartAlbumDetail, "SmartAlbumDetail");
+const Survey = page(survey, "Survey");
 const Settings = page(settings, "Settings");
 const Stats = page(stats, "Stats");
 const Trash = page(trash, "Trash");
@@ -1181,6 +1183,7 @@ export default function App() {
             <Route path="/canvas/:id" element={<CanvasDetail />} />
             <Route path="/canvas/:id/view" element={<CanvasView />} />
             <Route path="/smart-albums/:id" element={<SmartAlbumDetail />} />
+            <Route path="/survey" element={<Survey />} />
             {/* The editor is the photo view's second mode and its own history
                 entry (/image/:id/edit): Back closes it, Forward reopens it.
                 One route, so the view underneath stays mounted across the

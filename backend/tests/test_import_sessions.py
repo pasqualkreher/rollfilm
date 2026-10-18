@@ -204,11 +204,38 @@ def test_a_commit_can_keep_an_exhausted_session_open(db, dirs):
     db.refresh(session)
     assert session.status == ImportSessionStatus.staging
     assert (settings.import_staging_root / session.id).exists()
-    # Closing is the user's call, through the usual discard.
+    # Closing is the user's call, through the usual discard - and a session
+    # that imported something closes as a roll (committed), not discarded.
+    import_pipeline.discard_import_session(db, session)
+    db.refresh(session)
+    assert session.status == ImportSessionStatus.committed
+    assert not (settings.import_staging_root / session.id).exists()
+
+
+def test_imported_photos_remember_their_session(db, dirs):
+    session = _session(db)
+    _staged(db, session, "A.JPG", selected=True)
+    [image] = import_pipeline.commit_import_session(db, session, 1, keep_open=True)
+    assert image.import_session_id == session.id
+
+
+def test_closing_a_session_that_imported_nothing_discards_it(db, dirs):
+    session = _session(db)
+    _staged(db, session, "A.JPG", selected=False)
     import_pipeline.discard_import_session(db, session)
     db.refresh(session)
     assert session.status == ImportSessionStatus.discarded
-    assert not (settings.import_staging_root / session.id).exists()
+
+
+def test_rolls_are_listed_on_request(db, dirs):
+    roll = _session(db)
+    _staged(db, roll, "A.JPG", selected=True)
+    import_pipeline.commit_import_session(db, roll, 1, keep_open=True)
+    import_pipeline.discard_import_session(db, roll)
+    open_session = _session(db)
+
+    assert [s.id for s in routes.list_open_sessions(db, _User())] == [open_session.id]
+    assert [s.id for s in routes.list_open_sessions(db, _User(), status="committed")] == [roll.id]
 
 
 def test_a_session_with_photos_still_on_a_source_stays_open(db, dirs, tmp_path):

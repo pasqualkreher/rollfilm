@@ -131,6 +131,13 @@ class Image(Base):
 
     taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # The import session the photo came in through - its roll. Null for
+    # photos indexed in place from a source root and for photos from before
+    # rolls existed that no staged file remembers. Never cascades: a roll
+    # outlives the session's review.
+    import_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("import_sessions.id"), nullable=True, index=True
+    )
     # Set = the photo sits in the in-app Trash (soft-deleted): hidden from the
     # library but its file stays on disk until it's restored or permanently
     # deleted. Only managed photos are ever trashed - deleting a photo indexed
@@ -532,7 +539,9 @@ class ImportStagedFile(Base):
     # before this column existed were always fully analyzed at staging time.
     processed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="1")
 
-    duplicate_of_image_id: Mapped[str | None] = mapped_column(ForeignKey("images.id"), nullable=True)
+    duplicate_of_image_id: Mapped[str | None] = mapped_column(
+        ForeignKey("images.id"), nullable=True, index=True
+    )
     # Duplicate of another file staged earlier in the *same* batch (e.g. an
     # SD card with two copies of a shot) - distinct from duplicate_of_image_id,
     # which flags a match against the already-committed library.

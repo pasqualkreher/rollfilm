@@ -132,10 +132,12 @@
 
 
 /* ---- Skins ---------------------------------------------------------------
-   Five pairs, each a light and a dark cut of the same idea. The first three
+   Eight pairs, each a light and a dark cut of the same idea. The first three
    are colourless so only the photo carries colour; Cyanotype and Negative
    (after a cyanotype print and the orange base of colour negative film)
-   carry one restrained colour, added on request:
+   carry one restrained colour, added on request; Graphite (grey to black),
+   Platinum (greige) and Sepia (brown) followed on 2026-10-18, tinted
+   throughout but kept to greys and browns:
 
    Stone    - muted greys: surfaces off-white rather than white, type dark grey
               rather than black, the accent a slate grey. The default pair.
@@ -271,38 +273,149 @@
   color-scheme: dark;
 }
 
-/* Negative - the orange base of colour negative film: pale apricot surfaces
-   and a burnt orange accent. Danger is a crimson, so a warning never reads as
-   just another accent. */
+/* Negative - the orange-brown mask of colour negative film (C-41 base): amber
+   surfaces, dark brown type and a burnt sienna accent. Reworked 2026-10-18
+   from pale apricot, which read as beige rather than film. Danger is a
+   crimson, so a warning never reads as just another accent. */
 :root[data-theme="negative"] {
-  --bg: #f4e7d8;
-  --bg-elevated: #fbf4eb;
-  --hover: #ecdbc8;
-  --border: #e0cab2;
-  --text: #2e2219;
-  --text-muted: #7a6250;
-  --accent: #c0601d;
+  --bg: #e6c09b;
+  --bg-elevated: #f1d6ba;
+  --hover: #dcb089;
+  --border: #cc9a6e;
+  --text: #2f1a0e;
+  --text-muted: #6b4327;
+  --accent: #96421a;
   --accent-contrast: #ffffff;
-  --accent-soft: rgba(192, 96, 29, 0.13);
-  --danger: #a8303c;
+  --accent-soft: rgba(150, 66, 26, 0.15);
+  --danger: #98192c;
+  --shadow-sm: 0 1px 2px rgba(70, 30, 5, 0.12);
+  --shadow-pop: 0 8px 24px rgba(70, 30, 5, 0.24);
   color-scheme: light;
 }
 
-/* Negative Dark - a warm brown charcoal, the film base held to the light,
-   with the mask's orange as the accent. */
+/* Negative Dark - a strip of negative held to the light: saturated brown with
+   the mask's orange as the accent, lifted well clear of black. */
 :root[data-theme="negative-dark"] {
-  --bg: #33271e;
-  --bg-elevated: #3d2f24;
-  --hover: #47372b;
-  --border: #584435;
-  --text: #f3e8dc;
-  --text-muted: #b39d88;
-  --accent: #e8955a;
-  --accent-contrast: #2a1d14;
-  --accent-soft: rgba(232, 149, 90, 0.18);
-  --danger: #f07a86;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.5);
+  --bg: #4a2d1a;
+  --bg-elevated: #573521;
+  --hover: #643e27;
+  --border: #7a4c2e;
+  --text: #fbe8d4;
+  --text-muted: #d2a682;
+  --accent: #f39a52;
+  --accent-contrast: #2a1508;
+  --accent-soft: rgba(243, 154, 82, 0.2);
+  --danger: #ff8d8d;
+  --shadow-sm: 0 1px 2px rgba(20, 8, 0, 0.36);
+  --shadow-pop: 0 14px 36px rgba(20, 8, 0, 0.52);
+  color-scheme: dark;
+}
+
+/* Graphite - the monochrome pro look: neutral mid greys a step darker than
+   the other light skins, near-black type and a muted steel blue accent. Reworked
+   2026-10-18 (grey/brown/black surfaces, accents may carry a little colour). */
+:root[data-theme="graphite"] {
+  --bg: #d0d0d0;
+  --bg-elevated: #dedede;
+  --hover: #c4c4c4;
+  --border: #b3b3b3;
+  --text: #141414;
+  --text-muted: #505050;
+  --accent: #3d5f86;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(61, 95, 134, 0.14);
+  --danger: #a8332c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.24);
+  color-scheme: light;
+}
+
+/* Graphite Dark - near-black, as in the pro editors: a deep neutral charcoal
+   with a soft steel blue accent. Deliberately the darkest cut, asked for by name. */
+:root[data-theme="graphite-dark"] {
+  --bg: #1f1f1f;
+  --bg-elevated: #292929;
+  --hover: #333333;
+  --border: #3d3d3d;
+  --text: #ececec;
+  --text-muted: #9a9a9a;
+  --accent: #8eaacb;
+  --accent-contrast: #121a24;
+  --accent-soft: rgba(142, 170, 203, 0.18);
+  --danger: #e06a5c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+/* Platinum - greige, the platinum print's tone: grey surfaces with a brown
+   warmth throughout, dark taupe type and a muted brass accent. Reworked 2026-10-18. */
+:root[data-theme="platinum"] {
+  --bg: #e0ddd8;
+  --bg-elevated: #ece9e5;
+  --hover: #d4d0ca;
+  --border: #c3beb6;
+  --text: #24211d;
+  --text-muted: #5f5a52;
+  --accent: #806240;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(128, 98, 64, 0.14);
+  --danger: #a8363a;
+  --shadow-sm: 0 1px 2px rgba(40, 30, 20, 0.08);
+  --shadow-pop: 0 8px 24px rgba(40, 30, 20, 0.2);
+  color-scheme: light;
+}
+
+/* Platinum Dark - a warm grey-brown charcoal with a pale brass accent. */
+:root[data-theme="platinum-dark"] {
+  --bg: #2a2826;
+  --bg-elevated: #34312e;
+  --hover: #3e3b37;
+  --border: #4a4642;
+  --text: #ece8e2;
+  --text-muted: #a59f96;
+  --accent: #c9a877;
+  --accent-contrast: #241c10;
+  --accent-soft: rgba(201, 168, 119, 0.18);
+  --danger: #e2766a;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.52);
+  color-scheme: dark;
+}
+
+/* Sepia - a sepia-toned print: brown-beige surfaces, deep brown type and an
+   oxblood accent. Browner and less orange than Negative. Replaced the
+   mauve Selenium on 2026-10-18 (asked for grey/brown/black only). */
+:root[data-theme="sepia"] {
+  --bg: #dccdb9;
+  --bg-elevated: #ebe0d2;
+  --hover: #d0bfa8;
+  --border: #bfa98d;
+  --text: #2b1e12;
+  --text-muted: #5e4832;
+  --accent: #7a3b32;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(122, 59, 50, 0.14);
+  --danger: #9e2a30;
+  --shadow-sm: 0 1px 2px rgba(50, 30, 10, 0.1);
+  --shadow-pop: 0 8px 24px rgba(50, 30, 10, 0.22);
+  color-scheme: light;
+}
+
+/* Sepia Dark - dark walnut brown with a dusty rose-brown accent. */
+:root[data-theme="sepia-dark"] {
+  --bg: #2e2219;
+  --bg-elevated: #3a2b20;
+  --hover: #453328;
+  --border: #574131;
+  --text: #f1e5d6;
+  --text-muted: #b8a08a;
+  --accent: #d79c8f;
+  --accent-contrast: #2a1410;
+  --accent-soft: rgba(215, 156, 143, 0.18);
+  --danger: #ec7e7a;
+  --shadow-sm: 0 1px 2px rgba(10, 5, 0, 0.38);
+  --shadow-pop: 0 14px 36px rgba(10, 5, 0, 0.54);
   color-scheme: dark;
 }
 
@@ -1549,9 +1662,10 @@ summary.whats-new-version-title {
   bottom: 0;
   z-index: 25;
   margin: 0;
-  /* The toolbar's 40px floor (from .filter-bar) and the top bar's 20px
-     inset: the row centres in the floor, so it needs no vertical padding. */
-  padding: 0 var(--bar-pad-x);
+  /* One row centres in the 40px floor (from .filter-bar); a wrapped bar
+     gets the same 6px above, below and between its rows. */
+  padding: 6px var(--bar-pad-x);
+  row-gap: 6px;
   border: none;
   border-top: 1px solid var(--bar-sep);
   border-radius: 0;
@@ -1577,7 +1691,25 @@ summary.whats-new-version-title {
 }
 
 .page:has(.action-bar--bottom) .page-scroll {
-  padding-bottom: 96px;
+  /* The bar's measured height (utils/useBarHeight) plus a row of air, so a
+     wrapped bar never covers the last grid row. */
+  padding-bottom: calc(var(--action-bar-h, 40px) + 56px);
+}
+
+/* Groups wrap as a whole, never mid-cluster; everything sits left. */
+.action-bar--bottom .control-group {
+  flex-wrap: nowrap;
+}
+
+/* Once the bar wraps, the divider between the selection and its actions
+   would stand at the start of a line - gone below 1100px. */
+@media (max-width: 1100px) {
+  .action-bar--bottom .bar-sep {
+    display: none;
+  }
+  .action-bar--bottom input[type="text"] {
+    width: 160px;
+  }
 }
 
 /* The import review's selection row: a line of its own above the bar's
@@ -1620,7 +1752,7 @@ summary.whats-new-version-title {
   }
 
   .page:has(.action-bar--bottom) .page-scroll {
-    padding-bottom: 150px;
+    padding-bottom: calc(var(--action-bar-h, 40px) + 56px);
   }
 }
 
@@ -1697,7 +1829,7 @@ summary.whats-new-version-title {
   color: var(--danger);
 }
 
-/* Every boxed control in the bar - Select all, the Add to/Edit/Reset
+/* Every boxed control in the bar - the Add to/Edit/Reset
    triggers, the tag field, Import/Delete - stands as tall as the toolbar's
    XS-XL segments and its .btn-sm neighbours (--control-h-sm), with the same
    label size. A fixed height rather than padding, so a button with a glyph,
@@ -3406,16 +3538,6 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-}
-
-/* The database snapshots in Settings: a quiet table, the restore button at
-   the end of each row. */
-.snapshot-table {
-  margin-top: 8px;
-}
-
-.snapshot-table td:last-child {
-  text-align: right;
 }
 
 /* The file was not found: the badge says so in the danger colour, in the
@@ -9816,8 +9938,8 @@ kbd {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
   gap: 12px;
-  /* Five tiles in a row. */
-  max-width: 700px;
+  /* Up to eight tiles in a row. */
+  max-width: 1120px;
   margin-top: 14px;
 }
 
@@ -10471,6 +10593,10 @@ kbd {
    Backup & restore) get even vertical rhythm without per-element margins. */
 .settings-block + .settings-block {
   margin-top: 22px;
+}
+/* A description line after a block of buttons (About's donation line). */
+.settings-block + .settings-desc {
+  margin-top: 12px;
 }
 
 /* A maintenance action button with its time estimate / live elapsed timer
@@ -12906,8 +13032,11 @@ button.stats-col:disabled {
 
 /* Auto pick (components/AutoPickDialog.tsx): reference row, count, a grid
    of ticked tiles, one button. */
+/* Fixed size: the window does not jump with the number of results; the
+   result grid scrolls inside. */
 .modal.auto-pick-modal {
   width: min(640px, 100%);
+  height: min(640px, 80vh);
 }
 
 .modal.auto-arrange-modal {
@@ -13003,8 +13132,34 @@ button.stats-col:disabled {
   flex-wrap: wrap;
 }
 
+.auto-pick-count {
+  width: 64px;
+}
+
+/* Similarity floor: a fixed-width readout so "Any" and "85%" sit alike. */
+.auto-pick-similarity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.auto-pick-similarity input[type="range"] {
+  width: 180px;
+}
+
+.auto-pick-similarity-value {
+  width: 3.5em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
 .auto-pick-results {
+  flex: 1 1 auto;
   min-height: 120px;
+  overflow-y: auto;
+  padding: 2px;
 }
 
 .detail-section-label--row {
@@ -13074,6 +13229,28 @@ button.stats-col:disabled {
 .auto-pick-foot-actions {
   display: flex;
   gap: 8px;
+  flex: none;
+}
+
+/* The footer's note ("Added 10 photos to “Holiday”."): small, in the slack
+   between Cancel and the buttons. Basis 0, so it only ever takes the room
+   that is left - the buttons keep their size and place, the text is trimmed. */
+.auto-pick-foot > .btn {
+  flex: none;
+}
+
+.auto-pick-foot-note {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: right;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auto-arrange-summary {
+  margin-top: -6px;
 }
 
 .canvas-filmstrip-toggle {
@@ -13842,7 +14019,8 @@ a.info-card-chip--canvas:hover {
    A 3px track with the accent filled from zero to the value (the fill stops
    come from React, utils/rangeFill.ts) and a small ringed thumb. */
 .editor-slider input[type="range"],
-.canvas-crop-zoom input[type="range"] {
+.canvas-crop-zoom input[type="range"],
+.auto-pick-similarity input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   height: 18px;
@@ -13852,7 +14030,8 @@ a.info-card-chip--canvas:hover {
   --pm-fill-b: 0%;
 }
 .editor-slider input[type="range"]::-webkit-slider-runnable-track,
-.canvas-crop-zoom input[type="range"]::-webkit-slider-runnable-track {
+.canvas-crop-zoom input[type="range"]::-webkit-slider-runnable-track,
+.auto-pick-similarity input[type="range"]::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: var(--radius-xs);
   background: linear-gradient(
@@ -13865,6 +14044,7 @@ a.info-card-chip--canvas:hover {
 }
 .editor-slider input[type="range"]::-webkit-slider-thumb,
 .canvas-crop-zoom input[type="range"]::-webkit-slider-thumb,
+.auto-pick-similarity input[type="range"]::-webkit-slider-thumb,
 .dual-range input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 12px;
@@ -13883,6 +14063,7 @@ a.info-card-chip--canvas:hover {
 }
 .editor-slider input[type="range"]:active::-webkit-slider-thumb,
 .canvas-crop-zoom input[type="range"]:active::-webkit-slider-thumb,
+.auto-pick-similarity input[type="range"]:active::-webkit-slider-thumb,
 .dual-range input[type="range"]:active::-webkit-slider-thumb {
   background: var(--accent);
 }
@@ -13891,11 +14072,13 @@ a.info-card-chip--canvas:hover {
   cursor: default;
 }
 .editor-slider input[type="range"]:focus-visible,
-.canvas-crop-zoom input[type="range"]:focus-visible {
+.canvas-crop-zoom input[type="range"]:focus-visible,
+.auto-pick-similarity input[type="range"]:focus-visible {
   outline: none;
 }
 .editor-slider input[type="range"]:focus-visible::-webkit-slider-thumb,
-.canvas-crop-zoom input[type="range"]:focus-visible::-webkit-slider-thumb {
+.canvas-crop-zoom input[type="range"]:focus-visible::-webkit-slider-thumb,
+.auto-pick-similarity input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 /* Centre detent on a slider that swings both ways: a tick where zero sits
@@ -14416,4 +14599,146 @@ input:hover:not(:disabled),
 
 .export-size-row > input {
   width: 90px;
+}
+
+/* The roll that just landed, under the Import page's head: name and summary
+   on a line of fixed height (the name arrives a moment after the photos), the
+   photos as a contact sheet of bounded height so the review below stays
+   reachable. */
+.import-roll-sheet {
+  margin: 8px 0 0;
+}
+.import-roll-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  margin-bottom: 6px;
+}
+.import-roll-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.import-roll-name {
+  font-size: var(--text-base);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.import-roll-meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.import-roll-grid {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+}
+.import-roll-more {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+/* Survey: two to six photos side by side. Each cell keeps its place - a photo
+   taken out leaves its cell empty - and the frame is an inset outline, so
+   nothing moves when it changes hands. */
+.survey-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.survey-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  flex: none;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+.survey-bar-title {
+  font-weight: 600;
+}
+.survey-bar-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.survey-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+  padding: 8px 16px 12px;
+}
+.survey-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  overflow: hidden;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  cursor: pointer;
+}
+.survey-cell.active {
+  outline-color: var(--accent);
+}
+.survey-cell.removed {
+  cursor: default;
+  opacity: 0.6;
+}
+.survey-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.survey-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.survey-caption {
+  flex: none;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.survey-caption-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
 }

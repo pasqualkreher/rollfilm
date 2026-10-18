@@ -299,9 +299,7 @@ const CHAPTERS: Chapter[] = [
                 whole range since your last click, <kbd>⌘A</kbd> for everything shown (
                 <kbd>Esc</kbd> drops the selection). A card always decides for its own photo; the
                 bar at the bottom then sets stars, color and the import checkbox for all the
-                selected ones, and so do <kbd>0</kbd>–<kbd>5</kbd> and <kbd>Space</kbd>. While
-                photos are selected the toolbar shows{" "}
-                <strong>Select all</strong> and <strong>Clear selection</strong>.{" "}
+                selected ones, and so do <kbd>0</kbd>–<kbd>5</kbd> and <kbd>Space</kbd>.{" "}
                 <strong>Import all</strong> in the bottom bar ticks every photo shown,{" "}
                 <strong>Import none</strong> unticks the whole batch. New photos arrive unticked -
                 Settings can turn that around. The tick box on a{" "}
@@ -727,9 +725,9 @@ const CHAPTERS: Chapter[] = [
           <>
             <ul>
               <li>
-                <strong>Recent imports</strong> — one album per day photos came in, at the top of the
-                Albums page. After <em>Add to library</em> the Import page offers{" "}
-                <em>Show in Library</em> for the same thing.
+                <strong>Rolls</strong> — one album per import, named after the session, at the top of the
+                Albums page. After <em>Add to library</em> the Import page shows the roll as a contact sheet
+                with <em>Open in Library</em>; the Library also sorts <em>By roll</em>.
               </li>
               <li>
                 <strong>They work like any grid</strong> — select, rate, label, flag, right-click
@@ -1654,8 +1652,12 @@ const CHAPTERS: Chapter[] = [
               </li>
               <li>
                 <strong>Auto-arrange</strong> rebuilds the pages: it asks how many photos a page
-                gets (or 2–6 as they fit), whether photos go together by look, by time or in the
-                filmstrip's order, and how much air between them; each page is laid out for its
+                gets (a range, say 1 to 4, as they fit), whether photos go together by look, by
+                time (a new page where the shooting paused) or in the filmstrip's order, whether
+                the page is set in rows, columns or whichever fits best, the style (balanced;
+                fitted, where photos may swap places; edge to edge, where the paper is filled and
+                photos trimmed a little), whether sizes stay even or the paper gets filled, and how
+                much air between them; each page is laid out for its
                 photos - a big one with two small, a pair, a row of three. Undo takes it back.
               </li>
               <li>
@@ -2209,14 +2211,6 @@ const CHAPTERS: Chapter[] = [
                 <strong>Restore from backup</strong> — replaces <em>everything</em> in the current
                 library with the zip's contents. You have to type "delete" to confirm.
               </li>
-              <li>
-                <strong>Database snapshots</strong> — Rollfilm keeps copies of the catalog database
-                (stars, tags, albums, canvases and edits; not the photos) in a{" "}
-                <em>snapshots</em> folder beside it: one before every update that changes its
-                layout, one a day for the last seven days, and one whenever you press{" "}
-                <em>Snapshot now</em>. <em>Restore…</em> marks a copy; it is swapped in the next
-                time Rollfilm starts, and the database it replaces is kept beside it for a while.
-              </li>
             </ul>
             <h4>Repair</h4>
             <ul>
@@ -2302,6 +2296,7 @@ const CHAPTERS: Chapter[] = [
                 { keys: <kbd>⌘F</kbd>, does: "Jump into the search field (also View → Find)" },
                 { keys: <kbd>⌘,</kbd>, does: "Settings" },
                 { keys: <kbd>E</kbd>, does: "One photo selected: open it with the editor already open" },
+                { keys: <kbd>N</kbd>, does: "2 to 6 photos selected: see them side by side (Survey)" },
                 {
                   keys: (
                     <>
@@ -2428,6 +2423,37 @@ const CHAPTERS: Chapter[] = [
                   does: "Start a fullscreen slideshow of the set you're browsing (Space pauses, Esc ends it)",
                 },
                 { keys: <kbd>Esc</kbd>, does: "Zoomed in: back to fit. Otherwise: back to where the photo was opened from" },
+              ]}
+            />
+            <h4>Survey</h4>
+            <Keys
+              rows={[
+                {
+                  keys: (
+                    <>
+                      <kbd>←</kbd> / <kbd>→</kbd>
+                    </>
+                  ),
+                  does: "Move the frame to the next photo",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>0</kbd>–<kbd>5</kbd>, <kbd>6</kbd>–<kbd>9</kbd>
+                    </>
+                  ),
+                  does: "Stars and colour label for the framed photo",
+                },
+                {
+                  keys: (
+                    <>
+                      <kbd>A</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
+                    </>
+                  ),
+                  does: "Pick, reject, unflag the framed photo — X also takes it out of the survey",
+                },
+                { keys: <kbd>↩</kbd>, does: "Open the framed photo" },
+                { keys: <kbd>Esc</kbd>, does: "Back to the grid, with the survey's photos selected" },
               ]}
             />
             <h4>Editor</h4>

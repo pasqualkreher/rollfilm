@@ -34,6 +34,7 @@ from app.db.models import (
     ImageTag,
     ImportSession,
     ImportSessionSource,
+    ImportSessionStatus,
     ImportStagedFile,
     LayoutItem,
     LayoutVersion,
@@ -855,6 +856,10 @@ def _wipe_catalog_rows(db: Session, owner_id: int) -> None:
         db.query(ImportSessionSource).filter(
             ImportSessionSource.import_session_id.in_(session_ids)
         ).delete(synchronize_session=False)
+        # The photos point at their rolls; they go below, so unlink them first.
+        db.query(Image).filter(Image.owner_id == owner_id).update(
+            {Image.import_session_id: None}, synchronize_session=False
+        )
         db.query(ImportSession).filter(ImportSession.owner_id == owner_id).delete(synchronize_session=False)
 
     album_ids = [a.id for a in db.query(Album).filter(Album.owner_id == owner_id).all()]
@@ -967,6 +972,7 @@ def image_to_dict(image: Image, tags: list[str]) -> dict:
         "file_size": image.file_size,
         "taken_at": image.taken_at.isoformat() if image.taken_at else None,
         "imported_at": image.imported_at.isoformat(),
+        "import_session_id": image.import_session_id,
         "deleted_at": image.deleted_at.isoformat() if image.deleted_at else None,
         "camera_make": image.camera_make,
         "camera_model": image.camera_model,
@@ -1029,6 +1035,7 @@ def image_row_from_dict(data: dict, owner_id: int, *, keep_id: bool = True) -> I
         file_size=data["file_size"],
         taken_at=datetime.fromisoformat(data["taken_at"]) if data["taken_at"] else None,
         imported_at=datetime.fromisoformat(data["imported_at"]),
+        import_session_id=data.get("import_session_id"),
         deleted_at=(
             datetime.fromisoformat(data["deleted_at"]) if data.get("deleted_at") else None
         ),
@@ -1079,7 +1086,7 @@ def image_row_from_dict(data: dict, owner_id: int, *, keep_id: bool = True) -> I
 # Bumped whenever the manifest gains a section. A restore reads every version
 # up to this one (a section an older backup lacks is simply skipped) and
 # refuses anything newer, which it could only half understand.
-BACKUP_MANIFEST_VERSION = 3
+BACKUP_MANIFEST_VERSION = 4
 # Settings that never leave the machine in a backup: the manifest is plain
 # text in a zip the user may hand around or put on a shared drive, and the
 # Immich key in it would open the Immich server to whoever holds the file.
@@ -1204,6 +1211,14 @@ def build_backup_zip(db: Session, owner_id: int) -> Path:
             db.query(EditSnapshot).filter(EditSnapshot.image_id.in_(image_ids[start : start + 500])).all()
         )
     presets = db.query(DevelopPreset).filter(DevelopPreset.owner_id == owner_id).all()
+    # The rolls: closed sessions that imported something. Their review state
+    # (staged files, sources, the collection folder) is not part of the
+    # library and stays behind; the name and the dates are what a roll is.
+    rolls = (
+        db.query(ImportSession)
+        .filter(ImportSession.owner_id == owner_id, ImportSession.status == ImportSessionStatus.committed)
+        .all()
+    )
     app_settings = {
         row.key: row.value for row in db.query(AppSetting).all() if row.key not in BACKUP_SECRET_SETTINGS
     }
@@ -1235,6 +1250,7 @@ def build_backup_zip(db: Session, owner_id: int) -> Path:
         "layout_versions": [_row_to_dict(v) for v in layout_versions],
         "edit_snapshots": [_row_to_dict(s) for s in snapshots],
         "develop_presets": [_row_to_dict(p) for p in presets],
+        "import_sessions": [{**_row_to_dict(s), "staging_dir": None} for s in rolls],
         "settings": app_settings,
         "settings_excluded": list(BACKUP_SECRET_SETTINGS),
     }
@@ -1343,17 +1359,26 @@ def _restore_rows(db: Session, owner_id: int, manifest: dict) -> dict:
         # rows of the same ids as they are flushed.
         db.expunge_all()
 
-        # Source roots first: photos indexed in place point at them.
+        # Source roots first: photos indexed in place point at them. The
+        # rolls likewise (version 4; older manifests have none, and their
+        # photos restore without a roll).
         for data in manifest.get("source_roots", []):
             db.add(_row_from_dict(SourceRoot, data, owner_id=owner_id))
+        for data in manifest.get("import_sessions", []):
+            db.add(_row_from_dict(ImportSession, data, owner_id=owner_id))
         db.flush()
 
         # A photo's links to another photo (its RAW/JPEG partner, the original
         # of a virtual copy) are set once every photo is in - with the foreign
         # keys enforced, a link to a row that comes later would fail.
         links: list[tuple[str, str | None, str | None]] = []
+        # A photo of a session the backup does not carry (one still open when
+        # it was written) comes back without a roll.
+        roll_ids = {data["id"] for data in manifest.get("import_sessions", [])}
         for data in images:
             row = image_row_from_dict(data, owner_id)
+            if row.import_session_id not in roll_ids:
+                row.import_session_id = None
             links.append((row.id, row.paired_image_id, row.virtual_of_image_id))
             row.paired_image_id = None
             row.virtual_of_image_id = None

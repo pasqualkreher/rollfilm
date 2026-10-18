@@ -1513,6 +1513,7 @@ function buildApplicationMenu() {
           },
           { type: "separator" },
           appMenuItem("Edit (E)", "photo:edit"),
+          appMenuItem("Survey (N)", "photo:survey"),
           appMenuItem("Export…", "photo:export"),
           { type: "separator" },
           appMenuItem("Move to Trash (⌫)", "photo:trash"),

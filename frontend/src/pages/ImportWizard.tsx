@@ -10,6 +10,8 @@ import type {
   StagedFileOut,
   ViewMode,
 } from "../api/types";
+import type { ImageOut } from "../api/types";
+import { ImportRollSheet } from "../components/ImportRollSheet";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
 import { ImportReviewGrid, dayLabel, isDuplicate } from "../components/ImportReviewGrid";
@@ -227,11 +229,9 @@ export function ImportWizard() {
   const [dateTo, setDateTo] = useState<string | null>(initial.current?.dateTo ?? null);
   // Flash message - auto-dismisses after a moment.
   const [pickError, setPickError] = useTransientMessage(8000);
-  // "N photos added" after a partial import that leaves the session open.
-  const [commitNote, setCommitNote] = useTransientMessage(12000);
-  // The day (UTC, as imported_at is stored) the last commit landed on: the
-  // note's "Show in Library" opens the Library on exactly that import.
-  const [commitDay, setCommitDay] = useState<string | null>(null);
+  // The roll that just landed (the photos the commit added), shown as a
+  // contact sheet until the next commit or another session.
+  const [roll, setRoll] = useState<{ sessionId: string; added: ImageOut[]; albumName: string | null } | null>(null);
   const navigate = useNavigate();
   // The open preview follows the FILE, not its position in the list. An import
   // re-sorts under the user for as long as it runs - every file whose EXIF is
@@ -533,15 +533,12 @@ export function ImportWizard() {
           });
         }
       }
-      const inAlbum = albumName ? ` and to “${albumName}”` : "";
       // A session outlives an import until the user ends it: what wasn't
       // added - and what of its card isn't copied yet - stays for another
       // day, and another card can join it. Nothing is asked here; Close
       // session ends it, the way the session was set up at its start.
-      setCommitDay(new Date().toISOString().slice(0, 10));
-      setCommitNote(
-        `${added.length.toLocaleString()} ${added.length === 1 ? "photo" : "photos"} added to your library${inAlbum}. This session stays open until you close it.`
-      );
+      queryClient.invalidateQueries({ queryKey: ["smart-albums"] });
+      setRoll({ sessionId: sessionId!, added, albumName });
     },
     // A failed commit used to be completely invisible (no state change, no
     // message) - the button just looked dead. Staged files survive a failed
@@ -1589,7 +1586,7 @@ export function ImportWizard() {
     <div className="page page-timeline">
       {startDialogs}
       <div className="import-review-head">
-        <ImportSteps current={commitNote ? 3 : 2} />
+        <ImportSteps current={roll ? 3 : 2} />
         {/* Title and explanation run on in one line; the header stays three
             lines tall on a wide window instead of five. */}
         <div className="import-review-intro">
@@ -1672,15 +1669,8 @@ export function ImportWizard() {
             {sourceNotice}
           </p>
         )}
-        {commitNote && (
-          <p className="import-staging-banner" role="status">
-            {commitNote}{" "}
-            {commitDay && (
-              <button className="btn btn-sm" onClick={() => navigate(`/?imported=${commitDay}`)}>
-                Show in Library
-              </button>
-            )}
-          </p>
+        {roll && roll.sessionId === sessionId && (
+          <ImportRollSheet sessionId={roll.sessionId} added={roll.added} albumName={roll.albumName} />
         )}
         {/* Copying done, background analysis (thumbnails/EXIF/duplicates)
             still catching up: placeholders fill in as it runs. */}
@@ -1743,21 +1733,6 @@ export function ImportWizard() {
           </button>
         }
       >
-        {/* The library's two selection buttons, shown as there: only once a
-            card is picked (Cmd/Ctrl-click, Shift-click) - the toolbar stays
-            clean while nothing is selected; Cmd/Ctrl+A works anytime. They
-            pick cards, they import nothing: taking what is picked is the
-            import checkbox in the bottom bar's selection row. */}
-        {marked.size > 0 && (
-          <>
-            <button className="btn btn-sm" onClick={markAll} title={`Select every photo shown (${modKeyLabel}+A)`}>
-              <span className="btn-label"><IconCheck size={13} /> Select all</span>
-            </button>
-            <button className="btn btn-sm" onClick={() => setMarked(new Set())} title="Clear the selection (Esc)">
-              <span className="btn-label"><IconX size={13} /> Clear selection</span>
-            </button>
-          </>
-        )}
       </PhotoFilters>
       <div className="page-scroll">
       <div className="filter-bar action-bar--bottom" ref={actionBarRef}>

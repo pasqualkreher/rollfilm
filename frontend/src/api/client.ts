@@ -713,10 +713,16 @@ export const api = {
     },
     // Apply one develop object (an editor preset) to every selected photo in
     // place. Geometry is untouched; a neutral object clears the develop sliders.
-    bulkDevelop(image_ids: string[], adjustments: Record<string, unknown>): Promise<ImageOut[]> {
+    // `sections` names the parts of the object to apply (develop.SECTION_KEYS:
+    // "film", "tone", ...); the rest of each photo's edit stays as it is.
+    bulkDevelop(
+      image_ids: string[],
+      adjustments: Record<string, unknown>,
+      sections?: string[]
+    ): Promise<ImageOut[]> {
       return request(`/images/bulk-develop`, {
         method: "POST",
-        body: JSON.stringify({ image_ids, adjustments }),
+        body: JSON.stringify(sections ? { image_ids, adjustments, sections } : { image_ids, adjustments }),
       });
     },
     // Auto-develop every selected photo (each learns its own suggestion). Returns
@@ -1245,9 +1251,10 @@ export const api = {
     get(id: string): Promise<ImportSessionOut> {
       return request(`/import/sessions/${id}`);
     },
-    // Every import session still open, most recently worked on first.
-    sessions(): Promise<ImportSessionSummary[]> {
-      return request(`/import/sessions`);
+    // Every import session still open, most recently worked on first - or,
+    // with "committed", the closed ones that imported something: the rolls.
+    sessions(status: "staging" | "committed" = "staging"): Promise<ImportSessionSummary[]> {
+      return request(status === "staging" ? `/import/sessions` : `/import/sessions?status=${status}`);
     },
     // Continuing a session: scan its sources again for what isn't copied yet.
     // With `path`, scan that one folder instead - what adding it to the
@@ -1438,24 +1445,6 @@ export const api = {
     },
     removeMissing(): Promise<{ removed: number }> {
       return request(`/maintenance/missing/remove`, { method: "POST" });
-    },
-    // Copies of the catalog database (before migrations, daily, on request);
-    // restoring marks one for the next start.
-    dbSnapshots(): Promise<{
-      snapshots: { name: string; size: number; created_at: string; reason: string; revision: string | null }[];
-      pending_restore: string | null;
-      folder: string;
-    }> {
-      return request(`/maintenance/db-snapshots`);
-    },
-    takeDbSnapshot(): Promise<{ name: string; size: number; created_at: string; reason: string; revision: string | null }> {
-      return request(`/maintenance/db-snapshots`, { method: "POST" });
-    },
-    restoreDbSnapshot(name: string): Promise<{ pending: string }> {
-      return request(`/maintenance/db-snapshots/restore`, { method: "POST", body: JSON.stringify({ name }) });
-    },
-    cancelDbSnapshotRestore(): Promise<void> {
-      return request(`/maintenance/db-snapshots/restore`, { method: "DELETE" });
     },
     // Asks a running sync to stop; it stops before it removes anything.
     cancelSync(): Promise<void> {

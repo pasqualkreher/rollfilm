@@ -36,6 +36,8 @@ class ImageOut(BaseModel):
     color_label: ColorLabel
     # The culling flag: "pick", "reject" or null.
     flag: Flag | None = None
+    # The roll (import session) the photo came in through, or null.
+    import_session_id: str | None = None
     # Free-text note typed in the detail view; null when there's none.
     description: str | None = None
     # Flagged for selective Immich sync (see settings_store sync modes).
@@ -685,12 +687,24 @@ class CanvasGalleryOut(BaseModel):
     thumb_versions: dict[str, str] = {}
 
 
+class RollSummaryOut(BaseModel):
+    """What a roll's card and header say beside its name."""
+
+    session_id: str
+    imported_at: datetime
+    # Capture-date span of the roll's photos; both null when none is dated.
+    taken_from: datetime | None = None
+    taken_to: datetime | None = None
+    # The camera models on the roll, most photos first, at most three.
+    cameras: list[str] = []
+
+
 class SmartAlbumOut(BaseModel):
     # "cluster:<index>" / "year:2024" / "month:2024-07" / "day:2024-07-12" /
     # "place:48.1374,11.5755" / "country:Italy" / "country-year:Italy:2024" -
     # virtual, so the id encodes what the album *is* instead of naming a row.
     id: str
-    kind: Literal["cluster", "tag", "year", "month", "day", "place", "country", "country_year", "edits", "imported"]
+    kind: Literal["cluster", "tag", "year", "month", "day", "place", "country", "country_year", "edits", "imported", "roll"]
     name: str
     image_count: int
     cover_image_id: str | None = None
@@ -698,8 +712,10 @@ class SmartAlbumOut(BaseModel):
     cover_image_ids: list[str] = []
     # Clusters only: the base label ("Mountains") shared by sibling moments
     # ("Mountains · Alpine", "Mountains · Mediterranean") so the UI can stack
-    # them under one expandable group card.
+    # them under one expandable group card. Rolls: the year they were imported.
     group: str | None = None
+    # Rolls only: date span and cameras for the card and the header.
+    roll: RollSummaryOut | None = None
 
 
 class SmartAlbumsOut(BaseModel):
@@ -707,7 +723,9 @@ class SmartAlbumsOut(BaseModel):
     # served clusters are stale and a rebuild runs (e.g. embeddings still
     # backfilling after an import); the frontend polls until "ready".
     clusters_status: Literal["building", "refreshing", "ready"]
-    # The last days photos were imported on, newest first ("Recent imports").
+    # The rolls: one per import session that imported something, newest first.
+    rolls: list[SmartAlbumOut] = []
+    # Import days of the photos that belong to no roll, newest first.
     imports: list[SmartAlbumOut] = []
     clusters: list[SmartAlbumOut]
     # One album per tag ("albums by tag") - the "tags" section.
@@ -1185,6 +1203,9 @@ class AutoPickRequest(BaseModel):
     exclude_ids: list[str] = []
     tags: list[str] | None = None
     country: str | None = None
+    # Cosine floor (0..1): hits less alike than this are left out, so fewer
+    # than ``count`` may come back. None = no floor.
+    min_similarity: float | None = None
 
 
 class PickCoreRequest(BaseModel):

@@ -465,6 +465,8 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
                 # A fresh id (keep_id=False), so merging the same travel library
                 # twice can't collide with the rows the first run inserted.
                 target = image_row_from_dict(data, owner_id, keep_id=False)
+                # Its roll is the other library's; here the photo has none.
+                target.import_session_id = None
                 # The destination has to be settled BEFORE the row is inserted:
                 # file_path is unique, and the path the photo had over there
                 # ("2026/2026-07-14/DSCF0266.JPG") is exactly the one this

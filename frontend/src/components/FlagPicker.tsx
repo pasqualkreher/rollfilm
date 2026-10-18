@@ -12,7 +12,7 @@ interface Props {
 
 // The culling flag beside the stars and the colour swatches: a tick for a
 // pick, a cross for a reject. The lit one pressed again takes the flag off,
-// the way the filled star does. P / X / U are the keys everywhere.
+// the way the filled star does. A / X / U are the keys everywhere.
 export function FlagPicker({ value, onChange, title }: Props) {
   const one = (flag: Flag, label: string, key: string, icon: JSX.Element) => (
     <button

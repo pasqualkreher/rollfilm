@@ -1689,15 +1689,19 @@ export function ImageDetail() {
             references={[image]}
             initialReference={image.id}
             onClose={() => setAutoPickOpen(false)}
-            renderActions={(chosen, close) => (
+            renderActions={(chosen, close, note) => (
               <>
                 <button className="btn" disabled={chosen.length === 0} onClick={() => { close(); setPickExport(chosen); }}>
-                  Export…
+                  <IconExport size={13} /> Export…
                 </button>
                 <AddToPicker
                   disabled={chosen.length === 0}
                   onAddToAlbum={async (albumId) => { await api.albums.addImages(albumId, chosen); queryClient.invalidateQueries({ queryKey: ["albums"] }); }}
                   onAddToCanvas={async (canvasId) => { await api.canvases.addImages(canvasId, chosen); invalidateCanvas(canvasId); }}
+                  onResult={({ kind, name, ok }) => {
+                    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+                    note(ok ? `Added ${chosen.length} photo${chosen.length === 1 ? "" : "s"} to ${what}.` : `Could not add to ${what}.`, !ok);
+                  }}
                 />
               </>
             )}
