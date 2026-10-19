@@ -1116,9 +1116,23 @@ function TaskDock() {
                   )}
                 </span>
                 {t.finished ? (
-                  <button type="button" className="btn btn-sm ghost task-row-stop" onClick={() => dismissTask(t.id)}>
-                    Dismiss
-                  </button>
+                  <>
+                    {t.finished.action && (
+                      <button
+                        type="button"
+                        className="task-pill-action"
+                        onClick={() => {
+                          t.finished?.action?.run();
+                          dismissTask(t.id);
+                        }}
+                      >
+                        {t.finished.action.label}
+                      </button>
+                    )}
+                    <button type="button" className="btn btn-sm ghost task-row-stop" onClick={() => dismissTask(t.id)}>
+                      Dismiss
+                    </button>
+                  </>
                 ) : (
                   <TaskStop task={t} />
                 )}

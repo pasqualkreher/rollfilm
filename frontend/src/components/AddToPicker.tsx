@@ -1,23 +1,55 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { useTransientValue } from "../utils/transientMessage";
+import { useTasks } from "../state/tasks";
+import { plural } from "../utils/plural";
 import { useAppDialogs } from "./AppDialogs";
 import { Dropdown } from "./Dropdown";
 import { IconAlbum, IconCanvas, IconPlus } from "./Icons";
 
 export interface AddToResult {
   kind: "album" | "canvas";
+  id: string;
   name: string;
   ok: boolean;
+}
+
+// The one place an add reports: a line in the title bar's task dock - "Added
+// 12 photos to canvas “Wall”" - with an Open link that lands in the album, or
+// in the canvas's editor, since the photos sit in its filmstrip unplaced.
+// `extra` is a trailing note ("Stopped after 4."). A failure stays until
+// dismissed and has no link.
+export function useAddToNotice(): (result: AddToResult, count: number, extra?: string) => void {
+  const { notify } = useTasks();
+  const navigate = useNavigate();
+  return useCallback(
+    ({ kind, id, name, ok }, count, extra = "") => {
+      const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+      if (!ok) {
+        notify({ label: `Could not add to ${what}.`, error: true });
+        return;
+      }
+      notify({
+        label: `Added ${plural(count, "photo")} to ${what}.${extra}`,
+        action: {
+          label: kind === "canvas" ? "Open canvas" : "Open album",
+          run: () => navigate(kind === "canvas" ? `/canvas/${id}` : `/albums/${id}`),
+        },
+      });
+    },
+    [navigate, notify]
+  );
 }
 
 interface Props {
   onAddToAlbum: (albumId: string) => void | Promise<unknown>;
   onAddToCanvas: (canvasId: string) => void | Promise<unknown>;
-  // The bulk action bars own the shared message row; where this is passed the
-  // outcome lands there instead of stacking under the dropdown.
+  // Where this is passed the caller reports the outcome itself (it knows
+  // how many photos really went in); otherwise the picker reports `count`
+  // photos (one when left out) through useAddToNotice.
   onResult?: (result: AddToResult) => void;
+  count?: number;
   // Greys the picker out when there is nothing to add, so the control keeps
   // its place in the bar instead of coming and going.
   disabled?: boolean;
@@ -31,6 +63,7 @@ export function AddToPicker({
   onAddToAlbum,
   onAddToCanvas,
   onResult,
+  count = 1,
   disabled = false,
 }: Props) {
   const queryClient = useQueryClient();
@@ -41,23 +74,21 @@ export function AddToPicker({
     queryFn: () => api.canvases.list(),
   });
 
-  const [flash, setFlash] = useTransientValue<{ text: string; error: boolean }>();
   const [busy, setBusy] = useState(false);
+  const notice = useAddToNotice();
 
-  function report(kind: AddToResult["kind"], name: string, ok: boolean) {
-    if (onResult) onResult({ kind, name, ok });
-    else
-      setFlash(
-        ok
-          ? { text: `Added to “${name}” ✓`, error: false }
-          : { text: `Could not add to “${name}”`, error: true }
-      );
+  function report(kind: AddToResult["kind"], id: string, name: string, ok: boolean) {
+    const result = { kind, id, name, ok };
+    if (onResult) onResult(result);
+    else notice(result, count);
   }
 
-  async function run(kind: AddToResult["kind"], name: string, action: () => Promise<unknown>) {
+  // `id` may only be known once the action made the target ("New album…").
+  async function run(kind: AddToResult["kind"], name: string, action: () => Promise<string>) {
     setBusy(true);
+    let id = "";
     try {
-      await action();
+      id = await action();
       // Where a photo is used shows as marks on the photo itself (the album /
       // canvas chips, the info card's icons) - they read the photo's
       // album_ids and its derived "canvas: …" tags, which the server has just
@@ -66,9 +97,9 @@ export function AddToPicker({
       queryClient.invalidateQueries({ queryKey: ["image"] });
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
-      report(kind, name, true);
+      report(kind, id, name, true);
     } catch {
-      report(kind, name, false);
+      report(kind, "", name, false);
     } finally {
       setBusy(false);
     }
@@ -78,11 +109,17 @@ export function AddToPicker({
     if (value.startsWith("album:")) {
       const id = value.slice("album:".length);
       const name = (albums ?? []).find((a) => a.id === id)?.name ?? "album";
-      await run("album", name, () => Promise.resolve(onAddToAlbum(id)));
+      await run("album", name, async () => {
+        await onAddToAlbum(id);
+        return id;
+      });
     } else if (value.startsWith("canvas:")) {
       const id = value.slice("canvas:".length);
       const name = (canvases ?? []).find((c) => c.id === id)?.name ?? "canvas";
-      await run("canvas", name, () => Promise.resolve(onAddToCanvas(id)));
+      await run("canvas", name, async () => {
+        await onAddToCanvas(id);
+        return id;
+      });
     } else if (value === "new-album") {
       const name = await dialogs.prompt({
         title: "New album",
@@ -94,6 +131,7 @@ export function AddToPicker({
         const created = await api.albums.create(name);
         queryClient.invalidateQueries({ queryKey: ["albums"] });
         await onAddToAlbum(created.id);
+        return created.id;
       });
     } else if (value === "new-canvas") {
       const name = await dialogs.prompt({
@@ -106,6 +144,7 @@ export function AddToPicker({
         const created = await api.canvases.create(name);
         queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
         await onAddToCanvas(created.id);
+        return created.id;
       });
     }
   }
@@ -161,14 +200,6 @@ export function AddToPicker({
         }}
         options={options}
       />
-      {flash && (
-        <p
-          className={`status-note${flash.error ? " status-note--error" : ""}`}
-          style={{ margin: "6px 0 0" }}
-        >
-          {flash.text}
-        </p>
-      )}
     </div>
   );
 }

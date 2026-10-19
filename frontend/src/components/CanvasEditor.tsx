@@ -30,7 +30,6 @@ import {
   IconEraser,
   IconGrid,
   IconGuide,
-  IconHelp,
   IconImage,
   IconInfinity,
   IconLock,
@@ -42,7 +41,9 @@ import {
   IconPlus,
   IconRedo,
   IconRestore,
+  IconExpand,
   IconRotate,
+  IconSwap,
   IconSendBack,
   IconSheets,
   IconTextT,
@@ -55,11 +56,17 @@ import {
   boundsOf,
   clampContent,
   contentTravel,
+  fitAnywhere,
+  fitDropFrame,
   nextFreeSpot,
   pageAtMm,
   pageOffsetMm,
   PAGE_GAP_MM,
   PAGE_PRESETS,
+  PAGE_PRESET_GROUPS,
+  matchPagePreset,
+  photoItemAt,
+  shrinkToFit,
   snapMove,
   snapResize,
   worldRect,
@@ -74,6 +81,7 @@ import { AutoPickDialog } from "./AutoPickDialog";
 import { AutoArrangeDialog, loadArrangeOptions, type ArrangeOptions } from "./AutoArrangeDialog";
 import { arrangePage } from "../utils/pageTemplates";
 import { useTasks } from "../state/tasks";
+import { plural } from "../utils/plural";
 import { errorText } from "../utils/apiError";
 import { rangeFillStyle } from "../utils/rangeFill";
 import { shortcutLabel } from "../utils/selection";
@@ -121,6 +129,12 @@ function marginOf(doc: {
     y: Math.max(0, Math.min(y, doc.page_height_mm / 2)),
   };
 }
+// Air between a dropped photo and its neighbours, the gap the seed and the
+// fill use too.
+const DROP_GAP_MM = 6;
+// How far a swapped-in photo's shape may differ from its frame before the
+// frame reshapes instead of cropping (pageTemplates' MAX_CROP, the same eye).
+const SWAP_CROP_MAX = 0.15;
 // Frames are drawn with handles this big on screen, whatever the zoom.
 const HANDLE_PX = 9;
 const MIN_SIZE_MM = 5;
@@ -329,11 +343,43 @@ type Drag =
   | { kind: "none" }
   | { kind: "pan"; startX: number; startY: number; left: number; top: number }
   | { kind: "marquee"; fromX: number; fromY: number; toX: number; toY: number; additive: boolean }
-  | { kind: "move"; startX: number; startY: number; origin: Map<string, LayoutItem>; moved: boolean }
+  // swapTarget: the photo frame whose middle the (single) dragged photo is
+  // over - dropping there trades the two photos and leaves both frames put.
+  // railTarget: the pointer is over a page's card in the rail - dropping
+  // sends the photo to that page (into its free space), onto that card's
+  // frame `itemId` if one is under the pointer (a swap across pages), or onto
+  // a new page when `page` is past the last one ("Add a page").
+  | {
+      kind: "move";
+      startX: number;
+      startY: number;
+      origin: Map<string, LayoutItem>;
+      moved: boolean;
+      swapTarget?: string;
+      railTarget?: RailTarget;
+    }
   | { kind: "resize"; handle: Handle; startX: number; startY: number; origin: LayoutItem; keepAspect: boolean }
   | { kind: "rotate"; id: string; centerX: number; centerY: number; startAngle: number; origin: number }
   | { kind: "content"; id: string; startX: number; startY: number; origin: LayoutItem }
   | { kind: "place"; imageId: string; x: number; y: number };
+
+export interface RailTarget {
+  page: number;
+  itemId?: string;
+}
+
+// What the pointer is over in the page rail, read from the DOM: the dragged
+// frame holds the pointer capture, so the rail never hears a hover itself.
+function railTargetAt(clientX: number, clientY: number, pageCount: number): RailTarget | undefined {
+  const el = document.elementFromPoint(clientX, clientY);
+  if (!el) return undefined;
+  if (el.closest(".page-rail-add")) return { page: pageCount };
+  const slot = el.closest<HTMLElement>(".page-rail-slot[data-page]");
+  if (!slot) return undefined;
+  const page = Number(slot.dataset.page);
+  const photo = el.closest<HTMLElement>(".page-card-photo[data-item-id]");
+  return { page, itemId: photo?.dataset.itemId };
+}
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -403,8 +449,9 @@ export function CanvasEditor({
   stripImages: ImageOut[];
   imagesLoading: boolean;
   // Called when Escape has nothing left to step out of - the way back to the
-  // overview, same as the lightbox's and the editor's Escape.
-  onExit?: () => void;
+  // overview, same as the lightbox's and the editor's Escape. Told whether
+  // the canvas has anything placed, so the page can skip an empty view.
+  onExit?: (empty: boolean) => void;
   // The canvas edited a photo (a virtual copy appeared or changed): the owner
   // of the `files` query refetches, so edit_rev-based thumbnail URLs bust.
   onMembershipChanged?: () => void;
@@ -565,6 +612,202 @@ export function CanvasEditor({
       content_dx: 0,
       content_dy: 0,
     };
+  }
+
+  // A frame takes another frame's photo (a swap). Near the frame's own shape
+  // (within SWAP_CROP_MAX) the photo simply covers the frame - the crop can
+  // be moved with a double-click, as always. Further off (a portrait for a
+  // landscape) the frame takes the photo's shape at the same area and centre
+  // (reshapeToAspect): nothing is cut away, and swapping back gives exactly
+  // the old frame again - a contain-in-the-old-box here shrank the pair a
+  // little on every round trip. It only gets smaller where it would land on
+  // a neighbour (`obstacles`) or cross the margin, and then only once: the
+  // smaller frame fits both shapes from then on. On the grid the frame then
+  // sits on grid lines, inside what it was given.
+  function tradeInto(frame: LayoutItem, photo: LayoutItem, obstacles: Rect[]): LayoutItem {
+    const taken: LayoutItem = {
+      ...frame,
+      image_id: photo.image_id,
+      missing: photo.missing,
+      available: photo.available,
+      content_scale: 1,
+      content_dx: 0,
+      content_dy: 0,
+    };
+    const aspect = imageAspect(photo.image_id);
+    if (!aspect) return taken;
+    const frameAspect = frame.width_mm / frame.height_mm;
+    const mismatch = Math.max(aspect, frameAspect) / Math.min(aspect, frameAspect) - 1;
+    if (mismatch <= SWAP_CROP_MAX) return clampContent(taken, aspect);
+    const current = docRef.current;
+    const shaped = reshapeToAspect(taken, aspect);
+    const margin = current ? marginOf(current) : null;
+    const box: Rect | null =
+      current && margin && current.page_mode === "pages"
+        ? { x: margin.x, y: margin.y, w: current.page_width_mm - 2 * margin.x, h: current.page_height_mm - 2 * margin.y }
+        : null;
+    const fitted = shrinkToFit(
+      { x: shaped.x_mm, y: shaped.y_mm, w: shaped.width_mm, h: shaped.height_mm },
+      obstacles,
+      box
+    );
+    let { x, y, w, h } = fitted;
+    const grid = current && current.snap && current.show_grid ? current.grid_mm : 0;
+    if (grid > 0) {
+      // Inward and onto the grid: the edges first, the size follows.
+      const x1 = Math.ceil(x / grid - 1e-6) * grid;
+      const y1 = Math.ceil(y / grid - 1e-6) * grid;
+      const x2 = Math.floor((x + w) / grid + 1e-6) * grid;
+      const y2 = Math.floor((y + h) / grid + 1e-6) * grid;
+      if (x2 - x1 >= grid && y2 - y1 >= grid) {
+        x = x1;
+        y = y1;
+        w = x2 - x1;
+        h = y2 - y1;
+      }
+    }
+    return clampContent({ ...taken, x_mm: x, y_mm: y, width_mm: w, height_mm: h }, aspect);
+  }
+
+  // Two frames trade photos. Shapes alike: the frames stay as they are and
+  // the photos cover them. Shapes apart on a page that was set as a layout
+  // (axis-aligned frames, no overlaps, most of the paper covered - what
+  // Auto-arrange or a careful hand leaves): the page is set AGAIN in its
+  // reading order with the photos exchanged, the way Auto-arrange would have
+  // laid out that order - rows that reach the margins again instead of two
+  // reshaped frames floating in their old cells. Setting a page is
+  // deterministic, so swapping back gives the page exactly as it was. A page
+  // that is no layout (a rotated frame, text, overlaps, a few photos on a
+  // lot of paper) keeps its frames and reshapes the two (tradeInto).
+  const rectOfItem = (item: LayoutItem): Rect => ({ x: item.x_mm, y: item.y_mm, w: item.width_mm, h: item.height_mm });
+
+  // `asked`: the user said so (Fill free space with the whole page selected),
+  // so the page is set whatever it looks like now - overlaps, a corner of
+  // paper used, a turned frame (it keeps its turn). Unasked (a swap), only a
+  // page that already IS a layout is set again.
+  function relayoutPage(items: LayoutItem[], page: number, asked = false): LayoutItem[] | null {
+    const current = docRef.current;
+    if (!current || current.page_mode !== "pages") return null;
+    const onPage = items.filter((item) => item.page === page);
+    if (onPage.length < 2 || onPage.length > (asked ? 30 : 9)) return null;
+    if (onPage.some((item) => item.kind !== "photo" || !item.image_id)) return null;
+    if (!asked && onPage.some((item) => item.rotation !== 0)) return null;
+    const rects = onPage.map(rectOfItem);
+    if (!asked) {
+      for (let i = 0; i < rects.length; i++) {
+        for (let j = i + 1; j < rects.length; j++) {
+          const a = rects[i];
+          const b = rects[j];
+          if (a.x < b.x + b.w - 0.5 && a.x + a.w > b.x + 0.5 && a.y < b.y + b.h - 0.5 && a.y + a.h > b.y + 0.5) return null;
+        }
+      }
+    }
+    const margin = marginOf(current);
+    const boxArea = (current.page_width_mm - 2 * margin.x) * (current.page_height_mm - 2 * margin.y);
+    const coverage = rects.reduce((sum, r) => sum + r.w * r.h, 0) / boxArea;
+    if (!asked && coverage < 0.5) return null;
+    // The layout's own gap: the smallest distance between two frames that
+    // sit side by side or one above the other, snapped to the gaps offered.
+    let gap = Infinity;
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = 0; j < rects.length; j++) {
+        if (i === j) continue;
+        const a = rects[i];
+        const b = rects[j];
+        const dx = b.x - (a.x + a.w);
+        const dy = b.y - (a.y + a.h);
+        const overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 0;
+        const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 0;
+        if (overlapY && dx > 0.2) gap = Math.min(gap, dx);
+        if (overlapX && dy > 0.2) gap = Math.min(gap, dy);
+      }
+    }
+    const gapMm = Number.isFinite(gap) ? [3, 6, 12].reduce((best, g) => (Math.abs(g - gap) < Math.abs(best - gap) ? g : best), 6) : DROP_GAP_MM;
+    // Paper filled to the margins means the layout was allowed to crop. When
+    // asked, the page is set without a crop: the frames show the photos.
+    const style = !asked && coverage > 0.97 ? "edge" : "balanced";
+    // Reading order: by row (tops within a gap of each other), then left to right.
+    const order = [...onPage].sort((a, b) => {
+      const row = a.y_mm - b.y_mm;
+      return Math.abs(row) > gapMm ? row : a.x_mm - b.x_mm;
+    });
+    const minZ = Math.min(...onPage.map((item) => item.z));
+    const frames = arrangePage(
+      order.map((item) => ({ id: item.image_id!, aspect: imageAspect(item.image_id) ?? item.width_mm / item.height_mm })),
+      current,
+      { margin, gapMm, startZ: minZ, page, pageLayout: "best", sizes: "fill", style }
+    );
+    if (frames.length !== order.length) return null;
+    // Balanced keeps the order; edge may not. Match frames to items by photo,
+    // each photo once.
+    const pool = [...frames];
+    const placed = new Map<string, LayoutItem>();
+    for (const item of order) {
+      const at = pool.findIndex((f) => f.image_id === item.image_id);
+      if (at < 0) return null;
+      const [f] = pool.splice(at, 1);
+      placed.set(item.id, {
+        ...item,
+        x_mm: f.x_mm,
+        y_mm: f.y_mm,
+        width_mm: f.width_mm,
+        height_mm: f.height_mm,
+        z: f.z,
+        content_scale: 1,
+        content_dx: 0,
+        content_dy: 0,
+      });
+    }
+    return items.map((item) => placed.get(item.id) ?? item);
+  }
+
+  function swapPhotos(items: LayoutItem[], aId: string, bId: string): LayoutItem[] {
+    const a = items.find((item) => item.id === aId);
+    const b = items.find((item) => item.id === bId);
+    if (!a || !b) return items;
+    const take = (frame: LayoutItem, photo: LayoutItem): LayoutItem => ({
+      ...frame,
+      image_id: photo.image_id,
+      missing: photo.missing,
+      available: photo.available,
+      content_scale: 1,
+      content_dx: 0,
+      content_dy: 0,
+    });
+    const mismatch = (frame: LayoutItem, photo: LayoutItem) => {
+      const aspect = imageAspect(photo.image_id);
+      if (!aspect) return 0;
+      const frameAspect = frame.width_mm / frame.height_mm;
+      return Math.max(aspect, frameAspect) / Math.min(aspect, frameAspect) - 1;
+    };
+    let result = items.map((item) => (item.id === aId ? take(a, b) : item.id === bId ? take(b, a) : item));
+    for (const page of new Set([a.page, b.page])) {
+      const here = [a, b].filter((f) => f.page === page);
+      const pairs = here.map((f) => [f, f === a ? b : a] as const);
+      if (!pairs.some(([frame, photo]) => mismatch(frame, photo) > SWAP_CROP_MAX)) {
+        // Alike: the photos just cover their new frames.
+        result = result.map((item) =>
+          here.some((f) => f.id === item.id) ? clampContent(item, imageAspect(item.image_id)) : item
+        );
+        continue;
+      }
+      const relaid = relayoutPage(result, page);
+      if (relaid) {
+        result = relaid;
+        continue;
+      }
+      // No layout to keep: the frames stay and reshape, clear of their
+      // neighbours and of each other.
+      const obstacles = items
+        .filter((item) => item.page === page && item.id !== aId && item.id !== bId)
+        .map(rectOfItem);
+      for (const [frame, photo] of pairs) {
+        const next = tradeInto(frame, photo, obstacles);
+        obstacles.push(rectOfItem(next));
+        result = result.map((item) => (item.id === frame.id ? next : item));
+      }
+    }
+    return result;
   }
 
   // Assigned below once updateItems exists - refreshEditedFile only runs long
@@ -771,7 +1014,7 @@ export function CanvasEditor({
         // Leave anyway; the edit is still on the server's previous state.
       }
     }
-    onExit();
+    onExit((docRef.current?.items.length ?? 0) === 0);
   }, [onExit, canvasId, adoptServerLayout]);
 
   // Every edit goes through here: it records history and marks the document
@@ -1252,23 +1495,73 @@ export function CanvasEditor({
     setDirty(true);
   }, [canvasId, doc, imageAspect, images, imagesLoading, saved]);
 
+  // The frame a photo dropped at a world point gets, in page coordinates: on
+  // a page, the free space there (fitDropFrame); otherwise, or when the
+  // pointer is over a frame or a sliver, the default third-of-the-page frame
+  // centred on the pointer, kept inside the margins. Shared by the drop and
+  // the ghost that previews it.
+  const dropFrame = useCallback(
+    (imageId: string, at: { x: number; y: number }): { page: number; rect: Rect } => {
+      const current = docRef.current!;
+      const pageCount = Math.max(1, current.page_count);
+      const aspect = imageAspect(imageId) ?? 1.5;
+      const page = pageAtMm(at.y, current, pageCount);
+      const point = { x: at.x, y: at.y - pageOffsetMm(page, current) };
+      const margin = marginOf(current);
+      const box: Rect = {
+        x: margin.x,
+        y: margin.y,
+        w: current.page_width_mm - 2 * margin.x,
+        h: current.page_height_mm - 2 * margin.y,
+      };
+      if (current.page_mode === "pages") {
+        const fit = fitDropFrame(
+          point,
+          aspect,
+          box,
+          current.items
+            .filter((item) => item.page === page)
+            .map((item) => ({ x: item.x_mm, y: item.y_mm, w: item.width_mm, h: item.height_mm })),
+          { gapMm: DROP_GAP_MM, gridMm: current.snap && current.show_grid ? current.grid_mm : null }
+        );
+        if (fit) return { page, rect: fit };
+      }
+      // A new frame comes in at a third of the page width - big enough to
+      // see, small enough to leave room to arrange around it. Never taller
+      // than the page's inner height, and on a page never past the margins.
+      let w = current.page_width_mm / 3;
+      let h = w / aspect;
+      if (current.page_mode === "pages" && h > box.h) {
+        h = box.h;
+        w = h * aspect;
+      }
+      let x = point.x - w / 2;
+      let y = point.y - h / 2;
+      if (current.page_mode === "pages") {
+        x = Math.max(box.x, Math.min(box.x + box.w - w, x));
+        y = Math.max(box.y, Math.min(box.y + box.h - h, y));
+      }
+      return { page, rect: { x, y, w, h } };
+    },
+    [imageAspect]
+  );
+
   const addPhotos = useCallback(
     (imageIds: string[], at?: { x: number; y: number }) => {
       if (!doc || imageIds.length === 0) return;
-      const pageCount = Math.max(1, doc.page_count);
       const added: LayoutItem[] = [];
       let z = doc.items.reduce((max, item) => Math.max(max, item.z), 0);
       imageIds.forEach((imageId, index) => {
         const aspect = imageAspect(imageId) ?? 1.5;
-        // A new frame comes in at a third of the page width - big enough to
-        // see, small enough to leave room to arrange around it.
-        const width = doc.page_width_mm / 3;
-        const height = width / aspect;
-        // Dropped where the pointer let go; clicked onto the sheet the user is
-        // actually looking at.
-        const page = at ? pageAtMm(at.y, doc, pageCount) : visiblePage();
-        const spot = at
-          ? { x: at.x - width / 2, y: at.y - pageOffsetMm(page, doc) - height / 2 }
+        // Dropped: the frame the free space there gives (dropFrame). Clicked
+        // onto the sheet the user is looking at: the default frame, below
+        // what is there.
+        const dropped = at ? dropFrame(imageId, at) : null;
+        const width = dropped ? dropped.rect.w : doc.page_width_mm / 3;
+        const height = dropped ? dropped.rect.h : width / aspect;
+        const page = dropped ? dropped.page : visiblePage();
+        const spot = dropped
+          ? { x: dropped.rect.x, y: dropped.rect.y }
           : nextFreeSpot(
               doc.items
                 .filter((item) => item.page === page)
@@ -1302,7 +1595,7 @@ export function CanvasEditor({
       const box = boundsOf(added.map((item) => worldRect(item, doc)));
       if (box) revealRect(box);
     },
-    [commit, doc, imageAspect, revealRect, visiblePage]
+    [commit, doc, dropFrame, imageAspect, revealRect, visiblePage]
   );
 
   const addText = useCallback(() => {
@@ -1398,6 +1691,67 @@ export function CanvasEditor({
         return reshapeToAspect(item, aspect);
       })
     );
+  }, [imageAspect, selected, updateItems]);
+
+  // Grow the selected photos into the free space around them: the largest
+  // hole around each frame's centre, inside the margins and clear of the
+  // page's other frames by the drop gap, the photo's shape kept, on the grid
+  // when the grid is on. One after another, so two chosen frames never grow
+  // into each other. A frame whose centre sits in a neighbour's gap takes the
+  // biggest hole it overlaps instead; with no hole at all it stays.
+  // With EVERY photo of a page selected the page is set as a whole instead -
+  // Auto-arrange for this one page, in the photos' reading order: rows or
+  // columns that reach the margins, the gap the page already uses.
+  const fillFreeSpace = useCallback(() => {
+    const current = docRef.current;
+    if (!current || current.page_mode !== "pages") return;
+    const wholePages = new Set<number>();
+    for (const page of new Set(current.items.filter((item) => selected.has(item.id)).map((item) => item.page))) {
+      const onPage = current.items.filter((item) => item.page === page);
+      if (onPage.length >= 2 && onPage.every((item) => item.kind === "photo" && selected.has(item.id))) wholePages.add(page);
+    }
+    if (wholePages.size > 0) {
+      let next = current.items;
+      for (const page of wholePages) next = relayoutPage(next, page, true) ?? next;
+      if (next !== current.items) updateItems(() => next);
+      if (wholePages.size === new Set(current.items.filter((item) => selected.has(item.id)).map((item) => item.page)).size) return;
+    }
+    const margin = marginOf(current);
+    const box: Rect = {
+      x: margin.x,
+      y: margin.y,
+      w: current.page_width_mm - 2 * margin.x,
+      h: current.page_height_mm - 2 * margin.y,
+    };
+    const fit = { gapMm: DROP_GAP_MM, gridMm: current.snap && current.show_grid ? current.grid_mm : null };
+    const rectOf = (item: LayoutItem): Rect => ({ x: item.x_mm, y: item.y_mm, w: item.width_mm, h: item.height_mm });
+    const overlap = (a: Rect, b: Rect) =>
+      Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) *
+      Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+    const grown = new Map<string, LayoutItem>();
+    for (const item of current.items) {
+      if (!selected.has(item.id) || item.kind !== "photo" || wholePages.has(item.page)) continue;
+      const obstacles = current.items
+        .filter((other) => other.page === item.page && other.id !== item.id)
+        .map((other) => rectOf(grown.get(other.id) ?? other));
+      const aspect = imageAspect(item.image_id) ?? item.width_mm / item.height_mm;
+      const mine = rectOf(item);
+      let rect = fitDropFrame({ x: mine.x + mine.w / 2, y: mine.y + mine.h / 2 }, aspect, box, obstacles, fit);
+      if (!rect) {
+        const any = fitAnywhere(aspect, box, obstacles, fit);
+        if (any && overlap(any, mine) > 0) rect = any;
+      }
+      if (!rect) continue;
+      grown.set(
+        item.id,
+        clampContent(
+          { ...item, x_mm: rect.x, y_mm: rect.y, width_mm: rect.w, height_mm: rect.h, content_scale: 1, content_dx: 0, content_dy: 0 },
+          aspect
+        )
+      );
+    }
+    if (grown.size === 0) return;
+    updateItems((list) => list.map((item) => grown.get(item.id) ?? item));
   }, [imageAspect, selected, updateItems]);
 
   // Typed size for every selected photo. The top-left corner stays put, which
@@ -1531,7 +1885,7 @@ export function CanvasEditor({
   // justified rows or columns (utils/pageTemplates). Pages are rebuilt from
   // scratch - Undo takes it back. Photos the library has not analysed yet
   // go into a plain grid at the end, and the user is told.
-  const { runTask } = useTasks();
+  const { runTask, notify } = useTasks();
   const [arrangeOpen, setArrangeOpen] = useState(false);
   const autoArrange = useCallback(
     async (options: ArrangeOptions) => {
@@ -1556,13 +1910,33 @@ export function CanvasEditor({
         // its minimum; a last page under the minimum borrows from the one
         // before, or joins it.
         const ordered = groupBy === "time" ? [...images].sort((a, b) => (a.taken_at ?? "").localeCompare(b.taken_at ?? "")) : images;
-        const PAUSE_MS = 60 * 60 * 1000;
+        // What counts as a pause depends on how the shooting is spread: a
+        // year of photos breaks by day, one day of photos by hour, a burst of
+        // an hour by minute. The coarsest scale on the ladder that still cuts
+        // the run into about as many stretches as pages are needed wins; a
+        // run with no gaps at that scale falls through to the next.
+        const gaps = ordered.slice(1).map((image, i) => {
+          const a = ordered[i].taken_at;
+          const b = image.taken_at;
+          return a && b ? Date.parse(b) - Date.parse(a) : 0;
+        });
+        const LADDER_MS = [
+          7 * 24 * 3600_000, // a week
+          24 * 3600_000, // a day
+          6 * 3600_000, // part of a day
+          3600_000, // an hour
+          15 * 60_000,
+          5 * 60_000,
+          60_000, // a minute
+          10_000, // seconds
+        ];
+        const wantedPages = Math.ceil(ordered.length / maxPerPage);
+        const pauseMs =
+          LADDER_MS.find((ms) => gaps.filter((gap) => gap > ms).length + 1 >= wantedPages) ??
+          LADDER_MS[LADDER_MS.length - 1];
         const pauseAfter = (index: number) => {
           if (groupBy !== "time") return false;
-          const a = ordered[index]?.taken_at;
-          const b = ordered[index + 1]?.taken_at;
-          if (!a || !b) return false;
-          return Date.parse(b) - Date.parse(a) > PAUSE_MS;
+          return (gaps[index] ?? 0) > pauseMs;
         };
         const groups: string[][] = [];
         let page: string[] = [];
@@ -1667,21 +2041,24 @@ export function CanvasEditor({
         return;
       }
       if (arrange) arrangeOnce.current = new Set(ids);
+      notify({ label: `Added ${plural(ids.length, "photo")} to the canvas.` });
       await queryClient.invalidateQueries({ queryKey: ["canvas-images", canvasId] });
       queryClient.invalidateQueries({ queryKey: ["canvas", canvasId] });
     },
-    [canvasId, dialogs, queryClient]
+    [canvasId, dialogs, notify, queryClient]
   );
 
   // The way back out of a layout that went wrong. The canvas's photos are
   // untouched - only the placing is thrown away.
+  // Back to one empty page: the items go and so do the extra pages - a
+  // cleared canvas with twelve blank sheets is not cleared.
   const clearCanvas = useCallback(async () => {
-    if (items.length === 0) return;
+    if (items.length === 0 && pageCount <= 1) return;
     if (
       !(await dialogs.confirm({
         title: "Clear the canvas?",
         message:
-          "All placed photos and text are removed and the page starts empty. The photos stay in your library.",
+          "All placed photos and text are removed and the canvas starts over with one empty page. The photos stay in your library.",
         confirmLabel: "Clear canvas",
         danger: true,
       }))
@@ -1691,8 +2068,9 @@ export function CanvasEditor({
     setSelected(new Set());
     setCroppingId(null);
     setEditingTextId(null);
-    updateItems(() => []);
-  }, [dialogs, items.length, updateItems]);
+    commit((current) => ({ ...current, items: [], page_count: 1 }));
+    goToPage(0);
+  }, [commit, dialogs, goToPage, items.length, pageCount]);
 
   // --- Pages as things in their own right -----------------------------------
   //
@@ -1875,8 +2253,32 @@ export function CanvasEditor({
       let dx = world.x - current.startX;
       let dy = world.y - current.startY;
       const moving = [...current.origin.values()];
+      // One photo over the middle of another: offer the swap. The dragged
+      // frame keeps following the pointer (a frame that sticks feels broken),
+      // only the snapping stops, so nothing jumps while the zone is lit.
+      let swapTarget: string | undefined;
+      let railTarget: RailTarget | undefined;
+      if (moving.length === 1 && moving[0].kind === "photo") {
+        const hit = photoItemAt(world.x, world.y, doc.items, doc, new Set(current.origin.keys()));
+        if (hit?.inner && hit.item.image_id !== moving[0].image_id) swapTarget = hit.item.id;
+        if (doc.page_mode === "pages") {
+          railTarget = railTargetAt(event.clientX, event.clientY, pageCount);
+          // Its own page, or a frame holding the same photo: nothing to do there.
+          if (railTarget) {
+            if (railTarget.itemId) {
+              const other = doc.items.find((item) => item.id === railTarget!.itemId);
+              if (!other || other.id === moving[0].id || other.image_id === moving[0].image_id) railTarget.itemId = undefined;
+            }
+            if (!railTarget.itemId && railTarget.page === moving[0].page) railTarget = undefined;
+          }
+        }
+      }
+      const railChanged =
+        railTarget?.page !== current.railTarget?.page || railTarget?.itemId !== current.railTarget?.itemId;
+      if (swapTarget !== current.swapTarget || railChanged) setDrag({ ...current, moved: true, swapTarget, railTarget });
       const box = boundsOf(moving.map((item) => worldRect(item, doc)));
-      if (box && doc.snap) {
+      if (swapTarget) setGuides([]);
+      else if (box && doc.snap) {
         const others = doc.items
           .filter(
             (item) =>
@@ -1892,6 +2294,7 @@ export function CanvasEditor({
         const result = snapMove({ ...box, x: box.x + dx, y: box.y + dy }, others, doc, pageCount, {
           threshold,
           grid,
+          gapMm: DROP_GAP_MM,
         });
         dx += result.dx;
         dy += result.dy;
@@ -1909,7 +2312,7 @@ export function CanvasEditor({
         // One history entry per drag, written when it starts.
         { history: !current.moved }
       );
-      if (!current.moved) setDrag({ ...current, moved: true });
+      if (!current.moved && swapTarget === current.swapTarget && !railChanged) setDrag({ ...current, moved: true });
       return;
     }
 
@@ -1964,7 +2367,7 @@ export function CanvasEditor({
           others,
           doc,
           pageCount,
-          { threshold, grid }
+          { threshold, grid, gapMm: DROP_GAP_MM }
         );
         // Only the edges being dragged may move, or a resize would slide the
         // frame instead of reshaping it.
@@ -2072,8 +2475,21 @@ export function CanvasEditor({
     // so a moving pointer doesn't tear the listeners down and rebuild them.
   }, [addPhotos, drag.kind, toWorld]);
 
-  const onPointerUp = () => {
+  const onPointerUp = (event?: React.PointerEvent) => {
     const current = dragRef.current;
+    // Let go of a frame outside the page view - over the rail between two
+    // cards, the toolbar, the filmstrip - with nothing there to take it: it
+    // goes back where it came from rather than staying where the pointer
+    // happened to map to, off the edge of the page.
+    if (current.kind === "move" && !current.swapTarget && !current.railTarget && event) {
+      const view = viewportRef.current?.getBoundingClientRect();
+      if (
+        view &&
+        (event.clientX < view.left || event.clientX > view.right || event.clientY < view.top || event.clientY > view.bottom)
+      ) {
+        updateItems((list) => list.map((item) => current.origin.get(item.id) ?? item), { history: false });
+      }
+    }
     if (current.kind === "marquee" && doc) {
       const x1 = Math.min(current.fromX, current.toX);
       const x2 = Math.max(current.fromX, current.toX);
@@ -2088,6 +2504,96 @@ export function CanvasEditor({
         hit.forEach((item) => next.add(item.id));
         return next;
       });
+    }
+    if (current.kind === "move" && current.railTarget && doc) {
+      // Dropped on a page's card in the rail. history:false throughout: the
+      // drag's first frame holds the one undo entry.
+      const [draggedId, from] = [...current.origin.entries()][0];
+      const target = current.railTarget;
+      const other = target.itemId ? doc.items.find((item) => item.id === target.itemId) : undefined;
+      if (from && other) {
+        // Onto a frame there: the photos trade across the pages (swapPhotos),
+        // from the dragged frame's resting place, not where the drag left it.
+        updateItems(
+          (list) =>
+            swapPhotos(
+              list.map((item) => (item.id === draggedId ? from : item)),
+              draggedId,
+              other.id
+            ),
+          { history: false }
+        );
+        setSelected(new Set([other.id]));
+      } else if (from) {
+        // Onto the page: the frame moves there, into the biggest free space,
+        // or onto a new page at the end.
+        const newPage = target.page >= pageCount;
+        const page = newPage ? pageCount : target.page;
+        const margin = marginOf(doc);
+        const box: Rect = { x: margin.x, y: margin.y, w: doc.page_width_mm - 2 * margin.x, h: doc.page_height_mm - 2 * margin.y };
+        const aspect = from.width_mm / from.height_mm;
+        const fit = fitAnywhere(
+          aspect,
+          box,
+          doc.items
+            .filter((item) => item.page === page && item.id !== draggedId)
+            .map((item) => ({ x: item.x_mm, y: item.y_mm, w: item.width_mm, h: item.height_mm })),
+          { gapMm: DROP_GAP_MM, gridMm: doc.snap && doc.show_grid ? doc.grid_mm : null }
+        );
+        // No room: the frame keeps its size, centred, on top of what is there.
+        const rect = fit ?? {
+          x: box.x + (box.w - Math.min(from.width_mm, box.w)) / 2,
+          y: box.y + (box.h - Math.min(from.height_mm, box.h)) / 2,
+          w: Math.min(from.width_mm, box.w),
+          h: Math.min(from.width_mm, box.w) / aspect,
+        };
+        const topZ = doc.items.filter((item) => item.page === page).reduce((max, item) => Math.max(max, item.z), 0);
+        commit(
+          (c) => ({
+            ...c,
+            page_count: newPage ? c.page_count + 1 : c.page_count,
+            items: c.items.map((item) =>
+              item.id === draggedId
+                ? clampContent(
+                    { ...item, page, x_mm: rect.x, y_mm: rect.y, width_mm: rect.w, height_mm: rect.h, z: topZ + 1, content_scale: 1, content_dx: 0, content_dy: 0 },
+                    imageAspect(item.image_id)
+                  )
+                : item
+            ),
+          }),
+          { history: false }
+        );
+        setSelected(new Set([draggedId]));
+        goToPage(page);
+      }
+      setDrag({ kind: "none" });
+      setGuides([]);
+      return;
+    }
+    if (current.kind === "move" && current.swapTarget && doc) {
+      // Dropped on another photo's middle: the frames stay, the photos trade.
+      // The dragged frame goes back where it came from, each photo is fitted
+      // into its new frame from the centre. history:false - the drag's first
+      // frame already wrote the one undo entry, so ⌘Z takes the whole swap back.
+      const targetId = current.swapTarget;
+      const [draggedId, from] = [...current.origin.entries()][0];
+      const target = doc.items.find((item) => item.id === targetId);
+      if (target && from) {
+        // The dragged frame goes back to its resting place, then the photos
+        // trade (swapPhotos: alike shapes keep the frames, a set page is set
+        // again in the new order, a free page reshapes the two).
+        updateItems(
+          (list) =>
+            swapPhotos(
+              list.map((item) => (item.id === draggedId ? from : item)),
+              draggedId,
+              targetId
+            ),
+          { history: false }
+        );
+        // The selection follows the photo into its new frame.
+        setSelected(new Set([targetId]));
+      }
     }
     if (current.kind === "resize") {
       // Reshaping the frame changes how much room the picture inside it has to
@@ -2214,6 +2720,12 @@ export function CanvasEditor({
       // its (undo, arrows, Escape) - the canvas underneath must not also
       // undo, nudge frames or step its own Escape ladder.
       if (editingOpenRef.current) return;
+      // G: grow the selected photos into the free space around them.
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && !croppingId && (event.key === "g" || event.key === "G")) {
+        event.preventDefault();
+        fillFreeSpace();
+        return;
+      }
       // A focused button still owns Space: hold-to-pan must not stop the
       // toolbar being driven from the keyboard.
       const onButton = target?.tagName === "BUTTON";
@@ -2339,7 +2851,16 @@ export function CanvasEditor({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [croppingId, editingTextId, fitToView, focusMode, requestExit, redo, removeSelected, restack, selected, undo, updateItems, zoomAt]);
+  }, [croppingId, editingTextId, fillFreeSpace, fitToView, focusMode, requestExit, redo, removeSelected, restack, selected, undo, updateItems, zoomAt]);
+
+  // The ghost is the frame the drop would make, in world mm - so the size the
+  // free space gives is seen before the photo is let go. A hook, so it sits
+  // above the loading return like every other one.
+  const placingRect = useMemo(() => {
+    if (drag.kind !== "place" || !doc) return null;
+    const { page, rect } = dropFrame(drag.imageId, { x: drag.x, y: drag.y });
+    return { ...rect, y: rect.y + pageOffsetMm(page, doc) };
+  }, [drag, doc, dropFrame]);
 
   // --- Render ---------------------------------------------------------------
 
@@ -2520,7 +3041,7 @@ export function CanvasEditor({
         title={title}
         onExit={onExit && requestExit}
         onClear={clearCanvas}
-        canClear={items.length > 0}
+        canClear={items.length > 0 || pageCount > 1}
         exportChip={<ExportChip doc={doc} byId={byId} title={title} />}
       />
 
@@ -2534,6 +3055,7 @@ export function CanvasEditor({
         onRestack={restack}
         onDelete={removeSelected}
         onFitFrame={fitFrameToPhoto}
+        onFillSpace={doc.page_mode === "pages" ? fillFreeSpace : undefined}
         onCrop={() => single && single.kind === "photo" && setCroppingId(single.id)}
         onEditPhoto={() => (editingImage ? void closeEditor() : void editPhoto())}
         editingOpen={editingImage !== null}
@@ -2577,6 +3099,7 @@ export function CanvasEditor({
             onAdd={addPage}
             onDuplicate={duplicatePage}
             onRemove={removePage}
+            dropTarget={drag.kind === "move" ? drag.railTarget ?? null : null}
           />
         )}
         <div className="canvas-frame-col">
@@ -2751,6 +3274,7 @@ export function CanvasEditor({
                       selected={selected.has(item.id)}
                       cropping={croppingId === item.id}
                       editing={editingTextId === item.id}
+                      swapping={drag.kind === "move" && !!drag.swapTarget && drag.origin.has(item.id)}
                       maskHostRef={
                         editingImage && item.kind === "photo" && item.image_id === editingImage.id
                           ? setMaskHost
@@ -2843,7 +3367,11 @@ export function CanvasEditor({
                           width: rect.w,
                           height: rect.h,
                           transform: `rotate(${item.rotation}deg)`,
-                          borderWidth: 1 / zoom,
+                          // Two screen pixels and a light halo: one hairline
+                          // in the accent was lost on white paper and dark
+                          // photos alike once the whole page was selected.
+                          borderWidth: 2 / zoom,
+                          boxShadow: `0 0 0 ${1 / zoom}px rgba(255, 255, 255, 0.75), inset 0 0 0 ${1 / zoom}px rgba(255, 255, 255, 0.75)`,
                         }}
                       />
                     );
@@ -2884,14 +3412,44 @@ export function CanvasEditor({
                   />
                 )}
 
-                {placing && (
+                {/* The swap zone on the frame a photo is being dragged onto:
+                    the whole frame tinted, the inner half outlined, a badge in
+                    the middle. On the world layer, not in the item - the
+                    dragged photo is stacked above it and the item clips. */}
+                {drag.kind === "move" && drag.swapTarget && (() => {
+                  const target = doc.items.find((item) => item.id === drag.swapTarget);
+                  if (!target) return null;
+                  const rect = worldRect(target, doc);
+                  return (
+                    <div
+                      className="canvas-swap-target"
+                      style={{
+                        left: rect.x,
+                        top: rect.y,
+                        width: rect.w,
+                        height: rect.h,
+                        transform: `rotate(${target.rotation}deg)`,
+                      }}
+                    >
+                      <div className="canvas-swap-zone" style={{ borderWidth: 1 / zoom }} />
+                      <div
+                        className="canvas-swap-badge"
+                        style={{ fontSize: 12 / zoom, padding: `${4 / zoom}px ${9 / zoom}px`, gap: 6 / zoom, borderRadius: 999 / zoom }}
+                      >
+                        <IconSwap size={13 / zoom} /> Swap photos
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {placingRect && (
                   <div
                     className="canvas-drop-ghost"
                     style={{
-                      left: placing.x - doc.page_width_mm / 6,
-                      top: placing.y - doc.page_width_mm / 9,
-                      width: doc.page_width_mm / 3,
-                      height: doc.page_width_mm / 4.5,
+                      left: placingRect.x,
+                      top: placingRect.y,
+                      width: placingRect.w,
+                      height: placingRect.h,
                       borderWidth: 1 / zoom,
                     }}
                   />
@@ -3523,6 +4081,7 @@ function PageRail({
   onAdd,
   onDuplicate,
   onRemove,
+  dropTarget,
 }: {
   doc: Doc;
   pageCount: number;
@@ -3533,6 +4092,9 @@ function PageRail({
   onAdd: (after: number) => void;
   onDuplicate: (page: number) => void;
   onRemove: (page: number) => void;
+  // A photo from the stage is being dragged over the rail: which card (and
+  // frame on it) would take it. Drawn here; decided by the stage's drag.
+  dropTarget: RailTarget | null;
 }) {
   // Which card is being carried, and where it would land. `over` is an
   // insertion point BETWEEN cards, so it can also mean "after the last one".
@@ -3551,6 +4113,30 @@ function PageRail({
   const dragged = useRef(false);
 
   const pages = Array.from({ length: pageCount }, (_, i) => i);
+
+  // A photo carried over the rail near its top or bottom edge scrolls the
+  // list, so a page out of sight can be reached without letting go.
+  useEffect(() => {
+    if (!dropTarget) return;
+    let y = 0;
+    const onMoveEvent = (event: PointerEvent) => {
+      y = event.clientY;
+    };
+    const tick = window.setInterval(() => {
+      const list = listRef.current;
+      if (!list || !y) return;
+      const box = list.getBoundingClientRect();
+      const edge = 40;
+      if (y < box.top + edge) list.scrollTop -= 8;
+      else if (y > box.bottom - edge) list.scrollTop += 8;
+    }, 16);
+    window.addEventListener("pointermove", onMoveEvent);
+    return () => {
+      window.clearInterval(tick);
+      window.removeEventListener("pointermove", onMoveEvent);
+    };
+  }, [dropTarget]);
+
   // How far a card steps aside: the carried card's own height plus the gap
   // between cards, measured because a card can be any height.
   const stride =
@@ -3628,10 +4214,11 @@ function PageRail({
             else if (over <= page && page < carrying) shift = stride;
           }
           const ghost = carrying === page;
+          const dropHere = dropTarget?.page === page;
           return (
           <div key={page} data-page={page} className="page-rail-slot">
             <div
-              className={`page-card${page === current ? " is-current" : ""}${ghost ? " is-carrying" : ""}`}
+              className={`page-card${page === current ? " is-current" : ""}${ghost ? " is-carrying" : ""}${dropHere ? " is-drop-target" : ""}`}
               style={
                 ghost
                   ? { transform: `translateY(${travel}px) scale(1.03)` }
@@ -3676,7 +4263,8 @@ function PageRail({
                     return (
                       <img
                         key={item.id}
-                        className="page-card-photo"
+                        className={`page-card-photo${dropHere && dropTarget?.itemId === item.id ? " is-swap-target" : ""}`}
+                        data-item-id={item.id}
                         style={box}
                         src={api.images.thumbnailUrl(image.id, editVersion(image), "small")}
                         alt=""
@@ -3684,6 +4272,10 @@ function PageRail({
                       />
                     );
                   })}
+                {/* What a drop would do on this card: a word over the paper. */}
+                {dropHere && (
+                  <span className="page-card-drop">{dropTarget?.itemId ? "Swap photos" : "Move here"}</span>
+                )}
               </div>
               {/* The number and, on hover, the page's two actions - in a row
                   UNDER the miniature, never over it: the picture of the page
@@ -3727,7 +4319,11 @@ function PageRail({
         })}
       </div>
 
-      <button className="btn btn-sm page-rail-add" onClick={() => onAdd(pageCount - 1)} title="Add a page at the end">
+      <button
+        className={`btn btn-sm page-rail-add${dropTarget && dropTarget.page >= pageCount ? " is-drop-target" : ""}`}
+        onClick={() => onAdd(pageCount - 1)}
+        title="Add a page at the end. Drop a photo here to give it a page of its own."
+      >
         <IconPlus size={12} /> Add a page
       </button>
     </div>
@@ -3771,6 +4367,7 @@ function CanvasItem({
   selected,
   cropping,
   editing,
+  swapping = false,
   maskHostRef,
   onPointerDown,
   onDoubleClick,
@@ -3790,6 +4387,8 @@ function CanvasItem({
   zoom: number;
   selected: boolean;
   cropping: boolean;
+  // While another frame's swap zone is lit under this (dragged) photo.
+  swapping?: boolean;
   editing: boolean;
   // Set while this frame's photo is the one open in the docked editor: a
   // layer laid over the photo (same box, same content transform) that the
@@ -3879,7 +4478,7 @@ function CanvasItem({
 
   return (
     <div
-      className={`canvas-item canvas-item--photo${selected ? " is-selected" : ""}${cropping ? " is-cropping" : ""}`}
+      className={`canvas-item canvas-item--photo${selected ? " is-selected" : ""}${cropping ? " is-cropping" : ""}${swapping ? " is-swapping" : ""}`}
       style={
         border > 0
           ? {
@@ -4058,11 +4657,13 @@ function CanvasToolbar({
   canClear: boolean;
   exportChip: React.ReactNode;
 }) {
-  const presetKey =
-    PAGE_PRESETS.find((p) => p.w === doc.page_width_mm && p.h === doc.page_height_mm)?.key ?? "custom";
+  // The preset in either orientation; a turned preset is still that preset.
+  const presetMatch = matchPagePreset(doc.page_width_mm, doc.page_height_mm);
+  const presetKey = presetMatch?.preset.key ?? "custom";
   const presetLabel =
-    PAGE_PRESETS.find((p) => p.key === presetKey)?.label ??
-    `${Math.round(doc.page_width_mm)}×${Math.round(doc.page_height_mm)} mm`;
+    presetMatch?.preset.label ?? `${Math.round(doc.page_width_mm)}×${Math.round(doc.page_height_mm)} mm`;
+  const square = Math.abs(doc.page_width_mm - doc.page_height_mm) < 0.05;
+  const portrait = !square && doc.page_height_mm > doc.page_width_mm;
 
   // Everything the old "Paper" popover held sits IN the bar now, as icons
   // with a word next to each - the glyphs for "snap" or "place" are nobody's
@@ -4126,15 +4727,54 @@ function CanvasToolbar({
                   className="canvas-size-select"
                   value={presetKey}
                   ariaLabel={doc.page_mode === "pages" ? "Page size" : "Guide size"}
+                  searchable
                   options={[
                     ...(presetKey === "custom" ? [{ value: "custom", label: `Custom (${presetLabel})` }] : []),
-                    ...PAGE_PRESETS.map((p) => ({ value: p.key, label: p.label })),
+                    ...PAGE_PRESET_GROUPS.flatMap((group) => [
+                      { value: `group:${group}`, label: group, heading: true },
+                      ...PAGE_PRESETS.filter((p) => p.group === group).map((p) => ({
+                        value: p.key,
+                        label: p.label,
+                        search: `${group} ${p.label}`,
+                      })),
+                    ]),
                   ]}
                   onChange={(value) => {
                     const next = PAGE_PRESETS.find((p) => p.key === value);
-                    if (next) commit((c) => ({ ...c, page_width_mm: next.w, page_height_mm: next.h }));
+                    if (!next) return;
+                    // A turned page stays turned when its size changes.
+                    const turn = portrait && next.w !== next.h;
+                    commit((c) => ({
+                      ...c,
+                      page_width_mm: turn ? next.h : next.w,
+                      page_height_mm: turn ? next.w : next.h,
+                    }));
                   }}
                 />
+              </div>
+              <div className="canvas-panel-row">
+                <span className="canvas-panel-label">Orientation</span>
+                {/* Width and height trade places; a square has nothing to turn. */}
+                <span className="segmented" role="group" aria-label="Page orientation">
+                  {(["Landscape", "Portrait"] as const).map((o) => {
+                    const on = o === "Portrait" ? portrait : !portrait && !square;
+                    return (
+                      <button
+                        key={o}
+                        className={on ? "active" : ""}
+                        disabled={square}
+                        aria-pressed={on}
+                        title={square ? "A square page has no orientation" : `${o}: swap width and height`}
+                        onClick={() => {
+                          if (on) return;
+                          commit((c) => ({ ...c, page_width_mm: c.page_height_mm, page_height_mm: c.page_width_mm }));
+                        }}
+                      >
+                        {o}
+                      </button>
+                    );
+                  })}
+                </span>
               </div>
               {/* Typing a size IS choosing custom - no mode to switch first;
                   the select above simply reads "Custom" while the numbers
@@ -4324,7 +4964,6 @@ function CanvasToolbar({
           <IconPlus size={14} />
         </button>
         {exportChip}
-        <CanvasHelp />
       </div>
 
       {/* Clearing the canvas sits flush at the far right, on its own: the
@@ -4563,51 +5202,6 @@ function FontEditor({
 // without edits goes in as its own saved bytes, an edited one as a lossless
 // full-resolution render - never a re-compressed JPEG (see /images/{id}/export).
 // That render is why an export is not instant.
-// The gestures the canvas can't show you. Everything here is also reachable by
-// pointing and clicking - this is the shortcut for people who already know what
-// they want, not the only door.
-function CanvasHelp() {
-  const rows: [string, string][] = [
-    ["Move a photo", "Drag it"],
-    ["Reorder pages", "Drag a page up or down in the list on the left"],
-    ["Jump to a page", "Click it in the list on the left"],
-    ["Find your photos again", "Double-click an empty area of the free canvas to jump to the first photo"],
-    ["Design for print", "Turn on the page guide and keep your work inside it"],
-    ["Select several items", "Drag across an empty area, or Shift-click"],
-    ["Move the view", "Hold Space and drag · Alt-drag · scroll, the scrollbars, or the arrow keys with nothing selected"],
-    ["Zoom the canvas", "+ and − · Alt and scroll · hold Space and scroll"],
-    ["Fit one page in the window", "Double-click an empty area, or 0 (⌘+ and ⌘− zoom the whole app, not the canvas)"],
-    ["Fit all pages", "Shift-double-click an empty area, or Shift-0"],
-    ["See the pages as they will print", "E with nothing selected, or Escape: back to the canvas view"],
-    ["Crop inside a frame", "Double-click the photo, then drag to move and scroll to zoom"],
-    ["Resize", "Drag a corner or a side · Shift ignores the aspect lock · or type a size in the bar"],
-    ["Rotate", "Drag the round handle above the item · Shift for 15° steps"],
-    ["Nudge", "Arrow keys · Shift for 10 mm steps"],
-    ["Stacking order", "⌘] and ⌘[ · add Shift to move to the front or back"],
-    ["Remove from the page", "Delete key. The photo stays in the library."],
-    ["Undo", "⌘Z · ⌘⇧Z to redo"],
-  ];
-  return (
-    <FilterChip
-      align="right"
-      label={
-        <>
-          <IconHelp size={13} /> How this works
-        </>
-      }
-      title="Mouse and keyboard controls for the canvas"
-    >
-      <dl className="canvas-help">
-        {rows.map(([what, how]) => (
-          <div key={what}>
-            <dt>{what}</dt>
-            <dd>{how}</dd>
-          </div>
-        ))}
-      </dl>
-    </FilterChip>
-  );
-}
 
 // --- What is selected, and what can be done with it -------------------------
 
@@ -4617,6 +5211,7 @@ function CanvasActionBar({
   onRestack,
   onDelete,
   onFitFrame,
+  onFillSpace,
   onCrop,
   onEditPhoto,
   editingOpen,
@@ -4637,6 +5232,9 @@ function CanvasActionBar({
   onRestack: (direction: "front" | "back" | "forward" | "backward") => void;
   onDelete: () => void;
   onFitFrame: () => void;
+  // Grow into the free space around the frame; only on pages (a free canvas
+  // has no room to measure), so undefined there.
+  onFillSpace?: () => void;
   onCrop: () => void;
   onEditPhoto: () => void;
   editingOpen: boolean;
@@ -4710,6 +5308,15 @@ function CanvasActionBar({
               title="Adjust the frame to the photo's proportions and remove any crop"
             >
               <IconRotate size={13} /> <span className="canvas-action-label">Fit frame to photo</span>
+            </button>
+          )}
+          {photos > 0 && !cropping && onFillSpace && (
+            <button
+              className="btn btn-sm"
+              onClick={onFillSpace}
+              title="Grow into the free space around it, inside the margins and clear of its neighbours. With every photo of the page selected, sets the page like Auto-arrange (G)"
+            >
+              <IconExpand size={13} /> <span className="canvas-action-label">Fill free space</span>
             </button>
           )}
           {/* Only offered while something is actually turned: a rotation is set by
@@ -5080,7 +5687,7 @@ function Filmstrip({
             {remaining === 0
               ? "All photos are on the canvas."
               : `${remaining} not on the canvas yet.`}{" "}
-            Drag a photo onto the page, or click it to place it on the current page.
+            Drag a photo onto a page; it takes the free space where it lands.
           </span>
         )}
         {backButton}

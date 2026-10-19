@@ -18,6 +18,9 @@ export interface DropdownOption {
   // three stars): the button's own icon already says what the value is, so
   // the field can stay narrow in the pinned filter row.
   short?: ReactNode;
+  // A label over a group of options, not something to pick. Left out of a
+  // search (typing shows only the options that match).
+  heading?: boolean;
 }
 
 interface Props {
@@ -100,7 +103,7 @@ export function Dropdown({
   const needle = query.trim().toLowerCase();
   const visible =
     searchable && needle
-      ? options.filter((o) => searchText(o).toLowerCase().includes(needle))
+      ? options.filter((o) => !o.heading && searchText(o).toLowerCase().includes(needle))
       : options;
 
   function pick(o: DropdownOption) {
@@ -112,8 +115,8 @@ export function Dropdown({
   // The keyboard (utils/useMenuKeys): arrows, Home/End, Enter, Escape, and
   // typed letters where there is no search box to type into. The cursor
   // starts on the chosen option, the way a popup button opens on its value.
-  const enabledVisible = visible.filter((o) => !o.disabled);
-  const { cursor: cursorValue, setCursor } = useMenuKeys({
+  const enabledVisible = visible.filter((o) => !o.disabled && !o.heading);
+  const { lit: cursorValue, setCursor } = useMenuKeys({
     open: open && !isEmpty,
     ids: enabledVisible.map((o) => o.value),
     initial: enabledVisible.some((o) => o.value === value) ? value : enabledVisible[0]?.value ?? null,
@@ -262,7 +265,12 @@ export function Dropdown({
                 />
               )}
               {visible.length === 0 && <div className="dropdown-empty">No match</div>}
-              {visible.map((o) => (
+              {visible.map((o) =>
+                o.heading ? (
+                  <div key={o.value} className="dropdown-group-label" role="presentation">
+                    {o.label}
+                  </div>
+                ) : (
                 <button
                   key={o.value}
                   type="button"
@@ -273,12 +281,13 @@ export function Dropdown({
                   }`}
                   disabled={o.disabled}
                   data-menu-id={o.value}
-                  onMouseEnter={() => !o.disabled && setCursor(o.value)}
+                  onMouseEnter={() => !o.disabled && setCursor(o.value, true)}
                   onClick={() => pick(o)}
                 >
                   {o.label}
                 </button>
-              ))}
+                )
+              )}
             </div>
           )}
         </Presence>,

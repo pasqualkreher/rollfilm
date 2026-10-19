@@ -36,13 +36,20 @@ const TYPEAHEAD_MS = 1000;
 
 export function useMenuKeys(options: MenuKeysOptions) {
   const [cursor, setCursorState] = useState<string | null>(null);
+  // Whether the pointer put the cursor there. The pointer's row is painted
+  // by :hover, in the same frame the pointer arrives; painting it again from
+  // state would lag a render behind and stay lit after the pointer has left.
+  // So `lit` is only the keyboard's cursor, while `cursor` is what Enter takes
+  // either way.
+  const [byPointer, setByPointer] = useState(false);
   const cursorRef = useRef<string | null>(null);
   const latest = useRef(options);
   latest.current = options;
 
-  const setCursor = (id: string | null) => {
+  const setCursor = (id: string | null, pointer = false) => {
     cursorRef.current = id;
     setCursorState(id);
+    setByPointer(pointer);
   };
 
   // A fresh cursor on every opening.
@@ -50,6 +57,7 @@ export function useMenuKeys(options: MenuKeysOptions) {
   if (options.open && !wasOpen.current) {
     cursorRef.current = options.initial ?? null;
     setCursorState(cursorRef.current);
+    setByPointer(false);
   }
   wasOpen.current = options.open;
 
@@ -128,13 +136,13 @@ export function useMenuKeys(options: MenuKeysOptions) {
 
   // The row under the cursor stays in view in a scrolling menu.
   useEffect(() => {
-    if (!options.open || !cursor) return;
+    if (!options.open || !cursor || byPointer) return;
     document
       .querySelector<HTMLElement>(`[data-menu-id="${CSS.escape(cursor)}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [options.open, cursor]);
+  }, [options.open, cursor, byPointer]);
 
-  return { cursor, setCursor };
+  return { cursor, lit: byPointer ? null : cursor, setCursor };
 }
 
 // For a menu whose rows are real links or buttons (the burger menu): the

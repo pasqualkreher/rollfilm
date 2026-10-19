@@ -98,7 +98,7 @@ export const MenuButton = forwardRef<MenuButtonHandle, Props>(function MenuButto
     onPick(id);
   }
 
-  const { cursor, setCursor } = useMenuKeys({
+  const { lit: cursor, setCursor } = useMenuKeys({
     open,
     ids: enabled.map((e) => e.id),
     initial: null,
@@ -210,7 +210,7 @@ export const MenuButton = forwardRef<MenuButtonHandle, Props>(function MenuButto
                     className={`dropdown-option${e.id === cursor ? " cursor" : ""}${e.danger ? " dropdown-option--danger" : ""}`}
                     disabled={e.disabled}
                     data-menu-id={e.id}
-                    onMouseEnter={() => !e.disabled && setCursor(e.id)}
+                    onMouseEnter={() => !e.disabled && setCursor(e.id, true)}
                     onClick={(ev) => {
                       ev.stopPropagation();
                       pick(e.id);

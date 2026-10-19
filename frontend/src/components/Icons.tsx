@@ -127,6 +127,26 @@ export function IconArrowLeft(props: IconProps) {
   );
 }
 
+// Growing into the room around: arrows out of two corners.
+export function IconExpand(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M9.5 2.5h4v4M13.5 2.5L9 7" />
+      <path d="M6.5 13.5h-4v-4M2.5 13.5L7 9" />
+    </svg>
+  );
+}
+
+// Two photos trading places: arrows passing each other.
+export function IconSwap(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 5.5h10M9.5 2.5l3 3-3 3" />
+      <path d="M13.5 10.5h-10M6.5 7.5l-3 3 3 3" />
+    </svg>
+  );
+}
+
 export function IconSearch(props: IconProps) {
   return (
     <svg {...svgProps(props)}>

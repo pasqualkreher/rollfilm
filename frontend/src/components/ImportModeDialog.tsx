@@ -102,14 +102,13 @@ export function ImportModeDialog({
       <div className="modal pair-delete-modal import-start-modal" role="dialog" aria-modal="true" aria-label="Start import">
         <div className="pair-delete-body">
           <h3>New import session</h3>
-          <label className="filter-field filter-field-inline" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <label className="filter-field filter-field-inline import-start-name">
             <span>Name</span>
             <input
               type="text"
               value={name}
               placeholder={defaultName}
               onChange={(e) => setName(e.target.value)}
-              style={{ flex: 1 }}
               autoFocus
             />
           </label>

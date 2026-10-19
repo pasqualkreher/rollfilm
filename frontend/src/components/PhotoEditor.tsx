@@ -2406,8 +2406,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         // settle can be seconds of decode, so it says so. Cleared below once
         // the sharp frame is on the canvas (or by a later settle that finds
         // nothing owed: zoomed back out, or already sharp).
-        setNativePending(tier === "native");
-        setFullResPending(phase === "full" && rendering);
+        // ...and only while zoomed: at fit the climb to the screen's own
+        // size paints unannounced, as the user asked (no spinner).
+        setNativePending(tier === "native" && region !== null);
+        setFullResPending(phase === "full" && rendering && region !== null);
         let rearm = false;
         if (tier) {
           const dtoken = dirtyToken.current;

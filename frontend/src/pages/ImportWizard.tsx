@@ -19,6 +19,7 @@ import { ExternalSources } from "../components/ExternalSources";
 import { ImportLibrary } from "../components/ImportLibrary";
 import { ImportSessions, closeSessionTitle, confirmCloseSession } from "../components/ImportSessions";
 import { ImportModeDialog } from "../components/ImportModeDialog";
+import { MenuButton } from "../components/MenuButton";
 import { ImportSettingsDialog } from "../components/ImportSettingsPanel";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { ImportAlbumPicker } from "../components/ImportAlbumPicker";
@@ -41,8 +42,6 @@ import {
   type ReviewScrollAnchor,
 } from "../utils/importReviewState";
 import {
-  IconCheck,
-  IconChevronDown,
   IconDuplicate,
   IconFolder,
   IconGear,
@@ -85,29 +84,6 @@ function findIncompletePairs(files: StagedFileOut[]): StagedFileOut[] {
     }
   }
   return missingHalf;
-}
-
-// The import always flows Choose → Review (import folder) → Library. Showing
-// the three steps up front is what makes the import folder self-explanatory:
-// nothing reaches the library until step 3.
-function ImportSteps({ current }: { current: 1 | 2 | 3 }) {
-  const steps = ["Choose photos", "Review & select", "Added to library"];
-  return (
-    <ol className="import-steps" aria-label="Import steps">
-      {steps.map((label, i) => {
-        const n = i + 1;
-        const state = n === current ? " active" : n < current ? " done" : "";
-        return (
-          <li key={label} className={`import-step${state}`}>
-            <span className="import-step-num" aria-hidden>
-              {n < current ? <IconCheck size={11} /> : n}
-            </span>
-            {label}
-          </li>
-        );
-      })}
-    </ol>
-  );
 }
 
 // "Show in Finder" is the desktop app's: the web build has no file manager
@@ -332,10 +308,8 @@ export function ImportWizard() {
     syncAllToImmich,
     lightboxFileId,
   ]);
-  const [importMenuOpen, setImportMenuOpen] = useState(false);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
-  const importMenuRef = useRef<HTMLDivElement | null>(null);
   // Date-scrubber wiring for the review grid (same pattern as ThumbnailGrid's
   // groupByDate timeline): the grid root to find the scroller from, one DOM
   // node per day section, and the fixed bottom action bar whose height the
@@ -1357,24 +1331,37 @@ export function ImportWizard() {
     return () => el.removeEventListener("change", onChange);
   }, [stageFileList]);
 
-  // Close the import dropdown on an outside click or Escape.
-  useEffect(() => {
-    if (!importMenuOpen) return;
-    function onPointerDown(e: MouseEvent) {
-      if (importMenuRef.current && !importMenuRef.current.contains(e.target as Node)) {
-        setImportMenuOpen(false);
+  // The two pickers behind "Import photos". Desktop app: the native dialogs,
+  // and the backend reads the files straight from disk - no browser upload,
+  // which for a big SD card/drive is both much faster and immune to upload
+  // aborts; the review opens right away and fills as photos land. Browser
+  // build: the webkitdirectory picker / the file input.
+  async function pickFolderAndImport() {
+    const pickFolder = window.photoManager?.pickFolder;
+    if (pickFolder) {
+      const folder = await pickFolder();
+      if (folder) await importFolder(folder);
+      return;
+    }
+    folderInputRef.current?.click();
+  }
+  async function pickFilesAndImport() {
+    const pickFiles = window.photoManager?.pickFiles;
+    if (pickFiles) {
+      const picked = await pickFiles();
+      if (picked && picked.length > 0) {
+        setPickError(null);
+        const label =
+          picked.length === 1
+            ? picked[0].path.split("/").filter(Boolean).pop() || picked[0].path
+            : `${picked.length} selected files`;
+        const choice = await askImportMode(label);
+        if (choice) startFilesImport(picked, label, choice);
       }
+      return;
     }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setImportMenuOpen(false);
-    }
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [importMenuOpen]);
+    filesInputRef.current?.click();
+  }
 
   // The start dialog and the settings dialog, in both views: a folder dropped
   // on the window while a review is open asks the same questions as one
@@ -1408,63 +1395,52 @@ export function ImportWizard() {
     return (
       <div className="page">
         <h2 className="section-title">Import photos</h2>
-        <ImportSteps current={1} />
-        <p className="import-intro">
-          Photos come in through an <strong>import session</strong>: pick a card or folder, review
-          the photos, and add the ones you want to your library.
-        </p>
         <input ref={folderInputRef} type="file" multiple style={{ display: "none" }} />
         <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
         {startDialogs}
 
         <div className="import-panels">
-          <div className="import-panel import-panel--menu">
-            <div className="import-panel-head">
-              <h3 className="section-title">Import photos</h3>
+          <section className="settings-section">
+            <div className="settings-section-head">
+              <h3 className="settings-section-header">From a card, camera or folder</h3>
               <button
                 className="btn btn-sm"
                 onClick={() => setImportSettingsOpen(true)}
                 title="What a new session does unless you say otherwise"
               >
-                <IconGear size={13} /> Import settings…
+                <span className="btn-label"><IconGear size={13} /> Import settings…</span>
               </button>
             </div>
-            <p className="import-panel-desc">
+            <p className="page-subtitle">
               Bring photos from an SD card, camera, or folder into your library.
             </p>
-            <div className="import-menu" ref={importMenuRef}>
-              <button
+            {/* One button, two pickers behind it (the app's own action menu).
+                While an import runs it only says so - the figures go in the
+                note below, so the button keeps its width. */}
+            <div className="control-group">
+              <MenuButton
                 className="btn primary"
-                onClick={() => setImportMenuOpen((v) => !v)}
+                entries={[
+                  { id: "folder", label: <><IconFolder size={14} /> Choose folder…</> , search: "Choose folder" },
+                  { id: "files", label: <><IconImage size={14} /> Choose files…</>, search: "Choose files" },
+                ]}
+                onPick={(id) => void (id === "folder" ? pickFolderAndImport() : pickFilesAndImport())}
                 disabled={isUploading}
-                aria-haspopup="menu"
-                aria-expanded={importMenuOpen}
+                title="Choose a folder or single photos to import"
               >
-                {/* Working: the count can sit at 0 for a while on a slow
-                    card, so the spinner is what says it hasn't hung. */}
-                {isUploading && <Spinner tone="inherit" inline />}
-                {!isUploading
-                  ? <><IconImport size={13} /> Import photos <IconChevronDown size={12} /></>
-                  : folderImportActive
-                    ? totalFileCount
-                      ? `Importing… ${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}`
-                      : "Scanning folder…"
-                    : (uploadProgress ?? 0) >= 100
-                      ? `Processing files…${progressSuffix}`
-                      : `Importing… ${uploadProgress ?? 0}%${uploadEtaSuffix}`}
-              </button>
+                {isUploading ? <><Spinner tone="inherit" inline /> Importing…</> : <><IconImport size={13} /> Import photos</>}
+              </MenuButton>
               {/* Bail out of a long SD-card upload without waiting for it to
                   finish - aborts the in-flight request and clears the screen.
                   Hidden once the server is past receiving bytes ("Processing"),
                   since at that point the batch is already staging server-side. */}
               {isUploading && (uploadProgress ?? 0) < 100 && (
                 <button
-                  className="btn danger"
-                  style={{ marginLeft: 8 }}
+                  className="btn btn-sm quiet-danger"
                   onClick={() => void confirmCancelUpload()}
                   title="Stop and discard everything copied so far"
                 >
-                  <IconX size={13} /> Cancel
+                  <span className="btn-label"><IconX size={13} /> Cancel</span>
                 </button>
               )}
               {/* The other way out of a long copy: stop asking for more photos
@@ -1472,103 +1448,47 @@ export function ImportWizard() {
                   the first part of can go straight to review. */}
               {isUploading && canStopStaging && (
                 <button
-                  className="btn"
-                  style={{ marginLeft: 8 }}
+                  className="btn btn-sm"
                   onClick={stopStaging}
                   disabled={stagingStopped}
                   title="Stop copying and review the photos copied so far"
                 >
-                  <IconStop size={13} /> {stagingStopped ? "Stopping…" : "Stop & keep"}
+                  <span className="btn-label"><IconStop size={13} /> {stagingStopped ? "Stopping…" : "Stop & keep"}</span>
                 </button>
               )}
-              <Presence open={importMenuOpen && !isUploading} ms={MOTION.pop}>
-                {importMenuOpen && !isUploading && (
-                  <div className="import-menu-dropdown" role="menu">
-                    <button
-                      className="import-menu-item"
-                      role="menuitem"
-                      onClick={async () => {
-                        setImportMenuOpen(false);
-                        // Desktop app: use the native folder dialog and let the
-                        // backend read the files straight from disk - no browser
-                        // upload, which for a big SD card/drive is both much
-                        // faster and immune to upload aborts. Browser build
-                        // falls back to the webkitdirectory picker.
-                        const pickFolder = window.photoManager?.pickFolder;
-                        if (pickFolder) {
-                          const folder = await pickFolder();
-                          if (folder) await importFolder(folder);
-                          return;
-                        }
-                        folderInputRef.current?.click();
-                      }}
-                    >
-                      <IconFolder size={14} /> Choose folder…
-                    </button>
-                    <button
-                      className="import-menu-item"
-                      role="menuitem"
-                      onClick={async () => {
-                        setImportMenuOpen(false);
-                        // Desktop app: native file dialog + backend reads the
-                        // files straight from disk - the same incremental
-                        // staging as a folder import (review opens right away,
-                        // grid fills as photos land) instead of a browser
-                        // upload that only shows the grid once everything is
-                        // through. Browser build falls back to the file input.
-                        const pickFiles = window.photoManager?.pickFiles;
-                        if (pickFiles) {
-                          const picked = await pickFiles();
-                          if (picked && picked.length > 0) {
-                            setPickError(null);
-                            const label =
-                              picked.length === 1
-                                ? picked[0].path.split("/").filter(Boolean).pop() || picked[0].path
-                                : `${picked.length} selected files`;
-                            const choice = await askImportMode(label);
-                            if (choice) startFilesImport(picked, label, choice);
-                          }
-                          return;
-                        }
-                        filesInputRef.current?.click();
-                      }}
-                    >
-                      <IconImage size={14} /> Choose files…
-                    </button>
-                  </div>
-                )}
-              </Presence>
             </div>
             {/* The same thing the window-wide drop does, made visible: a target
-                that says dropping works. Clicking it opens the picker menu. */}
+                that says dropping works. Clicking it opens the folder picker. */}
             <button
               type="button"
               className="import-dropzone"
-              onClick={() => setImportMenuOpen(true)}
+              onClick={() => void pickFolderAndImport()}
               disabled={isUploading}
             >
               <IconImport size={22} />
               <strong>Drop a card, folder or photos here</strong>
-              <span>…or anywhere on this window. Click to choose instead.</span>
+              <span>…or anywhere on this window. Click to choose a folder instead.</span>
             </button>
             {isUploading && (
-              <p className="import-panel-desc" style={{ color: "var(--text-muted)", marginTop: 12 }}>
+              <p className="status-note" role="status" aria-live="polite">
+                {/* Working: the count can sit at 0 for a while on a slow
+                    card, so the spinner is what says it hasn't hung. */}
                 {folderImportActive
                   ? totalFileCount
-                    ? `Photos are being ${inPlace ? "read" : "copied"} and analyzed in the background. Nothing is added to your library until you have reviewed them.`
+                    ? `${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}. Photos are being ${inPlace ? "read" : "copied"} and analyzed in the background. Nothing is added to your library until you have reviewed them.`
                     : "Looking for photos in the selected folder…"
-                  : "Photos are being received. The review screen opens as soon as they are copied."}
+                  : (uploadProgress ?? 0) >= 100
+                    ? `Processing files…${progressSuffix}`
+                    : `${uploadProgress ?? 0}%${uploadEtaSuffix}. Photos are being received. The review screen opens as soon as they are copied.`}
               </p>
             )}
             {pickError && <p className="status-note status-note--error">{pickError}</p>}
-            {uploadError && (
-              <p className="import-panel-desc" style={{ color: "var(--danger)", marginTop: 12 }}>Upload failed: {uploadError}</p>
-            )}
-          </div>
+            {uploadError && <p className="status-note status-note--error">Upload failed: {uploadError}</p>}
+          </section>
 
           <ImportSessions />
 
-          <h3 className="import-panels-heading">Other ways to add photos</h3>
+          <h3 className="settings-subhead import-panels-heading">Other ways to add photos</h3>
 
           <ImportLibrary />
 
@@ -1585,112 +1505,16 @@ export function ImportWizard() {
   return (
     <div className="page page-timeline">
       {startDialogs}
-      <div className="import-review-head">
-        <ImportSteps current={roll ? 3 : 2} />
-        {/* Title and explanation run on in one line; the header stays three
-            lines tall on a wide window instead of five. */}
-        <div className="import-review-intro">
-          <h2 className="section-title">Review &amp; choose what to keep</h2>
-          <p className="import-review-sub">
-            From <strong>{sourceLabel}</strong>.{" "}
-            {importedCount > 0
-              ? `${plural(importedCount, "photo")} already in your library.`
-              : "Nothing is in your library yet."}{" "}
-            {inPlace && "Added photos stay where they are. "}
-            Select what to keep, then click "Add to library".
-          </p>
-        </div>
-        {/* A session can collect from more than one card or folder - add the
-            next one without leaving the review. Desktop only: it needs native
-            paths the backend reads itself. What the buttons are for is in
-            their tooltips; the session's folder shares the row. */}
-        {(nativePick?.pickFolder || sessionFolder) && (
-          <div className="import-add-row">
-            {nativePick?.pickFolder && (
-              <>
-                <button
-                  className="btn btn-sm"
-                  onClick={addFolderToOpenSession}
-                  disabled={isUploading}
-                  title={addHint}
-                >
-                  <IconFolder size={12} /> Add folder…
-                </button>
-                {nativePick.pickFiles && (
-                  <button
-                    className="btn btn-sm"
-                    onClick={addFilesToOpenSession}
-                    disabled={isUploading}
-                    title={addHint}
-                  >
-                    <IconImage size={12} /> Add photos…
-                  </button>
-                )}
-              </>
-            )}
-            {sessionFolder && <ImportFolder folder={sessionFolder} backup={sessionBackup} />}
-          </div>
-        )}
-        {/* Background copying still running: photos keep appearing, and the
-            commit button below stays disabled until this finishes. */}
-        {stagingInBackground && (
-          <p className="import-staging-banner" role="status" aria-live="polite">
-            <Spinner /> Still {inPlace ? "reading" : "copying"} photos in the background…{" "}
-            {liveStagedCount != null && totalFileCount != null
-              ? `${liveStagedCount.toLocaleString()} / ${totalFileCount.toLocaleString()}${
-                  copyEta != null ? ` · ~${formatEta(copyEta)} left` : ""
-                }`
-              : ""}{" "}
-            You can start reviewing now.
-            <button
-              className="btn btn-sm"
-              onClick={stopStaging}
-              disabled={stagingStopped}
-              title={`Stop ${inPlace ? "reading" : "copying"} and keep the photos ${inPlace ? "read" : "copied"} so far`}
-            >
-              <IconStop size={12} /> {stagingStopped ? "Stopping…" : inPlace ? "Stop" : "Stop copying"}
-            </button>
-          </p>
-        )}
-        {/* Stopped on purpose: the batch is short because the user said so.
-            Without this the review just looks like an import that lost half
-            the card. */}
-        {stoppedEarly && (
-          <p className="import-staging-banner" role="status">
-            {inPlace ? "Reading" : "Copying"} stopped. The {plural(files?.length ?? 0, "photo")}{" "}
-            {inPlace ? "read" : "copied"} so far {(files?.length ?? 0) === 1 ? "is" : "are"} shown below.{" "}
-            {sessionResumable
-              ? `Continue this session later to ${inPlace ? "add" : "copy"} the rest.`
-              : "To get the rest, import the same source again later."}
-          </p>
-        )}
-        {sourceNotice && (
-          <p className="import-staging-banner" role="status">
-            {sourceNotice}
-          </p>
-        )}
-        {roll && roll.sessionId === sessionId && (
-          <ImportRollSheet sessionId={roll.sessionId} added={roll.added} albumName={roll.albumName} />
-        )}
-        {/* Copying done, background analysis (thumbnails/EXIF/duplicates)
-            still catching up: placeholders fill in as it runs. */}
-        {analyzingInBackground && (
-          <p className="import-staging-banner" role="status" aria-live="polite">
-            <Spinner /> Analyzing photos in the background…{" "}
-            {analysisTotal > 0
-              ? `${analysisProcessed.toLocaleString()} / ${analysisTotal.toLocaleString()}`
-              : ""}{" "}
-            You can review now; importing unlocks when the analysis is done.
-          </p>
-        )}
-        {stagingError && !stagingInBackground && (
-          <p className="import-staging-banner import-staging-banner--error" role="alert">
-            Some photos could not be loaded ({stagingError}). You can still import the ones shown
-            below.
-          </p>
-        )}
-      </div>
+      {/* The source heads the bar like an album's name heads its bar; what
+          the bar used to say in a paragraph is the count pill. */}
       <PhotoFilters
+        title={
+          <>
+            <span className="bar-title-sub">Import</span>
+            <span className="bar-title-name">{sourceLabel}</span>
+            <span className="count-pill">{plural(files?.length ?? 0, "photo")}</span>
+          </>
+        }
         viewMode={viewMode}
         onViewMode={setViewMode}
         ratingMin={ratingMin}
@@ -1733,7 +1557,92 @@ export function ImportWizard() {
           </button>
         }
       >
+        {/* A session can collect from more than one card or folder - add the
+            next one without leaving the review. Desktop only: it needs native
+            paths the backend reads itself. */}
+        {nativePick?.pickFolder && (
+          <>
+            <button className="btn btn-sm" onClick={addFolderToOpenSession} disabled={isUploading} title={addHint}>
+              <span className="btn-label"><IconFolder size={13} /> Add folder…</span>
+            </button>
+            {nativePick.pickFiles && (
+              <button className="btn btn-sm" onClick={addFilesToOpenSession} disabled={isUploading} title={addHint}>
+                <span className="btn-label"><IconImage size={13} /> Add photos…</span>
+              </button>
+            )}
+          </>
+        )}
       </PhotoFilters>
+      {/* Status lines under the bar: the session's folder, copying or
+          analysis still running, a stop, a source notice, an error. Plain
+          notes in the bar's inset, like every other page's. */}
+      {(sessionFolder || stagingInBackground || stoppedEarly || sourceNotice || analyzingInBackground || (stagingError && !stagingInBackground)) && (
+        <div className="import-notes">
+          {sessionFolder && (
+            <p className="status-note">
+              <ImportFolder folder={sessionFolder} backup={sessionBackup} />
+            </p>
+          )}
+          {/* Background copying still running: photos keep appearing, and the
+              commit button below stays disabled until this finishes. */}
+          {stagingInBackground && (
+            <p className="status-note" role="status" aria-live="polite">
+              <Spinner /> Still {inPlace ? "reading" : "copying"} photos in the background…{" "}
+              {liveStagedCount != null && totalFileCount != null
+                ? `${liveStagedCount.toLocaleString()} / ${totalFileCount.toLocaleString()}${
+                    copyEta != null ? ` · ~${formatEta(copyEta)} left` : ""
+                  }`
+                : ""}{" "}
+              You can start reviewing now.
+              <button
+                className="btn btn-sm"
+                onClick={stopStaging}
+                disabled={stagingStopped}
+                title={`Stop ${inPlace ? "reading" : "copying"} and keep the photos ${inPlace ? "read" : "copied"} so far`}
+              >
+                <IconStop size={12} /> {stagingStopped ? "Stopping…" : inPlace ? "Stop" : "Stop copying"}
+              </button>
+            </p>
+          )}
+          {/* Stopped on purpose: the batch is short because the user said so.
+              Without this the review just looks like an import that lost half
+              the card. */}
+          {stoppedEarly && (
+            <p className="status-note" role="status">
+              {inPlace ? "Reading" : "Copying"} stopped. The {plural(files?.length ?? 0, "photo")}{" "}
+              {inPlace ? "read" : "copied"} so far {(files?.length ?? 0) === 1 ? "is" : "are"} shown below.{" "}
+              {sessionResumable
+                ? `Continue this session later to ${inPlace ? "add" : "copy"} the rest.`
+                : "To get the rest, import the same source again later."}
+            </p>
+          )}
+          {sourceNotice && (
+            <p className="status-note" role="status">
+              {sourceNotice}
+            </p>
+          )}
+          {/* Copying done, background analysis (thumbnails/EXIF/duplicates)
+              still catching up: placeholders fill in as it runs. */}
+          {analyzingInBackground && (
+            <p className="status-note" role="status" aria-live="polite">
+              <Spinner /> Analyzing photos in the background…{" "}
+              {analysisTotal > 0
+                ? `${analysisProcessed.toLocaleString()} / ${analysisTotal.toLocaleString()}`
+                : ""}{" "}
+              You can review now; importing unlocks when the analysis is done.
+            </p>
+          )}
+          {stagingError && !stagingInBackground && (
+            <p className="status-note status-note--error" role="alert">
+              Some photos could not be loaded ({stagingError}). You can still import the ones shown
+              below.
+            </p>
+          )}
+        </div>
+      )}
+      {roll && roll.sessionId === sessionId && (
+        <ImportRollSheet sessionId={roll.sessionId} added={roll.added} albumName={roll.albumName} />
+      )}
       <div className="page-scroll">
       <div className="filter-bar action-bar--bottom" ref={actionBarRef}>
         {/* The library's bulk bar, as a row of its own on top of this one:
@@ -1829,8 +1738,7 @@ export function ImportWizard() {
           )}
           {immichConfigured && immichMode === "full" && (
             <span
-              className="filter-field filter-field-inline"
-              style={{ color: "var(--text-muted)" }}
+              className="filter-field filter-field-inline status-note"
               title="Change this under Settings → Immich integration → Sync mode"
             >
               <IconRotate size={13} /> Immich full sync is on. Every imported photo is uploaded automatically.
@@ -1875,7 +1783,7 @@ export function ImportWizard() {
             )}
           </button>
         </div>
-        <div className="control-group" style={{ marginLeft: "auto" }}>
+        <div className="control-group control-group--trailing">
           {/* Closes the review, keeps the session: it is listed on the Import
               page to continue - selection, ratings and copies all as left. */}
           <button
@@ -1887,7 +1795,7 @@ export function ImportWizard() {
             disabled={commit.isPending || discard.isPending}
             title="Keep the session open and come back from the Import page. Nothing is deleted."
           >
-            <IconBookmark size={14} /> Continue later
+            <span className="btn-label"><IconBookmark size={13} /> Continue later</span>
           </button>
           <button
             className="btn"
@@ -1913,9 +1821,7 @@ export function ImportWizard() {
                 Closing…
               </>
             ) : (
-              <>
-                <IconLeave size={14} /> Close session
-              </>
+              <span className="btn-label"><IconLeave size={13} /> Close session</span>
             )}
           </button>
         </div>

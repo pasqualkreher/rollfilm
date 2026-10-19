@@ -292,18 +292,11 @@ export function Albums() {
     <div className="page albums-page" ref={pageRef}>
       <h2 className="section-title">Albums</h2>
 
-      {/* What was just imported first, then the albums the user made, then
+      {/* The albums the user made first, under the page's own title, then
           everything the app worked out by itself - their own work is what
-          they come here for, and nine automatic rows used to push it to the
-          bottom of the page. */}
-      {/* The rolls: one per import. Photos from before rolls existed that
-          no import session remembers keep their import days. */}
-      {hasSmart && <SmartRow title="Rolls" items={smart.rolls ?? []} />}
-      {hasSmart && <SmartRow title="Other imports" items={smart.imports ?? []} />}
-
-      <h3 className="smart-row-title">My albums</h3>
+          they come here for. */}
       <form
-        className="import-toolbar album-create-form"
+        className="album-create-row album-create-form"
         onSubmit={(e) => {
           e.preventDefault();
           if (name.trim()) createAlbum.mutate();
@@ -430,6 +423,10 @@ export function Albums() {
             <SmartRowSkeleton title="Moments" hint="Analyzing your photos…" />
           )}
           <MomentsRow items={smart.clusters} />
+          {/* The rolls: one per import. Photos from before rolls existed that
+              no import session remembers keep their import days. */}
+          <SmartRow title="Rolls" items={smart.rolls ?? []} />
+          <SmartRow title="Other imports" items={smart.imports ?? []} />
           <SmartRow title="Places" items={smart.places} />
           <SmartRow title="Countries" items={smart.countries} />
           <SmartRow title="Countries by year" items={smart.country_years} />

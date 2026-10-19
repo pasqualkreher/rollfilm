@@ -143,8 +143,8 @@ export function ImportSessions() {
   // The panel stays whether or not a session is open, so the page below it
   // never jumps when the last one closes.
   return (
-    <section className="import-panel">
-      <h3 className="section-title">
+    <section className="settings-section">
+      <h3 className="settings-section-header">
         Open import sessions
         {open.length > 0 && (
           <span className="import-panel-count">
@@ -172,10 +172,9 @@ export function ImportSessions() {
               // must not wrap them under a long import-folder path.
               <div
                 key={s.id}
-                className={`source-row${waiting.length > 0 ? " disconnected" : ""}`}
-                style={{ flexWrap: "nowrap" }}
+                className={`source-row source-row--nowrap${waiting.length > 0 ? " disconnected" : ""}`}
               >
-                <div className="source-row-main" style={{ flex: 1, minWidth: 0 }}>
+                <div className="source-row-main">
                   <span className="source-name">
                     {s.source_path}
                     {s.mode === "reference" && (

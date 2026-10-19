@@ -114,18 +114,15 @@ export function Canvases() {
     queryClient.invalidateQueries({ queryKey: ["facets"] });
   }
 
-  const openView = (id: string) => navigate(`/canvas/${id}/view`);
+  // A canvas with nothing placed yet has no view worth showing: it opens in
+  // the editor, where the photos go onto the page.
+  const open = (canvas: CanvasSummary) =>
+    navigate(canvas.item_count === 0 ? `/canvas/${canvas.id}` : `/canvas/${canvas.id}/view`);
 
   return (
     <div className="page" ref={pageRef}>
       <h2 className="section-title">Canvas</h2>
-      <p className="page-subtitle" style={{ color: "var(--text-muted)", marginTop: -8 }}>
-        Place photos by hand on pages or an endless sheet, then print or export. Click a canvas to
-        preview it, the pencil edits it. To add photos, select them in the Library or an album and
-        choose <em>Add to… → canvas</em>.
-      </p>
-
-      <div className="album-create-row" style={{ display: "flex", gap: 8, margin: "16px 0" }}>
+      <div className="album-create-row">
         <label className="name-field">
           <span className="name-field-icon" aria-hidden>
             <IconCanvas size={16} />
@@ -161,10 +158,10 @@ export function Canvases() {
               className="canvas-list-card"
               role="button"
               tabIndex={0}
-              title={`Show “${canvas.name}”`}
-              onClick={() => openView(canvas.id)}
+              title={canvas.item_count === 0 ? `Edit “${canvas.name}”` : `Show “${canvas.name}”`}
+              onClick={() => open(canvas)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") openView(canvas.id);
+                if (event.key === "Enter") open(canvas);
               }}
             >
               <CardPreview preview={canvas.preview} />

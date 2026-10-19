@@ -21,7 +21,7 @@ import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { FlagPicker } from "../components/FlagPicker";
 import { useSelectionExport } from "../components/SelectionExport";
-import { AddToPicker, type AddToResult } from "../components/AddToPicker";
+import { AddToPicker, useAddToNotice, type AddToResult } from "../components/AddToPicker";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { Dropdown } from "../components/Dropdown";
@@ -44,11 +44,9 @@ import { shortcutLabel, surveyState, useSelectionKeys } from "../utils/selection
 import { useBarHeight } from "../utils/useBarHeight";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import type { ContextActions } from "../components/PhotoContextMenu";
-import { useTransientMessage, useTransientValue } from "../utils/transientMessage";
 import { Presence } from "../components/Presence";
 import { MOTION } from "../utils/usePresence";
 import { LoadingState } from "../components/Spinner";
-import { ActionBarMessages } from "../components/ActionBarMessages";
 // The JPEG options of "Apply ... and save copy".
 type CopyOpts = { quality: number; maxSize: number | null };
 
@@ -222,26 +220,15 @@ function LibraryPage() {
   const { data: immich } = useQuery({ queryKey: ["immich-settings"], queryFn: () => api.settings.getImmich() });
   const immichConfigured = Boolean(immich?.base_url && immich?.api_key_set && immich.enabled);
   const [immichBusy, setImmichBusy] = useState(false);
-  // Both flash messages auto-dismiss after a moment.
-  const [immichMsg, setImmichMsg] = useTransientMessage();
   const [developBusy, setDevelopBusy] = useState(false);
-  const [developMsg, setDevelopMsg] = useTransientMessage();
-  // Adding to an album is otherwise invisible (the dropdown just snaps back to
-  // its placeholder), so confirm it in the action bar's message row - same place
-  // the tag note appears. Carries its own error flag since a failed add must not
-  // read like a success.
-  const [albumMsg, setAlbumMsg] = useTransientValue<{ text: string; error: boolean }>();
-  // A failed bulk action. Not transient like the notes above: it stays until
-  // it is dismissed, the next action starts or the selection is dropped.
-  const [barError, setBarError] = useState<string | null>(null);
-  function dismissMessages() {
-    setImmichMsg(null);
-    setDevelopMsg(null);
-    setAlbumMsg(null);
-    setBarError(null);
-  }
 
-  const { runTask, trackRenders, trackCopyJob, runBatches, hasTask, pushUndo } = useTasks();
+  const { runTask, trackRenders, trackCopyJob, runBatches, hasTask, pushUndo, notify } = useTasks();
+  // What a bulk action leaves behind - "Added tag “x” to 12 photos.", an
+  // Immich reply, a failure - stands in the title bar's task dock for a
+  // moment; a failure stays until dismissed or the next outcome replaces it.
+  const report = (text: string) => notify({ label: text });
+  const reportError = (text: string) => notify({ label: text, error: true });
+  const addToNotice = useAddToNotice();
   // Every bulk action of this page runs as one task in the title bar, counted
   // down there with a Stop, and one at a time: the develop picker is off while
   // one runs, and a second one started regardless is refused (TaskBusyError).
@@ -461,9 +448,6 @@ function LibraryPage() {
   function clearSelection() {
     setSelected(new Set());
     setLastIndex(null);
-    // The bar goes with the selection - and must not come back later with
-    // an old failure still written on it.
-    dismissMessages();
   }
 
   // A rubber band's result (utils/useMarquee): the whole selection at once.
@@ -606,7 +590,6 @@ function LibraryPage() {
           const next = new Set(Array.from(prev).filter((x) => !gone.has(x)));
           if (next.size === 0 && prev.size > 0) {
             setLastIndex(null);
-            dismissMessages();
           }
           return next;
         });
@@ -628,7 +611,7 @@ function LibraryPage() {
         (ids) => api.images.bulkAddTags(ids, [tag]),
         true
       );
-      setDevelopMsg(`Added tag “${tag}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
+      report(`Added tag “${tag}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
     } finally {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
@@ -653,24 +636,33 @@ function LibraryPage() {
     return n;
   }
 
-  // The same words for the Find similar dialog, which reports in its own
-  // footer (the bar's message row sits behind the modal).
-  function addToNote({ kind, name, ok }: AddToResult, count: number): [string, boolean] {
-    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
+  function reportAddTo(result: AddToResult, count = takeAddedCount()) {
+    const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
     partialAddRef.current = null;
-    return ok ? [`Added ${plural(count, "photo")} to ${what}.`, false] : [`Could not add to ${what}.`, true];
+    addToNotice(result, count, cancelNote);
   }
 
-  function reportAddTo({ kind, name, ok }: AddToResult) {
-    const cancelNote = partialAddRef.current !== null ? CANCELLED_NOTE : "";
-    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
-    setAlbumMsg(
-      ok
-        ? { text: `Added ${plural(takeAddedCount(), "photo")} to ${what}.${cancelNote}`, error: false }
-        : { text: `Could not add to ${what}.`, error: true },
-      // A failure stays until it is dismissed or the next action runs.
-      { keep: !ok }
-    );
+  // The right-click menu's add: the same report as the bar's picker, which
+  // the menu has no part in.
+  async function addFromMenu(kind: AddToResult["kind"], id: string, name: string, ids: string[]) {
+    try {
+      await (kind === "canvas" ? addSelectedToCanvas(id, ids) : addSelectedToAlbum(id, ids));
+      queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+      reportAddTo({ kind, id, name, ok: true }, partialAddRef.current ?? ids.length);
+    } catch {
+      reportAddTo({ kind, id, name, ok: false });
+    }
+  }
+
+  // The Find similar dialog's add: the dialog closes on success so the dock's
+  // line (and its Open link) is in reach - the modal covers the title bar.
+  // A failure keeps the dialog open and says so in its footer.
+  function reportPickAddTo(result: AddToResult, count: number, close: () => void, note: (text: string, error: boolean) => void) {
+    if (result.ok) {
+      reportAddTo(result, count);
+      close();
+    } else note(`Could not add to ${result.kind === "canvas" ? "canvas " : ""}“${result.name}”.`, true);
   }
 
   async function addSelectedToAlbum(albumId: string, target: string[] = Array.from(selected)) {
@@ -705,8 +697,8 @@ function LibraryPage() {
     onRate: (ids, rating) => applyBulk({ rating }, ids),
     onColor: (ids, label) => applyBulk({ color_label: label }, ids),
     onFlag: (ids, flag) => applyBulk({ flag }, ids),
-    onAddToAlbum: (ids, albumId) => addSelectedToAlbum(albumId, ids),
-    onAddToCanvas: (ids, canvasId) => addSelectedToCanvas(canvasId, ids),
+    onAddToAlbum: (ids, albumId, name) => addFromMenu("album", albumId, name, ids),
+    onAddToCanvas: (ids, canvasId, name) => addFromMenu("canvas", canvasId, name, ids),
     onAddTag: (ids, name) => addTagToSelected(name, ids),
     onAutoEdit: (ids, copy) => (copy ? autoDevelopAndCopy(ids) : autoDevelopSelected(undefined, ids)),
     onApplyPreset: (ids, name, copy) => (copy ? applyPresetAndCopy(name, ids) : applyPresetToSelected(name, undefined, ids)),
@@ -768,8 +760,6 @@ function LibraryPage() {
     )
       return;
     setDevelopBusy(true);
-    setDevelopMsg(null);
-    setBarError(null);
     try {
       const { done, results, cancelled } = await batch(
         "Auto-developing photos…",
@@ -778,7 +768,7 @@ function LibraryPage() {
       );
       const applied = results.reduce((n, r) => n + r.applied, 0);
       const skipped = results.reduce((n, r) => n + r.skipped, 0);
-      setDevelopMsg(
+      report(
         (skipped > 0
           ? `Auto-developed ${plural(applied, "photo")}. Skipped ${skipped} with no similar edits to learn from.`
           : `Auto-developed ${plural(applied, "photo")}.`) + (cancelled ? CANCELLED_NOTE : "")
@@ -788,7 +778,7 @@ function LibraryPage() {
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       if (copyOpts) await startCopies(results.flatMap((r) => r.applied_ids), copyOpts);
     } catch (e) {
-      setBarError(errorText(e));
+      reportError(errorText(e));
     } finally {
       setDevelopBusy(false);
     }
@@ -812,21 +802,19 @@ function LibraryPage() {
     )
       return;
     setDevelopBusy(true);
-    setDevelopMsg(null);
-    setBarError(null);
     const look = presetAdjustments(preset) as unknown as Record<string, unknown>;
     try {
       const { done, cancelled } = await batch("Applying preset…", target, (ids) =>
         api.images.bulkDevelop(ids, look)
       );
-      setDevelopMsg(`Applied preset “${name}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
+      report(`Applied preset “${name}” to ${plural(done.length, "photo")}.${cancelled ? CANCELLED_NOTE : ""}`);
       // The pictures render in the background: the title bar counts them down.
       trackRenders(done);
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       if (copyOpts) await startCopies(done, copyOpts);
     } catch (e) {
-      setBarError(errorText(e));
+      reportError(errorText(e));
     } finally {
       setDevelopBusy(false);
     }
@@ -840,7 +828,7 @@ function LibraryPage() {
     if (ids.length === 0) return;
     const { job_id, total } = await api.images.copyJobStart(ids, { quality: opts.quality, max_size: opts.maxSize });
     trackCopyJob(job_id, total);
-    setDevelopMsg(`Edit applied — saving ${total} ${total === 1 ? "copy" : "copies"} in the background.`);
+    report(`Edit applied — saving ${total} ${total === 1 ? "copy" : "copies"} in the background.`);
   }
 
   async function askCopyOptions(): Promise<CopyOpts | null> {
@@ -861,8 +849,6 @@ function LibraryPage() {
   async function addSelectedToImmich(target: string[] = Array.from(selected)) {
     if (target.length === 0) return;
     setImmichBusy(true);
-    setImmichMsg(null);
-    setBarError(null);
     try {
       // Shown in the title bar while the photos are handed over; the uploads
       // themselves then show as the Immich sync task.
@@ -870,9 +856,9 @@ function LibraryPage() {
         { id: "immich:push", kind: "plain", label: "Adding to Immich…" },
         () => api.images.pushToImmich(target)
       );
-      setImmichMsg(result.message);
+      report(result.message);
     } catch (e) {
-      setBarError(errorText(e));
+      reportError(errorText(e));
     } finally {
       setImmichBusy(false);
     }
@@ -884,18 +870,16 @@ function LibraryPage() {
   async function toggleSelectedImmichSync(enabled: boolean, target: string[] = Array.from(selected)) {
     if (target.length === 0) return;
     setImmichBusy(true);
-    setImmichMsg(null);
-    setBarError(null);
     try {
       const updated = await api.images.setImmichSync(target, enabled);
-      setImmichMsg(
+      report(
         enabled
           ? `${plural(updated.length, "photo")} marked for Immich sync. Uploading in the background.`
           : `Stopped syncing ${plural(updated.length, "photo")} to Immich.`
       );
       queryClient.invalidateQueries({ queryKey: ["images"] });
     } catch (e) {
-      setBarError(errorText(e));
+      reportError(errorText(e));
     } finally {
       setImmichBusy(false);
     }
@@ -941,7 +925,7 @@ function LibraryPage() {
                   disabled={chosen.length === 0}
                   onAddToAlbum={(albumId) => addSelectedToAlbum(albumId, chosen)}
                   onAddToCanvas={(canvasId) => addSelectedToCanvas(canvasId, chosen)}
-                  onResult={(result) => note(...addToNote(result, chosen.length))}
+                  onResult={(result) => reportPickAddTo(result, chosen.length, close, note)}
                 />
                 <button
                   className="btn primary"
@@ -1207,15 +1191,6 @@ function LibraryPage() {
             >
               <IconTrash size={15} />
             </button>
-            <ActionBarMessages
-              messages={[
-                immichMsg ? { text: immichMsg } : null,
-                developMsg ? { text: developMsg } : null,
-                albumMsg,
-                barError ? { text: barError, error: true } : null,
-              ]}
-              onDismiss={dismissMessages}
-            />
           </div>
         )}
       </Presence>

@@ -69,8 +69,9 @@ export interface ContextActions {
   // What the stars, swatches and flag show for these photos: their shared
   // values, or nothing where they differ.
   meta?: (ids: string[]) => { rating: number; colorLabel: ColorLabel; flag?: Flag | null };
-  onAddToAlbum?: (ids: string[], albumId: string) => void | Promise<unknown>;
-  onAddToCanvas?: (ids: string[], canvasId: string) => void | Promise<unknown>;
+  // With the target's name, for the line that reports the add.
+  onAddToAlbum?: (ids: string[], albumId: string, name: string) => void | Promise<unknown>;
+  onAddToCanvas?: (ids: string[], canvasId: string, name: string) => void | Promise<unknown>;
   onAddTag?: (ids: string[], name: string) => void | Promise<unknown>;
   // Develop: the automatic edit, a saved preset; `copy` = and save a copy of
   // every photo afterwards. The presets are read when the menu opens.
@@ -206,7 +207,7 @@ function ListSubmenu({
   kind: SubKind;
   anchor: DOMRect;
   items?: SubItem[];
-  onPick: (id: string) => void;
+  onPick: (id: string, name: string) => void;
   onNew: () => void;
   onClose: () => void;
 }) {
@@ -229,12 +230,12 @@ function ListSubmenu({
   const { newLabel, empty } = SUB_TEXT[kind];
   const ids = [...list.map((a) => a.id), ...(newLabel ? [NEW] : [])];
   const labelOf = (id: string) => (id === NEW ? newLabel ?? "" : list.find((a) => a.id === id)?.name ?? "");
-  const { cursor, setCursor } = useMenuKeys({
+  const { lit, setCursor } = useMenuKeys({
     open: true,
     ids,
     initial: ids[0] ?? null,
     labelOf,
-    onPick: (id) => (id === NEW ? onNew() : onPick(id)),
+    onPick: (id) => (id === NEW ? onNew() : onPick(id, labelOf(id))),
     onClose,
     onLeft: onClose,
   });
@@ -272,9 +273,9 @@ function ListSubmenu({
             type="button"
             role="menuitem"
             data-menu-id={a.id}
-            className={`ctx-menu-item${cursor === a.id ? " cursor" : ""}`}
-            onMouseEnter={() => setCursor(a.id)}
-            onClick={() => onPick(a.id)}
+            className={`ctx-menu-item${lit === a.id ? " cursor" : ""}`}
+            onMouseEnter={() => setCursor(a.id, true)}
+            onClick={() => onPick(a.id, a.name)}
           >
             {a.name}
           </button>
@@ -287,8 +288,8 @@ function ListSubmenu({
             type="button"
             role="menuitem"
             data-menu-id={NEW}
-            className={`ctx-menu-item${cursor === NEW ? " cursor" : ""}`}
-            onMouseEnter={() => setCursor(NEW)}
+            className={`ctx-menu-item${lit === NEW ? " cursor" : ""}`}
+            onMouseEnter={() => setCursor(NEW, true)}
             onClick={onNew}
           >
             {newLabel}
@@ -310,7 +311,7 @@ function Menu({
   menu: OpenMenu;
   entries: Entry[];
   onClose: () => void;
-  onSubPick: (kind: SubKind, id: string) => void;
+  onSubPick: (kind: SubKind, id: string, name: string) => void;
   onSubNew: (kind: SubKind) => void;
   // Set by <Presence> while the menu animates out.
   closing?: boolean;
@@ -327,7 +328,7 @@ function Menu({
     const item = items.find((i) => i.id === id);
     if (el && item?.submenu) setSub({ item, anchor: el.getBoundingClientRect() });
   };
-  const { cursor, setCursor } = useMenuKeys({
+  const { lit: keyCursor, setCursor } = useMenuKeys({
     open: !closing,
     paused: sub !== null,
     ids: items.map((i) => i.id),
@@ -349,7 +350,7 @@ function Menu({
   // The pointer resting on an item with a submenu opens it; moving onto
   // another row closes it.
   const hover = (item: Item) => {
-    setCursor(item.id);
+    setCursor(item.id, true);
     window.clearTimeout(hoverTimer.current);
     if (item.submenu) hoverTimer.current = window.setTimeout(() => openSub(item.id), SUBMENU_HOVER_MS);
     else setSub(null);
@@ -389,7 +390,7 @@ function Menu({
                 {entry.node}
               </div>
             );
-          const lit = cursor === entry.id || sub?.item.id === entry.id;
+          const lit = keyCursor === entry.id || sub?.item.id === entry.id;
           return (
             <button
               key={entry.id}
@@ -423,7 +424,7 @@ function Menu({
           kind={sub.item.submenu}
           anchor={sub.anchor}
           items={sub.item.items}
-          onPick={(id) => onSubPick(sub.item.submenu!, id)}
+          onPick={(id, name) => onSubPick(sub.item.submenu!, id, name)}
           onNew={() => onSubNew(sub.item.submenu!)}
           onClose={() => setSub(null)}
         />
@@ -545,7 +546,7 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     if (!name) return;
     const created = await api.albums.create(name);
     queryClient.invalidateQueries({ queryKey: ["albums"] });
-    await actions?.onAddToAlbum?.(t.ids, created.id);
+    await actions?.onAddToAlbum?.(t.ids, created.id, name);
   }
 
   async function newCanvas(t: Target) {
@@ -553,7 +554,7 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     if (!name) return;
     const created = await api.canvases.create(name);
     queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
-    await actions?.onAddToCanvas?.(t.ids, created.id);
+    await actions?.onAddToCanvas?.(t.ids, created.id, name);
   }
 
   // One aspect (or all of them) back to the imported state, after a word of
@@ -716,16 +717,16 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
   }
 
   // What a row of a submenu does.
-  function subPick(kind: SubKind, id: string) {
+  function subPick(kind: SubKind, id: string, name: string) {
     const t = target();
     setMenu(null);
     if (!t) return;
     switch (kind) {
       case "album":
-        void actions?.onAddToAlbum?.(t.ids, id);
+        void actions?.onAddToAlbum?.(t.ids, id, name);
         break;
       case "canvas":
-        void actions?.onAddToCanvas?.(t.ids, id);
+        void actions?.onAddToCanvas?.(t.ids, id, name);
         break;
       case "tag":
         void actions?.onAddTag?.(t.ids, id);

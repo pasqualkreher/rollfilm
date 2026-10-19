@@ -91,26 +91,26 @@ export function ExternalSources() {
   });
 
   return (
-    <section className="import-panel">
-      <h3 className="section-title">External photo sources</h3>
+    <section className="settings-section">
+      <h3 className="settings-section-header">External photo sources</h3>
       <p className="import-panel-desc">
         Show photos from a folder, such as a NAS, without copying them. Sources are scanned at
         startup and when you click scan. Folders left in place by an import scan only on request.
       </p>
-      <div className="import-toolbar" style={{ flexWrap: "wrap" }}>
+      <div className="import-toolbar import-toolbar--wrap">
         <input
           type="text"
           placeholder="Name (e.g. NAS photos)"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          style={{ minWidth: 180 }}
+          className="import-toolbar-name"
         />
         <input
           type="text"
           placeholder="/sources/nas-photos"
           value={path}
           onChange={(e) => setPath(e.target.value)}
-          style={{ minWidth: 220, flex: 1 }}
+          className="import-toolbar-path"
         />
         <button className="btn" onClick={handleBrowse}>
           <IconFolder size={13} /> Browse…

@@ -8,18 +8,24 @@ import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { FlagPicker } from "../components/FlagPicker";
 import { COLOR_KEYS, FLAG_KEYS, SURVEY_MIN, takesTyping } from "../utils/selection";
 import { isModalOpen } from "../utils/modalKeys";
-import { rememberLastViewedImage } from "../utils/lastViewed";
+import { peekLastViewedImage, rememberLastViewedImage } from "../utils/lastViewed";
 import { preloadImage } from "../utils/preload";
 
 // Two to six photos side by side, to decide between them: the keys of any
 // grid act on the framed photo (stars, colour, A / X / U), X also takes it out
-// of the survey, Esc goes back to the grid with the selection kept. Opened
-// with N or the right-click menu (utils/selection.surveyState).
+// of the survey, Esc goes back to the grid with the selection kept. A click or
+// Enter opens the framed photo in the photo view, which pages through the
+// survey's photos only; Esc there comes back here. Opened with N or the
+// right-click menu (utils/selection.surveyState).
 export interface SurveyState {
   imageIds: string[];
-  // The grid's order, for the photo view's paging when one is opened.
+  // The grid's order (kept for callers; the survey itself pages only its own).
   order?: string[];
   returnTo: string;
+  // Written into this history entry before a photo is opened, so coming back
+  // finds the survey as it was left (see SurveyView.open).
+  removed?: string[];
+  active?: number;
 }
 
 export function Survey() {
@@ -28,17 +34,25 @@ export function Survey() {
   if (!state || !Array.isArray(state.imageIds) || state.imageIds.length < SURVEY_MIN) {
     return <Navigate to="/" replace />;
   }
-  return <SurveyView key={state.imageIds.join(",")} ids={state.imageIds} order={state.order} returnTo={state.returnTo} />;
+  return <SurveyView key={state.imageIds.join(",")} state={state} />;
 }
 
 type Patch = { rating?: number; color_label?: ColorLabel; flag?: Flag | "" };
 
-function SurveyView({ ids, order, returnTo }: { ids: string[]; order?: string[]; returnTo: string }) {
+function SurveyView({ state }: { state: SurveyState }) {
+  const { imageIds: ids, returnTo } = state;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [active, setActive] = useState(0);
+  // Back from the photo view: the frame goes to the photo that was on screen
+  // there, the rest of the survey comes from the history entry.
+  const [active, setActive] = useState(() => {
+    const last = peekLastViewedImage();
+    const i = last ? ids.indexOf(last) : -1;
+    return i >= 0 && !state.removed?.includes(last!) ? i : state.active ?? 0;
+  });
   // Taken out with X: the cell stays (nothing else moves), only its photo goes.
-  const [removed, setRemoved] = useState<Set<string>>(() => new Set());
+  const [removed, setRemoved] = useState<Set<string>>(() => new Set(state.removed ?? []));
+  const kept = useMemo(() => ids.filter((id) => !removed.has(id)), [ids, removed]);
 
   const rows = useQueries({
     queries: ids.map((id) => ({ queryKey: ["image", id], queryFn: () => api.images.get(id) })),
@@ -95,13 +109,25 @@ function SurveyView({ ids, order, returnTo }: { ids: string[]; order?: string[];
   function leave() {
     const current = ids[active];
     if (current) rememberLastViewedImage(current);
-    const kept = ids.filter((id) => !removed.has(id));
     navigate(returnTo, { state: { reselect: kept.length > 0 ? kept : ids } });
   }
 
+  // The photo view over the survey's photos. The survey's own state goes
+  // into its history entry first: Esc in the photo view is navigate(-1), which
+  // mounts this view again from that entry.
+  function openAt(i: number) {
+    const id = ids[i];
+    if (!id || removed.has(id)) return;
+    navigate(".", { replace: true, state: { ...state, removed: [...removed], active: i } satisfies SurveyState });
+    navigate(`/image/${id}`, { state: { imageIds: kept } });
+  }
+  function open() {
+    openAt(active);
+  }
+
   // Fresh closures each render, one window listener (see utils/selection).
-  const latest = useRef({ active, removed, byId, patch, remove, leave, remaining });
-  latest.current = { active, removed, byId, patch, remove, leave, remaining };
+  const latest = useRef({ active, removed, byId, patch, remove, leave, remaining, open, kept });
+  latest.current = { active, removed, byId, patch, remove, leave, remaining, open, kept };
   useEffect(() => {
     function act(key: string): boolean {
       const { active, removed, byId, patch, remove } = latest.current;
@@ -130,7 +156,7 @@ function SurveyView({ ids, order, returnTo }: { ids: string[]; order?: string[];
       const target = e.target as HTMLElement | null;
       if (target && takesTyping(target)) return;
       if (isModalOpen()) return;
-      const { active, leave, remaining } = latest.current;
+      const { active, leave, remaining, open } = latest.current;
       if (e.key === "Escape") {
         e.preventDefault();
         leave();
@@ -142,10 +168,8 @@ function SurveyView({ ids, order, returnTo }: { ids: string[]; order?: string[];
         e.preventDefault();
         setActive(remaining(active, e.key === "ArrowRight" ? 1 : -1));
       } else if (e.key === "Enter") {
-        const id = ids[active];
-        if (!id) return;
         e.preventDefault();
-        navigate(`/image/${id}`, { state: { imageIds: order ?? ids } });
+        open();
       } else if (!e.shiftKey && act(e.key)) {
         e.preventDefault();
       }
@@ -154,7 +178,7 @@ function SurveyView({ ids, order, returnTo }: { ids: string[]; order?: string[];
     function onAppMenu(e: Event) {
       const { action, value } = (e as CustomEvent<{ action: string; value?: string | number }>).detail;
       if (isModalOpen()) return;
-      const { active, byId, patch, remove } = latest.current;
+      const { active, byId, patch, remove, kept } = latest.current;
       const id = ids[active];
       const row = id ? byId.get(id) : undefined;
       if (!id || !row) return;
@@ -164,7 +188,7 @@ function SurveyView({ ids, order, returnTo }: { ids: string[]; order?: string[];
         const flag = String(value ?? "") as Flag | "";
         void patch(id, { flag });
         if (flag === "reject") remove(id);
-      } else if (action === "photo:edit") navigate(`/image/${id}/edit`, { state: { imageIds: order ?? ids } });
+      } else if (action === "photo:edit") navigate(`/image/${id}/edit`, { state: { imageIds: kept } });
     }
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("pm:app-menu", onAppMenu);
@@ -172,19 +196,19 @@ function SurveyView({ ids, order, returnTo }: { ids: string[]; order?: string[];
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("pm:app-menu", onAppMenu);
     };
-  }, [ids, order, navigate]);
+  }, [ids, navigate]);
 
   const n = ids.length;
   const columns = Math.min(n, 3);
   const rowsCount = n > 3 ? 2 : 1;
-  const left = ids.filter((id) => !removed.has(id)).length;
+  const left = kept.length;
 
   return (
     <div className="page survey-page">
       <div className="survey-bar">
         <span className="survey-bar-title">Survey</span>
         <span className="count-pill">{left} of {n}</span>
-        <span className="survey-bar-hint">← → frame · 0–5 stars · 6–9 colour · A pick · X reject &amp; take out · ↩ open · Esc back</span>
+        <span className="survey-bar-hint">← → frame · 0–5 stars · 6–9 colour · A pick · X reject &amp; take out · click / ↩ open · Esc back</span>
         <button type="button" className="btn btn-sm" onClick={leave}>
           Done
         </button>
@@ -200,7 +224,11 @@ function SurveyView({ ids, order, returnTo }: { ids: string[]; order?: string[];
             <figure
               key={id}
               className={`survey-cell${i === active ? " active" : ""}${gone ? " removed" : ""}`}
-              onClick={() => !gone && setActive(i)}
+              onClick={() => {
+                if (gone) return;
+                setActive(i);
+                openAt(i);
+              }}
             >
               <div className="survey-stage">
                 {row && !gone && (

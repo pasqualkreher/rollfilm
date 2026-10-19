@@ -140,6 +140,10 @@ interface TasksState {
   // stars, labels, flags, the Trash, an album removal: "12 photos rejected ·
   // Undo". One at a time; the next change replaces it.
   pushUndo: (opts: { label: string; title?: string; undo: () => void | Promise<unknown>; ms?: number }) => void;
+  // The grey outcome line after an action - "Added 12 photos to canvas
+  // “Wall”" - with, where there is somewhere to go, a link ("Open canvas").
+  // One at a time; the next replaces it. An error stays until dismissed.
+  notify: (opts: { label: string; title?: string; error?: boolean; action?: TaskFinish["action"] }) => void;
 }
 
 const RENDER_POLL_MS = 600;
@@ -432,6 +436,25 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     [removeTask, upsertTask]
   );
 
+  const noticeSeq = useRef(0);
+  const notify = useCallback(
+    (opts: { label: string; title?: string; error?: boolean; action?: TaskFinish["action"] }) => {
+      for (const t of tasksRef.current) if (t.id.startsWith("notice:")) removeTask(t.id);
+      const id = `notice:${++noticeSeq.current}`;
+      upsertTask({
+        id,
+        kind: "plain",
+        label: opts.label,
+        quiet: true,
+        title: opts.title,
+        cancel: null,
+        finished: { label: opts.label, action: opts.action, error: opts.error },
+      });
+      if (!opts.error) finishTimers.current.set(id, window.setTimeout(() => removeTask(id), FINISH_MS));
+    },
+    [removeTask, upsertTask]
+  );
+
   // --- the pictures of a bulk edit -----------------------------------------
   // The edit itself returns as soon as the rows are written and the backend
   // re-renders in the background; this follows those renders until the last
@@ -668,7 +691,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     <TasksContext.Provider
       value={{
         tasks, hasTask, startTask, runTask, runBatches, trackPolledJob, cancelTask, dismissTask,
-        upsertTask, removeTask, trackRenders, cancelRenders, trackCopyJob, trackExportJob, pushUndo,
+        upsertTask, removeTask, trackRenders, cancelRenders, trackCopyJob, trackExportJob, pushUndo, notify,
       }}
     >
       {children}

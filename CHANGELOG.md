@@ -4,6 +4,27 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.1.99 — 2026-10-19
+
+### New
+- **Swap photos on the canvas**: drag a photo onto the middle of another and drop it on “Swap photos”. Alike shapes keep both frames; a portrait for a landscape on a page set as a layout sets the page again in its reading order, so the rows reach the margins as before, and swapping back gives the page exactly as it was. On a free page the two frames reshape to their photos at the same size, clear of their neighbours. ⌘Z takes a swap back in one step.
+- **Drop takes the free space**: a photo dropped from the filmstrip takes the empty area where it lands, inside the margins and clear of its neighbours; with the grid on it sits on the grid. The ghost shows the frame before you let go.
+- **Fill free space (G)** grows the selected photo into the empty area around it. With every photo of a page selected (⌘A) it sets the page as a whole, like Auto-arrange for that one page, in the photos' reading order.
+- **Pages in the rail take photos**: drag a photo from the page onto a page card to move it there, onto a frame on that card to swap the two across pages, or onto “Add a page” for a page of its own. The rail scrolls while you hold a photo near its edge.
+- **Page sizes**: the common photo-book and print sizes (A-series, Letter and Tabloid, book sizes from compact to XL and three squares, lab prints from 9×13 cm to 16×20 in), each once, grouped and searchable, with a Landscape/Portrait switch beside the list.
+- **Survey**: a click or Enter opens the framed photo in the photo view, which pages through the survey's photos only; Esc comes back to the survey as it was left.
+
+### Improved
+- The Import page looks like the rest of the app: the review's source and count head the toolbar, Add folder/Add photos sit in the bar, the step strip and the tinted banners are plain status lines, and the start page's cards are Settings-style sections with the app's own menu behind "Import photos". The button keeps its width while an import runs.
+- Adding to an album or canvas, Immich uploads and bulk develops report in the title bar's task dock, with an Open link where there is somewhere to go; the message row under the selection bar is gone.
+- Moving or resizing a frame also snaps to a neighbour's edge at the layout gap (6 mm), not only flush. A frame let go outside the page view goes back where it came from.
+- Several selected frames are marked clearly: a two-pixel accent outline with a light halo, readable on paper and on dark photos.
+- Auto-arrange by time picks its pauses from how the photos spread: a year of photos breaks by day, a day by hour, an hour by minute.
+- Clear canvas also removes the extra pages; the canvas starts over with one empty page. Leaving an empty canvas's editor goes back to the list.
+- Colour grading wheels: a drag with Shift held moves the puck at a quarter of the pointer's pace, the arrow keys nudge it (← → hue, ↑ ↓ saturation, Shift for tenths), and values keep a decimal.
+- In the editor the climb to the screen's full size after a slider rests no longer shows the small spinner at fit view; zoomed-in native renders still say so.
+- Albums and Canvas start with their create field right under the title; Rolls and Other imports moved down to the automatic rows; the intro texts on Canvas and Import and the canvas toolbar's "How this works" list are gone.
+
 ## 0.1.98 — 2026-10-18
 
 ### New

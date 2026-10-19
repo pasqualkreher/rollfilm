@@ -19,8 +19,12 @@ export function CanvasDetail() {
   // reads list → view again and Forward can reopen the editor. Came here
   // straight from the list's pencil or a freshly made canvas: the view takes
   // the editor's slot, so Back from the view is the list - not the editor.
-  const leaveEditor = () => {
-    if (previousPath === `/canvas/${id}/view`) navigate(-1);
+  // A canvas that is still empty has no view to show: back goes to the list
+  // (the list opened it straight into the editor, so the view was never on
+  // the stack).
+  const leaveEditor = (empty: boolean) => {
+    if (empty) navigate("/canvas", { replace: previousPath !== "/canvas" });
+    else if (previousPath === `/canvas/${id}/view`) navigate(-1);
     else navigate(`/canvas/${id}/view`, { replace: true });
   };
 

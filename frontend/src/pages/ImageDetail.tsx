@@ -9,7 +9,7 @@ import { FlagPicker } from "../components/FlagPicker";
 import { PhotoEditor } from "../components/PhotoEditor";
 import { TagEditor } from "../components/TagEditor";
 import { MembershipChips } from "../components/MembershipChips";
-import { AddToPicker } from "../components/AddToPicker";
+import { AddToPicker, useAddToNotice } from "../components/AddToPicker";
 import { useAppDialogs } from "../components/AppDialogs";
 import { MiniMap } from "../components/MiniMap";
 import { setDetailPanelOpen, useAskSaveCopyOptions, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
@@ -76,6 +76,7 @@ export function ImageDetail() {
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const { runTask, pushUndo } = useTasks();
+  const addToNotice = useAddToNotice();
   const { previousPath } = useNavHistory();
   const [activeId, setActiveId] = useState(id!);
   // Passed from the Library grid so arrow keys can zap through the same
@@ -1557,6 +1558,7 @@ export function ImageDetail() {
               <AddToPicker
                 onAddToAlbum={addToAlbum}
                 onAddToCanvas={addToCanvas}
+                count={idsWithPair().length}
               />
             </div>
           </div>
@@ -1698,9 +1700,13 @@ export function ImageDetail() {
                   disabled={chosen.length === 0}
                   onAddToAlbum={async (albumId) => { await api.albums.addImages(albumId, chosen); queryClient.invalidateQueries({ queryKey: ["albums"] }); }}
                   onAddToCanvas={async (canvasId) => { await api.canvases.addImages(canvasId, chosen); invalidateCanvas(canvasId); }}
-                  onResult={({ kind, name, ok }) => {
-                    const what = kind === "canvas" ? `canvas “${name}”` : `“${name}”`;
-                    note(ok ? `Added ${chosen.length} photo${chosen.length === 1 ? "" : "s"} to ${what}.` : `Could not add to ${what}.`, !ok);
+                  // Success closes the dialog so the dock's line (and its Open
+                  // link) is in reach - the modal covers the title bar.
+                  onResult={(result) => {
+                    if (result.ok) {
+                      addToNotice(result, chosen.length);
+                      close();
+                    } else note(`Could not add to ${result.kind === "canvas" ? "canvas " : ""}“${result.name}”.`, true);
                   }}
                 />
               </>

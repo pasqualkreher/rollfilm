@@ -82,8 +82,8 @@ export function ImportLibrary() {
   if (!electron?.pickFolder) return null;
 
   return (
-    <div className="import-panel">
-      <h3 className="section-title">Import a library</h3>
+    <section className="settings-section">
+      <h3 className="settings-section-header">Import a library</h3>
       <p className="import-panel-desc">
         Merge another Rollfilm library into this one. Ratings, labels, edits, tags and albums come
         along. The other library is only read.
@@ -162,6 +162,6 @@ export function ImportLibrary() {
 
       {progress?.error && <p className="status-note status-note--error">{progress.error}</p>}
       {error && <p className="status-note status-note--error">{error}</p>}
-    </div>
+    </section>
   );
 }
