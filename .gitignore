@@ -28,6 +28,8 @@ __pycache__/
 htmlcov/
 # virtualenvs
 .venv/
+# uv's lock: the backend pins through requirements.lock (pip), see the workflows.
+uv.lock
 venv/
 env/
 ENV/
