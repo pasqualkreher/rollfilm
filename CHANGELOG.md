@@ -4,6 +4,25 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.1.100 — 2026-10-21
+
+### New
+- **Import review: select by dragging** a rectangle over the cards, as in the Library; ⌘-click, Shift-click and ⌘A work as before.
+- **Add a library by dropping it**: drag a library folder from the Finder onto the Library tab of the Import page; the page checks it and offers to merge it.
+- **Back and Forward through the import**: the title bar's Back goes from the preview to the review and from the review to the Import page; Forward brings them back, the review with its filters and scroll position, the preview with its photo.
+
+### Improved
+- The Import page is one tabbed start: Card or folder, Library and External sources, with Import settings… at the end of the row. The drop target holds Choose folder… and Choose files…; open sessions sit below it with Continue, rename and close.
+- The review's toolbar says "k of n to import · m added" and has one Add… menu for folders and files. The bottom row keeps Close session and Continue later on the left, Album and Immich beside Import all, Import none and Add N photos on the right.
+- Review cards: stars and colour swatches sit under the photo with the Import checkbox; a card to import carries an accent frame instead of the others being dimmed.
+- The import preview has one row under the photo: the card's stars, colours and Import box on the left, background and zoom in the middle, name, kind, counter and Info on the right. Its own Back button is gone; the title bar's Back and the Import tab close it.
+- The Import tab steps one level up while you are on the Import page (preview → review → Import page) and never ends a session; from any other tab it returns to where you last were.
+- After an import the Import page goes back to its start; the roll is under Albums › Rolls.
+- The editor's and the photo view's control row give way step by step on a narrow stage (the Slideshow word, then the 200/400 zoom steps, then a second line) instead of breaking wherever the width runs out.
+- The photo view's info panel shows the flag beside the stars.
+- The narrow window's menu lists the modules only; Trash, Statistics, Settings and Help keep their icon buttons at every width.
+- Survey is gone: the side-by-side view (N) was taken out again, together with its menu entries and Help rows.
+
 ## 0.1.99 — 2026-10-19
 
 ### New
