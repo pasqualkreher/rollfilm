@@ -1588,23 +1588,54 @@ summary.whats-new-version-title {
 }
 
 /* The centred bar under a photo (photo view, editor, import lightbox): full
-   width, a hairline above, the controls centred. The 160px side padding keeps
-   them clear of the right-flush pair (.stage-end) without pulling them off
-   centre; position: relative anchors that pair and the left-flush Back. It is
-   a size container so its rows tighten on the stage's width, not the
-   window's. Only this modifier may carry the container: on the canvas
-   toolbar it would trap its popovers under the canvas. */
+   width, a hairline above, the controls centred; position: relative anchors
+   whatever a variant pins to an edge. It is a size container so its rows
+   tighten on the stage's width, not the window's. Only this modifier may
+   carry the container: on the canvas toolbar it would trap its popovers
+   under the canvas. The layout itself is the variants': .stage-bar (editor,
+   photo view) and .lightbox-stage-bar (import preview). */
 .filter-bar--stage {
   position: relative;
   flex: none;
   justify-content: center;
   margin: 0;
-  padding: 0 160px;
+  padding: 0 12px;
   border: none;
   border-top: 1px solid var(--bar-sep);
   border-radius: 0;
   container-type: inline-size;
   container-name: stage-toolbar;
+}
+
+/* The editor's and the photo view's row: one centred group (.stage-centre:
+   background, zoom, compares, the photo view's slideshow) and the pair flush
+   right (.stage-end: Edit/View + Panel). A grid, as the import preview's
+   row: the outer columns share the room, so the group sits on the stage's
+   centre line until the pair really needs more than its half, then shifts
+   left by only that much. It used to be 160px gutters on both sides and the
+   pair taken out of the flow - the left gutter was dead (no Back in this
+   row since the top bar's took over) and the row broke wherever its width
+   ran out, through the middle of the groups. What gives way as the stage
+   narrows is decided further down (the container queries by .zoom-readout). */
+.stage-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
+  grid-template-areas: "lead centre end";
+  align-items: center;
+  column-gap: 16px;
+}
+
+.stage-bar > .stage-centre {
+  grid-area: centre;
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bar-gap);
+}
+
+.stage-bar > .stage-end {
+  grid-area: end;
+  justify-self: end;
 }
 
 /* A page with a docked filter bar becomes a fixed-header column: the page itself
@@ -1708,10 +1739,35 @@ summary.whats-new-version-title {
 /* The import review's selection row: a line of its own above the bar's
    standing controls, with the extra foot room that taller bar needs. */
 .action-bar-selection {
-  flex-basis: 100%;
+  /* The bar's full width, side padding included (the margins below pull
+     the row out through it on both sides). */
+  flex-basis: calc(100% + 2 * var(--bar-pad-x));
+  box-sizing: border-box;
   /* Wider than the swatches' own spacing, so count, stars, colours and the
      import box read as four things rather than one run of symbols. */
   column-gap: 20px;
+  /* A hairline under it, the bar's own and edge to edge (the row reaches
+     out through the bar's side padding), so the two rows read as the
+     selection over the standing controls. */
+  margin: 0 calc(-1 * var(--bar-pad-x));
+  padding: 0 var(--bar-pad-x) 6px;
+  border-bottom: 1px solid var(--bar-sep);
+  /* Rises into the bar as the library's bar rises into the window (same
+     curve and time), fading in so the moment it passes behind the standing
+     controls doesn't show; sinks back out when the selection clears (the
+     page keeps it mounted for the exit - see Presence). */
+  animation: pm-rise-in 0.26s var(--ease-out) backwards, pm-fade-in 0.26s var(--ease-out) backwards;
+}
+
+.action-bar-selection.pm-closing {
+  animation: pm-rise-out 0.2s var(--ease-in) both, pm-fade-out 0.2s var(--ease-in) both;
+  pointer-events: none;
+}
+
+/* The standing controls paint over the row while it is on its way. */
+.action-bar--bottom > .control-group:not(.action-bar-selection) {
+  position: relative;
+  z-index: 1;
 }
 
 /* With no vertical padding the selection row would sit on the bar's top
@@ -1732,6 +1788,34 @@ summary.whats-new-version-title {
 
 .page:has(.action-bar-selection) .page-scroll {
   padding-bottom: 140px;
+}
+
+/* The selection row's Import box: the card footer's, at the bar's size.
+   Quiet while the picked photos are left out, the accent once they (or some
+   of them) come in - the one thing in the row that says what happens. */
+.import-check--bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* A step clear of the colour swatches before it, past the row's own gap. */
+  margin-left: 12px;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.import-check--bar svg {
+  flex: none;
+}
+
+.import-check--bar input {
+  margin-left: 3px;
+}
+
+.import-check--bar.on {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* Narrow windows: the selection bar wraps onto several rows - cap it and let
@@ -3749,29 +3833,21 @@ textarea:focus-visible {
   container-type: inline-size;
 }
 
-/* Not going to be imported: a veil in the skin's own background colour over
-   the photo, lifted while the pointer is on the card so it can still be judged
-   at full strength. A painted layer rather than a `filter` on the img - a
-   batch that arrives unticked dims every tile at once, and a filter would make
-   each of them a compositing layer of its own. Above the img, which becomes a
-   layer while it fades in or is hovered and would otherwise paint over it; the
-   selection checkbox shares this level and, coming later, stays on top. */
-.import-card.skipped .thumb-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: color-mix(in srgb, var(--bg) 58%, transparent);
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: 1;
-  transition: opacity 0.12s ease;
+/* Going to be imported: the card's own frame turns to the accent, a hairline
+   of shadow outside it making a 2px line that moves nothing. No photo is ever
+   dimmed - a card left out looks exactly like the others, only unframed, so
+   every photo is judged at full strength. (The selection ring on the photo
+   itself is the library's, unchanged: a ticked and picked card shows both.) */
+.import-card {
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.import-card.skipped .thumb-card:hover::before {
-  opacity: 0;
+.import-card--in {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
-/* The selection ring stays at full strength on a dimmed card. */
+/* The selection ring stays above the checkbox and badges. */
 .import-card .thumb-card.selected::after {
   z-index: 2;
 }
@@ -3922,6 +3998,22 @@ textarea:focus-visible {
   gap: 1px;
 }
 
+/* The stars and swatches are there to be used, not to be looked at: quiet
+   under every card, full strength while the pointer is on the card - and on
+   a card that has a rating or a colour, which is information. */
+.import-card-footer .rating-stars,
+.import-card-footer .color-label-picker {
+  opacity: 0.45;
+  transition: opacity 0.12s ease;
+}
+
+.import-card:hover .import-card-footer .rating-stars,
+.import-card:hover .import-card-footer .color-label-picker,
+.import-card-footer .rating-stars:has(.filled),
+.import-card-footer .color-label-picker:has(.color-swatch.selected:not(.color-swatch-none)) {
+  opacity: 1;
+}
+
 .import-card-footer .rating-stars button {
   font-size: var(--sym);
   line-height: 1;
@@ -4056,6 +4148,11 @@ textarea:focus-visible {
   overflow: hidden;
   /* Full bleed: the stage box and the toolbar row below it fill the column. */
   padding: 0;
+  /* The column is a size container (as the photo view's .detail-main): the
+     control row under the image cannot query itself, so the rule that
+     re-flows it into two lines asks the column, which is as wide as the row. */
+  container-type: inline-size;
+  container-name: stage-main;
 }
 
 /* The image box - same treatment as the lightbox's .detail-image: the stage
@@ -4097,13 +4194,13 @@ textarea:focus-visible {
 
 /* The editor's row under the image (background steps, zoom, hold-to-compare,
    the two compare modes) is the shared stage bar: `filter-bar
-   filter-bar--stage editor-bg-toggle` in the markup, so its height, inset,
-   hairline, the right-flush .stage-end anchor and the stage-toolbar size
-   container all come from there - the same bar the photo view has
-   (.detail-image-toolbar). Everything but the zoom steps is icon-only (the
-   words live in the tooltips), so the row fits one line even in a narrow
-   stage; the base's wrap stays as the last-resort fallback. The class stays
-   for the stacked-layout rule that drops the side gutters. */
+   filter-bar--stage stage-bar editor-bg-toggle` in the markup, so its
+   height, hairline, the grid with the right-flush .stage-end column and the
+   stage-toolbar size container all come from there - the same bar the photo
+   view has (.detail-image-toolbar). Everything but the zoom steps is
+   icon-only (the words live in the tooltips); what gives way on a narrow
+   stage, and the two-line layout below that, are the .stage-bar container
+   queries after .zoom-readout. */
 
 /* The baseline switch, a divider, then the compares it feeds - one unit, so the
    row wraps around it rather than through it. Same gap as the row itself. */
@@ -5317,17 +5414,8 @@ input.editor-preset-select {
     padding: 16px;
   }
 
-  /* No room for a reserved gutter here - Back rejoins the row as its first
-     item and wraps with the rest. */
-  .editor-bg-toggle {
-    padding-left: 0;
-    padding-right: 0;
-  }
-
-  .editor-bg-toggle .stage-back-btn {
-    position: static;
-    transform: none;
-  }
+  /* The control row needs nothing of its own here: it has no gutters to drop
+     (.stage-bar), and its narrow-stage steps fire on the stage's width. */
 
   .editor-panel {
     width: 100%;
@@ -5376,71 +5464,11 @@ input.editor-preset-select {
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 
-.lightbox-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px 24px;
-  color: #fff;
-  font-size: var(--text-base);
-  flex-wrap: wrap;
-  flex-shrink: 0;
-  justify-content: space-between;
-  width: min(90vw, 900px);
-  padding: 12px 18px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-lg);
-  backdrop-filter: blur(8px);
-}
-
-.lightbox-controls-meta,
-.lightbox-controls-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-/* Small screens: the photo needs the room more than the decorative band does,
-   and the control bar should span the full width instead of overflowing it. */
+/* Small screens: the photo needs the room more than the band around it. */
 @media (max-width: 700px) {
   .lightbox-overlay {
     padding: 14px 8px;
   }
-
-  .lightbox-controls {
-    width: 100%;
-    padding: 10px 12px;
-    gap: 8px 16px;
-  }
-}
-
-.lightbox-filename {
-  font-weight: 600;
-  max-width: 40ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lightbox-counter {
-  color: rgba(255, 255, 255, 0.55);
-}
-
-.lightbox-import-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.1);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.lightbox-import-toggle.disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
 }
 
 .badge-inline {
@@ -6195,6 +6223,13 @@ input.dropdown-search {
   gap: 2px;
 }
 
+/* Detail panel: the stars and the flag picker share one row. */
+.detail-rating-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 /* The flag picker beside the stars: pick (tick) and reject (cross), the lit
    one in its colour. */
 .flag-picker {
@@ -6697,34 +6732,45 @@ input.dropdown-search {
 }
 
 /* The Import page's visible drop target (the drop itself is the window's). */
+/* The Import page's one panel: the drop target with the two pickers inside
+   it. A box, not a button - the buttons are the clicks. */
 .import-dropzone {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   width: 100%;
-  margin: 12px 0;
-  padding: 18px 16px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 36px 16px 30px;
   border: 1px dashed var(--border);
   border-radius: var(--radius-lg);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  cursor: pointer;
   transition: border-color 0.12s ease, color 0.12s ease;
 }
 
-.import-dropzone:hover:not(:disabled) {
+.import-dropzone:hover:not(.disabled),
+.import-dropzone.dragover {
   border-color: var(--accent);
   color: var(--text);
 }
 
 .import-dropzone strong {
   color: var(--text);
+  font-size: var(--text-md);
 }
 
-.import-dropzone span {
+.import-dropzone > span {
   font-size: var(--text-sm);
+}
+
+/* The pickers, a step under the line, and a step over the small print. */
+.import-dropzone-actions {
+  justify-content: center;
+  margin: 8px 0 6px;
+  min-height: var(--control-h-sm);
 }
 
 .empty-state-report {
@@ -6789,6 +6835,12 @@ input.dropdown-search {
   min-height: 0;
   /* Full bleed, as .editor-stage. */
   padding: 0;
+  /* A size container, as .editor-stage: the control row under the photo
+     cannot query itself, so the rule that re-flows it into two lines asks
+     the column, which is as wide as the row. (The import preview's column
+     adds its own name below, .lightbox-detail-layout > .detail-main.) */
+  container-type: inline-size;
+  container-name: stage-main;
 }
 
 .detail-image {
@@ -6950,12 +7002,11 @@ input.dropdown-search {
 
 /* The row under the photo (photo view, import lightbox) is the shared stage
    bar - `filter-bar filter-bar--stage detail-image-toolbar` in the markup -
-   so the layout, the hairline above, the 160px gutters that keep the centred
-   controls clear of the right-flush pair (.stage-end: Edit/View + Panel) and
-   the stage-toolbar size container all come from .filter-bar--stage. The
-   same compact, icon-first row as the editor's (.editor-bg-toggle); the gaps
-   tighten on narrow stages and wrapping is the last resort. The class stays
-   for the stacked-layout rule that drops the gutters. */
+   so the hairline above and the stage-toolbar size container come from
+   .filter-bar--stage, the grid (centred group, the Edit/View + Panel pair
+   flush right) from .stage-bar - the same compact, icon-first row as the
+   editor's (.editor-bg-toggle). What gives way on a narrow stage is below,
+   after the zoom control. */
 
 /* Zoom control under the photo (ZoomReadout): the Fit / 100% / 200% steps and
    the live percentage. One row, same height as the background toggle beside
@@ -6989,26 +7040,98 @@ input.dropdown-search {
   }
 }
 
-/* The bar's own insets can't follow its container query (a container
-   doesn't query itself), so they step down with the window: with the side
-   panel open a 900px window leaves the stage ~560px, a 720px window ~400px.
-   The insets keep the centred group clear of Back on the left and the
-   Edit/Panel pair on the right; 100px is what those need with their words,
-   84px once the pair keeps only its glyphs. Panel hidden, the stage is
-   wider than it needs to be for these - no harm. */
-@media (max-width: 900px) {
-  .filter-bar--stage {
-    padding: 0 100px;
+/* What gives way as the editor's and the photo view's row (.stage-bar)
+   narrows - the side panel open in a smaller window - measured on the row
+   itself, in this order: the word on the slideshow button (photo view), the
+   200%/400% steps, the words on Edit/View and Panel, then Fit/100% - the
+   percentage stays (double-click, scroll and Esc still zoom). Only below
+   that does the row go to two lines (next block). Each threshold is what the
+   row needs with the item still there plus ~20px: the photo view's row with
+   everything is ~880px (background 98, zoom 250, compares 201, slideshow 95,
+   dividers and gaps 42, the Edit/Panel pair 138, the grid's gaps and insets
+   56); the editor's ~810px (compares 235 with the snapshot step, no
+   slideshow, View/Panel 144). One set of thresholds for both: the editor
+   loses a step at most 10px before it had to. */
+@container stage-toolbar (max-width: 900px) {
+  .stage-bar .slideshow-btn .stage-btn-text {
+    display: none;
   }
 }
 
-@media (max-width: 800px) {
-  .filter-bar--stage {
-    padding: 0 84px;
+@container stage-toolbar (max-width: 840px) {
+  .stage-bar .zoom-readout .segmented button:nth-child(n + 3) {
+    display: none;
+  }
+}
+
+@container stage-toolbar (max-width: 735px) {
+  .stage-bar .stage-switch-btn .stage-btn-text,
+  .stage-bar .detail-panel-toggle .stage-btn-text {
+    display: none;
+  }
+}
+
+@container stage-toolbar (max-width: 665px) {
+  .stage-bar .zoom-readout .segmented {
+    display: none;
+  }
+}
+
+/* Below what one line holds with everything optional gone (~545px), the row
+   opens a second line on purpose rather than breaking wherever the width
+   runs out: the pair leaves the flow and sits flush right, centred over
+   both lines (the right inset reserves its room: pair 70 + 12 edge + 12
+   air), the divider after the zoom turns into the line break (.stage-break),
+   so background and zoom take the first line and the compares (and the
+   slideshow) the second, each centred. The zoom steps come back - the first
+   line has the room again - until the stage is narrower than that line
+   (next block). A 720px window with the panel open leaves ~400px: two lines
+   of 150 and ~250px beside the pinned pair. Queried on the column
+   (stage-main: .editor-stage, .detail-main), which is as wide as the row. */
+@container stage-main (max-width: 565px) {
+  .stage-bar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 6px 16px;
+    padding: 6px 94px 6px 12px;
   }
 
-  .stage-switch-btn .stage-btn-text,
-  .detail-panel-toggle .stage-btn-text {
+  .stage-bar > .stage-centre {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 6px;
+  }
+
+  .stage-bar .stage-break {
+    flex: 0 0 100%;
+    width: auto;
+    height: 0;
+    background: none;
+  }
+
+  .stage-bar > .stage-end {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .stage-bar .zoom-readout .segmented {
+    display: inline-flex;
+  }
+
+  .stage-bar .zoom-readout .segmented button:nth-child(n + 3) {
+    display: inline-block;
+  }
+}
+
+/* The first line with all four steps is ~356px; beside the pinned pair that
+   needs ~460px of stage. Below, the steps go again (the percentage stays). */
+@container stage-main (max-width: 480px) {
+  .stage-bar .zoom-readout .segmented {
     display: none;
   }
 }
@@ -7558,11 +7681,10 @@ input.dropdown-search {
     visibility 0s linear 0.28s;
 }
 
-/* The handle that does it. Mirror of .stage-back-btn: flush with the right
-   edge of the photo above it, taken out of the row's flow so the centred
-   background/zoom group stays centred (the row reserves 96px on both sides).
-   In its own slim column right of the panel it cost a strip of width in both
-   states - here it costs none. */
+/* The handle that does it: flush with the right edge of the photo above it,
+   in the row's end column (.stage-bar > .stage-end) so the centred
+   background/zoom group stays centred. In its own slim column right of the
+   panel it cost a strip of width in both states - here it costs none. */
 .detail-panel-toggle {
   display: inline-flex;
   align-items: center;
@@ -7571,15 +7693,11 @@ input.dropdown-search {
 }
 
 /* The right end of the photo stages' control row: the Edit/View switch and
-   the panel toggle, as one pair pinned to the edge (the same inset
-   .stage-back-btn keeps on the left) - the same two buttons in the same
-   spot in the photo view and the editor, so switching between them moves
-   nothing. */
+   the panel toggle, as one pair at the edge - the same two buttons in the
+   same spot in the photo view and the editor, so switching between them
+   moves nothing. In the flow (the row's end column, see .stage-bar); only the
+   two-line layouts pin it over both lines. */
 .stage-end {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -7702,18 +7820,8 @@ input.dropdown-search {
     right: 8px;
   }
 
-  /* Same on the stacked photo view: no reserved gutter, Back wraps with the
-     rest of the row. */
-  .detail-image-toolbar {
-    padding-left: 0;
-    padding-right: 0;
-  }
-
-  .detail-image-toolbar .stage-back-btn,
-  .detail-image-toolbar .stage-end {
-    position: static;
-    transform: none;
-  }
+  /* The control row needs nothing of its own here: no gutters to drop
+     (.stage-bar), and its narrow-stage steps fire on the stage's width. */
 
   .detail-image {
     flex-basis: 100%;
@@ -7798,21 +7906,37 @@ input.dropdown-search {
   animation: pm-skeleton 1.4s ease-in-out infinite;
 }
 
-.import-panels {
+/* The Import page: the ways of adding photos under tabs, and - under the
+   "Card or folder" tab only - the open sessions below the drop target. */
+.import-overview {
   max-width: 820px;
 }
 
-/* A section's title and one button on the same line. */
-.settings-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 8px;
+.import-overview-main {
+  min-width: 0;
 }
 
-.settings-section-head > .settings-section-header {
-  margin: 0;
+/* The tabs draw the line the first section used to. */
+.import-overview-main > .settings-section {
+  border-top: none;
+  padding-top: 0;
+}
+
+.import-overview .settings-tabs {
+  margin-bottom: 20px;
+}
+
+/* The open sessions (their own .settings-section, nested in the source tab's)
+   sit a clear step under the drop target, with the section separator line. */
+.import-overview-main > .settings-section > .settings-section {
+  margin-top: 24px;
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+}
+
+/* The session whose review is open behind the page. */
+.source-row--current {
+  border-color: var(--accent);
 }
 
 .import-panel-desc {
@@ -7911,21 +8035,6 @@ input.dropdown-search {
 
 .source-row--nowrap > .source-row-main {
   flex: 1;
-}
-
-/* "3 sessions · 42 GB in import folders" beside the section title. */
-.import-panel-count {
-  margin-left: 10px;
-  font-size: var(--text-sm);
-  font-weight: 400;
-  color: var(--text-muted);
-}
-
-/* Heading over the sections that are not the import itself. */
-.import-panels-heading {
-  margin: 0 0 -12px;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
 }
 
 .import-settings-modal {
@@ -10001,6 +10110,14 @@ kbd {
   font-weight: 600;
 }
 
+/* A control at the end of the tab row (the Import page's settings button). */
+.settings-tabs-trailing {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding-bottom: 6px;
+}
+
 .settings-section {
   border-top: 1px solid var(--border);
   padding-top: 22px;
@@ -11235,6 +11352,17 @@ button.stats-col:disabled {
   min-width: 0;
 }
 
+/* The photo column as a size container: the control row under the photo is
+   a container of its own (stage-toolbar) that its CHILDREN query, but it
+   cannot query itself, so the rule that re-flows the row (.lightbox-stage-bar
+   below) asks the column, which is exactly as wide as the row. */
+.lightbox-detail-layout > .detail-main {
+  container-type: inline-size;
+  /* Both names: stage-main is what every .detail-main carries (the photo
+     view's rows query it), lightbox-main is this row's own. */
+  container-name: stage-main lightbox-main;
+}
+
 .lightbox-stage {
   position: relative;
 }
@@ -11258,106 +11386,229 @@ button.stats-col:disabled {
 /* Nav arrows anchor to the image box (nearest positioned ancestor); the chip
    itself is opaque, so no per-stage-shade tinting is needed. */
 
-/* The review bar is a band above the photo - it never covers image pixels,
-   and the stage keeps its full height below it. */
-.lightbox-overlay--page .lightbox-controls {
-  width: auto;
-  align-self: stretch;
-  padding: 9px 16px;
-  gap: 10px 20px;
-  color: var(--text);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  /* A flat band across the top of the stage, not a floating card. */
-  border-radius: 0;
-  border-width: 0 0 1px;
-  backdrop-filter: none;
+/* The one row under the photo (.filter-bar--stage, shared with the photo
+   view): the review controls flush left, the look-at-it controls (background,
+   zoom) centred, the file and the Info toggle flush right. A grid of its own
+   (the photo view's .stage-bar has a lead column and no review group): it
+   keeps the centre centred until one side really needs the room, then
+   shifts it by only that much. */
+.filter-bar--stage.lightbox-stage-bar {
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
+  grid-template-areas: "review centre file";
+  align-items: center;
+  column-gap: 16px;
+  padding: 0 12px;
 }
 
-.lightbox-overlay--page .lightbox-filename,
-.lightbox-overlay--page .lightbox-counter,
-.lightbox-overlay--page .lightbox-import-toggle {
-  color: var(--text);
+.lightbox-stage-bar > .lightbox-review-footer {
+  grid-area: review;
+  justify-self: start;
 }
 
-.lightbox-overlay--page .lightbox-counter {
-  color: var(--text-muted);
+.lightbox-stage-bar > .lightbox-stage-centre {
+  grid-area: centre;
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bar-gap);
 }
 
-/* Nothing in the bar may shift as the photo changes: every item whose text
-   varies in length gets a fixed slot, so the filename, the counter and the
-   rating stars stay on the same pixel column all the way through a review.
-   Longest values sized in: "RAW+JPG", "Already in library", "999 / 999". */
-.lightbox-overlay--page .lightbox-filename {
-  flex: 0 0 auto;
-  /* Room for a camera name (DSCF1234.jpeg) and little more, so the badge
-     sits next to it instead of across a gap; longer names ellipsize. */
+.lightbox-stage-bar > .stage-end {
+  grid-area: file;
+  position: static;
+  transform: none;
+  justify-self: end;
+  gap: 10px;
+}
+
+/* The review controls: a card's footer (.import-card-footer, inline
+   arrangement) in the row. --row-h puts the symbols at the footer's largest
+   size; the quiet-until-hover rule is a grid thing, here they are at full
+   strength. Stars, colours, then the Import box - the inline footer orders
+   the box last already, but it must not float off to the cell's far edge. */
+.lightbox-review-footer {
+  --row-h: 360px;
+  flex: none;
+  height: auto;
+  padding: 0;
+  gap: 16px;
+}
+
+.lightbox-review-footer .rating-stars,
+.lightbox-review-footer .color-label-picker {
+  opacity: 1;
+}
+
+.lightbox-review-footer .import-check {
+  margin-left: 0;
+}
+
+/* Nothing in the row may shift as the photo changes: every item whose text
+   varies in length gets a fixed slot, so the zoom group, the filename and the
+   counter stay on the same pixel column all the way through a review. Longest
+   values sized in: "Already in library", "RAW+JPG", "999 / 999". */
+.lightbox-review-footer .import-check {
+  width: 150px;
+}
+
+.lightbox-review-footer .import-check-text {
+  max-width: none;
+}
+
+.lightbox-stage-bar .lightbox-filename {
+  flex: none;
+  /* Room for a camera name (DSCF1234.jpeg) and little more; longer names
+     ellipsize, the full name rides in the tooltip. */
   width: 16ch;
-  max-width: 16ch;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.lightbox-overlay--page .lightbox-controls-meta .badge-inline {
-  flex: 0 0 auto;
+.lightbox-stage-bar .badge-inline {
+  flex: none;
   min-width: 58px;
   text-align: center;
 }
 
-.lightbox-overlay--page .lightbox-controls-meta .lightbox-counter {
-  flex: 0 0 auto;
+.lightbox-stage-bar .lightbox-counter {
+  flex: none;
+  min-width: 9ch;
+  color: var(--text-muted);
   /* Digits of equal width - "6 / 50" and "19 / 50" occupy the same box. */
   font-variant-numeric: tabular-nums;
 }
 
-.lightbox-overlay--page .lightbox-counter--index {
-  min-width: 9ch;
+/* What gives way as the stage narrows (side panel open, small window),
+   measured on the row itself, in this order: the filename shortens, then
+   goes; the position counter goes (with the word on the Info button); then
+   the 200%/400% steps, then Fit/100% - the percentage stays (double-click,
+   scroll and Esc still zoom). Only below that does the row break into lines.
+   The thresholds are the row's measured sum at each step plus ~30px: with
+   everything it needs ~1140px (review group 396, zoom group 352, file group
+   361, gutters and gaps); each step takes off what the item took. */
+@container stage-toolbar (max-width: 1180px) {
+  .lightbox-stage-bar .lightbox-filename {
+    width: 10ch;
+  }
 }
 
-.lightbox-overlay--page .lightbox-import-toggle {
-  flex: 0 0 auto;
-  /* Wide enough for the longest label ("Already in library"), so swapping to
-     the short one doesn't drag the stars sideways. */
-  min-width: 172px;
-  justify-content: center;
+@container stage-toolbar (max-width: 1120px) {
+  .lightbox-stage-bar .lightbox-filename {
+    display: none;
+  }
 }
 
-/* The bar is one row whenever the name, the counter and the review controls
-   fit: name and counter on the left, import/stars/colour on the right. The
-   keyboard hints are the part that gives way. They used to count towards the
-   left group's width, so a bar a few pixels short of holding everything broke
-   into two half-empty, left-aligned rows - which is exactly the width the
-   stage has with the camera-settings panel collapsed. */
-.lightbox-overlay--page .lightbox-controls-meta {
-  flex: 1 1 auto;
-  min-width: 0;
-  flex-wrap: nowrap;
+@container stage-toolbar (max-width: 1020px) {
+  .lightbox-stage-bar .lightbox-counter,
+  .lightbox-stage-bar .detail-panel-toggle .stage-btn-text {
+    display: none;
+  }
 }
 
-.lightbox-overlay--page .lightbox-controls-actions {
-  flex: 0 0 auto;
+@container stage-toolbar (max-width: 910px) {
+  .lightbox-stage-bar .zoom-readout .segmented button:nth-child(n + 3) {
+    display: none;
+  }
 }
 
-/* Takes whatever the row has left and nothing more: a zero base width keeps
-   the hints out of the "does it fit on one row" sum, and a one-line-high
-   wrapping box clips every hint that doesn't fit whole - none is cut mid-word.
-   The dot belongs to the hint it precedes, so it leaves with it. */
-.lightbox-overlay--page .lightbox-controls-meta .lightbox-hints {
-  flex: 1 1 0;
-  width: 0;
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  height: 20px;
-  line-height: 20px;
-  overflow: hidden;
+@container stage-toolbar (max-width: 820px) {
+  .lightbox-stage-bar .zoom-readout .segmented {
+    display: none;
+  }
 }
 
-.lightbox-overlay--page .lightbox-hints > span {
-  white-space: nowrap;
+/* Below what one line can hold with everything optional gone (review group
+   396 + background and percentage 147 + kind and toggle 120 + gaps 32 =
+   695px), the row opens a second line rather than running past the stage's
+   edges into the side panel - the way the photo view's bar does it: the kind
+   and the panel toggle leave the flow and sit flush right, centred over
+   both lines (the bar's right inset reserves their room), the review
+   controls take the first line and the background/zoom group (all steps
+   again, the line has the room) the second, each centred in the room that
+   is left. Flex rather than the grid: a grid item spanning both columns had
+   Chromium hand half its width to each column, so the column holding only
+   the kind and the toggle grew past what they need and the whole grid ran
+   34px wider than the bar. Queried on the photo column (see
+   .lightbox-detail-layout > .detail-main), which is as wide as the row. */
+@container lightbox-main (max-width: 710px) {
+  .filter-bar--stage.lightbox-stage-bar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 6px 16px;
+    /* Right: kind 58 + gap 10 + toggle 40 + the 12px edge inset + 12px air. */
+    padding: 6px 132px 6px 12px;
+  }
+
+  /* Each group is a full line that centres its own content - centring the
+     lines by the bar alone left them at the left edge. */
+  .lightbox-stage-bar > .lightbox-review-footer {
+    order: 1;
+    flex: 0 0 100%;
+    justify-content: center;
+  }
+
+  .lightbox-stage-bar > .lightbox-stage-centre {
+    order: 2;
+    flex: 0 0 100%;
+    justify-content: center;
+  }
+
+  .lightbox-stage-bar > .stage-end {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .lightbox-stage-bar .zoom-readout .segmented {
+    display: inline-flex;
+  }
+
+  .lightbox-stage-bar .zoom-readout .segmented button:nth-child(n + 3) {
+    display: inline-block;
+  }
+
+  /* Centred, the Import box's fixed slot would show as a lopsided gap, so
+     here it goes (a duplicate's longer label shifts the line a little). */
+  .lightbox-review-footer .import-check {
+    width: auto;
+  }
 }
 
-.lightbox-overlay--page .lightbox-hints > span + span::before {
-  content: "·";
-  margin: 0 6px;
+/* Narrower still: the zoom steps go again (the percentage stays), so the
+   review line (326px) fits beside the pinned pair down to ~470px. */
+@container lightbox-main (max-width: 540px) {
+  .lightbox-stage-bar .zoom-readout .segmented {
+    display: none;
+  }
+}
+
+/* The last step (a 720px window with the panel open leaves ~400px): the
+   pair stays pinned over both lines, as the photo view's does, and the
+   review line makes room for it instead of pushing it onto a third line -
+   the kind badge goes (the camera-settings panel and the grid still say
+   it) and the Import box keeps its symbol and the box but drops the word
+   (the tooltip still has it), so the line is ~275px and fits beside the
+   toggle (right inset 40 + 12 edge + 12 air) down to ~360px. */
+@container lightbox-main (max-width: 470px) {
+  .filter-bar--stage.lightbox-stage-bar {
+    padding-right: 64px;
+  }
+
+  .lightbox-stage-bar .badge-inline {
+    display: none;
+  }
+
+  /* The clipped width takes the ::after gap with it. */
+  .lightbox-review-footer .import-check-text {
+    max-width: 0;
+  }
 }
 
 /* ---- The album canvas ----------------------------------------------------
@@ -14440,15 +14691,6 @@ input:hover:not(:disabled),
   width: 90px;
 }
 
-/* The roll that just landed, under the Import page's head: name and summary
-   on a line of fixed height (the name arrives a moment after the photos), the
-   photos as a contact sheet of bounded height so the review below stays
-   reachable. */
-/* Under the review bar, in the bar's inset. */
-.page-timeline > .import-roll-sheet {
-  margin: 8px var(--bar-pad-x) 0;
-}
-
 /* Status lines under the review bar (the session's folder, copying or
    analysis still running, a stop, an error): plain notes, one per line, a
    small button allowed inline. */
@@ -14465,138 +14707,4 @@ input:hover:not(:disabled),
   flex-wrap: wrap;
   gap: 6px 8px;
   margin: 0;
-}
-.import-roll-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 40px;
-  margin-bottom: 6px;
-}
-.import-roll-title {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.import-roll-name {
-  font-size: var(--text-base);
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.import-roll-meta {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.import-roll-grid {
-  max-height: 320px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 6px;
-}
-.import-roll-more {
-  margin: 6px 0 0;
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-}
-
-/* Survey: two to six photos side by side. Each cell keeps its place - a photo
-   taken out leaves its cell empty - and the frame is an inset outline, so
-   nothing moves when it changes hands. */
-.survey-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.survey-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 40px;
-  flex: none;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--text-sm);
-}
-.survey-bar-title {
-  font-weight: 600;
-}
-.survey-bar-hint {
-  flex: 1;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.survey-grid {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  gap: 8px;
-  padding: 8px 16px 12px;
-}
-.survey-cell {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  margin: 0;
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  overflow: hidden;
-  outline: 2px solid transparent;
-  outline-offset: -2px;
-  cursor: pointer;
-}
-.survey-cell.active {
-  outline-color: var(--accent);
-}
-.survey-cell.removed {
-  cursor: default;
-  opacity: 0.6;
-}
-.survey-stage {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.survey-stage img {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-  display: block;
-}
-.survey-caption {
-  flex: none;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  border-top: 1px solid var(--border);
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-}
-.survey-caption-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
 }

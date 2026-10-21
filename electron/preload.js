@@ -37,6 +37,15 @@ contextBridge.exposeInMainWorld("photoManager", {
   // Native multi-file dialog; resolves to [{ path, size }] or null when dismissed.
   pickFiles: () => ipcRenderer.invoke("pm:pick-files"),
   classifyPaths: (paths) => ipcRenderer.invoke("pm:classify-paths", paths),
+  // The absolute path of a File from a drop the page handled itself (the
+  // merge-library drop zone); "" when the shell cannot tell.
+  pathForFile: (file) => {
+    try {
+      return webUtils?.getPathForFile ? webUtils.getPathForFile(file) : file.path || "";
+    } catch {
+      return "";
+    }
+  },
   // Selects a file in Finder / Explorer / the file manager (its folder when
   // the file is gone). Resolves { ok, missing? } / { ok: false, error }.
   revealFile: (filePath) => ipcRenderer.invoke("pm:reveal-file", filePath),

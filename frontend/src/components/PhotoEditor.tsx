@@ -6043,12 +6043,16 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             (below), in the spot the photo view keeps its Edit. The row is
             rendered even while the photo is still loading or failed to load,
             so there's always a visible way out. */}
-        <div className="filter-bar filter-bar--stage editor-bg-toggle">
+        <div className="filter-bar filter-bar--stage stage-bar editor-bg-toggle">
           {/* The whole row is there from the first frame - the editor must
               look complete the moment it opens, not assemble itself as the
               first render lands. The background switch works right away (it
               is a preference, not a render); zoom and the compares wait,
-              greyed out, for a picture to act on. */}
+              greyed out, for a picture to act on. One group (.stage-centre):
+              the bar's grid centres it as a whole and the narrow-stage rules
+              decide what in it gives way, instead of the row breaking wherever
+              the width happens to run out. */}
+          <span className="stage-centre">
           <StageBackgroundToggle />
           <span className={`editor-toolbar-live${loading || error ? " is-waiting" : ""}`}>
             <ZoomReadout
@@ -6059,8 +6063,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 zoomToNative,
               }}
             />
-            {/* Same divider as the photo view between zoom and compares. */}
-            <span className="editor-toolbar-sep" aria-hidden />
+            {/* Same divider as the photo view between zoom and compares; on
+                a stage too narrow for one line it turns into the line break
+                (.stage-break), so the compares open the second line whole. */}
+            <span className="editor-toolbar-sep stage-break" aria-hidden />
             {/* Kept as one group so the row never wraps between the baseline
                 switch and the compares it feeds. Icon-only, like everything in
                 this row except the zoom steps: the captions and words moved
@@ -6159,6 +6165,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 </button>
               </span>
             </span>
+          </span>
           </span>
           {/* The row's right end, next to the panel - the same pair, the same
               spot as in the photo view: the other half of its Edit button

@@ -20,15 +20,3 @@ export function rollSubtitle(roll: RollSummary | null | undefined): string {
   if (!roll) return "";
   return [rollSpanLabel(roll.taken_from, roll.taken_to), roll.cameras.join(", ")].filter(Boolean).join(" · ");
 }
-
-// Capture span and cameras from the photos themselves (the contact sheet
-// right after an import has the rows, not a summary yet).
-export function summarise(
-  photos: { taken_at: string | null; camera_model: string | null }[]
-): { span: string; cameras: string[] } {
-  const dates = photos.map((p) => p.taken_at).filter((d): d is string => !!d).sort();
-  const counts = new Map<string, number>();
-  for (const p of photos) if (p.camera_model) counts.set(p.camera_model, (counts.get(p.camera_model) ?? 0) + 1);
-  const cameras = [...counts.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([name]) => name);
-  return { span: rollSpanLabel(dates[0], dates[dates.length - 1]), cameras };
-}

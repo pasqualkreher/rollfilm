@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { rememberLibraryFilters, rememberedLibraryFilters } from "../utils/libraryFilterMemory";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -40,7 +40,7 @@ import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { useAskSaveCopyOptions, useMergePairs } from "../state/viewPrefs";
 import { FULL_COPY_QUALITY, SaveCopyDialog } from "../components/SaveCopyDialog";
-import { shortcutLabel, surveyState, useSelectionKeys } from "../utils/selection";
+import { shortcutLabel, useSelectionKeys } from "../utils/selection";
 import { useBarHeight } from "../utils/useBarHeight";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import type { ContextActions } from "../components/PhotoContextMenu";
@@ -189,14 +189,6 @@ function LibraryPage() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const barRef = useBarHeight();
-  // Back from the survey: its photos are the selection again.
-  const location = useLocation();
-  useEffect(() => {
-    const reselect = (location.state as { reselect?: string[] } | null)?.reselect;
-    if (!reselect) return;
-    setSelected(new Set(reselect));
-    navigate(location.pathname + location.search, { replace: true, state: null });
-  }, [location.state]); // eslint-disable-line react-hooks/exhaustive-deps
   // Export for the selection: the bar's button, the dialog, ⇧⌘E.
   const selectionExport = useSelectionExport(Array.from(selected));
   const [lastIndex, setLastIndex] = useState<number | null>(null);
@@ -466,7 +458,6 @@ function LibraryPage() {
     onClear: clearSelection,
     hasSelection: selected.size > 0,
     edit: { selected, order: orderedImages.map((img) => img.id) },
-    survey: { selected, order: orderedImages.map((img) => img.id), returnTo: location.pathname + location.search },
     onRate: (rating) => void applyBulk({ rating }),
     // The key of the colour the selection already has takes it off again.
     onColor: (label) =>
@@ -690,10 +681,6 @@ function LibraryPage() {
   const [pickExport, setPickExport] = useState<string[] | null>(null);
   const contextActions: ContextActions = {
     onAutoPick: (ids) => setAutoPick(ids),
-    onSurvey: (ids) =>
-      navigate("/survey", {
-        state: surveyState(ids, orderedImages.map((img) => img.id), location.pathname + location.search),
-      }),
     onRate: (ids, rating) => applyBulk({ rating }, ids),
     onColor: (ids, label) => applyBulk({ color_label: label }, ids),
     onFlag: (ids, flag) => applyBulk({ flag }, ids),

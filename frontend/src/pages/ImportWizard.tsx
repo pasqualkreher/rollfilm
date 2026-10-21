@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { useNavigate } from "react-router-dom";
 import type {
   ColorLabel,
   Facet,
@@ -10,8 +9,6 @@ import type {
   StagedFileOut,
   ViewMode,
 } from "../api/types";
-import type { ImageOut } from "../api/types";
-import { ImportRollSheet } from "../components/ImportRollSheet";
 import { PhotoFilters } from "../components/PhotoFilters";
 import { ImportLightbox } from "../components/ImportLightbox";
 import { ImportReviewGrid, dayLabel, isDuplicate } from "../components/ImportReviewGrid";
@@ -25,6 +22,7 @@ import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
 import { ImportAlbumPicker } from "../components/ImportAlbumPicker";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { pickImportableFiles, sourceLabelFor } from "../utils/folderPick";
+import { useLocation, useNavigate, useNavigationType } from "react-router-dom";
 import { useImportSession } from "../state/importSession";
 import { useAppDialogs } from "../components/AppDialogs";
 import { useTasks } from "../state/tasks";
@@ -35,6 +33,7 @@ import { selectionSharedMeta } from "../utils/selectionMeta";
 import { RatingStars } from "../components/RatingStars";
 import { ColorLabelPicker } from "../components/ColorLabelPicker";
 import { useTransientMessage } from "../utils/transientMessage";
+import { useSessionState } from "../utils/useSessionState";
 import {
   clearReviewState,
   readReviewState,
@@ -135,6 +134,19 @@ function ImportFolder({ folder, backup }: { folder: string; backup: boolean }) {
   );
 }
 
+// The overview's tabs: the import itself first, the two other ways of
+// bringing photos in behind it. "Library" needs the native folder picker
+// (ImportLibrary renders nothing without it), so it is left out on the web.
+type OverviewTab = "source" | "library" | "external";
+
+// The state of the Import page's history entries (see the effects in
+// ImportWizard): which session's review, and which file's preview, is open.
+interface ImportHistoryState {
+  importReview?: string;
+  importPreview?: boolean;
+  importPreviewFile?: string;
+}
+
 export function ImportWizard() {
   const {
     sessionId,
@@ -172,6 +184,11 @@ export function ImportWizard() {
   // The native pickers: adding to a session needs paths the backend can read,
   // which a browser file input can't give.
   const nativePick = typeof window !== "undefined" ? window.photoManager : undefined;
+  const overviewTabs: { id: OverviewTab; label: string }[] = [
+    { id: "source", label: "Card or folder" },
+    ...(nativePick?.pickFolder ? [{ id: "library" as const, label: "Library" }] : []),
+    { id: "external", label: "External sources" },
+  ];
   // The session leaves its photos where they are: nothing is copied, so the
   // review says "reading"/"adding" where it otherwise says "copying".
   const inPlace = sessionMode === "reference";
@@ -205,10 +222,9 @@ export function ImportWizard() {
   const [dateTo, setDateTo] = useState<string | null>(initial.current?.dateTo ?? null);
   // Flash message - auto-dismisses after a moment.
   const [pickError, setPickError] = useTransientMessage(8000);
-  // The roll that just landed (the photos the commit added), shown as a
-  // contact sheet until the next commit or another session.
-  const [roll, setRoll] = useState<{ sessionId: string; added: ImageOut[]; albumName: string | null } | null>(null);
-  const navigate = useNavigate();
+  // Which way of adding photos the overview shows; kept for the session so
+  // a trip to the Library and back lands on the same tab.
+  const [overviewTab, setOverviewTab] = useSessionState<OverviewTab>("import:tab", "source");
   // The open preview follows the FILE, not its position in the list. An import
   // re-sorts under the user for as long as it runs - every file whose EXIF is
   // read joins its capture day and shifts everything after it - so an
@@ -216,6 +232,108 @@ export function ImportWizard() {
   const [lightboxFileId, setLightboxFileId] = useState<string | null>(
     initial.current?.lightboxFileId ?? null
   );
+  // An open preview is an entry in the app's history, as the library's photo
+  // view is a route: the title bar's Back closes it, Forward opens the same
+  // file again (the entry carries it). Pushed when a preview opens without
+  // one, popped when it closes from inside; a step back from the title bar,
+  // or the Import tab pushing /import again, drops the entry and the effect
+  // below closes the preview to match.
+  const location = useLocation();
+  const navigate = useNavigate();
+  // What the Import page's history entries carry. The URL is /import for all
+  // of them; the state tells the page, the review and the preview apart.
+  const histState = (location.state as ImportHistoryState | null) ?? {};
+  // The review is a history entry of its own, the way the preview below is:
+  // Back from the title bar (and the Import tab, which steps back the same
+  // way) leaves the review as "Continue later" does - the session stays open
+  // and listed on the Import page, which is the entry underneath; Forward
+  // continues that session again. Pushed when a session comes up without one
+  // (Continue, a new import, the tab opened over an open session), popped
+  // when the review closes from inside (Continue later, Close session). The
+  // preview's entry sits on top of it.
+  const reviewEntryFor = histState.importReview;
+  const navType = useNavigationType();
+  const reviewEntry = useRef(false);
+  const wasReviewEntryFor = useRef(reviewEntryFor);
+  useEffect(() => {
+    const was = wasReviewEntryFor.current;
+    wasReviewEntryFor.current = reviewEntryFor;
+    if (sessionId && reviewEntryFor !== sessionId) {
+      if (navType === "POP" && was === sessionId && reviewEntry.current) {
+        // Backed out of the review's entry: the session is left for later.
+        reviewEntry.current = false;
+        leaveSession();
+        queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
+      } else {
+        reviewEntry.current = true;
+        navigate(location.pathname, {
+          state: { ...histState, importReview: sessionId, importPreview: undefined, importPreviewFile: undefined },
+        });
+      }
+    } else if (!sessionId && reviewEntryFor && reviewEntry.current) {
+      // The review closed from inside: its entry goes with it.
+      reviewEntry.current = false;
+      navigate(-1);
+    } else if (!sessionId && reviewEntryFor && navType === "POP") {
+      // Stepped forward onto the review's entry with its session closed:
+      // continue the session, as Continue on the Import page does. A session
+      // that has since been imported or discarded leaves a plain page entry.
+      reviewEntry.current = true;
+      const wanted = reviewEntryFor;
+      queryClient
+        .fetchQuery({ queryKey: ["import-sessions"], queryFn: () => api.import.sessions() })
+        .catch((): ImportSessionSummary[] => [])
+        .then((open) => {
+          if (wasReviewEntryFor.current !== wanted) return;
+          const same = open.find((s) => s.id === wanted);
+          if (same) {
+            continueSession(same);
+          } else {
+            reviewEntry.current = false;
+            navigate(location.pathname, {
+              replace: true,
+              state: { ...histState, importReview: undefined, importPreview: undefined, importPreviewFile: undefined },
+            });
+          }
+        });
+    } else if (sessionId && reviewEntryFor === sessionId) {
+      reviewEntry.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, reviewEntryFor, navType]);
+  const inPreviewEntry = Boolean(histState.importPreview);
+  // Whether this mount already owns a preview history entry, and the previous
+  // value of inPreviewEntry so a true->false step reads as "backed out".
+  const previewEntry = useRef(false);
+  const wasInPreviewEntry = useRef(inPreviewEntry);
+  useEffect(() => {
+    const backedOut = wasInPreviewEntry.current && !inPreviewEntry;
+    wasInPreviewEntry.current = inPreviewEntry;
+    if (lightboxFileId !== null && !inPreviewEntry && !backedOut && !previewEntry.current) {
+      // A preview is open (freshly, or restored on return to this tab) with no
+      // history entry of its own: add one so the title bar's Back closes it.
+      previewEntry.current = true;
+      navigate(location.pathname, {
+        state: { ...histState, importReview: sessionId, importPreview: true, importPreviewFile: lightboxFileId },
+      });
+    } else if (lightboxFileId !== null && backedOut && previewEntry.current) {
+      // Backed out of the preview entry (title bar Back): close the preview.
+      previewEntry.current = false;
+      setLightboxFileId(null);
+    } else if (inPreviewEntry) {
+      previewEntry.current = true;
+      // Stepped forward onto the entry: open the file it was made for again.
+      // Should that file have left the list, the fallback below takes over.
+      if (lightboxFileId === null && navType === "POP" && histState.importPreviewFile) {
+        setLightboxFileId(histState.importPreviewFile);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightboxFileId, inPreviewEntry, navType]);
+  const closeLightbox = useCallback(() => {
+    if (previewEntry.current && inPreviewEntry) navigate(-1);
+    else setLightboxFileId(null);
+  }, [inPreviewEntry, navigate]);
   // Where it last sat, for the case where the file leaves the visible list
   // altogether (a filter, or "Merge RAW+JPG" swallowing the RAW half): the
   // preview then stays put at that position instead of closing.
@@ -259,7 +377,9 @@ export function ImportWizard() {
     setDateTo(st.dateTo);
     setUploadToImmich(st.uploadToImmich);
     setSyncAllToImmich(st.syncAllToImmich);
-    setLightboxFileId(st.lightboxFileId);
+    // Two quick Forward steps (page -> review -> preview) land here with the
+    // preview's entry already current: its file wins over the record.
+    setLightboxFileId((inPreviewEntry && histState.importPreviewFile) || st.lightboxFileId);
     savedScroll.current = st.scroll;
     setMarked(new Set());
     setLastIndex(null);
@@ -487,7 +607,6 @@ export function ImportWizard() {
       // (both halves of a RAW+JPEG pair), so they go in by id - through the
       // same call as the library's "Add to album", Immich album mirror and
       // album tags included. The photos are in the library by now either way.
-      let albumName: string | null = null;
       if (targetAlbum && added.length > 0) {
         try {
           await runTask({ kind: "plain", label: `Adding photos to “${targetAlbum.name}”…` }, () =>
@@ -496,7 +615,6 @@ export function ImportWizard() {
               added.map((image) => image.id)
             )
           );
-          albumName = targetAlbum.name;
           queryClient.invalidateQueries({ queryKey: ["albums"] });
           queryClient.invalidateQueries({ queryKey: ["image"] });
         } catch (err) {
@@ -510,9 +628,10 @@ export function ImportWizard() {
       // A session outlives an import until the user ends it: what wasn't
       // added - and what of its card isn't copied yet - stays for another
       // day, and another card can join it. Nothing is asked here; Close
-      // session ends it, the way the session was set up at its start.
+      // session ends it, the way the session was set up at its start. The
+      // added photos leave the review on their own: they are duplicates of
+      // the library now, hidden with "Hide duplicates".
       queryClient.invalidateQueries({ queryKey: ["smart-albums"] });
-      setRoll({ sessionId: sessionId!, added, albumName });
     },
     // A failed commit used to be completely invisible (no state change, no
     // message) - the button just looked dead. Staged files survive a failed
@@ -738,9 +857,11 @@ export function ImportWizard() {
   useEffect(() => {
     if (lightboxFileId === null) return;
     if (lightboxIndex === null) {
-      // A preview restored from the session record (see restoredFor) has no
-      // index until the file list has loaded - keep it until then.
-      if (files) setLightboxFileId(null);
+      // lightboxIndex is only null when the visible list is EMPTY (a non-empty
+      // list falls back to a neighbour instead - see the memo). Keep the
+      // preview while the list is still loading or momentarily empty; close it
+      // only once a loaded, non-empty list truly has nothing to show it in.
+      if (files && files.length > 0 && visibleFiles.length === 0) setLightboxFileId(null);
       return;
     }
     lightboxFallback.current = lightboxIndex;
@@ -756,7 +877,19 @@ export function ImportWizard() {
     [visibleFiles]
   );
 
-  const selectedCount = (files ?? []).filter((f) => f.selected).length;
+  // What the counts count: the photos that can come in. Never an exact
+  // duplicate (the backend refuses those, and they are hidden by default -
+  // "1 of 183" over a grid of three cards was the whole batch's file count),
+  // and a merged RAW+JPEG pair once, as the grid shows it. Whatever the
+  // filters hide still counts: the import takes every tick in the session.
+  const importable = useMemo(() => {
+    const list = (files ?? []).filter((f) => !isDuplicate(f));
+    return mergePairs && viewMode === "combined"
+      ? collapsePairsBy(list, (f) => f.file_type, (f) => f.paired_staged_file_id)
+      : list;
+  }, [files, mergePairs, viewMode]);
+  const importableCount = importable.length;
+  const selectedCount = importable.filter((f) => f.selected).length;
   // Added by earlier partial imports of this session.
   const importedCount = (files ?? []).filter((f) => f.imported).length;
 
@@ -1399,100 +1532,118 @@ export function ImportWizard() {
         <input ref={filesInputRef} type="file" multiple style={{ display: "none" }} />
         {startDialogs}
 
-        <div className="import-panels">
-          <section className="settings-section">
-            <div className="settings-section-head">
-              <h3 className="settings-section-header">From a card, camera or folder</h3>
-              <button
-                className="btn btn-sm"
-                onClick={() => setImportSettingsOpen(true)}
-                title="What a new session does unless you say otherwise"
-              >
-                <span className="btn-label"><IconGear size={13} /> Import settings…</span>
-              </button>
-            </div>
-            <p className="page-subtitle">
-              Bring photos from an SD card, camera, or folder into your library.
-            </p>
-            {/* One button, two pickers behind it (the app's own action menu).
-                While an import runs it only says so - the figures go in the
-                note below, so the button keeps its width. */}
-            <div className="control-group">
-              <MenuButton
-                className="btn primary"
-                entries={[
-                  { id: "folder", label: <><IconFolder size={14} /> Choose folder…</> , search: "Choose folder" },
-                  { id: "files", label: <><IconImage size={14} /> Choose files…</>, search: "Choose files" },
-                ]}
-                onPick={(id) => void (id === "folder" ? pickFolderAndImport() : pickFilesAndImport())}
-                disabled={isUploading}
-                title="Choose a folder or single photos to import"
-              >
-                {isUploading ? <><Spinner tone="inherit" inline /> Importing…</> : <><IconImport size={13} /> Import photos</>}
-              </MenuButton>
-              {/* Bail out of a long SD-card upload without waiting for it to
-                  finish - aborts the in-flight request and clears the screen.
-                  Hidden once the server is past receiving bytes ("Processing"),
-                  since at that point the batch is already staging server-side. */}
-              {isUploading && (uploadProgress ?? 0) < 100 && (
+        {/* Two columns: the ways of adding photos under tabs on the left, the
+            open sessions beside them. The tabs replace a page-long stack of
+            sections; a session is continued without scrolling past them. */}
+        <div className="import-overview">
+          <div className="import-overview-main">
+            <nav className="settings-tabs" role="tablist" aria-label="Ways to add photos">
+              {overviewTabs.map((tab) => (
                 <button
-                  className="btn btn-sm quiet-danger"
-                  onClick={() => void confirmCancelUpload()}
-                  title="Stop and discard everything copied so far"
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={overviewTab === tab.id}
+                  className={`settings-tab${overviewTab === tab.id ? " active" : ""}`}
+                  onClick={() => setOverviewTab(tab.id)}
                 >
-                  <span className="btn-label"><IconX size={13} /> Cancel</span>
+                  {tab.label}
                 </button>
-              )}
-              {/* The other way out of a long copy: stop asking for more photos
-                  but keep the ones already staged, so a card you only wanted
-                  the first part of can go straight to review. */}
-              {isUploading && canStopStaging && (
+              ))}
+              {/* What a new session does unless the start dialog is asked:
+                  at the end of the tab row, where it applies to the tab. */}
+              <span className="settings-tabs-trailing">
                 <button
                   className="btn btn-sm"
-                  onClick={stopStaging}
-                  disabled={stagingStopped}
-                  title="Stop copying and review the photos copied so far"
+                  onClick={() => setImportSettingsOpen(true)}
+                  title="What a new session does unless you say otherwise"
                 >
-                  <span className="btn-label"><IconStop size={13} /> {stagingStopped ? "Stopping…" : "Stop & keep"}</span>
+                  <span className="btn-label"><IconGear size={13} /> Import settings…</span>
                 </button>
-              )}
-            </div>
-            {/* The same thing the window-wide drop does, made visible: a target
-                that says dropping works. Clicking it opens the folder picker. */}
-            <button
-              type="button"
-              className="import-dropzone"
-              onClick={() => void pickFolderAndImport()}
-              disabled={isUploading}
-            >
-              <IconImport size={22} />
-              <strong>Drop a card, folder or photos here</strong>
-              <span>…or anywhere on this window. Click to choose a folder instead.</span>
-            </button>
-            {isUploading && (
-              <p className="status-note" role="status" aria-live="polite">
-                {/* Working: the count can sit at 0 for a while on a slow
-                    card, so the spinner is what says it hasn't hung. */}
-                {folderImportActive
-                  ? totalFileCount
-                    ? `${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}. Photos are being ${inPlace ? "read" : "copied"} and analyzed in the background. Nothing is added to your library until you have reviewed them.`
-                    : "Looking for photos in the selected folder…"
-                  : (uploadProgress ?? 0) >= 100
-                    ? `Processing files…${progressSuffix}`
-                    : `${uploadProgress ?? 0}%${uploadEtaSuffix}. Photos are being received. The review screen opens as soon as they are copied.`}
-              </p>
+              </span>
+            </nav>
+            {overviewTab === "source" && (
+              <section className="settings-section">
+                {/* The tab is the drop target made visible, and the two pickers
+                    stand inside it: one place to look, whichever way the photos
+                    come. While an import runs the pickers give way to the two
+                    ways out of it; the figures go in the note below. */}
+                <div className={`import-dropzone${isUploading ? " disabled" : ""}`}>
+                  {isUploading ? <Spinner /> : <IconImport size={22} />}
+                  <strong>{isUploading ? "Importing…" : "Drop a card, folder or photos here"}</strong>
+                  <div className="control-group import-dropzone-actions">
+                    {!isUploading && (
+                      <>
+                        <button
+                          className="btn primary btn-sm"
+                          onClick={() => void pickFolderAndImport()}
+                          title="Choose a card or folder to import"
+                        >
+                          <span className="btn-label"><IconFolder size={13} /> Choose folder…</span>
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => void pickFilesAndImport()}
+                          title="Choose single photos to import"
+                        >
+                          <span className="btn-label"><IconImage size={13} /> Choose files…</span>
+                        </button>
+                      </>
+                    )}
+                    {/* Bail out of a long SD-card upload without waiting for it to
+                        finish - aborts the in-flight request and clears the screen.
+                        Hidden once the server is past receiving bytes ("Processing"),
+                        since at that point the batch is already staging server-side. */}
+                    {isUploading && (uploadProgress ?? 0) < 100 && (
+                      <button
+                        className="btn btn-sm quiet-danger"
+                        onClick={() => void confirmCancelUpload()}
+                        title="Stop and discard everything copied so far"
+                      >
+                        <span className="btn-label"><IconX size={13} /> Cancel</span>
+                      </button>
+                    )}
+                    {/* The other way out of a long copy: stop asking for more photos
+                        but keep the ones already staged, so a card you only wanted
+                        the first part of can go straight to review. */}
+                    {isUploading && canStopStaging && (
+                      <button
+                        className="btn btn-sm"
+                        onClick={stopStaging}
+                        disabled={stagingStopped}
+                        title="Stop copying and review the photos copied so far"
+                      >
+                        <span className="btn-label"><IconStop size={13} /> {stagingStopped ? "Stopping…" : "Stop & keep"}</span>
+                      </button>
+                    )}
+                  </div>
+                  <span>…or drop them anywhere on this window.</span>
+                </div>
+                {isUploading && (
+                  <p className="status-note" role="status" aria-live="polite">
+                    {/* Working: the count can sit at 0 for a while on a slow
+                        card, so the spinner is what says it hasn't hung. */}
+                    {folderImportActive
+                      ? totalFileCount
+                        ? `${effectiveUploadPct ?? 0}% · ${(liveStagedCount ?? 0).toLocaleString()} / ${totalFileCount.toLocaleString()} photos${uploadEtaSuffix}. Photos are being ${inPlace ? "read" : "copied"} and analyzed in the background. Nothing is added to your library until you have reviewed them.`
+                        : "Looking for photos in the selected folder…"
+                      : (uploadProgress ?? 0) >= 100
+                        ? `Processing files…${progressSuffix}`
+                        : `${uploadProgress ?? 0}%${uploadEtaSuffix}. Photos are being received. The review screen opens as soon as they are copied.`}
+                  </p>
+                )}
+                {pickError && <p className="status-note status-note--error">{pickError}</p>}
+                {uploadError && <p className="status-note status-note--error">Upload failed: {uploadError}</p>}
+                {/* The open sessions below the import itself, under its own
+                    tab only: continuing one belongs with starting one, not
+                    with the other ways of adding photos. */}
+                <ImportSessions
+                  currentSessionId={sessionId}
+                />
+              </section>
             )}
-            {pickError && <p className="status-note status-note--error">{pickError}</p>}
-            {uploadError && <p className="status-note status-note--error">Upload failed: {uploadError}</p>}
-          </section>
-
-          <ImportSessions />
-
-          <h3 className="settings-subhead import-panels-heading">Other ways to add photos</h3>
-
-          <ImportLibrary />
-
-          <ExternalSources />
+            {overviewTab === "library" && <ImportLibrary />}
+            {overviewTab === "external" && <ExternalSources />}
+          </div>
         </div>
       </div>
     );
@@ -1505,14 +1656,18 @@ export function ImportWizard() {
   return (
     <div className="page page-timeline">
       {startDialogs}
-      {/* The source heads the bar like an album's name heads its bar; what
-          the bar used to say in a paragraph is the count pill. */}
+      {/* The source heads the bar like an album's name heads its bar; the
+          pill is the one count the review has: how many of the photos come
+          in - and, after a first commit, how many already did. */}
       <PhotoFilters
         title={
           <>
             <span className="bar-title-sub">Import</span>
             <span className="bar-title-name">{sourceLabel}</span>
-            <span className="count-pill">{plural(files?.length ?? 0, "photo")}</span>
+            <span className="count-pill">
+              {selectedCount} of {importableCount} to import
+              {importedCount > 0 && ` · ${importedCount.toLocaleString()} added`}
+            </span>
           </>
         }
         viewMode={viewMode}
@@ -1556,26 +1711,34 @@ export function ImportWizard() {
             </span>
           </button>
         }
-      >
-        {/* A session can collect from more than one card or folder - add the
-            next one without leaving the review. Desktop only: it needs native
-            paths the backend reads itself. */}
-        {nativePick?.pickFolder && (
-          <>
-            <button className="btn btn-sm" onClick={addFolderToOpenSession} disabled={isUploading} title={addHint}>
-              <span className="btn-label"><IconFolder size={13} /> Add folder…</span>
-            </button>
-            {nativePick.pickFiles && (
-              <button className="btn btn-sm" onClick={addFilesToOpenSession} disabled={isUploading} title={addHint}>
-                <span className="btn-label"><IconImage size={13} /> Add photos…</span>
-              </button>
-            )}
-          </>
-        )}
-      </PhotoFilters>
+        // A session can collect from more than one card or folder - add the
+        // next one without leaving the review: one menu at the bar's far end,
+        // the same two pickers as the Import page's. Desktop only: it needs
+        // native paths the backend reads itself.
+        trailing={
+          nativePick?.pickFolder ? (
+            <MenuButton
+              className="btn btn-sm"
+              entries={[
+                { id: "folder", label: <><IconFolder size={14} /> Choose folder…</>, search: "Choose folder" },
+                ...(nativePick.pickFiles
+                  ? [{ id: "files", label: <><IconImage size={14} /> Choose files…</>, search: "Choose files" }]
+                  : []),
+              ]}
+              onPick={(id) => void (id === "folder" ? addFolderToOpenSession() : addFilesToOpenSession())}
+              disabled={isUploading}
+              title={addHint}
+              align="end"
+            >
+              <IconPlus size={13} /> Add…
+            </MenuButton>
+          ) : undefined
+        }
+      />
       {/* Status lines under the bar: the session's folder, copying or
-          analysis still running, a stop, a source notice, an error. Plain
-          notes in the bar's inset, like every other page's. */}
+          analysis still running (its Stop is the title bar's task dock),
+          a source notice, an error. Plain notes in the bar's inset, like
+          every other page's. */}
       {(sessionFolder || stagingInBackground || stoppedEarly || sourceNotice || analyzingInBackground || (stagingError && !stagingInBackground)) && (
         <div className="import-notes">
           {sessionFolder && (
@@ -1594,14 +1757,6 @@ export function ImportWizard() {
                   }`
                 : ""}{" "}
               You can start reviewing now.
-              <button
-                className="btn btn-sm"
-                onClick={stopStaging}
-                disabled={stagingStopped}
-                title={`Stop ${inPlace ? "reading" : "copying"} and keep the photos ${inPlace ? "read" : "copied"} so far`}
-              >
-                <IconStop size={12} /> {stagingStopped ? "Stopping…" : inPlace ? "Stop" : "Stop copying"}
-              </button>
             </p>
           )}
           {/* Stopped on purpose: the batch is short because the user said so.
@@ -1640,9 +1795,6 @@ export function ImportWizard() {
           )}
         </div>
       )}
-      {roll && roll.sessionId === sessionId && (
-        <ImportRollSheet sessionId={roll.sessionId} added={roll.added} albumName={roll.albumName} />
-      )}
       <div className="page-scroll">
       <div className="filter-bar action-bar--bottom" ref={actionBarRef}>
         {/* The library's bulk bar, as a row of its own on top of this one:
@@ -1651,7 +1803,8 @@ export function ImportWizard() {
             are. Everything a card's footer holds - stars, colour, import -
             once more, here for all the picked photos: a card decides for
             its own photo, this row for the selection. */}
-        {markedFiles.length > 0 && (
+        <Presence open={markedFiles.length > 0} ms={MOTION.bar}>
+          {markedFiles.length > 0 && (
           <div className="control-group action-bar-selection">
             <span>{markedFiles.length} selected</span>
             <RatingStars
@@ -1663,7 +1816,15 @@ export function ImportWizard() {
               value={markedMeta.colorLabel}
               onChange={(color_label) => applyToMarked({ color_label })}
             />
-            <label className="filter-field filter-field-inline" title="Import or skip the selected photos (Space)">
+            {/* The same Import box as a card's footer - symbol, word, box -
+                so the row reads as the cards' controls for all picked at once;
+                lit up once the picked photos come in. */}
+            <label
+              className={`import-check import-check--bar${markedImport !== "none" ? " on" : ""}`}
+              title="Import or skip the selected photos (Space)"
+            >
+              <IconImport size={14} />
+              <span className="import-check-text">Import</span>
               <input
                 type="checkbox"
                 checked={markedImport === "all"}
@@ -1672,51 +1833,69 @@ export function ImportWizard() {
                   if (el) el.indeterminate = markedImport === "some";
                 }}
                 onChange={toggleMarkedImport}
-              />{" "}
-              Import
+              />
             </label>
           </div>
-        )}
+          )}
+        </Presence>
+        {/* The bar reads like a dialog's foot: the two ways to leave the
+            review without adding anything on the far left, and on the right,
+            in the order the work goes, what is to be imported (Import all /
+            none; the count is in the bar's pill), where it goes and the
+            button that does it. Controls only, no text. */}
         <div className="control-group">
-          {/* Always there, switched off rather than hidden when there is
-              nothing for them to do - a review that starts with nothing ticked
-              (the default) starts at "Import all". They tick, they don't
-              select: the selection stays as it is. */}
+          {/* Ends the session for good; what closing does was decided when the
+              session started. Destructive, so it stands farthest from the
+              primary button. */}
           <button
             className="btn"
-            onClick={() => importAll(true)}
-            disabled={visibleFiles.length === 0 || allShownTicked}
-            title="Import every photo shown"
-          >
-            <span className="btn-label"><IconImport size={13} /> Import all</span>
-          </button>
-          <button
-            className="btn"
-            onClick={() => importAll(false)}
-            disabled={selectedCount === 0}
-            title="Import none of the photos"
-          >
-            <span className="btn-label"><IconMinus size={13} /> Import none</span>
-          </button>
-          {/* What the two buttons before it add up to. A slot as wide as the
-              longest count this batch can show, in digits of equal width, so
-              nothing after it moves while the count climbs from 0 to
-              everything. */}
-          <span
-            style={{
-              minWidth: `${2 * String(files?.length ?? 0).length + 12}ch`,
-              fontVariantNumeric: "tabular-nums",
+            onClick={async () => {
+              // What closing does was decided when the session started; it
+              // only stops to confirm when copies of photos that were never
+              // added would be deleted.
+              const ok = await confirmCloseSession(dialogs, {
+                label: sourceLabel,
+                mode: sessionMode,
+                folder: sessionFolder,
+                keepBackup: sessionBackup,
+                leftover: files ? files.filter((f) => !f.imported && !isDuplicate(f)).length : null,
+              });
+              if (ok) discard.mutate();
             }}
+            disabled={discard.isPending}
+            title={closeSessionTitle(sessionMode, sessionFolder, sessionBackup)}
           >
-            {selectedCount} of {files?.length ?? 0} to import
-          </span>
-          {importedCount > 0 && <span>{importedCount.toLocaleString()} already added</span>}
+            {discard.isPending ? (
+              <>
+                <Spinner tone="inherit" inline />
+                Closing…
+              </>
+            ) : (
+              <span className="btn-label"><IconLeave size={13} /> Close session</span>
+            )}
+          </button>
+          {/* Closes the review, keeps the session: it is listed on the Import
+              page to continue - selection, ratings and copies all as left. */}
+          <button
+            className="btn"
+            onClick={() => {
+              leaveSession();
+              queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
+            }}
+            disabled={commit.isPending || discard.isPending}
+            title="Keep the session open and come back from the Import page. Nothing is deleted."
+          >
+            <span className="btn-label"><IconBookmark size={13} /> Continue later</span>
+          </button>
         </div>
-        {/* The bar reads left to right in the order the work goes: what to
-            import, where it goes and the button that does it - and, apart
-            at the far end, the two ways to leave the review without adding
-            anything. */}
-        <div className="control-group">
+        <div className="control-group control-group--trailing">
+          {/* Where the photos go first - the album and, if set up, Immich -
+              then what goes: Import all / none and the button that adds them. */}
+          <ImportAlbumPicker
+            albumId={targetAlbum ? targetAlbum.id : null}
+            onChange={setTargetAlbumId}
+            disabled={commit.isPending}
+          />
           {/* Only shown when Immich is configured in Settings - an inert greyed
               checkbox is just clutter for everyone who doesn't use Immich. In
               selective/full sync modes the per-import checkbox is replaced by a
@@ -1744,11 +1923,27 @@ export function ImportWizard() {
               <IconRotate size={13} /> Immich full sync is on. Every imported photo is uploaded automatically.
             </span>
           )}
-          <ImportAlbumPicker
-            albumId={targetAlbum ? targetAlbum.id : null}
-            onChange={setTargetAlbumId}
-            disabled={commit.isPending}
-          />
+          <span className="bar-sep" aria-hidden="true" />
+          {/* Always there, switched off rather than hidden when there is
+              nothing for them to do - a review that starts with nothing ticked
+              (the default) starts at "Import all". They tick, they don't
+              select: the selection stays as it is. */}
+          <button
+            className="btn"
+            onClick={() => importAll(true)}
+            disabled={visibleFiles.length === 0 || allShownTicked}
+            title="Import every photo shown"
+          >
+            <span className="btn-label"><IconImport size={13} /> Import all</span>
+          </button>
+          <button
+            className="btn"
+            onClick={() => importAll(false)}
+            disabled={selectedCount === 0}
+            title="Import none of the photos"
+          >
+            <span className="btn-label"><IconMinus size={13} /> Import none</span>
+          </button>
           <button
             className="btn primary"
             onClick={handleCommitClick}
@@ -1783,48 +1978,6 @@ export function ImportWizard() {
             )}
           </button>
         </div>
-        <div className="control-group control-group--trailing">
-          {/* Closes the review, keeps the session: it is listed on the Import
-              page to continue - selection, ratings and copies all as left. */}
-          <button
-            className="btn"
-            onClick={() => {
-              leaveSession();
-              queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
-            }}
-            disabled={commit.isPending || discard.isPending}
-            title="Keep the session open and come back from the Import page. Nothing is deleted."
-          >
-            <span className="btn-label"><IconBookmark size={13} /> Continue later</span>
-          </button>
-          <button
-            className="btn"
-            onClick={async () => {
-              // What closing does was decided when the session started; it
-              // only stops to confirm when copies of photos that were never
-              // added would be deleted.
-              const ok = await confirmCloseSession(dialogs, {
-                label: sourceLabel,
-                mode: sessionMode,
-                folder: sessionFolder,
-                keepBackup: sessionBackup,
-                leftover: files ? files.filter((f) => !f.imported && !isDuplicate(f)).length : null,
-              });
-              if (ok) discard.mutate();
-            }}
-            disabled={discard.isPending}
-            title={closeSessionTitle(sessionMode, sessionFolder, sessionBackup)}
-          >
-            {discard.isPending ? (
-              <>
-                <Spinner tone="inherit" inline />
-                Closing…
-              </>
-            ) : (
-              <span className="btn-label"><IconLeave size={13} /> Close session</span>
-            )}
-          </button>
-        </div>
       </div>
 
       {isLoading ? (
@@ -1842,6 +1995,8 @@ export function ImportWizard() {
           onToggleSelect={toggleStagedSelect}
           markedIds={marked}
           onToggleMark={toggleMark}
+          // A rectangle dragged over the cards, as in the library.
+          onSetMarked={(ids) => setMarked(new Set(ids))}
           sectionSelect={sectionSelect}
           onOpen={openLightboxAt}
           onPatch={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
@@ -1871,7 +2026,7 @@ export function ImportWizard() {
             files={visibleFiles}
             index={lightboxIndex}
             onIndexChange={openLightboxAt}
-            onClose={() => setLightboxFileId(null)}
+            onClose={closeLightbox}
             onUpdate={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
             showImmichSync={immichConfigured && immichMode === "selective"}
             pairsMerged={mergePairs && viewMode === "combined"}

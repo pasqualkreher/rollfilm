@@ -25,6 +25,8 @@ declare global {
       pickFiles?: () => Promise<{ path: string; size: number }[] | null>;
       // Dropped paths sorted into folders and files (with sizes).
       classifyPaths?: (paths: string[]) => Promise<{ folders: string[]; files: { path: string; size: number }[] }>;
+      /** Absolute path of a dropped File ("" when unknown). Absent in older builds. */
+      pathForFile?: (file: File) => string;
       /**
        * Selects a file in Finder / Explorer / the file manager; opens its
        * folder instead when the file is gone (`missing`). Absent in older builds.

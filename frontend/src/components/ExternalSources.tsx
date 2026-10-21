@@ -92,7 +92,6 @@ export function ExternalSources() {
 
   return (
     <section className="settings-section">
-      <h3 className="settings-section-header">External photo sources</h3>
       <p className="import-panel-desc">
         Show photos from a folder, such as a NAS, without copying them. Sources are scanned at
         startup and when you click scan. Folders left in place by an import scan only on request.

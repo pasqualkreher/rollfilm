@@ -1282,12 +1282,20 @@ export function ImageDetail() {
               </button>
             )}
           </div>
-          <div className="filter-bar filter-bar--stage detail-image-toolbar">
+          <div className="filter-bar filter-bar--stage stage-bar detail-image-toolbar">
             {/* No Back of its own: the way out is the top bar's Back (and
-                Escape), which lead to wherever this photo was opened from. */}
+                Escape), which lead to wherever this photo was opened from.
+                One group (.stage-centre): the bar's grid centres it as a
+                whole and the narrow-stage rules decide what in it gives way
+                (the Slideshow word, the zoom steps), instead of the row
+                breaking wherever the width happens to run out. */}
+            <span className="stage-centre">
             <StageBackgroundToggle />
             <ZoomReadout zoom={zoom} />
-            <span className="editor-toolbar-sep" aria-hidden />
+            {/* The divider doubles as the line break on a stage too narrow
+                for one line (.stage-break): the compares and the slideshow
+                open the second line whole. */}
+            <span className="editor-toolbar-sep stage-break" aria-hidden />
             {/* The editor's compare group for the saved edit: hold the eye for
                 the original, split by a line, or side by side; JPG for a raw
                 with a camera JPEG. Greyed out, never gone, so the row never
@@ -1320,8 +1328,9 @@ export function ImageDetail() {
               onClick={() => setSlideshowOpen(true)}
               title="Play a fullscreen slideshow of the current photos (S)"
             >
-              <IconPlay size={13} /> Slideshow
+              <IconPlay size={13} /> <span className="stage-btn-text">Slideshow</span>
             </button>
+            </span>
             {/* Flush right at the end of the row, next to the panel: the way
                 into the editor - whose View sits in exactly this spot, so the
                 two read as one switch - and the collapse handle. The handle
@@ -1510,12 +1519,11 @@ export function ImageDetail() {
           )}
 
           <div className="detail-section">
-            <div className="detail-section-label">Flag</div>
-            <FlagPicker value={image.flag ?? null} onChange={setFlag} />
-          </div>
-          <div className="detail-section">
             <div className="detail-section-label">Rating</div>
-            <RatingStars rating={image.rating} onChange={setRating} />
+            <div className="detail-rating-row">
+              <RatingStars rating={image.rating} onChange={setRating} />
+              <FlagPicker value={image.flag ?? null} onChange={setFlag} />
+            </div>
           </div>
           <div className="detail-section">
             <div className="detail-section-label">Color label</div>

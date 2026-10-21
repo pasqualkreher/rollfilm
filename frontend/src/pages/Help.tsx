@@ -2296,7 +2296,6 @@ const CHAPTERS: Chapter[] = [
                 { keys: <kbd>⌘F</kbd>, does: "Jump into the search field (also View → Find)" },
                 { keys: <kbd>⌘,</kbd>, does: "Settings" },
                 { keys: <kbd>E</kbd>, does: "One photo selected: open it with the editor already open" },
-                { keys: <kbd>N</kbd>, does: "2 to 6 photos selected: see them side by side (Survey)" },
                 {
                   keys: (
                     <>
@@ -2423,37 +2422,6 @@ const CHAPTERS: Chapter[] = [
                   does: "Start a fullscreen slideshow of the set you're browsing (Space pauses, Esc ends it)",
                 },
                 { keys: <kbd>Esc</kbd>, does: "Zoomed in: back to fit. Otherwise: back to where the photo was opened from" },
-              ]}
-            />
-            <h4>Survey</h4>
-            <Keys
-              rows={[
-                {
-                  keys: (
-                    <>
-                      <kbd>←</kbd> / <kbd>→</kbd>
-                    </>
-                  ),
-                  does: "Move the frame to the next photo",
-                },
-                {
-                  keys: (
-                    <>
-                      <kbd>0</kbd>–<kbd>5</kbd>, <kbd>6</kbd>–<kbd>9</kbd>
-                    </>
-                  ),
-                  does: "Stars and colour label for the framed photo",
-                },
-                {
-                  keys: (
-                    <>
-                      <kbd>A</kbd> / <kbd>X</kbd> / <kbd>U</kbd>
-                    </>
-                  ),
-                  does: "Pick, reject, unflag the framed photo — X also takes it out of the survey",
-                },
-                { keys: <kbd>↩</kbd>, does: "Open the framed photo" },
-                { keys: <kbd>Esc</kbd>, does: "Back to the grid, with the survey's photos selected" },
               ]}
             />
             <h4>Editor</h4>

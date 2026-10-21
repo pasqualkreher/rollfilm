@@ -58,7 +58,6 @@ const canvasDetail = () => import("./pages/CanvasDetail");
 const canvasView = () => import("./pages/CanvasView");
 const albumDetail = () => import("./pages/AlbumDetail");
 const smartAlbumDetail = () => import("./pages/SmartAlbumDetail");
-const survey = () => import("./pages/Survey");
 const settings = () => import("./pages/Settings");
 const stats = () => import("./pages/Stats");
 const trash = () => import("./pages/Trash");
@@ -73,7 +72,6 @@ const CanvasDetail = page(canvasDetail, "CanvasDetail");
 const CanvasView = page(canvasView, "CanvasView");
 const AlbumDetail = page(albumDetail, "AlbumDetail");
 const SmartAlbumDetail = page(smartAlbumDetail, "SmartAlbumDetail");
-const Survey = page(survey, "Survey");
 const Settings = page(settings, "Settings");
 const Stats = page(stats, "Stats");
 const Trash = page(trash, "Trash");
@@ -327,7 +325,31 @@ function NavLink({ onClick, ...props }: NavLinkProps) {
 }
 
 function ImportNavLink({ onNavigate }: { onNavigate?: () => void }) {
-  const { isUploading, effectiveUploadPct, sessionId } = useImportSession();
+  const { isUploading, effectiveUploadPct, sessionId, leaveSession } = useImportSession();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  // Already on the Import tab: each click steps one level up, and no step
+  // ends the session. The preview and the review are history entries of
+  // their own (ImportWizard pushes them), so a click is a step back: from
+  // the preview to the review, from the review to the Import page - which is
+  // what "Continue later" does: the session stays open and listed there,
+  // where Continue brings it back. From any other tab a click lands where
+  // the user last was: the review, if a session is open.
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    onNavigate?.();
+    if (location.pathname !== "/import" || !sessionId) return;
+    const state = location.state as { importPreview?: boolean; importReview?: string } | null;
+    e.preventDefault();
+    if (state?.importPreview || state?.importReview === sessionId) {
+      navigate(-1);
+      return;
+    }
+    // No entry to step out of (the review came up without one): leave the
+    // session the way Continue later does.
+    leaveSession();
+    queryClient.invalidateQueries({ queryKey: ["import-sessions"] });
+  };
   // While uploading show live progress - the same number as the wizard's
   // progress bar (see effectiveUploadPct), so the two can never disagree.
   // A staged-but-unreviewed batch gets a dot so it's obvious from anywhere
@@ -337,7 +359,7 @@ function ImportNavLink({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <NavLink
       to="/import"
-      onClick={onNavigate}
+      onClick={onClick}
       title={
         !isUploading && sessionId
           ? "Imported photos are waiting for your review"
@@ -374,22 +396,6 @@ function ModuleLinks({ onNavigate }: { onNavigate?: () => void }) {
       <NavLink to="/canvas" onClick={onNavigate}>Canvas</NavLink>
       <NavLink to="/map" onClick={onNavigate}>Map</NavLink>
       <ImportNavLink onNavigate={onNavigate} />
-    </>
-  );
-}
-
-// Full list for the burger-menu dropdown on narrow windows, where the icon
-// buttons may be the only other way to Settings/Help and text reads better.
-// Trash lives with the icon buttons on wide windows, so it has to be listed
-// here explicitly or the collapsed bar would lose it entirely.
-function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <>
-      <ModuleLinks onNavigate={onNavigate} />
-      <NavLink to="/trash" onClick={onNavigate}>Trash</NavLink>
-      <NavLink to="/stats" onClick={onNavigate}>Statistics</NavLink>
-      <NavLink to="/settings" onClick={onNavigate}>Settings</NavLink>
-      <NavLink to="/help" onClick={onNavigate}>Help</NavLink>
     </>
   );
 }
@@ -891,7 +897,9 @@ function TopBar() {
         <Presence open={menuOpen} ms={MOTION.pop}>
           {menuOpen && (
             <nav className="nav-menu" role="menu">
-              <NavLinks onNavigate={() => setMenuOpen(false)} />
+              {/* The modules only: Trash, Statistics, Settings and Help keep
+                  their icon buttons on the right at every width. */}
+              <ModuleLinks onNavigate={() => setMenuOpen(false)} />
             </nav>
           )}
         </Presence>
@@ -1197,7 +1205,6 @@ export default function App() {
             <Route path="/canvas/:id" element={<CanvasDetail />} />
             <Route path="/canvas/:id/view" element={<CanvasView />} />
             <Route path="/smart-albums/:id" element={<SmartAlbumDetail />} />
-            <Route path="/survey" element={<Survey />} />
             {/* The editor is the photo view's second mode and its own history
                 entry (/image/:id/edit): Back closes it, Forward reopens it.
                 One route, so the view underneath stays mounted across the

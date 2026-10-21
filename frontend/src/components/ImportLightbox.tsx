@@ -6,7 +6,7 @@ import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
 import { flaggedDuplicate } from "./ImportReviewGrid";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
-import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconImage, IconRotate } from "./Icons";
+import { IconChevronLeft, IconChevronRight, IconImage, IconImport, IconRotate } from "./Icons";
 import { ExifTable } from "./ExifTable";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { useFullResUpgrade } from "../utils/useFullResUpgrade";
@@ -199,72 +199,13 @@ export function ImportLightbox({
 
   return (
     // Styled like the library's photo view (opaque app surface, the same
-    // elevated image box with the light/black background toggle and the Back
-    // button in the stage toolbar). Instead of the library's side panel there
-    // is an optional camera-settings panel in the same rail; the review
-    // controls bar above the photo stays.
+    // elevated image box, the same control row under it with the background
+    // toggle and the zoom). Instead of the library's side panel there is an
+    // optional camera-settings panel in the same rail; the review controls
+    // (stars, colours, Import) sit in that one row, left of the zoom.
     <div className={`lightbox-overlay lightbox-overlay--page${closing ? " pm-closing" : ""}`} onClick={onClose}>
       <div className="detail-layout lightbox-detail-layout" onClick={(e) => e.stopPropagation()}>
         <div className="detail-main">
-          {/* The review bar sits above the photo, in a band of its own - it
-              never covers image pixels, and rating/import stay in one place
-              while the eye moves across the frame below. */}
-          <div className="lightbox-controls">
-            <div className="lightbox-controls-meta">
-              <span className="lightbox-filename">{file.original_filename}</span>
-              <span
-                className={fileTypeBadgeClass(
-                  file.file_type,
-                  pairsMerged && Boolean(file.paired_staged_file_id),
-                  "badge-inline"
-                )}
-              >
-                {fileTypeBadge(file.file_type, pairsMerged && Boolean(file.paired_staged_file_id))}
-              </span>
-              <span className="lightbox-counter lightbox-counter--index">
-                {index + 1} / {files.length}
-              </span>
-              {/* One span per shortcut: the row shows as many whole ones as it
-                  has room for and drops the rest (see .lightbox-hints), so the
-                  hints give way before the bar has to break into two rows. */}
-              <span className="lightbox-counter lightbox-hints" title="Keyboard shortcuts">
-                <span>0-5 rate</span>
-                <span>Space import</span>
-                <span>←/→ navigate</span>
-                <span>P info</span>
-              </span>
-            </div>
-            <div className="lightbox-controls-actions">
-              {/* Selective sync replaces the import checkbox with the sync one -
-                  two checkboxes crowded the bar, and import is still toggled by
-                  Space (or Select mode in the grid). */}
-              {showImmichSync && !isDuplicate ? (
-                <label
-                  className="lightbox-import-toggle"
-                  title="Upload this photo to Immich right after import. RAW files only if enabled in Settings."
-                >
-                  <input
-                    type="checkbox"
-                    checked={file.immich_sync}
-                    onChange={(e) => onUpdate(file.id, { immich_sync: e.target.checked })}
-                  />{" "}
-                  Sync to Immich
-                </label>
-              ) : (
-                <label className={`lightbox-import-toggle${isDuplicate ? " disabled" : ""}`}>
-                  <input
-                    type="checkbox"
-                    checked={file.selected}
-                    disabled={isDuplicate}
-                    onChange={(e) => onUpdate(file.id, { selected: e.target.checked })}
-                  />{" "}
-                  {isDuplicate ? "Already in library" : "Import this file"}
-                </label>
-              )}
-              <RatingStars rating={file.rating} onChange={(rating) => onUpdate(file.id, { rating })} />
-              <ColorLabelPicker value={file.color_label} onChange={(color_label) => onUpdate(file.id, { color_label })} />
-            </div>
-          </div>
           <div
             className={`detail-image lightbox-stage detail-image-${bgMode}`}
             ref={zoom.setBox}
@@ -380,19 +321,75 @@ export function ImportLightbox({
               <IconChevronRight size={20} />
             </button>
           </div>
-          <div className="filter-bar filter-bar--stage detail-image-toolbar">
-            {/* Back sits with the other stage controls under the photo (same as
-                the library's photo view), labelled rather than a bare arrow. */}
-            <button
-              className="btn btn-sm back-btn stage-back-btn"
-              onClick={onClose}
-              title="Back (Esc)"
-            >
-              <IconArrowLeft size={13} /> Back
-            </button>
-            <StageBackgroundToggle />
-            <ZoomReadout zoom={zoom} />
+          {/* The one row under the photo: the card's footer as the grid draws
+              it (stars, colours, the Import box) flush left, the stage's
+              look-at-it controls (background, zoom) centred, the file, its
+              kind, the position and the Info toggle flush right. Selective
+              sync swaps the Import box for the sync one, as the grid's bar
+              does. No keyboard hints: the keys ride in the tooltips and in
+              Help. What gives way on a narrow stage (side panel open, small
+              window) is set in CSS (.lightbox-stage-bar): the filename first,
+              then the zoom steps. */}
+          <div className="filter-bar filter-bar--stage detail-image-toolbar lightbox-stage-bar">
+            <div className="import-card-footer import-card-footer--inline lightbox-review-footer">
+              <div className="import-card-footer-row">
+                <RatingStars rating={file.rating} onChange={(rating) => onUpdate(file.id, { rating })} />
+                {showImmichSync && !isDuplicate ? (
+                  <label
+                    className={`import-check${file.immich_sync ? " on" : ""}`}
+                    title="Upload this photo to Immich right after import. RAW files only if enabled in Settings."
+                  >
+                    <IconRotate />
+                    <span className="import-check-text">Sync to Immich</span>
+                    <input
+                      className="import-checkbox"
+                      type="checkbox"
+                      checked={file.immich_sync}
+                      onChange={(e) => onUpdate(file.id, { immich_sync: e.target.checked })}
+                    />
+                  </label>
+                ) : (
+                  <label
+                    className={`import-check${isDuplicate ? " disabled" : ""}`}
+                    title={isDuplicate ? "Already in your library" : "Import this photo (Space)"}
+                  >
+                    <IconImport />
+                    <span className="import-check-text">{isDuplicate ? "Already in library" : "Import"}</span>
+                    <input
+                      className="import-checkbox"
+                      type="checkbox"
+                      checked={file.selected}
+                      disabled={isDuplicate}
+                      onChange={(e) => onUpdate(file.id, { selected: e.target.checked })}
+                      aria-label="Import this photo"
+                    />
+                  </label>
+                )}
+              </div>
+              <ColorLabelPicker value={file.color_label} onChange={(color_label) => onUpdate(file.id, { color_label })} />
+            </div>
+            <span className="lightbox-stage-centre">
+              <StageBackgroundToggle />
+              <ZoomReadout zoom={zoom} />
+            </span>
+            {/* No Back of its own: Esc, the title bar's Back (the preview is a
+                history entry, see ImportWizard) or the Import tab close it. */}
             <span className="stage-end">
+              <span className="lightbox-filename" title={file.original_filename}>
+                {file.original_filename}
+              </span>
+              <span
+                className={fileTypeBadgeClass(
+                  file.file_type,
+                  pairsMerged && Boolean(file.paired_staged_file_id),
+                  "badge-inline"
+                )}
+              >
+                {fileTypeBadge(file.file_type, pairsMerged && Boolean(file.paired_staged_file_id))}
+              </span>
+              <span className="lightbox-counter lightbox-counter--index">
+                {index + 1} / {files.length}
+              </span>
               <button
                 className="btn btn-sm detail-panel-toggle"
                 onClick={() => setImportInfoPanelOpen(!infoOpen)}
@@ -401,7 +398,8 @@ export function ImportLightbox({
                 aria-expanded={infoOpen}
                 aria-controls="import-info-panel"
               >
-                Info {infoOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
+                <span className="stage-btn-text">Info</span>{" "}
+                {infoOpen ? <IconChevronRight size={13} /> : <IconChevronLeft size={13} />}
               </button>
             </span>
           </div>

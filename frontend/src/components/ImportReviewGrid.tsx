@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { api } from "../api/client";
 import type { ColorLabel, StagedFileOut, ViewMode } from "../api/types";
 import { RatingStars } from "./RatingStars";
@@ -9,6 +9,7 @@ import { Thumb, fileTypeBadge, fileTypeBadgeClass, tileAspectRatio } from "./Thu
 import { thumbPx, useThumbSize } from "../state/viewPrefs";
 import { GRID_PIN_LIMIT, preloadImage } from "../utils/preload";
 import { isSelectClick, modKeyLabel } from "../utils/selection";
+import { useMarquee, type MarqueeRect } from "../utils/useMarquee";
 import type { ReviewScrollAnchor } from "../utils/importReviewState";
 import {
   overscanFor,
@@ -112,6 +113,9 @@ interface Props {
   // checkbox of one of them.
   markedIds: Set<string>;
   onToggleMark: (index: number, shiftKey: boolean) => void;
+  // Replaces the picked cards with these - the rubber band dragged over the
+  // grid, as in the library. Absent = no rubber band.
+  onSetMarked?: (ids: string[]) => void;
   sectionSelect?: SectionSelect;
   onOpen: (index: number) => void;
   onPatch: (fileId: string, patch: { rating?: number; color_label?: ColorLabel }) => void;
@@ -155,6 +159,7 @@ export function ImportReviewGrid({
   onToggleSelect,
   markedIds,
   onToggleMark,
+  onSetMarked,
   sectionSelect,
   onOpen,
   onPatch,
@@ -289,6 +294,41 @@ export function ImportReviewGrid({
     return () => window.clearTimeout(timer);
   }, [layout, window_, warmPreviews, sessionId]);
 
+  // The rubber band, as the library timeline has it: the cards under the
+  // rectangle come from the layout model (root coordinates, mounted or not),
+  // so a band stretched by the autoscroll keeps picking past the window.
+  // Exact duplicates can't be imported, so the band passes over them the
+  // way a click does.
+  const getScroller = useCallback(() => scrollerRef.current, [scrollerRef]);
+  const hitTest = useCallback(
+    (box: MarqueeRect) => {
+      if (!layout) return [];
+      const right = box.left + box.width;
+      const bottom = box.top + box.height;
+      const ids: string[] = [];
+      for (const section of layout.sections) {
+        if (section.top > bottom || section.top + section.height < box.top) continue;
+        for (const row of section.rows) {
+          const y = section.top + row.top;
+          if (y > bottom || y + row.height < box.top) continue;
+          for (const tile of row.tiles) {
+            if (isDuplicate(tile.item)) continue;
+            if (tile.left < right && tile.left + tile.width > box.left) ids.push(tile.item.id);
+          }
+        }
+      }
+      return ids;
+    },
+    [layout]
+  );
+  const { marquee } = useMarquee({
+    rootRef,
+    getScroller,
+    hitTest,
+    selectedIds: markedIds,
+    onSetSelection: onSetMarked,
+  });
+
   if (files.length === 0) return null;
 
   // Once a card is picked every card grows a checkbox, exactly as in the
@@ -374,9 +414,12 @@ export function ImportReviewGrid({
     return (
       <div
         key={f.id}
-        // Not going to be imported (unticked, or an exact duplicate): the
-        // photo is dimmed, so what comes in reads at a glance.
-        className={`import-card${f.selected && !duplicate ? "" : " skipped"}`}
+        // Going to be imported (ticked, not an exact duplicate): the card is
+        // framed in the accent, so what comes in reads at a glance. The rest
+        // stay plain - never dimmed, a photo is judged at full strength. Its
+        // own stars, colour and Import box are in the footer below, as on
+        // every card.
+        className={`import-card${f.selected && !duplicate ? " import-card--in" : ""}`}
         // A card is large: its tips show at the mouse, not under the card.
         data-tip-at="pointer"
         style={{
@@ -553,6 +596,7 @@ export function ImportReviewGrid({
         sections={scrubberSections}
         getBottomInset={getBottomInset}
       />
+      {marquee}
     </div>
   );
 }

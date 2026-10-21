@@ -8,7 +8,7 @@ import { IconFolder, IconLeave, IconRename, IconResume } from "./Icons";
 
 function lastWorkedOn(s: ImportSessionSummary): string {
   return new Date(s.updated_at ?? s.created_at).toLocaleString(undefined, {
-    dateStyle: "medium",
+    dateStyle: "short",
     timeStyle: "short",
   });
 }
@@ -88,7 +88,16 @@ export async function confirmCloseSession(
 // photos a day stays open with the rest, and continuing it brings the review
 // back as it was left and copies whatever of the card isn't copied yet.
 // Nothing here when no session is open.
-export function ImportSessions() {
+export function ImportSessions({
+  currentSessionId = null,
+  onContinue,
+}: {
+  // The session whose review is open behind this page (the Import tab's step
+  // up from the review): its row is marked, and Continue on it is handed to
+  // the page, which brings the review back instead of re-continuing.
+  currentSessionId?: string | null;
+  onContinue?: (s: ImportSessionSummary) => void;
+} = {}) {
   const { continueSession, isUploading } = useImportSession();
   const dialogs = useAppDialogs();
   const { runTask } = useTasks();
@@ -140,25 +149,24 @@ export function ImportSessions() {
   const open = sessions ?? [];
   const heldBytes = open.reduce((sum, s) => sum + (s.folder_bytes ?? 0), 0);
 
-  // The panel stays whether or not a session is open, so the page below it
+  // The panel stays whether or not a session is open, so the page beside it
   // never jumps when the last one closes.
   return (
     <section className="settings-section">
       <h3 className="settings-section-header">
-        Open import sessions
+        Open sessions
         {open.length > 0 && (
-          <span className="import-panel-count">
-            {plural(open.length, "session", "sessions")}
-            {heldBytes > 0 && ` · ${formatBytes(heldBytes)} in import folders`}
+          <span
+            className="count-pill"
+            title={heldBytes > 0 ? `${formatBytes(heldBytes)} in import folders` : undefined}
+          >
+            {open.length}
           </span>
         )}
       </h3>
-      <p className="import-panel-desc">
-        {open.length === 0
-          ? "No open sessions. A session stays here until you close it."
-          : "Continue where you left off. Selection and ratings are kept; only missing copies are made."}
-      </p>
-      {open.length > 0 && (
+      {open.length === 0 ? (
+        <p className="import-panel-desc">No open sessions.</p>
+      ) : (
         <div className="source-list">
           {open.map((s) => {
             // A session collects from one or more folders; each is continued on
@@ -167,12 +175,19 @@ export function ImportSessions() {
             const waiting = s.sources.filter((src) => !src.available && src.remaining !== 0);
             const remaining = s.sources.reduce((sum, src) => sum + (src.remaining ?? 0), 0);
             const toReview = s.file_count - s.imported_count - s.duplicate_count;
+            // The sources are named only where the name doesn't already say
+            // it: several of them, or one called differently from the session.
+            const namedSources = s.sources.filter((src) => s.sources.length > 1 || src.label !== s.source_path);
             return (
-              // The actions stay on the right whatever the text does: the row
-              // must not wrap them under a long import-folder path.
+              // Two lines and the buttons under them: the name, then the
+              // figures. Where the photos are and what closing does is the
+              // row's tip, and the Close button's.
               <div
                 key={s.id}
-                className={`source-row source-row--nowrap${waiting.length > 0 ? " disconnected" : ""}`}
+                className={`source-row source-row--nowrap${waiting.length > 0 ? " disconnected" : ""}${
+                  s.id === currentSessionId ? " source-row--current" : ""
+                }`}
+                title={folderSentence(s)}
               >
                 <div className="source-row-main">
                   <span className="source-name">
@@ -189,27 +204,17 @@ export function ImportSessions() {
                   <span className="source-meta">
                     {plural(toReview, "photo", "photos")} to review
                     {s.imported_count > 0 && ` · ${s.imported_count.toLocaleString()} in library`}
-                    {remaining > 0 &&
-                      ` · ${remaining.toLocaleString()} not ${s.mode === "reference" ? "added" : "copied"} yet`}
-                    {` · last worked on ${lastWorkedOn(s)}`}
+                    {remaining > 0 && ` · ${remaining.toLocaleString()} to ${s.mode === "reference" ? "add" : "copy"}`}
+                    {` · ${lastWorkedOn(s)}`}
                   </span>
-                  <span className="source-path" title={s.staging_dir ?? undefined}>
-                    {folderSentence(s)}
-                  </span>
-                  {s.sources.length > 0 && (
-                    // Said outright: once the session has a name of its own, a bare
-                    // folder name here read like a leftover second title.
+                  {namedSources.length > 0 && (
                     <span className="source-meta">
-                      <IconFolder size={12} /> {s.sources.length === 1 ? "Source: " : "Sources: "}
-                      {s.sources.map((src, i) => (
+                      <IconFolder size={12} />{" "}
+                      {namedSources.map((src, i) => (
                         <span key={src.id} title={src.current_root ?? src.root}>
                           {i > 0 && " · "}
                           {src.label}
-                          {!src.available
-                            ? " (not connected)"
-                            : src.remaining
-                              ? ` (${src.remaining.toLocaleString()} to copy)`
-                              : ""}
+                          {!src.available ? " (not connected)" : ""}
                         </span>
                       ))}
                     </span>
@@ -218,12 +223,14 @@ export function ImportSessions() {
                 <div className="source-row-actions">
                   <button
                     className="btn primary btn-sm"
-                    onClick={() => continueSession(s)}
-                    disabled={isUploading}
+                    onClick={() => (onContinue ? onContinue(s) : continueSession(s))}
+                    disabled={isUploading && s.id !== currentSessionId}
                     title={
-                      isUploading
-                        ? "Available when the running import has finished copying"
-                        : "Open this session where you left off"
+                      s.id === currentSessionId
+                        ? "Back to this session's review"
+                        : isUploading
+                          ? "Available when the running import has finished copying"
+                          : "Open this session where you left off"
                     }
                   >
                     <IconResume size={14} /> Continue
@@ -239,11 +246,12 @@ export function ImportSessions() {
                   </button>
                   <button
                     className="btn btn-sm quiet-danger"
+                    aria-label={`Close session "${s.source_path}"`}
                     title={closeSessionTitle(s.mode, s.staging_dir, s.keep_backup)}
                     onClick={() => close(s)}
                     disabled={isUploading}
                   >
-                    <IconLeave size={14} /> Close session
+                    <IconLeave size={14} />
                   </button>
                 </div>
               </div>

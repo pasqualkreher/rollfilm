@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useSessionState } from "../utils/useSessionState";
-import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { CANCELLED_NOTE, pairUnits } from "../utils/batchUnits";
@@ -90,7 +90,6 @@ export function AlbumDetail() {
   };
   const [sort, setSort] = useSessionState<SortKey>(`album:${id}:sort`, "newest");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const location = useLocation();
   const barRef = useBarHeight();
   // Export for the selection: the bar's button, the dialog, ⇧⌘E.
   const selectionExport = useSelectionExport(Array.from(selected));
@@ -283,20 +282,12 @@ export function AlbumDetail() {
 
   // Cmd/Ctrl+A picks the whole album, Escape drops the selection, E opens a
   // single selected photo in the editor.
-  // Back from the survey: its photos are the selection again.
-  useEffect(() => {
-    const reselect = (location.state as { reselect?: string[] } | null)?.reselect;
-    if (!reselect) return;
-    setSelected(new Set(reselect));
-    navigate(location.pathname + location.search, { replace: true, state: null });
-  }, [location.state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useSelectionKeys({
     onSelectAll: selectAll,
     onClear: clearSelection,
     hasSelection,
     edit: { selected, order: orderedImages.map((img) => img.id) },
-    survey: { selected, order: orderedImages.map((img) => img.id), returnTo: location.pathname + location.search },
     onRate: (rating) => void applyBulk({ rating }),
     // The key of the colour the selection already has takes it off again.
     onColor: (label) =>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { LibraryMergeSummary } from "../api/types";
@@ -43,9 +43,7 @@ export function ImportLibrary() {
   const running = Boolean(progress?.active);
   const result = progress?.result ?? null;
 
-  async function choose() {
-    const path = await electron?.pickFolder();
-    if (!path) return;
+  async function inspect(path: string) {
     setSummary(null);
     try {
       setReading(true);
@@ -55,6 +53,49 @@ export function ImportLibrary() {
     } finally {
       setReading(false);
     }
+  }
+
+  async function choose() {
+    const path = await electron?.pickFolder();
+    if (path) await inspect(path);
+  }
+
+  // The drop zone takes a folder dragged in from the Finder. It claims the
+  // drop (preventDefault) so the window's own handler does not start a photo
+  // import from the same folder. A depth counter for the highlight: every
+  // child under the pointer fires its own enter/leave pair.
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+  function onDragEnter(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    depth.current += 1;
+    setOver(true);
+  }
+  function onDragLeave(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    depth.current = Math.max(0, depth.current - 1);
+    if (depth.current === 0) setOver(false);
+  }
+  function onDrop(e: React.DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth.current = 0;
+    setOver(false);
+    if (running || reading) return;
+    const item = e.dataTransfer.items[0];
+    const file = e.dataTransfer.files[0];
+    if (!item || !file) return;
+    if (!item.webkitGetAsEntry()?.isDirectory) {
+      setError("Drop the library's folder, not a file", { keep: true });
+      return;
+    }
+    const path = electron?.pathForFile?.(file) ?? "";
+    if (!path) {
+      setError("Could not read the dropped folder's path", { keep: true });
+      return;
+    }
+    void inspect(path);
   }
 
   async function start() {
@@ -83,7 +124,6 @@ export function ImportLibrary() {
 
   return (
     <section className="settings-section">
-      <h3 className="settings-section-header">Import a library</h3>
       <p className="import-panel-desc">
         Merge another Rollfilm library into this one. Ratings, labels, edits, tags and albums come
         along. The other library is only read.
@@ -111,9 +151,26 @@ export function ImportLibrary() {
       )}
 
       {!running && !summary && (
-        <button className="btn" onClick={choose} disabled={reading}>
-          <IconFolder size={13} /> {reading ? "Reading…" : "Choose library folder…"}
-        </button>
+        <div
+          className={`import-dropzone${over ? " dragover" : ""}${reading ? " disabled" : ""}`}
+          onDragEnter={onDragEnter}
+          onDragLeave={onDragLeave}
+          onDragOver={(e) => {
+            if (hasFiles(e)) e.preventDefault();
+          }}
+          onDrop={onDrop}
+        >
+          {reading ? <Spinner /> : <IconFolder size={22} />}
+          <strong>{reading ? "Reading the library…" : "Drop a Rollfilm library folder here"}</strong>
+          <div className="control-group import-dropzone-actions">
+            {!reading && (
+              <button className="btn primary btn-sm" onClick={choose} title="Choose the other library's folder">
+                <span className="btn-label"><IconFolder size={13} /> Choose library folder…</span>
+              </button>
+            )}
+          </div>
+          <span>The folder that holds the other library's photos and its Rollfilm data.</span>
+        </div>
       )}
 
       {!running && summary && (
