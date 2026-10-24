@@ -124,73 +124,81 @@
     !insertmacro _killRollfilmProcesses "$INSTDIR"
   !else
     !insertmacro _killRollfilmProcesses "$rfOldInstallDir"
-    !insertmacro _rfRemoveOldVersion
   !endif
 !macroend
 
-; What electron-builder does next is run the previous version's uninstaller
-; (silently, with --updated) - up to five times, then "Rollfilm cannot be
-; closed ... Retry / Cancel". With --updated that uninstaller moves every file
-; into %TEMP% one by one, and when a single one will not move (locked, a path
-; too long for the temp folder, another drive) it moves them all back and
-; fails. Five rounds of that over thousands of files is the long hang; Retry
-; runs it a sixth time with the same result and the same dialog; only Cancel
-; got through, into the fallback below. That uninstaller belongs to the old
-; version, so nothing in this build can fix it - but it can be skipped: remove
-; the old files here and clear its UninstallString, and electron-builder finds
-; no previous version to uninstall. Registry entries and shortcuts are written
-; afresh by the install section anyway.
+; What electron-builder does next in the install section is run the previous
+; version's uninstaller (silently, with --updated) - up to five times, then
+; "Rollfilm cannot be closed ... Retry / Cancel". With --updated that
+; uninstaller moves every file into %TEMP% one by one, and when a single one
+; will not move (locked, a path too long for the temp folder, another drive)
+; it moves them all back and fails. Five rounds of that over thousands of
+; files is the long hang; Retry runs it a sixth time with the same result and
+; the same dialog; only Cancel got through, into _rfRemoveOldFiles below.
+; That uninstaller belongs to the old version, so nothing in this build can
+; fix it - but it can be skipped: clear its UninstallString and
+; electron-builder finds no previous version to uninstall. Registry entries
+; and shortcuts are written afresh by the install section anyway, and the
+; old files go in _rfRemoveOldFiles, where the progress list is showing.
 ;
-; Only where this process can write: on a per-machine install this hook runs
-; in the unelevated outer instance, which cannot touch Program Files - there
-; the elevated instance takes electron-builder's path and the fallback.
+; Where this happens matters. On a per-machine install the installer starts
+; a second, elevated copy of itself that does the actual work, and in that
+; copy electron-builder skips customCheckAppRunning - v0.2.0 cleared the
+; value there and so never reached Program Files installs. A hidden page
+; between the directory page and the install page runs in every instance
+; that gets as far as installing, after the last click (Install) and before
+; the install section: a per-user install, the elevated copy of a
+; per-machine install, with or without --updated. The install mode is final
+; by then, so SHELL_CONTEXT is the hive of the installation being replaced;
+; the path is read again because customInit read it before the mode page.
 !ifndef BUILD_UNINSTALLER
-!macro _rfRemoveOldVersion
-  Push $0
-  ${If} $rfOldInstallDir != ""
-  ${AndIf} ${FileExists} "$rfOldInstallDir\Rollfilm.exe"
+!macro customPageAfterChangeDir
+  Function rfSkipOldUninstaller
     ClearErrors
-    FileOpen $0 "$rfOldInstallDir\.rollfilm-update" w
-    ${IfNot} ${Errors}
-      FileClose $0
-      Delete "$rfOldInstallDir\.rollfilm-update"
-      DetailPrint "Removing the previous version from $rfOldInstallDir (this can take a minute)..."
-      RMDir /r "$rfOldInstallDir"
+    ReadRegStr $rfOldInstallDir SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ${If} ${Errors}
+      StrCpy $rfOldInstallDir ""
+    ${EndIf}
+    ClearErrors
+    ${If} $rfOldInstallDir != ""
+    ${AndIf} ${FileExists} "$rfOldInstallDir\Rollfilm.exe"
       DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString
       !ifdef UNINSTALL_REGISTRY_KEY_2
         DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY_2}" UninstallString
       !endif
+      ClearErrors
     ${EndIf}
-    ClearErrors
-  ${EndIf}
-  Pop $0
+    Abort ; nothing to show - on to the install page
+  FunctionEnd
+  PageEx custom
+    PageCallbacks rfSkipOldUninstaller
+  PageExEnd
 !macroend
 !endif
 
 ; The uninstaller this build ships: the same plain removal, never the
-; move-to-temp-and-back of electron-builder's --updated path, so the next
-; version's installer cannot run into the loop above even where it still
-; runs this uninstaller (per-machine). The processes were ended in
-; customUnInit; a manual uninstall did RMDir /r before and still does.
+; move-to-temp-and-back of electron-builder's --updated path, so it cannot
+; run into the loop above wherever a later installer still runs it. The
+; processes were ended in customUnInit; a manual uninstall did RMDir /r
+; before and still does.
 !macro customRemoveFiles
   RMDir /r $INSTDIR
 !macroend
 
-; Reached right after electron-builder ran the previous version's uninstaller
-; (silently, with --updated) - or found none to run, because
-; _rfRemoveOldVersion already removed it. Its default reaction to a failure
-; is a message box - "Failed to uninstall old application files. Please try
-; running the installer again" - and Quit; running it again fails the same
-; way, and the user ends up in Settings > Apps uninstalling by hand before
-; the setup gets anywhere. Nothing in the old directory is worth that: the
-; new version brings a complete copy of everything. So on an error we remove
-; the old files ourselves and carry on installing.
-;
-; $R0 is the old uninstaller's exit code (0 = fine; 2 is its Abort when a
-; file could not be moved), the error flag means it could not even be
-; started. The directory is only wiped when it actually holds a Rollfilm -
-; a registry value pointing somewhere else is not a reason to delete that.
-!macro _rfRecoverFailedUninstall
+; Reached right after electron-builder looked for the previous version's
+; uninstaller - skipped above, so the old files are still in place - or ran
+; it after all (a per-user copy beside a per-machine install), with $R0 its
+; exit code (0 = fine; 2 is its Abort when a file could not be moved) and the
+; error flag meaning it could not even be started. electron-builder's own
+; reaction to a failure is a message box - "Failed to uninstall old
+; application files. Please try running the installer again" - and Quit;
+; running it again fails the same way, and the user ends up in Settings >
+; Apps uninstalling by hand. Nothing in the old directory is worth that: the
+; new version brings a complete copy of everything. So whatever happened
+; before, a Rollfilm still in the old directory is removed here and the
+; install carries on. A registry value pointing somewhere without a
+; Rollfilm.exe is not a reason to delete that directory.
+!macro _rfRemoveOldFiles
   !insertmacro _rfShowProgress
   ${If} ${Errors}
     ClearErrors
@@ -198,19 +206,18 @@
   ${EndIf}
   ${If} $R0 != 0
     DetailPrint "The previous version's uninstaller failed ($R0) - removing its files directly."
-    !insertmacro _killRollfilmProcesses "$rfOldInstallDir"
-    ${If} $rfOldInstallDir != ""
-    ${AndIf} ${FileExists} "$rfOldInstallDir\Rollfilm.exe"
-      RMDir /r "$rfOldInstallDir"
-    ${EndIf}
+  ${EndIf}
+  ${If} $rfOldInstallDir != ""
+  ${AndIf} ${FileExists} "$rfOldInstallDir\Rollfilm.exe"
+    DetailPrint "Removing the previous version from $rfOldInstallDir (this can take a minute)..."
+    RMDir /r "$rfOldInstallDir"
     ; Whatever is left (a locked file or two) gets overwritten by the
     ; install; a directory that survives only because it is our own working
     ; directory is fine too.
-    ClearErrors
-    StrCpy $R0 0
-  ${ElseIf} $rfOldInstallDir != ""
     DetailPrint "Previous version removed."
   ${EndIf}
+  ClearErrors
+  StrCpy $R0 0
 !macroend
 
 ; Next comes the part that takes longest and used to look like a hang: the
@@ -223,14 +230,14 @@
 !macroend
 
 !macro customUnInstallCheck
-  !insertmacro _rfRecoverFailedUninstall
+  !insertmacro _rfRemoveOldFiles
   ${If} $installMode != "all"
     !insertmacro _rfAnnounceUnpack
   ${EndIf}
 !macroend
 
 !macro customUnInstallCheckCurrentUser
-  !insertmacro _rfRecoverFailedUninstall
+  !insertmacro _rfRemoveOldFiles
   !insertmacro _rfAnnounceUnpack
 !macroend
 
