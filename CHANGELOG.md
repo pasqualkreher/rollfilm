@@ -4,6 +4,11 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.2.1 — 2026-10-24
+
+### Fixed
+- Windows: the update of a Rollfilm installed for all users (Program Files) still stopped on "Rollfilm cannot be closed – Retry / Cancel"; the previous version is now skipped in that case too.
+
 ## 0.2.0 — 2026-10-24
 
 ### Fixed
