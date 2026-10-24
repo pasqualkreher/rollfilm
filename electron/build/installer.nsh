@@ -19,8 +19,9 @@
 ; version / Retry" loop. The installer is never a descendant of the backend, so
 ; /T is safe there and takes the exiftool workers down with it.
 
-!macro _killRollfilmProcesses
+!macro _killRollfilmProcesses DIR
   Push $0 ; nsExec::Exec pushes its exit code; leave the caller's $0 untouched
+  Push $1
 
   ; No /T - see above.
   nsExec::Exec 'taskkill /F /IM "Rollfilm.exe"'
@@ -36,8 +37,22 @@
   Pop $0
   nsExec::Exec 'taskkill /F /T /IM "photo-manager-backend.exe"'
   Pop $0
+
+  ; /T only reaches the exiftool workers while their backend is alive. After a
+  ; backend crash they live on as orphans (exiftool.exe and its perl.exe, both
+  ; under resources\exiftool) and keep the install dir locked. So end whatever
+  ; still runs from DIR - matched by path, so an exiftool the user runs for
+  ; other things is left alone - except this process itself, which is the old
+  ; uninstaller when electron-builder falls back to running it in place.
+  StrCpy $1 "${DIR}"
+  ${If} $1 != ""
+    System::Call 'kernel32::GetCurrentProcessId() i .r0'
+    nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $$_.Id -ne $0 -and $$_.Path -and $$_.Path.StartsWith('$1\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force"`
+    Pop $0
+  ${EndIf}
   Sleep 500
 
+  Pop $1
   Pop $0
 !macroend
 
@@ -74,20 +89,21 @@
 !macroend
 
 !macro customInit
-  !insertmacro _killRollfilmProcesses
-
   ; initMultiUser has run by now, so SHELL_CONTEXT points at the hive of the
-  ; installation electron-builder is about to replace.
+  ; installation electron-builder is about to replace. Read first, so the
+  ; sweep knows which directory to clear.
   ClearErrors
   ReadRegStr $rfOldInstallDir SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
   ${If} ${Errors}
     StrCpy $rfOldInstallDir ""
   ${EndIf}
   ClearErrors
+
+  !insertmacro _killRollfilmProcesses "$rfOldInstallDir"
 !macroend
 
 !macro customUnInit
-  !insertmacro _killRollfilmProcesses
+  !insertmacro _killRollfilmProcesses "$INSTDIR"
 !macroend
 
 ; electron-builder's own "is the app running?" check, in the installer and
@@ -104,24 +120,71 @@
 !macro customCheckAppRunning
   !insertmacro _rfShowProgress
   DetailPrint "Closing Rollfilm if it is still running..."
-  !insertmacro _killRollfilmProcesses
-  !ifndef BUILD_UNINSTALLER
-    ; What electron-builder does next, and says nothing about: run the
-    ; previous version's uninstaller and wait for it.
-    ${If} $rfOldInstallDir != ""
-      DetailPrint "Removing the previous version from $rfOldInstallDir (this can take a minute)..."
-    ${EndIf}
+  !ifdef BUILD_UNINSTALLER
+    !insertmacro _killRollfilmProcesses "$INSTDIR"
+  !else
+    !insertmacro _killRollfilmProcesses "$rfOldInstallDir"
+    !insertmacro _rfRemoveOldVersion
   !endif
 !macroend
 
+; What electron-builder does next is run the previous version's uninstaller
+; (silently, with --updated) - up to five times, then "Rollfilm cannot be
+; closed ... Retry / Cancel". With --updated that uninstaller moves every file
+; into %TEMP% one by one, and when a single one will not move (locked, a path
+; too long for the temp folder, another drive) it moves them all back and
+; fails. Five rounds of that over thousands of files is the long hang; Retry
+; runs it a sixth time with the same result and the same dialog; only Cancel
+; got through, into the fallback below. That uninstaller belongs to the old
+; version, so nothing in this build can fix it - but it can be skipped: remove
+; the old files here and clear its UninstallString, and electron-builder finds
+; no previous version to uninstall. Registry entries and shortcuts are written
+; afresh by the install section anyway.
+;
+; Only where this process can write: on a per-machine install this hook runs
+; in the unelevated outer instance, which cannot touch Program Files - there
+; the elevated instance takes electron-builder's path and the fallback.
+!ifndef BUILD_UNINSTALLER
+!macro _rfRemoveOldVersion
+  Push $0
+  ${If} $rfOldInstallDir != ""
+  ${AndIf} ${FileExists} "$rfOldInstallDir\Rollfilm.exe"
+    ClearErrors
+    FileOpen $0 "$rfOldInstallDir\.rollfilm-update" w
+    ${IfNot} ${Errors}
+      FileClose $0
+      Delete "$rfOldInstallDir\.rollfilm-update"
+      DetailPrint "Removing the previous version from $rfOldInstallDir (this can take a minute)..."
+      RMDir /r "$rfOldInstallDir"
+      DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString
+      !ifdef UNINSTALL_REGISTRY_KEY_2
+        DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY_2}" UninstallString
+      !endif
+    ${EndIf}
+    ClearErrors
+  ${EndIf}
+  Pop $0
+!macroend
+!endif
+
+; The uninstaller this build ships: the same plain removal, never the
+; move-to-temp-and-back of electron-builder's --updated path, so the next
+; version's installer cannot run into the loop above even where it still
+; runs this uninstaller (per-machine). The processes were ended in
+; customUnInit; a manual uninstall did RMDir /r before and still does.
+!macro customRemoveFiles
+  RMDir /r $INSTDIR
+!macroend
+
 ; Reached right after electron-builder ran the previous version's uninstaller
-; (silently, with --updated). Its default reaction to a failure is a message
-; box - "Failed to uninstall old application files. Please try running the
-; installer again" - and Quit; running it again fails the same way, and the
-; user ends up in Settings > Apps uninstalling by hand before the setup gets
-; anywhere. Nothing in the old directory is worth that: the new version
-; brings a complete copy of everything. So on an error we remove the old
-; files ourselves and carry on installing.
+; (silently, with --updated) - or found none to run, because
+; _rfRemoveOldVersion already removed it. Its default reaction to a failure
+; is a message box - "Failed to uninstall old application files. Please try
+; running the installer again" - and Quit; running it again fails the same
+; way, and the user ends up in Settings > Apps uninstalling by hand before
+; the setup gets anywhere. Nothing in the old directory is worth that: the
+; new version brings a complete copy of everything. So on an error we remove
+; the old files ourselves and carry on installing.
 ;
 ; $R0 is the old uninstaller's exit code (0 = fine; 2 is its Abort when a
 ; file could not be moved), the error flag means it could not even be
@@ -135,7 +198,7 @@
   ${EndIf}
   ${If} $R0 != 0
     DetailPrint "The previous version's uninstaller failed ($R0) - removing its files directly."
-    !insertmacro _killRollfilmProcesses
+    !insertmacro _killRollfilmProcesses "$rfOldInstallDir"
     ${If} $rfOldInstallDir != ""
     ${AndIf} ${FileExists} "$rfOldInstallDir\Rollfilm.exe"
       RMDir /r "$rfOldInstallDir"
