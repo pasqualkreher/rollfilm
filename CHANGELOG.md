@@ -4,6 +4,26 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.2.2 — 2026-10-26
+
+### New
+- **Edit a copy**: Edit… and the right-click menu can put the automatic edit or a preset on a copy of each photo – a real file or a virtual copy – while the originals stay as they are.
+- **Save as…** in the selection bar: Export… and Save copy… in one menu.
+- **Full resolution in the photo view**: a raw gets sharp the way the editor does – the whole frame at the screen's size when fitted, the visible part when zoomed in – instead of waiting for a full-size render; paging on stops the photo you left.
+- Long lists stay short: Add to…, Edit… and the right-click submenus show the five presets, albums, canvases or tags you used last and put the rest behind More…, a dialog with a search field.
+
+### Improved
+- "Apply … and save copy" on many photos: the copies appear in the grid as they are written, they keep the edit you applied even if you change the photos again meanwhile, and the copy job no longer competes with the thumbnail renders for memory.
+- The title bar counts a bulk edit as "Rendering n of N" with N = your selection; Thumbnails and Saving copy are their own chips with their own Stop.
+- Startup no longer checks the whole library folder (Settings › Sync database to library still does) and no longer sweeps the thumbnail cache; on an external drive that took minutes.
+- Editor: once the sliders rest, the whole photo is rendered at its own resolution, so zooming in is sharp at once.
+- White balance shift pad: the mouse moves the puck in whole steps; the fields and Shift with the arrow keys go between them.
+
+### Fixed
+- Thumbnails left unfinished by a quit are picked up on the next start without a check of the whole library.
+- The library folder dialogs at startup no longer sit behind the splash screen.
+- A trash purge running at the same moment as a library check no longer makes the check fail.
+
 ## 0.2.1 — 2026-10-24
 
 ### Fixed
