@@ -391,6 +391,10 @@ async function ensureLibraryRoot() {
   if (cfg.libraryRoot && fs.existsSync(cfg.libraryRoot)) return cfg.libraryRoot;
 
   const missing = Boolean(cfg.libraryRoot); // saved but no longer present
+  // The splash would sit in front of these dialogs (it may even appear only
+  // now, on its ready-to-show), so it goes away while they are up and comes
+  // back once a folder is chosen.
+  closeSplash();
   while (true) {
     const intro = await dialog.showMessageBox({
       type: "info",
@@ -417,6 +421,7 @@ async function ensureLibraryRoot() {
 
     const chosen = picked.filePaths[0];
     writeConfig({ ...readConfig(), libraryRoot: chosen });
+    createSplash();
     return chosen;
   }
 }

@@ -1,9 +1,10 @@
 import { memo, useEffect, useRef, useState } from "react";
 
 // The white-balance shift grid a camera shows: one puck on a red/blue cross,
-// -9..+9 on each axis. One unit is one step of the camera's grid, but the puck
-// is free between the crossings (tenths) - a whole step is 3-4 % on a channel,
-// too much for a fine correction. Right is more red (left: cyan), up is more
+// -9..+9 on each axis. One unit is one step of the camera's grid; the mouse
+// puts the puck on the crossings, the fields (and Shift with the arrow keys)
+// go between them (tenths) for a finer correction - a whole step is 3-4 % on a
+// channel. Right is more red (left: cyan), up is more
 // blue (down: yellow). It sits under the Kelvin slider and is independent
 // of it - the colour temperature is set first, this is the fine correction on
 // top (adjustments wb_shift_r / wb_shift_b, applied as channel gains in the
@@ -20,6 +21,8 @@ const REACH = 9;
 const limit = (v: number) => Math.max(-REACH, Math.min(REACH, v));
 // Held in tenths of a step.
 const clamp = (v: number) => Math.round(limit(v) * 10) / 10;
+// The mouse moves in whole steps.
+const snap = (v: number) => Math.round(limit(v));
 const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`);
 // The arrow keys: one step, with Shift half a step.
 const KEY_STEP = 1;
@@ -108,8 +111,8 @@ function WbShiftPadImpl({ red, blue, onChange }: Props) {
   // (Shift) without the puck jumping.
   const dragRef = useRef({ red: 0, blue: 0, x: 0, y: 0 });
 
-  // Where on the cross a point of the screen is. Not snapped to the grid's
-  // crossings - the puck follows the pointer.
+  // Where on the cross a point of the screen is, unrounded (snapped to the
+  // nearest crossing when sent).
   function fromPointer(clientX: number, clientY: number) {
     const rect = padRef.current!.getBoundingClientRect();
     const x = (clientX - rect.left) / rect.width;
@@ -125,7 +128,7 @@ function WbShiftPadImpl({ red, blue, onChange }: Props) {
     drag.blue = limit(drag.blue - ((clientY - drag.y) / rect.height) * 2 * REACH * pace);
     drag.x = clientX;
     drag.y = clientY;
-    return { red: clamp(drag.red), blue: clamp(drag.blue) };
+    return { red: snap(drag.red), blue: snap(drag.blue) };
   }
 
   function queueChange(v: { red: number; blue: number }) {
@@ -179,7 +182,7 @@ function WbShiftPadImpl({ red, blue, onChange }: Props) {
             // the drag starts from where the puck is and only nudges it.
             const start = e.shiftKey ? { red, blue } : fromPointer(e.clientX, e.clientY);
             dragRef.current = { ...start, x: e.clientX, y: e.clientY };
-            if (!e.shiftKey) onChangeRef.current({ red: clamp(start.red), blue: clamp(start.blue) });
+            if (!e.shiftKey) onChangeRef.current({ red: snap(start.red), blue: snap(start.blue) });
           }}
           onPointerMove={(e) => {
             if (draggingRef.current) queueChange(dragTo(e.clientX, e.clientY, e.shiftKey));
