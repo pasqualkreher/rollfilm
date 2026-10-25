@@ -1,4 +1,8 @@
 import { useCallback, useState } from "react";
+import { Presence } from "./Presence";
+import { MOTION } from "../utils/usePresence";
+import { PickerDialog } from "./PickerDialog";
+import { noteRecent, shortList } from "../utils/recents";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -75,6 +79,8 @@ export function AddToPicker({
   });
 
   const [busy, setBusy] = useState(false);
+  // "More…": every album and canvas with a search box (PickerDialog).
+  const [moreOpen, setMoreOpen] = useState(false);
   const notice = useAddToNotice();
 
   function report(kind: AddToResult["kind"], id: string, name: string, ok: boolean) {
@@ -97,6 +103,7 @@ export function AddToPicker({
       queryClient.invalidateQueries({ queryKey: ["image"] });
       queryClient.invalidateQueries({ queryKey: ["images"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      noteRecent(kind, id);
       report(kind, id, name, true);
     } catch {
       report(kind, "", name, false);
@@ -149,9 +156,20 @@ export function AddToPicker({
     }
   }
 
+  // The lists newest-first, so a library without any recents yet still
+  // shows what was made last; the few used all the time come first once
+  // they have been (utils/recents).
+  const albumsNewest = [...(albums ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const canvasesNewest = [...(canvases ?? [])].sort((a, b) =>
+    (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at)
+  );
+  const albumsShort = shortList("album", albumsNewest, (a) => a.id);
+  const canvasesShort = shortList("canvas", canvasesNewest, (c) => c.id);
+  const hiddenCount = albumsShort.hidden.length + canvasesShort.hidden.length;
+
   const options = [
     { value: "h-albums", label: <span className="dropdown-group-label">Albums</span>, disabled: true },
-    ...(albums ?? []).map((a) => ({
+    ...albumsShort.shown.map((a) => ({
       value: `album:${a.id}`,
       label: (
         <>
@@ -169,7 +187,7 @@ export function AddToPicker({
       ),
     },
     { value: "h-canvas", label: <span className="dropdown-group-label">Canvas</span>, disabled: true },
-    ...(canvases ?? []).map((c) => ({
+    ...canvasesShort.shown.map((c) => ({
       value: `canvas:${c.id}`,
       label: (
         <>
@@ -186,6 +204,7 @@ export function AddToPicker({
         </>
       ),
     },
+    ...(hiddenCount > 0 ? [{ value: "more", label: `More… (${hiddenCount})`, search: "more" }] : []),
   ];
 
   return (
@@ -196,10 +215,61 @@ export function AddToPicker({
         disabled={busy || disabled}
         ariaLabel="Add to album or canvas"
         onChange={(v) => {
-          if (v) void handle(v);
+          if (v === "more") setMoreOpen(true);
+          else if (v) void handle(v);
         }}
         options={options}
       />
+      <Presence open={moreOpen} ms={MOTION.modal}>
+        {moreOpen && (
+          <PickerDialog
+            title="Add to album or canvas"
+            groups={[
+              {
+                heading: "Albums",
+                items: albumsNewest.map((a) => ({
+                  id: `album:${a.id}`,
+                  label: (
+                    <>
+                      <IconAlbum size={13} /> {a.name}
+                    </>
+                  ),
+                  search: a.name,
+                  count: a.image_count,
+                })),
+                newLabel: "New album…",
+                onNew: () => {
+                  setMoreOpen(false);
+                  void handle("new-album");
+                },
+              },
+              {
+                heading: "Canvas",
+                items: canvasesNewest.map((c) => ({
+                  id: `canvas:${c.id}`,
+                  label: (
+                    <>
+                      <IconCanvas size={13} /> {c.name}
+                    </>
+                  ),
+                  search: c.name,
+                  count: c.image_count,
+                })),
+                newLabel: "New canvas…",
+                onNew: () => {
+                  setMoreOpen(false);
+                  void handle("new-canvas");
+                },
+              },
+            ]}
+            onPick={(v) => {
+              setMoreOpen(false);
+              void handle(v);
+            }}
+            onClose={() => setMoreOpen(false)}
+          />
+        )}
+      </Presence>
     </div>
   );
 }

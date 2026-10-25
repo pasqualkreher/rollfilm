@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { SourceRoot } from "../api/types";
 import { useImportSession } from "./importSession";
-import { useExternalTask } from "./tasks";
+import { useExternalTask, useTasks } from "./tasks";
+import { nudgeWaitingThumbs } from "../utils/thumbNudge";
 
 // Work whose state lives elsewhere - an import session, the Immich sync, a
 // library merge, a source folder's scan - mirrored into the title bar's task
@@ -16,6 +17,7 @@ export function TaskSources() {
       <ImmichSource />
       <MergeSource />
       <ScanSources />
+      <BackgroundSource />
     </>
   );
 }
@@ -124,6 +126,43 @@ function MergeSource() {
           cancelling: stopping,
           stopTitle: "Stop after the photo being copied. What came across stays; run it again to continue.",
           title: "Another library is being merged into this one. You can keep working.",
+        }
+      : null
+  );
+  return null;
+}
+
+// Thumbnails the backend renders on its own, which no button started and so
+// nothing else showed - though the quit dialog waits for them: an import's,
+// the unfinished ones a last run left. Those of photos a bulk edit is being
+// followed for already count in "Rendering" (per photo, whatever render it
+// waits for) and are left out here, so nothing shows twice. (A library sync
+// is Settings' button and has its task there.)
+function BackgroundSource() {
+  const { trackedPlainPending } = useTasks();
+  const { data } = useQuery({
+    queryKey: ["background-activity"],
+    queryFn: () => api.maintenance.backgroundActivity(),
+    refetchInterval: (query) => ((query.state.data?.thumbnails_pending ?? 0) > 0 ? 2000 : 15_000),
+  });
+  const thumbnails = Math.max(0, (data?.thumbnails_pending ?? 0) - trackedPlainPending);
+  // Tiles still waiting for their picture ask again once the queue is through.
+  const hadThumbnails = useRef(false);
+  useEffect(() => {
+    if (thumbnails > 0) hadThumbnails.current = true;
+    else if (hadThumbnails.current) {
+      hadThumbnails.current = false;
+      nudgeWaitingThumbs();
+    }
+  }, [thumbnails]);
+  useExternalTask(
+    thumbnails > 0
+      ? {
+          id: "thumbnails",
+          kind: "renders",
+          label: `Thumbnails · ${thumbnails} left`,
+          cancel: null,
+          title: "Missing thumbnails are being rendered. You can keep working.",
         }
       : null
   );

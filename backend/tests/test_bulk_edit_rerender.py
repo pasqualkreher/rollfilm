@@ -284,3 +284,51 @@ def test_the_renders_of_a_bulk_edit_go_ahead_of_thumbnails_queued_earlier(held_q
     for fn, args in jobs[2:]:
         fn(*args)
     assert rendered == ["a", "b", "old-1", "old-2", "old-3"]
+
+
+def test_the_thumbnail_queue_is_counted_apart_from_the_re_renders(held_queue, tmp_path, monkeypatch):
+    """The dock shows a bulk edit's renders and the plain thumbnail jobs (an
+    import's, the ones a sync found missing) as two counts that add up to
+    derivatives_pending - the quit dialog's number."""
+    queue, jobs, rendered = held_queue
+    # Jobs an earlier test left in its held pool still count there.
+    monkeypatch.setattr(queue, "_pending_derivatives", 0)
+    queue.enqueue_post_import("t1", tmp_path / "t1.jpg")
+    queue.enqueue_post_import("t2", tmp_path / "t2.jpg")
+    queue.enqueue_rerender("a", undo="before-a")
+    queue.enqueue_rerender("b", undo="before-b")
+    assert queue.derivatives_pending() == 4
+    assert queue.thumbnail_jobs_pending() == 2
+    # A cancelled re-render waits in the pool but is no thumbnail job.
+    queue.cancel_rerenders(["b"])
+    assert queue.thumbnail_jobs_pending() == 2
+    # The pool takes the re-renders first: two turns finish "a" and skip "b".
+    for _ in range(2):
+        fn, args = jobs.pop(0)
+        fn(*args)
+    assert rendered == ["a"]
+    assert queue.derivatives_pending() == 2
+    assert queue.thumbnail_jobs_pending() == 2
+
+
+def test_pending_per_photo_counts_any_job_kind(held_queue, tmp_path, monkeypatch):
+    """The dock's "Rendering n of N" is per photo of the selection, whatever
+    render it waits for: a re-render, a plain thumbnail job, or both; a
+    cancelled re-render still in the pool is nothing."""
+    queue, jobs, rendered = held_queue
+    monkeypatch.setattr(queue, "_pending_derivatives", 0)
+    monkeypatch.setattr(queue, "_journal", {})
+    queue.enqueue_post_import("plain", tmp_path / "plain.jpg")
+    queue.enqueue_rerender("edit", undo="before-edit")
+    queue.enqueue_post_import("both", tmp_path / "both.jpg")
+    queue.enqueue_rerender("both", undo="before-both")
+    queue.enqueue_rerender("cancelled", undo="before-cancelled")
+    queue.cancel_rerenders(["cancelled"])
+    assert queue.derivatives_pending_for(["plain", "edit", "both", "cancelled", "none"]) == (3, 1)
+    # The re-renders go first in the pool: "edit" and "both" through, the
+    # cancelled one's no-op turn taken.
+    for _ in range(3):
+        fn, args = jobs.pop(0)
+        fn(*args)
+    assert sorted(rendered) == ["both", "edit"]
+    assert queue.derivatives_pending_for(["plain", "edit", "both", "cancelled"]) == (2, 2)

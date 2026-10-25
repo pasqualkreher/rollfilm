@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import threading
@@ -98,6 +99,114 @@ def derivatives_pending() -> int:
         return _pending_derivatives
 
 
+# --- The journal of unfinished derivative work ---------------------------------
+# The queue is in memory: a quit mid-run left photos whose thumbnails a bulk
+# edit had dropped, or an import had not rendered yet, without any. The
+# startup library sync used to find them by asking every photo's cache folder
+# - 25,000 lookups in one exFAT folder, 130 s on the USB drive at every
+# start. Now the queue writes down whom it still owes a picture
+# (pending-derivatives.json beside the cache), and the next start queues just
+# those (resume_derivative_journal). Counted per photo: a photo can be queued
+# twice (two bulk edits) and stays owed until both are through.
+_journal: dict[str, int] = {}
+_journal_dirty = False
+_journal_timer: threading.Timer | None = None
+# Written at most this often while the queue moves; flushed on shutdown.
+_JOURNAL_WRITE_S = 3.0
+_JOURNAL_NAME = "pending-derivatives.json"
+
+
+def _journal_path() -> Path:
+    return settings.thumbnail_cache_root / _JOURNAL_NAME
+
+
+def _journal_add(image_id: str) -> None:
+    """Under _pending_derivatives_lock."""
+    _journal[image_id] = _journal.get(image_id, 0) + 1
+    _journal_touched()
+
+
+def _journal_remove(image_id: str) -> None:
+    """Under _pending_derivatives_lock."""
+    left = _journal.get(image_id, 0) - 1
+    if left > 0:
+        _journal[image_id] = left
+    else:
+        _journal.pop(image_id, None)
+    _journal_touched()
+
+
+def _journal_touched() -> None:
+    """Under _pending_derivatives_lock: schedule a write unless one is due."""
+    global _journal_dirty, _journal_timer
+    _journal_dirty = True
+    if _journal_timer is None:
+        _journal_timer = threading.Timer(_JOURNAL_WRITE_S, flush_derivative_journal)
+        _journal_timer.daemon = True
+        _journal_timer.start()
+
+
+def flush_derivative_journal() -> None:
+    """Write the journal now if it changed (the debounce timer, and shutdown)."""
+    global _journal_dirty, _journal_timer
+    with _pending_derivatives_lock:
+        if _journal_timer is not None:
+            _journal_timer.cancel()
+            _journal_timer = None
+        if not _journal_dirty:
+            return
+        ids = sorted(_journal)
+        _journal_dirty = False
+    path = _journal_path()
+    try:
+        if not ids:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(ids))
+        os.replace(tmp, path)
+    except OSError:
+        logger.warning("Could not write the derivative journal %s", path, exc_info=True)
+
+
+def resume_derivative_journal() -> int:
+    """Queue the photos the last run still owed a thumbnail (see _journal):
+    the ones that still exist, are not in the Trash, are reachable and have
+    no thumbnail by now. Returns how many were queued."""
+    path = _journal_path()
+    try:
+        ids = json.loads(path.read_text())
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError):
+        logger.warning("Could not read the derivative journal %s", path, exc_info=True)
+        return 0
+    queued = 0
+    db = SessionLocal()
+    try:
+        for image_id in ids:
+            image = db.get(Image, image_id) if isinstance(image_id, str) else None
+            if image is None or image.deleted_at is not None or has_derivatives(image_id):
+                continue
+            original = resolve_image_path(image)
+            try:
+                reachable = original.exists()
+            except OSError:
+                reachable = False
+            if reachable:
+                enqueue_post_import(image_id, original)
+                queued += 1
+    finally:
+        db.close()
+    # The ones left out (gone, rendered meanwhile) are owed nothing: rewrite
+    # the journal from what is queued now, or drop it.
+    with _pending_derivatives_lock:
+        _journal_touched()
+    flush_derivative_journal()
+    return queued
+
+
 # Re-renders after a bulk edit that are queued or running, per photo (a count:
 # a second edit can queue a photo again before its first render is through).
 # The app asks for these to show how far the pictures of a bulk edit are.
@@ -110,6 +219,38 @@ _rerender_undo: dict[str, Any] = {}
 # still in the pool's queue that were cancelled and have to do nothing.
 _running_rerenders: dict[str, int] = {}
 _cancelled_rerenders: dict[str, int] = {}
+
+
+def thumbnail_jobs_pending() -> int:
+    """The derivative jobs that are not a bulk edit's re-render: an import's
+    thumbnails, or the ones the library sync found missing. The app's task
+    dock shows these on their own beside a bulk edit's "Rendering" count;
+    derivatives_pending() is both together. Cancelled re-renders still sit
+    in the pool until their turn and count in neither."""
+    with _pending_derivatives_lock:
+        rerenders = sum(_pending_rerenders.values()) + sum(_cancelled_rerenders.values())
+        return max(0, _pending_derivatives - rerenders)
+
+
+def derivatives_pending_for(image_ids: list[str]) -> tuple[int, int]:
+    """Of these photos, how many still wait for ANY derivative job - a bulk
+    edit's re-render or a plain thumbnail job (an import's, the journal's) -
+    and how many of those wait for a plain job alone. What the app's
+    "Rendering n of N" counts down: the user's selection, whatever kind of
+    render each photo happens to need. A cancelled re-render still queued
+    for its no-op turn counts for nothing."""
+    pending = plain = 0
+    with _pending_derivatives_lock:
+        for image_id in image_ids:
+            rerenders = _pending_rerenders.get(image_id, 0)
+            # The journal holds every job of the photo: plain ones, pending
+            # re-renders and cancelled re-renders still in the pool.
+            plain_jobs = _journal.get(image_id, 0) - rerenders - _cancelled_rerenders.get(image_id, 0)
+            if rerenders > 0 or plain_jobs > 0:
+                pending += 1
+                if rerenders == 0:
+                    plain += 1
+    return pending, plain
 
 
 def rerenders_pending(image_ids: list[str]) -> int:
@@ -167,11 +308,13 @@ def enqueue_post_import(image_id: str, source_path: Path) -> None:
     global _pending_derivatives
     with _pending_derivatives_lock:
         _pending_derivatives += 1
+        _journal_add(image_id)
     try:
         _submit(_waiting_jobs, _process, image_id, source_path)
     except Exception:
         with _pending_derivatives_lock:
             _pending_derivatives -= 1
+            _journal_remove(image_id)
         raise
 
 
@@ -190,6 +333,7 @@ def enqueue_rerender(image_id: str, undo: Any = None) -> None:
     global _pending_derivatives
     with _pending_derivatives_lock:
         _pending_derivatives += 1
+        _journal_add(image_id)
         _pending_rerenders[image_id] = _pending_rerenders.get(image_id, 0) + 1
         if undo is not None:
             _rerender_undo.setdefault(image_id, undo)
@@ -198,6 +342,7 @@ def enqueue_rerender(image_id: str, undo: Any = None) -> None:
     except Exception:
         with _pending_derivatives_lock:
             _pending_derivatives -= 1
+            _journal_remove(image_id)
         _rerender_settled(image_id)
         raise
 
@@ -212,7 +357,7 @@ def _rerender(image_id: str) -> None:
         else:
             _running_rerenders[image_id] = _running_rerenders.get(image_id, 0) + 1
     if cancelled:
-        _derivative_job_done()
+        _derivative_job_done(image_id)
         return
     try:
         # Read the row now, not at enqueue time: whatever the photo holds when
@@ -236,13 +381,14 @@ def _rerender(image_id: str) -> None:
             else:
                 _running_rerenders.pop(image_id, None)
         _rerender_settled(image_id)
-        _derivative_job_done()
+        _derivative_job_done(image_id)
 
 
-def _derivative_job_done() -> None:
+def _derivative_job_done(image_id: str) -> None:
     global _pending_derivatives
     with _pending_derivatives_lock:
         _pending_derivatives -= 1
+        _journal_remove(image_id)
         drained = _pending_derivatives <= 0
     if drained:
         # The render queue just went quiet - good moment to catch up on
@@ -508,7 +654,7 @@ def _process(image_id: str, source_path: Path) -> None:
     except Exception:
         logger.exception("Thumbnail/preview generation failed for image %s", image_id)
     finally:
-        _derivative_job_done()
+        _derivative_job_done(image_id)
 
 
 # --- Deferred search embeddings ----------------------------------------------

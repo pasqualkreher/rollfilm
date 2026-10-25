@@ -34,7 +34,7 @@ from app.services import machine
 from app.services.idle_reaper import start_idle_reaper
 from app.services.hashing import warm_phash_in_background
 from app.services.immich_sync import start_background_immich_sync
-from app.services.maintenance import start_background_sync
+from app.services.maintenance import start_background_housekeeping
 from app.services.db_snapshots import start_background_snapshot
 from app.services.membership_tags import sync_membership_tags
 from app.services.sources import scan_all_sources
@@ -114,10 +114,10 @@ def on_startup() -> None:
     # since last run - runs in the background so startup isn't blocked, and is
     # incremental (only new files are indexed).
     scan_all_sources()
-    # Reconcile the DB with the library folder (same as Settings' "Sync
-    # database to library") now that the folder is selected/confirmed -
-    # backgrounded like the scans.
-    start_background_sync()
+    # The catalog's upkeep (unfinished thumbnails, pairing, one-shot repairs)
+    # - backgrounded like the scans. Not the library sync: that is Settings'
+    # button (see maintenance.start_background_housekeeping).
+    start_background_housekeeping()
     # The day's copy of the catalog database (services/db_snapshots).
     start_background_snapshot()
     # Permanently delete photos that sat in the Trash longer than the retention
@@ -181,6 +181,14 @@ def on_shutdown() -> None:
     # helpers, then sweep whatever the pool threads and routes still hold.
     # uvicorn runs this before it re-raises SIGTERM and dies; atexit never
     # runs for that, so this hook is the one place cleanup can happen.
+    # The queue's journal of unfinished thumbnails, so the next start picks
+    # them up (workers.queue.resume_derivative_journal).
+    from app.workers.queue import flush_derivative_journal
+
+    try:
+        flush_derivative_journal()
+    except Exception:
+        pass
     for close in (close_exif_helper, close_lens_helper, close_white_balance_helper):
         try:
             close()

@@ -23,6 +23,36 @@ logger = logging.getLogger(__name__)
 # (and blocks on) the download.
 _SF_DATALESS = 0x40000000
 
+# Only macOS makes placeholders this module can see; read once so a test can
+# stand in for the platform.
+_PLACEHOLDERS_POSSIBLE = sys.platform == "darwin"
+
+
+def _cloud_roots() -> list[Path]:
+    """Where macOS keeps cloud-synced folders: iCloud Drive, and the File
+    Provider mounts every other provider (Dropbox, OneDrive, Google Drive,
+    Nextcloud) uses since macOS 12."""
+    home = Path.home()
+    return [home / "Library" / "Mobile Documents", home / "Library" / "CloudStorage"]
+
+
+def is_cloud_synced(path: Path | str) -> bool:
+    """Whether a folder can hold cloud placeholders at all: it lies under one
+    of the providers' roots. An external drive or a plain folder never does,
+    and walking it for placeholders was a stat per file - tens of thousands
+    on a thumbnail cache, a minute of a USB drive's time on every start."""
+    try:
+        target = Path(path).resolve()
+    except OSError:
+        return False
+    for root in _cloud_roots():
+        try:
+            if target.is_relative_to(root.resolve()):
+                return True
+        except OSError:
+            continue
+    return False
+
 
 def is_dataless(path: Path | str) -> bool:
     """True if the file is a cloud placeholder without local bytes (macOS)."""
@@ -49,14 +79,17 @@ def materialize(path: Path | str) -> bool:
 def rehydrate_dirs_in_background(*roots: Path | str) -> None:
     """Walk the given directories and re-download every placeholder found, on
     a daemon thread so startup and requests never wait on it. No-op on
-    non-macOS and when nothing is evicted."""
-    if sys.platform != "darwin":
+    non-macOS, for folders outside the cloud providers' roots (see
+    is_cloud_synced), and when nothing is evicted."""
+    if not _PLACEHOLDERS_POSSIBLE:
+        return
+    targets = [Path(root) for root in roots if is_cloud_synced(root)]
+    if not targets:
         return
 
     def _run() -> None:
         found = 0
-        for root in roots:
-            root = Path(root)
+        for root in targets:
             if not root.exists():
                 continue
             for dirpath, _dirnames, filenames in os.walk(root):
@@ -68,6 +101,6 @@ def rehydrate_dirs_in_background(*roots: Path | str) -> None:
                         if found % 50 == 0:
                             logger.info("re-hydrated %d evicted cloud files so far…", found)
         if found:
-            logger.info("re-hydrated %d evicted cloud files under %s", found, ", ".join(str(r) for r in roots))
+            logger.info("re-hydrated %d evicted cloud files under %s", found, ", ".join(str(r) for r in targets))
 
     threading.Thread(target=_run, name="cloud-rehydrate", daemon=True).start()

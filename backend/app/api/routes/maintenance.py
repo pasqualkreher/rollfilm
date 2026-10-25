@@ -17,7 +17,7 @@ from app.services.library_merge import (
     start_merge,
 )
 from app.services import copy_jobs
-from app.workers.queue import derivatives_pending, embeddings_running
+from app.workers.queue import derivatives_pending, embeddings_running, thumbnail_jobs_pending
 from app.services.maintenance import (
     AlreadyRunning,
     RestoreError,
@@ -215,6 +215,8 @@ def background_activity(current_user: User = Depends(get_current_user)):
         maintenance_active=sync_active()
         or get_rebuild_progress()["active"]
         or get_repair_progress()["active"],
+        sync_active=sync_active(),
+        thumbnails_pending=thumbnail_jobs_pending(),
     )
 
 

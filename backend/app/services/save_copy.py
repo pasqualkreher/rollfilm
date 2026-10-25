@@ -102,19 +102,22 @@ class CopyEdits:
 
 def render_copy_frame(
     src: Image, edits: CopyEdits, max_size: int | None = None,
-    is_stale: Callable[[], bool] | None = None,
+    is_stale: Callable[[], bool] | None = None, timing: dict | None = None,
+    on_base: Callable[[], None] | None = None,
 ) -> PILImage.Image:
     """The copy's picture: the full-resolution render of `src` with `edits`
     baked in, capped to `max_size` on its long edge. The render keeps its
     last frame (thumbnails._last_full_render), so the editor's Save copy
     right after the full.jpg warm-up, or a second copy of the same edit,
     skips the render. `is_stale` lets a batch stop a render it no longer
-    wants (PreviewSuperseded)."""
+    wants (PreviewSuperseded); `timing` receives the render's per-stage
+    milliseconds (decode among them) for the batch's log; `on_base` fires
+    once the render holds its decoded base (thumbnails.render_edited_image)."""
     frame = thumbnails.render_edited_image(
         src, edits.rotation, edits.crop, edits.normalized,
         distortion=edits.distortion, flip_h=edits.flip_h, flip_v=edits.flip_v,
         straighten=edits.straighten, persp_h=edits.persp_h, persp_v=edits.persp_v,
-        max_px=max_size, is_stale=is_stale, array=True,
+        max_px=max_size, is_stale=is_stale, array=True, timing=timing, on_base=on_base,
     )
     edited = PILImage.fromarray(frame, "RGB")
     if max_size and max(edited.size) > max_size:

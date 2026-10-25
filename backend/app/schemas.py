@@ -175,10 +175,13 @@ class RenderStatusRequest(BaseModel):
 
 
 class RenderStatus(BaseModel):
-    """How many of the asked-about photos still wait for the re-render a bulk
-    edit queued for them."""
+    """How many of the asked-about photos still wait for a render - the
+    re-render a bulk edit queued, or a plain thumbnail job (an import's, the
+    journal's); `plain` is the part waiting for a plain job alone, so the
+    dock's "Thumbnails" count can leave those out."""
 
     pending: int
+    plain: int = 0
 
 
 class RenderCancelResult(BaseModel):
@@ -379,12 +382,19 @@ class ExportStartResponse(BaseModel):
 
 
 class CopyJobStartRequest(BaseModel):
-    """Save a copy of each photo from its saved edits (services/copy_jobs):
-    the grid's bulk Save copy and "Apply ... and save copy"."""
+    """Save a copy of each photo (services/copy_jobs): from its saved edits -
+    the grid's bulk Save copy and "Apply ... and save copy" - or, with `look`
+    or `auto`, with that edit in place of the saved one while the original
+    stays as it is ("Edit a copy")."""
 
     image_ids: list[str]
     quality: int = 100
     max_size: int | None = None
+    # A develop object (a preset) every copy is rendered with.
+    look: dict | None = None
+    # The automatic edit, suggested per photo; photos with nothing to learn
+    # from get no copy.
+    auto: bool = False
 
 
 class CopyJobStartResponse(BaseModel):
@@ -1388,6 +1398,12 @@ class BackgroundActivityOut(BaseModel):
     export_jobs_running: int = 0
     # A sync, thumbnail rebuild or date repair running in Settings.
     maintenance_active: bool = False
+    # The library sync alone - also the one every start runs by itself, which
+    # the app's task dock shows (state/taskSources BackgroundSource).
+    sync_active: bool = False
+    # Of derivatives_pending, the jobs that are no bulk edit's re-render (an
+    # import's, the missing ones a sync queued) - the dock's "Thumbnails" chip.
+    thumbnails_pending: int = 0
     # Everything above resumes by itself on the next start, which is what makes
     # "quit now" a safe offer rather than a loss.
     resumes_next_run: bool = True

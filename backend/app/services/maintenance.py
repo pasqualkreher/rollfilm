@@ -54,7 +54,7 @@ from app.services.thumbnails import (
     editor_recently_active,
     regenerate_for_image,
 )
-from app.services.trash import hard_delete_images
+from app.services.trash import catalog_cleanup_lock, hard_delete_images
 from app.workers.queue import enqueue_post_import
 
 
@@ -66,29 +66,29 @@ class UploadedFile(Protocol):
     file: BinaryIO
 
 
-def start_background_sync() -> None:
-    """Run the same reconciliation as Settings' "Sync database to library" once
-    on every app start, in the background: by the time the backend launches the
-    desktop shell has confirmed (or asked the user to re-select) the library
-    folder, so the DB is brought in line with whatever changed on disk while
-    the app was closed. Backgrounded because hashing and thumbnail regeneration
-    can take a while and /health must come up fast."""
+def start_background_housekeeping() -> None:
+    """The catalog's own upkeep once per app start, in the background: the
+    thumbnails the last run still owed, the RAW+JPEG pairing, the one-shot
+    repairs behind their settings flags. All of it works from the database
+    and touches a photo file only where a repair needs one.
+
+    Deliberately NOT the library sync (Settings' "Sync database to library"):
+    reading the folder on every start was a visible wait on an external
+    drive, and nothing it finds - a file moved or deleted in Finder - needs
+    finding before the user asks for it. The sync is a button."""
 
     def _run() -> None:
-        # Never reconcile against a missing/unreadable library root - with the
-        # folder gone, every managed file "is missing" and the whole catalog
-        # would be wiped. The desktop shell prevents this, but a bare backend
-        # run (Docker, dev) has no such gate.
-        if not settings.library_root.is_dir():
-            logger.warning("Startup library sync skipped: library root %s not found", settings.library_root)
-            return
         from app.auth import LOCAL_USER_ID
         from app.db.session import SessionLocal
 
         db = SessionLocal()
         try:
-            result = sync_db_with_library(db, LOCAL_USER_ID)
-            logger.info("Startup library sync: %s", result)
+            # What the last run still owed a thumbnail (workers.queue's journal).
+            from app.workers.queue import resume_derivative_journal
+
+            resumed = resume_derivative_journal()
+            if resumed:
+                logger.info("Startup: %d unfinished thumbnail(s) queued again", resumed)
             # Re-pair pass: link any still-unpaired RAW+JPEG siblings (halves
             # imported in different sessions, or libraries from before the
             # metadata-aware pairing). Idempotent and cheap once caught up.
@@ -162,11 +162,11 @@ def start_background_sync() -> None:
                     rendered, skipped,
                 )
         except Exception:
-            logger.exception("Startup library sync failed")
+            logger.exception("Startup housekeeping failed")
         finally:
             db.close()
 
-    threading.Thread(target=_run, name="startup-library-sync", daemon=True).start()
+    threading.Thread(target=_run, name="startup-housekeeping", daemon=True).start()
 
 
 def regenerate_lens_profile_derivatives(
@@ -341,7 +341,9 @@ def _follow_renamed_files(
     return relocated, [path for path in untracked_paths if path not in claimed]
 
 
-def sync_db_with_library(db: Session, owner_id: int) -> dict:
+def sync_db_with_library(
+    db: Session, owner_id: int, check_derivatives: bool = True, timing: dict | None = None
+) -> dict:
     """The filesystem is the source of truth: reconcile the database *and* the
     thumbnail cache with what is actually in the library.
 
@@ -359,7 +361,13 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
       ghost entries behind.
     - Cached thumbnail folders that belong to no image anymore are deleted.
     - Photos whose thumbnail/preview is missing get it regenerated in the
-      background (only when their original is currently reachable).
+      background (only when their original is currently reachable). Only
+      with `check_derivatives`: asking every photo's cache folder took 130 s
+      on a USB drive; the queue's journal (workers.queue.
+      resume_derivative_journal) covers unfinished thumbnails at startup.
+
+    `timing`, when given, receives the seconds each phase took - what the
+    startup log prints, so a slow start says where it was slow.
     - Files found in the library folder that aren't tracked in the DB are only
       reported, not auto-imported - re-adding them is what the Import flow is
       for.
@@ -381,49 +389,89 @@ def sync_db_with_library(db: Session, owner_id: int) -> dict:
         raise AlreadyRunning("The library is already being synced.")
     _sync_cancel.clear()
     try:
-        return _sync_db_with_library(db, owner_id)
+        # Not beside a trash purge: see trash.catalog_cleanup_lock.
+        with catalog_cleanup_lock:
+            return _sync_db_with_library(db, owner_id, check_derivatives, timing)
     finally:
         _sync_active.release()
 
 
-def _sync_db_with_library(db: Session, owner_id: int) -> dict:
-    images = db.query(Image).filter(Image.owner_id == owner_id).all()
-    # Virtual copies ("virtual copies") own no file: their synthetic path never
-    # exists on disk, so the missing-file scan must never see them - their
-    # fate is tied to their source's row, not to a path of their own (a
-    # source that is hard-deleted below takes its copies with it inside
-    # hard_delete_images).
-    missing = [
-        image
-        for image in images
-        if image.source_root_id is None
-        and image.virtual_of_image_id is None
-        and not (settings.library_root / image.file_path).exists()
-    ]
+def _sync_db_with_library(
+    db: Session, owner_id: int, check_derivatives: bool = True, timing: dict | None = None
+) -> dict:
+    # Nothing in here asks the library volume about one file at a time. The
+    # sync used to stat every row's file, resolve every path (an lstat per
+    # path component) and is_file() every walked file - some 95,000 lookups
+    # for 12,500 photos. Warm they are microseconds; on an exFAT USB drive
+    # whose cache a machine in swap keeps dropping, each is about a
+    # millisecond, and the start took a minute and a half. Now the folder is
+    # read once, directory by directory, and both directions - rows without a
+    # file, files without a row - come out of that one listing.
+    laps = timing if timing is not None else {}
+    t_last = time.monotonic()
 
-    tracked = {
-        str((settings.library_root / img.file_path).resolve())
-        for img in images
-        if img.source_root_id is None and img.virtual_of_image_id is None
-    }
+    def lap(key: str) -> None:
+        nonlocal t_last
+        now = time.monotonic()
+        laps[key] = round(now - t_last, 2)
+        t_last = now
+
+    # The columns the reconcile needs, not the rows: a photo row carries its
+    # edits and camera data too (2 KB each), and 12,500 ORM objects built
+    # twice over were a noticeable share of the start on 8 GB.
+    rows = db.query(
+        Image.id, Image.owner_id, Image.file_path, Image.source_root_id,
+        Image.virtual_of_image_id, Image.missing_since,
+    ).all()
+    lap("query")
+    mine = [r for r in rows if r.owner_id == owner_id]
+    # Virtual copies own no file: their synthetic path never exists on disk,
+    # so the missing-file scan must never see them - their fate is tied to
+    # their source's row, not to a path of their own (a source that is
+    # hard-deleted later takes its copies with it inside hard_delete_images).
+    # Photos from an external source root are governed by their own scan.
+    root = settings.library_root.resolve()
+    root_s = str(root)
+    tracked: dict[str, str] = {}
+    for r in mine:
+        if r.source_root_id is None and r.virtual_of_image_id is None:
+            tracked[os.path.normpath(os.path.join(root_s, r.file_path))] = r.id
+    tracked_fold = {path.lower() for path in tracked}
+
     # The database, thumbnails and staging live in a ".photomanager" subfolder
     # of the library; skip it so its JPG thumbnails aren't counted as untracked
     # photos. "Import" holds the collection folders of open import sessions
-    # (cards copied in, not yet reviewed) - not library photos either.
-    untracked_paths = []
-    for path in settings.library_root.rglob("*"):
+    # (cards copied in, not yet reviewed) - not library photos either. Both
+    # are left out of the walk, not filtered after it: walking the thumbnail
+    # cache (tens of thousands of files) only to drop each one took 87 s of a
+    # 2 s walk on a USB drive, on every start. The walk's own listing says
+    # what is a file (no stat), and the type is read off the name.
+    found: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(root_s):
         # Stopped while still reading the folder: nothing has been changed.
         if _sync_cancel.is_set():
             return _sync_result(cancelled=True)
-        if (
-            path.is_file()
-            and ".photomanager" not in path.relative_to(settings.library_root).parts
-            and path.relative_to(settings.library_root).parts[0] != "Import"
-            and classify_file_type(path) is not None
-            and str(path.resolve()) not in tracked
-        ):
-            untracked_paths.append(path)
+        if dirpath == root_s:
+            dirnames[:] = [d for d in dirnames if d not in (".photomanager", "Import")]
+        else:
+            dirnames[:] = [d for d in dirnames if d != ".photomanager"]
+        for name in filenames:
+            if classify_file_type(Path(name)) is not None:
+                found.add(os.path.normpath(os.path.join(dirpath, name)))
+    # The library volume is case-insensitive as a rule (exFAT, APFS): a row
+    # whose path differs from the file's name in case alone is not missing.
+    found_fold = {path.lower() for path in found}
+    missing_ids = [
+        image_id for path, image_id in tracked.items()
+        if path not in found and path.lower() not in found_fold
+    ]
+    untracked_paths = [
+        Path(path) for path in sorted(found)
+        if path not in tracked and path.lower() not in tracked_fold
+    ]
+    lap("walk")
 
+    missing = _rows_by_id(db, missing_ids)
     relocated, untracked_paths = _follow_renamed_files(missing, untracked_paths)
     if relocated:
         # A moved photo's virtual copies borrow its path: keep their synthetic
@@ -437,6 +485,7 @@ def _sync_db_with_library(db: Session, owner_id: int) -> dict:
         logger.info("Library sync: followed %d renamed/moved file(s)", len(relocated))
     relocated_ids = {image.id for image in relocated}
     missing = [image for image in missing if image.id not in relocated_ids]
+    lap("follow")
 
     # The last moment to stop before anything is marked. Renamed files were
     # followed above (their rows only gained a new path); nothing is deleted.
@@ -446,11 +495,13 @@ def _sync_db_with_library(db: Session, owner_id: int) -> dict:
     # A file that is back - the drive mounted again, the folder put back - is
     # simply back: the row never left, so nothing has to be restored.
     now = datetime.now(timezone.utc)
+    still_missing = {image.id for image in missing}
+    marked_before = [r.id for r in mine if r.missing_since is not None]
+    recover_ids = [image_id for image_id in marked_before if image_id not in still_missing]
     recovered = 0
-    for image in images:
-        if image.missing_since is not None and image.id not in {m.id for m in missing}:
-            image.missing_since = None
-            recovered += 1
+    for image in _rows_by_id(db, recover_ids):
+        image.missing_since = None
+        recovered += 1
     for image in relocated:
         image.missing_since = None
 
@@ -462,9 +513,7 @@ def _sync_db_with_library(db: Session, owner_id: int) -> dict:
     # lost it - its drive is asleep, its folder moved, its permissions wrong -
     # and marking a thousand photos would only be noise over the real cause.
     newly_missing = [image for image in missing if image.missing_since is None]
-    managed_count = sum(
-        1 for image in images if image.source_root_id is None and image.virtual_of_image_id is None
-    )
+    managed_count = len(tracked)
     limit = max(MISSING_ABORT_MIN, int(managed_count * MISSING_ABORT_FRAC))
     if len(newly_missing) > limit:
         db.commit()
@@ -480,42 +529,52 @@ def _sync_db_with_library(db: Session, owner_id: int) -> dict:
             renamed_files_followed=len(relocated),
             recovered_files=recovered,
             untracked_files_found=len(untracked_paths),
-            missing_total=sum(1 for image in images if image.missing_since is not None),
+            missing_total=len(marked_before),
         )
     _last_sync_abort["missing"] = 0
     for image in newly_missing:
         image.missing_since = now
     db.commit()
+    lap("mark")
 
-    kept = [image for image in db.query(Image).filter(Image.owner_id == owner_id).all() if image.missing_since is None]
     untracked = len(untracked_paths)
 
     # Thumbnail cache holds one folder per image id - drop any that no image
     # row (of any owner; ids are globally unique) points at anymore, e.g. left
-    # behind by older deletes that never cleaned up.
-    valid_ids = {row[0] for row in db.query(Image.id).all()}
+    # behind by older deletes that never cleaned up. One directory listing.
+    valid_ids = {r.id for r in rows}
     orphan_thumbnails_removed = 0
     if settings.thumbnail_cache_root.is_dir():
         for entry in settings.thumbnail_cache_root.iterdir():
             if entry.is_dir() and entry.name not in valid_ids:
                 shutil.rmtree(entry, ignore_errors=True)
                 orphan_thumbnails_removed += 1
+    lap("orphans")
 
     # ...and the reverse direction: queue regeneration for photos whose
     # derivatives are missing, off the request path on the post-import pool.
+    # Settings' sync only (see sync_db_with_library): two lookups per photo
+    # in the cache folder.
     thumbnails_queued = 0
-    for image in kept:
-        cache = derivative_dir(image.id)
-        if (cache / "thumbnail.jpg").exists() and (cache / "preview.jpg").exists():
-            continue
-        original = resolve_image_path(image)
-        try:
-            reachable = original.exists()
-        except OSError:
-            reachable = False  # hung/broken network mount
-        if reachable:
-            enqueue_post_import(image.id, original)
-            thumbnails_queued += 1
+    if check_derivatives:
+        kept = (
+            db.query(Image)
+            .filter(Image.owner_id == owner_id, Image.missing_since.is_(None))
+            .all()
+        )
+        for image in kept:
+            cache = derivative_dir(image.id)
+            if (cache / "thumbnail.jpg").exists() and (cache / "preview.jpg").exists():
+                continue
+            original = resolve_image_path(image)
+            try:
+                reachable = original.exists()
+            except OSError:
+                reachable = False  # hung/broken network mount
+            if reachable:
+                enqueue_post_import(image.id, original)
+                thumbnails_queued += 1
+        lap("derivatives")
 
     return _sync_result(
         missing_files=len(newly_missing),
@@ -526,6 +585,15 @@ def _sync_db_with_library(db: Session, owner_id: int) -> dict:
         orphan_thumbnails_removed=orphan_thumbnails_removed,
         thumbnails_queued=thumbnails_queued,
     )
+
+
+def _rows_by_id(db: Session, image_ids: list[str]) -> list[Image]:
+    """The photo rows for these ids, in chunks SQLite's variable limit allows."""
+    out: list[Image] = []
+    for i in range(0, len(image_ids), 500):
+        chunk = image_ids[i:i + 500]
+        out.extend(db.query(Image).filter(Image.id.in_(chunk)).all())
+    return out
 
 
 def _sync_result(**fields) -> dict:

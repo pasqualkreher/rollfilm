@@ -33,6 +33,7 @@ import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow, preloadImage } from "../uti
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { useFullResUpgrade } from "../utils/useFullResUpgrade";
 import { useBaselineRender } from "../utils/useBaselineRender";
+import { useRegionRender, type RegionAsk } from "../utils/useRegionRender";
 import { CompareControls, type CompareMode } from "../components/CompareControls";
 import { BaselinePane, CompareOverlay } from "../components/CompareOverlay";
 import { ZoomReadout } from "../components/ZoomReadout";
@@ -63,11 +64,62 @@ import { Spinner, LoadingState } from "../components/Spinner";
 // takes to count as rested.
 const FIT_SHARP_SLACK = 1.04;
 const FIT_SHARPEN_DELAY_MS = 750;
-// How long after the user has rested on a raw its full-resolution render is
-// fetched for the fit view. Not sooner: zapping through a set at a photo every
-// second or two must not start a render per photo - each one holds the render
-// for many seconds and the next photo's waits behind it.
-const FIT_FULL_DELAY_MS = 3000;
+// How long the view has to rest - the photo just up, a zoom, a pan - before
+// what is on screen is asked for at full resolution (the editor's own settle
+// delay). Paging through a set starts nothing: each step aborts the ask.
+const TILE_REST_MS = 350;
+
+// The part of the photo on screen, in fractions of the finished frame - what
+// the full-resolution render is asked for (the same maths as the editor's
+// visibleRegion). `ask` carries a margin so a small pan stays on the tile and
+// the render's long edge in device pixels; `view` is the bare visible part,
+// for "does the render on screen still cover it". With nearly the whole photo
+// in view (the fit view, a slight zoom) the ask is the whole frame at the
+// size the screen shows it, rounded up in steps so a window resized by a few
+// pixels asks for nothing new, and never more than the photo has (`maxPx`).
+function visibleTileRegion(
+  img: HTMLElement | null,
+  stage: HTMLElement | null,
+  maxPx: number
+): { ask: RegionAsk; view: { x: number; y: number; w: number; h: number } } | null {
+  if (!img || !stage) return null;
+  const cr = img.getBoundingClientRect();
+  const sr = stage.getBoundingClientRect();
+  if (cr.width < 1 || cr.height < 1) return null;
+  const dpr = window.devicePixelRatio || 1;
+  const x = Math.max(0, Math.min(1, (Math.max(cr.left, sr.left) - cr.left) / cr.width));
+  const y = Math.max(0, Math.min(1, (Math.max(cr.top, sr.top) - cr.top) / cr.height));
+  const w = Math.max(0, Math.min(1, (Math.min(cr.right, sr.right) - cr.left) / cr.width) - x);
+  const h = Math.max(0, Math.min(1, (Math.min(cr.bottom, sr.bottom) - cr.top) / cr.height) - y);
+  if (w <= 0 || h <= 0) return null;
+  const mx = Math.min(w * 0.08, (1 - w) / 2);
+  const my = Math.min(h * 0.08, (1 - h) / 2);
+  const out = { x: Math.max(0, x - mx), y: Math.max(0, y - my), w: w + 2 * mx, h: h + 2 * my };
+  if (out.w * out.h > 0.8) {
+    const shown = Math.ceil((Math.max(cr.width, cr.height) * dpr) / 200) * 200;
+    const px = Math.max(1, Math.min(shown, maxPx || Infinity));
+    return { ask: { x: 0, y: 0, w: 1, h: 1, px }, view: { x: 0, y: 0, w: 1, h: 1 } };
+  }
+  const px = Math.round(Math.max(out.w * cr.width, out.h * cr.height) * dpr);
+  return { ask: { ...out, px }, view: { x, y, w, h } };
+}
+
+// Whether the tile asked for last still serves the view: it holds all of it,
+// at no less resolution than the view now wants (zooming out over the same
+// tile keeps it; zooming in past it asks again).
+function tileCovers(
+  asked: RegionAsk | null,
+  next: { ask: RegionAsk; view: { x: number; y: number; w: number; h: number } }
+): boolean {
+  if (!asked) return false;
+  const v = next.view;
+  const eps = 1e-4;
+  const inside =
+    v.x >= asked.x - eps && v.y >= asked.y - eps &&
+    v.x + v.w <= asked.x + asked.w + eps && v.y + v.h <= asked.y + asked.h + eps;
+  const density = (a: RegionAsk) => a.px / Math.max(a.w, a.h);
+  return inside && density(next.ask) <= density(asked) * 1.1;
+}
 
 export function ImageDetail() {
   const { id, mode } = useParams<{ id: string; mode?: string }>();
@@ -237,16 +289,10 @@ export function ImageDetail() {
   const [hiRes, setHiRes] = useState(false);
   // A JPEG's full-size <img> failed: it drops back to the preview for this visit.
   const [fullFailed, setFullFailed] = useState(false);
-  // A raw's full render is seconds away (7-9s for a 40MP file, more on a
-  // machine short of memory). Zooming shows its half tier at once (see
-  // api.images.halfUrl) and, once that is on the stage, fetches the full
-  // render off-screen (useFullResUpgrade); only once that has arrived and
-  // decoded does the <img> switch to it - one swap, no blank stage. The full
-  // request waits for the half one on purpose: for an edited raw both take
-  // the same render lock, and a full render that got there first held the
-  // "instant" half tier back for its whole 10+s. JPEGs need none of this:
-  // their full size is the file itself.
-  const [halfShown, setHalfShown] = useState(false);
+  // Zooming into a raw shows its half tier at once (see api.images.halfUrl);
+  // the full resolution is laid over it as a render of what is on screen
+  // (see tileMode below). JPEGs need none of this: their full size is the
+  // file itself.
   const [halfFailed, setHalfFailed] = useState(false);
   // The long edge of the preview as it was loaded, per photo - what "is this
   // fit view soft" is judged against (see the fit-view upgrade below). Read
@@ -254,9 +300,6 @@ export function ImageDetail() {
   const [previewPx, setPreviewPx] = useState<{ id: string; px: number } | null>(null);
   // The photo whose fit view has been found soft and is being sharpened.
   const [sharperFor, setSharperFor] = useState<string | null>(null);
-  // The raw whose full-resolution render the fit view is to move on to (see
-  // the fit-view upgrade below).
-  const [fullAtFitFor, setFullAtFitFor] = useState<string | null>(null);
   // The preview itself failed to load (damaged/unreadable file). Shows a clean
   // error state instead of the browser's broken-image icon; navigation, rating
   // and the info panel keep working. Retry remounts the <img> (keyed by the
@@ -322,7 +365,6 @@ export function ImageDetail() {
     resetZoom();
     setHiRes(false);
     setFullFailed(false);
-    setHalfShown(false);
     setHalfFailed(false);
     setPreviewFailed(false);
     setRetryNonce(0);
@@ -374,7 +416,6 @@ export function ImageDetail() {
     resetZoom();
     setHiRes(false);
     setFullFailed(false);
-    setHalfShown(false);
     setHalfFailed(false);
     // The baseline render belongs to the edit it was made against.
     setPrimedFor(null);
@@ -399,21 +440,69 @@ export function ImageDetail() {
     }
   }, [nothingToCompare]);
 
-  // The raw's full render, fetched off-screen once zoomed and the half tier is
-  // up: the <img> shows the half tier meanwhile and switches when this has
-  // landed. Busy/superseded answers are asked again; a real failure keeps the
-  // half tier - never a broken image, never a blank stage - and says so.
-  // The fit view asks for the same render once the user has rested on the
-  // photo (fullAtFitFor): one fetch for both, so a zoom during or after it
-  // starts nothing new.
   const isRaw = image?.file_type === "raw";
-  const fullAtFit = !!image && fullAtFitFor === image.id && activeId === image.id && !adjustOpen;
-  const full = useFullResUpgrade(
-    isRaw && image && ((hiRes && (halfShown || halfFailed)) || fullAtFit)
-      ? api.images.fullUrl(image.id, editVersion(image))
-      : null
+  // The photo the user has rested on (set a moment after paging stops; see
+  // the neighbour prefetch below, where the wait is explained).
+  const [restedId, setRestedId] = useState(activeId);
+
+  // Full resolution comes the editor's way: what is on screen is rendered
+  // from the full-resolution decode (useRegionRender) and laid over the
+  // picture once the view has rested - the whole frame at the screen's size
+  // in the fit view, the visible part alone when zoomed in. A whole-frame
+  // full.jpg of an edited 40MP raw was the decode plus half a minute of
+  // pipeline at sensor size; either render is about a second once the decode
+  // is in. Raws and edited photos (an unedited JPEG's half tier is the file
+  // itself); not while comparing (the baseline has the stage), in the editor
+  // or the slideshow, nor from a grid row without its edits. Paging on ends
+  // the ask for the photo left; the next photo asks once it is up and has
+  // rested. (A decode already running on the server finishes - it cannot be
+  // cut short - and the next photo's starts right after it.)
+  const photoImgRef = useRef<HTMLImageElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const zoomSetImg = zoom.setImg;
+  const zoomSetBox = zoom.setBox;
+  const setPhotoImg = useCallback(
+    (el: HTMLImageElement | null) => {
+      photoImgRef.current = el;
+      zoomSetImg(el);
+    },
+    [zoomSetImg]
   );
-  const fullReady = full.state === "ready";
+  const setStage = useCallback(
+    (el: HTMLDivElement | null) => {
+      stageRef.current = el;
+      zoomSetBox(el);
+    },
+    [zoomSetBox]
+  );
+  const tileMode =
+    !!image &&
+    (isRaw || image.edit_rev > 0) &&
+    !seeded &&
+    !imageStale &&
+    loadedId === image.id &&
+    restedId === activeId &&
+    !!zoom.fit &&
+    !compareActive &&
+    !adjustOpen &&
+    !adjustClosing &&
+    !slideshowOpen &&
+    !previewFailed;
+  const [tileAsk, setTileAsk] = useState<RegionAsk | null>(null);
+  useEffect(() => {
+    if (!tileMode) {
+      setTileAsk(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      const maxPx = zoomSource ? Math.max(zoomSource.w, zoomSource.h) : 0;
+      const next = visibleTileRegion(photoImgRef.current, stageRef.current, maxPx);
+      setTileAsk((asked) => (next === null ? asked : tileCovers(asked, next) ? asked : next.ask));
+    }, TILE_REST_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tileMode, zoom.scale, zoom.pan.x, zoom.pan.y, zoom.fit?.w, zoom.fit?.h]);
+  const tile = useRegionRender(tileMode ? image : undefined, tileMode ? tileAsk : null);
 
   const { data: paired } = useQuery({
     queryKey: ["image", image?.paired_image_id],
@@ -566,7 +655,6 @@ export function ImageDetail() {
   // once started, all ran to completion. Keying that work to restedId means an
   // intermediate photo fires nothing but its own main preview load (which the
   // browser cancels natively when the src moves on).
-  const [restedId, setRestedId] = useState(activeId);
   useEffect(() => {
     if (restedId === activeId) return;
     const t = setTimeout(() => setRestedId(activeId), 250);
@@ -685,21 +773,6 @@ export function ImageDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restedId, activeId, adjustOpen]);
 
-  // And the raw's full-resolution render, a good while later: a raw shows its
-  // true pixels on its own, without the user having to zoom for them. The
-  // preview and the half tier come from a half-size decode; the full render is
-  // the picture a zoom used to be needed for. It is fetched off-screen through
-  // the same hook the zoom uses (see `full` above) and swapped in when it has
-  // landed. JPEGs need nothing here (their full size is the file itself, and
-  // the half tier below hands it over); moving on cancels the timer, and a
-  // render still queued on the server is superseded by the next photo's.
-  useEffect(() => {
-    if (restedId !== activeId || adjustOpen || slideshowOpen || image?.file_type !== "raw") return;
-    const t = setTimeout(() => setFullAtFitFor(restedId), FIT_FULL_DELAY_MS);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restedId, activeId, adjustOpen, slideshowOpen, image?.file_type]);
-
   // The fit view sharpens on its own. The preview is 2600px at most, and a
   // big window on a hi-dpi screen shows the photo at up to half as many
   // pixels again - soft until the user zoomed, which is not something anyone
@@ -709,7 +782,8 @@ export function ImageDetail() {
   // 3900px half tier for a raw or an edited photo, the file itself for an
   // unedited JPEG (the server picks, see get_half). A second after arriving,
   // so paging through a set fetches nothing; leaving the photo cancels it.
-  // Zooming keeps its own chain (hiRes) and takes over from here.
+  // It lands within a second, while the full-resolution render (tileMode)
+  // may still be waiting for its decode; zooming keeps its own chain (hiRes).
   const fitDevicePx = zoom.fit ? Math.max(zoom.fit.w, zoom.fit.h) * (window.devicePixelRatio || 1) : 0;
   const sourcePx = zoomSource ? Math.max(zoomSource.w, zoomSource.h) : 0;
   const loadedPreviewPx = image && previewPx?.id === image.id ? previewPx.px : 0;
@@ -728,8 +802,6 @@ export function ImageDetail() {
       : null
   );
   const sharperSrc = sharper.state === "ready" ? sharper.src : null;
-  // The raw's full render, once it has landed for the fit view.
-  const fitFullSrc = isRaw && fullReady ? full.src : null;
 
   // The baseline's render for the compare views. At fit the ultra tier sized
   // to the screen; zoomed in while comparing, the native tier - asked for once
@@ -1117,7 +1189,7 @@ export function ImageDetail() {
       {pairDeleteDialog}
       <div className="detail-layout">
         <div className="detail-main">
-          <div className={`detail-image lightbox-stage detail-image-${bgMode}`} ref={zoom.setBox}>
+          <div className={`detail-image lightbox-stage detail-image-${bgMode}`} ref={setStage}>
             {canPage && (
               <button
                 className="lightbox-nav-btn lightbox-nav-prev"
@@ -1166,12 +1238,12 @@ export function ImageDetail() {
             // otherwise it is display: contents and the <img> stays the
             // stage's own child, exactly as before.
             <div
-              className={`detail-photo-wrap${compareActive ? " is-compare" : ""}${pairMode ? " detail-pane" : ""}`}
-              style={compareActive && zoom.fit ? { width: zoom.fit.w, height: zoom.fit.h } : undefined}
+              className={`detail-photo-wrap${compareActive ? " is-compare" : ""}${tileMode ? " has-tile" : ""}${pairMode ? " detail-pane" : ""}`}
+              style={(compareActive || tileMode) && zoom.fit ? { width: zoom.fit.w, height: zoom.fit.h } : undefined}
             >
             <img
               key={retryNonce}
-              ref={zoom.setImg}
+              ref={setPhotoImg}
               // The photo the user is looking at must always win the connection
               // pool over similar-strip thumbs and neighbor prefetches.
               {...({ fetchpriority: "high" } as Record<string, string>)}
@@ -1183,10 +1255,9 @@ export function ImageDetail() {
                 setPhotoLoaded(true);
                 setLoadedId(image.id);
                 shownOnceRef.current = true;
-                if (hiRes && isRaw && !fullReady) setHalfShown(true);
                 // Only the preview's own size: the sharper tier loading must
                 // not make the view look "not soft" and undo itself.
-                if (!hiRes && !sharperSrc && !fitFullSrc && el.naturalWidth) {
+                if (!hiRes && !sharperSrc && el.naturalWidth) {
                   setPreviewPx({ id: image.id, px: Math.max(el.naturalWidth, el.naturalHeight) });
                 }
               }}
@@ -1194,23 +1265,21 @@ export function ImageDetail() {
               src={
                 hiRes
                   ? isRaw
-                    ? fullReady && full.src
-                      ? full.src
-                      : halfFailed
-                        ? api.images.previewUrl(image.id, editVersion(image))
-                        : api.images.halfUrl(image.id, editVersion(image))
+                    ? halfFailed
+                      ? api.images.previewUrl(image.id, editVersion(image))
+                      : api.images.halfUrl(image.id, editVersion(image))
                     : api.images.fullUrl(image.id, editVersion(image))
-                  : fitFullSrc ?? sharperSrc ?? api.images.previewUrl(image.id, editVersion(image))
+                  : sharperSrc ?? api.images.previewUrl(image.id, editVersion(image))
               }
               alt={image.original_filename}
               onError={() => {
                 // A higher tier unavailable - fall back so the photo never
                 // shows as a broken image: a raw's half tier to the preview
-                // (the full render is still fetched), a JPEG's full size to
-                // the preview. If the preview itself fails, switch to the
+                // (the full-resolution render still comes), a JPEG's full
+                // size to the preview. If the preview itself fails, switch to the
                 // error state instead of leaving the browser's broken-image
                 // icon behind.
-                if (hiRes && isRaw && !fullReady && !halfFailed) {
+                if (hiRes && isRaw && !halfFailed) {
                   setHalfFailed(true);
                 } else if (hiRes && !isRaw) {
                   setFullFailed(true);
@@ -1221,6 +1290,30 @@ export function ImageDetail() {
               }}
               {...zoom.imageHandlers}
             />
+            {/* The visible part at full resolution, over the half tier: the
+                same size and zoom/pan transform as the photo, the tile placed
+                in it by its fractions of the frame - it moves with the photo
+                and nothing else on the stage moves. */}
+            {tileMode && tile.src && tile.box && (
+              <div
+                className={`detail-photo-tile${zoom.zoomAnim ? " zoom-anim" : ""}`}
+                style={{ ...zoom.imageStyle, cursor: undefined }}
+                aria-hidden
+              >
+                <img
+                  src={tile.src}
+                  alt=""
+                  draggable={false}
+                  style={{
+                    left: `${tile.box.x * 100}%`,
+                    top: `${tile.box.y * 100}%`,
+                    width: `${tile.box.w * 100}%`,
+                    height: `${tile.box.h * 100}%`,
+                    imageRendering: zoom.imageStyle.imageRendering,
+                  }}
+                />
+              </div>
+            )}
             <CompareOverlay
               src={baseline.src}
               mode={compareMode}
@@ -1243,19 +1336,18 @@ export function ImageDetail() {
                 Loading…
               </div>
             )}
-            {/* The picture is up and a sharper one is on its way - the raw's
-                full render (zoomed or at fit) or the fit view's half tier. The
+            {/* The picture is up and a sharper one is on its way - the
+                full-resolution render or the fit view's half tier. The
                 editor's own full-resolution wait: the spinner alone. */}
             {!pixelsPending &&
-              ((hiRes && isRaw && full.state !== "ready" && full.state !== "failed") ||
-                full.state === "loading" ||
+              ((tileMode && tile.pending) ||
                 (!hiRes && sharper.state === "loading") ||
                 baselineBusy) && (
               <div className="stage-rendering is-quiet" role="status" aria-label="Rendering full resolution">
                 <Spinner size="sm" tone="inherit" />
               </div>
             )}
-            {hiRes && isRaw && full.state === "failed" && !pixelsPending && (
+            {tileMode && tile.state === "failed" && !pixelsPending && (
               <div className="stage-rendering" role="status">
                 Full resolution unavailable – showing a reduced render
               </div>

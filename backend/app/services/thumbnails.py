@@ -303,6 +303,13 @@ def _render_admission(timeout: float | None):
         yield
 
 
+# The same ticket for renders that live outside this module (a copy job's
+# full render, services/copy_jobs): heavy renders from anywhere count against
+# the one budget, or a copy beside two thumbnail re-renders is a third
+# gigabyte-frame on an 8 GB machine - and swap.
+render_admission = _render_admission
+
+
 def _distortion_indices(h: int, w: int, amount: int) -> tuple[np.ndarray, np.ndarray]:
     """The (sy, sx) source-index maps of the radial lens-distortion correction,
     shared by the PIL and float-array variants."""
@@ -4176,6 +4183,22 @@ def editor_mtime_ns(image: "Image") -> int:
         return 0
 
 
+def ensure_native_base(image: "Image") -> None:
+    """Decode a photo's full-resolution base into the one-photo native cache
+    (a hit costs nothing). The copy job's prefetch of the next photo; unlike
+    warm_native_base it does not wait for _full_render_lock to be free - the
+    render it is meant to overlap holds that lock."""
+    from app.services.filesystem import resolve_image_path
+
+    path = resolve_image_path(image)
+    _cached_native_base(image.id, str(path), path.stat().st_mtime_ns)
+
+
+def render_slots_free() -> int:
+    """How many of the RENDER_SLOTS admission tickets are not taken."""
+    return int(getattr(_render_slots, "_value", 0))
+
+
 def native_base_ready(image_id: str, mtime_ns: int) -> bool:
     hit = _native_editor_base
     return bool(hit and hit[0] == image_id and hit[1] == mtime_ns)
@@ -4375,6 +4398,7 @@ def render_editor_preview_bytes(
     scrub_px: int | None = None,
     is_stale: Callable[[], bool] | None = None,
     settle_px: int | None = None,
+    editor_activity: bool = True,
 ) -> bytes:
     """Render the editor's live preview server-side: the exact save pipeline
     (same code path as generate_derivatives/render_edited_image) on a cached,
@@ -4409,7 +4433,11 @@ def render_editor_preview_bytes(
     the editor's "show me what this mask covers" for the masks that have no
     shape to outline. It rides along on the render instead of being a call of
     its own, so the marking tracks the sliders on the very frames the preview
-    is already drawing."""
+    is already drawing.
+
+    `editor_activity=False` is a render for the photo view (its zoomed-in
+    tiles): it does not mark the editor as in use, so the work that waits for
+    an idle editor (warm-ups, the thumbnail rebuild) is not held back."""
     from app.services.filesystem import resolve_image_path
 
     if meta is not None:
@@ -4428,7 +4456,8 @@ def render_editor_preview_bytes(
         if is_stale is not None and is_stale():
             raise PreviewSuperseded()
 
-    note_editor_activity()
+    if editor_activity:
+        note_editor_activity()
     _bail_if_stale()
     path = resolve_image_path(image)
     if region is not None and not region_is_supported(adjustments):
@@ -5197,6 +5226,7 @@ def render_edited_image(
     timing: dict | None = None,
     is_stale: Callable[[], bool] | None = None,
     array: bool = False,
+    on_base: Callable[[], None] | None = None,
 ) -> "PILImage.Image | np.ndarray":
     """TRUE full-resolution RGB render with the given lens/geometry and tonal
     edits baked in - the only path that demosaics a RAW at full sensor size
@@ -5220,8 +5250,23 @@ def render_edited_image(
 
     `timing` and `is_stale` are apply_adjustments_linear's: the per-stage
     milliseconds for the slow-render log (plus `base` and `geom` from here),
-    and the probe that lets a background render give way between stages."""
+    and the probe that lets a background render give way between stages.
+
+    `on_base` is called once this render holds its decoded base (or the kept
+    frame) and needs the native cache no more - the copy job's cue to decode
+    the NEXT photo meanwhile (copy_jobs). Not earlier: the cache keeps one
+    photo, and a decode started before this one's lookup would evict it and
+    make this render decode twice."""
     global _last_full_render
+
+    def base_in_hand() -> None:
+        if on_base is None:
+            return
+        try:
+            on_base()
+        except Exception:
+            logger.debug("on_base callback failed", exc_info=True)
+
     from app.services.filesystem import resolve_image_path
 
     path = resolve_image_path(image)
@@ -5272,6 +5317,7 @@ def render_edited_image(
             if kept is not None and kept[0] == key:
                 if timing is not None:
                     timing["full_hit"] = True
+                base_in_hand()
                 return kept[1] if array else PILImage.fromarray(kept[1], "RGB")
         if decode_px is None:
             # Unbounded render: reuse (and fill) the editor's native-base cache
@@ -5297,6 +5343,7 @@ def render_edited_image(
                 dims = raw_service.raw_dimensions(path)
                 half_size = half_decode or bool(dims and max(dims) // 2 >= decode_px)
             lin, gain = raw_service.load_linear_base(path, half_size=half_size, max_px=decode_px)
+        base_in_hand()
         t0 = _mark(timing, "base", t0)
         lin = lens_profile.correct(lin, path, adjustments)
         if distortion:
@@ -5388,12 +5435,60 @@ def render_full_from_stored_edits(
 # high until the next walk, which only makes the collector look sooner.
 _FULL_CACHE_FILES = ("full.jpg", "half.jpg")
 _full_cache_lock = threading.Lock()
-# None until the first walk: the first write then starts one.
+# None until known: read back from the file below, else counted by a walk the
+# first write starts.
 _full_cache_bytes: int | None = None
+# The total, kept beside the cache across restarts: counting it is a stat per
+# cached file, tens of thousands on a big library, a minute of a USB drive's
+# time - and it used to happen in every session, the moment the first half or
+# full render landed. Now a start reads the number back and only walks when
+# it has to pick files to drop (over budget) or the number is missing.
+_FULL_CACHE_TOTAL_NAME = "full-cache-total.json"
+# Before the walk, the editor and the photo view must have been quiet this
+# long: the sweep competes with their reads for the same disk.
+_FULL_CACHE_GC_IDLE_S = 30.0
+_FULL_CACHE_GC_POLL_S = 5.0
+_FULL_CACHE_GC_MAX_WAIT_S = 600.0
+# When a cached full/half file was last written or served (monotonic).
+_full_cache_last_use = 0.0
 # The budget as last read from the settings (None = unlimited); the default
 # until the collector's first run reads the stored one.
 _full_cache_budget_bytes: int | None = 4096 * 1024 * 1024
 _full_cache_gc_thread: "threading.Thread | None" = None
+
+
+def _full_cache_total_path(root: Path) -> Path:
+    return root / _FULL_CACHE_TOTAL_NAME
+
+
+def _load_full_cache_total(root: Path) -> int | None:
+    """The total the last run left beside the cache, or None."""
+    try:
+        data = json.loads(_full_cache_total_path(root).read_text())
+        return max(0, int(data["bytes"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _save_full_cache_total(root: Path, total: int) -> None:
+    path = _full_cache_total_path(root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"bytes": int(total)}))
+        os.replace(tmp, path)
+    except OSError:
+        logger.debug("Could not write %s", path, exc_info=True)
+
+
+def _touch_full_cache_use() -> None:
+    global _full_cache_last_use
+    _full_cache_last_use = time.monotonic()
+
+
+def _full_cache_in_use(idle_s: float) -> bool:
+    """The editor or the photo view has read or written here lately."""
+    return editor_recently_active(idle_s) or (time.monotonic() - _full_cache_last_use) < idle_s
 
 
 def _walk_full_cache(root: Path) -> list[tuple[float, int, str, str]]:
@@ -5447,12 +5542,14 @@ def gc_full_cache(budget_mb: int, exclude_image_id: str | None = None, root: Pat
             freed += size
     with _full_cache_lock:
         _full_cache_bytes = total - freed
+    _save_full_cache_total(root, total - freed)
     return freed
 
 
 def note_full_cache_hit(path: Path) -> None:
     """A cached file was read: mark it used, so the collector takes others
     first. One syscall; a failure means nothing."""
+    _touch_full_cache_use()
     try:
         os.utime(path, None)
     except OSError:
@@ -5481,6 +5578,11 @@ def _unlink_full_cache(out_dir: Path) -> None:
         with _full_cache_lock:
             if _full_cache_bytes is not None:
                 _full_cache_bytes = max(0, _full_cache_bytes - size)
+                total = _full_cache_bytes
+            else:
+                total = None
+        if total is not None:
+            _save_full_cache_total(settings.thumbnail_cache_root, total)
 
 
 def _note_full_cache_write(path: Path, image_id: str) -> None:
@@ -5488,13 +5590,19 @@ def _note_full_cache_write(path: Path, image_id: str) -> None:
     not known yet or over budget, collect in the background. One collector at
     a time; a write during its walk is picked up by the next one."""
     global _full_cache_bytes, _full_cache_gc_thread
+    _touch_full_cache_use()
     try:
         size = path.stat().st_size
     except OSError:
         size = 0
+    root = settings.thumbnail_cache_root
     with _full_cache_lock:
+        if _full_cache_bytes is None:
+            # The number the last run left, so a fresh start does not count.
+            _full_cache_bytes = _load_full_cache_total(root)
         if _full_cache_bytes is not None:
             _full_cache_bytes += size
+            _save_full_cache_total(root, _full_cache_bytes)
         over = _full_cache_bytes is None or (
             _full_cache_budget_bytes is not None and _full_cache_bytes > _full_cache_budget_bytes
         )
@@ -5518,6 +5626,12 @@ def _read_full_cache_budget_mb() -> int:
 
 
 def _full_cache_gc_run(exclude_image_id: str) -> None:
+    # Not under the user's reads: wait for a pause in the editor and the
+    # photo view first (bounded, so a long session still gets its collection).
+    waited = 0.0
+    while _full_cache_in_use(_FULL_CACHE_GC_IDLE_S) and waited < _FULL_CACHE_GC_MAX_WAIT_S:
+        time.sleep(_FULL_CACHE_GC_POLL_S)
+        waited += _FULL_CACHE_GC_POLL_S
     try:
         budget_mb = _read_full_cache_budget_mb()
     except Exception:

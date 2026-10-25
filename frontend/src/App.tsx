@@ -982,11 +982,8 @@ function shownTask(tasks: Task[]): Task | null {
   return visible.length > 0 ? visible[visible.length - 1] : null;
 }
 
-// After "Apply … and save copy" the copies and the renders run at once: the
-// copy task stands in for both, its Stop stops both.
 function visibleTasks(tasks: Task[]): Task[] {
-  const copying = tasks.some((t) => t.kind === "copies" && !t.finished);
-  return tasks.filter((t) => !t.hidden && !(copying && t.kind === "renders"));
+  return tasks.filter((t) => !t.hidden);
 }
 
 function TaskCount({ done, total }: { done: number; total: number }) {

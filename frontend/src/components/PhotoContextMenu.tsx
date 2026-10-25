@@ -5,10 +5,12 @@ import { api } from "../api/client";
 import type { BulkResetOptions, ColorLabel, Flag } from "../api/types";
 import { useTransientMessage } from "../utils/transientMessage";
 import { useAskSaveCopyOptions } from "../state/viewPrefs";
-import { useTasks } from "../state/tasks";
+import { useSaveCopies } from "../utils/useSaveCopies";
 import { useMenuKeys } from "../utils/useMenuKeys";
 import { autoTagMessage, isAutoTag } from "../utils/autoTags";
 import { ExportDialog } from "./ExportDialog";
+import { PickerDialog, type PickerGroup } from "./PickerDialog";
+import { noteRecent, shortList } from "../utils/recents";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
 import { useAppDialogs } from "./AppDialogs";
 import { RatingStars } from "./RatingStars";
@@ -72,10 +74,12 @@ export interface ContextActions {
   onAddToAlbum?: (ids: string[], albumId: string, name: string) => void | Promise<unknown>;
   onAddToCanvas?: (ids: string[], canvasId: string, name: string) => void | Promise<unknown>;
   onAddTag?: (ids: string[], name: string) => void | Promise<unknown>;
-  // Develop: the automatic edit, a saved preset; `copy` = and save a copy of
-  // every photo afterwards. The presets are read when the menu opens.
-  onAutoEdit?: (ids: string[], copy: boolean) => void | Promise<unknown>;
-  onApplyPreset?: (ids: string[], name: string, copy: boolean) => void | Promise<unknown>;
+  // Develop: the automatic edit, a saved preset. "apply" = on the photos;
+  // "copy" = on the photos and a copy of each saved afterwards; "on-copy" =
+  // on a copy of each only, the photos untouched. The presets are read when
+  // the menu opens.
+  onAutoEdit?: (ids: string[], mode: EditMode) => void | Promise<unknown>;
+  onApplyPreset?: (ids: string[], name: string, mode: EditMode) => void | Promise<unknown>;
   presets?: () => string[];
   // Back to the just-imported state, for the ticked aspects (explicit false
   // for the rest, as the bar's Reset menu sends it).
@@ -117,8 +121,10 @@ interface OpenMenu extends Target {
   y: number;
 }
 
+export type EditMode = "apply" | "copy" | "on-copy";
+
 // The lists that hang off an item.
-type SubKind = "album" | "canvas" | "tag" | "edit" | "edit-copy" | "reset";
+type SubKind = "album" | "canvas" | "tag" | "edit" | "reset";
 
 interface SubItem {
   id: string;
@@ -178,6 +184,8 @@ function usePlaced(ref: React.RefObject<HTMLElement | null>, wish: { x: number; 
 }
 
 const NEW = "__new__";
+// The row behind which the rest of a long list waits (PickerDialog).
+const MORE = "__more__";
 
 // What a list submenu says at its foot and when it is empty.
 const SUB_TEXT: Record<SubKind, { newLabel?: string; empty: string }> = {
@@ -185,7 +193,6 @@ const SUB_TEXT: Record<SubKind, { newLabel?: string; empty: string }> = {
   canvas: { newLabel: "New canvas…", empty: "No canvases yet" },
   tag: { newLabel: "New tag…", empty: "No tags yet" },
   edit: { empty: "No presets yet" },
-  "edit-copy": { empty: "No presets yet" },
   reset: { empty: "" },
 };
 
@@ -216,17 +223,24 @@ function ListSubmenu({
     enabled: kind === "canvas",
   });
   const { data: tags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list(), enabled: kind === "tag" });
-  const list: SubItem[] =
+  // The loaded lists newest-first, then the few used last in front and the
+  // rest behind "More…" (utils/recents); the rows the menu hands in (the
+  // edits, the reset aspects) come shortened already.
+  const full: SubItem[] =
     kind === "album"
-      ? albums ?? []
+      ? [...(albums ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at))
       : kind === "canvas"
-        ? canvases ?? []
+        ? [...(canvases ?? [])].sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at))
         : kind === "tag"
           ? (tags ?? []).filter((t) => !isAutoTag(t)).map((t) => ({ id: t, name: t }))
           : items ?? [];
+  const short = kind === "album" || kind === "canvas" || kind === "tag" ? shortList(kind, full, (a) => a.id) : { shown: full, hidden: [] };
+  const list = short.shown;
+  const moreLabel = short.hidden.length > 0 ? `More… (${short.hidden.length})` : null;
   const { newLabel, empty } = SUB_TEXT[kind];
-  const ids = [...list.map((a) => a.id), ...(newLabel ? [NEW] : [])];
-  const labelOf = (id: string) => (id === NEW ? newLabel ?? "" : list.find((a) => a.id === id)?.name ?? "");
+  const ids = [...list.map((a) => a.id), ...(moreLabel ? [MORE] : []), ...(newLabel ? [NEW] : [])];
+  const labelOf = (id: string) =>
+    id === NEW ? newLabel ?? "" : id === MORE ? moreLabel ?? "" : list.find((a) => a.id === id)?.name ?? "";
   const { lit, setCursor } = useMenuKeys({
     open: true,
     ids,
@@ -278,6 +292,18 @@ function ListSubmenu({
           </button>
         </span>
       ))}
+      {moreLabel && (
+        <button
+          type="button"
+          role="menuitem"
+          data-menu-id={MORE}
+          className={`ctx-menu-item${lit === MORE ? " cursor" : ""}`}
+          onMouseEnter={() => setCursor(MORE, true)}
+          onClick={() => onPick(MORE, "")}
+        >
+          {moreLabel}
+        </button>
+      )}
       {newLabel && (
         <>
           {list.length > 0 && <div className="ctx-menu-sep" role="separator" />}
@@ -451,13 +477,22 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const askSaveCopyOptions = useAskSaveCopyOptions();
-  const { trackCopyJob, runBatches } = useTasks();
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   // The dialog opened from the menu keeps its target after the menu closed.
-  const [dialog, setDialog] = useState<{ kind: "export" | "copy"; target: Target } | null>(null);
+  const [dialog, setDialog] = useState<
+    | { kind: "export" | "copy"; target: Target }
+    // The long list behind a submenu's "More…": a loaded list, or the
+    // presets of one edit mode.
+    | { kind: "pick"; target: Target; what: "album" | "canvas" | "tag" | EditMode }
+    | null
+  >(null);
+  const { data: pickAlbums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list(), enabled: dialog?.kind === "pick" && dialog.what === "album" });
+  const { data: pickCanvases } = useQuery({ queryKey: ["canvas-list"], queryFn: () => api.canvases.list(), enabled: dialog?.kind === "pick" && dialog.what === "canvas" });
+  const { data: pickTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list(), enabled: dialog?.kind === "pick" && dialog.what === "tag" });
   // "Show in Finder" has no dialog; what it has to say (a missing file) flashes
   // as a note at the bottom of the window.
   const [note, setNote] = useTransientMessage(6000);
+  const saveCopiesOf = useSaveCopies(setNote);
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
@@ -643,19 +678,32 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
 
     const develop: Entry[] = [];
     if (actions?.onAutoEdit || actions?.onApplyPreset) {
-      // The automatic edit, then the presets as their own group.
-      const presets = actions.onApplyPreset ? actions.presets?.() ?? [] : [];
+      // ONE "Edit" list, the bar's Edit… menu in rows: the edits as they
+      // are, with a copy saved afterwards, and on a copy only. Each group
+      // has the automatic edit first, then the presets.
+      // Newest preset first; the ones used last in front, the rest behind
+      // "More presets…" per group (utils/recents).
+      const allPresets = actions.onApplyPreset ? [...(actions.presets?.() ?? [])].reverse() : [];
+      const auto = Boolean(actions.onAutoEdit);
+      const group = (mode: EditMode, head: string, autoName: string, suffix: string, first: boolean): SubItem[] => {
+        const { shown, hidden } = shortList("preset", allPresets, (n) => n);
+        return [
+          ...(auto ? [{ id: `${mode}:${AUTO}`, name: autoName, sepBefore: !first, headBefore: head }] : []),
+          ...shown.map((name, i) => ({
+            id: `${mode}:${name}`,
+            name: `${name}${suffix}`,
+            sepBefore: i === 0 && !auto && !first,
+            headBefore: i === 0 && !auto ? head : undefined,
+          })),
+          ...(hidden.length > 0 ? [{ id: `${mode}:${MORE}`, name: `More presets… (${hidden.length})` }] : []),
+        ];
+      };
       const editRows: SubItem[] = [
-        ...(actions.onAutoEdit ? [{ id: AUTO, name: "Auto edit" }] : []),
-        ...presets.map((name, i) => ({
-          id: name,
-          name,
-          sepBefore: i === 0 && Boolean(actions.onAutoEdit),
-          headBefore: i === 0 ? "Presets" : undefined,
-        })),
+        ...group("apply", "Apply", "Auto edit", "", true),
+        ...group("copy", "Apply and save copy", "Auto edit and save copy", " and save copy", false),
+        ...group("on-copy", "Edit a copy", "Auto edit a copy", " on a copy", false),
       ];
-      develop.push({ kind: "item", id: "develop", label: "Apply edit", submenu: "edit", items: editRows, run: () => {} });
-      develop.push({ kind: "item", id: "develop-copy", label: "Apply edit and save copy", submenu: "edit-copy", items: editRows, run: () => {} });
+      develop.push({ kind: "item", id: "develop", label: "Edit", submenu: "edit", items: editRows, run: () => {} });
     }
     if (actions?.onReset) {
       const resetRows: SubItem[] = [
@@ -716,19 +764,31 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     if (!t) return;
     switch (kind) {
       case "album":
+        if (id === MORE) return setDialog({ kind: "pick", target: t, what: "album" });
+        noteRecent("album", id);
         void actions?.onAddToAlbum?.(t.ids, id, name);
         break;
       case "canvas":
+        if (id === MORE) return setDialog({ kind: "pick", target: t, what: "canvas" });
+        noteRecent("canvas", id);
         void actions?.onAddToCanvas?.(t.ids, id, name);
         break;
       case "tag":
+        if (id === MORE) return setDialog({ kind: "pick", target: t, what: "tag" });
+        noteRecent("tag", id);
         void actions?.onAddTag?.(t.ids, id);
         break;
-      case "edit":
-      case "edit-copy": {
-        const copy = kind === "edit-copy";
-        if (id === AUTO) void actions?.onAutoEdit?.(t.ids, copy);
-        else void actions?.onApplyPreset?.(t.ids, id, copy);
+      case "edit": {
+        // "<mode>:<AUTO | MORE | preset name>" (see build).
+        const colon = id.indexOf(":");
+        const mode = id.slice(0, colon) as EditMode;
+        const what = id.slice(colon + 1);
+        if (what === MORE) return setDialog({ kind: "pick", target: t, what: mode });
+        if (what === AUTO) void actions?.onAutoEdit?.(t.ids, mode);
+        else {
+          noteRecent("preset", what);
+          void actions?.onApplyPreset?.(t.ids, what, mode);
+        }
         break;
       }
       case "reset":
@@ -748,34 +808,91 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
 
   // Copy every targeted photo from its SAVED edits - the grid has no editor
   // state to take instead. The dialog closes at once either way and the title
-  // bar counts the copies down: physical copies are one background job on the
-  // server, virtual copies are made from here in slices (there is nothing to
-  // render), with a Stop between them. With several copies there is no single
-  // one to land on, so they simply appear in the grid next to their originals
-  // once the queries refresh.
+  // bar counts the copies down (utils/useSaveCopies, shared with the
+  // selection bar's "Save copy…").
   async function saveCopies(req: SaveCopyRequest) {
     const ids = dialog?.target.ids ?? [];
     setDialog(null);
-    try {
-      if (req.kind === "physical") {
-        const { job_id, total } = await api.images.copyJobStart(ids, { quality: req.quality, max_size: req.maxSize });
-        trackCopyJob(job_id, total);
-        return;
+    await saveCopiesOf(ids, req);
+  }
+
+  // The dialog behind a submenu's "More…": the whole list with a search box.
+  function pickTitle(what: "album" | "canvas" | "tag" | EditMode): string {
+    switch (what) {
+      case "album":
+        return "Add to album";
+      case "canvas":
+        return "Add to canvas";
+      case "tag":
+        return "Add tag";
+      case "apply":
+        return "Apply preset";
+      case "copy":
+        return "Apply preset and save copy";
+      case "on-copy":
+        return "Preset on a copy";
+    }
+  }
+  function pickGroups(d: { target: Target; what: "album" | "canvas" | "tag" | EditMode }): PickerGroup[] {
+    const t = d.target;
+    switch (d.what) {
+      case "album":
+        return [{
+          items: [...(pickAlbums ?? [])]
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))
+            .map((a) => ({ id: a.id, label: a.name, search: a.name, count: a.image_count })),
+          newLabel: "New album…",
+          onNew: () => {
+            setDialog(null);
+            void newAlbum(t);
+          },
+        }];
+      case "canvas":
+        return [{
+          items: [...(pickCanvases ?? [])]
+            .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at))
+            .map((c) => ({ id: c.id, label: c.name, search: c.name, count: c.image_count })),
+          newLabel: "New canvas…",
+          onNew: () => {
+            setDialog(null);
+            void newCanvas(t);
+          },
+        }];
+      case "tag":
+        return [{
+          items: (pickTags ?? []).filter((x) => !isAutoTag(x)).map((x) => ({ id: x, label: x, search: x })),
+          newLabel: "New tag…",
+          onNew: () => {
+            setDialog(null);
+            void newTag(t);
+          },
+        }];
+      default:
+        return [{ items: [...(actions?.presets?.() ?? [])].reverse().map((n) => ({ id: n, label: n, search: n })) }];
+    }
+  }
+  async function pickFromDialog(d: { target: Target; what: "album" | "canvas" | "tag" | EditMode }, id: string) {
+    const t = d.target;
+    switch (d.what) {
+      case "album": {
+        const name = (pickAlbums ?? []).find((a) => a.id === id)?.name ?? "album";
+        noteRecent("album", id);
+        await actions?.onAddToAlbum?.(t.ids, id, name);
+        break;
       }
-      const { done } = await runBatches(
-        { id: "batch:virtual-copies", kind: "batch", label: "Creating virtual copies…" },
-        ids,
-        (slice) => Promise.all(slice.map((id) => api.images.virtualCopy(id)))
-      );
-      if (done.length > 0) {
-        queryClient.invalidateQueries({ queryKey: ["images"] });
-        queryClient.invalidateQueries({ queryKey: ["tags"] });
+      case "canvas": {
+        const name = (pickCanvases ?? []).find((c) => c.id === id)?.name ?? "canvas";
+        noteRecent("canvas", id);
+        await actions?.onAddToCanvas?.(t.ids, id, name);
+        break;
       }
-    } catch (e) {
-      // Whatever was made before an error shows up too.
-      queryClient.invalidateQueries({ queryKey: ["images"] });
-      queryClient.invalidateQueries({ queryKey: ["tags"] });
-      setNote((e as Error).message || "Could not save the copies.");
+      case "tag":
+        noteRecent("tag", id);
+        await actions?.onAddTag?.(t.ids, id);
+        break;
+      default:
+        noteRecent("preset", id);
+        await actions?.onApplyPreset?.(t.ids, id, d.what);
     }
   }
 
@@ -796,6 +913,20 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
           <ExportDialog
             imageIds={dialog.target.ids}
             singleFilename={dialog.target.ids.length === 1 ? dialog.target.filename : undefined}
+            onClose={() => setDialog(null)}
+          />
+        )}
+      </Presence>
+      <Presence open={dialog?.kind === "pick"} ms={MOTION.modal}>
+        {dialog?.kind === "pick" && (
+          <PickerDialog
+            title={pickTitle(dialog.what)}
+            groups={pickGroups(dialog)}
+            onPick={(id) => {
+              const d = dialog;
+              setDialog(null);
+              void pickFromDialog(d, id);
+            }}
             onClose={() => setDialog(null)}
           />
         )}

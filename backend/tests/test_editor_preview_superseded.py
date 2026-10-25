@@ -87,3 +87,53 @@ def test_superseded_while_queued_on_the_full_render_lock(monkeypatch, tmp_path):
     t_work.join(5)
     t_hold.join(5)
     assert outcome.get("superseded") is True
+
+
+def test_a_photo_view_render_does_not_count_as_editor_activity(monkeypatch):
+    """The photo view's zoomed tiles (editor_activity=False) must not mark the
+    editor as in use - that holds the idle-editor warm-ups back."""
+    noted: list[bool] = []
+    monkeypatch.setattr(thumbnails, "note_editor_activity", lambda: noted.append(True))
+    for activity in (False, True):
+        with pytest.raises(thumbnails.PreviewSuperseded):
+            thumbnails.render_editor_preview_bytes(
+                _FakeImage("img-viewer"),
+                rotation=0,
+                crop=None,
+                adjustments=develop.normalize(None),
+                is_stale=lambda: True,
+                editor_activity=activity,
+            )
+        assert noted == ([True] if activity else [])
+
+
+def test_a_photo_view_render_has_its_own_newest_slot(monkeypatch):
+    """A viewer tile and an editor render of the same photo do not make each
+    other stale."""
+    from types import SimpleNamespace
+
+    from app import schemas
+    from app.api.routes import images as images_routes
+
+    seen: dict[str, object] = {}
+
+    def render(image, *args, is_stale=None, editor_activity=True, **kwargs):
+        seen[f"stale-{editor_activity}"] = is_stale()
+        seen[f"slots-{editor_activity}"] = sorted(images_routes._editor_preview_latest)
+        return b"jpeg"
+
+    monkeypatch.setattr(images_routes, "get_owned_image", lambda db, uid, iid: SimpleNamespace(id=iid))
+    monkeypatch.setattr(thumbnails, "render_editor_preview_bytes", render)
+    monkeypatch.setattr(images_routes, "_payload_adjustments", lambda payload: develop.normalize(None))
+    # An editor render of the same photo is in flight.
+    images_routes._editor_preview_latest["p1"] = -1
+    try:
+        user = SimpleNamespace(id=1)
+        images_routes.editor_preview("p1", schemas.ImageEdits(), viewer=True, db=None, current_user=user)
+        assert seen["stale-False"] is False
+        assert seen["slots-False"] == ["p1", "p1:viewer"]
+        # ...and the editor's own render is still the newest of its slot.
+        assert images_routes._editor_preview_latest["p1"] == -1
+    finally:
+        images_routes._editor_preview_latest.pop("p1", None)
+        images_routes._editor_preview_latest.pop("p1:viewer", None)

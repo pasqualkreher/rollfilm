@@ -72,13 +72,13 @@ def test_a_sync_stopped_before_the_sweep_removes_nothing(db, library, monkeypatc
     maintenance.request_sync_cancel()
     # The run clears the flag when it starts - set it again from inside the
     # sweep, the way the cancel route would while the folder is being read.
-    real_rglob = Path.rglob
+    real_walk = maintenance.os.walk
 
-    def rglob_then_stop(self, pattern):
+    def walk_then_stop(top, *args, **kwargs):
         maintenance.request_sync_cancel()
-        return real_rglob(self, pattern)
+        return real_walk(top, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "rglob", rglob_then_stop)
+    monkeypatch.setattr(maintenance.os, "walk", walk_then_stop)
     result = maintenance.sync_db_with_library(db, 1)
 
     assert result["cancelled"] is True
@@ -166,3 +166,37 @@ def test_a_scan_cancel_only_marks_a_running_scan():
     assert sources._cancel_requested("busy") is False
     with sources._status_lock:
         sources._scan_status.pop("busy", None)
+
+
+def test_a_trash_purge_waits_for_a_running_sync(db, library, monkeypatch):
+    """The purge hard-deleted rows the sync still held, and the sync's write
+    failed as a whole. Now the purge runs after the sync, not inside it."""
+    import threading
+
+    from app.services import trash
+
+    in_sync = threading.Event()
+    release = threading.Event()
+    order: list[str] = []
+
+    # The sync's body stands in: the in-memory database lives on this thread.
+    def slow_sync(db_, owner_id, check_derivatives=True, timing=None):
+        in_sync.set()
+        assert release.wait(2.0)
+        order.append("sync")
+        return maintenance._sync_result()
+
+    monkeypatch.setattr(maintenance, "_sync_db_with_library", slow_sync)
+    monkeypatch.setattr(trash, "_purge_expired", lambda: order.append("purge") or 0)
+
+    syncing = threading.Thread(target=maintenance.sync_db_with_library, args=(db, 1))
+    syncing.start()
+    assert in_sync.wait(2.0)
+    purging = threading.Thread(target=trash.purge_expired)
+    purging.start()
+    purging.join(0.2)
+    assert purging.is_alive() and order == []
+    release.set()
+    syncing.join(2.0)
+    purging.join(2.0)
+    assert order == ["sync", "purge"]

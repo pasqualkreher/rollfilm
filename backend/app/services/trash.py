@@ -37,6 +37,13 @@ from app.services.settings_store import (
 
 logger = logging.getLogger(__name__)
 
+# Held by the purge and by the library sync (maintenance.sync_db_with_library):
+# the sync loads every row up front and writes some back at the end, and a
+# purge hard-deleting rows in between failed that whole write
+# (StaleDataError - "expected to update 14 row(s); 0 were matched"). Both run
+# right after startup, so whichever comes second waits for the first.
+catalog_cleanup_lock = threading.Lock()
+
 
 def prune_empty_dirs(directory: Path, stop_at: Path) -> None:
     """Remove `directory` and any now-empty parents the app created for it (the
@@ -239,6 +246,11 @@ def purge_expired() -> int:
             "Trash purge skipped: library root %s not found", settings.library_root
         )
         return 0
+    with catalog_cleanup_lock:
+        return _purge_expired()
+
+
+def _purge_expired() -> int:
     db = SessionLocal()
     try:
         days = get_trash_retention_days(db)

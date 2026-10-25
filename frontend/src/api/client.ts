@@ -643,13 +643,22 @@ export const api = {
     // Copies of many photos in the background, each from its saved edits
     // (tagged "edit copy", carrying the source's tags): start a job, poll
     // its count, stop it between photos. The title bar counts it down.
+    // `look` / `auto` ("Edit a copy"): the copies get that edit in place of
+    // the saved one, the originals keep theirs; `total` is how many photos
+    // the job took (auto skips photos with nothing to learn from).
     copyJobStart(
       image_ids: string[],
-      opts: { quality: number; max_size?: number | null }
+      opts: { quality: number; max_size?: number | null; look?: Record<string, unknown>; auto?: boolean }
     ): Promise<{ job_id: string; total: number }> {
       return request(`/images/copy-jobs`, {
         method: "POST",
-        body: JSON.stringify({ image_ids, quality: opts.quality, max_size: opts.max_size ?? null }),
+        body: JSON.stringify({
+          image_ids,
+          quality: opts.quality,
+          max_size: opts.max_size ?? null,
+          ...(opts.look ? { look: opts.look } : {}),
+          ...(opts.auto ? { auto: true } : {}),
+        }),
       });
     },
     copyJobProgress(job_id: string): Promise<CopyJobProgress> {
@@ -697,7 +706,7 @@ export const api = {
     },
     // How many of these photos still wait for the re-render a bulk edit
     // queued for them (the backend renders those in the background).
-    renderStatus(image_ids: string[]): Promise<{ pending: number }> {
+    renderStatus(image_ids: string[]): Promise<{ pending: number; plain?: number }> {
       return request(`/images/render-status`, {
         method: "POST",
         body: JSON.stringify({ image_ids }),
@@ -816,7 +825,11 @@ export const api = {
       // "pair": answer with the raw's camera JPEG instead of a render of the
       // raw - the compare views' third baseline. Only the edits' geometry is
       // used; the JPEG comes back untouched, in the frame the edit is shown in.
-      reference: "pair" | null = null
+      reference: "pair" | null = null,
+      // The photo view asking, not the editor (its zoomed-in tiles, see
+      // utils/useRegionRender): the server does not count the render as
+      // editor activity and gives it its own "newest render" slot.
+      viewer = false
     ): Promise<ServedBlob> {
       const tier =
         mode === "native"
@@ -842,6 +855,7 @@ export const api = {
         mode === "native" && nativeOnly ? "native_only=1" : "",
         zoomed && mode === "scrub" ? "zoomed=1" : "",
         reference ? `reference=${reference}` : "",
+        viewer ? "viewer=1" : "",
       ]
         .filter(Boolean)
         .join("&");
@@ -1445,6 +1459,12 @@ export const api = {
     },
     removeMissing(): Promise<{ removed: number }> {
       return request(`/maintenance/missing/remove`, { method: "POST" });
+    },
+    // What runs in the background, for the task dock: the library sync (the
+    // one each start runs by itself, too) and the thumbnail jobs that are no
+    // bulk edit's re-render.
+    backgroundActivity(): Promise<{ sync_active: boolean; thumbnails_pending: number }> {
+      return request(`/maintenance/background-activity`);
     },
     // Asks a running sync to stop; it stops before it removes anything.
     cancelSync(): Promise<void> {

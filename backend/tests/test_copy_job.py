@@ -1,6 +1,6 @@
-"""The batch copy job: many photos, each from its saved edits, in the
-background - counted, stoppable, and never sunk by one broken photo. The
-render of the next photo overlaps the previous photo's tail.
+"""The batch copy job: many photos, each with the edit it held when the job
+started, in the background - counted, stoppable, and never sunk by one broken
+photo. The render of the next photo overlaps the previous photo's tail.
 """
 
 import threading
@@ -10,7 +10,6 @@ from datetime import datetime
 import pytest
 from PIL import Image as PILImage
 from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
@@ -25,10 +24,12 @@ class _Helper:
 
 
 @pytest.fixture()
-def db(monkeypatch) -> Session:
-    # One connection for every thread: the job and its finisher open their
-    # own sessions, and an in-memory database lives on its connection.
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+def db(monkeypatch, tmp_path) -> Session:
+    # A file, not an in-memory database: the job and its finisher open their
+    # own sessions on two threads, and the one shared connection an in-memory
+    # database needs was used from both at once (a lost row now and then,
+    # once a crash).
+    engine = create_engine(f"sqlite:///{tmp_path / 'library.db'}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     session = factory()
@@ -53,7 +54,7 @@ def db(monkeypatch) -> Session:
 def _stub_render(monkeypatch, on_render=None):
     rendered = []
 
-    def render(src, edits, max_size=None, is_stale=None):
+    def render(src, edits, max_size=None, is_stale=None, timing=None, on_base=None):
         rendered.append(src.id)
         if on_render:
             on_render(src.id, is_stale)
@@ -103,6 +104,28 @@ def test_every_photo_is_copied_in_order_and_counted(db, monkeypatch):
     assert job["created_ids"] == ["copy-of-p0", "copy-of-p1", "copy-of-p2"]
     assert (job["done"], job["written"], job["skipped"]) == (3, 3, 0)
     assert copy_jobs.running_count() == 0
+
+
+def test_an_edit_changed_after_the_start_does_not_reach_the_copy(db, monkeypatch):
+    """A reset of p1 while p0 renders: p1's copy still has the edit."""
+    gate = threading.Event()
+    seen = {}
+
+    def render(src, edits, max_size=None, is_stale=None, timing=None, on_base=None):
+        if src.id == "p0":
+            gate.wait(2.0)
+        seen[src.id] = edits.normalized.get("exposure")
+        return PILImage.new("RGB", (8, 6), "red")
+
+    monkeypatch.setattr(save_copy, "render_copy_frame", render)
+    _stub_write(monkeypatch)
+    job_id = copy_jobs.start_copy_job(1, ["p0", "p1"], 100, None)
+    db.get(Image, "p1").edit_adjustments = None
+    db.commit()
+    gate.set()
+    job = _wait(job_id)
+    assert job["state"] == "ready"
+    assert seen == {"p0": 0.5, "p1": 0.5}
 
 
 def test_one_broken_photo_is_skipped_not_fatal(db, monkeypatch):
@@ -182,3 +205,72 @@ def test_a_finished_job_is_dropped_on_cancel_and_pruned_by_age(db, monkeypatch):
     copy_jobs.get_job(job_id)["created"] -= copy_jobs._JOB_TTL_S + 1
     copy_jobs._prune()
     assert copy_jobs.get_job(job_id) is None
+
+
+def test_the_render_waits_for_a_render_slot(db, monkeypatch):
+    """A copy's full render counts against the render slots the thumbnail
+    workers share: with every slot taken, it waits; it does not render beside
+    them."""
+    from app.services import thumbnails
+
+    monkeypatch.setattr(thumbnails, "_render_slots", threading.BoundedSemaphore(1))
+    rendered_at = threading.Event()
+    _stub_render(monkeypatch, lambda image_id, is_stale: rendered_at.set())
+    _stub_write(monkeypatch)
+    assert thumbnails._render_slots.acquire(timeout=1)
+    job_id = copy_jobs.start_copy_job(1, ["p0"], 100, None)
+    assert not rendered_at.wait(0.3), "rendered while every slot was taken"
+    thumbnails._render_slots.release()
+    assert rendered_at.wait(2.0)
+    assert _wait(job_id)["written"] == 1
+
+
+def test_the_callers_own_edits_win_over_the_rows(db, monkeypatch):
+    """"Edit a copy": the route hands the job the edit each copy is to get;
+    the rows' saved edits (exposure 0.5) are not what is rendered."""
+    from app.services import develop
+
+    seen = {}
+
+    def render(src, edits, max_size=None, is_stale=None, timing=None, on_base=None):
+        seen[src.id] = edits.normalized.get("exposure")
+        return PILImage.new("RGB", (8, 6), "red")
+
+    monkeypatch.setattr(save_copy, "render_copy_frame", render)
+    _stub_write(monkeypatch)
+    look = develop.normalize({"exposure": 1.5})
+    edits = {"p0": save_copy.CopyEdits(adjustments=look), "p1": save_copy.CopyEdits(adjustments=look)}
+    job = _wait(copy_jobs.start_copy_job(1, ["p0", "p1"], 100, None, edits=edits))
+    assert job["written"] == 2
+    assert seen == {"p0": 1.5, "p1": 1.5}
+
+
+def test_the_next_photo_is_decoded_while_the_current_one_renders(db, monkeypatch):
+    """With a slot to spare, the render's on_base cue starts the next photo's
+    decode; with every other slot taken it does not."""
+    from app.services import thumbnails
+
+    monkeypatch.setattr(copy_jobs, "PREFETCH_ON_LOW_RAM", True)
+    prefetched: list[str] = []
+    monkeypatch.setattr(thumbnails, "ensure_native_base", lambda image: prefetched.append(image.id))
+    monkeypatch.setattr(thumbnails, "RENDER_SLOTS", 2)
+    free = {"n": 1}  # ours taken, one spare
+    monkeypatch.setattr(thumbnails, "render_slots_free", lambda: free["n"])
+
+    def render(src, edits, max_size=None, is_stale=None, timing=None, on_base=None):
+        if on_base:
+            on_base()
+        return PILImage.new("RGB", (8, 6), "red")
+
+    monkeypatch.setattr(save_copy, "render_copy_frame", render)
+    _stub_write(monkeypatch)
+    job = _wait(copy_jobs.start_copy_job(1, ["p0", "p1", "p2"], 100, None))
+    assert job["written"] == 3
+    time.sleep(0.2)  # the prefetch threads
+    assert sorted(prefetched) == ["p1", "p2"]
+    # Another render busy (no spare slot): nothing is prefetched.
+    prefetched.clear()
+    free["n"] = 0
+    _wait(copy_jobs.start_copy_job(1, ["p0", "p1"], 100, None))
+    time.sleep(0.2)
+    assert prefetched == []

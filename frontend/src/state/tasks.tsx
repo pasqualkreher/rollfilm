@@ -134,6 +134,10 @@ interface TasksState {
   removeTask: (id: string) => void;
   trackRenders: (imageIds: string[]) => void;
   cancelRenders: () => Promise<void>;
+  // Of the photos a tracked bulk edit follows, how many wait for a plain
+  // thumbnail job (not a re-render) - the dock's "Thumbnails" count leaves
+  // those out, or the same photos would be counted twice.
+  trackedPlainPending: number;
   trackCopyJob: (jobId: string, total: number) => void;
   trackExportJob: (opts: ExportJobOpts) => void;
   // A chip in the dock for a moment after a change that used to ask first -
@@ -147,6 +151,8 @@ interface TasksState {
 }
 
 const RENDER_POLL_MS = 600;
+// How often a running copy job refreshes the grid with the copies written so far.
+const COPY_REFRESH_MS = 8000;
 const EXPORT_POLL_MS = 400;
 const POLL_MS = 1000;
 // How long a finished task's chip stays.
@@ -462,13 +468,16 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   // pictures are, so the photos not rendered yet go back to how they were.
   //
   // Every photo being followed since the queue was last empty: a second bulk
-  // edit while the first still renders adds to the same count.
+  // edit while the first still renders adds to the same set. The set IS the
+  // total shown - the photos of the user's action - and done is what no
+  // longer waits for a render of any kind (render-status): a photo whose
+  // picture was already right counts as done from the start, and one that
+  // waits for a plain thumbnail (a last run's unfinished work) counts until
+  // that lands. "Rendering 430 of 600" for a preset on 600 photos, not
+  // "89 of 170" for the part that happened to be queued at the first look.
   const trackedRef = useRef<Set<string>>(new Set());
   const timerRef = useRef<number | null>(null);
-  // The count shown is of renders, not of photos followed: a bulk edit only
-  // queues the photos whose look it changed. So the total is what was through
-  // before plus what is waiting, taken again whenever photos were added.
-  const countRef = useRef({ total: 0, left: 0, added: false });
+  const [trackedPlainPending, setTrackedPlainPending] = useState(0);
 
   const cancelRenders = useCallback(async () => {
     const ids = Array.from(trackedRef.current);
@@ -476,8 +485,6 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     patchTask(RENDERS_TASK_ID, { cancelling: true });
     try {
       await api.images.cancelRenders(ids);
-      // What is left are the few a worker already had in hand: count again.
-      countRef.current.added = true;
       // The photos taken back out hold their earlier edit again.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["images"] }),
@@ -495,38 +502,36 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     timerRef.current = null;
     const ids = Array.from(trackedRef.current);
     let pending = 0;
+    let plain = 0;
     try {
-      pending = (await api.images.renderStatus(ids)).pending;
+      const status = await api.images.renderStatus(ids);
+      pending = status.pending;
+      plain = status.plain ?? 0;
     } catch {
       // The backend is gone or restarting: there is nothing left to follow.
     }
-    const count = countRef.current;
     // Photos added while the request was out have not been asked about yet.
     const unasked = trackedRef.current.size > ids.length;
     if (pending <= 0 && !unasked) {
       trackedRef.current = new Set();
-      countRef.current = { total: 0, left: 0, added: false };
+      setTrackedPlainPending(0);
       removeTask(RENDERS_TASK_ID);
       // Tiles sitting out a retry backoff ask again now instead of when their
       // timer runs out - the picture they wait for is there.
       nudgeWaitingThumbs();
       return;
     }
-    if (count.added) {
-      count.total = count.total - count.left + pending;
-      count.added = unasked;
-    }
-    count.left = pending;
+    setTrackedPlainPending(plain);
     if (pending > 0) {
       upsertTask({
         id: RENDERS_TASK_ID,
         kind: "renders",
         label: "Rendering",
-        done: count.total - pending,
-        total: count.total,
+        done: ids.length - pending,
+        total: ids.length,
         cancel: cancelRenders,
         cancelling: find(RENDERS_TASK_ID)?.cancelling ?? false,
-        title: "The edited photos are being rendered in the background. You can keep working.",
+        title: "The edited photos' pictures are being rendered in the background. You can keep working.",
         stopTitle: "Stop. Photos already rendered keep the edit, the rest stay as they were.",
       });
     }
@@ -537,7 +542,6 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     (imageIds: string[]) => {
       if (imageIds.length === 0) return;
       for (const id of imageIds) trackedRef.current.add(id);
-      countRef.current.added = true;
       if (timerRef.current === null) timerRef.current = window.setTimeout(poll, 0);
     },
     [poll]
@@ -546,21 +550,24 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   // --- the copy job --------------------------------------------------------
   // A server-side job writes one copy after the other; followed the same way,
   // and Stop ends it between photos - the copies written so far stay. After
-  // "Apply … and save copy" the edited photos re-render at the same time: the
-  // copy task stands in for both (the dock hides the render task under it)
-  // and its Stop stops both.
-  const copyTimerRef = useRef<number | null>(null);
+  // "Apply … and save copy" the edited photos re-render at the same time under
+  // their own "Rendering" task: Stop here never touches the edit, which a
+  // later bulk edit (a reset, say) may already have replaced.
+  //
+  // One timer per job: a second job started while the first runs must not
+  // stop the first one's count.
+  const copyTimersRef = useRef<Map<string, number>>(new Map());
 
   const trackCopyJob = useCallback(
     (jobId: string, total: number) => {
       const id = `copies:${jobId}`;
+      const timers = copyTimersRef.current;
       const cancel = async () => {
         try {
           await api.images.copyJobCancel(jobId);
         } catch {
           // The poll notices a backend that is gone and takes the task down.
         }
-        if (trackedRef.current.size > 0) void cancelRenders();
       };
       const task = (done: number) => ({
         id,
@@ -570,42 +577,47 @@ export function TasksProvider({ children }: { children: ReactNode }) {
         total,
         cancel,
         cancelling: find(id)?.cancelling ?? false,
-        title:
-          trackedRef.current.size > 0
-            ? "The edit is applied and the copies are saved in the background. You can keep working."
-            : "The copies are being saved in the background. You can keep working.",
-        stopTitle:
-          trackedRef.current.size > 0
-            ? "Stop. Copies already made and photos already rendered stay; the rest go back."
-            : "Stop after the copy being written. The copies already made stay.",
+        title: "The copies are being saved in the background. You can keep working.",
+        stopTitle: "Stop after the copy being written. The copies already made stay.",
       });
       upsertTask(task(0));
-      const pollCopies = async () => {
-        copyTimerRef.current = null;
-        let finished = true;
-        try {
-          const p = await api.images.copyJobProgress(jobId);
-          finished = p.state !== "running";
-          upsertTask(task(p.done));
-        } catch {
-          // The backend is gone or restarting: there is nothing left to follow.
-        }
-        if (!finished) {
-          copyTimerRef.current = window.setTimeout(pollCopies, RENDER_POLL_MS);
-          return;
-        }
-        removeTask(id);
-        // The copies sit in the grid next to their originals now.
+      // The copies join the grid as they are written, not only at the end:
+      // a big batch runs for hours. Not on every poll - each refresh refetches
+      // the grid.
+      let written = 0;
+      let refreshedAt = 0;
+      const refresh = async () => {
+        refreshedAt = Date.now();
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["images"] }),
           queryClient.invalidateQueries({ queryKey: ["tags"] }),
         ]);
         nudgeWaitingThumbs();
       };
-      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = window.setTimeout(pollCopies, RENDER_POLL_MS);
+      const pollCopies = async () => {
+        timers.delete(jobId);
+        let finished = true;
+        try {
+          const p = await api.images.copyJobProgress(jobId);
+          finished = p.state !== "running";
+          upsertTask(task(p.done));
+          if (!finished && p.written > written && Date.now() - refreshedAt >= COPY_REFRESH_MS) {
+            written = p.written;
+            void refresh();
+          }
+        } catch {
+          // The backend is gone or restarting: there is nothing left to follow.
+        }
+        if (!finished) {
+          timers.set(jobId, window.setTimeout(pollCopies, RENDER_POLL_MS));
+          return;
+        }
+        removeTask(id);
+        await refresh();
+      };
+      timers.set(jobId, window.setTimeout(pollCopies, RENDER_POLL_MS));
     },
-    [cancelRenders, find, queryClient, removeTask, upsertTask]
+    [find, queryClient, removeTask, upsertTask]
   );
 
   // --- an export job ---------------------------------------------------------
@@ -681,7 +693,7 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   useEffect(
     () => () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+      for (const timer of copyTimersRef.current.values()) window.clearTimeout(timer);
       for (const timer of finishTimers.current.values()) window.clearTimeout(timer);
     },
     []
@@ -691,7 +703,8 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     <TasksContext.Provider
       value={{
         tasks, hasTask, startTask, runTask, runBatches, trackPolledJob, cancelTask, dismissTask,
-        upsertTask, removeTask, trackRenders, cancelRenders, trackCopyJob, trackExportJob, pushUndo, notify,
+        upsertTask, removeTask, trackRenders, cancelRenders, trackedPlainPending, trackCopyJob, trackExportJob,
+        pushUndo, notify,
       }}
     >
       {children}

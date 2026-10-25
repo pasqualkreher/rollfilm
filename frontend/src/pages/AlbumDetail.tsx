@@ -30,7 +30,8 @@ import { loadPresets, presetAdjustments } from "../utils/presets";
 import { useTasks, type BatchItem } from "../state/tasks";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
 import { collapsePairs, useAskSaveCopyOptions } from "../state/viewPrefs";
-import { FULL_COPY_QUALITY, SaveCopyDialog } from "../components/SaveCopyDialog";
+import { FULL_COPY_QUALITY, SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
+import { useEditCopies } from "../utils/useEditCopies";
 import { modKeyLabel, useSelectionKeys } from "../utils/selection";
 import { useBarHeight } from "../utils/useBarHeight";
 import { selectionSharedMeta } from "../utils/selectionMeta";
@@ -138,7 +139,14 @@ export function AlbumDetail() {
     runBatches({ id: ALBUM_BATCH, kind: "batch", label, quiet }, items, run);
   const askSaveCopyOptions = useAskSaveCopyOptions();
   // The options dialog of "Apply ... and save copy", resolved by its answer.
-  const [copyPrompt, setCopyPrompt] = useState<{ resolve: (opts: CopyOpts | null) => void } | null>(null);
+  // The Save-copy dialog asked before a bulk copy: "Apply … and save copy"
+  // (a file by definition, only the options) and "Edit a copy" (which kind).
+  const [copyPrompt, setCopyPrompt] = useState<{
+    resolve: (req: SaveCopyRequest | null) => void;
+    physicalOnly: boolean;
+    title: string;
+  } | null>(null);
+  const editCopies = useEditCopies();
 
 
   // Escape walks back to the albums, the same as it leaves the lightbox and
@@ -546,8 +554,14 @@ export function AlbumDetail() {
     onAddToAlbum: (ids, albumId, name) => addFromMenu("album", albumId, name, ids),
     onAddToCanvas: (ids, canvasId, name) => addFromMenu("canvas", canvasId, name, ids),
     onAddTag: (ids, name) => addTagToSelected(name, ids),
-    onAutoEdit: (ids, copy) => (copy ? autoDevelopAndCopy(ids) : autoDevelopSelected(undefined, ids)),
-    onApplyPreset: (ids, name, copy) => (copy ? applyPresetAndCopy(name, ids) : applyPresetToSelected(name, undefined, ids)),
+    onAutoEdit: (ids, mode) =>
+      mode === "on-copy" ? autoDevelopOnCopy(ids) : mode === "copy" ? autoDevelopAndCopy(ids) : autoDevelopSelected(undefined, ids),
+    onApplyPreset: (ids, name, mode) =>
+      mode === "on-copy"
+        ? applyPresetOnCopy(name, ids)
+        : mode === "copy"
+          ? applyPresetAndCopy(name, ids)
+          : applyPresetToSelected(name, undefined, ids),
     presets: () => Object.keys(loadPresets()),
     onReset: (ids, opts) => resetSelected(opts, ids),
     // The bar's "Add to Immich": not in full mode (everything uploads anyway)
@@ -666,19 +680,48 @@ export function AlbumDetail() {
     report(`Edit applied — saving ${total} ${total === 1 ? "copy" : "copies"} in the background.`);
   }
 
-  async function askCopyOptions(): Promise<CopyOpts | null> {
+  async function askCopyOptions(count: number): Promise<CopyOpts | null> {
     if (!askSaveCopyOptions) return { quality: FULL_COPY_QUALITY, maxSize: null };
-    return new Promise((resolve) => setCopyPrompt({ resolve }));
+    return new Promise((resolve) =>
+      setCopyPrompt({
+        physicalOnly: true,
+        title: `Apply and save copy of ${plural(count, "photo")}`,
+        resolve: (req) => resolve(req && req.kind === "physical" ? { quality: req.quality, maxSize: req.maxSize } : null),
+      })
+    );
   }
 
-  async function autoDevelopAndCopy(target?: string[]) {
-    const opts = await askCopyOptions();
+  async function autoDevelopAndCopy(target: string[] = Array.from(selected)) {
+    const opts = await askCopyOptions(target.length);
     if (opts) await autoDevelopSelected(opts, target);
   }
 
-  async function applyPresetAndCopy(name: string, target?: string[]) {
-    const opts = await askCopyOptions();
+  async function applyPresetAndCopy(name: string, target: string[] = Array.from(selected)) {
+    const opts = await askCopyOptions(target.length);
     if (opts) await applyPresetToSelected(name, opts, target);
+  }
+
+  // "Edit a copy": the edit goes on a copy of each photo, the photos stay as
+  // they are. Which kind of copy is asked first (utils/useEditCopies).
+  function askCopyKind(count: number): Promise<SaveCopyRequest | null> {
+    return new Promise((resolve) =>
+      setCopyPrompt({ physicalOnly: false, title: `Edit a copy of ${plural(count, "photo")}`, resolve })
+    );
+  }
+
+  async function autoDevelopOnCopy(target: string[] = Array.from(selected)) {
+    if (target.length === 0) return;
+    const req = await askCopyKind(target.length);
+    if (req) await editCopies(target, { kind: "auto" }, req);
+  }
+
+  async function applyPresetOnCopy(name: string, target: string[] = Array.from(selected)) {
+    const preset = loadPresets()[name];
+    if (target.length === 0 || !preset) return;
+    const req = await askCopyKind(target.length);
+    if (req) {
+      await editCopies(target, { kind: "preset", name, look: presetAdjustments(preset) as unknown as Record<string, unknown> }, req);
+    }
   }
 
   async function toggleAlbumImmichSync(enabled: boolean) {
@@ -846,16 +889,16 @@ export function AlbumDetail() {
       <Presence open={copyPrompt !== null} ms={MOTION.modal}>
         {copyPrompt && (
           <SaveCopyDialog
-            physicalOnly
-            askOptions
+            physicalOnly={copyPrompt.physicalOnly}
+            askOptions={askSaveCopyOptions || copyPrompt.physicalOnly}
             count={selected.size}
-            title={`Apply and save copy of ${selected.size} ${selected.size === 1 ? "photo" : "photos"}`}
+            title={copyPrompt.title}
             onClose={() => {
               copyPrompt.resolve(null);
               setCopyPrompt(null);
             }}
             onSave={(req) => {
-              copyPrompt.resolve(req.kind === "physical" ? { quality: req.quality, maxSize: req.maxSize } : null);
+              copyPrompt.resolve(req);
               setCopyPrompt(null);
             }}
           />
@@ -991,8 +1034,10 @@ export function AlbumDetail() {
               <EditPicker
                 onAutoEdit={() => autoDevelopSelected()}
                 onApplyPreset={(name) => applyPresetToSelected(name)}
-                onAutoEditAndCopy={autoDevelopAndCopy}
-                onApplyPresetAndCopy={applyPresetAndCopy}
+                onAutoEditAndCopy={() => autoDevelopAndCopy()}
+                onApplyPresetAndCopy={(name) => applyPresetAndCopy(name)}
+                onAutoEditOnCopy={() => autoDevelopOnCopy()}
+                onApplyPresetOnCopy={(name) => applyPresetOnCopy(name)}
                 busy={developBusy}
               />
               <ResetMenu count={selected.size} onReset={resetSelected} />

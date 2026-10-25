@@ -2,6 +2,7 @@ import hashlib
 import io
 import itertools
 import json
+import dataclasses
 import logging
 import os
 import re
@@ -81,8 +82,8 @@ from app.workers.queue import (
     enqueue_immich_upload,
     enqueue_post_import,
     cancel_rerenders,
+    derivatives_pending_for,
     enqueue_rerender,
-    rerenders_pending,
     schedule_embedding_backfill,
     store_immich_asset_id,
 )
@@ -1562,12 +1563,37 @@ def copy_job_start(
     current_user: User = Depends(get_current_user),
 ):
     # Validate ownership up front so the worker can assume clean input.
-    for image_id in payload.image_ids:
-        get_owned_image(db, current_user.id, image_id)
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     quality = max(1, min(100, payload.quality))
     max_size = max(16, payload.max_size) if payload.max_size else None
-    job_id = copy_jobs.start_copy_job(current_user.id, payload.image_ids, quality, max_size)
-    return schemas.CopyJobStartResponse(job_id=job_id, total=len(payload.image_ids))
+    image_ids = list(payload.image_ids)
+    edits = None
+    if payload.look is not None or payload.auto:
+        # "Edit a copy": the copies get this edit, the originals keep theirs.
+        # Each photo's geometry stays its own; only the develop object is the
+        # look's (or the photo's own automatic suggestion).
+        groups: list[str] = []
+        if payload.auto:
+            groups = get_auto_develop_groups(db)
+            if not groups:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Auto develop is set to affect no settings - enable at least one group in Settings",
+                )
+        look = _bulk_look(payload.look) if payload.look is not None else None
+        edits = {}
+        for image in images:
+            adjustments = look if look is not None else _auto_develop_for(db, image, groups)
+            if adjustments is None:
+                continue
+            edits[image.id] = dataclasses.replace(
+                save_copy_service.CopyEdits.from_row(image), adjustments=adjustments
+            )
+        image_ids = [image_id for image_id in image_ids if image_id in edits]
+        if not image_ids:
+            return schemas.CopyJobStartResponse(job_id="", total=0)
+    job_id = copy_jobs.start_copy_job(current_user.id, image_ids, quality, max_size, edits=edits)
+    return schemas.CopyJobStartResponse(job_id=job_id, total=len(image_ids))
 
 
 def _get_copy_job(job_id: str, user: User) -> dict:
@@ -1823,9 +1849,11 @@ def render_status(
     payload: schemas.RenderStatusRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """How far the background re-renders of a bulk edit are (see
-    _rerender_later): the app counts them down in its title bar."""
-    return schemas.RenderStatus(pending=rerenders_pending(payload.image_ids))
+    """How far the pictures of a bulk edit's photos are (see _rerender_later
+    and workers.queue.derivatives_pending_for): the app counts them down in
+    its title bar."""
+    pending, plain = derivatives_pending_for(payload.image_ids)
+    return schemas.RenderStatus(pending=pending, plain=plain)
 
 
 @router.post("/cancel-renders", response_model=schemas.RenderCancelResult)
@@ -1857,6 +1885,40 @@ def cancel_renders(
     return schemas.RenderCancelResult(cancelled=len(undone))
 
 
+def _bulk_look(adjustments: dict) -> dict:
+    """A develop object applied to many photos at once (a preset), made whole.
+    A look that says nothing about the raw base (a preset saved before the
+    Normalize switch existed) goes on the standard base, like a new edit -
+    the "legacy" default would drop every photo to its dark native exposure.
+    Retouch spots are a composition too: a healed speck sits where it sat on
+    the photo it was healed on, so a look applied to many photos carries none."""
+    look = dict(adjustments)
+    if look.get("raw_base") not in ("standard", "native"):
+        look["raw_base"] = "standard"
+    look["spots"] = []
+    return develop.normalize(look)
+
+
+def _auto_develop_for(db: Session, image: Image, groups: list[str]) -> dict | None:
+    """The automatic edit for one photo, merged over its current develop state
+    the way bulk_auto_develop and the editor do; None when there is nothing
+    to learn from (no embedding, no similar edits)."""
+    vector = _embedding_for_image(image)
+    if vector is None:
+        return None
+    suggestion = auto_develop.suggest_adjustments(db, engine, image, vector)
+    if suggestion is None:
+        return None
+    adjustments, _ = suggestion
+    partial = auto_develop.filter_to_groups(adjustments, groups)
+    merged = {**develop.loads(image.edit_adjustments), **partial}
+    if not image.edit_adjustments:
+        merged["process"] = develop.CURRENT_PROCESS
+        if "raw_base" not in partial:
+            merged["raw_base"] = "standard"
+    return develop.normalize(merged)
+
+
 @router.post("/bulk-develop", response_model=list[schemas.ImageOut])
 def bulk_develop(
     payload: schemas.BulkDevelopRequest,
@@ -1867,16 +1929,7 @@ def bulk_develop(
     in place and re-render them (in the background). Geometry is left untouched
     - a preset is a look, not a composition - and a neutral object simply clears
     the develop sliders."""
-    look = dict(payload.adjustments)
-    # A look that says nothing about the raw base (a preset saved before the
-    # Normalize switch existed) goes on the standard base, like a new edit -
-    # the "legacy" default would drop every photo to its dark native exposure.
-    if look.get("raw_base") not in ("standard", "native"):
-        look["raw_base"] = "standard"
-    # Retouch spots are a composition too: a healed speck sits where it sat on
-    # the photo it was healed on, so a look applied to many photos carries none.
-    look["spots"] = []
-    blob = develop.dumps(develop.normalize(look))
+    blob = develop.dumps(_bulk_look(payload.adjustments))
     images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
     before = {image.id: _edit_state(image) for image in images}
     changed: list[Image] = []
@@ -2488,6 +2541,7 @@ def editor_preview(
     px: int | None = None,
     native_only: bool = False,
     reference: str | None = None,
+    viewer: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -2523,7 +2577,14 @@ def editor_preview(
     `?reference=pair` answers with the raw's camera JPEG instead of a render of
     the raw: the compare views' third baseline, beside the original and the
     snapshot. Only the payload's geometry is used - the JPEG is shown as the
-    camera made it, in the frame the edit is shown in."""
+    camera made it, in the frame the edit is shown in.
+
+    `?viewer=1` is the photo view asking, not the editor: its zoomed-in tiles
+    of the saved edit (ImageDetail, useRegionRender). Such a render does not
+    count as editor activity - which would hold the background warm-ups back
+    as if someone were dragging sliders - and has its own "newest render"
+    slot, so it neither cancels nor is cancelled by the editor's or the
+    compare baseline's renders of the same photo."""
     if payload.rotation % 90 != 0:
         raise HTTPException(status_code=400, detail="rotation must be a multiple of 90")
     _validate_crop(payload.crop)
@@ -2581,12 +2642,13 @@ def editor_preview(
     # Claim "newest render of this image"; anything older that's still pending
     # (queued behind the full/native lock, or not yet started) becomes stale.
     seq = next(_editor_preview_seq)
+    slot = f"{image_id}:viewer" if viewer else image_id
     with _editor_preview_state_lock:
-        _editor_preview_latest[image_id] = seq
+        _editor_preview_latest[slot] = seq
 
     def _is_stale() -> bool:
         with _editor_preview_state_lock:
-            return _editor_preview_latest.get(image_id) != seq
+            return _editor_preview_latest.get(slot) != seq
 
     started = time.perf_counter()
     render_meta: dict = {}
@@ -2615,6 +2677,7 @@ def editor_preview(
             scrub_px=scrub_px,
             is_stale=_is_stale,
             settle_px=settle_px,
+            editor_activity=not viewer,
         )
         if native and not thumbnails.native_base_ready(
             image.id, thumbnails.editor_mtime_ns(image)
@@ -2652,8 +2715,8 @@ def editor_preview(
         # Drop the bookkeeping entry once the newest render finishes, so the
         # map only ever holds images with a render actually in flight.
         with _editor_preview_state_lock:
-            if _editor_preview_latest.get(image_id) == seq:
-                del _editor_preview_latest[image_id]
+            if _editor_preview_latest.get(slot) == seq:
+                del _editor_preview_latest[slot]
     # What was actually rendered, which is not always what was asked for: a
     # native request whose full-resolution base is still decoding is answered
     # from the tier below (see thumbnails.warm_native_base). The editor reads

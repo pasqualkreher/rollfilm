@@ -77,8 +77,10 @@ def test_a_write_updates_the_total_and_starts_the_collector_only_over_budget(tmp
     thumbnails._note_full_cache_write(path, "b")
     thumbnails._full_cache_gc_thread.join(5.0)
     assert runs == ["b"]
-    # An unknown total (nothing counted yet) starts the first walk.
+    # An unknown total (nothing counted yet, nothing left by a last run)
+    # starts the first walk.
     monkeypatch.setattr(thumbnails, "_full_cache_bytes", None)
+    monkeypatch.setattr(thumbnails, "_load_full_cache_total", lambda root: None)
     thumbnails._note_full_cache_write(path, "c")
     thumbnails._full_cache_gc_thread.join(5.0)
     assert runs == ["b", "c"]
@@ -109,3 +111,40 @@ def test_the_setting_defaults_and_clamps(monkeypatch):
     assert settings_store.get_full_cache_budget_mb(Db("0")) == 0
     assert settings_store.get_full_cache_budget_mb(Db("-5")) == 0
     assert settings_store.get_full_cache_budget_mb(Db("512")) == 512
+
+
+def test_the_total_survives_a_restart_so_a_start_does_not_count(tmp_path, monkeypatch):
+    """Counting is a stat per cached file; the number is kept beside the cache
+    and read back, and only a missing number (or a budget overrun) walks."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "thumbnail_cache_root", tmp_path)
+    runs = []
+    monkeypatch.setattr(thumbnails, "_full_cache_gc_run", lambda image_id: runs.append(image_id))
+    monkeypatch.setattr(thumbnails, "_full_cache_gc_thread", None)
+    monkeypatch.setattr(thumbnails, "_full_cache_budget_bytes", 10 * MB)
+    # A last run left its number: known at once, no walk.
+    thumbnails._save_full_cache_total(tmp_path, 1 * MB)
+    monkeypatch.setattr(thumbnails, "_full_cache_bytes", None)
+    path = _write(tmp_path, "a", "half.jpg", 1 * MB, age_s=0)
+    thumbnails._note_full_cache_write(path, "a")
+    assert thumbnails._full_cache_bytes == 2 * MB and runs == []
+    assert thumbnails._load_full_cache_total(tmp_path) == 2 * MB
+    # A collection writes what it counted.
+    assert thumbnails.gc_full_cache(0, root=tmp_path) == 0
+    assert thumbnails._load_full_cache_total(tmp_path) == 1 * MB
+    # Dropping a pair keeps the number right too.
+    thumbnails._unlink_full_cache(tmp_path / "a")
+    assert thumbnails._load_full_cache_total(tmp_path) == 0
+
+
+def test_the_collector_waits_for_a_pause_before_it_walks(tmp_path, monkeypatch):
+    busy = iter([True, True, False])
+    monkeypatch.setattr(thumbnails, "_full_cache_in_use", lambda idle_s: next(busy, False))
+    monkeypatch.setattr(thumbnails, "_FULL_CACHE_GC_POLL_S", 0.0)
+    monkeypatch.setattr(thumbnails, "_read_full_cache_budget_mb", lambda: 0)
+    walked = []
+    monkeypatch.setattr(thumbnails, "gc_full_cache", lambda budget_mb, exclude_image_id=None, root=None: walked.append(budget_mb) or 0)
+    thumbnails._full_cache_gc_run("x")
+    assert walked == [0]
+    assert next(busy, "spent") == "spent"

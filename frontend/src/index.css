@@ -2767,6 +2767,47 @@ textarea:focus-visible {
   gap: 12px;
 }
 
+/* The list behind a menu's "More…" (PickerDialog): the menus' own rows and
+   group labels, in a scrolling box under a search field. */
+.picker-modal {
+  width: min(440px, 100%);
+}
+
+.picker-search {
+  width: 100%;
+}
+
+.picker-list {
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.picker-row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-row-count {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
 .pair-delete-body h3 {
   margin: 0;
   font-size: var(--text-lg);
@@ -6933,6 +6974,38 @@ input.dropdown-search {
   position: relative;
   flex: none;
   line-height: 0;
+}
+
+/* Zoomed in on a raw, the wrap is the same fit-sized box for the full-
+   resolution tile (ImageDetail, useRegionRender) - the photo keeps its size
+   and place, so switching it on moves nothing. */
+.detail-photo-wrap.has-tile {
+  display: block;
+  position: relative;
+  flex: none;
+  line-height: 0;
+}
+
+/* The tile's layer: the photo's own size and zoom/pan transform (inline), so
+   the tile, placed in it by its fractions of the frame, stays registered. */
+.detail-photo-tile {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  transform-origin: center center;
+  overflow: hidden;
+}
+
+.detail-photo-tile.zoom-anim {
+  transition: transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.detail-photo-tile > img {
+  position: absolute;
+  display: block;
+  max-width: none;
+  max-height: none;
 }
 
 /* The baseline over the edited photo (hold / split): the same size and the

@@ -182,3 +182,16 @@ def test_virtual_copies_of_a_missing_photo_stay_with_it(db, library):
     assert db.get(Image, "src-vc") is not None
     assert maintenance.remove_missing_images(db, 1) == 1
     assert db.get(Image, "src-vc") is None
+
+
+def test_the_startup_sync_does_not_ask_every_photo_for_its_thumbnails(db, library, monkeypatch):
+    """25,000 lookups in the cache folder were 130 s on a USB drive: the
+    startup sync leaves missing thumbnails to the queue's journal, Settings'
+    sync still looks."""
+    queued: list[str] = []
+    monkeypatch.setattr(maintenance, "enqueue_post_import", lambda image_id, path: queued.append(image_id))
+    _add(db, library, "a.jpg", b"one")
+    assert maintenance.sync_db_with_library(db, 1, check_derivatives=False)["thumbnails_queued"] == 0
+    assert queued == []
+    assert maintenance.sync_db_with_library(db, 1)["thumbnails_queued"] == 1
+    assert queued == ["a.jpg"]
