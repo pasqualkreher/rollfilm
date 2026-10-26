@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { loadPresets } from "../utils/presets";
 import { noteRecent, shortList } from "../utils/recents";
-import { Dropdown } from "./Dropdown";
-import { IconPencil } from "./Icons";
+import { Dropdown, type DropdownOption } from "./Dropdown";
+import { IconAlbum, IconCanvas, IconPencil, IconPlus } from "./Icons";
 import { PickerDialog } from "./PickerDialog";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
@@ -21,13 +21,98 @@ interface Props {
   busy?: boolean;
 }
 
-type Mode = "apply" | "copy" | "oncopy";
+// The three ways an edit goes on: on the photos, on the photos with a copy
+// saved afterwards, on a copy only.
+export type EditRowMode = "apply" | "copy" | "on-copy";
+type Mode = EditRowMode;
 
-const MODE_TEXT: Record<Mode, { heading: string; auto: string; suffix: string; title: string }> = {
+export const EDIT_MODE_TEXT: Record<Mode, { heading: string; auto: string; suffix: string; title: string }> = {
   apply: { heading: "Apply preset", auto: "Apply auto edit", suffix: "", title: "Apply preset" },
   copy: { heading: "Apply and save copy", auto: "Apply auto edit and save copy", suffix: " and save copy", title: "Apply preset and save copy" },
-  oncopy: { heading: "Edit a copy", auto: "Auto edit a copy", suffix: " on a copy", title: "Preset on a copy" },
+  "on-copy": { heading: "Edit a copy", auto: "Auto edit a copy", suffix: " on a copy", title: "Preset on a copy" },
 };
+const MODE_TEXT = EDIT_MODE_TEXT;
+
+// One row of a menu shared by a bar's dropdown and the right-click menu's
+// submenu, so both list the same things under the same words: a heading, a
+// row to pick, a greyed note, or a rule (the dropdown leaves rules out).
+export interface MenuRow {
+  kind: "head" | "item" | "note" | "sep";
+  id: string;
+  label: string;
+  // The glyph the bar's dropdown puts in front of the label.
+  icon?: "pencil" | "album" | "canvas" | "plus";
+  // What typing matches in the dropdown, where the label is not enough.
+  search?: string;
+}
+
+// The bar's Edit… menu as rows (the right-click menu's "Edit" submenu uses
+// the same): per mode a heading, the automatic edit (when offered), the
+// presets used last and "More presets… (n)" for the rest. Ids:
+// "auto:<mode>", "preset:<mode>:<name>", "more:<mode>" (parseEditRow).
+// `presets` newest first.
+export function editMenuRows(presets: string[], auto: boolean): MenuRow[] {
+  const rows: MenuRow[] = [];
+  for (const mode of ["apply", "copy", "on-copy"] as Mode[]) {
+    const { heading, auto: autoLabel, suffix } = MODE_TEXT[mode];
+    const { shown, hidden } = shortList("preset", presets, (n) => n);
+    rows.push({ kind: "head", id: `h-${mode}`, label: heading });
+    if (auto) rows.push({ kind: "item", id: `auto:${mode}`, label: autoLabel });
+    if (presets.length === 0) {
+      rows.push({ kind: "note", id: `none-${mode}`, label: "No presets yet — save one in the editor" });
+    } else {
+      for (const name of shown) {
+        rows.push({ kind: "item", id: `preset:${mode}:${name}`, label: `${name}${suffix}`, icon: "pencil", search: `${name}${suffix}` });
+      }
+    }
+    if (hidden.length > 0) rows.push({ kind: "item", id: `more:${mode}`, label: `More presets… (${hidden.length})`, search: "more" });
+  }
+  return rows;
+}
+
+// An Edit row's id read back: what it does, in which mode, with which preset.
+export function parseEditRow(id: string): { kind: "auto" | "preset" | "more"; mode: Mode; name: string } | null {
+  const [kind, mode, ...rest] = id.split(":");
+  if ((kind !== "auto" && kind !== "preset" && kind !== "more") || !Object.prototype.hasOwnProperty.call(MODE_TEXT, mode)) return null;
+  return { kind, mode: mode as Mode, name: rest.join(":") };
+}
+
+// Shared rows as the bar's dropdown options: headings and notes greyed, rules
+// left out, the glyph in front of the label.
+export function menuRowsToOptions(rows: MenuRow[]): DropdownOption[] {
+  const glyph = (icon: MenuRow["icon"]) =>
+    icon === "pencil" ? (
+      <IconPencil size={12} />
+    ) : icon === "album" ? (
+      <IconAlbum size={13} />
+    ) : icon === "canvas" ? (
+      <IconCanvas size={13} />
+    ) : icon === "plus" ? (
+      <IconPlus size={12} />
+    ) : null;
+  const out: DropdownOption[] = [];
+  for (const r of rows) {
+    if (r.kind === "sep") continue;
+    if (r.kind === "head") {
+      out.push({ value: r.id, label: <span className="dropdown-group-label">{r.label}</span>, disabled: true });
+    } else if (r.kind === "note") {
+      out.push({ value: r.id, label: r.label, disabled: true });
+    } else {
+      out.push({
+        value: r.id,
+        label: r.icon ? (
+          <>
+            {glyph(r.icon)} {r.label}
+          </>
+        ) : (
+          r.label
+        ),
+        ...(r.search !== undefined ? { search: r.search } : {}),
+      });
+    }
+  }
+  return out;
+}
 
 // ONE "Edit…" for the bulk action bars, the develop counterpart of "Add
 // to...": automatic edits and every saved editor preset in a single dropdown,
@@ -66,27 +151,6 @@ export function EditPicker({
     else void onAutoEditOnCopy();
   };
 
-  const group = (mode: Mode) => {
-    const { heading, auto, suffix } = MODE_TEXT[mode];
-    const { shown, hidden } = shortList("preset", presetNames, (n) => n);
-    return [
-      { value: `h-${mode}`, label: <span className="dropdown-group-label">{heading}</span>, disabled: true },
-      { value: `auto:${mode}`, label: auto },
-      ...(presetNames.length === 0
-        ? [{ value: `none-${mode}`, label: "No presets yet — save one in the editor", disabled: true }]
-        : shown.map((name) => ({
-            value: `preset:${mode}:${name}`,
-            label: (
-              <>
-                <IconPencil size={12} /> {name}
-                {suffix}
-              </>
-            ),
-            search: `${name}${suffix}`,
-          }))),
-      ...(hidden.length > 0 ? [{ value: `more:${mode}`, label: `More presets… (${hidden.length})`, search: "more" }] : []),
-    ];
-  };
 
   return (
     <>
@@ -97,13 +161,13 @@ export function EditPicker({
         title="Apply automatic edits or a saved editor preset to the selected photos - as they are, with a copy of each, or on a copy only"
         ariaLabel="Apply auto edit or preset"
         onChange={(v) => {
-          const [kind, mode, ...rest] = v.split(":");
-          const name = rest.join(":");
-          if (kind === "auto") runAuto(mode as Mode);
-          else if (kind === "preset") runPreset(mode as Mode, name);
-          else if (kind === "more") setMore(mode as Mode);
+          const row = parseEditRow(v);
+          if (!row) return;
+          if (row.kind === "auto") runAuto(row.mode);
+          else if (row.kind === "preset") runPreset(row.mode, row.name);
+          else setMore(row.mode);
         }}
-        options={[...group("apply"), ...group("copy"), ...group("oncopy")]}
+        options={menuRowsToOptions(editMenuRows(presetNames, true))}
       />
       <Presence open={more !== null} ms={MOTION.modal}>
         {more && (

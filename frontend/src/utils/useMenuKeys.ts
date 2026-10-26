@@ -34,6 +34,11 @@ export interface MenuKeysOptions {
 // How long a typed prefix is kept before the next letter starts afresh.
 const TYPEAHEAD_MS = 1000;
 
+function isTextBox(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+}
+
 export function useMenuKeys(options: MenuKeysOptions) {
   const [cursor, setCursorState] = useState<string | null>(null);
   // Whether the pointer put the cursor there. The pointer's row is painted
@@ -91,6 +96,12 @@ export function useMenuKeys(options: MenuKeysOptions) {
           break;
         case "Enter":
         case " ":
+          // A space typed into a text box inside the menu (a searchable
+          // dropdown, the picker's search) is part of the search, not a pick.
+          if (e.key === " " && isTextBox(e.target)) {
+            handled = false;
+            break;
+          }
           if (cursorRef.current) o.onPick(cursorRef.current);
           break;
         case "Escape":

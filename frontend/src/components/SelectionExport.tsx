@@ -4,7 +4,6 @@ import { SaveCopyDialog } from "./SaveCopyDialog";
 import { MenuButton } from "./MenuButton";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
-import { useAskSaveCopyOptions } from "../state/viewPrefs";
 import { useTasks } from "../state/tasks";
 import { useSaveCopies } from "../utils/useSaveCopies";
 import { IconExport, IconSaveCopy } from "./Icons";
@@ -17,7 +16,6 @@ import { IconExport, IconSaveCopy } from "./Icons";
 // one the bar and the menu bar share.
 export function useSelectionExport(ids: string[], singleFilename?: string) {
   const [open, setOpen] = useState<"export" | "copy" | null>(null);
-  const askSaveCopyOptions = useAskSaveCopyOptions();
   const { notify } = useTasks();
   const saveCopies = useSaveCopies((message) => notify({ label: message, error: true }));
   const button = (
@@ -68,7 +66,6 @@ export function useSelectionExport(ids: string[], singleFilename?: string) {
         {open === "copy" && ids.length > 0 && (
           <SaveCopyDialog
             count={ids.length}
-            askOptions={askSaveCopyOptions}
             onClose={() => setOpen(null)}
             onSave={(req) => {
               setOpen(null);

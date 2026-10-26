@@ -4,6 +4,7 @@ import { Dropdown } from "./Dropdown";
 import { SIZE_OPTIONS } from "./ExportDialog";
 import { IconDisk, IconDuplicate } from "./Icons";
 import { rangeFillStyle } from "../utils/rangeFill";
+import { readSaveCopyMaxSize, readSaveCopyQuality, setSaveCopyOptions } from "../state/viewPrefs";
 
 // The quality a copy is baked at when nobody picks one: the maximum JPEG
 // quality, which is also this dialog's starting point. A copy is a photo you
@@ -28,14 +29,14 @@ export type SaveCopyRequest =
   | { kind: "virtual" };
 
 // Save copy always asks one question first: a real file or a virtual copy.
-// With the Settings toggle on, picking the physical copy also exposes the
-// export-style quality/size controls; otherwise it bakes at full quality. The
+// The export-style quality/size controls are always there, greyed out while
+// the virtual copy is picked (it has no file to bake). They start at the last
+// copy's values (viewPrefs), 100 / original size the first time. The
 // dialog only asks: the caller closes it and runs the copy as a task in the
 // title bar (state/tasks), where it is counted down.
 export function SaveCopyDialog({
   onClose,
   onSave,
-  askOptions,
   count = 1,
   closing = false,
   physicalOnly = false,
@@ -44,8 +45,6 @@ export function SaveCopyDialog({
   onClose: () => void;
   // The choice. The caller closes the dialog and starts the copy from here.
   onSave: (req: SaveCopyRequest) => void;
-  // Show the JPEG quality / size controls for the physical copy.
-  askOptions: boolean;
   // How many photos the copy is made of - the grid's multi-select passes the
   // selection size; the editor and the lightbox always copy one.
   count?: number;
@@ -59,11 +58,14 @@ export function SaveCopyDialog({
   title?: string;
 }) {
   const [kind, setKind] = useState<SaveCopyRequest["kind"]>("physical");
-  const [quality, setQuality] = useState(FULL_COPY_QUALITY);
-  const [maxSize, setMaxSize] = useState<number | null>(null);
+  const [quality, setQuality] = useState(readSaveCopyQuality);
+  const [maxSize, setMaxSize] = useState<number | null>(readSaveCopyMaxSize);
   // True once the size came from the slider or the "Custom" entry: the
   // dropdown then says "Custom" even while the slider sits on a preset value.
-  const [customSize, setCustomSize] = useState(false);
+  // A remembered size that is no preset starts as custom.
+  const [customSize, setCustomSize] = useState(
+    () => maxSize !== null && !SIZE_OPTIONS.some((o) => o.value === maxSize),
+  );
   // The pixel field's text while it is being typed; null = shows the value.
   const [sizeDraft, setSizeDraft] = useState<string | null>(null);
   // Escape is the Cancel button.
@@ -72,11 +74,19 @@ export function SaveCopyDialog({
   useEnterToConfirm(!closing, () => doSave());
 
   function doSave() {
-    onSave(kind === "physical" ? { kind, quality, maxSize } : { kind });
+    if (kind === "physical") {
+      setSaveCopyOptions(quality, maxSize);
+      onSave({ kind, quality, maxSize });
+    } else {
+      onSave({ kind });
+    }
   }
 
   const physical = kind === "physical";
   const many = count > 1;
+  // The options greyed out (not hidden: nothing moves) for a virtual copy.
+  const optsOff = !physical;
+  const offStyle = optsOff ? { opacity: 0.45 } : undefined;
 
   // What the size dropdown shows: a preset, "Custom" or "Original size".
   const sizeChoice = maxSize === null ? "" : customSize ? CUSTOM_SIZE : String(maxSize);
@@ -163,9 +173,8 @@ export function SaveCopyDialog({
             </button>
           </div>
           )}
-          {physical && askOptions && (
-            <>
-              <label className="editor-slider">
+          <>
+              <label className="editor-slider" style={offStyle}>
                 <span className="editor-slider-head">
                   <span>JPEG quality</span>
                   <span className="editor-slider-val">{quality}</span>
@@ -176,17 +185,19 @@ export function SaveCopyDialog({
                   max={100}
                   step={1}
                   value={quality}
+                  disabled={optsOff}
                       style={rangeFillStyle(quality, 60, 100)}
                   onChange={(e) => setQuality(Number(e.target.value))}
                 />
               </label>
-              <div className="editor-slider">
+              <div className="editor-slider" style={offStyle}>
                 <span className="editor-slider-head">
                   <span>Size</span>
                 </span>
                 <Dropdown
                   value={sizeChoice}
                       ariaLabel="Copy size"
+                  disabled={optsOff}
                   onChange={pickSize}
                   options={[
                     ...SIZE_OPTIONS.map((opt) => ({
@@ -201,7 +212,7 @@ export function SaveCopyDialog({
                   preset or "Custom" moves nothing: it follows the dropdown
                   and dragging it (or typing a number) makes the size custom.
                   Greyed out while the copy keeps its original size. */}
-              <label className="editor-slider">
+              <label className="editor-slider" style={offStyle}>
                 <span className="editor-slider-head">
                   <span>Long edge</span>
                   <span className="copy-size-field">
@@ -212,7 +223,7 @@ export function SaveCopyDialog({
                       aria-label="Long edge in pixels"
                       value={sizeDraft ?? (maxSize === null ? "" : String(maxSize))}
                       placeholder="–"
-                      disabled={maxSize === null}
+                      disabled={optsOff || maxSize === null}
                       onChange={(e) => setSizeDraft(e.target.value)}
                       onBlur={commitSizeDraft}
                       onKeyDown={(e) => {
@@ -233,14 +244,13 @@ export function SaveCopyDialog({
                   max={SIZE_MAX}
                   step={SIZE_STEP}
                   value={maxSize ?? SIZE_MAX}
-                  disabled={maxSize === null}
+                  disabled={optsOff || maxSize === null}
                   style={rangeFillStyle(maxSize ?? SIZE_MIN, SIZE_MIN, SIZE_MAX)}
                   onChange={(e) => slideSize(Number(e.target.value))}
                   title="Drag, or type a number in the field above."
                 />
               </label>
-            </>
-          )}
+          </>
           <div className="pair-delete-actions">
             <button className="btn ghost" onClick={onClose}>
               Cancel

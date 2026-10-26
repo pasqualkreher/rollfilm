@@ -836,18 +836,21 @@ def _hue_sat_drift(before: np.ndarray, after: np.ndarray) -> tuple[float, float]
     return float(np.abs(a[..., 1] - b[..., 1]).max()), float(dh.max())
 
 
+@pytest.mark.parametrize("depth", [False, True])
 @pytest.mark.parametrize("amount", [1.3, 0.65, -0.65, -1.3])
-def test_clarity_never_touches_colour(amount):
+def test_clarity_never_touches_colour(amount, depth):
     """Clarity controls detail depth. It runs on luminance and is applied as one
     shared RGB ratio, so hue and saturation survive to float32 rounding - the
-    per-channel version this replaced moved them by 0.05 and 10 degrees."""
+    per-channel version this replaced moved them by 0.05 and 10 degrees.
+    (`depth` is the process-8 pass with its second band.)"""
     chart = _saturated_chart()
-    dsat, dhue = _hue_sat_drift(chart, thumbnails._clarity(chart, 12.0, amount))
+    dsat, dhue = _hue_sat_drift(chart, thumbnails._clarity(chart, 12.0, amount, depth=depth))
     assert dsat < 1e-5, f"saturation moved by {dsat}"
     assert dhue < 1e-3, f"hue rotated by {dhue} degrees"
 
 
-def test_clarity_still_changes_detail_depth():
+@pytest.mark.parametrize("depth", [False, True])
+def test_clarity_still_changes_detail_depth(depth):
     """Guard against the ratio being a no-op: local contrast must actually move,
     up for positive and down for negative."""
     chart = _saturated_chart()
@@ -858,8 +861,8 @@ def test_clarity_still_changes_detail_depth():
         y = luma(a)
         return float((y - cv2.GaussianBlur(y, (0, 0), 3.0)).std())
 
-    assert detail(thumbnails._clarity(chart, 12.0, 0.65)) > detail(chart) * 1.02
-    assert detail(thumbnails._clarity(chart, 12.0, -0.65)) < detail(chart) * 0.98
+    assert detail(thumbnails._clarity(chart, 12.0, 0.65, depth=depth)) > detail(chart) * 1.02
+    assert detail(thumbnails._clarity(chart, 12.0, -0.65, depth=depth)) < detail(chart) * 0.98
 
 
 def test_denoise_guard_protects_colour_on_a_clean_image(monkeypatch):

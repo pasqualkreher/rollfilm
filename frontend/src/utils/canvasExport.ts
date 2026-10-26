@@ -61,6 +61,78 @@ export function exportImages(doc: Doc, byId: Map<string, ImageOut>): ImageOut[] 
   return images;
 }
 
+// How the photos go into the export: dpi null = Original (full resolution,
+// the saved bytes or a lossless render, as always); otherwise each photo is a
+// JPEG at `quality`, sized for the largest place it is printed at that dpi.
+export interface ExportPhotoQuality {
+  dpi: number | null;
+  quality: number;
+}
+
+export interface ExportUrlOptions {
+  format: "jpeg";
+  quality: number;
+  maxSize: number;
+}
+
+// The photo's shape as the editor left it (a quarter-turn swaps the sides, a
+// crop scales them) - the same reading as the canvas editor's frames.
+function editedAspect(image: ImageOut): number | null {
+  if (!image.width || !image.height) return null;
+  const turned = ((image.edit_rotation ?? 0) / 90) % 2 !== 0;
+  let w = turned ? image.height : image.width;
+  let h = turned ? image.width : image.height;
+  if (image.edit_crop_width && image.edit_crop_height) {
+    w *= image.edit_crop_width;
+    h *= image.edit_crop_height;
+  }
+  return w > 0 && h > 0 ? w / h : null;
+}
+
+// The long edge, in printed mm, of the picture inside one frame: covered into
+// the frame (object-fit: cover), then zoomed by the frame's content scale.
+function printedLongEdgeMm(item: LayoutItem, aspect: number | null): number {
+  const fw = item.width_mm;
+  const fh = item.height_mm;
+  const zoom = Math.max(1, item.content_scale || 1);
+  if (!aspect) return Math.max(fw, fh) * zoom;
+  const dw = Math.max(fw, fh * aspect);
+  const dh = dw / aspect;
+  return Math.max(dw, dh) * zoom;
+}
+
+// Each exported photo's URL. With a dpi, the photo is asked for as a JPEG no
+// bigger than its largest placement needs at that density; Original keeps the
+// URL exactly as before.
+export function exportPhotoUrls(
+  doc: Doc,
+  images: ImageOut[],
+  photos: ExportPhotoQuality,
+  urlFor: (image: ImageOut, opts?: ExportUrlOptions) => string
+): Map<string, string> {
+  const urls = new Map<string, string>();
+  const dpi = photos.dpi;
+  if (dpi === null) {
+    for (const image of images) urls.set(image.id, urlFor(image));
+    return urls;
+  }
+  const longestMm = new Map<string, number>();
+  const byId = new Map(images.map((image) => [image.id, image]));
+  for (const item of doc.items) {
+    if (item.kind !== "photo" || !item.image_id) continue;
+    const image = byId.get(item.image_id);
+    if (!image) continue;
+    const mmLong = printedLongEdgeMm(item, editedAspect(image));
+    longestMm.set(image.id, Math.max(longestMm.get(image.id) ?? 0, mmLong));
+  }
+  for (const image of images) {
+    const mmLong = longestMm.get(image.id) ?? 0;
+    const maxSize = Math.max(16, Math.ceil((mmLong / 25.4) * dpi));
+    urls.set(image.id, urlFor(image, { format: "jpeg", quality: photos.quality, maxSize }));
+  }
+  return urls;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")

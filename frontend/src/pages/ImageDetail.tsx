@@ -12,7 +12,7 @@ import { MembershipChips } from "../components/MembershipChips";
 import { AddToPicker, useAddToNotice } from "../components/AddToPicker";
 import { useAppDialogs } from "../components/AppDialogs";
 import { MiniMap } from "../components/MiniMap";
-import { setDetailPanelOpen, useAskSaveCopyOptions, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
+import { setDetailPanelOpen, useDetailPanelOpen, useMergePairs, useStageBg } from "../state/viewPrefs";
 import { useTasks } from "../state/tasks";
 import { useNavHistory } from "../state/navHistory";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
@@ -57,17 +57,25 @@ import { MOTION } from "../utils/usePresence";
 import { isTextEntry } from "../utils/keyboardFocus";
 import { Spinner, LoadingState } from "../components/Spinner";
 
-// The fit view counts as soft when it is shown more than this much bigger
-// than the preview's own pixels (a few percent of upscale is invisible, and
-// not worth a fetch), and how long after the user has rested on a photo the
-// sharper tier is asked for - a second after arriving, with the 250ms it
-// takes to count as rested.
+// The sharper tier is worth a fetch when the photo has more than this much
+// over the preview's own pixels (a few percent is invisible), and how long
+// after the user has rested on a photo it is asked for - a second after
+// arriving, with the 250ms it takes to count as rested.
 const FIT_SHARP_SLACK = 1.04;
 const FIT_SHARPEN_DELAY_MS = 750;
+// The fit view's full-resolution render is asked for at no less than this long
+// edge: the half tier's size, so the tile that lands over it is never softer
+// than it. A screen that shows more wins (see visibleTileRegion). Measured on
+// the user's 4K screen the fit frame is 1600-2600 device pixels, the same as
+// the preview, so asking at screen size changed nothing visible.
+const FIT_TILE_MIN_PX = 3900;
 // How long the view has to rest - the photo just up, a zoom, a pan - before
 // what is on screen is asked for at full resolution (the editor's own settle
 // delay). Paging through a set starts nothing: each step aborts the ask.
 const TILE_REST_MS = 350;
+// How long a step may wait for its picture before the stage says "Loading…".
+// Paging that keeps up never gets there; each step restarts the wait.
+const SLOW_SWAP_MS = 600;
 
 // The part of the photo on screen, in fractions of the finished frame - what
 // the full-resolution render is asked for (the same maths as the editor's
@@ -75,8 +83,9 @@ const TILE_REST_MS = 350;
 // the render's long edge in device pixels; `view` is the bare visible part,
 // for "does the render on screen still cover it". With nearly the whole photo
 // in view (the fit view, a slight zoom) the ask is the whole frame at the
-// size the screen shows it, rounded up in steps so a window resized by a few
-// pixels asks for nothing new, and never more than the photo has (`maxPx`).
+// size the screen shows it - rounded up in steps so a window resized by a few
+// pixels asks for nothing new - but never less than the half tier it lands
+// over (FIT_TILE_MIN_PX), and never more than the photo has (`maxPx`).
 function visibleTileRegion(
   img: HTMLElement | null,
   stage: HTMLElement | null,
@@ -97,7 +106,7 @@ function visibleTileRegion(
   const out = { x: Math.max(0, x - mx), y: Math.max(0, y - my), w: w + 2 * mx, h: h + 2 * my };
   if (out.w * out.h > 0.8) {
     const shown = Math.ceil((Math.max(cr.width, cr.height) * dpr) / 200) * 200;
-    const px = Math.max(1, Math.min(shown, maxPx || Infinity));
+    const px = Math.max(1, Math.min(Math.max(shown, FIT_TILE_MIN_PX), maxPx || Infinity));
     return { ask: { x: 0, y: 0, w: 1, h: 1, px }, view: { x: 0, y: 0, w: 1, h: 1 } };
   }
   const px = Math.round(Math.max(out.w * cr.width, out.h * cr.height) * dpr);
@@ -189,7 +198,6 @@ export function ImageDetail() {
   // edits already saved on the photo. The dialog asks physical vs virtual;
   // the Settings toggle adds the physical copy's quality/size controls.
   const [saveCopyOpen, setSaveCopyOpen] = useState(false);
-  const askSaveCopyOptions = useAskSaveCopyOptions();
   // Renaming the file on disk: the title row swaps to an input while this is
   // on. The draft holds the STEM only - the extension isn't editable.
   const [renaming, setRenaming] = useState(false);
@@ -234,6 +242,28 @@ export function ImageDetail() {
   // state - the editor, a saved copy - may start from it.
   const seeded = !!image && !imageStale && isPlaceholderData;
 
+  // What is on the stage. Paging does not touch the stage until the next
+  // photo's preview has DECODED (see the swap effect below): the old picture
+  // stays, at full strength and its own size, and the new one replaces it in
+  // one frame - its size set in the same commit (zoom.fitFor), so a new
+  // aspect never shows squeezed into the old box first. `row` is the photo's
+  // row as it was at the swap; the live row is preferred while it is the
+  // same photo (stageRow).
+  const [shown, setShown] = useState<{ id: string; src: string; w: number; h: number; row: ImageOut } | null>(null);
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const stageRow = shown ? (image && image.id === shown.id ? image : shown.row) : image;
+  // The photo the stage is going to: its row (the live one once it is this
+  // photo's, else the grid's) and its preview. Null while neither is known -
+  // the swap then waits for the query.
+  const targetRow = image && image.id === activeId ? image : seed;
+  const targetUrl = targetRow ? api.images.previewUrl(targetRow.id, editVersion(targetRow)) : null;
+  // Decodes started ahead of the travel direction (fast paging, see the
+  // look-ahead below), by photo id: the swap picks one up instead of
+  // starting its own, so the step it was made for swaps at once.
+  const aheadDecodesRef = useRef(new Map<string, { url: string; img: HTMLImageElement }>());
+  const aheadWantedRef = useRef(new Set<string>());
+
   // Scroll / trackpad-pinch to zoom (toward the cursor), drag to pan, and the
   // fit-to-frame sizing underneath it - shared with the import review's preview
   // so a photo behaves the same wherever the app shows it big. Handed the
@@ -242,13 +272,15 @@ export function ImageDetail() {
   // saved crop is applied to it (as the editor does): full.jpg IS the cropped
   // frame, so measuring 100% against the whole sensor upscaled every cropped
   // photo by the crop factor.
+  // Measured on the photo the stage shows (stageRow), which while paging is
+  // still the one just left.
   const zoomSource = useMemo(() => {
-    if (!image?.width || !image?.height) return null;
-    const quarter = image.edit_rotation === 90 || image.edit_rotation === 270;
-    const w = quarter ? image.height : image.width;
-    const h = quarter ? image.width : image.height;
-    return { w: w * (image.edit_crop_width ?? 1), h: h * (image.edit_crop_height ?? 1) };
-  }, [image?.width, image?.height, image?.edit_rotation, image?.edit_crop_width, image?.edit_crop_height]);
+    if (!stageRow?.width || !stageRow?.height) return null;
+    const quarter = stageRow.edit_rotation === 90 || stageRow.edit_rotation === 270;
+    const w = quarter ? stageRow.height : stageRow.width;
+    const h = quarter ? stageRow.width : stageRow.height;
+    return { w: w * (stageRow.edit_crop_width ?? 1), h: h * (stageRow.edit_crop_height ?? 1) };
+  }, [stageRow?.width, stageRow?.height, stageRow?.edit_rotation, stageRow?.edit_crop_width, stageRow?.edit_crop_height]);
   // Compare with the original (or the raw's camera JPEG) - the editor's
   // compare views for a photo that already carries its edits: hold the eye,
   // split by a draggable line, or side by side (see CompareControls). The
@@ -310,16 +342,56 @@ export function ImageDetail() {
   // instead of it snapping in. Reset per shown photo, not per src change, so a
   // hi-res upgrade while zoomed doesn't blink.
   const [photoLoaded, setPhotoLoaded] = useState(false);
-  // Which photo's pixels the <img> has actually decoded. Paging keeps the
-  // previous photo on the stage until the next one's have arrived; while they
-  // haven't (fast zapping outruns the neighbour prefetch), the stage says so
-  // instead of silently showing the wrong photo at full strength.
+  // Which photo's pixels the <img> has actually loaded. Paging keeps the
+  // previous photo on the stage until the next one's have decoded (see
+  // `shown`); a step that waits long for them says so (see `slow`).
   const [loadedId, setLoadedId] = useState<string | null>(null);
   // True once any photo has been shown. Gates the fade-in to the very first
   // open (from the grid): while paging through a set we keep the current frame
   // on screen and swap in place, so there's no fade-out/in wash between photos.
   const shownOnceRef = useRef(false);
   const { zoomed, resetZoom } = zoom;
+
+  // The swap: once the photo to show (or its edit version) changes, its
+  // preview is decoded off-screen and only then put on the stage, sized in
+  // the same commit (fitFor from the decoded bitmap: the numbers refit gets
+  // on load). The browser holds the decoded picture, so the <img> taking its
+  // url has no blank frame. A newer step cancels an older one; a decode that
+  // refuses swaps anyway and leaves the sizing to the <img>'s own load (and
+  // a broken file to its onError).
+  const zoomFitFor = zoom.fitFor;
+  useEffect(() => {
+    if (!targetRow || !targetUrl) return;
+    const cur = shownRef.current;
+    if (cur && cur.id === targetRow.id && cur.src === targetUrl) return;
+    const row = targetRow;
+    let cancelled = false;
+    let im: HTMLImageElement | undefined;
+    for (const d of aheadDecodesRef.current.values()) if (d.url === targetUrl) im = d.img;
+    if (!im) {
+      im = new Image();
+      (im as HTMLImageElement & { fetchPriority?: string }).fetchPriority = "high";
+      im.src = targetUrl;
+    }
+    const el = im;
+    const swap = (decoded: boolean) => {
+      if (cancelled) return;
+      const w = decoded ? el.naturalWidth : 0;
+      const h = decoded ? el.naturalHeight : 0;
+      setShown({ id: row.id, src: targetUrl, w, h, row });
+      if (w && h) zoomFitFor(w, h);
+    };
+    el.decode().then(
+      () => swap(true),
+      () => swap(false)
+    );
+    return () => {
+      cancelled = true;
+    };
+    // targetRow is read for the id behind the url; a fresher row of the same
+    // photo and version needs no new swap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetUrl, targetRow?.id, zoomFitFor]);
 
   // Escape's way out: one step back through the history, the same step the
   // top bar's Back takes.
@@ -366,24 +438,28 @@ export function ImageDetail() {
     setHiRes(false);
     setFullFailed(false);
     setHalfFailed(false);
-    setPreviewFailed(false);
-    setRetryNonce(0);
     // The compare belongs to the photo it was switched on for.
     setCompareModeState("off");
     setHolding(false);
     setJpgChosen(false);
     setSplitPos(0.5);
     setPrimedFor(null);
-    // Only blank + fade for the first open. When paging through a set, keep the
-    // current photo (and its size) on screen until the next one's pixels have
-    // decoded, then swap in place - the browser holds the old <img> content
-    // until the new src is ready (neighbors are prefetched below), so paging
-    // reads as a clean swap instead of a fade-out/in wash.
+    // Only blank + fade for the first open. When paging through a set, the
+    // current photo (and its size) stays on screen until the next one's
+    // preview has decoded, then the swap puts it up in place (see `shown`),
+    // so paging reads as a clean swap instead of a fade-out/in wash.
     if (!shownOnceRef.current) {
       zoom.clearFit();
       setPhotoLoaded(false);
     }
   }, [activeId]);
+
+  // A preview that failed belongs to the photo on the stage, not to the step:
+  // paging on keeps the error up until the next photo is the one shown.
+  useEffect(() => {
+    setPreviewFailed(false);
+    setRetryNonce(0);
+  }, [shown?.id, shown?.src]);
 
   // Once zoomed in, upgrade to the full-resolution render (loaded lazily) unless
   // it already failed for this photo.
@@ -440,7 +516,8 @@ export function ImageDetail() {
     }
   }, [nothingToCompare]);
 
-  const isRaw = image?.file_type === "raw";
+  // Of the photo on the stage (its zoom tiers and their fallbacks).
+  const isRaw = stageRow?.file_type === "raw";
   // The photo the user has rested on (set a moment after paging stops; see
   // the neighbour prefetch below, where the wait is explained).
   const [restedId, setRestedId] = useState(activeId);
@@ -451,12 +528,15 @@ export function ImageDetail() {
   // in the fit view, the visible part alone when zoomed in. A whole-frame
   // full.jpg of an edited 40MP raw was the decode plus half a minute of
   // pipeline at sensor size; either render is about a second once the decode
-  // is in. Raws and edited photos (an unedited JPEG's half tier is the file
-  // itself); not while comparing (the baseline has the stage), in the editor
-  // or the slideshow, nor from a grid row without its edits. Paging on ends
-  // the ask for the photo left; the next photo asks once it is up and has
-  // rested. (A decode already running on the server finishes - it cannot be
-  // cut short - and the next photo's starts right after it.)
+  // is in. Every photo, an unedited JPEG too (its preview is as soft at fit
+  // on a big hi-dpi screen as a raw's); not while comparing (the baseline has
+  // the stage), in the editor or the slideshow, nor from a grid row without
+  // its edits. Paging on ends the ask for the photo left (tileLive), but its
+  // tile stays laid over it until the next photo is on the stage (tileMode
+  // holds it), so nothing collapses under the old picture; the next photo
+  // asks once it is up and has rested. (A decode already running on the
+  // server finishes - it cannot be cut short - and the next photo's starts
+  // right after it.)
   const photoImgRef = useRef<HTMLImageElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const zoomSetImg = zoom.setImg;
@@ -475,11 +555,16 @@ export function ImageDetail() {
     },
     [zoomSetBox]
   );
-  const tileMode =
+  // The full-resolution render is for raws and edited photos. An unedited
+  // JPEG's best is the file itself, which the sharper tier brings (get_half
+  // serves it); a native decode of the JPEG only to render it again would be
+  // seconds for nothing.
+  const tileLive =
     !!image &&
-    (isRaw || image.edit_rev > 0) &&
+    (isRaw || (image.edit_rev ?? 0) > 0) &&
     !seeded &&
     !imageStale &&
+    shown?.id === image.id &&
     loadedId === image.id &&
     restedId === activeId &&
     !!zoom.fit &&
@@ -488,9 +573,30 @@ export function ImageDetail() {
     !adjustClosing &&
     !slideshowOpen &&
     !previewFailed;
+  // The photo whose tile was last live; held while the stage still shows it
+  // and the user is moving (the swap to the next photo pending, or back on
+  // it before it counts as rested again), dropped in the commit that swaps.
+  const [tileHeldFor, setTileHeldFor] = useState<string | null>(null);
+  const swapPending = !shown || shown.id !== activeId;
+  const moving = swapPending || restedId !== activeId;
+  useEffect(() => {
+    if (tileLive) setTileHeldFor(activeId);
+    else if (!moving) setTileHeldFor(null);
+  }, [tileLive, moving, activeId]);
+  const tileMode =
+    tileLive ||
+    (!!shown &&
+      moving &&
+      tileHeldFor === shown.id &&
+      !!zoom.fit &&
+      !compareActive &&
+      !adjustOpen &&
+      !adjustClosing &&
+      !slideshowOpen &&
+      !previewFailed);
   const [tileAsk, setTileAsk] = useState<RegionAsk | null>(null);
   useEffect(() => {
-    if (!tileMode) {
+    if (!tileLive) {
       setTileAsk(null);
       return;
     }
@@ -501,8 +607,25 @@ export function ImageDetail() {
     }, TILE_REST_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tileMode, zoom.scale, zoom.pan.x, zoom.pan.y, zoom.fit?.w, zoom.fit?.h]);
-  const tile = useRegionRender(tileMode ? image : undefined, tileMode ? tileAsk : null);
+  }, [tileLive, zoom.scale, zoom.pan.x, zoom.pan.y, zoom.fit?.w, zoom.fit?.h]);
+  // Held (tileMode without tileLive), the old photo keeps its tile but asks
+  // for nothing more.
+  const tile = useRegionRender(tileMode ? stageRow : undefined, tileLive ? tileAsk : null);
+  // Past the first build the stage only reads as "loading" when the step has
+  // been waiting a while: paging that keeps up never shows it, a slow photo
+  // does (see the stage's overlay). About the picture alone: the swap can
+  // go ahead on the grid's row while the full one is still on its way.
+  const pixelsPending = !image || swapPending || loadedId !== shown?.id;
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!pixelsPending) {
+      setSlow(false);
+      return;
+    }
+    if (slow) return;
+    const t = setTimeout(() => setSlow(true), SLOW_SWAP_MS);
+    return () => clearTimeout(t);
+  }, [pixelsPending, activeId, slow]);
 
   const { data: paired } = useQuery({
     queryKey: ["image", image?.paired_image_id],
@@ -731,8 +854,16 @@ export function ImageDetail() {
     prevIndexRef.current = index;
     if (index === -1 || prev === -1 || prev === index) return;
     const dir = index > prev ? 1 : -1;
-    for (const aheadId of [imageIds[index + dir], imageIds[index + 2 * dir]]) {
-      if (!aheadId) continue;
+    // The two ahead are also DECODED (held in aheadDecodesRef), so the swap
+    // to them has nothing left to wait for. Only the photo just arrived at
+    // and the two ahead are kept: a turn drops the old direction's at once,
+    // and no more than two decodes run ahead.
+    const aheadIds = [imageIds[index + dir], imageIds[index + 2 * dir]].filter((x): x is string => !!x);
+    const wanted = new Set([imageIds[index], ...aheadIds]);
+    aheadWantedRef.current = wanted;
+    const decodes = aheadDecodesRef.current;
+    for (const key of [...decodes.keys()]) if (!wanted.has(key)) decodes.delete(key);
+    for (const aheadId of aheadIds) {
       queryClient
         .prefetchQuery({
           queryKey: ["image", aheadId],
@@ -740,7 +871,18 @@ export function ImageDetail() {
         })
         .then(() => {
           const ahead = queryClient.getQueryData<ImageOut>(["image", aheadId]);
-          if (ahead) preloadImage(api.images.previewUrl(ahead.id, editVersion(ahead)));
+          if (!ahead) return;
+          const url = api.images.previewUrl(ahead.id, editVersion(ahead));
+          preloadImage(url);
+          // Moved on (or turned) while the row was on its way: not wanted.
+          // Already decoding this version: nothing to add.
+          if (!aheadWantedRef.current.has(aheadId) || decodes.get(aheadId)?.url === url) return;
+          const img = new Image();
+          img.decoding = "async";
+          (img as HTMLImageElement & { fetchPriority?: string }).fetchPriority = "low";
+          img.src = url;
+          decodes.set(aheadId, { url, img });
+          img.decode().catch(() => {});
         });
     }
   }, [imageIds, id, queryClient]);
@@ -773,34 +915,42 @@ export function ImageDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restedId, activeId, adjustOpen]);
 
-  // The fit view sharpens on its own. The preview is 2600px at most, and a
-  // big window on a hi-dpi screen shows the photo at up to half as many
-  // pixels again - soft until the user zoomed, which is not something anyone
-  // should have to do to see a photo properly. So once the user has rested on
-  // a photo whose preview is being stretched (and which has the pixels to do
-  // better), the tier above it is fetched off-screen and swapped in: the
-  // 3900px half tier for a raw or an edited photo, the file itself for an
-  // unedited JPEG (the server picks, see get_half). A second after arriving,
-  // so paging through a set fetches nothing; leaving the photo cancels it.
-  // It lands within a second, while the full-resolution render (tileMode)
-  // may still be waiting for its decode; zooming keeps its own chain (hiRes).
-  const fitDevicePx = zoom.fit ? Math.max(zoom.fit.w, zoom.fit.h) * (window.devicePixelRatio || 1) : 0;
+  // The fit view sharpens on its own. The preview is a 2600px re-encode, and
+  // even shown at its own size it is visibly softer than the tier above it -
+  // which the user used to get only by zooming in once (hiRes latches), not
+  // something anyone should have to do to see a photo properly. So once the
+  // user has rested on a photo that has more pixels than its preview, the
+  // tier above is fetched off-screen and swapped in: the 3900px half tier for
+  // a raw or an edited photo, the file itself for an unedited JPEG (the
+  // server picks, see get_half). A second after arriving, so paging through a
+  // set fetches nothing; leaving the photo cancels it. It lands within a
+  // second and stands under the full-resolution render (tileMode), which may
+  // still be waiting for its decode and lands over it at no less than the
+  // half tier's size; zooming keeps its own chain (hiRes). Not gated on the
+  // screen's pixels: judged by pixel count alone the fit view on a 4K screen
+  // was "not soft" (fit frame 1600-2600 device px), and nothing ever sharpened.
   const sourcePx = zoomSource ? Math.max(zoomSource.w, zoomSource.h) : 0;
   const loadedPreviewPx = image && previewPx?.id === image.id ? previewPx.px : 0;
-  const softAtFit =
-    loadedPreviewPx > 0 &&
-    fitDevicePx > loadedPreviewPx * FIT_SHARP_SLACK &&
-    sourcePx > loadedPreviewPx * FIT_SHARP_SLACK;
+  const previewIsNotTheBest = loadedPreviewPx > 0 && sourcePx > loadedPreviewPx * FIT_SHARP_SLACK;
   useEffect(() => {
-    if (restedId !== activeId || adjustOpen || slideshowOpen || hiRes || !softAtFit) return;
+    if (restedId !== activeId || adjustOpen || slideshowOpen || hiRes || !previewIsNotTheBest) return;
     const t = setTimeout(() => setSharperFor(restedId), FIT_SHARPEN_DELAY_MS);
     return () => clearTimeout(t);
-  }, [restedId, activeId, adjustOpen, slideshowOpen, hiRes, softAtFit]);
+  }, [restedId, activeId, adjustOpen, slideshowOpen, hiRes, previewIsNotTheBest]);
+  // Belongs to the photo on the stage: a sharper tier that is up stays up
+  // while the step to the next photo is pending (sharperKeptFor), so the
+  // <img> never drops back to the preview under the old picture; it goes in
+  // the commit that swaps - the hook revokes its object URL only after the
+  // <img> has moved on. One still loading when the user pages on is dropped.
+  const [sharperKeptFor, setSharperKeptFor] = useState<string | null>(null);
   const sharper = useFullResUpgrade(
-    image && !hiRes && sharperFor === image.id && activeId === image.id
-      ? api.images.halfUrl(image.id, editVersion(image))
+    stageRow && !hiRes && sharperFor === stageRow.id && (stageRow.id === activeId || sharperKeptFor === stageRow.id)
+      ? api.images.halfUrl(stageRow.id, editVersion(stageRow))
       : null
   );
+  useEffect(() => {
+    setSharperKeptFor(sharper.state === "ready" ? sharperFor : null);
+  }, [sharper.state, sharperFor]);
   const sharperSrc = sharper.state === "ready" ? sharper.src : null;
 
   // The baseline's render for the compare views. At fit the ultra tier sized
@@ -809,7 +959,7 @@ export function ImageDetail() {
   // The ask is rounded up in steps and capped at the photo's own size, so a
   // window resize doesn't re-render for a few pixels and nothing asks for more
   // than the photo has.
-  const stageHasPixels = !!image && !imageStale && loadedId === image.id;
+  const stageHasPixels = !!image && !imageStale && shown?.id === image.id && loadedId === image.id;
   const baselineUpgrade = compareActive && zoomed;
   const baselineRawPx = zoom.fit
     ? Math.ceil(Math.max(zoom.fit.w, zoom.fit.h) * (baselineUpgrade ? zoom.scale : 1) * (window.devicePixelRatio || 1)) + 2
@@ -893,7 +1043,10 @@ export function ImageDetail() {
 
   if (!image) return <LoadingState className="page" />;
 
-  const pixelsPending = imageStale || loadedId !== image.id;
+  // The photo on the stage and its preview (see `shown`); before the first
+  // swap, the photo opened, its preview asked for straight away.
+  const stage = stageRow ?? image;
+  const stageSrc = shown?.src ?? api.images.previewUrl(stage.id, editVersion(stage));
 
   // Rating/coloring/tagging the shown file also writes its RAW+JPEG partner
   // (always - a pair shares them) - and we refresh the partner's cached copy
@@ -922,7 +1075,9 @@ export function ImageDetail() {
   // editor, while it is open over this view, takes them itself).
   const menuRef = useRef<(msg: { action: string; value?: string | number }) => void>(() => {});
   menuRef.current = (msg) => {
-    if (!image || adjustOpen) return;
+    // Not on the row of the photo just left (imageStale): the keys wait the
+    // same way, and a rating meant for this photo must not land on that one.
+    if (!image || adjustOpen || imageStale) return;
     if (msg.action === "photo:rate") void setRating(Number(msg.value));
     else if (msg.action === "photo:color") void setColor(String(msg.value) as ColorLabel);
     else if (msg.action === "photo:flag") void setFlag(String(msg.value ?? "") as Flag | "");
@@ -1221,7 +1376,7 @@ export function ImageDetail() {
               <div className="detail-photo-error">
                 <span className="detail-photo-error-icon" aria-hidden="true"><IconImage size={40} /></span>
                 <p>This photo cannot be displayed. The file may be damaged or unreadable.</p>
-                <p className="detail-photo-error-name">{image.original_filename}</p>
+                <p className="detail-photo-error-name">{stage.original_filename}</p>
                 <button
                   className="btn"
                   onClick={() => {
@@ -1248,17 +1403,20 @@ export function ImageDetail() {
               // pool over similar-strip thumbs and neighbor prefetches.
               {...({ fetchpriority: "high" } as Record<string, string>)}
               className={`detail-photo${bgMode === "dark" ? " framed" : ""}${zoomed ? " zoomed" : ""}${zoom.zoomAnim ? " zoom-anim" : ""}`}
-              style={{ ...zoom.imageStyle, opacity: photoLoaded ? (pixelsPending ? 0.35 : 1) : 0 }}
+              // Full strength while the next photo is on its way: the stage
+              // holds the old picture until the swap (no dim, no pulsing).
+              // The fade is the first open's alone.
+              style={{ ...zoom.imageStyle, opacity: photoLoaded ? 1 : 0 }}
               onLoad={(e) => {
                 const el = e.currentTarget;
                 zoom.refit();
                 setPhotoLoaded(true);
-                setLoadedId(image.id);
+                setLoadedId(stage.id);
                 shownOnceRef.current = true;
                 // Only the preview's own size: the sharper tier loading must
                 // not make the view look "not soft" and undo itself.
                 if (!hiRes && !sharperSrc && el.naturalWidth) {
-                  setPreviewPx({ id: image.id, px: Math.max(el.naturalWidth, el.naturalHeight) });
+                  setPreviewPx({ id: stage.id, px: Math.max(el.naturalWidth, el.naturalHeight) });
                 }
               }}
               draggable={false}
@@ -1266,12 +1424,12 @@ export function ImageDetail() {
                 hiRes
                   ? isRaw
                     ? halfFailed
-                      ? api.images.previewUrl(image.id, editVersion(image))
-                      : api.images.halfUrl(image.id, editVersion(image))
-                    : api.images.fullUrl(image.id, editVersion(image))
-                  : sharperSrc ?? api.images.previewUrl(image.id, editVersion(image))
+                      ? stageSrc
+                      : api.images.halfUrl(stage.id, editVersion(stage))
+                    : api.images.fullUrl(stage.id, editVersion(stage))
+                  : sharperSrc ?? stageSrc
               }
-              alt={image.original_filename}
+              alt={stage.original_filename}
               onError={() => {
                 // A higher tier unavailable - fall back so the photo never
                 // shows as a broken image: a raw's half tier to the preview
@@ -1330,7 +1488,9 @@ export function ImageDetail() {
             {pairMode && <span className="split-tag split-tag-right">Edited</span>}
             </div>
             )}
-            {pixelsPending && !previewFailed && (
+            {/* The first build, or a step that has waited SLOW_SWAP_MS - not
+                every step of a fast run through the set. */}
+            {pixelsPending && !previewFailed && (slow || !photoLoaded) && (
               <div className="lightbox-loading-stage" aria-live="polite">
                 <Spinner tone="inherit" />
                 Loading…
@@ -1518,14 +1678,18 @@ export function ImageDetail() {
                   {image.virtual_of_image_id && <VirtualCopyMark />}
                   {fileTypeBadge(image.file_type, mergePairs && Boolean(image.paired_image_id))}
                 </span>
-                <button
-                  className="detail-rename-btn"
-                  onClick={startRename}
-                  title="Rename this photo. The file on disk is renamed as well."
-                  aria-label="Rename photo"
-                >
-                  <IconRename size={15} />
-                </button>
+                {/* A virtual copy has no file of its own to rename (the
+                    backend refuses too): the original carries the name. */}
+                {!image.virtual_of_image_id && (
+                  <button
+                    className="detail-rename-btn"
+                    onClick={startRename}
+                    title="Rename this photo. The file on disk is renamed as well."
+                    aria-label="Rename photo"
+                  >
+                    <IconRename size={15} />
+                  </button>
+                )}
               </>
             )}
             {/* Hidden while renaming: the row belongs to the name field then,
@@ -1746,11 +1910,15 @@ export function ImageDetail() {
         </div>
       </div>
 
-      {/* Never over a grid's stand-in row (`seeded`): the editor reads the
-          develop state once, on mount. E pressed in that moment still opens
-          it - the mode is in the URL - a round-trip later, with the edits. */}
-      {(adjustOpen || adjustClosing) && !seeded && (
-        <PhotoEditor key={editorKey} image={image} onClose={leaveEditor} closing={!adjustOpen} />
+      {/* Never over a grid's stand-in row (`seeded`) or the previous photo's
+          (`imageStale`): the editor reads the develop state once, on mount,
+          and would autosave that photo's look onto this one. E pressed in
+          that moment still opens it - the mode is in the URL - a round-trip
+          later, with the edits. The key carries the photo's id so a row
+          switch under an open editor remounts it rather than re-pointing
+          its state. */}
+      {(adjustOpen || adjustClosing) && !seeded && !imageStale && (
+        <PhotoEditor key={`${editorKey}:${image.id}`} image={image} onClose={leaveEditor} closing={!adjustOpen} />
       )}
       <Presence open={slideshowOpen} ms={MOTION.overlay}>
         {slideshowOpen && (
@@ -1781,7 +1949,6 @@ export function ImageDetail() {
                 dialogs.alert({ title: "Could not save the copy", message: (e as Error).message || "Could not save the copy." })
               );
             }}
-            askOptions={askSaveCopyOptions}
           />
         )}
       </Presence>

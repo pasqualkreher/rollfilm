@@ -732,23 +732,33 @@ def _clut_scene_cube(sim: str) -> np.ndarray | None:
     return _sample_cube(provia.reshape(n * n, n, 3), clut).reshape(n, n, n, 3)
 
 
+def _process_at_least(adj: dict, version: int) -> bool:
+    """Whether the edit's process version is `version` or later. Every rule
+    here is "from version N on", so a new process version takes part in all
+    of them without each one being told (process 8 once was not)."""
+    try:
+        return int(adj.get("process") or 1) >= version
+    except (TypeError, ValueError):
+        return False
+
+
 def renders_as_still(adj: dict) -> bool:
     """Process version 4 and up: a look rendered from a scene cube gets the
     anchor and the stills shoulder, and the derived cubes count."""
-    return adj.get("process") in ("4", "5", "6", "7")
+    return _process_at_least(adj, 4)
 
 
 def mixes_scene(adj: dict) -> bool:
     """Process version 7 and up: a look rendered from one of Fujifilm's cubes
     (or a cube built on those) gets the scene colours the cube was made for
     (_SCENE_MIX) instead of the textbook F-Gamut."""
-    return adj.get("process") == "7"
+    return _process_at_least(adj, 7)
 
 
 def agx_under_look(adj: dict) -> bool:
     """Process version 5 and up with AgX chosen: a look rendered from a scene
     cube takes its tone curve from AgX instead of bringing its own."""
-    return adj.get("process") in ("5", "6", "7") and adj.get("tone_mapper") == "agx"
+    return _process_at_least(adj, 5) and adj.get("tone_mapper") == "agx"
 
 
 def _scene_cube(sim: str, still: bool) -> np.ndarray | None:
@@ -767,7 +777,7 @@ def official_sim(adj: dict, raw_source: bool) -> str | None:
     (apply_official) and the display colour block leaves the simulation
     alone."""
     sim = adj.get("film_sim")
-    if not raw_source or adj.get("process") not in ("3", "4", "5", "6", "7") or not sim or sim == "none":
+    if not raw_source or not _process_at_least(adj, 3) or not sim or sim == "none":
         return None
     if adj.get("lut_intensity", 100) <= 0 or _scene_cube(sim, renders_as_still(adj)) is None:
         return None

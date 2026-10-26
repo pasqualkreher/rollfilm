@@ -1,3 +1,5 @@
+import time
+import os
 """The library sync never removes a photo on its own.
 
 A managed file that is not where its row says - the drive not mounted, the
@@ -184,10 +186,10 @@ def test_virtual_copies_of_a_missing_photo_stay_with_it(db, library):
     assert db.get(Image, "src-vc") is None
 
 
-def test_the_startup_sync_does_not_ask_every_photo_for_its_thumbnails(db, library, monkeypatch):
-    """25,000 lookups in the cache folder were 130 s on a USB drive: the
-    startup sync leaves missing thumbnails to the queue's journal, Settings'
-    sync still looks."""
+def test_without_check_derivatives_the_sync_leaves_thumbnails_to_the_journal(db, library, monkeypatch):
+    """Looking in every photo's cache folder is the one per-photo cost left in
+    the sync; a caller that only wants the catalog reconciled skips it and
+    leaves missing thumbnails to the queue's journal. Settings' sync looks."""
     queued: list[str] = []
     monkeypatch.setattr(maintenance, "enqueue_post_import", lambda image_id, path: queued.append(image_id))
     _add(db, library, "a.jpg", b"one")
@@ -195,3 +197,62 @@ def test_the_startup_sync_does_not_ask_every_photo_for_its_thumbnails(db, librar
     assert queued == []
     assert maintenance.sync_db_with_library(db, 1)["thumbnails_queued"] == 1
     assert queued == ["a.jpg"]
+
+
+def test_the_thumbnail_check_lists_folders_and_creates_none(db, library, monkeypatch):
+    """One readdir per photo and nothing else: the check used to create every
+    photo's cache folder (a mkdir + stat each, and an empty folder for photos
+    without derivatives) and stat two files in it - 130 s on a USB drive."""
+    queued: list[str] = []
+    monkeypatch.setattr(maintenance, "enqueue_post_import", lambda image_id, path: queued.append(image_id))
+    _add(db, library, "complete.jpg", b"one")
+    _add(db, library, "half.jpg", b"two")
+    _add(db, library, "bare.jpg", b"three")
+    cache = settings.thumbnail_cache_root
+    (cache / "complete.jpg").mkdir()
+    (cache / "complete.jpg" / "thumbnail.jpg").write_bytes(b"t")
+    (cache / "complete.jpg" / "preview.jpg").write_bytes(b"p")
+    (cache / "half.jpg").mkdir()
+    (cache / "half.jpg" / "thumbnail.jpg").write_bytes(b"t")
+    (cache / "orphan").mkdir()
+    (cache / "orphan" / "thumbnail.jpg").write_bytes(b"t")
+    # Left behind by an old delete: older than the sweep's grace. A folder as
+    # young as a merge's or a copy's derivatives (written before the row
+    # commits) is spared, see ORPHAN_THUMBNAIL_GRACE_S.
+    aged = time.time() - maintenance.ORPHAN_THUMBNAIL_GRACE_S - 60
+    os.utime(cache / "orphan", (aged, aged))
+    (cache / "young-orphan").mkdir()
+    (cache / "young-orphan" / "thumbnail.jpg").write_bytes(b"t")
+    (cache / "pending-derivatives.json").write_text("[]")
+
+    mkdirs: list[Path] = []
+    real_mkdir = Path.mkdir
+
+    def counting_mkdir(self, *args, **kwargs):
+        mkdirs.append(self)
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", counting_mkdir)
+    stats: list[str] = []
+    real_stat = Path.stat
+
+    def counting_stat(self, *args, **kwargs):
+        if str(self).startswith(str(cache)):
+            stats.append(str(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", counting_stat)
+
+    result = maintenance.sync_db_with_library(db, 1)
+    stats_during_sync = list(stats)
+
+    assert sorted(queued) == ["bare.jpg", "half.jpg"]
+    assert result["thumbnails_queued"] == 2
+    assert result["orphan_thumbnails_removed"] == 1
+    assert not (cache / "orphan").exists()
+    assert (cache / "young-orphan").exists()
+    # The photo without derivatives got no empty folder, and no folder was stat'ed.
+    assert not (cache / "bare.jpg").exists()
+    assert mkdirs == []
+    assert stats_during_sync == [str(cache)]  # the one is_dir() on the cache root itself
+    assert (cache / "pending-derivatives.json").exists()  # files in the root are left alone

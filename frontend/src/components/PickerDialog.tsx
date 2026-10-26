@@ -73,6 +73,14 @@ export function PickerDialog({ title, groups, onPick, onClose, closing = false }
     onPick: pick,
     onClose,
   });
+  // Narrowing the list moves the cursor to its first row (as the searchable
+  // dropdown does): Enter after typing takes what is seen, never a row the
+  // search has hidden.
+  const firstVisible = ids[0] ?? null;
+  useEffect(() => {
+    setCursor(firstVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
   // The lit row stays in view while the arrow keys move it.
   useEffect(() => {
     if (!lit) return;

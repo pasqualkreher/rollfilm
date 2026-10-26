@@ -1024,8 +1024,22 @@ export const api = {
     },
     // The photo as the layout exports take it: the saved bytes themselves for
     // a photo without edits, a lossless full-resolution PNG for one with.
-    exportUrl(id: string, version?: string): string {
-      return derivativeUrl(id, "export", version);
+    // With `opts`: a JPEG at `quality`, capped to `maxSize` on its long edge.
+    exportUrl(
+      id: string,
+      version?: string,
+      opts?: { format?: "jpeg" | "png"; quality?: number; maxSize?: number }
+    ): string {
+      const url = derivativeUrl(id, "export", version);
+      const extra = [
+        opts?.format ? `format=${opts.format}` : "",
+        opts?.quality !== undefined ? `quality=${Math.round(opts.quality)}` : "",
+        opts?.maxSize !== undefined ? `max_size=${Math.max(16, Math.ceil(opts.maxSize))}` : "",
+      ]
+        .filter(Boolean)
+        .join("&");
+      if (!extra) return url;
+      return `${url}${url.includes("?") ? "&" : "?"}${extra}`;
     },
     // Geometry-only render (no tonal edits) the editor draws its live preview on.
     basePreviewUrl(id: string, version?: string): string {
@@ -1460,9 +1474,8 @@ export const api = {
     removeMissing(): Promise<{ removed: number }> {
       return request(`/maintenance/missing/remove`, { method: "POST" });
     },
-    // What runs in the background, for the task dock: the library sync (the
-    // one each start runs by itself, too) and the thumbnail jobs that are no
-    // bulk edit's re-render.
+    // What runs in the background, for the task dock: the library sync and
+    // the thumbnail jobs that are no bulk edit's re-render.
     backgroundActivity(): Promise<{ sync_active: boolean; thumbnails_pending: number }> {
       return request(`/maintenance/background-activity`);
     },

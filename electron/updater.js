@@ -29,7 +29,7 @@
 // and a failed check (offline, rate-limited, GitHub down) is logged and
 // otherwise invisible - the app simply stays on its current version.
 
-const { app, dialog, shell } = require("electron");
+const { app, dialog, ipcMain, shell } = require("electron");
 const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -61,6 +61,7 @@ let promptedVersion = null;
 function initAutoUpdate(hooks) {
   // Dev runs update against nothing; the version is meaningless there.
   if (!app.isPackaged) return;
+  registerNoticeIpc();
 
   if (process.platform === "darwin") {
     initMacUpdater(hooks);
@@ -93,7 +94,7 @@ const log = (() => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     // One file that never grows past a few runs' worth.
     try {
-      if (fs.statSync(file).size > 512 * 1024) {
+      if (fs.statSync(file).size > 2 * 1024 * 1024) {
         fs.renameSync(file, path.join(path.dirname(file), "updater.previous.log"));
       }
     } catch {
@@ -104,8 +105,12 @@ const log = (() => {
     return stream;
   };
   const write = (level, args) => {
-    const line = util.format(...args);
-    (level === "info" || level === "debug" ? console.log : console.warn)(`[updater] ${line}`);
+    let line = util.format(...args);
+    // electron-updater's debug output is the whole operation list of a delta
+    // download (thousands of lines) and then every range request: cut the
+    // list, and keep all of it out of main.log.
+    if (line.length > 2000) line = `${line.slice(0, 160).replace(/\s+/g, " ")}… (${line.length} chars)`;
+    if (level !== "debug") (level === "info" ? console.log : console.warn)(`[updater] ${line}`);
     try {
       open().write(`${new Date().toISOString()} ${level} ${line}\n`);
     } catch {
@@ -130,26 +135,97 @@ function runUpdater(updater, hooks) {
 
   // Asked once per version and run; "Not now" asks again on the next start.
   let askedVersion = null;
+  // The version whose download the in-app sheet is following.
+  let sheetDownload = null;
+
+  // The download with its retries; at the end "failed - try again?".
+  const download = async (info) => {
+    const follows = () => sheetDownload === info.version;
+    const result = await downloadWithRetry(updater, hooks, info, follows);
+    if (result === "done") return;
+    if (follows()) sheetDownload = null;
+    if (result === "cancelled") {
+      tellInApp(hooks, { state: "closed", version: info.version });
+      return;
+    }
+    const reason = errorReason(result);
+    let action = await askInApp(hooks, { state: "failed", mode: "self", version: info.version, reason });
+    if (action === null) {
+      const win = hooks.getMainWindow();
+      const { response } = await dialog.showMessageBox(win ?? null, {
+        type: "warning",
+        title: "Update download failed",
+        message: `Rollfilm ${info.version} could not be downloaded.`,
+        detail: `${reason}\n\nTry again now, or later: the update is offered again on the next start.`,
+        buttons: ["Try again", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      action = response === 0 ? "download" : "dismiss";
+    } else if (action === "download") {
+      sheetDownload = info.version;
+    }
+    if (action === "download") download(info);
+  };
+
   updater.on("update-available", async (info) => {
     if (askedVersion === info.version) return;
     askedVersion = info.version;
-    const win = hooks.getMainWindow();
-    const { response } = await dialog.showMessageBox(win ?? null, {
-      type: "info",
-      title: "Update available",
-      message: `Rollfilm ${info.version} is available (you have ${app.getVersion()}).`,
-      detail: withNotes(
-        releaseNotesOf(info),
-        "Update downloads it in the background; you are asked before the app restarts."
-      ),
-      buttons: ["Update", "Not now"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (response !== 0) return;
-    updater.downloadUpdate().catch((err) => {
-      log.warn("update download failed:", err == null ? "unknown" : err.message);
+    const notes = await releaseNotesMarkdown(info);
+    let action = await askInApp(hooks, { state: "available", mode: "self", version: info.version, notes });
+    if (action === null) {
+      // No sheet: the native dialog, as before.
+      const win = hooks.getMainWindow();
+      const { response } = await dialog.showMessageBox(win ?? null, {
+        type: "info",
+        title: "Update available",
+        message: `Rollfilm ${info.version} is available (you have ${app.getVersion()}).`,
+        detail: withNotes(
+          releaseNotesOf(info),
+          "Update downloads it in the background; you are asked before the app restarts."
+        ),
+        buttons: ["Update", "Not now"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      action = response === 0 ? "download" : "dismiss";
+    } else if (action === "download") {
+      sheetDownload = info.version;
+    }
+    if (action !== "download") return;
+    download(info);
+  });
+
+  // Progress: the Dock (taskbar) bar always, the sheet when it is following
+  // the download - with the rate over the last minute and the time that
+  // leaves, since a delta download from GitHub is hundreds of small range
+  // requests and the percent alone can sit still for a while.
+  updater.on("download-progress", (progress) => {
+    const percent = Math.max(0, Math.min(100, Math.floor(Number(progress?.percent) || 0)));
+    setDockProgress(hooks, percent / 100);
+    const d = activeDownload;
+    if (!d) return;
+    d.percent = percent;
+    d.transferred = Number(progress?.transferred) || 0;
+    d.total = Number(progress?.total) || 0;
+    d.rate.add(d.transferred);
+    if (sheetDownload !== d.version) return;
+    const now = Date.now();
+    if (percent === d.sentPercent && now - d.sentAt < 2000) return;
+    d.sentPercent = percent;
+    d.sentAt = now;
+    const rate = d.rate.perSecond();
+    tellInApp(hooks, {
+      state: "downloading",
+      mode: "self",
+      version: d.version,
+      percent,
+      transferred: d.transferred,
+      total: d.total,
+      bytesPerSecond: rate,
+      etaSeconds: rate > 0 && d.total > d.transferred ? Math.round((d.total - d.transferred) / rate) : null,
     });
   });
 
@@ -159,20 +235,27 @@ function runUpdater(updater, hooks) {
   });
 
   updater.on("update-downloaded", async (info) => {
+    setDockProgress(hooks, -1);
     if (promptedVersion === info.version) return;
     promptedVersion = info.version;
-    const win = hooks.getMainWindow();
-    const { response } = await dialog.showMessageBox(win ?? null, {
-      type: "info",
-      title: "Update ready",
-      message: `Rollfilm ${info.version} has been downloaded.`,
-      detail: "Restart now to update, or keep working - the update installs by itself the next time you quit.",
-      buttons: ["Restart now", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (response !== 0) return;
+    if (sheetDownload === info.version) sheetDownload = null;
+    const notes = await releaseNotesMarkdown(info);
+    let action = await askInApp(hooks, { state: "ready", mode: "self", version: info.version, notes });
+    if (action === null) {
+      const win = hooks.getMainWindow();
+      const { response } = await dialog.showMessageBox(win ?? null, {
+        type: "info",
+        title: "Update ready",
+        message: `Rollfilm ${info.version} has been downloaded.`,
+        detail: "Restart now to update, or keep working - the update installs by itself the next time you quit.",
+        buttons: ["Restart now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      action = response === 0 ? "restart" : "dismiss";
+    }
+    if (action !== "restart") return;
     // The close handler intercepts quits while Immich uploads are pending;
     // the user just chose to restart, so that decision is already made.
     hooks.allowQuit();
@@ -196,6 +279,128 @@ function runUpdater(updater, hooks) {
 
   setTimeout(check, FIRST_CHECK_DELAY_MS);
   setInterval(check, RECHECK_INTERVAL_MS).unref?.();
+}
+
+// --- The download: retries, progress, what the quit dialog sees -------------------
+
+// The download in flight, or null: { version, percent, transferred, total,
+// token, cancelled, rate, wake }. main.js asks for it before the app quits.
+let activeDownload = null;
+
+function updateDownloadState() {
+  const d = activeDownload;
+  if (!d) return null;
+  return {
+    version: d.version,
+    percent: d.percent,
+    transferred: d.transferred,
+    total: d.total,
+    cancel: () => {
+      d.cancelled = true;
+      d.token?.cancel();
+      d.wake?.();
+    },
+  };
+}
+
+// A download that breaks off (the Wi-Fi roams, a VPN comes up, GitHub's CDN
+// drops the connection) is tried again by itself: three more times, with
+// growing pauses. electron-updater starts each try fresh, as a delta where
+// it can, and falls back to the whole file when the delta fails.
+const RETRY_DELAYS_MS = [5000, 20000, 60000];
+const TRANSIENT_ERROR =
+  /ERR_NETWORK_CHANGED|ERR_CONNECTION|ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_TIMED_OUT|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|EPIPE|EHOSTUNREACH|ENETUNREACH|socket hang up|timed? ?out|status code 5\d\d|HttpError: 5\d\d/i;
+
+// "done" (update-downloaded has fired), "cancelled", or the final Error.
+async function downloadWithRetry(updater, hooks, info, sheetFollows) {
+  const { CancellationToken } = require("electron-updater");
+  const d = {
+    version: info.version,
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    token: null,
+    cancelled: false,
+    rate: new RateMeter(),
+    wake: null,
+    sentPercent: -1,
+    sentAt: 0,
+  };
+  activeDownload = d;
+  try {
+    for (let attempt = 0; ; attempt++) {
+      d.token = new CancellationToken();
+      try {
+        await updater.downloadUpdate(d.token);
+        return "done";
+      } catch (err) {
+        if (d.cancelled) {
+          log.info("update download cancelled");
+          return "cancelled";
+        }
+        const delay = RETRY_DELAYS_MS[attempt];
+        if (delay == null || !TRANSIENT_ERROR.test(errorReason(err))) {
+          log.warn("update download failed:", errorReason(err));
+          return err instanceof Error ? err : new Error(String(err ?? "unknown error"));
+        }
+        log.warn(`update download failed (${errorReason(err)}); trying again in ${delay / 1000} s`);
+        if (sheetFollows()) {
+          tellInApp(hooks, { state: "downloading", mode: "self", version: d.version, percent: d.percent, retryInSeconds: delay / 1000 });
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, delay);
+          d.wake = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+        d.wake = null;
+        if (d.cancelled) return "cancelled";
+        d.rate = new RateMeter();
+      }
+    }
+  } finally {
+    if (activeDownload === d) activeDownload = null;
+    setDockProgress(hooks, -1);
+  }
+}
+
+// Bytes per second over the last minute of samples - long enough that the
+// pauses between range requests don't make the figure jump.
+class RateMeter {
+  constructor() {
+    this.samples = [];
+  }
+  add(bytes) {
+    const now = Date.now();
+    this.samples.push({ t: now, bytes });
+    while (this.samples.length > 2 && now - this.samples[1].t > 60000) this.samples.shift();
+  }
+  perSecond() {
+    if (this.samples.length < 2) return 0;
+    const first = this.samples[0];
+    const last = this.samples[this.samples.length - 1];
+    const seconds = (last.t - first.t) / 1000;
+    return seconds > 0 ? Math.max(0, Math.round((last.bytes - first.bytes) / seconds)) : 0;
+  }
+}
+
+// One line that says what went wrong: electron-updater's errors carry it in
+// the message ("net::ERR_NETWORK_CHANGED").
+function errorReason(err) {
+  const text = err == null ? "" : String(err.message || err.code || err);
+  return text.replace(/^Error:\s*/, "").split("\n")[0].slice(0, 160) || "unknown error";
+}
+
+// The Dock icon's progress bar (taskbar on Windows): 0-1, anything else takes it away.
+function setDockProgress(hooks, fraction) {
+  const win = hooks.getMainWindow();
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.setProgressBar(fraction);
+  } catch {
+    /* no window chrome to draw on */
+  }
 }
 
 // --- macOS: download through electron-updater, install by hand -----------------
@@ -390,21 +595,113 @@ async function checkMacNotifyOnly(hooks) {
   if (promptedVersion === latestVersion) return;
   promptedVersion = latestVersion;
 
-  const win = hooks.getMainWindow();
-  const { response } = await dialog.showMessageBox(win ?? null, {
-    type: "info",
-    title: "Update available",
-    message: `Rollfilm ${latestVersion} is available (you have ${app.getVersion()}).`,
-    detail: withNotes(
-      latest.body,
-      "Download the new version from the releases page, then drag it into Applications to update."
-    ),
-    buttons: ["Open download page", "Later"],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
+  const url = latest.html_url || RELEASES_URL;
+  let action = await askInApp(hooks, {
+    state: "available",
+    mode: "page",
+    version: latestVersion,
+    notes: changelogPart(latest.body),
+    url,
   });
-  if (response === 0) shell.openExternal(latest.html_url || RELEASES_URL);
+  if (action === null) {
+    const win = hooks.getMainWindow();
+    const { response } = await dialog.showMessageBox(win ?? null, {
+      type: "info",
+      title: "Update available",
+      message: `Rollfilm ${latestVersion} is available (you have ${app.getVersion()}).`,
+      detail: withNotes(
+        latest.body,
+        "Download the new version from the releases page, then drag it into Applications to update."
+      ),
+      buttons: ["Open download page", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    action = response === 0 ? "open-page" : "dismiss";
+  }
+  if (action === "open-page") shell.openExternal(url);
+}
+
+// --- The prompt as the app's own sheet -------------------------------------------
+
+// The announcement is the app's own sheet (frontend UpdateNotice.tsx), styled
+// like "What's new", with the release notes folded under a disclosure. Every
+// notice carries an id the page acknowledges as soon as it has it; no window,
+// or no answer within ACK_TIMEOUT_MS (a page still loading, a renderer bundle
+// from before the sheet), and the caller shows the native dialog instead.
+const ACK_TIMEOUT_MS = 3000;
+let noticeSeq = 0;
+// The notice waiting for the user: { id, version, acked(), answer(action) }.
+let openNotice = null;
+let noticeIpcRegistered = false;
+
+function registerNoticeIpc() {
+  if (noticeIpcRegistered) return;
+  noticeIpcRegistered = true;
+  ipcMain.handle("pm:update-ack", (_event, id) => {
+    if (openNotice && openNotice.id === id) openNotice.acked();
+  });
+  // "download" | "restart" | "open-page" | "dismiss"; the caller of askInApp
+  // maps it onto what the native dialog's buttons did. An answer with no
+  // notice open (closing the sheet while it shows the download) is ignored.
+  ipcMain.handle("pm:update-action", (_event, action) => {
+    const notice = openNotice;
+    if (!notice) return;
+    openNotice = null;
+    notice.answer(String(action || "dismiss"));
+  });
+}
+
+function sendToWindow(hooks, payload) {
+  const win = hooks.getMainWindow();
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return false;
+  try {
+    win.webContents.send("pm:update", { current: app.getVersion(), ...payload });
+    return true;
+  } catch (err) {
+    log.warn("update notice could not be sent:", err.message);
+    return false;
+  }
+}
+
+// A notice that needs no answer (download progress, "close the sheet").
+function tellInApp(hooks, payload) {
+  sendToWindow(hooks, payload);
+}
+
+// Resolves with the action picked in the sheet, or null when the sheet can't
+// be shown - the caller then asks natively.
+async function askInApp(hooks, payload) {
+  // A newer notice replaces one nobody answered (a reload took its sheet away).
+  if (openNotice) {
+    const stale = openNotice;
+    openNotice = null;
+    stale.answer("dismiss");
+  }
+  const id = ++noticeSeq;
+  let acked;
+  let answer;
+  const ack = new Promise((resolve) => (acked = () => resolve(true)));
+  const action = new Promise((resolve) => (answer = resolve));
+  const notice = { id, version: payload.version, acked, answer };
+  openNotice = notice;
+  if (!sendToWindow(hooks, { ...payload, id })) {
+    if (openNotice === notice) openNotice = null;
+    return null;
+  }
+  let timer;
+  const timeout = new Promise((resolve) => (timer = setTimeout(() => resolve(false), ACK_TIMEOUT_MS)));
+  const ok = await Promise.race([ack, timeout]);
+  clearTimeout(timer);
+  if (!ok) {
+    log.info("the page did not take the update notice; asking natively");
+    if (openNotice === notice) openNotice = null;
+    // An answer that comes late must not leave a second prompt on screen.
+    tellInApp(hooks, { state: "closed", version: payload.version });
+    return null;
+  }
+  return action;
 }
 
 // --- What's new, in the prompt ---------------------------------------------------
@@ -423,12 +720,57 @@ function releaseNotesOf(info) {
   return typeof notes === "string" ? notes : "";
 }
 
+// Where the changelog part of a release body ends: the downloads, the folded
+// blocks, or the commit list of a release without a CHANGELOG section.
+const NOTES_END = /<h\d[^>]*>\s*Download|^#+\s*Download|<details|^#+\s*Changes/im;
+
+// The release body's changelog part, as markdown (the sheet parses it the way
+// it parses CHANGELOG.md).
+function changelogPart(raw) {
+  if (!raw) return "";
+  const text = String(raw);
+  const cut = text.search(NOTES_END);
+  return (cut === -1 ? text : text.slice(0, cut)).trim();
+}
+
+// The release page's body as GitHub stores it: markdown, unlike the HTML
+// electron-updater hands over. null when GitHub can't be asked.
+async function fetchReleaseBody(version) {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/v${version}`, {
+      headers: { "User-Agent": "Rollfilm", Accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const release = await res.json();
+    return typeof release.body === "string" ? release.body : null;
+  } catch (err) {
+    log.warn(`release notes of ${version} could not be fetched:`, err.message);
+    return null;
+  }
+}
+
+// What the sheet shows for an electron-updater update: the release body, or
+// failing that the points of the HTML it brought along.
+const notesByVersion = new Map();
+async function releaseNotesMarkdown(info) {
+  if (notesByVersion.has(info.version)) return notesByVersion.get(info.version);
+  const body = await fetchReleaseBody(info.version);
+  const notes = body
+    ? changelogPart(body)
+    : notesSummary(releaseNotesOf(info))
+        .map((p) => `- ${p}`)
+        .join("\n");
+  if (body) notesByVersion.set(info.version, notes);
+  return notes;
+}
+
 // HTML or markdown in, "• point" lines out - only the changelog part, which
 // ends where the downloads begin.
 function notesSummary(raw) {
   if (!raw) return [];
   let text = String(raw);
-  const cut = text.search(/<h\d[^>]*>\s*Download|^#+\s*Download|<details|^#+\s*Changes/im);
+  const cut = text.search(NOTES_END);
   if (cut !== -1) text = text.slice(0, cut);
   // HTML wraps a point's text over lines as it likes: one line per element.
   if (/<li[\s>]/i.test(text)) text = text.replace(/\s+/g, " ");
@@ -472,4 +814,4 @@ function isNewerVersion(candidate, current) {
   return false;
 }
 
-module.exports = { initAutoUpdate };
+module.exports = { initAutoUpdate, updateDownloadState };

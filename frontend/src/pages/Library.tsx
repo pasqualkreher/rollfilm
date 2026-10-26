@@ -38,8 +38,8 @@ import { loadPresets, presetAdjustments } from "../utils/presets";
 import { useTasks, type BatchItem } from "../state/tasks";
 import { collapsePairsBy, groupPairsAdjacent } from "../utils/pairing";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
-import { useAskSaveCopyOptions, useMergePairs } from "../state/viewPrefs";
-import { FULL_COPY_QUALITY, SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
+import { useMergePairs } from "../state/viewPrefs";
+import { SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
 import { useEditCopies } from "../utils/useEditCopies";
 import { shortcutLabel, useSelectionKeys } from "../utils/selection";
 import { useBarHeight } from "../utils/useBarHeight";
@@ -192,7 +192,11 @@ function LibraryPage() {
   const barRef = useBarHeight();
   // Export for the selection: the bar's button, the dialog, ⇧⌘E.
   const selectionExport = useSelectionExport(Array.from(selected));
-  const [lastIndex, setLastIndex] = useState<number | null>(null);
+  // The photo the last click landed on, by id: a shift-click selects the run
+  // between it and the clicked photo in the order on screen NOW. By index it
+  // went wrong once the list changed under it - a filter that left fewer
+  // photos than the index pointed past read off the end and threw.
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const mergePairs = useMergePairs();
@@ -231,7 +235,6 @@ function LibraryPage() {
   // quiet: stars, flags and tags - out of the dock unless they take a while.
   const batch = <R,>(label: string, items: BatchItem[], run: (ids: string[]) => Promise<R>, quiet = false) =>
     runBatches({ id: LIBRARY_BATCH, kind: "batch", label, quiet }, items, run);
-  const askSaveCopyOptions = useAskSaveCopyOptions();
   // The options dialog of "Apply ... and save copy", resolved by its answer.
   // The Save-copy dialog asked before a bulk copy: "Apply … and save copy"
   // (a file by definition, only the options) and "Edit a copy" (which kind).
@@ -239,6 +242,8 @@ function LibraryPage() {
     resolve: (req: SaveCopyRequest | null) => void;
     physicalOnly: boolean;
     title: string;
+    // How many photos the copy is made of (the action's target).
+    count: number;
   } | null>(null);
   const editCopies = useEditCopies();
 
@@ -321,11 +326,10 @@ function LibraryPage() {
     // changed: every mutation path already invalidates ["images"] explicitly.
     //
     // Deliberately NOT Infinity, though. Server-side background work can change
-    // the library with no client-side signal at all - the startup maintenance
-    // sync reconciles the DB against the library folder (see main.on_startup) -
-    // and stale-forever would leave the grid wrong until a filter change or a
-    // restart. A few minutes keeps that self-healing while removing the
-    // per-navigation refetch.
+    // the library with no client-side signal at all - source scans, the
+    // startup housekeeping, thumbnails a sync queued - and stale-forever would
+    // leave the grid wrong until a filter change or a restart. A few minutes
+    // keeps that self-healing while removing the per-navigation refetch.
     staleTime: 5 * 60_000,
   });
 
@@ -353,6 +357,7 @@ function LibraryPage() {
     colorLabel !== "none" ||
     Boolean(albumId || canvasId || camera || lens || focalMin || focalMax || dateFrom || dateTo) ||
     Boolean(cameraMake || isoMin || isoMax || apertureMin || apertureMax || shutterMin || shutterMax) ||
+    Boolean(flagFilter || photoState || missingOnly || importedDay || rollId || country) ||
     selectedTags.length > 0;
   function clearFilters() {
     setParams({
@@ -375,6 +380,12 @@ function LibraryPage() {
       shutter_max: null,
       from: null,
       to: null,
+      flag: null,
+      state: null,
+      missing: null,
+      imported: null,
+      roll: null,
+      country: null,
     });
   }
 
@@ -422,14 +433,17 @@ function LibraryPage() {
   // the last click, like Finder/Photos - selects a long run of photos fast,
   // and deselects the run again when the clicked photo is already selected.
   function toggleSelect(id: string, index: number, shiftKey: boolean) {
+    const anchor = lastClickedId === null ? -1 : orderedImages.findIndex((img) => img.id === lastClickedId);
     setSelected((prev) => {
       const next = new Set(prev);
-      if (shiftKey && lastIndex !== null) {
+      if (shiftKey && anchor >= 0) {
         const deselect = next.has(id);
-        const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
+        const [start, end] = anchor < index ? [anchor, index] : [index, anchor];
         for (let i = start; i <= end; i++) {
-          if (deselect) next.delete(orderedImages[i].id);
-          else next.add(orderedImages[i].id);
+          const member = orderedImages[i];
+          if (!member) continue;
+          if (deselect) next.delete(member.id);
+          else next.add(member.id);
         }
       } else if (next.has(id)) {
         next.delete(id);
@@ -438,7 +452,7 @@ function LibraryPage() {
       }
       return next;
     });
-    setLastIndex(index);
+    setLastClickedId(id);
   }
 
   function selectAll() {
@@ -447,7 +461,7 @@ function LibraryPage() {
 
   function clearSelection() {
     setSelected(new Set());
-    setLastIndex(null);
+    setLastClickedId(null);
   }
 
   // A rubber band's result (utils/useMarquee): the whole selection at once.
@@ -518,9 +532,9 @@ function LibraryPage() {
   }
 
   // The arrow keys' target: this photo, and only it (see utils/gridKeys).
-  function selectOnly(id: string, index: number) {
+  function selectOnly(id: string, _index?: number) {
     setSelected(new Set([id]));
-    setLastIndex(index);
+    setLastClickedId(id);
   }
 
   async function deleteSelected(target: string[] = Array.from(selected)) {
@@ -588,7 +602,7 @@ function LibraryPage() {
         setSelected((prev) => {
           const next = new Set(Array.from(prev).filter((x) => !gone.has(x)));
           if (next.size === 0 && prev.size > 0) {
-            setLastIndex(null);
+            setLastClickedId(null);
           }
           return next;
         });
@@ -824,7 +838,7 @@ function LibraryPage() {
   // "Apply ... and save copy": the edit as above, then one JPEG copy of every
   // photo it was applied to, written in the background (the title bar counts
   // them down). The options - quality, size - are asked once for the whole
-  // batch when Settings says to ask, before anything is applied.
+  // batch, before anything is applied.
   async function startCopies(ids: string[], opts: CopyOpts) {
     if (ids.length === 0) return;
     const { job_id, total } = await api.images.copyJobStart(ids, { quality: opts.quality, max_size: opts.maxSize });
@@ -833,10 +847,11 @@ function LibraryPage() {
   }
 
   async function askCopyOptions(count: number): Promise<CopyOpts | null> {
-    if (!askSaveCopyOptions) return { quality: FULL_COPY_QUALITY, maxSize: null };
+    if (count === 0) return null;
     return new Promise((resolve) =>
       setCopyPrompt({
         physicalOnly: true,
+        count,
         title: `Apply and save copy of ${plural(count, "photo")}`,
         resolve: (req) => resolve(req && req.kind === "physical" ? { quality: req.quality, maxSize: req.maxSize } : null),
       })
@@ -857,7 +872,7 @@ function LibraryPage() {
   // they are. Which kind of copy is asked first (utils/useEditCopies).
   function askCopyKind(count: number): Promise<SaveCopyRequest | null> {
     return new Promise((resolve) =>
-      setCopyPrompt({ physicalOnly: false, title: `Edit a copy of ${plural(count, "photo")}`, resolve })
+      setCopyPrompt({ physicalOnly: false, count, title: `Edit a copy of ${plural(count, "photo")}`, resolve })
     );
   }
 
@@ -980,8 +995,7 @@ function LibraryPage() {
         {copyPrompt && (
           <SaveCopyDialog
             physicalOnly={copyPrompt.physicalOnly}
-            askOptions={askSaveCopyOptions || copyPrompt.physicalOnly}
-            count={selected.size}
+            count={copyPrompt.count}
             title={copyPrompt.title}
             onClose={() => {
               copyPrompt.resolve(null);

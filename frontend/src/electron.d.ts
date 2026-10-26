@@ -110,7 +110,38 @@ declare global {
        * drag if any path is not an existing file. Absent in older builds.
        */
       startDrag?: (paths: string[]) => void;
+      /**
+       * Update notices from the shell (electron/updater.js); notices with an
+       * id are acknowledged by the bridge. Returns the unsubscribe. Absent in
+       * older builds.
+       */
+      onUpdate?: (callback: (payload: UpdateNoticePayload) => void) => () => void;
+      /** The answer to the open update notice. Absent in older builds. */
+      updateAction?: (action: "download" | "restart" | "open-page" | "dismiss") => Promise<void>;
     };
+  }
+
+  /** One update notice (electron/updater.js); "closed" withdraws the sheet. */
+  interface UpdateNoticePayload {
+    state: "available" | "downloading" | "ready" | "failed" | "closed";
+    version: string;
+    current?: string;
+    /** Markdown: the release's CHANGELOG section without its "## version" line. */
+    notes?: string;
+    mode?: "self" | "page";
+    /** The release page, for mode "page". */
+    url?: string;
+    percent?: number;
+    /** Download progress (state "downloading"); etaSeconds is null while the rate is unknown. */
+    transferred?: number;
+    total?: number;
+    bytesPerSecond?: number;
+    etaSeconds?: number | null;
+    /** Between two attempts of the download: seconds until the next one. */
+    retryInSeconds?: number;
+    /** Why the download failed (state "failed"), one line. */
+    reason?: string;
+    id?: number;
   }
 
   /**

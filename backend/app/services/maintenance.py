@@ -50,7 +50,6 @@ from app.services.settings_store import IMMICH_API_KEY, set_setting
 from app.services import lens_profile
 from app.services.thumbnails import (
     adjustments_from_image,
-    derivative_dir,
     editor_recently_active,
     regenerate_for_image,
 )
@@ -341,6 +340,12 @@ def _follow_renamed_files(
     return relocated, [path for path in untracked_paths if path not in claimed]
 
 
+# A thumbnail folder no row points at is removed by the sync - unless it is
+# this young: a photo whose derivatives are written before its row commits
+# (the library merge, a copy being saved) has a folder before it has an id.
+ORPHAN_THUMBNAIL_GRACE_S = 15 * 60
+
+
 def sync_db_with_library(
     db: Session, owner_id: int, check_derivatives: bool = True, timing: dict | None = None
 ) -> dict:
@@ -362,12 +367,13 @@ def sync_db_with_library(
     - Cached thumbnail folders that belong to no image anymore are deleted.
     - Photos whose thumbnail/preview is missing get it regenerated in the
       background (only when their original is currently reachable). Only
-      with `check_derivatives`: asking every photo's cache folder took 130 s
-      on a USB drive; the queue's journal (workers.queue.
-      resume_derivative_journal) covers unfinished thumbnails at startup.
+      with `check_derivatives`: it is one directory listing per photo in the
+      cache folder, which only Settings' sync pays; the queue's journal
+      (workers.queue.resume_derivative_journal) covers unfinished thumbnails
+      at startup.
 
     `timing`, when given, receives the seconds each phase took - what the
-    startup log prints, so a slow start says where it was slow.
+    sync route logs, so a slow sync says where it was slow.
     - Files found in the library folder that aren't tracked in the DB are only
       reported, not auto-imported - re-adding them is what the Import flow is
       for.
@@ -539,33 +545,68 @@ def _sync_db_with_library(
 
     untracked = len(untracked_paths)
 
-    # Thumbnail cache holds one folder per image id - drop any that no image
-    # row (of any owner; ids are globally unique) points at anymore, e.g. left
-    # behind by older deletes that never cleaned up. One directory listing.
-    valid_ids = {r.id for r in rows}
+    # The thumbnail cache holds one folder per image id; one listing of it
+    # serves both directions. Folders no image row (of any owner; ids are
+    # globally unique) points at anymore - left behind by older deletes that
+    # never cleaned up - are removed. And for every photo that is kept (only
+    # with `check_derivatives`), its folder's listing says whether thumbnail
+    # and preview are there: ONE readdir per photo, no stat, no mkdir. This
+    # phase used to load every photo's full ORM row, create its cache folder
+    # (a mkdir + stat per photo, and an empty folder for each photo that had
+    # no derivatives) and stat two files in it - some 50,000 lookups for
+    # 12,500 photos, 130 s on a cold USB drive. The listing's own entry type
+    # (d_type) says what is a folder, so the orphan check costs no stat either.
+    # The ids are read again here, not taken from the rows the reconcile
+    # started with: an import, a merge or a saved copy that landed while the
+    # folder walk ran (minutes on a cold USB drive) has its folder already and
+    # must keep it. A folder younger than the grace is spared as well - a
+    # merge writes the derivatives before it commits the row, and a folder
+    # that is being written to is young by its mtime.
+    valid_ids = {row_id for (row_id,) in db.query(Image.id).all()}
+    sweep_grace_before = time.time() - ORPHAN_THUMBNAIL_GRACE_S
+    newly_missing_ids = {image.id for image in newly_missing}
+    recovered_ids = set(recover_ids)
+    kept_ids = {
+        r.id for r in mine
+        if (r.missing_since is None or r.id in recovered_ids or r.id in relocated_ids)
+        and r.id not in newly_missing_ids
+    }
+    have_derivatives: set[str] = set()
     orphan_thumbnails_removed = 0
     if settings.thumbnail_cache_root.is_dir():
-        for entry in settings.thumbnail_cache_root.iterdir():
-            if entry.is_dir() and entry.name not in valid_ids:
-                shutil.rmtree(entry, ignore_errors=True)
-                orphan_thumbnails_removed += 1
+        with os.scandir(settings.thumbnail_cache_root) as entries:
+            for entry in entries:
+                try:
+                    if not entry.is_dir():
+                        continue
+                except OSError:
+                    continue
+                if entry.name not in valid_ids:
+                    try:
+                        if entry.stat().st_mtime > sweep_grace_before:
+                            continue
+                    except OSError:
+                        continue
+                    shutil.rmtree(entry.path, ignore_errors=True)
+                    orphan_thumbnails_removed += 1
+                    continue
+                if check_derivatives and entry.name in kept_ids:
+                    try:
+                        names = os.listdir(entry.path)
+                    except OSError:
+                        continue
+                    if "thumbnail.jpg" in names and "preview.jpg" in names:
+                        have_derivatives.add(entry.name)
     lap("orphans")
 
-    # ...and the reverse direction: queue regeneration for photos whose
-    # derivatives are missing, off the request path on the post-import pool.
-    # Settings' sync only (see sync_db_with_library): two lookups per photo
-    # in the cache folder.
+    # ...and queue regeneration for the photos whose derivatives are missing
+    # (no folder, or a folder without both files), off the request path on the
+    # post-import pool - only while their original is reachable. Only these few
+    # rows are loaded in full; the folder is created by the render, not here.
     thumbnails_queued = 0
     if check_derivatives:
-        kept = (
-            db.query(Image)
-            .filter(Image.owner_id == owner_id, Image.missing_since.is_(None))
-            .all()
-        )
-        for image in kept:
-            cache = derivative_dir(image.id)
-            if (cache / "thumbnail.jpg").exists() and (cache / "preview.jpg").exists():
-                continue
+        need_ids = sorted(kept_ids - have_derivatives)
+        for image in _rows_by_id(db, need_ids):
             original = resolve_image_path(image)
             try:
                 reachable = original.exists()
@@ -1137,6 +1178,9 @@ def image_row_from_dict(data: dict, owner_id: int, *, keep_id: bool = True) -> I
         immich_sync=data.get("immich_sync", False),
         immich_asset_id=data.get("immich_asset_id"),
         virtual_of_image_id=data.get("virtual_of_image_id"),
+        # Set on the row by the caller once every photo is in (the restore's
+        # link pass); a merge, with its fresh ids, pairs anew.
+        paired_image_id=data.get("paired_image_id"),
         source_root_id=data.get("source_root_id"),
     )
     if keep_id:

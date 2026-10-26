@@ -35,7 +35,11 @@ export function SmartAlbumDetail() {
   const queryClient = useQueryClient();
   const { pushUndo } = useTasks();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [lastIndex, setLastIndex] = useState<number | null>(null);
+  // The photo the last click landed on, by id: a shift-click selects the run
+  // between it and the clicked photo in the order on screen NOW. By index it
+  // went wrong once the list changed under it - a filter that left fewer
+  // photos than the index pointed past read off the end and threw.
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
   const hasSelection = selected.size > 0;
 
   // Escape walks back to the albums, the same as it leaves a manual album,
@@ -120,16 +124,20 @@ export function SmartAlbumDetail() {
   const orderedImages = viewMode === "combined" ? collapsePairs(filtered) : filtered;
 
   function toggleSelect(imageId: string, index: number, shiftKey: boolean) {
+    const anchor = lastClickedId === null ? -1 : orderedImages.findIndex((img) => img.id === lastClickedId);
     setSelected((prev) => {
       const next = new Set(prev);
-      if (shiftKey && lastIndex !== null) {
-        const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
-        for (let i = start; i <= end; i++) next.add(orderedImages[i].id);
+      if (shiftKey && anchor >= 0) {
+        const [start, end] = anchor < index ? [anchor, index] : [index, anchor];
+        for (let i = start; i <= end; i++) {
+          const member = orderedImages[i];
+          if (member) next.add(member.id);
+        }
       } else if (next.has(imageId)) next.delete(imageId);
       else next.add(imageId);
       return next;
     });
-    setLastIndex(index);
+    setLastClickedId(imageId);
   }
 
   // In the merged view a card stands for its RAW+JPEG shot: a change reaches
@@ -182,7 +190,7 @@ export function SmartAlbumDetail() {
     onSelectAll: () => setSelected(new Set(orderedImages.map((im) => im.id))),
     onClear: () => {
       setSelected(new Set());
-      setLastIndex(null);
+      setLastClickedId(null);
     },
     hasSelection,
     edit: { selected, order: orderedImages.map((im) => im.id) },
@@ -264,9 +272,9 @@ export function SmartAlbumDetail() {
             groupByDate
             selectedIds={selected}
             onToggleSelect={toggleSelect}
-            onSelectOnly={(imageId, index) => {
+            onSelectOnly={(imageId) => {
               setSelected(new Set([imageId]));
-              setLastIndex(index);
+              setLastClickedId(imageId);
             }}
             onSetSelection={(ids) => setSelected(new Set(ids))}
             contextActions={contextActions}

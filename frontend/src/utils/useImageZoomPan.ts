@@ -69,6 +69,9 @@ export interface ZoomPan {
   zoomPercent: number | null;
   /** Re-measure the fit size; call from the <img>'s onLoad. */
   refit: () => void;
+  /** Fit a picture of this pixel size before the <img> has it (the same
+   *  numbers refit gets once it loads), so a swap is sized in its own frame. */
+  fitFor: (w: number, h: number) => void;
   /** Forget the measured size, so the next photo doesn't flash at the old one's. */
   clearFit: () => void;
   resetZoom: (animate?: boolean) => void;
@@ -202,6 +205,16 @@ export function useImageZoomPan(sourceSize?: Size | null, options?: ZoomPanOptio
     const s = Math.min(avail.w / img.naturalWidth, avail.h / img.naturalHeight);
     setNatural({ w: img.naturalWidth, h: img.naturalHeight });
     setFit({ w: img.naturalWidth * s, h: img.naturalHeight * s });
+  }, []);
+
+  const fitFor = useCallback((w: number, h: number) => {
+    const box = boxRef.current;
+    if (!box || !(w > 0) || !(h > 0)) return;
+    const avail = availableSize(box);
+    if (avail.w <= 0 || avail.h <= 0) return;
+    const s = Math.min(avail.w / w, avail.h / h);
+    setNatural({ w, h });
+    setFit({ w: w * s, h: h * s });
   }, []);
 
   const clearFit = useCallback(() => setFit(null), []);
@@ -374,6 +387,7 @@ export function useImageZoomPan(sourceSize?: Size | null, options?: ZoomPanOptio
     zoomAnim,
     zoomPercent: natural ? Math.round((scale / nativeScale) * 100) : null,
     refit,
+    fitFor,
     clearFit,
     resetZoom,
     zoomToNative,

@@ -106,6 +106,18 @@ def test_effects_a_tile_cannot_carry_keep_the_whole_frame():
         assert not thumbnails.region_is_supported({spreading: 25}), spreading
     # Negative clarity brings the diffusion pass with it.
     assert not thumbnails.region_is_supported({"clarity": -40})
+    # Process 8 clarity reads a twentieth of the frame around every pixel.
+    assert thumbnails.region_is_supported({"clarity": 40, "process": "7"})
+    assert not thumbnails.region_is_supported({"clarity": 40, "process": "8"})
+    assert thumbnails.region_is_supported({"grain_amount": 30, "sharpness": 20, "process": "8"})
+    # Grain is pinned to the frame's lattice only from a particle size up:
+    # fine grain on a small photo renders whole-frame, the same on a 40MP one
+    # (or any grain without a known long edge) takes tiles.
+    assert thumbnails.region_is_supported({"grain_amount": 30, "grain_size": 50, "process": "8"}, long_edge=6000)
+    assert not thumbnails.region_is_supported({"grain_amount": 30, "grain_size": 0, "process": "8"}, long_edge=1000)
+    assert thumbnails.region_is_supported({"grain_amount": 30, "grain_size": 0, "process": "8"}, long_edge=None)
+    assert thumbnails.region_is_supported({"grain_amount": 30, "grain_size": 0, "process": "7"}, long_edge=6000)
+    assert not thumbnails.region_is_supported({"grain_amount": 30, "grain_size": 0, "process": "7"}, long_edge=1500)
 
 
 def test_a_tile_gets_the_grain_of_the_whole_photo(monkeypatch):

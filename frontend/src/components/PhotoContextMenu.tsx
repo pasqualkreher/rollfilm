@@ -4,7 +4,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { BulkResetOptions, ColorLabel, Flag } from "../api/types";
 import { useTransientMessage } from "../utils/transientMessage";
-import { useAskSaveCopyOptions } from "../state/viewPrefs";
 import { useSaveCopies } from "../utils/useSaveCopies";
 import { useMenuKeys } from "../utils/useMenuKeys";
 import { autoTagMessage, isAutoTag } from "../utils/autoTags";
@@ -17,6 +16,8 @@ import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
 import { FlagPicker } from "./FlagPicker";
 import { RESET_ASPECTS } from "./ResetMenu";
+import { EDIT_MODE_TEXT, editMenuRows, parseEditRow, type MenuRow } from "./EditPicker";
+import { addToPickerGroups, addToRows } from "./AddToPicker";
 import { IconChevronRight } from "./Icons";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
@@ -122,9 +123,11 @@ interface OpenMenu extends Target {
 }
 
 export type EditMode = "apply" | "copy" | "on-copy";
+// What a "More…" dialog lists.
+type PickWhat = "addto" | "tag" | EditMode;
 
 // The lists that hang off an item.
-type SubKind = "album" | "canvas" | "tag" | "edit" | "reset";
+type SubKind = "addto" | "tag" | "edit" | "reset" | "save";
 
 interface SubItem {
   id: string;
@@ -133,6 +136,30 @@ interface SubItem {
   // (the presets under the automatic edit).
   sepBefore?: boolean;
   headBefore?: string;
+  // A greyed line that is not picked ("No presets yet").
+  disabled?: boolean;
+}
+
+// The rows a bar's menu is built from (EditPicker, AddToPicker) as submenu
+// rows: a heading or rule goes onto the row below it; a heading after other
+// rows brings a rule of its own.
+function rowsToSubItems(rows: MenuRow[]): SubItem[] {
+  const out: SubItem[] = [];
+  let sep = false;
+  let head: string | undefined;
+  for (const r of rows) {
+    if (r.kind === "sep") {
+      sep = out.length > 0;
+    } else if (r.kind === "head") {
+      sep = out.length > 0;
+      head = r.label;
+    } else {
+      out.push({ id: r.id, name: r.label, sepBefore: sep || undefined, headBefore: head, disabled: r.kind === "note" || undefined });
+      sep = false;
+      head = undefined;
+    }
+  }
+  return out;
 }
 
 type Entry =
@@ -189,15 +216,15 @@ const MORE = "__more__";
 
 // What a list submenu says at its foot and when it is empty.
 const SUB_TEXT: Record<SubKind, { newLabel?: string; empty: string }> = {
-  album: { newLabel: "New album…", empty: "No albums yet" },
-  canvas: { newLabel: "New canvas…", empty: "No canvases yet" },
+  addto: { empty: "" },
   tag: { newLabel: "New tag…", empty: "No tags yet" },
   edit: { empty: "No presets yet" },
   reset: { empty: "" },
+  save: { empty: "" },
 };
 
-// A list hanging off an item - the albums, the canvases, the tags (loaded
-// here), or rows the menu hands in (the edits, the reset aspects) - with
+// A list hanging off an item - the tags (loaded here), or rows the menu
+// hands in (add to, the edits, the reset aspects, save as) - with
 // "New …" at its foot where the list can grow. Opens at the item's right
 // edge, or at its left where there is no room.
 function ListSubmenu({
@@ -216,29 +243,15 @@ function ListSubmenu({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const { data: albums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list(), enabled: kind === "album" });
-  const { data: canvases } = useQuery({
-    queryKey: ["canvas-list"],
-    queryFn: () => api.canvases.list(),
-    enabled: kind === "canvas",
-  });
   const { data: tags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list(), enabled: kind === "tag" });
-  // The loaded lists newest-first, then the few used last in front and the
-  // rest behind "More…" (utils/recents); the rows the menu hands in (the
-  // edits, the reset aspects) come shortened already.
-  const full: SubItem[] =
-    kind === "album"
-      ? [...(albums ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at))
-      : kind === "canvas"
-        ? [...(canvases ?? [])].sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at))
-        : kind === "tag"
-          ? (tags ?? []).filter((t) => !isAutoTag(t)).map((t) => ({ id: t, name: t }))
-          : items ?? [];
-  const short = kind === "album" || kind === "canvas" || kind === "tag" ? shortList(kind, full, (a) => a.id) : { shown: full, hidden: [] };
+  // The tags, the few used last in front and the rest behind "More…"
+  // (utils/recents); the rows the menu hands in come shortened already.
+  const full: SubItem[] = kind === "tag" ? (tags ?? []).filter((t) => !isAutoTag(t)).map((t) => ({ id: t, name: t })) : items ?? [];
+  const short = kind === "tag" ? shortList(kind, full, (a) => a.id) : { shown: full, hidden: [] };
   const list = short.shown;
   const moreLabel = short.hidden.length > 0 ? `More… (${short.hidden.length})` : null;
   const { newLabel, empty } = SUB_TEXT[kind];
-  const ids = [...list.map((a) => a.id), ...(moreLabel ? [MORE] : []), ...(newLabel ? [NEW] : [])];
+  const ids = [...list.filter((a) => !a.disabled).map((a) => a.id), ...(moreLabel ? [MORE] : []), ...(newLabel ? [NEW] : [])];
   const labelOf = (id: string) =>
     id === NEW ? newLabel ?? "" : id === MORE ? moreLabel ?? "" : list.find((a) => a.id === id)?.name ?? "";
   const { lit, setCursor } = useMenuKeys({
@@ -280,16 +293,28 @@ function ListSubmenu({
         <span key={a.id}>
           {a.sepBefore && <div className="ctx-menu-sep" role="separator" />}
           {a.headBefore && <div className="ctx-menu-head">{a.headBefore}</div>}
-          <button
-            type="button"
-            role="menuitem"
-            data-menu-id={a.id}
-            className={`ctx-menu-item${lit === a.id ? " cursor" : ""}`}
-            onMouseEnter={() => setCursor(a.id, true)}
-            onClick={() => onPick(a.id, a.name)}
-          >
-            {a.name}
-          </button>
+          {a.disabled ? (
+            <div
+              role="menuitem"
+              aria-disabled="true"
+              className="ctx-menu-item"
+              style={{ color: "var(--text-muted)", cursor: "default", background: "none" }}
+              onMouseEnter={() => setCursor(null)}
+            >
+              {a.name}
+            </div>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              data-menu-id={a.id}
+              className={`ctx-menu-item${lit === a.id ? " cursor" : ""}`}
+              onMouseEnter={() => setCursor(a.id, true)}
+              onClick={() => onPick(a.id, a.name)}
+            >
+              {a.name}
+            </button>
+          )}
         </span>
       ))}
       {moreLabel && (
@@ -446,7 +471,9 @@ function Menu({
         <ListSubmenu
           kind={sub.item.submenu}
           anchor={sub.anchor}
-          items={sub.item.items}
+          // The item as built now: a list that loads after the submenu
+          // opened (the albums of "Add to") shows up in it.
+          items={(items.find((i) => i.id === sub.item.id) ?? sub.item).items}
           onPick={(id, name) => onSubPick(sub.item.submenu!, id, name)}
           onNew={() => onSubNew(sub.item.submenu!)}
           onClose={() => setSub(null)}
@@ -457,8 +484,7 @@ function Menu({
   );
 }
 
-// The rows of "Apply edit": the automatic edit, then the saved presets.
-const AUTO = "__auto__";
+// The reset row that takes every aspect back.
 const EVERYTHING = "__everything__";
 
 /**
@@ -476,18 +502,28 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
   const { open, edit, actions } = opts;
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
-  const askSaveCopyOptions = useAskSaveCopyOptions();
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   // The dialog opened from the menu keeps its target after the menu closed.
   const [dialog, setDialog] = useState<
     | { kind: "export" | "copy"; target: Target }
-    // The long list behind a submenu's "More…": a loaded list, or the
-    // presets of one edit mode.
-    | { kind: "pick"; target: Target; what: "album" | "canvas" | "tag" | EditMode }
+    // The long list behind a submenu's "More…": albums and canvases, the
+    // tags, or the presets of one edit mode.
+    | { kind: "pick"; target: Target; what: PickWhat }
     | null
   >(null);
-  const { data: pickAlbums } = useQuery({ queryKey: ["albums"], queryFn: () => api.albums.list(), enabled: dialog?.kind === "pick" && dialog.what === "album" });
-  const { data: pickCanvases } = useQuery({ queryKey: ["canvas-list"], queryFn: () => api.canvases.list(), enabled: dialog?.kind === "pick" && dialog.what === "canvas" });
+  // Albums and canvases for "Add to", loaded while the menu or its "More…"
+  // dialog is open (cached - the bar's Add to… reads the same).
+  const addToLive = menu !== null || (dialog?.kind === "pick" && dialog.what === "addto");
+  const { data: pickAlbums } = useQuery({
+    queryKey: ["albums"],
+    queryFn: () => api.albums.list(),
+    enabled: addToLive && Boolean(actions?.onAddToAlbum),
+  });
+  const { data: pickCanvases } = useQuery({
+    queryKey: ["canvas-list"],
+    queryFn: () => api.canvases.list(),
+    enabled: addToLive && Boolean(actions?.onAddToCanvas),
+  });
   const { data: pickTags } = useQuery({ queryKey: ["tags"], queryFn: () => api.tags.list(), enabled: dialog?.kind === "pick" && dialog.what === "tag" });
   // "Show in Finder" has no dialog; what it has to say (a missing file) flashes
   // as a note at the bottom of the window.
@@ -613,8 +649,10 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     await actions.onReset?.(t.ids, opts);
   }
 
-  // The rows, from what the grid and the page offer. Groups are separated
-  // like the system's menus: open · change · develop · sync · file · remove.
+  // The rows, from what the grid and the page offer, in the groups of the
+  // selection bar: open · flag, rate, label, tag · save as, find similar ·
+  // add to · Immich · edit, reset · show the file · remove. A group the page
+  // offers nothing for is left out, with its rule.
   function build(m: OpenMenu): Entry[] {
     const t: Target = { ids: m.ids, clickedId: m.clickedId, filename: m.filename };
     const n = m.ids.length;
@@ -627,7 +665,7 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
 
     const openGroup: Entry[] = [];
     if (open) openGroup.push({ kind: "item", id: "open", label: "Open", shortcut: "↩", run: run(() => open(m.clickedId)) });
-    if (edit) openGroup.push({ kind: "item", id: "edit", label: "Edit", shortcut: "E", run: run(() => edit(m.clickedId)) });
+    if (edit) openGroup.push({ kind: "item", id: "edit", label: "Open in editor", shortcut: "E", run: run(() => edit(m.clickedId)) });
     groups.push(openGroup);
 
     const change: Entry[] = [];
@@ -671,38 +709,43 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
         ),
       });
     }
-    if (actions?.onAddToAlbum) change.push({ kind: "item", id: "album", label: "Add to album", submenu: "album", run: () => {} });
-    if (actions?.onAddToCanvas) change.push({ kind: "item", id: "canvas", label: "Add to canvas", submenu: "canvas", run: () => {} });
     if (actions?.onAddTag) change.push({ kind: "item", id: "tag", label: "Add tag", submenu: "tag", run: () => {} });
     groups.push(change);
 
+    // The bar's "Save as…": export, or a copy of each photo.
+    const out: Entry[] = [];
+    if (actions?.files !== false) {
+      const saveRows: SubItem[] = [
+        { id: "export", name: many ? `Export ${n} photos…` : "Export…" },
+        { id: "copy", name: many ? `Save copy of ${n} photos…` : "Save copy…" },
+      ];
+      out.push({ kind: "item", id: "save", label: "Save as", submenu: "save", items: saveRows, run: () => {} });
+    }
+    if (actions?.onAutoPick) {
+      const pick = actions.onAutoPick;
+      out.push({ kind: "item", id: "pick", label: "Find similar…", run: run(() => pick(t.ids)) });
+    }
+    groups.push(out);
+
+    // The bar's "Add to…": albums and canvases in one list.
+    if (actions?.onAddToAlbum || actions?.onAddToCanvas) {
+      const addRows = rowsToSubItems(
+        addToRows(actions.onAddToAlbum ? pickAlbums ?? [] : null, actions.onAddToCanvas ? pickCanvases ?? [] : null)
+      );
+      groups.push([{ kind: "item", id: "addto", label: "Add to", submenu: "addto", items: addRows, run: () => {} }]);
+    }
+
+    const immich = actions?.immich?.(m.ids);
+    if (immich) groups.push([{ kind: "item", id: "immich", label: immich.label, checked: immich.checked, run: run(immich.run) }]);
+
     const develop: Entry[] = [];
     if (actions?.onAutoEdit || actions?.onApplyPreset) {
-      // ONE "Edit" list, the bar's Edit… menu in rows: the edits as they
-      // are, with a copy saved afterwards, and on a copy only. Each group
-      // has the automatic edit first, then the presets.
+      // ONE "Edit" list, the bar's Edit… menu in rows (EditPicker): the
+      // edits as they are, with a copy saved afterwards, and on a copy only.
       // Newest preset first; the ones used last in front, the rest behind
       // "More presets…" per group (utils/recents).
       const allPresets = actions.onApplyPreset ? [...(actions.presets?.() ?? [])].reverse() : [];
-      const auto = Boolean(actions.onAutoEdit);
-      const group = (mode: EditMode, head: string, autoName: string, suffix: string, first: boolean): SubItem[] => {
-        const { shown, hidden } = shortList("preset", allPresets, (n) => n);
-        return [
-          ...(auto ? [{ id: `${mode}:${AUTO}`, name: autoName, sepBefore: !first, headBefore: head }] : []),
-          ...shown.map((name, i) => ({
-            id: `${mode}:${name}`,
-            name: `${name}${suffix}`,
-            sepBefore: i === 0 && !auto && !first,
-            headBefore: i === 0 && !auto ? head : undefined,
-          })),
-          ...(hidden.length > 0 ? [{ id: `${mode}:${MORE}`, name: `More presets… (${hidden.length})` }] : []),
-        ];
-      };
-      const editRows: SubItem[] = [
-        ...group("apply", "Apply", "Auto edit", "", true),
-        ...group("copy", "Apply and save copy", "Auto edit and save copy", " and save copy", false),
-        ...group("on-copy", "Edit a copy", "Auto edit a copy", " on a copy", false),
-      ];
+      const editRows = rowsToSubItems(editMenuRows(allPresets, Boolean(actions.onAutoEdit)));
       develop.push({ kind: "item", id: "develop", label: "Edit", submenu: "edit", items: editRows, run: () => {} });
     }
     if (actions?.onReset) {
@@ -714,25 +757,14 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     }
     groups.push(develop);
 
-    const immich = actions?.immich?.(m.ids);
-    if (immich) groups.push([{ kind: "item", id: "immich", label: immich.label, checked: immich.checked, run: run(immich.run) }]);
-
-    if (actions?.onAutoPick) {
-      const pick = actions.onAutoPick;
-      groups.push([{ kind: "item", id: "pick", label: "Find similar…", run: run(() => pick(t.ids)) }]);
-    }
-    if (actions?.files !== false) {
-      groups.push([
-        { kind: "item", id: "export", label: many ? `Export ${n} photos…` : "Export…", run: run(() => setDialog({ kind: "export", target: t })) },
-        { kind: "item", id: "copy", label: many ? `Save copy of ${n} photos…` : "Save copy…", run: run(() => setDialog({ kind: "copy", target: t })) },
-      ]);
-      if (revealFile) groups.push([{ kind: "item", id: "reveal", label: REVEAL_LABEL, run: run(() => reveal(t)) }]);
+    if (actions?.files !== false && revealFile) {
+      groups.push([{ kind: "item", id: "reveal", label: REVEAL_LABEL, run: run(() => reveal(t)) }]);
     }
 
     const remove: Entry[] = [];
     if (actions?.onRemoveFromAlbum) {
       const onRemove = actions.onRemoveFromAlbum;
-      remove.push({ kind: "item", id: "remove-album", label: "Remove from album", run: run(() => onRemove(m.ids)) });
+      remove.push({ kind: "item", id: "remove-album", label: "Remove from this album", run: run(() => onRemove(m.ids)) });
     }
     if (actions?.onDelete) {
       const onDelete = actions.onDelete;
@@ -763,15 +795,20 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     setMenu(null);
     if (!t) return;
     switch (kind) {
-      case "album":
-        if (id === MORE) return setDialog({ kind: "pick", target: t, what: "album" });
-        noteRecent("album", id);
-        void actions?.onAddToAlbum?.(t.ids, id, name);
-        break;
-      case "canvas":
-        if (id === MORE) return setDialog({ kind: "pick", target: t, what: "canvas" });
-        noteRecent("canvas", id);
-        void actions?.onAddToCanvas?.(t.ids, id, name);
+      case "addto":
+        // Ids of AddToPicker's addToRows.
+        if (id === "more") return setDialog({ kind: "pick", target: t, what: "addto" });
+        if (id === "new-album") return void newAlbum(t);
+        if (id === "new-canvas") return void newCanvas(t);
+        if (id.startsWith("album:")) {
+          const albumId = id.slice("album:".length);
+          noteRecent("album", albumId);
+          void actions?.onAddToAlbum?.(t.ids, albumId, name);
+        } else if (id.startsWith("canvas:")) {
+          const canvasId = id.slice("canvas:".length);
+          noteRecent("canvas", canvasId);
+          void actions?.onAddToCanvas?.(t.ids, canvasId, name);
+        }
         break;
       case "tag":
         if (id === MORE) return setDialog({ kind: "pick", target: t, what: "tag" });
@@ -779,20 +816,22 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
         void actions?.onAddTag?.(t.ids, id);
         break;
       case "edit": {
-        // "<mode>:<AUTO | MORE | preset name>" (see build).
-        const colon = id.indexOf(":");
-        const mode = id.slice(0, colon) as EditMode;
-        const what = id.slice(colon + 1);
-        if (what === MORE) return setDialog({ kind: "pick", target: t, what: mode });
-        if (what === AUTO) void actions?.onAutoEdit?.(t.ids, mode);
+        // Ids of EditPicker's editMenuRows.
+        const row = parseEditRow(id);
+        if (!row) return;
+        if (row.kind === "more") return setDialog({ kind: "pick", target: t, what: row.mode });
+        if (row.kind === "auto") void actions?.onAutoEdit?.(t.ids, row.mode);
         else {
-          noteRecent("preset", what);
-          void actions?.onApplyPreset?.(t.ids, what, mode);
+          noteRecent("preset", row.name);
+          void actions?.onApplyPreset?.(t.ids, row.name, row.mode);
         }
         break;
       }
       case "reset":
         void reset(t, id);
+        break;
+      case "save":
+        setDialog({ kind: id === "copy" ? "copy" : "export", target: t });
         break;
     }
   }
@@ -801,9 +840,7 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
     const t = target();
     setMenu(null);
     if (!t) return;
-    if (kind === "album") void newAlbum(t);
-    else if (kind === "canvas") void newCanvas(t);
-    else if (kind === "tag") void newTag(t);
+    if (kind === "tag") void newTag(t);
   }
 
   // Copy every targeted photo from its SAVED edits - the grid has no editor
@@ -817,47 +854,32 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
   }
 
   // The dialog behind a submenu's "More…": the whole list with a search box.
-  function pickTitle(what: "album" | "canvas" | "tag" | EditMode): string {
+  function pickTitle(what: PickWhat): string {
     switch (what) {
-      case "album":
-        return "Add to album";
-      case "canvas":
-        return "Add to canvas";
+      case "addto":
+        return "Add to album or canvas";
       case "tag":
         return "Add tag";
-      case "apply":
-        return "Apply preset";
-      case "copy":
-        return "Apply preset and save copy";
-      case "on-copy":
-        return "Preset on a copy";
+      default:
+        return EDIT_MODE_TEXT[what].title;
     }
   }
-  function pickGroups(d: { target: Target; what: "album" | "canvas" | "tag" | EditMode }): PickerGroup[] {
+  function pickGroups(d: { target: Target; what: PickWhat }): PickerGroup[] {
     const t = d.target;
     switch (d.what) {
-      case "album":
-        return [{
-          items: [...(pickAlbums ?? [])]
-            .sort((a, b) => b.created_at.localeCompare(a.created_at))
-            .map((a) => ({ id: a.id, label: a.name, search: a.name, count: a.image_count })),
-          newLabel: "New album…",
-          onNew: () => {
+      case "addto":
+        return addToPickerGroups(
+          actions?.onAddToAlbum ? pickAlbums ?? [] : null,
+          actions?.onAddToCanvas ? pickCanvases ?? [] : null,
+          () => {
             setDialog(null);
             void newAlbum(t);
           },
-        }];
-      case "canvas":
-        return [{
-          items: [...(pickCanvases ?? [])]
-            .sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at))
-            .map((c) => ({ id: c.id, label: c.name, search: c.name, count: c.image_count })),
-          newLabel: "New canvas…",
-          onNew: () => {
+          () => {
             setDialog(null);
             void newCanvas(t);
-          },
-        }];
+          }
+        );
       case "tag":
         return [{
           items: (pickTags ?? []).filter((x) => !isAutoTag(x)).map((x) => ({ id: x, label: x, search: x })),
@@ -871,21 +893,22 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
         return [{ items: [...(actions?.presets?.() ?? [])].reverse().map((n) => ({ id: n, label: n, search: n })) }];
     }
   }
-  async function pickFromDialog(d: { target: Target; what: "album" | "canvas" | "tag" | EditMode }, id: string) {
+  async function pickFromDialog(d: { target: Target; what: PickWhat }, id: string) {
     const t = d.target;
     switch (d.what) {
-      case "album": {
-        const name = (pickAlbums ?? []).find((a) => a.id === id)?.name ?? "album";
-        noteRecent("album", id);
-        await actions?.onAddToAlbum?.(t.ids, id, name);
+      case "addto":
+        if (id.startsWith("album:")) {
+          const albumId = id.slice("album:".length);
+          const name = (pickAlbums ?? []).find((a) => a.id === albumId)?.name ?? "album";
+          noteRecent("album", albumId);
+          await actions?.onAddToAlbum?.(t.ids, albumId, name);
+        } else if (id.startsWith("canvas:")) {
+          const canvasId = id.slice("canvas:".length);
+          const name = (pickCanvases ?? []).find((c) => c.id === canvasId)?.name ?? "canvas";
+          noteRecent("canvas", canvasId);
+          await actions?.onAddToCanvas?.(t.ids, canvasId, name);
+        }
         break;
-      }
-      case "canvas": {
-        const name = (pickCanvases ?? []).find((c) => c.id === id)?.name ?? "canvas";
-        noteRecent("canvas", id);
-        await actions?.onAddToCanvas?.(t.ids, id, name);
-        break;
-      }
       case "tag":
         noteRecent("tag", id);
         await actions?.onAddTag?.(t.ids, id);
@@ -937,7 +960,6 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
             count={dialog.target.ids.length}
             onClose={() => setDialog(null)}
             onSave={(req) => void saveCopies(req)}
-            askOptions={askSaveCopyOptions}
           />
         )}
       </Presence>

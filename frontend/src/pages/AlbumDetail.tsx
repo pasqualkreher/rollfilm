@@ -29,8 +29,8 @@ import { SORT_OPTIONS, sortImages, type SortKey } from "../utils/sortOrder";
 import { loadPresets, presetAdjustments } from "../utils/presets";
 import { useTasks, type BatchItem } from "../state/tasks";
 import { usePairDeleteConfirm } from "../components/usePairDeleteConfirm";
-import { collapsePairs, useAskSaveCopyOptions } from "../state/viewPrefs";
-import { FULL_COPY_QUALITY, SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
+import { collapsePairs } from "../state/viewPrefs";
+import { SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
 import { useEditCopies } from "../utils/useEditCopies";
 import { modKeyLabel, useSelectionKeys } from "../utils/selection";
 import { useBarHeight } from "../utils/useBarHeight";
@@ -94,7 +94,11 @@ export function AlbumDetail() {
   const barRef = useBarHeight();
   // Export for the selection: the bar's button, the dialog, ⇧⌘E.
   const selectionExport = useSelectionExport(Array.from(selected));
-  const [lastIndex, setLastIndex] = useState<number | null>(null);
+  // The photo the last click landed on, by id: a shift-click selects the run
+  // between it and the clicked photo in the order on screen NOW. By index it
+  // went wrong once the list changed under it - a filter that left fewer
+  // photos than the index pointed past read off the end and threw.
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const dialogs = useAppDialogs();
   const navigate = useNavigate();
@@ -137,7 +141,6 @@ export function AlbumDetail() {
   // quiet: stars, flags and tags - out of the dock unless they take a while.
   const batch = <R,>(label: string, items: BatchItem[], run: (ids: string[]) => Promise<R>, quiet = false) =>
     runBatches({ id: ALBUM_BATCH, kind: "batch", label, quiet }, items, run);
-  const askSaveCopyOptions = useAskSaveCopyOptions();
   // The options dialog of "Apply ... and save copy", resolved by its answer.
   // The Save-copy dialog asked before a bulk copy: "Apply … and save copy"
   // (a file by definition, only the options) and "Edit a copy" (which kind).
@@ -145,6 +148,8 @@ export function AlbumDetail() {
     resolve: (req: SaveCopyRequest | null) => void;
     physicalOnly: boolean;
     title: string;
+    // How many photos the copy is made of (the action's target).
+    count: number;
   } | null>(null);
   const editCopies = useEditCopies();
 
@@ -264,11 +269,15 @@ export function AlbumDetail() {
   // Click = toggle; shift-click = select the whole range since the last click,
   // like the library grid - makes selecting a long run of photos fast.
   function toggleSelect(imageId: string, index: number, shiftKey: boolean) {
+    const anchor = lastClickedId === null ? -1 : orderedImages.findIndex((img) => img.id === lastClickedId);
     setSelected((prev) => {
       const next = new Set(prev);
-      if (shiftKey && lastIndex !== null) {
-        const [start, end] = lastIndex < index ? [lastIndex, index] : [index, lastIndex];
-        for (let i = start; i <= end; i++) next.add(orderedImages[i].id);
+      if (shiftKey && anchor >= 0) {
+        const [start, end] = anchor < index ? [anchor, index] : [index, anchor];
+        for (let i = start; i <= end; i++) {
+          const member = orderedImages[i];
+          if (member) next.add(member.id);
+        }
       } else if (next.has(imageId)) {
         next.delete(imageId);
       } else {
@@ -276,7 +285,7 @@ export function AlbumDetail() {
       }
       return next;
     });
-    setLastIndex(index);
+    setLastClickedId(imageId);
   }
 
   function selectAll() {
@@ -285,7 +294,7 @@ export function AlbumDetail() {
 
   function clearSelection() {
     setSelected(new Set());
-    setLastIndex(null);
+    setLastClickedId(null);
   }
 
   // Cmd/Ctrl+A picks the whole album, Escape drops the selection, E opens a
@@ -344,9 +353,9 @@ export function AlbumDetail() {
   }
 
   // The arrow keys' target: this photo, and only it (see utils/gridKeys).
-  function selectOnly(id: string, index: number) {
+  function selectOnly(id: string, _index?: number) {
     setSelected(new Set([id]));
-    setLastIndex(index);
+    setLastClickedId(id);
   }
 
   async function deleteSelected(target: string[] = Array.from(selected)) {
@@ -413,7 +422,7 @@ export function AlbumDetail() {
         setSelected((prev) => {
           const next = new Set(Array.from(prev).filter((x) => !gone.has(x)));
           if (next.size === 0 && prev.size > 0) {
-            setLastIndex(null);
+            setLastClickedId(null);
           }
           return next;
         });
@@ -450,7 +459,7 @@ export function AlbumDetail() {
       setSelected((prev) => {
         const next = new Set(Array.from(prev).filter((x) => !gone.has(x)));
         if (next.size === 0 && prev.size > 0) {
-          setLastIndex(null);
+          setLastClickedId(null);
         }
         return next;
       });
@@ -672,7 +681,7 @@ export function AlbumDetail() {
   // "Apply ... and save copy": the edit as above, then one JPEG copy of every
   // photo it was applied to, written in the background (the title bar counts
   // them down). The options - quality, size - are asked once for the whole
-  // batch when Settings says to ask, before anything is applied.
+  // batch, before anything is applied.
   async function startCopies(ids: string[], opts: CopyOpts) {
     if (ids.length === 0) return;
     const { job_id, total } = await api.images.copyJobStart(ids, { quality: opts.quality, max_size: opts.maxSize });
@@ -681,10 +690,11 @@ export function AlbumDetail() {
   }
 
   async function askCopyOptions(count: number): Promise<CopyOpts | null> {
-    if (!askSaveCopyOptions) return { quality: FULL_COPY_QUALITY, maxSize: null };
+    if (count === 0) return null;
     return new Promise((resolve) =>
       setCopyPrompt({
         physicalOnly: true,
+        count,
         title: `Apply and save copy of ${plural(count, "photo")}`,
         resolve: (req) => resolve(req && req.kind === "physical" ? { quality: req.quality, maxSize: req.maxSize } : null),
       })
@@ -705,7 +715,7 @@ export function AlbumDetail() {
   // they are. Which kind of copy is asked first (utils/useEditCopies).
   function askCopyKind(count: number): Promise<SaveCopyRequest | null> {
     return new Promise((resolve) =>
-      setCopyPrompt({ physicalOnly: false, title: `Edit a copy of ${plural(count, "photo")}`, resolve })
+      setCopyPrompt({ physicalOnly: false, count, title: `Edit a copy of ${plural(count, "photo")}`, resolve })
     );
   }
 
@@ -890,8 +900,7 @@ export function AlbumDetail() {
         {copyPrompt && (
           <SaveCopyDialog
             physicalOnly={copyPrompt.physicalOnly}
-            askOptions={askSaveCopyOptions || copyPrompt.physicalOnly}
-            count={selected.size}
+            count={copyPrompt.count}
             title={copyPrompt.title}
             onClose={() => {
               copyPrompt.resolve(null);

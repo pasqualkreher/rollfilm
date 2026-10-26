@@ -457,6 +457,14 @@ def test_process_7_mixes_the_scene_for_fujifilm_cubes_only():
         assert film_sims.official_sim({**adj, "film_sim": "provia"}, True) == "provia"
     assert film_sims.agx_under_look({"process": "7", "tone_mapper": "agx"})
     assert not film_sims.mixes_scene({"process": "6"})
+    # The rules are "from version N on": the current process (8, and whatever
+    # follows it) takes part without being listed - 8 once was not.
+    for later in (develop.CURRENT_PROCESS, "9"):
+        assert film_sims.renders_as_still({"process": later}) and film_sims.mixes_scene({"process": later})
+        assert film_sims.agx_under_look({"process": later, "tone_mapper": "agx"})
+    current = develop.normalize({"film_sim": "classic_neg", "process": develop.CURRENT_PROCESS})
+    assert film_sims.official_sim(current, True) == "classic_neg"
+    assert not film_sims.renders_as_still({"process": None}) and not film_sims.official_sim({"film_sim": "provia"}, True)
     # 6 is untouched: still 5 with Basic. Grey is grey on 7 too (rows sum to 1).
     np.testing.assert_array_equal(render(lin, process="6"), render(lin, process="5"))
     np.testing.assert_array_equal(render(grey, process="7"), render(grey, process="6"))

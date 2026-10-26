@@ -19,8 +19,6 @@ import { useTasks } from "../state/tasks";
 import {
   useAskDeletePartner,
   setAskDeletePartner,
-  useAskSaveCopyOptions,
-  setAskSaveCopyOptions,
   EDITOR_WORK_RES,
   useEditorWorkRes,
   setEditorWorkRes,
@@ -338,9 +336,6 @@ export function Settings() {
   // Whether deleting a paired photo asks "only this file or the whole pair?".
   // Client-side view preference (see viewPrefs), not a server setting.
   const askDeletePartner = useAskDeletePartner();
-  // Whether the editor's "Save copy" asks for quality and size first. Also a
-  // client-side view preference, not a server setting.
-  const askSaveCopyOptions = useAskSaveCopyOptions();
   const editorWorkRes = useEditorWorkRes();
 
   // The open tab. sectionProps stays the single indirection every section call
@@ -1245,15 +1240,8 @@ export function Settings() {
       <Section {...sectionProps("Photo editor")}>
         <Desc>
           <strong>Save copy</strong> creates a new photo from your edits. A physical copy is a new
-          full-size JPEG. A virtual copy shares the original file and keeps only its edits.
+          JPEG. A virtual copy shares the original file and keeps only its edits.
         </Desc>
-        <OptionRow
-          type="checkbox"
-          checked={askSaveCopyOptions}
-          onChange={setAskSaveCopyOptions}
-          title="Ask for quality and size before saving a copy"
-          desc="Lets you pick JPEG quality and size for a physical copy — once per batch for the grid's “Apply … and save copy”."
-        />
         <div className="settings-corners">
           <span className="settings-option-body">
             <strong>Working resolution</strong>

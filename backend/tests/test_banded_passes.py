@@ -52,6 +52,22 @@ def test_clarity_in_bands_is_the_whole_frame_clarity(whole, amount):
     assert np.array_equal(banded, whole(lambda: thumbnails._clarity(arr, 40.0, amount)))
 
 
+@pytest.mark.parametrize("amount", [0.52, 1.3])
+def test_depth_clarity_in_bands_is_the_whole_frame_clarity(whole, amount):
+    """Process 8: the depth band's coefficient maps are scaled up per band,
+    and the knee and tents are per pixel - the same bits either way."""
+    arr = _frame()
+    kw = dict(depth=True, ref_long_edge=1100.0)
+    banded = thumbnails._clarity(arr, 40.0, amount, **kw)
+    # The depth maps are scaled up with a per-band affine (warpAffine), whose
+    # translation differs per band - a float32 ulp or two, never a level.
+    assert np.allclose(banded, whole(lambda: thumbnails._clarity(arr, 40.0, amount, **kw)), rtol=0.0, atol=1e-6)
+    assert np.abs(banded - thumbnails._clarity(arr, 40.0, amount)).max() > 0.005
+    target = arr.copy()
+    assert thumbnails._clarity(target, 40.0, amount, out=target, **kw) is target
+    assert np.array_equal(target, banded)
+
+
 def test_clarity_written_into_its_own_frame_is_the_same_picture():
     arr = _frame()
     expected = thumbnails._clarity(arr, 40.0, 0.52)
@@ -76,17 +92,18 @@ def test_sharpening_in_bands_is_the_whole_frame_sharpening(v2, radius, amount, t
     assert np.array_equal(banded, fn(arr, radius, amount, threshold=threshold))
 
 
-def test_grain_in_bands_is_the_whole_frame_grain(whole, monkeypatch):
+@pytest.mark.parametrize("fuji", [False, True])
+def test_grain_in_bands_is_the_whole_frame_grain(whole, monkeypatch, fuji):
     arr = _frame()
     h, w = arr.shape[:2]
     # One field for both renders - a fresh one each time is the grain's own
     # randomness, not the banding's.
     field = np.random.default_rng(3).standard_normal((h, w)).astype(np.float32)
     monkeypatch.setattr(thumbnails, "_cached_grain_field", lambda *a, **k: field)
-    banded = thumbnails._apply_grain(arr, 40, 25, 50)
-    assert np.array_equal(banded, whole(lambda: thumbnails._apply_grain(arr, 40, 25, 50)))
+    banded = thumbnails._apply_grain(arr, 40, 25, 50, fuji=fuji)
+    assert np.array_equal(banded, whole(lambda: thumbnails._apply_grain(arr, 40, 25, 50, fuji=fuji)))
     target = arr.copy()
-    assert thumbnails._apply_grain(target, 40, 25, 50, out=target) is target
+    assert thumbnails._apply_grain(target, 40, 25, 50, out=target, fuji=fuji) is target
     assert np.array_equal(target, banded)
 
 
@@ -138,20 +155,21 @@ def test_chrome_without_the_hue_reads_the_same_saturation_and_lightness():
     assert np.array_equal(short_sat, sat) and np.array_equal(short_lum, lum)
 
 
+@pytest.mark.parametrize("v8", [False, True])
 @pytest.mark.parametrize("light_sources", [True, False])
-def test_mist_in_bands_is_the_whole_frame_mist(whole, light_sources):
+def test_mist_in_bands_is_the_whole_frame_mist(whole, light_sources, v8):
     arr = np.clip(_frame(), 0.0, 1.0)
-    banded = thumbnails._mist(arr, 40, light_sources=light_sources, ref_long_edge=1100.0)
-    assert np.array_equal(
-        banded,
-        whole(lambda: thumbnails._mist(arr, 40, light_sources=light_sources, ref_long_edge=1100.0)),
-    )
+    kw = dict(light_sources=light_sources, ref_long_edge=1100.0, v8=v8)
+    banded = thumbnails._mist(arr, 40, **kw)
+    assert np.array_equal(banded, whole(lambda: thumbnails._mist(arr, 40, **kw)))
     assert np.abs(banded - arr).max() > 0.005
 
 
-def test_mist_with_nothing_bright_enough_leaves_the_frame_as_it_is():
+@pytest.mark.parametrize("v8", [False, True])
+def test_mist_with_nothing_bright_enough_leaves_the_frame_as_it_is(v8):
     arr = np.full((1100, 1000, 3), 0.3, dtype=np.float32)
-    assert thumbnails._mist(arr, 40, light_sources=True) is arr
+    assert thumbnails._mist(arr, 40, light_sources=True, v8=v8) is arr
+    assert thumbnails._mist(arr, 0, light_sources=True, v8=v8) is arr
 
 
 def test_the_colour_denoise_in_bands_is_the_whole_frame_colour_denoise(whole):

@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { api, editVersion, saveDownload } from "../api/client";
 import type { CanvasLayout, ImageOut } from "../api/types";
-import { exportImages, exportSheets, renderLayoutHtml } from "../utils/canvasExport";
+import {
+  CANVAS_EXPORT_DPIS,
+  setCanvasExportDpi,
+  setCanvasExportQuality,
+  useCanvasExportDpi,
+  useCanvasExportQuality,
+} from "../state/viewPrefs";
+import { exportImages, exportPhotoUrls, exportSheets, renderLayoutHtml } from "../utils/canvasExport";
+import { rangeFillStyle } from "../utils/rangeFill";
+import { Dropdown } from "./Dropdown";
 import { FilterChip } from "./FilterChip";
 
 // The canvas's Export chip: PDF for printing, or one self-contained HTML file.
@@ -32,20 +41,30 @@ export function ExportChip({
   const fileStem = (title.trim() || "Album").replace(/[\\/:*?"<>|]+/g, "-");
   const sheets = exportSheets(doc);
   const images = exportImages(doc, byId);
+  const dpi = useCanvasExportDpi();
+  const quality = useCanvasExportQuality();
+  const photos = { dpi, quality };
+  const resolutionText = dpi === null ? "at full resolution" : `at ${dpi} dpi (JPEG ${quality})`;
   // Absolute, because the document may be opened from a file or a blob URL
   // where a relative API path would point nowhere.
-  const exportUrl = (image: ImageOut) =>
-    new URL(api.images.exportUrl(image.id, editVersion(image)), window.location.href).toString();
+  const exportUrls = () =>
+    exportPhotoUrls(doc, images, photos, (image, opts) =>
+      new URL(api.images.exportUrl(image.id, editVersion(image), opts), window.location.href).toString()
+    );
 
   // Both exports close the panel once the file is out of the door - and only
   // then: a dismissed location picker or a failure leaves it open, with the
   // error where it can be read.
   async function toPdf(close: () => void) {
     setError(null);
-    const sources = new Map(images.map((image) => [image.id, exportUrl(image)]));
+    const sources = exportUrls();
     const desktop = window.photoManager?.exportPdf;
     if (desktop) {
-      setBusy("Rendering the pages at full resolution. RAW and edited photos can take a minute each…");
+      setBusy(
+        dpi === null
+          ? "Rendering the pages at full resolution. RAW and edited photos can take a minute each…"
+          : `Rendering the pages at ${dpi} dpi. RAW and edited photos can take a while each…`
+      );
       try {
         const result = await desktop({
           html: renderLayoutHtml(doc, sheets, sources, { title }),
@@ -78,10 +97,11 @@ export function ExportChip({
       await saveDownload(`${fileStem}.html`, { "text/html": [".html"] }, async () => {
         // Fetched one after another (see the note in the exported page's
         // script) and folded into the file, so it needs nothing but itself.
+        const urls = exportUrls();
         const sources = new Map<string, string>();
         for (const [index, image] of images.entries()) {
-          setBusy(`Rendering photo ${index + 1} of ${images.length} at full resolution…`);
-          sources.set(image.id, await fetchDataUrl(exportUrl(image)));
+          setBusy(`Rendering photo ${index + 1} of ${images.length} ${dpi === null ? "at full resolution" : `at ${dpi} dpi`}…`);
+          sources.set(image.id, await fetchDataUrl(urls.get(image.id)!));
         }
         setBusy("Writing the file…");
         written = true;
@@ -110,7 +130,7 @@ export function ExportChip({
           </button>
           <span className="canvas-panel-note">
             {sheets.length} {sheets.length === 1 ? "page" : "pages"} at {Math.round(sheets[0].w)}×
-            {Math.round(sheets[0].h)} mm. Photos at full resolution, text stays selectable.
+            {Math.round(sheets[0].h)} mm. Photos {resolutionText}, text stays selectable.
           </span>
         </div>
         <div className="canvas-panel-row">
@@ -118,10 +138,41 @@ export function ExportChip({
             Web page (HTML)
           </button>
           <span className="canvas-panel-note">
-            A single file with all photos embedded at full resolution, so it can be very large.
+            A single file with all photos embedded {dpi === null ? "at full resolution, so it can be very large" : `at ${dpi} dpi`}.
             Opens in any browser and can be printed from there.
           </span>
         </div>
+        <div className="canvas-panel-row canvas-panel-row--last">
+          <span className="canvas-panel-label">Resolution</span>
+          <Dropdown
+            value={dpi === null ? "original" : String(dpi)}
+            ariaLabel="Resolution"
+            disabled={busy !== null}
+            onChange={(value) => setCanvasExportDpi(value === "original" ? null : Number(value))}
+            options={[
+              { value: "original", label: "Original" },
+              ...CANVAS_EXPORT_DPIS.map((d) => ({ value: String(d), label: `${d} dpi` })),
+            ]}
+          />
+        </div>
+        {/* Always shown so switching to Original moves nothing: greyed out
+            there, since the photos then keep their own encoding. */}
+        <label className="editor-slider" style={dpi === null ? { opacity: 0.45 } : undefined}>
+          <span className="editor-slider-head">
+            <span>JPEG quality</span>
+            <span className="editor-slider-val">{quality}</span>
+          </span>
+          <input
+            type="range"
+            min={60}
+            max={100}
+            step={1}
+            value={quality}
+            disabled={dpi === null || busy !== null}
+            style={rangeFillStyle(quality, 60, 100)}
+            onChange={(e) => setCanvasExportQuality(Number(e.target.value))}
+          />
+        </label>
         {busy && <div className="canvas-panel-note canvas-export-busy">{busy}</div>}
         {error && <div className="canvas-panel-note canvas-export-error">{error}</div>}
         {empty && <div className="canvas-panel-note">Place something on the canvas first.</div>}

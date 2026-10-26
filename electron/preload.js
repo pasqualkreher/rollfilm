@@ -125,6 +125,21 @@ contextBridge.exposeInMainWorld("photoManager", {
   // preventDefault): the OS drag has to start while the mouse is still down.
   // main.js refuses the whole drag if any path is not an existing file.
   startDrag: (paths) => ipcRenderer.send("start-drag", Array.isArray(paths) ? paths.map(String) : []),
+  // Update notices from updater.js ({ state, version, current, notes, mode,
+  // url?, percent?, id? }). A notice with an id is acknowledged once handed
+  // over - without that ack within 3 s main shows its native dialog instead.
+  // The return value unsubscribes.
+  onUpdate: (callback) => {
+    const handler = (_event, payload) => {
+      if (!payload || typeof payload.state !== "string") return;
+      callback(payload);
+      if (payload.id != null) ipcRenderer.invoke("pm:update-ack", payload.id).catch(() => {});
+    };
+    ipcRenderer.on("pm:update", handler);
+    return () => ipcRenderer.removeListener("pm:update", handler);
+  },
+  // The answer to the open notice: "download" | "restart" | "open-page" | "dismiss".
+  updateAction: (action) => ipcRenderer.invoke("pm:update-action", String(action)),
 });
 
 // --- Files dropped on the window ----------------------------------------------

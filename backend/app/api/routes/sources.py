@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import schemas
 from app.auth import get_current_user
-from app.db.models import Image, ImportStagedFile, SourceRoot, User
+from app.db.models import CanvasImage, EditSnapshot, Image, ImportStagedFile, LayoutItem, SourceRoot, User
 from app.db.session import get_db
 from app.services import sources as sources_service
 from app.services.thumbnails import derivative_dir
@@ -174,6 +174,12 @@ def remove_source(
         raise HTTPException(status_code=404, detail="Source not found")
 
     images = db.query(Image).filter(Image.source_root_id == source.id).all()
+    # A virtual copy of one of these photos has no picture without it: it
+    # goes with its source (as in the trash's purge).
+    seed_ids = {image.id for image in images}
+    if seed_ids:
+        copies = db.query(Image).filter(Image.virtual_of_image_id.in_(seed_ids)).all()
+        images = images + [copy for copy in copies if copy.id not in seed_ids]
     image_ids = [image.id for image in images]
 
     # Clear every foreign key that points at the rows we're about to delete, or
@@ -192,6 +198,20 @@ def remove_source(
         db.query(ImportStagedFile).filter(
             ImportStagedFile.duplicate_of_image_id.in_(image_ids)
         ).update({ImportStagedFile.duplicate_of_image_id: None}, synchronize_session=False)
+        #   3. Canvas frames and memberships, and the edit snapshots - the
+        #      same detaching the trash's purge does (services/trash.py): a
+        #      frame stays as a "missing" placeholder, a membership and a
+        #      snapshot go. Both tables' foreign keys have no cascade, so
+        #      without this the DELETE below fails on the first photo that is
+        #      on a canvas.
+        db.query(LayoutItem).filter(LayoutItem.image_id.in_(image_ids)).update(
+            {LayoutItem.image_id: None, LayoutItem.missing: True}, synchronize_session=False
+        )
+        db.query(Image).filter(Image.virtual_of_image_id.in_(image_ids)).update(
+            {Image.virtual_of_image_id: None}, synchronize_session=False
+        )
+        db.query(CanvasImage).filter(CanvasImage.image_id.in_(image_ids)).delete(synchronize_session=False)
+        db.query(EditSnapshot).filter(EditSnapshot.image_id.in_(image_ids)).delete(synchronize_session=False)
     db.flush()
     for image in images:
         shutil.rmtree(derivative_dir(image.id), ignore_errors=True)

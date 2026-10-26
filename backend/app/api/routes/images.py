@@ -2128,6 +2128,14 @@ def rename_image(
     rename fails the photo's own still stands, reported via `pair_error`.
     """
     image = get_owned_image(db, current_user.id, image_id)
+    if image.virtual_of_image_id:
+        # A virtual copy has no file of its own: resolve_image_path would hand
+        # back the original's, and renaming that from here would move the
+        # original's file out from under its own row.
+        raise HTTPException(
+            status_code=409,
+            detail="This is a virtual copy - rename the original photo instead.",
+        )
     source = resolve_image_path(image)
     if not source.exists():
         raise HTTPException(
@@ -3320,7 +3328,14 @@ def get_original(image_id: str, db: Session = Depends(get_db), current_user: Use
 
 
 @router.get("/{image_id}/export")
-def get_export(image_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_export(
+    image_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    format: str = "png",
+    quality: int = 92,
+    max_size: int | None = None,
+):
     """The photo's pixels for the album layout exports (PDF / HTML), with
     nothing lost on the way out. A photo without non-destructive edits - which
     includes every flattened edited copy - goes out as the very bytes it was
@@ -3332,12 +3347,19 @@ def get_export(image_id: str, db: Session = Depends(get_db), current_user: User 
 
     Rendered per request, not cached: a full-resolution PNG of a 40MP photo is
     ~100MB, which is too much to keep on disk per photo for an export that is
-    made once. Serialised on the full render lock like every full render."""
+    made once. Serialised on the full render lock like every full render.
+
+    format=jpeg (with `quality`, clamped 60-100, and an optional `max_size`
+    long edge) is the layout export's smaller option: the photo rendered with
+    its edits, capped to the size the print needs and encoded like a saved
+    copy (sRGB ICC). An unedited JPEG that already fits goes out as itself."""
     image = get_owned_image(db, current_user.id, image_id)
     path: Path = resolve_image_path(image)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Original file missing from library")
     headers = {"Cache-Control": "private, max-age=31536000, immutable"}
+    if format == "jpeg":
+        return _export_jpeg(image, path, quality, max_size, headers)
     if not _has_any_edit(image) and image.file_type in (FileType.jpeg, FileType.png):
         return FileResponse(path, headers=headers)
     try:
@@ -3351,6 +3373,28 @@ def get_export(image_id: str, db: Session = Depends(get_db), current_user: User 
     # that goes straight into a print PDF.
     rendered.save(buf, "PNG", compress_level=1)
     return Response(buf.getvalue(), media_type="image/png", headers=headers)
+
+
+def _export_jpeg(image: Image, path: Path, quality: int, max_size: int | None, headers: dict) -> Response:
+    """get_export's JPEG branch: rendered with the saved edits, capped to
+    `max_size` on the long edge, encoded like a saved copy."""
+    quality = max(60, min(100, int(quality)))
+    cap = max(16, int(max_size)) if max_size else None
+    if not _has_any_edit(image) and image.file_type == FileType.jpeg:
+        try:
+            with PILImage.open(path) as probe:
+                long_edge = max(probe.size)
+        except Exception:
+            long_edge = None
+        if cap is None or (long_edge is not None and cap >= long_edge):
+            return FileResponse(path, headers=headers)
+    try:
+        edited = save_copy_service.render_copy_frame(image, save_copy_service.CopyEdits.from_row(image), cap)
+    except Exception:
+        logger.exception("JPEG export render failed for image %s", image.id)
+        raise HTTPException(status_code=404, detail="Photo could not be rendered")
+    data = save_copy_service._encode(edited, quality)
+    return Response(data, media_type="image/jpeg", headers=headers)
 
 
 def _embedding_for_image(image: Image):

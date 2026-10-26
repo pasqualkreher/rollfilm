@@ -40,20 +40,30 @@ COLOR_BANDS: tuple[str, ...] = ("red", "orange", "yellow", "green", "aqua", "blu
 
 def is_v2(adj: dict) -> bool:
     """Process version 2 and everything built on it."""
-    return adj.get("process") in ("2", "3", "4", "5", "6", "7")
+    return adj.get("process") in ("2", "3", "4", "5", "6", "7", "8")
 
 
 def calibration_moves_whole_bands(adj: dict) -> bool:
     """Process version 6 and up: a Calibration primary moves its whole band of
     colours by the same amount (develop_color.apply_color_calibration)."""
-    return adj.get("process") in ("6", "7")
+    return adj.get("process") in ("6", "7", "8")
 
 
 def measured_film_sims(adj: dict) -> bool:
     """Process version 3 and up: the film simulations render from cubes
     instead of the hand-made recipes - Fujifilm's own where it publishes one, a
     measured one where there is one (film_sims)."""
-    return adj.get("process") in ("3", "4", "5", "6", "7")
+    return adj.get("process") in ("3", "4", "5", "6", "7", "8")
+
+
+def effects_v8(adj: dict) -> bool:
+    """Process version 8 and up: the finishing passes as measured against the
+    camera - grain fitted to Fujifilm's Grain Effect, clarity with its depth
+    band, the two-part mist (thumbnails._apply_grain / _clarity / _mist)."""
+    try:
+        return int(adj.get("process") or 1) >= 8
+    except (TypeError, ValueError):
+        return False
 
 
 # ------------------------------------------------------------------ transfers

@@ -149,7 +149,13 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     # "7" is "6" with Fujifilm's cubes fed the scene colours they were made
     # for (film_sims._SCENE_MIX): greens no longer yellowish and flat against
     # the camera's own rendering of the look.
-    "process": ("1", ("1", "2", "3", "4", "5", "6", "7")),
+    # "8" is "7" with the finishing passes measured and rebuilt: grain fitted
+    # to the camera's own Grain Effect (thumbnails._apply_grain, fuji=True),
+    # clarity with a second, broad band for midtone depth (_clarity,
+    # depth=True) and the two-part mist - bloom that holds the blacks, plus
+    # an overall softness (_mist, v8=True). The same sliders render
+    # differently, so an edit made on "7" keeps its own finishing.
+    "process": ("1", ("1", "2", "3", "4", "5", "6", "7", "8")),
     # Which exposure a RAW is developed from (see thumbnails._browsing_gain).
     # "standard" lifts every raw to the same brightness with the auto-exposure
     # gain the grid already uses (raw.compute_base_gain), so a photo opens the
@@ -223,7 +229,7 @@ ENUM_SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 # The process version a photo's first edit starts on (see ENUM_SPEC["process"]).
-CURRENT_PROCESS = "7"
+CURRENT_PROCESS = "8"
 
 # Identity point curve: pass-through on the 0..255 grid.
 _IDENTITY_CURVE = [[0, 0], [255, 255]]
@@ -650,9 +656,19 @@ def process_for_current_looks(adj: dict[str, Any]) -> str:
     one, unless the edit is on process 5 with a Calibration move, which keeps
     its Calibration as it renders there."""
     process = str(adj.get("process") or CURRENT_PROCESS)
-    if process in (LAST_UNMIXED_LOOK, CURRENT_PROCESS) or calibration_is_neutral(adj):
+    if calibration_renders_whole_bands(process) or calibration_is_neutral(adj):
         return CURRENT_PROCESS
     return LAST_BELL_CALIBRATION
+
+
+def calibration_renders_whole_bands(process: str) -> bool:
+    """Every process after LAST_BELL_CALIBRATION renders Calibration the same
+    way, so a look chosen on any of them is a plain move to the current one
+    (from "7" to "8" as much as from "6" to "7")."""
+    try:
+        return int(process) > int(LAST_BELL_CALIBRATION)
+    except ValueError:
+        return False
 
 
 # --- The whole stored edit ---------------------------------------------------

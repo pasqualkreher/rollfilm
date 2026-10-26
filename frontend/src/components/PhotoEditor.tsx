@@ -1,3 +1,4 @@
+import { isModalOpen } from "../utils/modalKeys";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useId, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -109,7 +110,7 @@ import { kelvinFromTemperature, whiteBalanceFromKelvin, whiteBalanceFromNeutral 
 import { MaskOverlay } from "./MaskOverlay";
 import { ZoomReadout } from "./ZoomReadout";
 import { StageBackgroundToggle } from "./StageBackgroundToggle";
-import { useStageBg, useAskSaveCopyOptions, useEditorWorkRes, editorWorkResFactor } from "../state/viewPrefs";
+import { useStageBg, useEditorWorkRes, editorWorkResFactor } from "../state/viewPrefs";
 import { useAppDialogs } from "./AppDialogs";
 import { useTasks } from "../state/tasks";
 import { useLeaveGuard } from "../state/navHistory";
@@ -1379,7 +1380,6 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // export renders what is stored), then the same dialog as everywhere.
   const [exportOpen, setExportOpen] = useState(false);
   const [exportPreparing, setExportPreparing] = useState(false);
-  const askSaveCopyOptions = useAskSaveCopyOptions();
   const [presetName, setPresetName] = useState("");
   const [drag, setDrag] = useState<DragRect | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -3453,6 +3453,9 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       // Saving on the way out: the editor is locked until it is through, the
       // keys included (the mouse is off through editor-overlay--saving).
       if (busyRef.current) return;
+      // A dialog over the editor (Export, Save copy, an update notice) has
+      // the keys: E must not close the editor under it, nor A/X/U flag.
+      if (isModalOpen()) return;
       if (e.key === "Escape") {
         // Peel back the active on-canvas tool first, then close the editor.
         if (tool === "spot" && selectedSpotId) setSelectedSpotId(null);
@@ -7685,7 +7688,6 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                 setSaveCopyOpen(false);
                 saveCopy.mutate(req);
               }}
-              askOptions={askSaveCopyOptions}
             />
           )}
         </Presence>,

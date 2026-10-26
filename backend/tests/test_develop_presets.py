@@ -183,7 +183,7 @@ def test_choosing_a_look_moves_the_process_like_the_editor():
     # The three cases of adjustments.ts processForCurrentLooks / withFilmSim.
     look = develop.normalize({"film_sim": "velvia", "process": "7"})
     on_five_neutral_calibration = develop.normalize({"exposure": 0.3, "process": "5"})
-    assert develop.merge_sections(on_five_neutral_calibration, look, ["film"])["process"] == "7"
+    assert develop.merge_sections(on_five_neutral_calibration, look, ["film"])["process"] == develop.CURRENT_PROCESS
     on_five_with_calibration = develop.normalize({
         "exposure": 0.3, "process": "5", "color_calibration": {"red_hue": 10},
     })

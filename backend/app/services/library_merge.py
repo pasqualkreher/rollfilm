@@ -465,6 +465,9 @@ def merge_library(db: Session, owner_id: int, library_root: Path) -> dict:
                 # A fresh id (keep_id=False), so merging the same travel library
                 # twice can't collide with the rows the first run inserted.
                 target = image_row_from_dict(data, owner_id, keep_id=False)
+                # The other library's pairing points at ids this one does not
+                # have; the pairs are made again below, by the new ids.
+                target.paired_image_id = None
                 # Its roll is the other library's; here the photo has none.
                 target.import_session_id = None
                 # The destination has to be settled BEFORE the row is inserted:

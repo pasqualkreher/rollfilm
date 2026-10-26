@@ -31,30 +31,30 @@ export interface SkinInfo {
 // Eight pairs. Three colourless, because a photo is the only thing on screen
 // that should carry colour: Stone, Stone a step lighter, and Stone moved
 // towards warm paper. Two with one restrained colour, asked for by name:
-// Cyanotype (deep blue) and Negative (the orange of colour negative film).
-// Three more in greys and browns only: Graphite (grey to black), Platinum
-// (greige) and Sepia (brown).
+// Cyanotype, Negative and Sepia are tints (near-grey surfaces with a cast,
+// the colour in the accent); Graphite (grey to black) and Platinum (greige)
+// stay in greys and browns.
 // Same order in both lists so a pair sits in the same column.
 export const LIGHT_SKINS: SkinInfo[] = [
   { value: "stone", label: "Stone", hint: "Muted grey, the default", bg: "#eaebec", elevated: "#f6f7f7", text: "#26282a", accent: "#5a6067" },
   { value: "pebble", label: "Pebble", hint: "Stone, a step lighter", bg: "#f1f2f3", elevated: "#fbfbfc", text: "#26282a", accent: "#5a6067" },
   { value: "paper", label: "Paper", hint: "Warm off-white, like print paper", bg: "#f3f0e9", elevated: "#fbf9f4", text: "#2b2824", accent: "#5e5850" },
-  { value: "cyanotype", label: "Cyanotype", hint: "Blue-grey with a deep blue", bg: "#e6ebf2", elevated: "#f4f7fb", text: "#1d2738", accent: "#1f4f96" },
-  { value: "negative", label: "Negative", hint: "The orange-brown of negative film", bg: "#e6c09b", elevated: "#f1d6ba", text: "#2f1a0e", accent: "#96421a" },
+  { value: "cyanotype", label: "Cyanotype", hint: "Cool grey, deep blue accent", bg: "#e5ecf5", elevated: "#f3f7fc", text: "#212935", accent: "#395987" },
+  { value: "negative", label: "Negative", hint: "Warm film tint, sienna accent", bg: "#f3e9e0", elevated: "#fcf6f0", text: "#2f241e", accent: "#8d5136" },
   { value: "graphite", label: "Graphite", hint: "Mid grey, steel blue", bg: "#d0d0d0", elevated: "#dedede", text: "#141414", accent: "#3d5f86" },
   { value: "platinum", label: "Platinum", hint: "Greige with brass", bg: "#e0ddd8", elevated: "#ece9e5", text: "#24211d", accent: "#806240" },
-  { value: "sepia", label: "Sepia", hint: "Brown with oxblood", bg: "#dccdb9", elevated: "#ebe0d2", text: "#2b1e12", accent: "#7a3b32" },
+  { value: "sepia", label: "Sepia", hint: "Brown tint, oxblood accent", bg: "#eee7dc", elevated: "#f7f3ec", text: "#2e241d", accent: "#79443c" },
 ];
 
 export const DARK_SKINS: SkinInfo[] = [
   { value: "stone-dark", label: "Stone Dark", hint: "Soft muted grey", bg: "#26292d", elevated: "#2e3237", text: "#e5e7ea", accent: "#aab1b8" },
   { value: "pebble-dark", label: "Pebble Dark", hint: "Lighter charcoal, not too dark", bg: "#313438", elevated: "#3a3d42", text: "#eceef0", accent: "#b8bec5" },
   { value: "paper-dark", label: "Paper Dark", hint: "Soft warm charcoal", bg: "#302e2a", elevated: "#393632", text: "#eeeae2", accent: "#c8c1b5" },
-  { value: "cyanotype-dark", label: "Cyanotype Dark", hint: "Deep blue, not navy-black", bg: "#1f2a3c", elevated: "#27344a", text: "#e6ebf3", accent: "#82a8e2" },
-  { value: "negative-dark", label: "Negative Dark", hint: "Film brown, orange accent", bg: "#4a2d1a", elevated: "#573521", text: "#fbe8d4", accent: "#f39a52" },
+  { value: "cyanotype-dark", label: "Cyanotype Dark", hint: "Cool charcoal, sky-blue accent", bg: "#232932", elevated: "#2d333c", text: "#e5e8ed", accent: "#92afde" },
+  { value: "negative-dark", label: "Negative Dark", hint: "Warm charcoal, film-orange accent", bg: "#312620", elevated: "#3b3029", text: "#ede7df", accent: "#e1a170" },
   { value: "graphite-dark", label: "Graphite Dark", hint: "Near-black, steel blue", bg: "#1f1f1f", elevated: "#292929", text: "#ececec", accent: "#8eaacb" },
   { value: "platinum-dark", label: "Platinum Dark", hint: "Grey-brown with brass", bg: "#2a2826", elevated: "#34312e", text: "#ece8e2", accent: "#c9a877" },
-  { value: "sepia-dark", label: "Sepia Dark", hint: "Walnut brown, rosewood", bg: "#2e2219", elevated: "#3a2b20", text: "#f1e5d6", accent: "#d79c8f" },
+  { value: "sepia-dark", label: "Sepia Dark", hint: "Brown charcoal, rosewood accent", bg: "#2d241e", elevated: "#372e27", text: "#ede7df", accent: "#daa195" },
 ];
 
 export const SKINS: SkinInfo[] = [...LIGHT_SKINS, ...DARK_SKINS];

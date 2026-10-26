@@ -1,3 +1,4 @@
+import { isModalOpen } from "./utils/modalKeys";
 import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -17,6 +18,7 @@ import { SearchBar } from "./components/SearchBar";
 import { IconChart, IconChevronLeft, IconChevronRight, IconGear, IconHelp, IconImport, IconLandfill, IconMail, IconMenu, IconStop, IconX } from "./components/Icons";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { WhatsNew, openWhatsNew } from "./components/WhatsNew";
+import { UpdateNotice } from "./components/UpdateNotice";
 import { DialogProvider } from "./components/AppDialogs";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UnhandledErrors } from "./components/UnhandledErrors";
@@ -122,8 +124,7 @@ function usePrefetchLikelyRoutes() {
 // scan completes or a source's photo count changes - without it, the Library
 // only updated on react-query's refetch-on-window-focus, i.e. after switching
 // windows and back.
-// A library sync that stopped because too many files were missing at once
-// (the startup sync most of all - it runs with no screen to report to):
+// A library sync that stopped because too many files were missing at once:
 // a pill in the title bar until it is dismissed or a sync goes through.
 function MissingFilesWatcher() {
   const { data } = useQuery({
@@ -457,6 +458,8 @@ function NavHistoryButtons({ locked }: { locked: boolean }) {
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      // Not from under a dialog: it would navigate the page away beneath it.
+      if (isModalOpen()) return;
       const chord = isMac
         ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
         : e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey;
@@ -1221,6 +1224,7 @@ export default function App() {
 
             <OnboardingWizard />
             <WhatsNew />
+            <UpdateNotice />
           </div>
           </DialogProvider>
         </ImportSessionProvider>

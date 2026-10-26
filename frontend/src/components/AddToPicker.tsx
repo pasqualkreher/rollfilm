@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { Presence } from "./Presence";
 import { MOTION } from "../utils/usePresence";
-import { PickerDialog } from "./PickerDialog";
+import { PickerDialog, type PickerGroup } from "./PickerDialog";
 import { noteRecent, shortList } from "../utils/recents";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -10,7 +10,96 @@ import { useTasks } from "../state/tasks";
 import { plural } from "../utils/plural";
 import { useAppDialogs } from "./AppDialogs";
 import { Dropdown } from "./Dropdown";
-import { IconAlbum, IconCanvas, IconPlus } from "./Icons";
+import { IconAlbum, IconCanvas } from "./Icons";
+import { menuRowsToOptions, type MenuRow } from "./EditPicker";
+
+type AlbumLike = { id: string; name: string; created_at: string; image_count?: number };
+type CanvasLike = { id: string; name: string; created_at: string; updated_at?: string | null; image_count?: number };
+
+// The lists newest-first, so a library without any recents yet still shows
+// what was made last; the few used all the time come first once they have
+// been (utils/recents).
+function newestAlbums<T extends AlbumLike>(albums: T[]): T[] {
+  return [...albums].sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+function newestCanvases<T extends CanvasLike>(canvases: T[]): T[] {
+  return [...canvases].sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
+}
+
+// The bar's Add to… menu as rows (the right-click menu's "Add to" submenu
+// uses the same): "Albums", the albums used last, "New album…", "Canvas", the
+// canvases used last, "New canvas…", and one "More… (n)" for the rest of
+// both. A null list leaves its group out. Ids: "album:<id>", "canvas:<id>",
+// "new-album", "new-canvas", "more".
+export function addToRows(albums: AlbumLike[] | null, canvases: CanvasLike[] | null): MenuRow[] {
+  const rows: MenuRow[] = [];
+  let hidden = 0;
+  if (albums) {
+    const short = shortList("album", newestAlbums(albums), (a) => a.id);
+    hidden += short.hidden.length;
+    rows.push({ kind: "head", id: "h-albums", label: "Albums" });
+    for (const a of short.shown) rows.push({ kind: "item", id: `album:${a.id}`, label: a.name, icon: "album", search: a.name });
+    rows.push({ kind: "item", id: "new-album", label: "New album…", icon: "plus" });
+  }
+  if (canvases) {
+    const short = shortList("canvas", newestCanvases(canvases), (c) => c.id);
+    hidden += short.hidden.length;
+    rows.push({ kind: "head", id: "h-canvas", label: "Canvas" });
+    for (const c of short.shown) rows.push({ kind: "item", id: `canvas:${c.id}`, label: c.name, icon: "canvas", search: c.name });
+    rows.push({ kind: "item", id: "new-canvas", label: "New canvas…", icon: "plus" });
+  }
+  if (hidden > 0) {
+    rows.push({ kind: "sep", id: "sep-more", label: "" });
+    rows.push({ kind: "item", id: "more", label: `More… (${hidden})`, search: "more" });
+  }
+  return rows;
+}
+
+// The dialog behind "More…": every album and canvas with a search box. Ids as
+// in addToRows.
+export function addToPickerGroups(
+  albums: AlbumLike[] | null,
+  canvases: CanvasLike[] | null,
+  onNewAlbum: () => void,
+  onNewCanvas: () => void
+): PickerGroup[] {
+  const groups: PickerGroup[] = [];
+  if (albums) {
+    groups.push({
+      heading: "Albums",
+      items: newestAlbums(albums).map((a) => ({
+        id: `album:${a.id}`,
+        label: (
+          <>
+            <IconAlbum size={13} /> {a.name}
+          </>
+        ),
+        search: a.name,
+        count: a.image_count,
+      })),
+      newLabel: "New album…",
+      onNew: onNewAlbum,
+    });
+  }
+  if (canvases) {
+    groups.push({
+      heading: "Canvas",
+      items: newestCanvases(canvases).map((c) => ({
+        id: `canvas:${c.id}`,
+        label: (
+          <>
+            <IconCanvas size={13} /> {c.name}
+          </>
+        ),
+        search: c.name,
+        count: c.image_count,
+      })),
+      newLabel: "New canvas…",
+      onNew: onNewCanvas,
+    });
+  }
+  return groups;
+}
 
 export interface AddToResult {
   kind: "album" | "canvas";
@@ -156,56 +245,7 @@ export function AddToPicker({
     }
   }
 
-  // The lists newest-first, so a library without any recents yet still
-  // shows what was made last; the few used all the time come first once
-  // they have been (utils/recents).
-  const albumsNewest = [...(albums ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const canvasesNewest = [...(canvases ?? [])].sort((a, b) =>
-    (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at)
-  );
-  const albumsShort = shortList("album", albumsNewest, (a) => a.id);
-  const canvasesShort = shortList("canvas", canvasesNewest, (c) => c.id);
-  const hiddenCount = albumsShort.hidden.length + canvasesShort.hidden.length;
-
-  const options = [
-    { value: "h-albums", label: <span className="dropdown-group-label">Albums</span>, disabled: true },
-    ...albumsShort.shown.map((a) => ({
-      value: `album:${a.id}`,
-      label: (
-        <>
-          <IconAlbum size={13} /> {a.name}
-        </>
-      ),
-      search: a.name,
-    })),
-    {
-      value: "new-album",
-      label: (
-        <>
-          <IconPlus size={12} /> New album…
-        </>
-      ),
-    },
-    { value: "h-canvas", label: <span className="dropdown-group-label">Canvas</span>, disabled: true },
-    ...canvasesShort.shown.map((c) => ({
-      value: `canvas:${c.id}`,
-      label: (
-        <>
-          <IconCanvas size={13} /> {c.name}
-        </>
-      ),
-      search: c.name,
-    })),
-    {
-      value: "new-canvas",
-      label: (
-        <>
-          <IconPlus size={12} /> New canvas…
-        </>
-      ),
-    },
-    ...(hiddenCount > 0 ? [{ value: "more", label: `More… (${hiddenCount})`, search: "more" }] : []),
-  ];
+  const options = menuRowsToOptions(addToRows(albums ?? [], canvases ?? []));
 
   return (
     <div className="album-picker">
@@ -224,44 +264,18 @@ export function AddToPicker({
         {moreOpen && (
           <PickerDialog
             title="Add to album or canvas"
-            groups={[
-              {
-                heading: "Albums",
-                items: albumsNewest.map((a) => ({
-                  id: `album:${a.id}`,
-                  label: (
-                    <>
-                      <IconAlbum size={13} /> {a.name}
-                    </>
-                  ),
-                  search: a.name,
-                  count: a.image_count,
-                })),
-                newLabel: "New album…",
-                onNew: () => {
-                  setMoreOpen(false);
-                  void handle("new-album");
-                },
+            groups={addToPickerGroups(
+              albums ?? [],
+              canvases ?? [],
+              () => {
+                setMoreOpen(false);
+                void handle("new-album");
               },
-              {
-                heading: "Canvas",
-                items: canvasesNewest.map((c) => ({
-                  id: `canvas:${c.id}`,
-                  label: (
-                    <>
-                      <IconCanvas size={13} /> {c.name}
-                    </>
-                  ),
-                  search: c.name,
-                  count: c.image_count,
-                })),
-                newLabel: "New canvas…",
-                onNew: () => {
-                  setMoreOpen(false);
-                  void handle("new-canvas");
-                },
-              },
-            ]}
+              () => {
+                setMoreOpen(false);
+                void handle("new-canvas");
+              }
+            )}
             onPick={(v) => {
               setMoreOpen(false);
               void handle(v);

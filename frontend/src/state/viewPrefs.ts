@@ -35,12 +35,12 @@ const FILTER_PIN_KEY = "pm.filterPinned";
 // has a pin of its own: docked, it is one more row of the bar under the
 // general filters. Off until pinned - the row is long.
 const CAMERA_PIN_KEY = "pm.cameraPinned";
-// When on, the editor's "Save copy" button opens the options dialog (JPEG
-// quality slider + size cap) first. Off (default) is one click: the copy is
-// baked at full quality and full size, which is what a copy you keep in the
-// library should be - the dialog exists for the rarer case of deliberately
-// making a smaller or lighter copy.
-const ASK_SAVE_COPY_KEY = "pm.askSaveCopyOptions";
+// The Save copy dialog's last JPEG quality and long-edge cap, so the next copy
+// starts where the last one was made. Quality defaults to the maximum (100),
+// the size to the original (no cap, stored as nothing).
+const SAVE_COPY_QUALITY_KEY = "pm.saveCopyQuality";
+const SAVE_COPY_MAX_SIZE_KEY = "pm.saveCopyMaxSize";
+const DEFAULT_SAVE_COPY_QUALITY = 100;
 // Surround behind a photo shown big, in four steps from near-white to black.
 // The steps are named rather than numbered - a row of percentages beside the
 // zoom control's percentages reads as the same kind of setting, and nobody
@@ -148,8 +148,16 @@ function readCameraPinned(): boolean {
   return localStorage.getItem(CAMERA_PIN_KEY) === "1";
 }
 
-function readAskSaveCopyOptions(): boolean {
-  return localStorage.getItem(ASK_SAVE_COPY_KEY) === "1";
+export function readSaveCopyQuality(): number {
+  const n = Number(localStorage.getItem(SAVE_COPY_QUALITY_KEY));
+  return Number.isFinite(n) && n >= 60 && n <= 100 ? Math.round(n) : DEFAULT_SAVE_COPY_QUALITY;
+}
+
+export function readSaveCopyMaxSize(): number | null {
+  const raw = localStorage.getItem(SAVE_COPY_MAX_SIZE_KEY);
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
 }
 
 function readDetailPanel(): boolean {
@@ -241,8 +249,10 @@ export function setCameraPinned(on: boolean) {
   emit();
 }
 
-export function setAskSaveCopyOptions(on: boolean) {
-  localStorage.setItem(ASK_SAVE_COPY_KEY, on ? "1" : "0");
+export function setSaveCopyOptions(quality: number, maxSize: number | null) {
+  localStorage.setItem(SAVE_COPY_QUALITY_KEY, String(quality));
+  if (maxSize === null) localStorage.removeItem(SAVE_COPY_MAX_SIZE_KEY);
+  else localStorage.setItem(SAVE_COPY_MAX_SIZE_KEY, String(maxSize));
   emit();
 }
 
@@ -291,8 +301,12 @@ export function useCameraPinned(): boolean {
   return useSyncExternalStore(subscribe, readCameraPinned, () => false);
 }
 
-export function useAskSaveCopyOptions(): boolean {
-  return useSyncExternalStore(subscribe, readAskSaveCopyOptions, () => false);
+export function useSaveCopyQuality(): number {
+  return useSyncExternalStore(subscribe, readSaveCopyQuality, () => DEFAULT_SAVE_COPY_QUALITY);
+}
+
+export function useSaveCopyMaxSize(): number | null {
+  return useSyncExternalStore(subscribe, readSaveCopyMaxSize, () => null);
 }
 
 export function useDetailPanelOpen(): boolean {
@@ -325,4 +339,62 @@ export function collapsePairs(images: ImageOut[]): ImageOut[] {
     (img) => img.file_type,
     (img) => img.paired_image_id
   );
+}
+
+// --- Canvas export: photo resolution and JPEG quality ------------------------
+// The Export chip's "Photos" block. dpi null = Original (full resolution,
+// lossless as before); otherwise the photos go out as JPEG at that print
+// density and quality.
+const CANVAS_EXPORT_DPI_KEY = "pm.canvasExportDpi";
+const CANVAS_EXPORT_QUALITY_KEY = "pm.canvasExportQuality";
+export const CANVAS_EXPORT_DPIS = [300, 200, 150] as const;
+const DEFAULT_CANVAS_EXPORT_DPI = 300;
+const DEFAULT_CANVAS_EXPORT_QUALITY = 92;
+
+function readCanvasExportDpi(): number | null {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(CANVAS_EXPORT_DPI_KEY);
+  } catch {
+    return DEFAULT_CANVAS_EXPORT_DPI;
+  }
+  if (raw === "original") return null;
+  const n = Number(raw);
+  return (CANVAS_EXPORT_DPIS as readonly number[]).includes(n) ? n : DEFAULT_CANVAS_EXPORT_DPI;
+}
+
+function readCanvasExportQuality(): number {
+  let n = NaN;
+  try {
+    n = Number(localStorage.getItem(CANVAS_EXPORT_QUALITY_KEY));
+  } catch {
+    /* ignore */
+  }
+  return Number.isFinite(n) && n >= 60 && n <= 100 ? Math.round(n) : DEFAULT_CANVAS_EXPORT_QUALITY;
+}
+
+export function setCanvasExportDpi(dpi: number | null) {
+  try {
+    localStorage.setItem(CANVAS_EXPORT_DPI_KEY, dpi === null ? "original" : String(dpi));
+  } catch {
+    /* ignore */
+  }
+  emit();
+}
+
+export function setCanvasExportQuality(quality: number) {
+  try {
+    localStorage.setItem(CANVAS_EXPORT_QUALITY_KEY, String(Math.round(quality)));
+  } catch {
+    /* ignore */
+  }
+  emit();
+}
+
+export function useCanvasExportDpi(): number | null {
+  return useSyncExternalStore(subscribe, readCanvasExportDpi, () => DEFAULT_CANVAS_EXPORT_DPI);
+}
+
+export function useCanvasExportQuality(): number {
+  return useSyncExternalStore(subscribe, readCanvasExportQuality, () => DEFAULT_CANVAS_EXPORT_QUALITY);
 }

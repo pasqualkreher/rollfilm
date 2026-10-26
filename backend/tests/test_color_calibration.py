@@ -190,7 +190,7 @@ def test_whole_band_darkens_and_desaturates_every_leaf_alike():
 
 
 def test_only_process_6_and_up_render_calibration_the_new_way():
-    assert develop.CURRENT_PROCESS == "7"
+    assert develop.CURRENT_PROCESS == "8"
     assert develop.normalize({"process": "7"})["process"] == "7"
     rng = np.random.default_rng(5)
     lin = (rng.random((48, 64, 3), dtype=np.float32) * 0.5 + 0.05).astype(np.float32)
@@ -205,6 +205,8 @@ def test_only_process_6_and_up_render_calibration_the_new_way():
     assert np.abs(render("5", green_hue=120) - render("6", green_hue=120)).max() > 4
     # 7 changes only how Fujifilm's cubes are fed: without a look it is 6.
     np.testing.assert_array_equal(render("6", green_hue=120), render("7", green_hue=120))
+    # 8 changes only the finishing passes: without grain, clarity or mist it is 7.
+    np.testing.assert_array_equal(render("7", green_hue=120), render("8", green_hue=120))
 
 
 def test_whole_band_does_not_paint_noise_onto_a_colour_at_its_edge():

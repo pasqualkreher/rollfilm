@@ -37,8 +37,32 @@ def test_an_edit_without_the_key_is_on_the_original_process():
 def test_every_version_after_the_first_builds_on_v2():
     from app.services import develop_v2
 
-    assert all(develop_v2.is_v2({"process": p}) for p in ("2", "3", "4", "5", "6", "7"))
+    assert all(develop_v2.is_v2({"process": p}) for p in ("2", "3", "4", "5", "6", "7", "8"))
     assert not develop_v2.is_v2({"process": "1"})
+
+
+def test_process_8_keeps_everything_before_it_and_adds_the_measured_finishing():
+    from app.services import develop_v2
+
+    assert develop.CURRENT_PROCESS == "8"
+    assert develop.normalize({"process": "8"})["process"] == "8"
+    assert develop_v2.calibration_moves_whole_bands({"process": "8"})
+    assert develop_v2.measured_film_sims({"process": "8"})
+    assert develop_v2.effects_v8({"process": "8"})
+    for p in ("1", "2", "5", "6", "7"):
+        assert not develop_v2.effects_v8({"process": p}), p
+    # An edit without the key is on "1"; junk is not on "8".
+    assert not develop_v2.effects_v8({})
+    assert not develop_v2.effects_v8({"process": None})
+    assert not develop_v2.effects_v8({"process": "latest"})
+    # A look chosen on "7" is a plain move to "8", Calibration set or not.
+    assert develop.process_for_current_looks({"process": "7"}) == "8"
+    assert develop.process_for_current_looks(
+        {"process": "7", "color_calibration": {"red_hue": 20}}
+    ) == "8"
+    assert develop.process_for_current_looks(
+        {"process": "5", "color_calibration": {"red_hue": 20}}
+    ) == "5"
 
 
 def test_the_process_alone_never_makes_a_photo_edited():

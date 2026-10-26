@@ -133,11 +133,11 @@
 
 /* ---- Skins ---------------------------------------------------------------
    Eight pairs, each a light and a dark cut of the same idea. The first three
-   are colourless so only the photo carries colour; Cyanotype and Negative
-   (after a cyanotype print and the orange base of colour negative film)
-   carry one restrained colour, added on request; Graphite (grey to black),
-   Platinum (greige) and Sepia (brown) followed on 2026-10-18, tinted
-   throughout but kept to greys and browns:
+   are colourless so only the photo carries colour. Cyanotype, Negative and
+   Sepia (after a cyanotype print, the orange base of colour negative film
+   and a sepia print) are tints since 2026-10-26: near-grey surfaces with a
+   cast, the colour carried by one muted accent, the way the pro editors do
+   it. Graphite (grey to black) and Platinum (greige) stay in greys and browns:
 
    Stone    - muted greys: surfaces off-white rather than white, type dark grey
               rather than black, the accent a slate grey. The default pair.
@@ -238,76 +238,72 @@
 }
 
 /* Cyanotype - the one blue skin, after the Prussian blue of a cyanotype
-   print: blue-grey surfaces and a deep blue accent by day. Added on request
-   (2026-10-15) next to the colourless pairs; the surfaces stay pale so the
-   photo still carries the strongest colour. */
+   print. Since 2026-10-26 a tint only: near-grey surfaces with a cool cast,
+   the blue carried by the accent (muted so it never shouts next to a photo). */
 :root[data-theme="cyanotype"] {
-  --bg: #e6ebf2;
-  --bg-elevated: #f4f7fb;
+  --bg: #e5ecf5;
+  --bg-elevated: #f3f7fc;
   --hover: #dbe2ec;
-  --border: #cbd4e1;
-  --text: #1d2738;
-  --text-muted: #5f6b80;
-  --accent: #1f4f96;
+  --border: #cad2dd;
+  --text: #212935;
+  --text-muted: #677383;
+  --accent: #395987;
   --accent-contrast: #ffffff;
-  --accent-soft: rgba(31, 79, 150, 0.12);
+  --accent-soft: rgba(57, 89, 135, 0.13);
   --danger: #b34a3e;
   color-scheme: light;
 }
 
-/* Cyanotype Dark - deep blue at night, lifted well clear of navy-black, with
-   a soft sky-blue accent. */
+/* Cyanotype Dark - a cool charcoal rather than navy, with a soft sky-blue
+   accent. */
 :root[data-theme="cyanotype-dark"] {
-  --bg: #1f2a3c;
-  --bg-elevated: #27344a;
-  --hover: #2f3d55;
-  --border: #3b4b66;
-  --text: #e6ebf3;
-  --text-muted: #95a3b9;
-  --accent: #82a8e2;
-  --accent-contrast: #15213a;
-  --accent-soft: rgba(130, 168, 226, 0.18);
+  --bg: #232932;
+  --bg-elevated: #2d333c;
+  --hover: #373e47;
+  --border: #464e58;
+  --text: #e5e8ed;
+  --text-muted: #979fab;
+  --accent: #92afde;
+  --accent-contrast: #121b28;
+  --accent-soft: rgba(146, 175, 222, 0.18);
   --danger: #e27466;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
   --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.52);
   color-scheme: dark;
 }
 
-/* Negative - the orange-brown mask of colour negative film (C-41 base): amber
-   surfaces, dark brown type and a burnt sienna accent. Reworked 2026-10-18
-   from pale apricot, which read as beige rather than film. Danger is a
-   crimson, so a warning never reads as just another accent. */
+/* Negative - after the orange mask of colour negative film (C-41 base).
+   Since 2026-10-26 a tint only: warm near-grey surfaces with the mask's
+   cast, a burnt sienna accent carrying the colour. Danger stays crimson so a
+   warning never reads as just another accent. */
 :root[data-theme="negative"] {
-  --bg: #e6c09b;
-  --bg-elevated: #f1d6ba;
-  --hover: #dcb089;
-  --border: #cc9a6e;
-  --text: #2f1a0e;
-  --text-muted: #6b4327;
-  --accent: #96421a;
+  --bg: #f3e9e0;
+  --bg-elevated: #fcf6f0;
+  --hover: #ebdfd4;
+  --border: #dccec1;
+  --text: #2f241e;
+  --text-muted: #7c6354;
+  --accent: #8d5136;
   --accent-contrast: #ffffff;
-  --accent-soft: rgba(150, 66, 26, 0.15);
+  --accent-soft: rgba(141, 81, 54, 0.14);
   --danger: #98192c;
-  --shadow-sm: 0 1px 2px rgba(70, 30, 5, 0.12);
-  --shadow-pop: 0 8px 24px rgba(70, 30, 5, 0.24);
   color-scheme: light;
 }
 
-/* Negative Dark - a strip of negative held to the light: saturated brown with
-   the mask's orange as the accent, lifted well clear of black. */
+/* Negative Dark - a warm charcoal with the mask's orange as the accent. */
 :root[data-theme="negative-dark"] {
-  --bg: #4a2d1a;
-  --bg-elevated: #573521;
-  --hover: #643e27;
-  --border: #7a4c2e;
-  --text: #fbe8d4;
-  --text-muted: #d2a682;
-  --accent: #f39a52;
-  --accent-contrast: #2a1508;
-  --accent-soft: rgba(243, 154, 82, 0.2);
-  --danger: #ff8d8d;
-  --shadow-sm: 0 1px 2px rgba(20, 8, 0, 0.36);
-  --shadow-pop: 0 14px 36px rgba(20, 8, 0, 0.52);
+  --bg: #312620;
+  --bg-elevated: #3b3029;
+  --hover: #463b33;
+  --border: #584a41;
+  --text: #ede7df;
+  --text-muted: #ac9b8b;
+  --accent: #e1a170;
+  --accent-contrast: #25170d;
+  --accent-soft: rgba(225, 161, 112, 0.2);
+  --danger: #ec7e7a;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.52);
   color-scheme: dark;
 }
 
@@ -383,39 +379,37 @@
   color-scheme: dark;
 }
 
-/* Sepia - a sepia-toned print: brown-beige surfaces, deep brown type and an
-   oxblood accent. Browner and less orange than Negative. Replaced the
-   mauve Selenium on 2026-10-18 (asked for grey/brown/black only). */
+/* Sepia - after a sepia-toned print. Since 2026-10-26 a tint only: warm
+   near-grey surfaces with a brown cast, deep brown type and an oxblood
+   accent carrying the colour. Browner than Negative, which leans orange. */
 :root[data-theme="sepia"] {
-  --bg: #dccdb9;
-  --bg-elevated: #ebe0d2;
-  --hover: #d0bfa8;
-  --border: #bfa98d;
-  --text: #2b1e12;
-  --text-muted: #5e4832;
-  --accent: #7a3b32;
+  --bg: #eee7dc;
+  --bg-elevated: #f7f3ec;
+  --hover: #e6dcd0;
+  --border: #d7ccbd;
+  --text: #2e241d;
+  --text-muted: #796456;
+  --accent: #79443c;
   --accent-contrast: #ffffff;
-  --accent-soft: rgba(122, 59, 50, 0.14);
+  --accent-soft: rgba(121, 68, 60, 0.14);
   --danger: #9e2a30;
-  --shadow-sm: 0 1px 2px rgba(50, 30, 10, 0.1);
-  --shadow-pop: 0 8px 24px rgba(50, 30, 10, 0.22);
   color-scheme: light;
 }
 
-/* Sepia Dark - dark walnut brown with a dusty rose-brown accent. */
+/* Sepia Dark - a warm brown charcoal with a dusty rosewood accent. */
 :root[data-theme="sepia-dark"] {
-  --bg: #2e2219;
-  --bg-elevated: #3a2b20;
-  --hover: #453328;
-  --border: #574131;
-  --text: #f1e5d6;
-  --text-muted: #b8a08a;
-  --accent: #d79c8f;
-  --accent-contrast: #2a1410;
-  --accent-soft: rgba(215, 156, 143, 0.18);
+  --bg: #2d241e;
+  --bg-elevated: #372e27;
+  --hover: #423831;
+  --border: #54483f;
+  --text: #ede7df;
+  --text-muted: #ab9c8b;
+  --accent: #daa195;
+  --accent-contrast: #26160e;
+  --accent-soft: rgba(218, 161, 149, 0.18);
   --danger: #ec7e7a;
-  --shadow-sm: 0 1px 2px rgba(10, 5, 0, 0.38);
-  --shadow-pop: 0 14px 36px rgba(10, 5, 0, 0.54);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.52);
   color-scheme: dark;
 }
 
@@ -702,7 +696,19 @@ summary.whats-new-version-title {
 .whats-new-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   padding: 14px 22px 18px;
+}
+
+/* Update notice (components/UpdateNotice.tsx): its one line, and the download
+   percent in place of the buttons - boxed like a .btn so nothing moves. */
+.update-notice-line {
+  margin: 0;
+  padding: 5px 0;
+  border: 1px solid transparent;
+  line-height: normal;
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
 }
 
 .about-modal-site {
@@ -6943,11 +6949,11 @@ input.dropdown-search {
 .detail-photo {
   transform-origin: center center;
   /* will-change is set inline by useImageZoomPan, only while zooming/panning. */
-  /* Only opacity eases by default (the soft fade on load / when paging through
-     photos, driven by ImageDetail) - deliberately NOT transform, so wheel-zoom
-     and pan still track the input directly with no lag. A gentle ease-out over
-     ~0.3s reads as a soft appearance rather than a hard pop-in, while staying
-     short enough that arrowing through a set still feels responsive. */
+  /* Only opacity eases by default (the soft fade on the first open, driven by
+     ImageDetail; paging swaps decoded pictures in place and never changes
+     it) - deliberately NOT transform, so wheel-zoom and pan still track the
+     input directly with no lag. A gentle ease-out over ~0.3s reads as a soft
+     appearance rather than a hard pop-in. */
   transition: opacity 0.32s ease-out;
 }
 
@@ -11440,9 +11446,10 @@ button.stats-col:disabled {
   position: relative;
 }
 
-/* "Loading…" where the photo goes, while the next photo's row or pixels are
-   still on their way (fast paging); the previous photo stays underneath,
-   dimmed. Never catches the pointer - the nav arrows and zoom keep working. */
+/* "Loading…" where the photo goes: on the first open, and when a step has
+   waited a while for the next photo's row or pixels (ImageDetail's
+   SLOW_SWAP_MS); the previous photo stays underneath at full strength.
+   Never catches the pointer - the nav arrows and zoom keep working. */
 .lightbox-loading-stage {
   position: absolute;
   inset: 0;

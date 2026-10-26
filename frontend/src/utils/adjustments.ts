@@ -402,9 +402,12 @@ export type FilmSim =
 // by the same amount, where before a colour off the centre of the band (a
 // leaf under Green) got part of it; "7" feeds Fujifilm's film simulation
 // cubes the scene colours they were made for, so greens no longer come out
-// yellowish and flat against the camera's own rendering.
-export type ProcessVersion = "1" | "2" | "3" | "4" | "5" | "6" | "7";
-export const CURRENT_PROCESS: ProcessVersion = "7";
+// yellowish and flat against the camera's own rendering; "8" renders the
+// finishing passes as measured against the camera - grain fitted to
+// Fujifilm's Grain Effect, clarity with a broad band for midtone depth, and
+// a mist that blooms around light sources while the blacks stay deep.
+export type ProcessVersion = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8";
+export const CURRENT_PROCESS: ProcessVersion = "8";
 // The last process on which Calibration renders the old way.
 const LAST_BELL_CALIBRATION: ProcessVersion = "5";
 // The last process on which the looks render from the unmixed scene; the one
@@ -884,7 +887,9 @@ export const FILM_SIM_ORDER: FilmSim[] = FILM_SIM_SECTIONS.flatMap((section) => 
 // way - that renders differently from "6" on, and the move must change
 // nothing but the look.
 export function processForCurrentLooks(a: Adjustments): ProcessVersion {
-  if (calibrationIsNeutral(a) || a.process === LAST_UNMIXED_LOOK || a.process === CURRENT_PROCESS) {
+  // Every process after LAST_BELL_CALIBRATION renders Calibration the same
+  // way, so from any of them ("6", "7", ...) the move is a plain update.
+  if (calibrationIsNeutral(a) || Number(a.process) > Number(LAST_BELL_CALIBRATION)) {
     return CURRENT_PROCESS;
   }
   return LAST_BELL_CALIBRATION;

@@ -1398,8 +1398,7 @@ class BackgroundActivityOut(BaseModel):
     export_jobs_running: int = 0
     # A sync, thumbnail rebuild or date repair running in Settings.
     maintenance_active: bool = False
-    # The library sync alone - also the one every start runs by itself, which
-    # the app's task dock shows (state/taskSources BackgroundSource).
+    # The library sync alone (Settings' "Sync database to library").
     sync_active: bool = False
     # Of derivatives_pending, the jobs that are no bulk edit's re-render (an
     # import's, the missing ones a sync queued) - the dock's "Thumbnails" chip.

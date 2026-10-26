@@ -208,11 +208,65 @@ def configure_api_token() -> None:
     security.lock_with_random_token()
 
 
+def watch_parent() -> None:
+    """Leave when the desktop shell that spawned this backend is gone.
+
+    The shell stops the backend on every quit it sees - but a Force Quit, a
+    kill -9 or a crash of the shell runs none of its handlers, and the
+    backend (its own process group, so a signal reaches its helpers) stayed
+    behind holding the port and the database; the next launch then started a
+    second backend against the same library. The shell passes its pid
+    (PM_PARENT_PID); stdin cannot serve, it is closed right after the token.
+
+    POSIX: the parent pid changes (to launchd's, to init's) the moment the
+    parent is gone. Windows: a handle on the parent, waited on. Either way a
+    SIGTERM to ourselves first (uvicorn's graceful stop, see main), and a hard
+    exit if that has not ended the process in a few seconds."""
+    parent = os.environ.get("PM_PARENT_PID")
+    try:
+        parent_pid = int(parent or "")
+    except ValueError:
+        return
+    import signal
+    import threading
+    import time
+
+    def leave() -> None:
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except OSError:
+            pass
+        time.sleep(8)
+        os._exit(0)
+
+    def posix() -> None:
+        while os.getppid() == parent_pid:
+            time.sleep(2)
+        print("[main] the desktop shell is gone - stopping", flush=True)
+        leave()
+
+    def windows() -> None:
+        import ctypes
+
+        synchronize = 0x00100000
+        handle = ctypes.windll.kernel32.OpenProcess(synchronize, False, parent_pid)
+        if not handle:
+            return
+        ctypes.windll.kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)
+        print("[main] the desktop shell is gone - stopping", flush=True)
+        leave()
+
+    threading.Thread(
+        target=windows if os.name == "nt" else posix, name="parent-watch", daemon=True
+    ).start()
+
+
 def main() -> None:
     # Make the backend package importable when frozen or launched from elsewhere.
     if str(BASE_DIR) not in sys.path:
         sys.path.insert(0, str(BASE_DIR))
 
+    watch_parent()
     cap_native_thread_pools()
     use_bundled_ca_certificates()
     raise_open_files_limit()

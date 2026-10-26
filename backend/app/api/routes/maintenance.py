@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -39,6 +40,8 @@ from app.services.maintenance import (
 from app.api.routes.images import export_jobs_running
 from app.services import db_snapshots
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
 
@@ -49,13 +52,26 @@ def _require_delete_confirmation(confirmation: str) -> None:
 
 @router.post("/sync", response_model=schemas.SyncResult)
 def sync_library(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    timing: dict = {}
     try:
-        return sync_db_with_library(db, current_user.id)
+        result = sync_db_with_library(db, current_user.id, timing=timing)
     except RuntimeError as exc:
         # Library root unreachable (external drive asleep/unplugged), or a
         # sync already running - refuse with a clear message instead of
         # wiping the catalog or a bare 500.
         raise HTTPException(status_code=409, detail=str(exc))
+    # One line per sync, phase by phase: when the button feels slow, the log
+    # says which phase it was (the walk, following renamed files, the cache).
+    logger.info(
+        "Library sync: %s; %d missing (%d in all), %d recovered, %d followed, %d untracked, "
+        "%d orphan folders removed, %d thumbnails queued%s",
+        ", ".join(f"{key} {secs}s" for key, secs in timing.items()) or "no phases",
+        result["missing_files"], result["missing_total"], result["recovered_files"],
+        result["renamed_files_followed"], result["untracked_files_found"],
+        result["orphan_thumbnails_removed"], result["thumbnails_queued"],
+        " (stopped)" if result["cancelled"] else "",
+    )
+    return result
 
 
 @router.get("/missing", response_model=schemas.MissingFilesOut)

@@ -1,3 +1,4 @@
+import { isModalOpen } from "../utils/modalKeys";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -2709,6 +2710,9 @@ export function CanvasEditor({
       const target = event.target as HTMLElement | null;
       // Never steal keys from a text box - including the canvas's own.
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      // Nor from a dialog over the canvas: Backspace there must not remove
+      // the selected frames, nor the arrows nudge them.
+      if (isModalOpen()) return;
       // F: focus mode. Ahead of the docked editor's claim on the keyboard -
       // it has no F of its own, and focus is the whole canvas's business.
       if (!event.metaKey && !event.ctrlKey && !event.altKey && (event.key === "f" || event.key === "F")) {

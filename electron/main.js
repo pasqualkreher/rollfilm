@@ -33,7 +33,7 @@ const {
 } = require("electron");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
-const { initAutoUpdate } = require("./updater");
+const { initAutoUpdate, updateDownloadState } = require("./updater");
 const { spawn, spawnSync } = require("child_process");
 const net = require("net");
 const http = require("http");
@@ -298,17 +298,32 @@ function configPath() {
   return path.join(app.getPath("userData"), "app-config.json");
 }
 
+// The last config that parsed. A read that fails (a write cut short by a
+// crash, a transient EBUSY on the folder) must not turn into an empty config:
+// every write is `{...readConfig(), key}`, and an empty one would drop the
+// library root and send the next start through onboarding.
+let lastGoodConfig = null;
+
 function readConfig() {
   try {
-    return JSON.parse(fs.readFileSync(configPath(), "utf8"));
-  } catch {
+    lastGoodConfig = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    return lastGoodConfig;
+  } catch (err) {
+    if (err && err.code === "ENOENT") return lastGoodConfig || {};
+    if (lastGoodConfig) return lastGoodConfig;
     return {};
   }
 }
 
 function writeConfig(cfg) {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
-  fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2));
+  // Written beside and renamed over: the file is never half-written on disk,
+  // whatever happens between the two (it is rewritten on every move and
+  // resize of the window).
+  const tmp = `${configPath()}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
+  fs.renameSync(tmp, configPath());
+  lastGoodConfig = cfg;
 }
 
 // Runs fn once things have been quiet for `ms` - the window's resize and move
@@ -392,9 +407,11 @@ async function ensureLibraryRoot() {
 
   const missing = Boolean(cfg.libraryRoot); // saved but no longer present
   // The splash would sit in front of these dialogs (it may even appear only
-  // now, on its ready-to-show), so it goes away while they are up and comes
-  // back once a folder is chosen.
-  closeSplash();
+  // now, on its ready-to-show), so it is hidden while they are up and comes
+  // back once a folder is chosen. Hidden, not closed: the splash is the only
+  // window at this point, and closing it would fire window-all-closed and quit
+  // the app under the dialog.
+  hideSplash();
   while (true) {
     const intro = await dialog.showMessageBox({
       type: "info",
@@ -421,7 +438,7 @@ async function ensureLibraryRoot() {
 
     const chosen = picked.filePaths[0];
     writeConfig({ ...readConfig(), libraryRoot: chosen });
-    createSplash();
+    showSplash();
     return chosen;
   }
 }
@@ -735,7 +752,11 @@ function createSplash() {
     backgroundColor: windowBackground(),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splashWindow.once("ready-to-show", () => splashWindow?.show());
+  // A startup dialog may be up by the time the page is ready (hideSplash); then
+  // showSplash brings it back later instead.
+  splashWindow.once("ready-to-show", () => {
+    if (!splashHidden) splashWindow?.show();
+  });
   // The splash shows the app version next to the logo; loadFile's query is the
   // one channel available before the page has loaded.
   splashWindow.loadFile(path.join(__dirname, "splash.html"), {
@@ -752,7 +773,25 @@ function setSplashStatus(text) {
   splashWindow.webContents.executeJavaScript(js).catch(() => {});
 }
 
+// Startup dialogs (missing library, slow backend) run while the splash is the
+// only window. Destroying it there would fire window-all-closed and quit the
+// app, so those dialogs hide the splash and show it again afterwards.
+let splashHidden = false;
+
+function hideSplash() {
+  splashHidden = true;
+  if (splashWindow && splashWindow.isVisible()) splashWindow.hide();
+}
+
+function showSplash() {
+  splashHidden = false;
+  if (!splashWindow) return;
+  // Not yet loaded: the ready-to-show handler shows it once the page is up.
+  if (!splashWindow.webContents.isLoading()) splashWindow.show();
+}
+
 function closeSplash() {
+  splashHidden = false;
   if (splashWindow) {
     splashWindow.destroy();
     splashWindow = null;
@@ -821,6 +860,9 @@ function resolveBackendCommand() {
     PM_HOST: "127.0.0.1",
     // The token itself follows on stdin (startBackend); this only says to read it.
     PM_API_TOKEN_STDIN: "1",
+    // run_server.py watches this pid and leaves when it is gone - a Force
+    // Quit or a crash of the shell runs none of stopBackend's callers.
+    PM_PARENT_PID: String(process.pid),
     // Model cache and logs are shared/disposable and default under userData...
     PM_DATA_DIR: app.getPath("userData"),
     // ...while the database, thumbnails and import staging live inside the
@@ -1024,6 +1066,9 @@ let backgroundWaitTimer = null;
 const BACKGROUND_POLL_MS = 5000;
 const BACKGROUND_STALL_POLLS = 36;
 const BACKGROUND_FINISH_MAX_MS = 15 * 60 * 1000;
+// An update download on a slow line can take longer than that; it ends by
+// itself (done, or given up after its retries), so the hidden app may wait.
+const BACKGROUND_DOWNLOAD_MAX_MS = 90 * 60 * 1000;
 
 function fetchImmichActivity() {
   return new Promise((resolve) => {
@@ -1100,22 +1145,25 @@ async function outstandingWork() {
   const copies = background ? background.copy_jobs_running || 0 : 0;
   const exports = background ? background.export_jobs_running || 0 : 0;
   const maintenance = Boolean(background && background.maintenance_active);
+  // An update being downloaded (updater.js): quitting throws it away.
+  const download = updateDownloadState();
   const parts = [];
   if (uploads > 0) parts.push(`${uploads} photo${uploads === 1 ? "" : "s"} uploading to Immich`);
   if (merging) parts.push("a library being imported");
   if (copies > 0) parts.push(`${copies} ${copies === 1 ? "copy" : "copies"} being saved`);
   if (exports > 0) parts.push(`${exports} export${exports === 1 ? "" : "s"} being written`);
   if (maintenance) parts.push("a library maintenance run");
+  if (download) parts.push(`the update download (${download.percent} %)`);
   for (const label of renderer) parts.push(label.replace(/…$/, "").toLowerCase());
   if (derivatives > 0) parts.push(`${derivatives} thumbnail${derivatives === 1 ? "" : "s"} to render`);
   // The search index catching up is not a reason to wait: it resumes on the
   // next start, and it once held "finish in background" open for hours.
   return {
-    immich, uploads, derivatives, embeddings, merging, copies, exports, maintenance, renderer, parts,
+    immich, uploads, derivatives, embeddings, merging, copies, exports, maintenance, renderer, download, parts,
     busy: parts.length > 0,
     // What a poll compares against the last one to see whether anything
     // moves: a merge has no count, it is bounded by the deadline alone.
-    counts: `${uploads}/${derivatives}/${copies}/${exports}/${renderer.length}`,
+    counts: `${uploads}/${derivatives}/${copies}/${exports}/${renderer.length}/${download ? download.transferred : "-"}`,
   };
 }
 
@@ -1126,19 +1174,40 @@ function cancelBackgroundWait() {
   }
 }
 
+// Whether the quit check is up (its dialog or the work query): a second Cmd-Q
+// meanwhile is answered by the first.
+let closeCheckRunning = false;
+
 async function confirmCloseWithSyncCheck() {
   if (!mainWindow) return;
-  // Already in "finish in background" mode (window hidden): a second quit
-  // request (Cmd-Q on the dock icon) means "quit for real, now" - never show
-  // a dialog that would attach to an invisible window.
-  if (!mainWindow.isVisible()) {
+  // Already in "finish in background" mode: a second quit request (Cmd-Q on
+  // the dock icon) means "quit for real, now" - never show a dialog that
+  // would attach to an invisible window. Only that mode, though: a window
+  // put away with Cmd-W (or minimised) is hidden too, and a quit from there
+  // gets the same check as any other, with the window brought back for it.
+  if (backgroundWaitTimer) {
     cancelBackgroundWait();
+    updateDownloadState()?.cancel();
     forceClose = true;
     mainWindow.close();
     return;
   }
+  if (closeCheckRunning) return;
+  closeCheckRunning = true;
+  try {
+    await confirmCloseWithSyncCheckInner();
+  } finally {
+    closeCheckRunning = false;
+  }
+}
+
+async function confirmCloseWithSyncCheckInner() {
   const work = await outstandingWork();
   if (!mainWindow) return;
+  if (work.busy) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+  }
   if (!work.busy) {
     forceClose = true;
     mainWindow.close();
@@ -1158,6 +1227,7 @@ async function confirmCloseWithSyncCheck() {
   // A bulk action stopped half-way stays half done; a save cut off leaves
   // the old thumbnail (the values themselves are on the server already).
   if (work.renderer.length > 0) lost.push("the rest of what the window is doing");
+  if (work.download) lost.push("the update download");
   const { response } = await dialog.showMessageBox(mainWindow, {
     type: "info",
     title: "Rollfilm is still working",
@@ -1173,6 +1243,7 @@ async function confirmCloseWithSyncCheck() {
 
   if (response === 2 || !mainWindow) return;
   if (response === 1) {
+    work.download?.cancel();
     forceClose = true;
     mainWindow.close();
     return;
@@ -1190,10 +1261,13 @@ async function confirmCloseWithSyncCheck() {
   let stillPolls = 0;
   backgroundWaitTimer = setInterval(async () => {
     const current = await outstandingWork();
+    // Called off while the query ran (a click on the Dock icon brought the
+    // window back): this poll's answer is nobody's business anymore.
+    if (!backgroundWaitTimer) return;
     stillPolls = current.counts === lastCounts ? stillPolls + 1 : 0;
     lastCounts = current.counts;
     const stalled = !current.merging && stillPolls >= BACKGROUND_STALL_POLLS;
-    const overdue = Date.now() - startedAt > BACKGROUND_FINISH_MAX_MS;
+    const overdue = Date.now() - startedAt > (current.download ? BACKGROUND_DOWNLOAD_MAX_MS : BACKGROUND_FINISH_MAX_MS);
     // A backend that stopped answering can't be working anymore - quit too
     // (outstandingWork reads that as nothing outstanding).
     if (!current.busy || stalled || overdue) {
@@ -1203,6 +1277,7 @@ async function confirmCloseWithSyncCheck() {
         );
       }
       cancelBackgroundWait();
+      current.download?.cancel();
       forceClose = true;
       if (mainWindow) mainWindow.close();
       else app.quit();
@@ -2172,9 +2247,25 @@ ipcMain.handle("pm:change-library-root", async () => {
   });
   if (confirm.response !== 0) return { changed: false };
 
-  writeConfig({ ...readConfig(), libraryRoot: chosen });
-  app.relaunch();
-  app.quit();
+  // Through the quit check like any other quit (running copies or exports,
+  // an update download): the new folder is written and the relaunch armed
+  // only once the quit really happens (see will-quit). "Keep app open" then
+  // leaves the config and the next quit as they were - before, both were
+  // already set, and a later ordinary quit restarted the app into the
+  // other library.
+  pendingLibraryRoot = chosen;
+  await confirmCloseWithSyncCheck();
+  const keptOpen =
+    pendingLibraryRoot === chosen &&
+    !forceClose &&
+    !backgroundWaitTimer &&
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible();
+  if (keptOpen) {
+    pendingLibraryRoot = null;
+    return { changed: false };
+  }
   return { changed: true, path: chosen };
 });
 
@@ -2268,7 +2359,7 @@ async function startBackendAndWait(isFirstStart) {
   // waiting instead of giving up — and point at the log file either way.
   let result = await waitForHealth();
   while (result !== "ok") {
-    closeSplash();
+    hideSplash();
     if (result === "died") {
       const choice = await dialog.showMessageBox({
         type: "error",
@@ -2296,6 +2387,7 @@ async function startBackendAndWait(isFirstStart) {
       noLink: true,
     });
     if (choice.response !== 0) return false;
+    showSplash();
     result = await waitForHealth(120000);
   }
   console.log("[main] backend healthy");
@@ -2405,7 +2497,15 @@ app.on("window-all-closed", () => {
 // the stop runs, then quit goes through. Without the wait the shell exited
 // while the backend was still shutting down and the backend stayed behind.
 let backendStopDone = false;
+// A library folder chosen in Settings, taken up by the restart that the quit
+// in progress turns into (pm:change-library-root).
+let pendingLibraryRoot = null;
 app.on("will-quit", (event) => {
+  if (pendingLibraryRoot) {
+    writeConfig({ ...readConfig(), libraryRoot: pendingLibraryRoot });
+    pendingLibraryRoot = null;
+    app.relaunch();
+  }
   if (backendStopDone) return;
   event.preventDefault();
   const settle = () => {

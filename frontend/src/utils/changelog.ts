@@ -48,6 +48,15 @@ function parse(text: string): ChangelogEntry[] {
 
 export const CHANGELOG: ChangelogEntry[] = parse(raw);
 
+// A release page's notes (its CHANGELOG section without the "## version"
+// line, then the downloads) as one entry; no groups when nothing is noted.
+export function parseNotes(version: string, markdown: string): ChangelogEntry {
+  const cut = markdown.search(/<h\d[^>]*>\s*Download|^#+\s*Download|<details/im);
+  const body = cut === -1 ? markdown : markdown.slice(0, cut);
+  const entry = parse(`## ${version}\n${body}`)[0];
+  return entry ?? { version, date: null, groups: [] };
+}
+
 // "0.1.13" vs "0.1.12", numeric per part; > 0 when a is newer.
 export function compareVersions(a: string, b: string): number {
   const x = a.split(".").map((n) => parseInt(n, 10) || 0);

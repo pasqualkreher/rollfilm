@@ -1266,6 +1266,24 @@ def _box_gauss(img: np.ndarray, sigma: float, passes: int = 3) -> np.ndarray:
 # Radii are fractions of the long edge, so the look is resolution-independent.
 _MIST_PSF = ((1.0, 0.50), (2.7, 0.31), (7.5, 0.19))  # (radius x base, weight)
 _MIST_BASE_DIV = 60.0  # base sigma = long_edge / this
+# Process 8 (_mist, v8=True): a fourth, very wide lobe for the faint far
+# bloom a real filter spreads across the frame, the weights renormalised to
+# sum 1 so the pass conserves light - the veil surplus below is left out, the
+# blacks are held instead (see _MIST_BLACK_HOLD) and the softness is its own
+# step (_MIST_SOFT_DIV).
+_MIST_PSF_V8 = tuple(
+    (r, wt / 1.08) for r, wt in ((1.0, 0.50), (2.7, 0.31), (7.5, 0.19), (18.0, 0.08))
+)
+# Black hold (the Black Pro-Mist half of the look): the halo arriving on a
+# pixel is scaled by 0.3 + 0.7 * smoothstep(its own toned luminance, 0, 0.10)
+# - a deep black far from any light keeps a residual 30% of the glow and
+# stays black, a midtone takes all of it.
+_MIST_BLACK_HOLD_FLOOR, _MIST_BLACK_HOLD_KNEE = 0.3, 0.10
+# Softness: after the scatter the toned frame is blended toward a Gaussian
+# blur of itself, sigma long_edge / _MIST_SOFT_DIV, by 0.35 * f * (0.4 +
+# 0.6 * luminance) - the brights go softer than the shadows, as through glass.
+_MIST_SOFT_DIV = 600.0
+_MIST_SOFT_MAX = 0.35
 
 # The halo carries the scattered light back with a surplus: a real filter's
 # near-source output measures brighter than pure conservation predicts, because
@@ -1295,10 +1313,17 @@ _MIST_FIELD_PX = 512
 
 
 def _mist(
-    arr: np.ndarray, amount: int, light_sources: bool = True, ref_long_edge: float | None = None
+    arr: np.ndarray, amount: int, light_sources: bool = True, ref_long_edge: float | None = None,
+    v8: bool = False,
 ) -> np.ndarray:
     """Pro-Mist-style optical diffusion: light scattered *out of* the highlights
     and spread back across the frame through a heavy-tailed PSF, in linear light.
+
+    `v8` (process version 8 and up) is the two-part mist: bloom that conserves
+    light (no veil surplus, a fourth far lobe, see _MIST_PSF_V8) and holds the
+    blacks where no light arrives (_MIST_BLACK_HOLD_*), plus an overall
+    softness (_MIST_SOFT_DIV). Without it the pass is the earlier mist, kept
+    exactly as it was.
 
     `light_sources=True` (the Mist slider): only genuinely bright highlights and
     light sources scatter. A smooth, steep brightness gate isolates them, so
@@ -1370,9 +1395,9 @@ def _mist(
         small = src
     base = max(1.5, max(h, w) * scale / _MIST_BASE_DIV)
     halo = np.zeros_like(small)
-    for radius_scale, weight in _MIST_PSF:
+    for radius_scale, weight in (_MIST_PSF_V8 if v8 else _MIST_PSF):
         halo += _box_gauss(small, base * radius_scale) * weight
-    halo *= _MIST_TINT * (k * _MIST_VEIL_GAIN)
+    halo *= _MIST_TINT * (k * (1.0 if v8 else _MIST_VEIL_GAIN))
     if scale < 1.0:
         halo = cv2.resize(halo, (w, h), interpolation=cv2.INTER_LINEAR)
 
@@ -1380,11 +1405,43 @@ def _mist(
     # spread out (+halo). The PSF weights sum to 1, so away from the veil
     # surplus this moves light around rather than manufacturing it.
     def scatter_in(y0: int, y1: int) -> None:
-        lin = _srgb_to_linear(arr[y0:y1]).astype(np.float32)
-        out = lin - src[y0:y1] * k + halo[y0:y1]
+        rows = arr[y0:y1]
+        lin = _srgb_to_linear(rows).astype(np.float32)
+        arriving = halo[y0:y1]
+        if v8:
+            # Black hold: what arrives on a deep black is mostly turned away.
+            luma = np.clip(rows @ _LUMA, 0.0, 1.0)
+            hold = _smoothstep_between(luma, 0.0, _MIST_BLACK_HOLD_KNEE)
+            hold *= 1.0 - _MIST_BLACK_HOLD_FLOOR
+            hold += _MIST_BLACK_HOLD_FLOOR
+            arriving = arriving * hold[..., None]
+        out = lin - src[y0:y1] * k + arriving
         src[y0:y1] = _linear_to_srgb(np.clip(out, 0.0, 1.0)).astype(np.float32)
 
     _band_map(scatter_in, h, w)
+    if not v8:
+        return src
+
+    # Softness: the toned frame blended toward a blur of itself, the brights
+    # more than the shadows. On the display values, after the scatter: this
+    # is the glass taking the edge off, not more light moving.
+    sigma = max(0.6, float(ref_long_edge or max(h, w)) / _MIST_SOFT_DIV)
+    soft = _banded_local(
+        lambda a: cv2.GaussianBlur(a, (0, 0), sigma), src, int(np.ceil(4.0 * sigma)) + 1
+    )
+
+    def soften(y0: int, y1: int) -> None:
+        rows = src[y0:y1]
+        luma = np.clip(rows @ _LUMA, 0.0, 1.0)
+        s = luma * (0.6 * _MIST_SOFT_MAX * f)
+        s += 0.4 * _MIST_SOFT_MAX * f
+        # rows + (soft - rows) * s, in place in the blur's own rows.
+        step = soft[y0:y1]
+        step -= rows
+        step *= s[..., None]
+        rows += step
+
+    _band_map(soften, h, w)
     return src
 
 
@@ -2257,6 +2314,29 @@ def _lattice_grain_field(
     return field
 
 
+def _grain_particle_px(long_edge: float, size_f: float, fuji: bool) -> float:
+    """Particle size in render pixels for a photo of this long edge and Grain
+    Size (0..1) - the one number _apply_grain and grain_is_pinned share."""
+    if fuji:
+        # Measured (see the table above _FUJI_GRAIN_X). Small (25) is the
+        # camera's pixel-level grain, 1.5px on a 6240px frame; Large (75) is
+        # 3.2px there.
+        return max(1.0, (long_edge / 1500.0) * (0.18 + 0.76 * size_f))
+    # The smallest Grain Size lands on a crisp ~1px fine-ISO texture (the
+    # 1.0px floor); the top end is chunky pushed-film.
+    return max(1.0, (long_edge / 1500.0) * (0.55 + 2.45 * size_f))
+
+
+def grain_is_pinned(adj: dict, long_edge: float) -> bool:
+    """Whether this edit's grain on a photo of this long edge samples the one
+    lattice laid over the frame (_make_grain_field), so a zoomed tile shows
+    the grains of the whole render. Below _GRAIN_LATTICE_MIN_CELL_PX the
+    field is built per render and a tile's grains are not the frame's."""
+    size_f = min(100, max(0, adj.get("grain_size", 25))) / 100.0
+    p = _grain_particle_px(float(long_edge), size_f, develop_v2.effects_v8(adj))
+    return p / 3.0 >= _GRAIN_LATTICE_MIN_CELL_PX
+
+
 def _make_grain_field(
     h: int, w: int, particle_px: float, coarse: float, shape: float, origin: tuple[int, int]
 ) -> np.ndarray:
@@ -2311,12 +2391,59 @@ def _cached_grain_field(
     return f
 
 
+# Fujifilm's Grain Effect, measured on the camera's own JPEGs (X-T30 II and
+# X-E5, ISO 125-640, tools/grain_reference.py, 2026-10-26). The grain's
+# standard deviation (x1000, display 0..1) per luminance bin, in flat squares,
+# the sensor-noise floor taken out; the autocorrelation half-width over the
+# long edge for the particle size; excess kurtosis for the character:
+#
+#   bin centre    0.04  0.12  0.21  0.29  0.38  0.46  0.54  0.62  0.71  0.79  0.88  0.96   acf-hw/edge  kurt
+#   Weak/Small   15.32 23.49 23.96 23.47 23.83 21.62 23.06 22.36     - 19.87 17.70 16.37     0.75e-4   0.17
+#   Weak/Large    3.62 13.77 14.45 14.97 14.94 13.88 12.94 12.11 11.39     -  9.60  5.68     1.81e-4   0.44
+#   Strong/Small 13.76 48.40 50.32 50.33 55.94 48.14 45.35 43.67 44.51 44.08 43.26 35.68     0.84e-4  -0.86
+#
+# What it says: the grain peaks in the lower mids (0.2-0.45), is nearly as
+# strong at 0.12, stays at ~80% through the upper mids and highlights and
+# only eases to ~60% at paper-white; the deep blacks (bin 0.04) carry a
+# quarter to half of it. Strong is 2.1x Weak. Small is pixel-level noise at
+# the camera's resolution (half-width 0.5px on a 6240px frame), Large about
+# twice that (1.1px) and 0.62x as strong per pixel. The distribution is
+# round: slightly peaked for Weak, flatter than Gaussian for Strong (a
+# platykurtic field is out of this generator's reach; Roughness 0 is the
+# closest, at kurtosis ~0). Strong/Large was not in the sample; its size and
+# amplitude follow from the other three.
+#
+# The pipeline's own grain measured the same way (--ours) at long edge 6240:
+# particle_px 1.5 gives half-width 0.55 (Small), 3.2 with coarse 0.25 gives
+# 1.12 (Large); shape 1.12 gives kurtosis 0.3 (Weak).
+_FUJI_GRAIN_X = np.array(
+    [0.0417, 0.125, 0.2083, 0.2917, 0.375, 0.4583, 0.5417, 0.625, 0.7083, 0.7917, 0.875, 0.9583],
+    dtype=np.float32,
+)
+# The measured curve, normalised to its peak, the three settings combined.
+_FUJI_GRAIN_LUT = np.array(
+    [0.38, 0.95, 0.96, 0.97, 1.00, 0.90, 0.87, 0.84, 0.80, 0.80, 0.74, 0.60], dtype=np.float32
+)
+# Standard deviation at the curve's peak per unit of Amount: 33 lands on Weak
+# (0.0240 measured), 66 on Strong (0.0500), 100 is headroom.
+_FUJI_GRAIN_STRENGTH = 0.074
+# Per-pixel amplitude against Grain Size: Large (75) measured 0.625x Small (25).
+_FUJI_GRAIN_SIZE_GAIN_X = np.array([0.0, 0.25, 0.75, 1.0], dtype=np.float32)
+_FUJI_GRAIN_SIZE_GAIN = np.array([1.10, 1.00, 0.625, 0.50], dtype=np.float32)
+
+
 def _apply_grain(
     arr: np.ndarray, amount: int, size: int = 0, roughness: int = 50,
     out: np.ndarray | None = None, ref_long_edge: float | None = None,
-    origin: tuple[int, int] = (0, 0),
+    origin: tuple[int, int] = (0, 0), fuji: bool = False,
 ) -> np.ndarray:
     """Fujifilm-style analog film grain.
+
+    `fuji` (process version 8 and up) is the grain as measured on the camera's
+    JPEGs (see _FUJI_GRAIN_LUT above): the tone curve, the amplitude per
+    Amount, the particle size per Grain Size and the clumping all come from
+    the table. Without it the pass is the earlier hand-tuned grain, kept
+    exactly as it was so saved edits render as they did.
 
     Monochromatic (the same offset on R/G/B), like silver grain - Fuji's Grain
     Effect is monochrome too, and coloured grain reads as sensor noise.
@@ -2351,34 +2478,59 @@ def _apply_grain(
     rough = min(100, max(0, roughness)) / 100.0
     long_edge = ref_long_edge or max(h, w)
 
-    # Particle size relative to resolution. The smallest Grain Size lands on a
-    # crisp ~1px fine-ISO texture (the 1.0px floor); the top end is chunky
-    # pushed-film. Slightly below the old 3.5 maximum because a band-pass
-    # particle reads visually larger than the old blurred block of the same
-    # nominal size.
-    p = max(1.0, (long_edge / 1500.0) * (0.55 + 2.45 * size_f))
-    # How much of the coarse clump band rides along. Big grain clumps more (that
-    # is what makes pushed film look pushed); Roughness nudges it either way.
-    coarse = min(0.85, max(0.0, 0.10 + 0.45 * size_f + 0.12 * (rough - 0.5)))
-    # Roughness is the particle *character*, not just a second volume knob:
-    # low = fine, even, almost Gaussian texture; high = sparse, hard-edged
-    # specks with clean gaps, plus a little more amplitude to match.
-    field = _cached_grain_field(h, w, p, coarse, 1.0 + 0.55 * rough, origin=origin)
-    strength = (amount / 100.0) * 0.040 * (0.72 + 0.56 * rough)
+    if fuji:
+        # Measured (see the table above _FUJI_GRAIN_X). Particle size: Small
+        # (25) is the camera's pixel-level grain, 1.5px on a 6240px frame -
+        # just inside the photo lattice (_GRAIN_LATTICE_MIN_CELL_PX), so the
+        # native render and its tiles share their grains; Large (75) is 3.2px
+        # there. Clumping follows the measured autocorrelation tail: none to
+        # speak of for Small, a little for Large. Roughness keeps its role as
+        # the character knob: 50 sits on the Weak measurement's kurtosis, 0 is
+        # an even Gaussian texture, 100 harder specks - with only a trace of
+        # amplitude change, since the camera's Strong is not rougher than its
+        # Weak, only louder.
+        p = _grain_particle_px(long_edge, size_f, True)
+        coarse = min(0.85, max(0.0, 0.05 + 0.30 * size_f + 0.12 * (rough - 0.5)))
+        field = _cached_grain_field(h, w, p, coarse, 1.0 + 0.24 * rough, origin=origin)
+        strength = (
+            (amount / 100.0) * _FUJI_GRAIN_STRENGTH * (0.9 + 0.2 * rough)
+            * float(np.interp(size_f, _FUJI_GRAIN_SIZE_GAIN_X, _FUJI_GRAIN_SIZE_GAIN))
+        )
+    else:
+        # Particle size relative to resolution. The smallest Grain Size lands on a
+        # crisp ~1px fine-ISO texture (the 1.0px floor); the top end is chunky
+        # pushed-film. Slightly below the old 3.5 maximum because a band-pass
+        # particle reads visually larger than the old blurred block of the same
+        # nominal size.
+        p = _grain_particle_px(long_edge, size_f, False)
+        # How much of the coarse clump band rides along. Big grain clumps more (that
+        # is what makes pushed film look pushed); Roughness nudges it either way.
+        coarse = min(0.85, max(0.0, 0.10 + 0.45 * size_f + 0.12 * (rough - 0.5)))
+        # Roughness is the particle *character*, not just a second volume knob:
+        # low = fine, even, almost Gaussian texture; high = sparse, hard-edged
+        # specks with clean gaps, plus a little more amplitude to match.
+        field = _cached_grain_field(h, w, p, coarse, 1.0 + 0.55 * rough, origin=origin)
+        strength = (amount / 100.0) * 0.040 * (0.72 + 0.56 * rough)
     if out is None:
         out = np.empty_like(arr)
 
     def run(y0: int, y1: int) -> None:
         rows = arr[y0:y1]
         luma = np.clip(rows @ _LUMA, 0.0, 1.0)
-        # sqrt(luma) - 0.45*luma^3, peaking around luma 0.68 and normalised to
-        # 1 there: clean deep blacks, full strength through the mids and
-        # highlights, a gentle roll-off into pure white (where the positive
-        # half of the noise clips anyway, so grain there reads as fine
-        # darkening speckle).
-        tone_w = np.sqrt(luma)
-        tone_w -= 0.45 * luma * luma * luma
-        tone_w *= 1.0 / 0.683
+        if fuji:
+            # The camera's tone curve: the grain peaks in the lower mids, holds
+            # ~80% through the highlights, eases at paper-white and keeps a
+            # third of itself in the deep blacks.
+            tone_w = np.interp(luma, _FUJI_GRAIN_X, _FUJI_GRAIN_LUT).astype(np.float32)
+        else:
+            # sqrt(luma) - 0.45*luma^3, peaking around luma 0.68 and normalised to
+            # 1 there: clean deep blacks, full strength through the mids and
+            # highlights, a gentle roll-off into pure white (where the positive
+            # half of the noise clips anyway, so grain there reads as fine
+            # darkening speckle).
+            tone_w = np.sqrt(luma)
+            tone_w -= 0.45 * luma * luma * luma
+            tone_w *= 1.0 / 0.683
         noise = field[y0:y1] * tone_w
         noise *= strength
         out[y0:y1] = np.clip(rows + noise[..., None], 0.0, 1.0)
@@ -2498,11 +2650,49 @@ def _guided_filter(plane: np.ndarray, radius: int, eps: float) -> np.ndarray:
     return cv2.ximgproc.guidedFilter(plane, plane, radius, eps)
 
 
+# The depth band of process-8 clarity (_clarity, depth=True): the surroundings
+# are an edge-aware smooth of the luminance over about a twentieth of the frame
+# - a guided filter run on a small copy, its two coefficient maps scaled back
+# up per band (the fast guided filter, as develop_v2.LocalToneGuide does it),
+# so the cost does not grow with the frame.
+_CLARITY_DEPTH_SMALL_PX = 1024
+_CLARITY_DEPTH_RADIUS_DIV = 20.0
+# How much luminance variation (display 0..1, squared) still counts as one
+# region. The same eps as the fine band's base: the two bases then leak the
+# same fraction of a hard edge and the depth band - their difference - carries
+# none of it. Measured on a 2600px frame at +65 against the single-band pass:
+# a 0.25/0.75 step halos 5.1/255 against 4.5, a 0.4/0.6 step 8.7 against
+# 10.1; a 0.08 sine of period frame/10 gains +0.50 against +0.24 (frame/200:
+# +0.38 against +0.46). Larger eps buys more depth and pays in halo (0.02:
+# 9.7/255 at the hard step; 0.03: 12.8).
+_CLARITY_DEPTH_EPS = 0.01
+# Weights of the fine ("bite") and the depth band in the mix.
+_CLARITY_FINE_W, _CLARITY_DEPTH_W = 0.8, 1.1
+
+
+def _smoothstep_between(x: np.ndarray, e0: float, e1: float) -> np.ndarray:
+    """Smoothstep of `x` between the edges e0 and e1 (not to be confused with
+    _smoothstep above, which takes the already normalised 0..1 position)."""
+    t = np.clip((x - e0) * (1.0 / (e1 - e0)), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
 def _clarity(
-    arr: np.ndarray, radius: float, amount: float, out: np.ndarray | None = None
+    arr: np.ndarray, radius: float, amount: float, out: np.ndarray | None = None,
+    depth: bool = False, ref_long_edge: float | None = None,
 ) -> np.ndarray:
     """Fujifilm-style clarity (their -5..+5 maps roughly onto Lightroom's
     -50..+50 clarity, i.e. our -100..+100 slider covers the same span).
+
+    `depth` (process version 8 and up) adds a second, broad band to positive
+    amounts: the luminance against an edge-aware smooth of its surroundings
+    over ~1/20 of the frame (see _CLARITY_DEPTH_EPS), masked by a plain
+    midtone tent and faded out at both ends of the tone scale - the midtone
+    depth and punch of Lightroom's clarity, with highlights and shadows kept
+    and no halo across hard edges. The fine "bite" band stays. Without it
+    the pass is the earlier single-band clarity, kept exactly as it was.
+    `ref_long_edge` is the long edge of the photo the array is a tile of; the
+    depth band's surroundings are sized by it.
 
     Positive: local contrast over a band that reaches from *fine lines* (the
     "bite" on skin, fabric, foliage that Fuji clarity is known for) up to broad
@@ -2558,12 +2748,36 @@ def _clarity(
 
     _band_map(luminance, h, w)
     np.maximum(y, 1e-6, out=y)
+    depth_maps = None
     if amount > 0:
         # Positive clarity: midtone local contrast (definition / "bite").
         smooth = cv2.GaussianBlur(y, (0, 0), max(0.8, radius / 40.0))
         band = _guided_filter(smooth, int(max(4, radius)), 0.01)
         np.subtract(smooth, band, out=band)  # smooth - base
-        del smooth
+        if depth:
+            # The depth band's surroundings: guided-filter coefficients on a
+            # small copy of the smooth luminance. The band itself is taken
+            # per row band below, where the maps are scaled up to the rows.
+            long_edge = float(ref_long_edge or max(h, w))
+            f = min(1.0, _CLARITY_DEPTH_SMALL_PX / long_edge)
+            sw, sh = max(1, int(round(w * f))), max(1, int(round(h * f)))
+            small = (
+                cv2.resize(smooth, (sw, sh), interpolation=cv2.INTER_AREA)
+                if (sw, sh) != (w, h) else smooth
+            )
+            r = max(1, int(round(long_edge / _CLARITY_DEPTH_RADIUS_DIV * f)))
+            k = (2 * r + 1, 2 * r + 1)
+            mean = cv2.blur(small, k, borderType=cv2.BORDER_REFLECT)
+            var = cv2.blur(small * small, k, borderType=cv2.BORDER_REFLECT) - mean * mean
+            a = var / (var + _CLARITY_DEPTH_EPS)
+            b = (1.0 - a) * mean
+            depth_maps = (
+                cv2.blur(a, k, borderType=cv2.BORDER_REFLECT),
+                cv2.blur(b, k, borderType=cv2.BORDER_REFLECT),
+                sw / float(w), sh / float(h),
+            )
+        else:
+            del smooth
         fine, blend = None, 0.0
     else:
         # Negative clarity: a pure fine-detail *softener* (the Fuji look), NOT a
@@ -2598,7 +2812,41 @@ def _clarity(
     def run(y0: int, y1: int) -> None:
         rows = arr[y0:y1]
         y_in = y[y0:y1]
-        if band is not None:
+        if band is not None and depth_maps is not None:
+            # Process 8: the fine band and the depth band, each under its own
+            # midtone tent, mixed; the darkening bias on the mix; and a soft
+            # knee at both ends so the deepest shadows and the brightest
+            # highlights are left as they are.
+            a_map, b_map, sx, sy = depth_maps
+            m = np.array(
+                [[sx, 0.0, 0.5 * sx - 0.5], [0.0, sy, (y0 + 0.5) * sy - 0.5]], dtype=np.float64
+            )
+            flags = cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
+            base = cv2.warpAffine(a_map, m, (w, y1 - y0), flags=flags, borderMode=cv2.BORDER_REPLICATE)
+            base *= smooth[y0:y1]
+            base += cv2.warpAffine(b_map, m, (w, y1 - y0), flags=flags, borderMode=cv2.BORDER_REPLICATE)
+            tent = 1.0 - np.abs(2.0 * y_in - 1.0)
+            fine_rows = band[y0:y1]
+            mix = np.power(tent, 1.5)
+            mix *= _CLARITY_FINE_W
+            mix *= fine_rows
+            # The depth band is the fine band's base against the broad one:
+            # the structure between the two scales, and nothing the fine band
+            # already carries. (smooth - fine_rows is the fine base.)
+            depth_rows = smooth[y0:y1] - fine_rows
+            depth_rows -= base
+            depth_rows *= tent
+            depth_rows *= _CLARITY_DEPTH_W
+            mix += depth_rows
+            delta = np.abs(mix)
+            delta *= -0.15 * amount
+            mix *= amount
+            delta += mix
+            knee = _smoothstep_between(y_in, 0.0, 0.12)
+            knee *= _smoothstep_between(1.0 - y_in, 0.0, 0.18)
+            delta *= knee
+            y_out = y_in + delta
+        elif band is not None:
             b = band[y0:y1]
             mask = np.power(1.0 - np.abs(2.0 * y_in - 1.0), 1.5)  # peaks at midtones
             delta = amount * b * mask
@@ -2622,7 +2870,10 @@ def _grain_pil(image: PILImage.Image, adj: dict) -> PILImage.Image:
     if g <= 0:
         return image
     arr = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
-    arr = _apply_grain(arr, g, adj.get("grain_size", 25), adj.get("grain_roughness", 50))
+    arr = _apply_grain(
+        arr, g, adj.get("grain_size", 25), adj.get("grain_roughness", 50),
+        fuji=develop_v2.effects_v8(adj),
+    )
     return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGB")
 
 
@@ -2641,7 +2892,10 @@ def _apply_local_adjustments(
     long_edge = ref_long_edge or max(arr.shape[:2])
     cl = full.get("clarity", 0)
     if cl:
-        arr = _clarity(arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3)
+        arr = _clarity(
+            arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3,
+            depth=develop_v2.effects_v8(full), ref_long_edge=long_edge,
+        )
     st = full.get("structure", 0)
     if st:
         arr = develop_effects.apply_structure(arr, st, long_edge)
@@ -2670,6 +2924,9 @@ def _mask_reach(madj: dict, process: str, long_edge: float) -> int | None:
     light is a percentile of all of it)."""
     full = develop.normalize(madj)
     if full.get("dehaze", 0):
+        return None
+    if full.get("clarity", 0) > 0 and develop_v2.effects_v8({"process": process}):
+        # The depth band's surroundings reach a twentieth of the frame.
         return None
     reach = 0.0
     if full.get("clarity", 0):
@@ -3297,6 +3554,7 @@ def apply_adjustments_linear(
             arr = _clarity(
                 arr, max(4.0, long_edge / 50.0), cl / 100.0 * 1.3,
                 out=arr if owned else None,
+                depth=develop_v2.effects_v8(adj), ref_long_edge=long_edge,
             )
             owned = True
             if cl < 0:
@@ -3314,7 +3572,7 @@ def apply_adjustments_linear(
                 # together - which is the point, since the softening on its own
                 # doesn't look like what the slider is going to settle at.
                 arr = _mist(arr, min(50, int(-cl * 0.35)), light_sources=False,
-                            ref_long_edge=long_edge)
+                            ref_long_edge=long_edge, v8=develop_v2.effects_v8(adj))
         st = adj.get("structure", 0)
         if st:
             arr = develop_effects.apply_structure(arr, st)
@@ -3368,7 +3626,7 @@ def apply_adjustments_linear(
     # so those two sit out a drag and are restored on the pointer-up render.
     _abort_if_stale()
     if adj.get("mist", 0) > 0:
-        arr = _mist(arr, adj["mist"], ref_long_edge=long_edge)
+        arr = _mist(arr, adj["mist"], ref_long_edge=long_edge, v8=develop_v2.effects_v8(adj))
     if not fast and adj.get("glow_amount", 0) > 0:
         arr = develop_effects.apply_glow(arr, adj["glow_amount"])
     if adj.get("halation_amount", 0) > 0:
@@ -3390,6 +3648,7 @@ def apply_adjustments_linear(
             arr, adj["grain_amount"], adj.get("grain_size", 25), adj.get("grain_roughness", 50),
             out=arr if owned else None, ref_long_edge=long_edge,
             origin=(view.x0, view.y0) if view is not None else (0, 0),
+            fuji=develop_v2.effects_v8(adj),
         )
     # Last of all, so the marking is the flat pink it was meant to be rather than
     # something the vignette darkened and the grain crawled over.
@@ -4460,7 +4719,9 @@ def render_editor_preview_bytes(
         note_editor_activity()
     _bail_if_stale()
     path = resolve_image_path(image)
-    if region is not None and not region_is_supported(adjustments):
+    if region is not None and not region_is_supported(
+        adjustments, long_edge=max(image.width or 0, image.height or 0) or None
+    ):
         region = None
     # The interactive tiers (scrub and the accurate render) honour a region too,
     # cut from the decoded native base: zoomed far in, a whole 1600px frame
@@ -4589,8 +4850,9 @@ def render_editor_preview_bytes(
 REGION_PAD_PX = 96
 
 
-def region_is_supported(adj: dict) -> bool:
+def region_is_supported(adj: dict, long_edge: float | None = None) -> bool:
     """Whether a zoomed tile can stand in for the whole-frame render.
+    `long_edge` is the photo's, when known: the grain's pinning depends on it.
 
     Some effects cannot be computed from a tile at all, and for those the honest
     answer is to render the frame whole. None of them is what anyone zooms to
@@ -4599,12 +4861,15 @@ def region_is_supported(adj: dict) -> bool:
     Defined by the frame's edges: the frame border is drawn around the photo,
     which a tile from the middle of it does not have.
 
-    Film grain used to be on this list and is not any more. It sizes its
-    particles from the photo's long edge, which a tile is told (_apply_grain's
-    ref_long_edge); what a tile cannot reproduce is the exact pattern, and no
-    two renders share that anyway. Keeping it here meant that one Grain slider
-    turned every zoomed frame of a 40MP raw into a whole-frame render - seconds
-    each, where a tile takes a few hundred milliseconds.
+    Film grain is here only when its lattice cannot be used (grain_is_pinned):
+    normally it sizes its particles from the photo's long edge and samples one
+    lattice laid over the frame, so a tile shows the frame's own grains
+    (_apply_grain's ref_long_edge and origin). Below the lattice's cell floor
+    (very fine grain on a small photo) the field is per render, and a tile's
+    grains would not be the frame's - seams between tiles, a save unlike the
+    editor. Keeping grain on this list wholesale meant that one Grain slider
+    turned every zoomed frame of a 40MP raw into a whole-frame render -
+    seconds each, where a tile takes a few hundred milliseconds.
 
     Defined by light from outside the tile: the diffusion effects - mist, glow,
     halation, lens flare - spread bright areas across a large fraction of the
@@ -4620,6 +4885,14 @@ def region_is_supported(adj: dict) -> bool:
             return False
     # Negative clarity layers the diffusion pass on top of the softening.
     if adj.get("clarity", 0) < 0:
+        return False
+    # Process 8 clarity reads its surroundings over a twentieth of the frame
+    # (_clarity, depth=True), far past the padding: measured on a 7700px
+    # frame at +65, a padded tile differs from the whole render by up to
+    # 8/255 on a tenth of its pixels (the single-band pass: 2/255, none).
+    if adj.get("clarity", 0) > 0 and develop_v2.effects_v8(adj):
+        return False
+    if adj.get("grain_amount", 0) > 0 and long_edge and not grain_is_pinned(adj, long_edge):
         return False
     return True
 
