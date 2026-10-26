@@ -4,6 +4,38 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.2.3 — 2026-10-26
+
+### New
+- Process version 8: the finishing passes measured against the camera. Grain is fitted to Fujifilm's own Grain Effect (its strength over the tone scale, particle size and character, measured on X-T30 II and X-E5 JPEGs), clarity gets a second, broad band for midtone depth, and the mist blooms around light sources while deep blacks stay deep, with an overall softness. New edits use it; an edit made on an earlier version keeps its own look.
+- Canvas export: the "Photos" block in the Export chip sends the photos out as JPEG at a chosen print density (dpi) and quality, each sized for the largest place it is printed; Original keeps the full-resolution files as before.
+
+### Improved
+- Save copy: the quality and size controls are always in the dialog (greyed out for a virtual copy) and start at the last copy's values; the Settings switch "Ask for quality and size" is gone.
+- Skins: Cyanotype, Negative and Sepia are tints now - near-grey surfaces with a cast and the colour in the accent; Graphite and Platinum stay as they were.
+- Updates: the download shows its progress, rate and time left in the sheet and in the Dock (taskbar); it tries again by itself when the connection drops, and says so if it has to give up.
+- Quitting while an update downloads is treated like other running work: finish in background keeps the download going and installs the update when done, quit now stops it.
+
+### Fixed
+- A delta update no longer floods the logs with its block list and range requests.
+- Starting with the library drive unplugged: "Choose folder…" in the start dialog now opens the folder picker instead of quitting the app (the splash is hidden, not closed, while the dialog is up); the same for "Keep waiting" when the backend is slow to start.
+- Fujifilm looks on a new edit rendered from the old hand-made recipe instead of the camera's own cube (the scene mix and AgX were lost): the rules now cover the current process version and every later one.
+- Grain in a zoomed view: very fine grain on a small photo rendered its own pattern per tile (seams between tiles, a save unlike the editor); such photos now render whole.
+- Rename on a virtual copy renamed the original's file on disk and left the original looking missing; a virtual copy can no longer be renamed (rename the original).
+- Removing a source whose photos sit on a canvas failed with an error; the frames stay as "missing" placeholders, as when a photo is deleted.
+- A photo imported, merged or copied while a library sync was running could lose its thumbnails to the sync's orphan sweep.
+- Restoring a backup lost the RAW+JPEG pairing; it comes back with the backup now.
+- "More…" pickers (albums, canvases, presets): typing in the search box and pressing Enter took the first entry of the full list, not of the matches; a space in the search picked an entry.
+- Shift-click after a filter had shortened the grid could crash the page; the range now anchors on the photo last clicked, in the order on screen.
+- Opening the editor right after paging to the next photo could load the previous photo's edits and save them onto the new one; the editor and the menu bar's rating keys now wait for the photo's own data.
+- Keyboard shortcuts no longer act behind a dialog: E, A/X/U, ⌘Z and the digits in the editor, Backspace and the arrows on a canvas, ⌘[ / ⌘] page navigation.
+- Quit after ⌘W (window closed, app running) skipped the "still working" check and stopped exports, copies and the update download without asking.
+- Changing the library folder while work was running, then "Keep app open", still switched the folder and restarted the app on the next quit.
+- "Finish in background", then a click on the Dock icon while the check was running, could quit the app right after the window came back.
+- The settings file is written atomically now, so a crash during a window move can no longer empty it (which sent the next start through onboarding).
+- The backend now leaves with the app: after a Force Quit or a crash of the app it stayed behind holding the port and the database.
+- Photo view: a photo you rest on gets sharp without zooming in first – the sharper tier (the file itself for an unedited JPEG, the half-size render otherwise) comes after about a second, and raws and edited photos get their full-resolution render at no less than that size; before, the fit view asked for the screen's own pixel count, which on a 4K screen was no more than the preview already had.
+
 ## 0.2.2 — 2026-10-26
 
 ### New
