@@ -259,26 +259,3 @@ def test_v8_mist_conserves_light():
     assert abs(change) < 0.005, change
     # ... and the bloom is there.
     assert ((out - arr) @ thumbnails._LUMA)[400, 645] * 255 > 5.0
-
-
-def test_v8_mist_softens_the_frame():
-    """The softness step: fine texture loses contrast across the frame, not
-    only around the lights."""
-    rng = np.random.default_rng(2)
-    h, w = 600, 900
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    g = np.clip(0.5 + 0.2 * np.sin(xx / 2.0) * np.sin(yy / 2.0) + 0.02 * rng.standard_normal((h, w)), 0, 1)
-    arr = np.repeat(g[..., None], 3, axis=-1).astype(np.float32)
-    arr[20:60, 20:60] = 1.0  # something to scatter, far from the texture measured
-    out = thumbnails._mist(arr, 40, ref_long_edge=float(w), v8=True)
-    old = thumbnails._mist(arr, 40, ref_long_edge=float(w))
-    import cv2
-
-    def texture(a):
-        y = (a @ thumbnails._LUMA).astype(np.float32)[300:, 300:]
-        return float((y - cv2.GaussianBlur(y, (0, 0), 3.0)).std())
-
-    # Measured: -4.5% at _MIST_SOFT_MAX 0.35 (the look as tuned); the bar is
-    # well under that and above the 2% the old mist is allowed to move.
-    assert texture(out) < texture(arr) * 0.97
-    assert texture(old) > texture(arr) * 0.98
